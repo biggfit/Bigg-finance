@@ -16,12 +16,10 @@ export default function AddCompModal({ franchise, month, year, onClose, onAdd })
   const [ref,      setRef]      = useState("");
   const [nota,     setNota]     = useState("");
 
-  // Al cambiar entre Comprobante/Movimiento, resetear moneda al default de la franquicia
-  const handleSetIsMov = (v) => { setIsMov(v); setCurrency(franchise.currency); };
+  const handleSetIsMov = (v) => { setIsMov(v); };
 
   const type         = isMov ? movType : makeType(doc, cuenta);
-  // FACTURA/NC siempre en moneda de la franquicia; pagos pueden ser en cualquier moneda
-  const effectiveCur = isMov ? currency : franchise.currency;
+  const effectiveCur = currency;
   const showIVA      = !isMov && franchise.applyIVA;
   const totalConIVA  = showIVA ? amount * (1 + TAX) : amount;
 
@@ -67,26 +65,24 @@ export default function AddCompModal({ franchise, month, year, onClose, onAdd })
       <Field label="Fecha">
         <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ width: "100%", padding: "8px 10px" }} />
       </Field>
-      {/* Selector de moneda — solo para movimientos (pagos). Comprobantes siempre en moneda de la franquicia */}
-      {isMov && (
-        <Field label="Moneda del pago">
-          <div style={{ display: "flex", gap: 6 }}>
-            {CURRENCIES.map(cur => (
-              <button key={cur} onClick={() => setCurrency(cur)} style={{
-                padding: "6px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", border: "none", fontFamily: "var(--font)",
-                background: currency === cur ? "var(--accent)" : "var(--bg)",
-                color: currency === cur ? "#1e2022" : "var(--muted)",
-                outline: currency === cur ? "none" : "1px solid var(--border2)",
-              }}>{cur}</button>
-            ))}
+      {/* Selector de moneda — disponible siempre para comprobantes y movimientos */}
+      <Field label="Moneda">
+        <div style={{ display: "flex", gap: 6 }}>
+          {CURRENCIES.map(cur => (
+            <button key={cur} onClick={() => setCurrency(cur)} style={{
+              padding: "6px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", border: "none", fontFamily: "var(--font)",
+              background: currency === cur ? "var(--accent)" : "var(--bg)",
+              color: currency === cur ? "#1e2022" : "var(--muted)",
+              outline: currency === cur ? "none" : "1px solid var(--border2)",
+            }}>{cur}</button>
+          ))}
+        </div>
+        {currency !== franchise.currency && (
+          <div style={{ fontSize: 10, color: "var(--cyan)", marginTop: 4 }}>
+            Moneda distinta a la base de la sede ({franchise.currency}).
           </div>
-          {currency !== franchise.currency && (
-            <div style={{ fontSize: 10, color: "var(--cyan)", marginTop: 4 }}>
-              Moneda distinta a la de facturación ({franchise.currency}). El saldo de la franquicia no se verá afectado hasta asignar tipo de cambio.
-            </div>
-          )}
-        </Field>
-      )}
+        )}
+      </Field>
       <Field label={`Monto neto (${effectiveCur})`}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span className="mono" style={{ color: "var(--muted)", fontSize: 12 }}>{SYM[effectiveCur]}</span>

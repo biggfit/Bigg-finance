@@ -1,7 +1,7 @@
 import { memo, useState, useMemo, useCallback, useRef } from "react";
 import * as XLSX from "xlsx";
 import { useStore } from "../lib/context";
-import { makeType, MONTHS, AVAILABLE_YEARS, DOCS, CUENTAS, CUENTA_LABEL, COMP_TYPES, SYM, uid } from "../lib/helpers";
+import { makeType, MONTHS, AVAILABLE_YEARS, DOCS, CUENTAS, CUENTA_LABEL, COMP_TYPES, SYM, uid, CURRENCIES } from "../lib/helpers";
 import { todayDmy } from "../data/franchisor";
 import { TypePill } from "../components/atoms";
 import PendientesPanel from "../components/PendientesPanel";
@@ -79,6 +79,8 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
   const [movImpRaw,  setMovImpRaw] = useState("");
   const [movConcepto,setMovConcepto] = useState("");
   const [movFecha,   setMovFecha]  = useState(todayIso);
+  const [currency,    setCurrency]    = useState(prefillFr?.currency ?? "ARS");
+  const [movCurrency, setMovCurrency] = useState(prefillFr?.currency ?? "ARS");
 
   const fr     = activeFr.find(f => f.id === parseInt(frId));
   const isAR   = fr?.country === "Argentina";
@@ -156,6 +158,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
   // ── PASO 1: tipo ──
   if (step === 1) return (
     <div className="fade">
+      <Crumb />
       <div style={{ marginBottom: 28 }}>
         <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 6 }}>¿Qué querés registrar?</div>
         <div style={{ color: "var(--muted)", fontSize: 13 }}>Paso 1 de 3</div>
@@ -199,7 +202,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
       />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 8, maxHeight: 420, overflowY: "auto" }}>
         {filteredFr.map(f => (
-          <div key={f.id} onClick={() => { setFrId(String(f.id)); setStep(3); }}
+          <div key={f.id} onClick={() => { setFrId(String(f.id)); setCurrency(f.currency ?? "ARS"); setMovCurrency(f.currency ?? "ARS"); setStep(3); }}
             style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", borderRadius: 8, border: "1px solid var(--border2)", cursor: "pointer", background: "var(--bg)", transition: "all .1s" }}
             onMouseEnter={e => { e.currentTarget.style.background = "var(--bg2)"; e.currentTarget.style.borderColor = "var(--accent)"; }}
             onMouseLeave={e => { e.currentTarget.style.background = "var(--bg)"; e.currentTarget.style.borderColor = "var(--border2)"; }}
@@ -216,6 +219,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
   // ── PASO 3: formulario ──
   // — comprobante —
   if (step === 3 && wizType === "comprobante") {
+    const symComp = SYM[currency] ?? "$";
     const handlePreview = () => {
       if (!tipo || importeNeto <= 0) return;
       const mesComp  = parseInt(fechaIso.split("-")[1]) - 1;
@@ -227,6 +231,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
         amount: importeTotal, amountNeto: importeNeto, amountIVA: importeIVA,
         ref: notaFinal, nota: notaFinal,
         month: mesComp, year: anioComp,
+        currency,
       });
     };
     const handleConfirm = () => {
@@ -236,7 +241,6 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
       downloadTextAsPDF(pdfText, `${isAR ? "Factura" : "Invoice"}_${fr.name}_${MONTHS[preview.month]}_${preview.year}.html`);
       setDone(true);
     };
-    // Concepto auto-generado: "Tipo - Cuenta - Mes Año"
     const mesComp   = parseInt(fechaIso.split("-")[1]) - 1;
     const anioComp  = parseInt(fechaIso.split("-")[0]);
     const autoConcepto = `${doc === "FACTURA" ? "Factura" : "NC"} - ${CUENTA_LABEL[cuenta] ?? cuenta} - ${MONTHS[mesComp]} ${anioComp}`;
@@ -245,64 +249,80 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
       <div className="fade">
         <Crumb />
 
-        {/* Fila 1: Documento + Cuenta — mismo peso visual */}
+        {/* Fecha */}
         <div style={{ marginBottom: 16 }}>
-          <label style={labelS}>TIPO DE DOCUMENTO Y CUENTA</label>
-          <div style={{ display: "grid", gridTemplateColumns: "auto auto 1fr", gap: 8, alignItems: "center" }}>
-            {/* Doc toggle */}
-            <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1.5px solid var(--border2)" }}>
-              {DOCS.map(d => (
-                <div key={d} onClick={() => { setDoc(d); setPreview(null); }} style={{
-                  padding: "8px 18px", cursor: "pointer", fontWeight: 800, fontSize: 13,
-                  background: doc === d ? (d === "FACTURA" ? "rgba(255,85,112,.18)" : "rgba(16,217,122,.18)") : "transparent",
-                  color: doc === d ? (d === "FACTURA" ? "var(--red)" : "var(--green)") : "var(--muted)",
-                  borderRight: d === "FACTURA" ? "1px solid var(--border2)" : "none",
-                  transition: "all .12s", whiteSpace: "nowrap",
-                }}>
-                  {d === "FACTURA" ? "🧾 Factura" : "📋 NC"}
-                </div>
-              ))}
-            </div>
-            {/* separator */}
-            <span style={{ color: "var(--border2)", fontSize: 18 }}>·</span>
-            {/* Cuenta select */}
-            <select value={cuenta} onChange={e => { setCuenta(e.target.value); setPreview(null); }}
-              style={{ ...inputS, fontWeight: 700, fontSize: 13 }}>
-              {CUENTAS.map(c => <option key={c} value={c}>{CUENTA_LABEL[c]}</option>)}
-            </select>
+          <label style={labelS}>FECHA</label>
+          <input type="date" value={fechaIso} onChange={e => { setFechaIso(e.target.value); setPreview(null); }}
+            style={{ ...inputS, cursor: "pointer", colorScheme: "dark", fontWeight: 700, maxWidth: 220 }} />
+        </div>
+
+        {/* Tipo de documento */}
+        <div style={{ marginBottom: 16 }}>
+          <label style={labelS}>TIPO DE DOCUMENTO</label>
+          <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1.5px solid var(--border2)", maxWidth: 280 }}>
+            {DOCS.map(d => (
+              <div key={d} onClick={() => { setDoc(d); setPreview(null); }} style={{
+                flex: 1, padding: "9px 18px", cursor: "pointer", fontWeight: 800, fontSize: 13,
+                background: doc === d ? (d === "FACTURA" ? "rgba(255,85,112,.18)" : "rgba(16,217,122,.18)") : "transparent",
+                color: doc === d ? (d === "FACTURA" ? "var(--red)" : "var(--green)") : "var(--muted)",
+                borderRight: d === "FACTURA" ? "1px solid var(--border2)" : "none",
+                transition: "all .12s", textAlign: "center",
+              }}>
+                {d === "FACTURA" ? "🧾 Factura" : "📋 NC"}
+              </div>
+            ))}
           </div>
         </div>
 
-        {/* Fila 2: Importe + Fecha */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>
+        {/* Cuenta */}
+        <div style={{ marginBottom: 16 }}>
+          <label style={labelS}>CUENTA</label>
+          <select value={cuenta} onChange={e => { setCuenta(e.target.value); setPreview(null); }}
+            style={{ ...inputS, fontWeight: 700, fontSize: 13 }}>
+            {CUENTAS.map(c => <option key={c} value={c}>{CUENTA_LABEL[c]}</option>)}
+          </select>
+        </div>
+
+        {/* Moneda + Importe */}
+        <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 14, marginBottom: importeNeto > 0 && applyIVA ? 8 : 16, alignItems: "start" }}>
           <div>
-            <label style={labelS}>{applyIVA ? `NETO (sin IVA) — ${fr?.currency}` : `IMPORTE — ${fr?.currency}`}</label>
+            <label style={labelS}>MONEDA</label>
+            <div style={{ display: "flex", gap: 6 }}>
+              {CURRENCIES.map(cur => (
+                <button key={cur} onClick={() => { setCurrency(cur); setPreview(null); }} style={{
+                  padding: "8px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", border: "none", fontFamily: "var(--font)",
+                  background: currency === cur ? "var(--accent)" : "var(--bg)",
+                  color: currency === cur ? "#1e2022" : "var(--muted)",
+                  outline: currency === cur ? "none" : "1px solid var(--border2)",
+                }}>{cur}</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label style={labelS}>{applyIVA ? `NETO (sin IVA) — ${currency}` : `IMPORTE — ${currency}`}</label>
             <div style={{ position: "relative" }}>
-              <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--muted)", fontSize: 13, pointerEvents: "none" }}>{sym}</span>
+              <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--muted)", fontSize: 13, pointerEvents: "none" }}>{symComp}</span>
               <input value={importeRaw}
-                onChange={e => { if (!e.target.value) { setImporteRaw(""); setPreview(null); return; } setImporteRaw(formatCurrencyInput(e.target.value.replace(/[^\d,]/g,""), fr?.currency)); setPreview(null); }}
+                onChange={e => { if (!e.target.value) { setImporteRaw(""); setPreview(null); return; } setImporteRaw(formatCurrencyInput(e.target.value.replace(/[^\d,]/g,""), currency)); setPreview(null); }}
                 placeholder="0,00" inputMode="decimal"
                 style={{ ...inputS, paddingLeft: 26, textAlign: "right", fontWeight: 700 }} />
             </div>
-            {importeNeto > 0 && applyIVA && (
-              <div style={{ marginTop: 6, display: "flex", gap: 14, justifyContent: "flex-end" }}>
-                {[["Neto", importeNeto, "var(--text)"],["IVA 21%", importeIVA, "var(--blue)"],["Total", importeTotal, "var(--accent)"]].map(([l,v,c]) => (
-                  <div key={l} style={{ textAlign: "center" }}>
-                    <div style={{ fontSize: 9, color: "var(--muted)", fontWeight: 700 }}>{l}</div>
-                    <div className="mono" style={{ fontSize: 12, fontWeight: 800, color: c }}>{sym} {fmtBig(v)}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          <div>
-            <label style={labelS}>FECHA</label>
-            <input type="date" value={fechaIso} onChange={e => { setFechaIso(e.target.value); setPreview(null); }}
-              style={{ ...inputS, cursor: "pointer", colorScheme: "dark", fontWeight: 700 }} />
           </div>
         </div>
 
-        {/* Fila 3: Descripción editable (pre-relleno con auto) */}
+        {/* IVA breakdown */}
+        {importeNeto > 0 && applyIVA && (
+          <div style={{ marginBottom: 16, display: "flex", gap: 14, justifyContent: "flex-end" }}>
+            {[["Neto", importeNeto, "var(--text)"],["IVA 21%", importeIVA, "var(--blue)"],["Total", importeTotal, "var(--accent)"]].map(([l,v,c]) => (
+              <div key={l} style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 9, color: "var(--muted)", fontWeight: 700 }}>{l}</div>
+                <div className="mono" style={{ fontSize: 12, fontWeight: 800, color: c }}>{symComp} {fmtBig(v)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Descripción */}
         <div style={{ marginBottom: 20 }}>
           <label style={labelS}>DESCRIPCIÓN <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>— editable</span></label>
           <input value={concepto || autoConcepto}
@@ -316,11 +336,12 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
           <div style={{ marginBottom: 20, background: "rgba(16,217,122,.05)", border: "1px solid rgba(16,217,122,.2)", borderRadius: 10, padding: "14px 18px" }}>
             <div style={{ fontSize: 9, fontWeight: 800, color: "var(--muted)", letterSpacing: ".1em", marginBottom: 10 }}>CONFIRMACIÓN</div>
             {[
-              ["Tipo",      COMP_TYPES[preview.type]?.label],
-              ["Importe",   applyIVA ? `${sym} ${fmtBig(preview.amountNeto)} neto + IVA = ${sym} ${fmtBig(preview.amount)}` : `${sym} ${fmtBig(preview.amount)}`],
-              ["Fecha",     preview.date],
-              ["Descripción",  preview.nota],
-              ["Documento", isAR ? "Factura AR (ÑAKO SRL)" : "Invoice (BIGG FIT LLC)"],
+              ["Tipo",        COMP_TYPES[preview.type]?.label],
+              ["Importe",     applyIVA ? `${symComp} ${fmtBig(preview.amountNeto)} neto + IVA = ${symComp} ${fmtBig(preview.amount)}` : `${symComp} ${fmtBig(preview.amount)}`],
+              ["Moneda",      preview.currency],
+              ["Fecha",       preview.date],
+              ["Descripción", preview.nota],
+              ["Documento",   isAR ? "Factura AR (ÑAKO SRL)" : "Invoice (BIGG FIT LLC)"],
             ].map(([k,v]) => (
               <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, borderBottom: "1px solid var(--border)", paddingBottom: 4, marginBottom: 4 }}>
                 <span style={{ color: "var(--muted)" }}>{k}</span><span style={{ fontWeight: 600 }}>{v}</span>
@@ -343,6 +364,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
   // — movimiento —
   if (step === 3 && wizType === "movimiento") {
     const ct = COMP_TYPES[movTipo];
+    const symMov = SYM[movCurrency] ?? "$";
     const mesMovComp  = parseInt(movFecha.split("-")[1]) - 1;
     const anioMovComp = parseInt(movFecha.split("-")[0]);
     const autoMovConcepto = `${ct?.label ?? movTipo} - ${MONTHS[mesMovComp]} ${anioMovComp}`;
@@ -351,7 +373,14 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
       <div className="fade">
         <Crumb />
 
-        {/* Fila 1: Tipo de movimiento — mismo estilo que doc+cuenta */}
+        {/* Fecha */}
+        <div style={{ marginBottom: 16 }}>
+          <label style={labelS}>FECHA</label>
+          <input type="date" value={movFecha} onChange={e => setMovFecha(e.target.value)}
+            style={{ ...inputS, cursor: "pointer", colorScheme: "dark", fontWeight: 700, maxWidth: 220 }} />
+        </div>
+
+        {/* Tipo de movimiento */}
         <div style={{ marginBottom: 16 }}>
           <label style={labelS}>TIPO DE MOVIMIENTO</label>
           <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1.5px solid var(--border2)" }}>
@@ -377,14 +406,27 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
           </div>
         </div>
 
-        {/* Fila 2: Importe + Fecha */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>
+        {/* Moneda + Importe */}
+        <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 14, marginBottom: 16, alignItems: "start" }}>
           <div>
-            <label style={labelS}>IMPORTE — {fr?.currency}</label>
+            <label style={labelS}>MONEDA</label>
+            <div style={{ display: "flex", gap: 6 }}>
+              {CURRENCIES.map(cur => (
+                <button key={cur} onClick={() => setMovCurrency(cur)} style={{
+                  padding: "8px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", border: "none", fontFamily: "var(--font)",
+                  background: movCurrency === cur ? "var(--accent)" : "var(--bg)",
+                  color: movCurrency === cur ? "#1e2022" : "var(--muted)",
+                  outline: movCurrency === cur ? "none" : "1px solid var(--border2)",
+                }}>{cur}</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label style={labelS}>IMPORTE — {movCurrency}</label>
             <div style={{ position: "relative" }}>
-              <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--muted)", fontSize: 13, pointerEvents: "none" }}>{sym}</span>
+              <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--muted)", fontSize: 13, pointerEvents: "none" }}>{symMov}</span>
               <input value={movImpRaw}
-                onChange={e => { if (!e.target.value) { setMovImpRaw(""); return; } setMovImpRaw(formatCurrencyInput(e.target.value.replace(/[^\d,]/g,""), fr?.currency)); }}
+                onChange={e => { if (!e.target.value) { setMovImpRaw(""); return; } setMovImpRaw(formatCurrencyInput(e.target.value.replace(/[^\d,]/g,""), movCurrency)); }}
                 placeholder="0,00" inputMode="decimal"
                 style={{ ...inputS, paddingLeft: 26, textAlign: "right", fontWeight: 700 }} />
             </div>
@@ -394,14 +436,9 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
               </div>
             )}
           </div>
-          <div>
-            <label style={labelS}>FECHA</label>
-            <input type="date" value={movFecha} onChange={e => setMovFecha(e.target.value)}
-              style={{ ...inputS, cursor: "pointer", colorScheme: "dark", fontWeight: 700 }} />
-          </div>
         </div>
 
-        {/* Fila 3: Concepto editable */}
+        {/* Referencia */}
         <div style={{ marginBottom: 20 }}>
           <label style={labelS}>REFERENCIA <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>— editable</span></label>
           <input value={movConcepto || autoMovConcepto}
@@ -419,6 +456,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
               id: uid(), type: movTipo, date: inputDateToDmy(movFecha),
               amount: movImporte, ref: nota, nota,
               month: mesMovComp, year: anioMovComp,
+              currency: movCurrency,
             };
             onAddComp(fr.id, comp);
             setDone(true);
@@ -895,14 +933,19 @@ function parseExcelRows(data, franchises) {
     const r = {};
     for (const k of Object.keys(row)) r[k.toLowerCase().trim()] = row[k];
 
-    const sedeName  = String(r.sede ?? r.franquicia ?? r.franchise ?? "").trim();
-    const cuentaRaw = String(r.cuenta ?? r.account ?? r.tipo ?? "").trim().toUpperCase();
-    const importeRaw = parseFloat(String(r.importe ?? r.monto ?? r.amount ?? "0").replace(/[^0-9.,\-]/g,"").replace(",",".")) || 0;
-    const fechaRaw  = r.fecha ?? r.date ?? r.fecha_doc ?? "";
+    const sedeName    = String(r.sede ?? r.franquicia ?? r.franchise ?? "").trim();
+    const cuentaRaw   = String(r.cuenta ?? r.account ?? r.tipo ?? "").trim().toUpperCase();
+    const importeRaw  = parseFloat(String(r.importe ?? r.monto ?? r.amount ?? "0").replace(/[^0-9.,\-]/g,"").replace(",",".")) || 0;
+    const fechaRaw    = r.fecha ?? r.date ?? r.fecha_doc ?? "";
     const conceptoRaw = String(r.concepto ?? r.descripcion ?? r.ref ?? r.referencia ?? "").trim();
+    const monedaRaw   = String(r.moneda ?? r.currency ?? r.currencies ?? "").trim().toUpperCase();
 
     // match sede — exact only, sin fuzzy
     const fr = franchises.find(f => f.name.toLowerCase() === sedeName.toLowerCase());
+
+    // moneda: usar la del excel si es válida, sino la de la sede
+    const VALID_CURRENCIES = new Set(["ARS", "USD", "EUR"]);
+    const currency = VALID_CURRENCIES.has(monedaRaw) ? monedaRaw : (fr?.currency ?? "ARS");
 
     // deduce type
     let type = null;
@@ -929,7 +972,7 @@ function parseExcelRows(data, franchises) {
       franchiseId:   fr?.id ?? null,
       franchiseName: fr?.name ?? sedeName,
       rawFranchise:  sedeName,
-      currency:      fr?.currency ?? "ARS",
+      currency,
       type, date, amount,
       ref:      conceptoRaw || autoConcepto,
       month:    mesRow,
@@ -997,6 +1040,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
         amount: r.amount, ref: r.ref || `${loteId} — importado`,
         nota: `${COMP_TYPES[r.type]?.label ?? r.type} — ${r.franchiseName}`,
         month: r.month, year: r.year, loteId,
+        currency: r.currency,
       };
       onAddComp(r.franchiseId, comp);
       log.push({ status: "ok", step: "CC", msg: `✓ CC actualizada — ${r.franchiseName}` });
@@ -1029,9 +1073,10 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
       ["importe   →  Número sin símbolo de moneda (ej: 150000 o -50000)"],
       ["fecha     →  Formato DD/MM/AAAA (ej: 15/02/2026)"],
       [""],
-      ["COLUMNA OPCIONAL"],
+      ["COLUMNAS OPCIONALES"],
       ["──────────────────────────────────────────────────────────────────────"],
-      ["concepto  →  Si se deja vacío se genera automáticamente."],
+      ["moneda    →  ARS, USD o EUR. Si se omite, se usa la moneda base de la sede."],
+      ["concepto  →  Descripción libre. Si se deja vacío se genera automáticamente."],
       [""],
       ["CUENTAS VÁLIDAS PARA COMPROBANTES"],
       ["──────────────────────────────────────────────────────────────────────"],
@@ -1055,21 +1100,24 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
       [""],
       ["EJEMPLOS"],
       ["──────────────────────────────────────────────────────────────────────"],
-      ["sede", "cuenta", "importe", "fecha", "concepto"],
-      ["Caballito", "FEE", 250000, "28/02/2026", "Fee Febrero 2026"],
-      ["Nordelta Ruta 27", "PAUTA", -30000, "28/02/2026", "Ajuste pauta febrero"],
-      ["Caballito", "PAGO", 200000, "05/02/2026", "Transf. CBU 123456"],
+      ["sede", "cuenta", "importe", "fecha", "moneda", "concepto"],
+      ["Caballito", "FEE", 250000, "28/02/2026", "ARS", "Fee Febrero 2026"],
+      ["Nordelta Ruta 27", "PAUTA", -30000, "28/02/2026", "ARS", "Ajuste pauta febrero"],
+      ["Caballito", "PAGO", 200000, "05/02/2026", "ARS", "Transf. CBU 123456"],
+      ["Herrera", "FEE", 1200, "28/02/2026", "USD", "Fee Febrero 2026"],
+      ["Poblenou", "PAGO", 950, "05/02/2026", "EUR", "Transferencia recibida"],
     ]);
     wsInstr["!cols"] = [{ wch: 90 }];
     XLSX.utils.book_append_sheet(wb, wsInstr, "Instrucciones");
 
     const wsPlant = XLSX.utils.aoa_to_sheet([
-      ["sede", "cuenta", "importe", "fecha", "concepto"],
-      ["Caballito", "FEE", 250000, "28/02/2026", ""],
-      ["Nordelta Ruta 27", "PAUTA", 80000, "28/02/2026", ""],
-      ["Caballito", "PAGO", 200000, "05/02/2026", "Transferencia 123456"],
+      ["sede", "cuenta", "importe", "fecha", "moneda", "concepto"],
+      ["Caballito", "FEE", 250000, "28/02/2026", "ARS", ""],
+      ["Nordelta Ruta 27", "PAUTA", 80000, "28/02/2026", "ARS", ""],
+      ["Caballito", "PAGO", 200000, "05/02/2026", "ARS", "Transferencia 123456"],
+      ["Herrera", "FEE", 1200, "28/02/2026", "USD", ""],
     ]);
-    wsPlant["!cols"] = [{ wch: 26 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 36 }];
+    wsPlant["!cols"] = [{ wch: 26 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 8 }, { wch: 36 }];
     XLSX.utils.book_append_sheet(wb, wsPlant, "Plantilla");
     XLSX.writeFile(wb, "Plantilla_Importacion_BIGG.xlsx");
   };
@@ -1081,7 +1129,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
         {[
           { n: "1", icon: "📥", title: "Descargá la plantilla", desc: "Ya tiene el formato correcto y ejemplos para guiarte.", action: <button className="ghost" style={{ fontSize: 11, marginTop: 10 }} onClick={downloadPlantilla}>↓ Descargar plantilla</button> },
-          { n: "2", icon: "✏️", title: "Completá las filas", desc: "Una fila por comprobante. Solo 4 columnas: sede, cuenta, importe y fecha.", action: null },
+          { n: "2", icon: "✏️", title: "Completá las filas", desc: "Una fila por comprobante. 4 columnas obligatorias: sede, cuenta, importe y fecha. Moneda y concepto son opcionales.", action: null },
           { n: "3", icon: "↑",  title: "Subí el archivo", desc: "El sistema valida todo antes de importar. Podés corregir errores ahí mismo.", action: null },
         ].map(s => (
           <div key={s.n} style={{ background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: 12, padding: "18px 18px 16px" }}>
@@ -1103,7 +1151,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr>
-                {[["sede",""],["cuenta",""],["importe",""],["fecha",""],["concepto","opcional"]].map(([col, sub]) => (
+                {[["sede",""],["cuenta",""],["importe",""],["fecha",""],["moneda","opcional"],["concepto","opcional"]].map(([col, sub]) => (
                   <th key={col} style={{ textAlign: "left", padding: "6px 12px", background: "rgba(173,255,25,.08)", border: "1px solid var(--border2)", fontFamily: "monospace", fontWeight: 700, color: "var(--accent)", whiteSpace: "nowrap" }}>
                     {col} {sub && <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: 10 }}>({sub})</span>}
                   </th>
@@ -1112,16 +1160,18 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
             </thead>
             <tbody>
               {[
-                ["Caballito",        "FEE",          "250.000",  "28/02/2026", "→ Factura FEE",    "var(--red)"],
-                ["Nordelta Ruta 27", "PAUTA",         "80.000",  "28/02/2026", "→ Factura PAUTA",  "var(--red)"],
-                ["Caballito",        "FEE",          "-15.000",  "28/02/2026", "→ NC (negativo)",  "var(--green)"],
-                ["Caballito",        "PAGO",         "200.000",  "05/02/2026", "→ Pago recibido",  "var(--muted)"],
+                ["Caballito",        "FEE",   "250.000",  "28/02/2026", "ARS", "→ Factura FEE",   "var(--red)"],
+                ["Nordelta Ruta 27", "PAUTA",  "80.000",  "28/02/2026", "ARS", "→ Factura PAUTA", "var(--red)"],
+                ["Caballito",        "FEE",   "-15.000",  "28/02/2026", "ARS", "→ NC (negativo)", "var(--green)"],
+                ["Caballito",        "PAGO",  "200.000",  "05/02/2026", "ARS", "→ Pago recibido", "var(--muted)"],
+                ["Herrera",          "FEE",    "1.200",   "28/02/2026", "USD", "→ en USD",        "var(--red)"],
               ].map((row, i) => (
                 <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                   {row.slice(0,4).map((cell, j) => (
                     <td key={j} style={{ padding: "7px 12px", color: "var(--text)", fontFamily: j === 1 ? "monospace" : "inherit", fontWeight: j === 1 ? 700 : 400 }}>{cell}</td>
                   ))}
-                  <td style={{ padding: "7px 12px", color: row[5], fontSize: 11, fontStyle: "italic" }}>{row[4]}</td>
+                  <td style={{ padding: "7px 12px", fontFamily: "monospace", fontWeight: 700, color: "var(--accent)", fontSize: 11 }}>{row[4]}</td>
+                  <td style={{ padding: "7px 12px", color: row[6], fontSize: 11, fontStyle: "italic" }}>{row[5]}</td>
                 </tr>
               ))}
             </tbody>
@@ -1202,10 +1252,11 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
         <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
           <colgroup>
             <col style={{ width: 32 }} />
-            <col style={{ width: "11%" }} />
-            <col style={{ width: "18%" }} />
-            <col style={{ width: "28%" }} />
-            <col style={{ width: "14%" }} />
+            <col style={{ width: "10%" }} />
+            <col style={{ width: "15%" }} />
+            <col style={{ width: "24%" }} />
+            <col style={{ width: "13%" }} />
+            <col style={{ width: "8%" }} />
             <col style={{ width: "16%" }} />
             <col style={{ width: 52 }} />
           </colgroup>
@@ -1218,6 +1269,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
               </th>
               <th>Fecha</th><th>Tipo</th><th>Sede</th>
               <th style={{ textAlign: "right" }}>Importe</th>
+              <th>Moneda</th>
               <th>Estado</th><th></th>
             </tr>
           </thead>
@@ -1247,6 +1299,13 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
                         </select>
                       </td>
                       <td><input value={editBuf.amountRaw ?? (editBuf.amount ? formatCurrencyInput(String(editBuf.amount), "ARS") : "")} onChange={e => { const raw = formatCurrencyInput(e.target.value.replace(/[^\d,]/g,""), "ARS"); setEditBuf(b => ({ ...b, amountRaw: raw, amount: parseCurrencyInput(raw) })); }} inputMode="decimal" placeholder="0,00" style={{ width: "100%", padding: "4px 6px", borderRadius: 6, fontSize: 11, textAlign: "right", background: "var(--bg)", border: "1px solid var(--border2)", color: "var(--text)", fontFamily: "var(--font)" }} /></td>
+                      <td>
+                        <select value={editBuf.currency ?? "ARS"} onChange={e => setEditBuf(b => ({ ...b, currency: e.target.value }))} style={{ width: "100%", padding: "4px 6px", borderRadius: 6, fontSize: 11, background: "var(--bg)", border: "1px solid var(--border2)", color: "var(--text)" }}>
+                          <option value="ARS">ARS</option>
+                          <option value="USD">USD</option>
+                          <option value="EUR">EUR</option>
+                        </select>
+                      </td>
                       <td></td>
                       <td>
                         <div style={{ display: "flex", gap: 4 }}>
@@ -1292,6 +1351,9 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
                       </td>
                       <td className="mono" style={{ textAlign: "right", fontSize: 12, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {r.amount > 0 ? `${r.currency === "USD" ? "U$D" : r.currency === "EUR" ? "€" : "$"}\u202f${r.amount.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : <span style={{ color: "var(--red)" }}>—</span>}
+                      </td>
+                      <td className="mono" style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", textAlign: "center" }}>
+                        {r.currency ?? "ARS"}
                       </td>
                       <td>
                         {r.excluded
