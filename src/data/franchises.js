@@ -1258,7 +1258,7 @@ export const REAL_FRANCHISES = [
     "id": 28,
     "name": "Palermo Rosedal",
     "country": "Argentina",
-    "activa": true,
+    "activa": false,
     "moneda": "ARS",
     "condIVA": "Responsable Inscripto",
     "applyIVA": true,

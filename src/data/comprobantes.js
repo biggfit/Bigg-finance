@@ -7,11 +7,8 @@ export const REAL_COMPROBANTES = {
     {"id": "ene26-56-5", "type": "FACTURA|FEE", "date": "31/01/2026", "amount": 19.36, "nota": "fee enero 2026", "ref": "", "month": 0, "year": 2026},
     {"id": "feb26-56-1", "type": "FACTURA|PAUTA", "date": "28/02/2026", "amount": 675.39, "nota": "pauta febrero 2026", "ref": "", "month": 0, "year": 2026},
     {"id": "feb26-56-2", "type": "FACTURA|INTERUSOS", "date": "28/02/2026", "amount": 18.07, "nota": "interusos febrero red bigg", "ref": "", "month": 0, "year": 2026},
-    {"id": "feb26-56-3", "type": "FACTURA|FEE", "date": "28/02/2026", "amount": 0, "nota": "fee febrero 2026 (dto 100%)", "ref": "", "month": 0, "year": 2026}
-  ,
-    {"id": "feb26-56-4", "type": "PAGO", "date": "25/02/2026", "amount": 0, "nota": "pago febrero 2026 - BIGG PERFORMANCE SL", "ref": "", "month": 0, "year": 2026}
-  ,
-    {"id": "feb26-56-5", "type": "PAGO", "date": "25/02/2026", "amount": 0, "nota": "pago febrero 2026 - BARNA FIT GROUP SL", "ref": "", "month": 0, "year": 2026}
+    {"id": "feb26-56-3", "type": "FACTURA|FEE", "date": "28/02/2026", "amount": 0, "nota": "fee febrero 2026 (dto 100%)", "ref": "", "month": 0, "year": 2026},
+    {"id": "feb26-56-4", "type": "PAGO", "date": "25/02/2026", "amount": 699.00, "nota": "pago febrero 2026 - BARNA FIT GROUP SL", "ref": "", "month": 0, "year": 2026}
   ],
   "47": [
     {"id": "ene26-47-1", "type": "PAGO", "date": "30/01/2026", "amount": 1950.0, "nota": "pago enero 2026", "ref": "", "month": 0, "year": 2026},
@@ -20,7 +17,8 @@ export const REAL_COMPROBANTES = {
     {"id": "ene26-47-4", "type": "NC|INTERUSOS", "date": "31/01/2026", "amount": 18.07, "nota": "interusos enero red bigg", "ref": "", "month": 0, "year": 2026},
     {"id": "ene26-47-5", "type": "FACTURA|FEE", "date": "31/01/2026", "amount": 1302.96, "nota": "fee enero 2026", "ref": "", "month": 0, "year": 2026},
     {"id": "feb26-47-1", "type": "FACTURA|PAUTA", "date": "28/02/2026", "amount": 506.54, "nota": "pauta febrero 2026", "ref": "", "month": 0, "year": 2026},
-    {"id": "feb26-47-2", "type": "FACTURA|FEE", "date": "28/02/2026", "amount": 1367.87, "nota": "fee febrero 2026", "ref": "", "month": 0, "year": 2026}
+    {"id": "feb26-47-2", "type": "FACTURA|FEE", "date": "28/02/2026", "amount": 1367.87, "nota": "fee febrero 2026", "ref": "", "month": 0, "year": 2026},
+    {"id": "feb26-47-3", "type": "PAGO", "date": "25/02/2026", "amount": 1952.00, "nota": "pago febrero 2026 - BIGG PERFORMANCE SL", "ref": "", "month": 0, "year": 2026}
   ],
   "58": [
     {"id": "ene26-58-1", "type": "FACTURA|PAUTA", "date": "31/01/2026", "amount": 1004.5, "nota": "pauta enero 2026", "ref": "", "month": 0, "year": 2026},
@@ -52,9 +50,8 @@ export const REAL_COMPROBANTES = {
     {"id": "feb26-59-1", "type": "FACTURA|PAUTA", "date": "28/02/2026", "amount": 675.39, "nota": "pauta febrero 2026", "ref": "", "month": 0, "year": 2026},
     {"id": "feb26-59-2", "type": "NC|INTERUSOS", "date": "28/02/2026", "amount": 18.07, "nota": "interusos febrero GP", "ref": "", "month": 0, "year": 2026},
     {"id": "feb26-59-3", "type": "NC|INTERUSOS", "date": "28/02/2026", "amount": 72.28, "nota": "interusos febrero red bigg", "ref": "", "month": 0, "year": 2026},
-    {"id": "feb26-59-4", "type": "FACTURA|FEE", "date": "28/02/2026", "amount": 18.07, "nota": "fee febrero 2026", "ref": "", "month": 0, "year": 2026}
-  ,
-    {"id": "feb26-59-5", "type": "PAGO", "date": "25/02/2026", "amount": 0, "nota": "pago febrero 2026 - ABUDINO FIT SL", "ref": "", "month": 0, "year": 2026}
+    {"id": "feb26-59-4", "type": "FACTURA|FEE", "date": "28/02/2026", "amount": 18.07, "nota": "fee febrero 2026", "ref": "", "month": 0, "year": 2026},
+    {"id": "feb26-59-5", "type": "PAGO", "date": "25/02/2026", "amount": 699.00, "nota": "pago febrero 2026 - ABUDINO FIT SL", "ref": "", "month": 0, "year": 2026}
   ],
   "45": [
     {"id": "ene26-45-1", "type": "FACTURA|FEE", "date": "31/01/2026", "amount": 559.06, "nota": "fee enero 2026 (dto 50%)", "ref": "", "month": 0, "year": 2026},

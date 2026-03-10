@@ -1,41 +1,41 @@
 export const REAL_SALDO_INICIAL = {
-  "3":  -332186,   // La Plata Centro
-  "4":  -680313,   // Urquiza
-  "5":   189003,   // Cañitas
-  "6":  1255639,   // Nordelta Ruta 27
-  "8": -1048550,   // Devoto
-  "10":  772305,   // Facultades
-  "11": 1392942,   // Maschwitz
-  "13": -165973,   // San Isidro
-  "14": 1800787,   // Nordelta Colegios
-  "15":  -70156,   // Nuñez Arribeños
-  "16":  126578,   // Florida
-  "17": 2916865,   // Caballito
-  "18": -869895,   // Belgrano Monroe
-  "21": -633509,   // Palermo
-  "25": -179388,   // Botánico
-  "26":   -5725,   // Cerro las Rosas
-  "27":-1698578,   // La Horqueta
-  "28": 2495538,   // Palermo Rosedal
-  "29":  732478,   // Chacras de Coria
-  "31":-2142848,   // Saavedra
-  "34": 1291669,   // Las Lomas
-  "37":-2143273,   // Colegiales
-  "38": -277453,   // Canning
-  "39":-1021725,   // Puerto Norte
-  "40": -623402,   // Nuñez Manuela Pedraza
-  "41": 3200978,   // Caballito Alberdi
-  "44": 1430567,   // Golf
-  "46": 1024328,   // San Lorenzo
-  "48": 1454510,   // MDQ
-  "49": 1598261,   // Pico
-  "52":  283279,   // Torcuato
-  "54": 1141531,   // Tortuguitas
-  "57": 1520605,   // Caballito Norte
-  "7":  1317906,   // Pilar
-  "63": -331606,   // Las Lomitas
-  "64": -321847,   // Corrientes
-  "68":10149887,   // San Juan
+  "3":   -332186.03,  // La Plata Centro
+  "4":  -1166937.48,  // Urquiza
+  "5":    564002.33,  // Cañitas
+  "6":   1255637.95,  // Nordelta Ruta 27
+  "8":  -1048549.76,  // Devoto
+  "10":   772304.57,  // Facultades
+  "11":  1392941.48,  // Maschwitz
+  "13":  -165972.89,  // San Isidro
+  "14":  1800786.93,  // Nordelta Colegios
+  "15":   -70156.29,  // Nuñez Arribeños
+  "16":   276577.84,  // Florida
+  "17":  2916863.98,  // Caballito
+  "18":  -869894.56,  // Belgrano Monroe
+  "21":  -633506.50,  // Palermo
+  "25":  -179387.01,  // Botánico
+  "26":    -5725.49,  // Cerro las Rosas
+  "27": -1698579.87,  // La Horqueta
+  // "28": 2495538,   // Palermo Rosedal (inactiva)
+  "29":   732476.87,  // Chacras de Coria
+  "31": -2442848.62,  // Saavedra
+  "34":  1291669.30,  // Las Lomas
+  "37": -2143272.18,  // Colegiales
+  "38":  -277453.04,  // Canning
+  "39": -1021724.95,  // Puerto Norte
+  "40":  -523400.38,  // Nuñez Manuela Pedraza
+  "41":  3200977.75,  // Caballito Alberdi
+  "44":  1430569.47,  // Golf
+  "46":  1024326.81,  // San Lorenzo
+  "48":  1454509.61,  // MDQ
+  "49":  1598261.28,  // Pico
+  "52":   283278.99,  // Torcuato
+  "54":  1041532.07,  // Tortuguitas
+  "57":  1520604.79,  // Caballito Norte
+  "7":   1317904.46,  // Pilar
+  "63":  -331606.00,  // Las Lomitas
+  "64":  -321847.00,  // Corrientes
+  "68": 10149886.76,  // San Juan
   // USD
   "1":   5919.00,  // Herrera (Paraguay)
   "20":  4258.00,  // Century (Paraguay)
