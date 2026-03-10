@@ -4,7 +4,7 @@ import { buildCuentaCorriente, COMP_TYPES, fmt, fmtS, downloadCSV } from "../lib
 import { dmyToIso, isoToDmy } from "../data/franchisor";
 import { TypePill } from "./atoms";
 
-// ─── CC MODAL ─────────────────────────────────────────────────────────────────
+// ─── CC MODAL — Estado de cuenta tipo recordatorio ────────────────────────────
 export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
   const { comps, saldoInicial } = useStore();
   const { lines } = buildCuentaCorriente(franchise.id, comps, saldoInicial);
@@ -12,6 +12,12 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
   const [confirmId, setConfirmId] = useState(null);
   const [editId,    setEditId]    = useState(null);
   const [editBuf,   setEditBuf]   = useState({});
+
+  // Separar apertura del resto
+  const apertura  = lines.find(l => l.type === "apertura");
+  const movs      = lines.filter(l => l.type !== "apertura");
+  const saldoFinal = movs.length > 0 ? movs[movs.length - 1].saldo : (apertura?.saldo ?? 0);
+  const fechaFinal = movs.length > 0 ? movs[movs.length - 1].date : apertura?.date ?? "—";
 
   const openEdit = (l) => {
     setEditId(l.id);
@@ -24,57 +30,113 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
   };
 
   const handleExportCSV = useCallback(() => {
-    const rows = [["Fecha", "Tipo", "Descripción", "Débito", "Crédito", "Saldo"]];
-    lines.forEach(l => rows.push([l.date ?? "—", COMP_TYPES[l.type]?.label ?? "Apertura", l.ref ?? l.nota ?? "—", (l.debit ?? 0).toFixed(2), (l.credit ?? 0).toFixed(2), l.saldo.toFixed(2)]));
+    const rows = [["Fecha", "N° Comprobante", "Tipo", "Importe", "Saldo"]];
+    movs.forEach(l => {
+      const importe = l.debit > 0 ? l.debit : -l.credit;
+      rows.push([l.date ?? "—", l.invoice ?? "—", COMP_TYPES[l.type]?.label ?? l.type, importe.toFixed(2), l.saldo.toFixed(2)]);
+    });
     downloadCSV(rows, `CC_${franchise.name.replace(/ /g, "_")}.csv`);
-  }, [lines, franchise.name]);
+  }, [movs, franchise.name]);
 
   const inpS = { padding: "3px 7px", fontSize: 11, borderRadius: 5, background: "var(--bg)", border: "1px solid var(--accent)", color: "var(--text)", fontFamily: "var(--font)" };
 
+  const saldoColor = (s) => s > 0.01 ? "var(--red)" : s < -0.01 ? "var(--green)" : "var(--muted)";
+
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.9)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="fade" style={{ background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: 14, width: 920, maxWidth: "97vw", maxHeight: "90vh", display: "flex", flexDirection: "column" }}>
-        <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.9)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+      onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="fade" style={{ background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: 14, width: 960, maxWidth: "97vw", maxHeight: "92vh", display: "flex", flexDirection: "column" }}>
+
+        {/* ── Header ── */}
+        <div style={{ padding: "16px 24px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
           <div>
-            <div style={{ fontWeight: 800, fontSize: 14 }}>{franchise.name}</div>
-            <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 1 }}>Cuenta Corriente Completa · {franchise.currency}</div>
+            <div style={{ fontWeight: 800, fontSize: 15 }}>{franchise.name}</div>
+            <div style={{ color: "var(--muted)", fontSize: 11, marginTop: 2 }}>
+              {franchise.razonSocial && <span>{franchise.razonSocial} · </span>}
+              Estado de Cuenta · {franchise.currency}
+            </div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button className="ghost" onClick={handleExportCSV}>↓ CSV</button>
             <button className="ghost" onClick={onClose}>Cerrar</button>
           </div>
         </div>
+
+        {/* ── Saldo Anterior ── */}
+        {apertura && (
+          <div style={{ padding: "14px 24px", borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,.02)", flexShrink: 0, display: "flex", alignItems: "baseline", gap: 16 }}>
+            <span style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 }}>
+              Saldo anterior al {apertura.date}
+            </span>
+            <span className="mono" style={{ fontSize: 20, fontWeight: 800, color: saldoColor(apertura.saldo) }}>
+              {fmtS(apertura.saldo, franchise.currency)}
+            </span>
+          </div>
+        )}
+
+        {/* ── Tabla de movimientos ── */}
         <div style={{ overflowY: "auto", flex: 1 }}>
           <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
             <colgroup>
-              <col style={{ width: "9%" }} /><col style={{ width: "14%" }} /><col style={{ width: "27%" }} />
-              <col style={{ width: "13%" }} /><col style={{ width: "13%" }} /><col style={{ width: "13%" }} />
-              <col style={{ width: 68 }} />
+              <col style={{ width: "10%" }} />  {/* Fecha */}
+              <col style={{ width: "22%" }} />  {/* N° Comprobante */}
+              <col style={{ width: "18%" }} />  {/* Tipo */}
+              <col style={{ width: "18%" }} />  {/* Importe */}
+              <col style={{ width: "18%" }} />  {/* Saldo */}
+              <col style={{ width: 72 }} />     {/* Acciones */}
             </colgroup>
-            <thead style={{ position: "sticky", top: 0, background: "var(--bg2)" }}>
-              <tr><th>Fecha</th><th>Tipo</th><th>Descripción</th><th style={{ textAlign: "right" }}>Débito</th><th style={{ textAlign: "right" }}>Crédito</th><th style={{ textAlign: "right" }}>Saldo</th><th></th></tr>
+            <thead style={{ position: "sticky", top: 0, background: "var(--bg2)", zIndex: 2 }}>
+              <tr>
+                <th>Fecha</th>
+                <th>N° Comprobante</th>
+                <th>Tipo</th>
+                <th style={{ textAlign: "right" }}>Importe</th>
+                <th style={{ textAlign: "right" }}>Saldo</th>
+                <th></th>
+              </tr>
             </thead>
             <tbody>
-              {lines.map((l, i) => {
+              {movs.length === 0 && (
+                <tr><td colSpan={6} style={{ textAlign: "center", padding: 32, color: "var(--muted)", fontSize: 13 }}>Sin movimientos</td></tr>
+              )}
+              {movs.map((l, i) => {
                 const canAct = MOV_TYPES.has(l.type) && l.id;
-                const isEd = editId === l.id;
+                const isEd   = editId === l.id;
+                const importe = l.debit > 0 ? l.debit : -l.credit;
                 return (
-                  <tr key={i} style={{ background: isEd ? "rgba(173,255,25,.06)" : l.type === "apertura" ? "rgba(173,255,25,.03)" : "transparent" }}>
-                    <td className="mono" style={{ fontSize: 11, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {isEd ? <input type="date" value={dmyToIso(editBuf.date)} onChange={e => setEditBuf(b => ({ ...b, date: isoToDmy(e.target.value) }))} style={{ ...inpS, width: 112, colorScheme: "dark" }} /> : l.date ?? "—"}
+                  <tr key={i} style={{
+                    background: isEd ? "rgba(173,255,25,.06)" : i % 2 === 0 ? "transparent" : "rgba(255,255,255,.012)",
+                    borderBottom: "1px solid rgba(255,255,255,.04)"
+                  }}>
+                    {/* Fecha */}
+                    <td className="mono" style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap", padding: "8px 8px" }}>
+                      {isEd
+                        ? <input type="date" value={dmyToIso(editBuf.date)} onChange={e => setEditBuf(b => ({ ...b, date: isoToDmy(e.target.value) }))} style={{ ...inpS, width: 112, colorScheme: "dark" }} />
+                        : l.date ?? "—"}
                     </td>
-                    <td style={{ overflow: "hidden" }}>{l.type === "apertura" ? <span className="pill" style={{ color: "var(--accent)", background: "rgba(173,255,25,.08)" }}>Apertura</span> : <TypePill type={l.type} />}</td>
-                    <td style={{ fontSize: 11, color: "var(--muted)", overflow: "hidden" }}>
-                      {isEd ? <input value={editBuf.nota} onChange={e => setEditBuf(b => ({ ...b, nota: e.target.value }))} style={{ ...inpS, width: "100%" }} placeholder="Descripción..." /> : <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.ref ?? l.nota ?? "—"}</span>}
+                    {/* N° Comprobante */}
+                    <td className="mono" style={{ fontSize: 10, color: "var(--accent)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", padding: "8px 8px", fontWeight: 700, letterSpacing: ".03em" }}>
+                      {l.invoice ?? <span style={{ color: "var(--dim)", fontWeight: 400 }}>—</span>}
                     </td>
-                    <td className="mono" style={{ textAlign: "right", fontSize: 12, color: "var(--muted)" }}>
-                      {isEd && l.debit > 0 ? <input type="number" min="0" step="0.01" value={editBuf.amount} onChange={e => setEditBuf(b => ({ ...b, amount: e.target.value }))} style={{ ...inpS, width: 85, textAlign: "right" }} /> : l.debit > 0 ? fmt(l.debit, franchise.currency) : "—"}
+                    {/* Tipo */}
+                    <td style={{ overflow: "hidden", padding: "8px 4px" }}>
+                      <TypePill type={l.type} />
                     </td>
-                    <td className="mono" style={{ textAlign: "right", fontSize: 12, color: "var(--green)" }}>
-                      {isEd && l.credit > 0 ? <input type="number" min="0" step="0.01" value={editBuf.amount} onChange={e => setEditBuf(b => ({ ...b, amount: e.target.value }))} style={{ ...inpS, width: 85, textAlign: "right" }} /> : l.credit > 0 ? fmt(l.credit, franchise.currency) : "—"}
+                    {/* Importe */}
+                    <td className="mono" style={{ textAlign: "right", fontSize: 12, fontWeight: 700, padding: "8px 8px", whiteSpace: "nowrap",
+                      color: importe > 0 ? "var(--red)" : "var(--green)" }}>
+                      {isEd
+                        ? <input type="number" min="0" step="0.01" value={editBuf.amount} onChange={e => setEditBuf(b => ({ ...b, amount: e.target.value }))} style={{ ...inpS, width: 90, textAlign: "right" }} />
+                        : fmt(Math.abs(importe), franchise.currency)}
                     </td>
-                    <td style={{ textAlign: "right" }}><span className="mono" style={{ fontSize: 12, fontWeight: 700, color: l.saldo > 0.01 ? "var(--red)" : l.saldo < -0.01 ? "var(--green)" : "var(--muted)" }}>{fmtS(l.saldo, franchise.currency)}</span></td>
-                    <td style={{ textAlign: "right", paddingRight: 6 }}>
+                    {/* Saldo */}
+                    <td style={{ textAlign: "right", padding: "8px 8px" }}>
+                      <span className="mono" style={{ fontSize: 12, fontWeight: 700, color: saldoColor(l.saldo) }}>
+                        {fmtS(l.saldo, franchise.currency)}
+                      </span>
+                    </td>
+                    {/* Acciones */}
+                    <td style={{ textAlign: "right", paddingRight: 8 }}>
                       {isEd ? (
                         <span style={{ display: "flex", gap: 3, justifyContent: "flex-end" }}>
                           <button className="btn" style={{ fontSize: 10, padding: "2px 7px" }} onClick={saveEdit}>✓</button>
@@ -98,6 +160,17 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
             </tbody>
           </table>
         </div>
+
+        {/* ── Saldo Final ── */}
+        <div style={{ padding: "14px 24px", borderTop: "2px solid var(--border2)", background: "rgba(255,255,255,.02)", flexShrink: 0, display: "flex", justifyContent: "flex-end", alignItems: "baseline", gap: 16 }}>
+          <span style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 }}>
+            Saldo adeudado al {fechaFinal}
+          </span>
+          <span className="mono" style={{ fontSize: 22, fontWeight: 800, color: saldoColor(saldoFinal) }}>
+            {fmtS(saldoFinal, franchise.currency)}
+          </span>
+        </div>
+
       </div>
     </div>
   );

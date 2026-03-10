@@ -292,14 +292,7 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
                   <td style={{ fontSize: 11, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", padding: "6px 8px 6px 18px" }}>
                     {isEd
                       ? <input value={editBufTC.concepto} onChange={e => setEditBufTC(b => ({ ...b, concepto: e.target.value }))} style={{ ...inpS, width: "100%" }} placeholder="Descripción..." />
-                      : <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-                          {r.invoice && (
-                            <span className="mono" style={{ flexShrink: 0, fontSize: 9, fontWeight: 700, color: "var(--accent)", background: "rgba(173,255,25,.10)", border: "1px solid rgba(173,255,25,.25)", borderRadius: 4, padding: "1px 5px", letterSpacing: ".04em" }}>
-                              {r.invoice}
-                            </span>
-                          )}
-                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.concepto}</span>
-                        </span>
+                      : <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.concepto}</span>
                     }
                   </td>
                   {/* Debe */}
@@ -329,12 +322,26 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
                         }}>✓</button>
                         <button className="ghost" style={{ fontSize: 10, padding: "2px 6px" }} onClick={() => setEditRowId(null)}>✕</button>
                       </span>
-                    ) : !r.isApertura && r.compId && (r.tipo === "PAGO" || r.tipo === "PAGO_PAUTA" || r.tipo === "PAGO_ENVIADO") ? (
-                      <button className="ghost" style={{ fontSize: 12, padding: "2px 5px", opacity: .5 }} title="Editar" onClick={() => {
-                        setEditRowId(r.compId);
-                        setEditBufTC({ date: r.displayDate, concepto: r.concepto === "—" ? "" : r.concepto, amount: r.debe > 0 ? r.debe : r.haber, frId: r.frId });
-                      }}>✎</button>
-                    ) : null}
+                    ) : (
+                      <span style={{ display: "flex", gap: 3, justifyContent: "flex-end", alignItems: "center", height: "100%" }}>
+                        {r.invoice && (
+                          <button className="ghost" title={r.invoice} style={{ padding: "2px 5px", opacity: .6, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "default" }}>
+                            <svg width="12" height="14" viewBox="0 0 12 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+                              <rect x="0.6" y="0.6" width="10.8" height="12.8" rx="1.4" stroke="var(--accent)" strokeWidth="1.2"/>
+                              <line x1="2.5" y1="4" x2="9.5" y2="4" stroke="var(--accent)" strokeWidth="1" strokeLinecap="round"/>
+                              <line x1="2.5" y1="6.5" x2="9.5" y2="6.5" stroke="var(--accent)" strokeWidth="1" strokeLinecap="round"/>
+                              <line x1="2.5" y1="9" x2="6.5" y2="9" stroke="var(--accent)" strokeWidth="1" strokeLinecap="round"/>
+                            </svg>
+                          </button>
+                        )}
+                        {!r.isApertura && r.compId && (r.tipo === "PAGO" || r.tipo === "PAGO_PAUTA" || r.tipo === "PAGO_ENVIADO") && (
+                          <button className="ghost" style={{ fontSize: 12, padding: "2px 5px", opacity: .5, display: "inline-flex", alignItems: "center" }} title="Editar" onClick={() => {
+                            setEditRowId(r.compId);
+                            setEditBufTC({ date: r.displayDate, concepto: r.concepto === "—" ? "" : r.concepto, amount: r.debe > 0 ? r.debe : r.haber, frId: r.frId });
+                          }}>✎</button>
+                        )}
+                      </span>
+                    )}
                   </td>
                 </tr>
               );

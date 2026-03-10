@@ -206,11 +206,11 @@ export const REAL_COMPROBANTES = {
       "year": 2026
     },
     {
-      "id": "feb26-48-4",
-      "type": "PAGO_ENVIADO",
-      "date": "31/01/2026",
+      "id": "feb26-48-pauta",
+      "type": "FACTURA|PAUTA",
+      "date": "28/02/2026",
       "amount": 605000.0,
-      "nota": "ajuste",
+      "nota": "pauta febrero 2026",
       "ref": "",
       "month": 1,
       "year": 2026
@@ -235,16 +235,6 @@ export const REAL_COMPROBANTES = {
       "month": 1,
       "year": 2026
     , "invoice": "FA 00003-00002023"},
-    {
-      "id": "feb26-48-manual-pauta",
-      "type": "FACTURA|PAUTA",
-      "date": "28/02/2026",
-      "amount": 605000.0,
-      "nota": "pauta febrero",
-      "ref": "",
-      "month": 1,
-      "year": 2026
-    }
   ],
   "25": [
     {
