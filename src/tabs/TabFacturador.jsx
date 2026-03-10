@@ -249,42 +249,40 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
       <div className="fade">
         <Crumb />
 
-        {/* Fecha */}
-        <div style={{ marginBottom: 16 }}>
-          <label style={labelS}>FECHA</label>
-          <input type="date" value={fechaIso} onChange={e => { setFechaIso(e.target.value); setPreview(null); }}
-            style={{ ...inputS, cursor: "pointer", colorScheme: "dark", fontWeight: 700, maxWidth: 220 }} />
-        </div>
-
-        {/* Tipo de documento */}
-        <div style={{ marginBottom: 16 }}>
-          <label style={labelS}>TIPO DE DOCUMENTO</label>
-          <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1.5px solid var(--border2)", maxWidth: 280 }}>
-            {DOCS.map(d => (
-              <div key={d} onClick={() => { setDoc(d); setPreview(null); }} style={{
-                flex: 1, padding: "9px 18px", cursor: "pointer", fontWeight: 800, fontSize: 13,
-                background: doc === d ? (d === "FACTURA" ? "rgba(255,85,112,.18)" : "rgba(16,217,122,.18)") : "transparent",
-                color: doc === d ? (d === "FACTURA" ? "var(--red)" : "var(--green)") : "var(--muted)",
-                borderRight: d === "FACTURA" ? "1px solid var(--border2)" : "none",
-                transition: "all .12s", textAlign: "center",
-              }}>
-                {d === "FACTURA" ? "🧾 Factura" : "📋 NC"}
-              </div>
-            ))}
+        {/* Fila 1: Fecha + Tipo de documento */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16, alignItems: "start" }}>
+          <div>
+            <label style={labelS}>FECHA</label>
+            <input type="date" value={fechaIso} onChange={e => { setFechaIso(e.target.value); setPreview(null); }}
+              style={{ ...inputS, cursor: "pointer", colorScheme: "dark", fontWeight: 700 }} />
+          </div>
+          <div>
+            <label style={labelS}>TIPO DE DOCUMENTO</label>
+            <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1.5px solid var(--border2)" }}>
+              {DOCS.map(d => (
+                <div key={d} onClick={() => { setDoc(d); setPreview(null); }} style={{
+                  flex: 1, padding: "9px 18px", cursor: "pointer", fontWeight: 800, fontSize: 13,
+                  background: doc === d ? (d === "FACTURA" ? "rgba(255,85,112,.18)" : "rgba(16,217,122,.18)") : "transparent",
+                  color: doc === d ? (d === "FACTURA" ? "var(--red)" : "var(--green)") : "var(--muted)",
+                  borderRight: d === "FACTURA" ? "1px solid var(--border2)" : "none",
+                  transition: "all .12s", textAlign: "center",
+                }}>
+                  {d === "FACTURA" ? "🧾 Factura" : "📋 NC"}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
-        {/* Cuenta */}
-        <div style={{ marginBottom: 16 }}>
-          <label style={labelS}>CUENTA</label>
-          <select value={cuenta} onChange={e => { setCuenta(e.target.value); setPreview(null); }}
-            style={{ ...inputS, fontWeight: 700, fontSize: 13 }}>
-            {CUENTAS.map(c => <option key={c} value={c}>{CUENTA_LABEL[c]}</option>)}
-          </select>
-        </div>
-
-        {/* Moneda + Importe */}
-        <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 14, marginBottom: importeNeto > 0 && applyIVA ? 8 : 16, alignItems: "start" }}>
+        {/* Fila 2: Cuenta + Moneda + Importe */}
+        <div style={{ display: "grid", gridTemplateColumns: "1.5fr auto 1.2fr", gap: 14, marginBottom: 16, alignItems: "start" }}>
+          <div>
+            <label style={labelS}>CUENTA</label>
+            <select value={cuenta} onChange={e => { setCuenta(e.target.value); setPreview(null); }}
+              style={{ ...inputS, fontWeight: 700, fontSize: 13 }}>
+              {CUENTAS.map(c => <option key={c} value={c}>{CUENTA_LABEL[c]}</option>)}
+            </select>
+          </div>
           <div>
             <label style={labelS}>MONEDA</label>
             <div style={{ display: "flex", gap: 6 }}>
@@ -299,7 +297,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
             </div>
           </div>
           <div>
-            <label style={labelS}>{applyIVA ? `NETO (sin IVA) — ${currency}` : `IMPORTE — ${currency}`}</label>
+            <label style={labelS}>{applyIVA ? "NETO (sin IVA)" : "IMPORTE"}</label>
             <div style={{ position: "relative" }}>
               <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--muted)", fontSize: 13, pointerEvents: "none" }}>{symComp}</span>
               <input value={importeRaw}
@@ -310,25 +308,29 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
           </div>
         </div>
 
-        {/* IVA breakdown */}
-        {importeNeto > 0 && applyIVA && (
-          <div style={{ marginBottom: 16, display: "flex", gap: 14, justifyContent: "flex-end" }}>
-            {[["Neto", importeNeto, "var(--text)"],["IVA 21%", importeIVA, "var(--blue)"],["Total", importeTotal, "var(--accent)"]].map(([l,v,c]) => (
-              <div key={l} style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 9, color: "var(--muted)", fontWeight: 700 }}>{l}</div>
-                <div className="mono" style={{ fontSize: 12, fontWeight: 800, color: c }}>{symComp} {fmtBig(v)}</div>
-              </div>
-            ))}
+        {/* Fila 3: Descripción + IVA breakdown (misma fila) */}
+        <div style={{ display: "grid", gridTemplateColumns: importeNeto > 0 && applyIVA ? "1fr auto" : "1fr", gap: 14, marginBottom: 20, alignItems: "end" }}>
+          <div>
+            <label style={labelS}>DESCRIPCIÓN <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>— editable</span></label>
+            <input value={concepto || autoConcepto}
+              onChange={e => { setConcepto(e.target.value); setPreview(null); }}
+              onFocus={e => { if (!concepto) setConcepto(autoConcepto); }}
+              style={inputS} />
           </div>
-        )}
-
-        {/* Descripción */}
-        <div style={{ marginBottom: 20 }}>
-          <label style={labelS}>DESCRIPCIÓN <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>— editable</span></label>
-          <input value={concepto || autoConcepto}
-            onChange={e => { setConcepto(e.target.value); setPreview(null); }}
-            onFocus={e => { if (!concepto) setConcepto(autoConcepto); }}
-            style={inputS} />
+          {importeNeto > 0 && applyIVA && (
+            <div style={{ display: "flex", gap: 0, border: "1px solid var(--border2)", borderRadius: 8, overflow: "hidden", alignSelf: "end" }}>
+              {[["NETO", importeNeto, "var(--text)"], ["IVA 21%", importeIVA, "var(--blue)"], ["TOTAL", importeTotal, "var(--accent)"]].map(([l, v, c], i) => (
+                <div key={l} style={{
+                  padding: "8px 16px", textAlign: "center",
+                  borderRight: i < 2 ? "1px solid var(--border2)" : "none",
+                  background: i === 2 ? "rgba(173,255,25,.05)" : "transparent",
+                }}>
+                  <div style={{ fontSize: 9, color: "var(--muted)", fontWeight: 700, letterSpacing: ".06em", marginBottom: 4 }}>{l}</div>
+                  <div className="mono" style={{ fontSize: 13, fontWeight: 800, color: c, whiteSpace: "nowrap" }}>{symComp} {fmtBig(v)}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Preview inline */}
