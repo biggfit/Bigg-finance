@@ -1,4 +1,4 @@
-import { memo, useState, useMemo } from "react";
+import { memo, useState, useMemo, useEffect } from "react";
 import React from "react";
 import { useStore } from "../lib/context";
 import { computeSaldoPrevMes, COMP_TYPES, CUENTAS, CUENTA_LABEL, SKIP_CC_TYPES, fmt, fmtS } from "../lib/helpers";
@@ -11,7 +11,7 @@ const getCuenta = (type) => {
   return type.split("|")[1]; // "FACTURA|FEE" → "FEE"
 };
 
-const TabContabilidad = memo(function TabContabilidad({ franchises, month, year, onOpenFr, initialFilter, initialTipo, showAll, multiCurrency, filterCur = "ALL" }) {
+const TabContabilidad = memo(function TabContabilidad({ franchises, month, year, onOpenFr, initialFilter, initialTipo, showAll, multiCurrency, filterCur = "ALL", onFilteredChange }) {
   const { comps, saldoInicial, editComp } = useStore();
   const filterCurrency = filterCur === "ALL" ? null : filterCur;
 
@@ -141,6 +141,8 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
       return 0;
     });
   }, [allRows, fSede, fCuenta, fConcepto, sortCol, sortDir]);
+
+  useEffect(() => { onFilteredChange?.(filtered); }, [filtered, onFilteredChange]);
 
   const toggleSort = (col) => {
     if (sortCol === col) setSortDir(d => -d); else { setSortCol(col); setSortDir(1); }

@@ -24,6 +24,7 @@ export default function App() {
   const [showMaestros, setShowMaestros] = useState(false);
   const [franchisor,   setFranchisor]   = useState(() => import.meta.env.VITE_SHEETS_API_URL ? null : DEFAULT_FRANCHISOR);
   const [tab,        setTab]       = useState("resumen");
+  const [detailFilteredRows, setDetailFilteredRows] = useState([]);
   const [month,      setMonth]     = useState(1);   // February 2026 — where the data lives
   const [year,       setYear]      = useState(2026);
   const [franchises, setFranchises]= useState(() => import.meta.env.VITE_SHEETS_API_URL ? [] : REAL_FRANCHISES.map(f => ({ ...f })));
@@ -140,6 +141,24 @@ export default function App() {
   }, []);
 
   const handleExportCSV = useCallback(() => {
+    if (tab === "contabilidad") {
+      const rows = [["Fecha","Sede","Cuenta","Descripción","N° Comprobante","Debe","Haber","Saldo","Moneda"]];
+      detailFilteredRows.forEach(r => {
+        rows.push([
+          r.displayDate ?? r.date ?? "",
+          r.frName,
+          r.tipoLabel ?? r.cuenta ?? "",
+          r.concepto ?? "",
+          r.invoice ?? "",
+          r.debe > 0 ? r.debe.toFixed(2) : "",
+          r.haber > 0 ? r.haber.toFixed(2) : "",
+          r.saldo.toFixed(2),
+          r.currency ?? "",
+        ]);
+      });
+      downloadCSV(rows, `BIGG_Detalle_${MONTHS[month]}_${year}.csv`);
+      return;
+    }
     const rows = [["Franquicia","País","Moneda","Saldo 31/12/2025","Devengado Mes","Saldo Final"]];
     filteredFr.forEach(fr => {
       const sp = computeSaldoPrevMes(fr.id, year, month, comps, saldoInicial);
@@ -147,7 +166,7 @@ export default function App() {
       rows.push([fr.name, fr.country, fr.currency, sp.toFixed(2), (sa - sp).toFixed(2), sa.toFixed(2)]);
     });
     downloadCSV(rows, `BIGG_${MONTHS[month]}_${year}.csv`);
-  }, [filteredFr, year, month, comps, saldoInicial]);
+  }, [tab, detailFilteredRows, filteredFr, year, month, comps, saldoInicial]);
 
   // Context value — stable object ref changes only when comps/saldoInicial/franchises change
   const storeValue = useMemo(
@@ -276,7 +295,7 @@ export default function App() {
       <div style={{ padding: "18px 20px", maxWidth: 1600 }}>
 {tab === "resumen"      && <TabResumenMes   allFranchises={allActiveFr} month={month} year={year} onNavigate={handleNavigate} />}
         {tab === "saldos"       && <TabSaldos       franchises={activeFr}    month={month} year={year} onOpenFr={setModalFrId} filterCur={filterCur} />}
-        {tab === "contabilidad" && <TabContabilidad key={`${detailFilter}-${detailTipo}-${navCount}`} franchises={filteredFr} month={month} year={year} onOpenFr={setModalFrId} initialFilter={detailFilter} initialTipo={detailTipo} showAll={showAll} multiCurrency={filterCur === "ALL"} filterCur={filterCur} />}
+        {tab === "contabilidad" && <TabContabilidad key={`${detailFilter}-${detailTipo}-${navCount}`} franchises={filteredFr} month={month} year={year} onOpenFr={setModalFrId} initialFilter={detailFilter} initialTipo={detailTipo} showAll={showAll} multiCurrency={filterCur === "ALL"} filterCur={filterCur} onFilteredChange={setDetailFilteredRows} />}
         {tab === "facturador"   && <TabFacturador   month={month} year={year} onAddComp={addComp} factState={factState} setFactState={setFactState} franchisor={franchisor} />}
       </div>
     </StoreCtx.Provider>
