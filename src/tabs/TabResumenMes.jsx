@@ -1,5 +1,5 @@
 import { memo, useMemo } from "react";
-import { fmt, computeSaldo, computeSaldoPrevMes, computePautaPendiente, makeType } from "../lib/helpers";
+import { fmt, computeSaldo, computeSaldoPrevMes, computePautaPendiente, makeType, SYM } from "../lib/helpers";
 import { SaldoBadge } from "../components/atoms";
 import { useStore } from "../lib/context";
 import { inPeriod } from "../data/franchisor";
@@ -88,6 +88,8 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
     }).filter(Boolean);
   }, [allFranchises, comps, saldoInicial, month, year]);
 
+  const fmtInt = (v, c) => `${SYM[c] || "$"}\u202f${Math.round(Math.abs(v)).toLocaleString("es-AR")}`;
+
   const CuentaRow = ({ label, data, cur, cuenta }) => {
     const hayMovimiento = data.facts > 0 || data.ncs > 0;
     return (
@@ -107,11 +109,11 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
 
   return (
     <div className="fade">
-      <div style={{ display: "grid", gridTemplateColumns: `repeat(${tarjetas.length || 1}, 1fr)`, gap: 16, alignItems: "stretch" }}>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${tarjetas.length || 1}, minmax(0, 1fr))`, gap: 16, alignItems: "stretch" }}>
         {tarjetas.map(({ cur, totSP, totSA, fee, interusos, pauta, sponsors, otrosIngresos, totPagos, totPagosACuenta, totEnv, nDeben, cobrarReal, pautaPendRows, totDeben, totPautaPend }) => {
           const accentC = cur === "ARS" ? "var(--gold)" : cur === "USD" ? "var(--green)" : "var(--cyan)";
           return (
-            <div key={cur} style={{ background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: 12, padding: 22, display: "flex", flexDirection: "column" }}>
+            <div key={cur} style={{ background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: 12, padding: 22, display: "flex", flexDirection: "column", minWidth: 0 }}>
               <div style={{ fontWeight: 900, fontSize: 22, letterSpacing: ".1em", color: accentC, marginBottom: 14 }}>{cur}</div>
 
               {/* Saldo arrastrado */}
@@ -157,29 +159,29 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
               {/* Nos deben / Debemos */}
               <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 {nDeben > 0 && (
-                  <div onClick={() => onNavigate("saldos", "deben")} style={{ padding: "10px 12px", borderRadius: 7, background: "rgba(255,85,112,.05)", border: "1px solid rgba(255,85,112,.1)", textAlign: "center", cursor: "pointer", transition: "background .15s" }}
+                  <div onClick={() => onNavigate("saldos", "deben")} style={{ padding: "10px 12px", borderRadius: 7, background: "rgba(255,85,112,.05)", border: "1px solid rgba(255,85,112,.1)", textAlign: "center", cursor: "pointer", transition: "background .15s", containerType: "inline-size", minWidth: 0, overflow: "hidden" }}
                     onMouseEnter={e => e.currentTarget.style.background="rgba(255,85,112,.12)"}
                     onMouseLeave={e => e.currentTarget.style.background="rgba(255,85,112,.05)"}>
                     <div style={{ fontSize: 10, fontWeight: 800, color: "var(--red)", letterSpacing: ".08em", marginBottom: 4 }}>NOS DEBEN ↗</div>
-                    <div className="mono" style={{ fontSize: 14, fontWeight: 800, color: "var(--red)" }}>{fmt(totDeben, cur)}</div>
+                    <div className="mono" style={{ fontSize: "clamp(10px, 11cqi, 14px)", fontWeight: 800, color: "var(--red)", whiteSpace: "nowrap" }}>{fmtInt(totDeben, cur)}</div>
                     <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>{nDeben} sede{nDeben !== 1 ? "s" : ""}</div>
                   </div>
                 )}
-                {cobrarReal.length > 0 && (
-                  <div onClick={() => onNavigate("saldos", "debemos")} style={{ padding: "10px 12px", borderRadius: 7, background: "rgba(16,217,122,.05)", border: "1px solid rgba(16,217,122,.1)", textAlign: "center", cursor: "pointer", transition: "background .15s" }}
+                {(() => { const totDebo = Math.abs(cobrarReal.reduce((a,d)=>a+d.sa,0)); return cobrarReal.length > 0 && Math.round(totDebo) > 0 && (
+                  <div onClick={() => onNavigate("saldos", "debemos")} style={{ padding: "10px 12px", borderRadius: 7, background: "rgba(16,217,122,.05)", border: "1px solid rgba(16,217,122,.1)", textAlign: "center", cursor: "pointer", transition: "background .15s", containerType: "inline-size", minWidth: 0, overflow: "hidden" }}
                     onMouseEnter={e => e.currentTarget.style.background="rgba(16,217,122,.12)"}
                     onMouseLeave={e => e.currentTarget.style.background="rgba(16,217,122,.05)"}>
                     <div style={{ fontSize: 10, fontWeight: 800, color: "var(--green)", letterSpacing: ".08em", marginBottom: 4 }}>DEBEMOS ↗</div>
-                    <div className="mono" style={{ fontSize: 14, fontWeight: 800, color: "var(--green)" }}>{fmt(Math.abs(cobrarReal.reduce((a,d)=>a+d.sa,0)), cur)}</div>
+                    <div className="mono" style={{ fontSize: "clamp(10px, 11cqi, 14px)", fontWeight: 800, color: "var(--green)", whiteSpace: "nowrap" }}>{fmtInt(totDebo, cur)}</div>
                     <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>{cobrarReal.length} sede{cobrarReal.length !== 1 ? "s" : ""}</div>
                   </div>
-                )}
+                ); })()}
                 {pautaPendRows.length > 0 && (
-                  <div onClick={() => onNavigate("detalle", "facturar", { cuenta: ["PAGO_PAUTA", "PAUTA"] })} style={{ padding: "10px 12px", borderRadius: 7, background: "rgba(34,211,238,.05)", border: "1px solid rgba(34,211,238,.15)", textAlign: "center", cursor: "pointer", transition: "background .15s", gridColumn: cobrarReal.length > 0 ? "auto" : "1 / -1" }}
+                  <div onClick={() => onNavigate("detalle", "facturar", { cuenta: ["PAGO_PAUTA", "PAUTA"] })} style={{ padding: "10px 12px", borderRadius: 7, background: "rgba(34,211,238,.05)", border: "1px solid rgba(34,211,238,.15)", textAlign: "center", cursor: "pointer", transition: "background .15s", gridColumn: cobrarReal.length > 0 ? "auto" : "1 / -1", containerType: "inline-size", minWidth: 0, overflow: "hidden" }}
                     onMouseEnter={e => e.currentTarget.style.background="rgba(34,211,238,.12)"}
                     onMouseLeave={e => e.currentTarget.style.background="rgba(34,211,238,.05)"}>
                     <div style={{ fontSize: 10, fontWeight: 800, color: "var(--cyan)", letterSpacing: ".08em", marginBottom: 4 }}>A FACTURAR ↗</div>
-                    <div className="mono" style={{ fontSize: 14, fontWeight: 800, color: "var(--cyan)" }}>{fmt(totPautaPend, cur)}</div>
+                    <div className="mono" style={{ fontSize: "clamp(10px, 11cqi, 14px)", fontWeight: 800, color: "var(--cyan)", whiteSpace: "nowrap" }}>{fmtInt(totPautaPend, cur)}</div>
                     <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>Pagos a cuenta · {pautaPendRows.length} sede{pautaPendRows.length !== 1 ? "s" : ""}</div>
                   </div>
                 )}

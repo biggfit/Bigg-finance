@@ -3,3 +3,8 @@ dist
 .claude
 *.cjs
 *.local
+
+.vercel
+
+# Migration artifacts
+migration_*.csv

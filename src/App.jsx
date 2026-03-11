@@ -1,9 +1,12 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { DEFAULT_FRANCHISOR } from "./data/franchisor";
 import { REAL_FRANCHISES } from "./data/franchises";
 import { REAL_SALDO_INICIAL } from "./data/saldos";
 import { REAL_COMPROBANTES } from "./data/comprobantes";
 import { StoreCtx } from "./lib/context";
+import { fetchComps, fetchSaldos, appendComp, updateComp, removeComp,
+         fetchFranchises, fetchFranchisor,
+         sheetsSaveFr, sheetsAddFr, sheetsDeleteFr, sheetsSaveFranchisor } from "./lib/sheetsApi";
 import { CURRENCIES, MONTHS, AVAILABLE_YEARS, computeSaldo, computeSaldoPrevMes, downloadCSV } from "./lib/helpers";
 import "./lib/styles";
 import FrDetail from "./components/FrDetail";
@@ -19,13 +22,16 @@ const LOGO_SRC = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA9gAAAFeCAYAAAB+
 export default function App() {
   const [user,       setUser]      = useState({ name: "Admin" }); // login deshabilitado para testing
   const [showMaestros, setShowMaestros] = useState(false);
-  const [franchisor,   setFranchisor]   = useState(DEFAULT_FRANCHISOR);
+  const [franchisor,   setFranchisor]   = useState(() => import.meta.env.VITE_SHEETS_API_URL ? null : DEFAULT_FRANCHISOR);
   const [tab,        setTab]       = useState("resumen");
   const [month,      setMonth]     = useState(1);   // February 2026 — where the data lives
   const [year,       setYear]      = useState(2026);
-  const [franchises, setFranchises]= useState(() => REAL_FRANCHISES.map(f => ({ ...f })));
-  const [comps,      setComps]     = useState(REAL_COMPROBANTES);
-  const [saldoInicial]             = useState(REAL_SALDO_INICIAL);
+  const [franchises, setFranchises]= useState(() => import.meta.env.VITE_SHEETS_API_URL ? [] : REAL_FRANCHISES.map(f => ({ ...f })));
+  const useSheets = !!import.meta.env.VITE_SHEETS_API_URL;
+  const [comps,        setComps]       = useState(() => useSheets ? {} : REAL_COMPROBANTES);
+  const [saldoInicial, setSaldoInicial] = useState(() => useSheets ? {} : REAL_SALDO_INICIAL);
+  const [sheetsReady,  setSheetsReady] = useState(!import.meta.env.VITE_SHEETS_API_URL);
+  const [loadError,    setLoadError]   = useState(null);
   const [modalFrId,  setModalFrId] = useState(null);   // null = closed, number = franchise id
   const [factState,  setFactState] = useState({       // Facturador state persists across tab switches
     stage: "idle", rows: [], editIdx: null, editBuf: {},
@@ -40,6 +46,8 @@ export default function App() {
 
   const saveFr = useCallback((id, data) => {
     setFranchises(prev => prev.map(f => f.id === id ? { ...f, ...data } : f));
+    if (import.meta.env.VITE_SHEETS_API_URL)
+      sheetsSaveFr(id, data).catch(err => console.error('Sheets saveFr:', err));
   }, []);
 
   const deleteFr = useCallback((id) => {
@@ -49,17 +57,24 @@ export default function App() {
       Object.keys(next).forEach(k => { if (k.startsWith(String(id) + "-")) delete next[k]; });
       return next;
     });
+    if (import.meta.env.VITE_SHEETS_API_URL)
+      sheetsDeleteFr(id).catch(err => console.error('Sheets deleteFr:', err));
   }, []);
 
   const addFr = useCallback((data) => {
     setFranchises(prev => {
       const maxId = Math.max(0, ...prev.map(f => f.id));
-      return [...prev, { ...data, id: maxId + 1 }];
+      const newFr = { ...data, id: maxId + 1 };
+      if (import.meta.env.VITE_SHEETS_API_URL)
+        sheetsAddFr(newFr).catch(err => console.error('Sheets addFr:', err));
+      return [...prev, newFr];
     });
   }, []);
 
   const saveFranchisor = useCallback((side, data) => {
-    setFranchisor(prev => ({ ...prev, [side]: { ...prev[side], ...data } }));
+    setFranchisor(prev => ({ ...prev, [side]: { ...(prev?.[side] ?? {}), ...data } }));
+    if (import.meta.env.VITE_SHEETS_API_URL)
+      sheetsSaveFranchisor(side, data).catch(err => console.error('Sheets saveFranchisor:', err));
   }, []);
 
   const handleNavigate = useCallback((tab, filter, { tipo, cuenta, moneda } = {}) => {
@@ -103,11 +118,15 @@ export default function App() {
   const addComp = useCallback((frId, comp) => {
     const key = String(frId);
     setComps(prev => ({ ...prev, [key]: [...(prev[key] ?? []), comp] }));
+    if (import.meta.env.VITE_SHEETS_API_URL)
+      appendComp(frId, comp).catch(err => console.error('Sheets appendComp:', err));
   }, []);
 
   const delComp = useCallback((frId, compId) => {
     const key = String(frId);
     setComps(prev => ({ ...prev, [key]: (prev[key] ?? []).filter(c => c.id !== String(compId)) }));
+    if (import.meta.env.VITE_SHEETS_API_URL)
+      removeComp(frId, compId).catch(err => console.error('Sheets removeComp:', err));
   }, []);
 
   const editComp = useCallback((frId, compId, patch) => {
@@ -116,6 +135,8 @@ export default function App() {
       ...prev,
       [key]: (prev[key] ?? []).map(c => c.id === String(compId) ? { ...c, ...patch } : c),
     }));
+    if (import.meta.env.VITE_SHEETS_API_URL)
+      updateComp(frId, compId, patch).catch(err => console.error('Sheets updateComp:', err));
   }, []);
 
   const handleExportCSV = useCallback(() => {
@@ -137,6 +158,34 @@ export default function App() {
   const modalFr = modalFrId != null ? franchiseMap.get(modalFrId) : null;
 
   // if (!user) return <Login onLogin={setUser} />; // deshabilitado para testing
+
+  // Cargar datos de Google Sheets al montar
+  useEffect(() => {
+    if (!import.meta.env.VITE_SHEETS_API_URL) return;
+    Promise.allSettled([fetchComps(), fetchSaldos(), fetchFranchises(), fetchFranchisor()])
+      .then(([compsRes, saldosRes, frRes, franchisorRes]) => {
+        if (compsRes.status === 'fulfilled') setComps(compsRes.value);
+        else { console.error('Sheets comps:', compsRes.reason); setLoadError(compsRes.reason.message); }
+
+        if (saldosRes.status === 'fulfilled') setSaldoInicial(saldosRes.value);
+        else console.error('Sheets saldos:', saldosRes.reason);
+
+        if (frRes.status === 'fulfilled') setFranchises(frRes.value);
+        else { console.warn('Sheets franchises (fallback estático):', frRes.reason); setFranchises(REAL_FRANCHISES.map(f => ({ ...f }))); }
+
+        if (franchisorRes.status === 'fulfilled') setFranchisor(franchisorRes.value);
+        else { console.warn('Sheets franchisor (fallback estático):', franchisorRes.reason); setFranchisor(DEFAULT_FRANCHISOR); }
+
+        setSheetsReady(true);
+      });
+  }, []);
+
+  if (!sheetsReady) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: 'var(--bg)', flexDirection: 'column', gap: 16 }}>
+      <div style={{ width: 36, height: 36, border: '3px solid var(--border2)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+      <div style={{ color: 'var(--muted)', fontSize: 13 }}>Cargando datos…</div>
+    </div>
+  );
 
   return (
     <StoreCtx.Provider value={storeValue}>
