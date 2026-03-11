@@ -16,13 +16,15 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
   const filterCurrency = filterCur === "ALL" ? null : filterCur;
 
   // ── Filtros ──────────────────────────────────────────────────────────────────
-  const [fSede,      setFSede]      = useState("");
-  const [fCuenta,    setFCuenta]    = useState(() => {
+  const [fSede,        setFSede]        = useState(new Set());
+  const [fSedeSearch,  setFSedeSearch]  = useState("");
+  const [fCuenta,      setFCuenta]      = useState(() => {
     if (!initialTipo) return new Set();
     const vals = Array.isArray(initialTipo) ? initialTipo : [getCuenta(initialTipo)];
     return new Set(vals);
   });
-  const [fConcepto,  setFConcepto]  = useState("");
+  const [fCuentaSearch, setFCuentaSearch] = useState("");
+  const [fConcepto,    setFConcepto]    = useState("");
   const [sortCol,    setSortCol]    = useState("date");
   const [sortDir,    setSortDir]    = useState(1);
   const [editRowId,  setEditRowId]  = useState(null);
@@ -102,6 +104,8 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
   }, [franchises, comps, saldoInicial, month, year, showAll, filterCurrency]);
 
   // ── Filtrar ──────────────────────────────────────────────────────────────────
+  const sedesPresentes = useMemo(() => [...new Set(allRows.map(r => r.frName))].sort(), [allRows]);
+
   const cuentasPresentes = useMemo(() => {
     const s = new Set(allRows.filter(r => !r.isApertura && r.cuenta).map(r => r.cuenta));
     return [...s];
@@ -110,7 +114,7 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
   const filtered = useMemo(() => {
     // ── 1. Aplicar filtros
     let rows = allRows;
-    if (fSede)            rows = rows.filter(r => r.frName.toLowerCase().includes(fSede.toLowerCase()));
+    if (fSede.size > 0)   rows = rows.filter(r => fSede.has(r.frName));
     if (fConcepto)        rows = rows.filter(r => r.isApertura || r.concepto.toLowerCase().includes(fConcepto.toLowerCase()));
     if (fCuenta.size > 0) rows = rows.filter(r => r.isApertura ? fCuenta.has("__apertura__") : fCuenta.has(r.cuenta));
 
@@ -167,6 +171,7 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
       background: "var(--bg2)", border: "1px solid var(--border2)",
       borderRadius: 8, padding: "10px 12px", minWidth: 210,
       boxShadow: "0 8px 32px rgba(0,0,0,.7)",
+      textTransform: "none", fontWeight: "normal", letterSpacing: "normal",
     }}>
       {children}
     </div>
@@ -194,11 +199,28 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
               <th style={{ position: "relative" }}>
                 <span onClick={() => toggleSort("sede")} style={{ cursor: "pointer", userSelect: "none" }}>Sede<Arr col="sede" /></span>
                 <span onClick={e => { e.stopPropagation(); toggleFilter("sede", e); }}
-                  style={{ marginLeft: 5, cursor: "pointer", opacity: fSede ? 1 : 0.4, color: fSede ? "var(--accent)" : "inherit", fontSize: 11 }}>⌕</span>
+                  style={{ marginLeft: 5, cursor: "pointer", opacity: fSede.size > 0 ? 1 : 0.4, color: fSede.size > 0 ? "var(--accent)" : "inherit", fontSize: 11 }}>⌕</span>
+                {fSede.size > 0 && <span style={{ marginLeft: 4, fontSize: 9, background: "var(--accent)", color: "#1e2022", borderRadius: 99, padding: "1px 5px", fontWeight: 800 }}>{fSede.size}</span>}
                 <FilterPopover col="sede">
-                  <input autoFocus placeholder="Buscar sede..." value={fSede} onChange={e => setFSede(e.target.value)}
-                    style={{ width: "100%", padding: "5px 8px", fontSize: 12, borderRadius: 5, background: "var(--bg)", border: "1px solid var(--border2)", color: "var(--text)", fontFamily: "var(--font)" }} />
-                  {fSede && <button className="ghost" style={{ fontSize: 10, marginTop: 5 }} onClick={() => setFSede("")}>✕ limpiar</button>}
+                  <input autoFocus placeholder="Buscar sede..." value={fSedeSearch} onChange={e => setFSedeSearch(e.target.value)}
+                    style={{ width: "100%", padding: "5px 8px", fontSize: 12, borderRadius: 5, background: "var(--bg)", border: "1px solid var(--border2)", color: "var(--text)", fontFamily: "var(--font)", marginBottom: 6 }} />
+                  <div style={{ display: "flex", gap: 6, marginBottom: 6, paddingBottom: 6, borderBottom: "1px solid var(--border)" }}>
+                    <button className="ghost" style={{ fontSize: 10, flex: 1 }}
+                      onClick={() => setFSede(fSede.size === sedesPresentes.length ? new Set() : new Set(sedesPresentes))}>
+                      {fSede.size === sedesPresentes.length ? "✕ Ninguna" : "✓ Todas"}
+                    </button>
+                    {fSede.size > 0 && fSede.size < sedesPresentes.length && (
+                      <button className="ghost" style={{ fontSize: 10, flex: 1 }} onClick={() => setFSede(new Set())}>✕ Limpiar</button>
+                    )}
+                  </div>
+                  <div style={{ maxHeight: 220, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
+                    {sedesPresentes.filter(s => s.toLowerCase().includes(fSedeSearch.toLowerCase())).map(s => (
+                      <label key={s} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, cursor: "pointer", padding: "4px 6px", borderRadius: 5, background: fSede.has(s) ? "rgba(173,255,25,.08)" : "transparent" }}>
+                        <input type="checkbox" checked={fSede.has(s)} onChange={() => setFSede(prev => { const n = new Set(prev); n.has(s) ? n.delete(s) : n.add(s); return n; })} style={{ accentColor: "var(--accent)", cursor: "pointer" }} />
+                        <span style={{ color: fSede.has(s) ? "var(--accent)" : "var(--text)" }}>{s}</span>
+                      </label>
+                    ))}
+                  </div>
                 </FilterPopover>
               </th>
               <th style={{ position: "relative" }}>
@@ -209,11 +231,13 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
                 <FilterPopover col="cuenta">
                   {(() => {
                     const ALL_OPTS = [...CUENTAS.map(c => [c, CUENTA_LABEL[c]]), ["PAGO","Pagos Recibidos"], ["PAGO_PAUTA","Pagos a Cuenta"], ["PAGO_ENVIADO","Trf. Enviadas"], ["__apertura__","Saldo Inicial"]];
+                    const visibleOpts = ALL_OPTS.filter(([, lbl]) => lbl.toLowerCase().includes(fCuentaSearch.toLowerCase()));
                     const allVals = ALL_OPTS.map(([v]) => v);
                     const allSelected = allVals.every(v => fCuenta.has(v));
                     return (
                       <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                        {/* Select all / clear row */}
+                        <input autoFocus placeholder="Buscar cuenta..." value={fCuentaSearch} onChange={e => setFCuentaSearch(e.target.value)}
+                          style={{ width: "100%", padding: "5px 8px", fontSize: 12, borderRadius: 5, background: "var(--bg)", border: "1px solid var(--border2)", color: "var(--text)", fontFamily: "var(--font)", marginBottom: 6 }} />
                         <div style={{ display: "flex", gap: 6, marginBottom: 6, paddingBottom: 6, borderBottom: "1px solid var(--border)" }}>
                           <button className="ghost" style={{ fontSize: 10, flex: 1 }}
                             onClick={() => setFCuenta(allSelected ? new Set() : new Set(allVals))}>
@@ -224,7 +248,7 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
                               onClick={() => setFCuenta(new Set())}>✕ Limpiar</button>
                           )}
                         </div>
-                        {ALL_OPTS.map(([val, lbl]) => (
+                        {visibleOpts.map(([val, lbl]) => (
                           <label key={val} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, cursor: "pointer", padding: "4px 6px", borderRadius: 5, background: fCuenta.has(val) ? "rgba(173,255,25,.08)" : "transparent" }}>
                             <input type="checkbox" checked={fCuenta.has(val)} onChange={() => {
                               setFCuenta(prev => { const n = new Set(prev); n.has(val) ? n.delete(val) : n.add(val); return n; });
@@ -250,9 +274,9 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
               <th onClick={() => toggleSort("debe")}  style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }}>Debe<Arr col="debe" /></th>
               <th onClick={() => toggleSort("haber")} style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }}>Haber<Arr col="haber" /></th>
               {!multiCurrency && <th onClick={() => toggleSort("saldo")} style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }}>Saldo<Arr col="saldo" /></th>}
-              <th style={{ textAlign: "right" }}>{(fSede || fCuenta.size > 0 || fConcepto) && (
+              <th style={{ textAlign: "right" }}>{(fSede.size > 0 || fCuenta.size > 0 || fConcepto) && (
                 <button className="ghost" style={{ fontSize: 9, padding: "2px 5px", whiteSpace: "nowrap" }}
-                  onClick={() => { setFSede(""); setFCuenta(new Set()); setFConcepto(""); }}>✕ limpiar</button>
+                  onClick={() => { setFSede(new Set()); setFCuenta(new Set()); setFConcepto(""); }}>✕ limpiar</button>
               )}</th>
             </tr>
           </thead>
