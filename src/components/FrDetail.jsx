@@ -93,17 +93,15 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
           {/* ── Header ── */}
           <div style={{ padding: "16px 24px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
             <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontWeight: 800, fontSize: 15 }}>{franchise.name}</span>
-                <button className="ghost" style={{ fontSize: 15, padding: "0 6px", lineHeight: 1.3 }} onClick={goToPrev}>‹</button>
-                <span style={{ fontSize: 12, fontWeight: 700, minWidth: 80, textAlign: "center" }}>{MONTH_NAMES[localMonth]} {localYear}</span>
-                <button className="ghost" style={{ fontSize: 15, padding: "0 6px", lineHeight: 1.3 }} onClick={goToNext}>›</button>
-              </div>
+              <div style={{ fontWeight: 800, fontSize: 15 }}>{franchise.name}</div>
               {franchise.razonSocial && (
                 <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>{franchise.razonSocial}</div>
               )}
             </div>
-            <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <button className="ghost" style={{ fontSize: 15, padding: "0 6px", lineHeight: 1.3 }} onClick={goToPrev}>‹</button>
+              <span style={{ fontSize: 12, fontWeight: 700, minWidth: 80, textAlign: "center" }}>{MONTH_NAMES[localMonth]} {localYear}</span>
+              <button className="ghost" style={{ fontSize: 15, padding: "0 6px", lineHeight: 1.3 }} onClick={goToNext}>›</button>
               <button className="ghost" onClick={() => setAdding(true)}>+ Comprobante</button>
               <button className="ghost" onClick={() => setShowCC(true)}>📋 CC</button>
               <button className="ghost" onClick={onClose}>Cerrar</button>
