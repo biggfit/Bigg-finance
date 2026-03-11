@@ -60,6 +60,30 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
   const inpS = { padding: "3px 7px", fontSize: 11, borderRadius: 5, background: "var(--bg)", border: "1px solid var(--accent)", color: "var(--text)", fontFamily: "var(--font)" };
   const saldoColor = (s) => s > 0.01 ? "var(--red)" : s < -0.01 ? "var(--green)" : "var(--muted)";
 
+  const handleEmailCC = useCallback(() => {
+    const to      = franchise.emailFactura ?? franchise.emailComercial ?? "";
+    const subject = encodeURIComponent(`Estado de Cuenta — ${franchise.name} — ${MONTH_NAMES[localMonth]} ${localYear}`);
+    const lines = [
+      `Estado de Cuenta — ${franchise.name}`,
+      franchise.razonSocial ?? "",
+      `Período: ${MONTH_NAMES[localMonth]} ${localYear}`,
+      "",
+      `Saldo al ${aperturaDate}: ${fmtS(sp, franchise.currency)}`,
+      "",
+      "Fecha        Tipo                    Importe              Saldo",
+      "──────────────────────────────────────────────────────────────",
+      ...compsWithSaldo.map(c => {
+        const sign  = COMP_TYPES[c.type]?.sign ?? 0;
+        const label = (COMP_TYPES[c.type]?.label ?? c.type).padEnd(22);
+        const imp   = fmt(Math.abs(sign * c.amount), franchise.currency).padStart(14);
+        return `${c.date}   ${label} ${imp}   ${fmtS(c.saldo, franchise.currency)}`;
+      }),
+      "──────────────────────────────────────────────────────────────",
+      `Saldo al ${lastComp?.date ?? aperturaDate}: ${fmtS(sa, franchise.currency)}`,
+    ].filter(Boolean);
+    window.open(`mailto:${to}?subject=${subject}&body=${encodeURIComponent(lines.join("\n"))}`, "_blank");
+  }, [franchise, localMonth, localYear, sp, sa, compsWithSaldo, aperturaDate, lastComp]);
+
   return (
     <>
       <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.85)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
@@ -69,15 +93,15 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
           {/* ── Header ── */}
           <div style={{ padding: "16px 24px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
             <div>
-              <div style={{ fontWeight: 800, fontSize: 15 }}>
-                {franchise.name}
-                {franchise.razonSocial && <span style={{ fontWeight: 400, fontSize: 12, color: "var(--muted)", marginLeft: 8 }}>({franchise.razonSocial})</span>}
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontWeight: 800, fontSize: 15 }}>{franchise.name}</span>
+                <button className="ghost" style={{ fontSize: 15, padding: "0 6px", lineHeight: 1.3 }} onClick={goToPrev}>‹</button>
+                <span style={{ fontSize: 12, fontWeight: 700, minWidth: 80, textAlign: "center" }}>{MONTH_NAMES[localMonth]} {localYear}</span>
+                <button className="ghost" style={{ fontSize: 15, padding: "0 6px", lineHeight: 1.3 }} onClick={goToNext}>›</button>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 5 }}>
-                <button className="ghost" style={{ fontSize: 15, padding: "0px 7px", lineHeight: 1.3 }} onClick={goToPrev}>‹</button>
-                <span style={{ fontSize: 12, fontWeight: 700, minWidth: 90, textAlign: "center" }}>{MONTH_NAMES[localMonth]} {localYear}</span>
-                <button className="ghost" style={{ fontSize: 15, padding: "0px 7px", lineHeight: 1.3 }} onClick={goToNext}>›</button>
-              </div>
+              {franchise.razonSocial && (
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>{franchise.razonSocial}</div>
+              )}
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button className="ghost" onClick={() => setAdding(true)}>+ Comprobante</button>
@@ -186,14 +210,17 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
             </table>
           </div>
 
-          {/* ── Saldo Final (abajo, derecha) ── */}
-          <div style={{ padding: "14px 24px", borderTop: "2px solid var(--border2)", background: "rgba(255,255,255,.02)", flexShrink: 0, display: "flex", justifyContent: "flex-end", alignItems: "baseline", gap: 12 }}>
-            <span style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 }}>
-              {sa < -0.01 ? "Saldo a favor al" : "Saldo adeudado al"} {lastComp?.date ?? aperturaDate}
-            </span>
-            <span className="mono" style={{ fontSize: 22, fontWeight: 800, color: saldoColor(sa) }}>
-              {fmtS(sa, franchise.currency)}
-            </span>
+          {/* ── Saldo Final (abajo) ── */}
+          <div style={{ padding: "14px 24px", borderTop: "2px solid var(--border2)", background: "rgba(255,255,255,.02)", flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <button className="ghost" title={`Enviar CC a ${franchise.emailFactura ?? franchise.emailComercial ?? "—"}`} onClick={handleEmailCC} style={{ fontSize: 16, opacity: .65, padding: "4px 8px" }}>✉</button>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
+              <span style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 }}>
+                {sa < -0.01 ? "Saldo a favor al" : "Saldo adeudado al"} {lastComp?.date ?? aperturaDate}
+              </span>
+              <span className="mono" style={{ fontSize: 22, fontWeight: 800, color: saldoColor(sa) }}>
+                {fmtS(sa, franchise.currency)}
+              </span>
+            </div>
           </div>
 
         </div>
