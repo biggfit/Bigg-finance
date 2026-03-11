@@ -1,9 +1,11 @@
 import { useState, useCallback } from "react";
-import { Field, Modal } from "./atoms";
+import { Modal } from "./atoms";
 import { CURRENCIES, DOCS, CUENTAS, CUENTA_LABEL, MOV_TYPES, TIPOS_MOVIMIENTO, SYM, fmt, uid, makeType } from "../lib/helpers";
 
 // ─── ADD COMP MODAL ───────────────────────────────────────────────────────────
 const TAX = 0.21;
+
+const isoToDmy = (iso) => { const [y, m, d] = iso.split("-"); return `${d}/${m}/${y}`; };
 
 export default function AddCompModal({ franchise, month, year, onClose, onAdd }) {
   const [doc,      setDoc]      = useState("FACTURA");
@@ -12,102 +14,153 @@ export default function AddCompModal({ franchise, month, year, onClose, onAdd })
   const [movType,  setMovType]  = useState("PAGO");
   const [currency, setCurrency] = useState(franchise.currency);
   const [date,     setDate]     = useState(`${year}-${String(month + 1).padStart(2, "0")}-28`);
-  const [amount,   setAmount]   = useState(0);
+  const [amount,   setAmount]   = useState("");
   const [ref,      setRef]      = useState("");
   const [nota,     setNota]     = useState("");
 
-  const handleSetIsMov = (v) => { setIsMov(v); };
+  const type       = isMov ? movType : makeType(doc, cuenta);
+  const showIVA    = !isMov && franchise.applyIVA;
+  const amountNum  = parseFloat(String(amount).replace(",", ".")) || 0;
+  const totalFinal = showIVA ? amountNum * (1 + TAX) : amountNum;
+  const sym        = SYM[currency] ?? currency;
 
-  const type         = isMov ? movType : makeType(doc, cuenta);
-  const effectiveCur = currency;
-  const showIVA      = !isMov && franchise.applyIVA;
-  const totalConIVA  = showIVA ? amount * (1 + TAX) : amount;
+  const inputS = { padding: "9px 12px", fontSize: 14, borderRadius: 8, background: "var(--bg)", border: "1px solid var(--border2)", color: "var(--text)", fontFamily: "var(--font)", width: "100%", boxSizing: "border-box" };
+  const labelS = { fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: ".08em", display: "block", marginBottom: 6 };
 
   const handleAdd = useCallback(() => {
-    onAdd({ id: uid(), type, date, amount: totalConIVA, amountNeto: amount, ref, nota, month, year, currency: effectiveCur });
+    onAdd({ id: uid(), type, date: isoToDmy(date), amount: totalFinal, amountNeto: amountNum, ref, nota, month, year, currency });
     onClose();
-  }, [type, date, totalConIVA, amount, ref, nota, month, year, effectiveCur, onAdd, onClose]);
+  }, [type, date, totalFinal, amountNum, ref, nota, month, year, currency, onAdd, onClose]);
+
+  const MONTH_NAMES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 
   return (
-    <Modal title={`Nuevo comprobante — ${franchise.name}`} subtitle={`${franchise.months ?? ""}${month !== undefined ? ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"][month] : ""} ${year}`} onClose={onClose} width={520}>
-      {/* Comprobante vs Movimiento */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
-        {[["🧾 Comprobante", false],["💸 Movimiento", true]].map(([lbl, v]) => (
-          <div key={String(v)} onClick={() => handleSetIsMov(v)} style={{
-            padding: "8px 10px", borderRadius: 8, cursor: "pointer", textAlign: "center",
-            background: isMov === v ? "rgba(173,255,25,.1)" : "var(--bg)",
-            border: `1.5px solid ${isMov === v ? "var(--accent)" : "var(--border)"}`,
-          }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: isMov === v ? "var(--accent)" : "var(--muted)" }}>{lbl}</span>
-          </div>
+    <Modal title={`Nuevo comprobante — ${franchise.name}`} subtitle={`${MONTH_NAMES[month]} ${year}`} onClose={onClose} width={540}>
+
+      {/* ── Comprobante / Movimiento toggle ── */}
+      <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1.5px solid var(--border2)", marginBottom: 18 }}>
+        {[["🧾 Comprobante", false], ["💸 Movimiento", true]].map(([lbl, v]) => (
+          <div key={String(v)} onClick={() => setIsMov(v)} style={{
+            flex: 1, padding: "9px 18px", cursor: "pointer", fontWeight: 800, fontSize: 13, textAlign: "center",
+            background: isMov === v ? "rgba(173,255,25,.12)" : "transparent",
+            color: isMov === v ? "var(--accent)" : "var(--muted)",
+            borderRight: !v ? "1px solid var(--border2)" : "none",
+            transition: "all .12s",
+          }}>{lbl}</div>
         ))}
       </div>
-      {!isMov ? (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
-          <Field label="Documento">
-            <select value={doc} onChange={e => setDoc(e.target.value)} style={{ width: "100%", padding: "8px 10px" }}>
-              {DOCS.map(d => <option key={d} value={d}>{d === "FACTURA" ? "Factura" : "NC"}</option>)}
-            </select>
-          </Field>
-          <Field label="Cuenta">
-            <select value={cuenta} onChange={e => setCuenta(e.target.value)} style={{ width: "100%", padding: "8px 10px" }}>
-              {CUENTAS.map(c => <option key={c} value={c}>{CUENTA_LABEL[c]}</option>)}
-            </select>
-          </Field>
+
+      {/* ── Fila principal: 2 columnas ── */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.6fr", gap: 14, marginBottom: 16, alignItems: "start" }}>
+
+        {/* Columna izquierda: Fecha + Cuenta/TipoMov */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div>
+            <label style={labelS}>FECHA</label>
+            <input type="date" value={date} onChange={e => setDate(e.target.value)}
+              style={{ ...inputS, cursor: "pointer", colorScheme: "dark", fontWeight: 700 }} />
+          </div>
+          {!isMov ? (
+            <div>
+              <label style={labelS}>CUENTA</label>
+              <select value={cuenta} onChange={e => setCuenta(e.target.value)} style={{ ...inputS, fontWeight: 700, fontSize: 13 }}>
+                {CUENTAS.map(c => <option key={c} value={c}>{CUENTA_LABEL[c]}</option>)}
+              </select>
+            </div>
+          ) : (
+            <div>
+              <label style={labelS}>TIPO DE MOVIMIENTO</label>
+              <select value={movType} onChange={e => setMovType(e.target.value)} style={{ ...inputS, fontWeight: 700, fontSize: 13 }}>
+                {TIPOS_MOVIMIENTO.map(t => <option key={t} value={t}>{MOV_TYPES[t].label}</option>)}
+              </select>
+            </div>
+          )}
         </div>
-      ) : (
-        <Field label="Tipo de movimiento">
-          <select value={movType} onChange={e => setMovType(e.target.value)} style={{ width: "100%", padding: "8px 10px" }}>
-            {TIPOS_MOVIMIENTO.map(t => <option key={t} value={t}>{MOV_TYPES[t].label}</option>)}
-          </select>
-        </Field>
-      )}
-      <Field label="Fecha">
-        <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ width: "100%", padding: "8px 10px" }} />
-      </Field>
-      {/* Selector de moneda — disponible siempre para comprobantes y movimientos */}
-      <Field label="Moneda">
-        <div style={{ display: "flex", gap: 6 }}>
-          {CURRENCIES.map(cur => (
-            <button key={cur} onClick={() => setCurrency(cur)} style={{
-              padding: "6px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", border: "none", fontFamily: "var(--font)",
-              background: currency === cur ? "var(--accent)" : "var(--bg)",
-              color: currency === cur ? "#1e2022" : "var(--muted)",
-              outline: currency === cur ? "none" : "1px solid var(--border2)",
-            }}>{cur}</button>
+
+        {/* Columna derecha: Tipo doc (solo comprobante) + Moneda + Importe */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {!isMov && (
+            <div>
+              <label style={labelS}>TIPO DE DOCUMENTO</label>
+              <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1.5px solid var(--border2)" }}>
+                {DOCS.map(d => (
+                  <div key={d} onClick={() => setDoc(d)} style={{
+                    flex: 1, padding: "9px 12px", cursor: "pointer", fontWeight: 800, fontSize: 13, textAlign: "center",
+                    background: doc === d ? (d === "FACTURA" ? "rgba(255,85,112,.18)" : "rgba(16,217,122,.18)") : "transparent",
+                    color: doc === d ? (d === "FACTURA" ? "var(--red)" : "var(--green)") : "var(--muted)",
+                    borderRight: d === "FACTURA" ? "1px solid var(--border2)" : "none",
+                    transition: "all .12s",
+                  }}>
+                    {d === "FACTURA" ? "🧾 Factura" : "📋 NC"}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 10, alignItems: "start" }}>
+            <div>
+              <label style={labelS}>MONEDA</label>
+              <div style={{ display: "flex", gap: 6 }}>
+                {CURRENCIES.map(cur => (
+                  <button key={cur} onClick={() => setCurrency(cur)} style={{
+                    padding: "8px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", border: "none", fontFamily: "var(--font)",
+                    background: currency === cur ? "var(--accent)" : "var(--bg)",
+                    color: currency === cur ? "#1e2022" : "var(--muted)",
+                    outline: currency === cur ? "none" : "1px solid var(--border2)",
+                  }}>{cur}</button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label style={labelS}>{showIVA ? "NETO (SIN IVA)" : "IMPORTE"}</label>
+              <div style={{ position: "relative" }}>
+                <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--muted)", fontSize: 13, pointerEvents: "none" }}>{sym}</span>
+                <input type="number" min="0" step="0.01" value={amount}
+                  onChange={e => setAmount(e.target.value)}
+                  placeholder="0,00" inputMode="decimal"
+                  style={{ ...inputS, paddingLeft: 28, textAlign: "right", fontWeight: 700 }} />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── IVA breakdown ── */}
+      {showIVA && amountNum > 0 && (
+        <div style={{ display: "flex", gap: 0, border: "1px solid var(--border2)", borderRadius: 8, overflow: "hidden", marginBottom: 16 }}>
+          {[["NETO", amountNum, "var(--text)"], ["IVA 21%", amountNum * TAX, "var(--blue)"], ["TOTAL", totalFinal, "var(--accent)"]].map(([l, v, c], i) => (
+            <div key={l} style={{
+              flex: 1, padding: "8px 14px", textAlign: "center",
+              borderRight: i < 2 ? "1px solid var(--border2)" : "none",
+              background: i === 2 ? "rgba(173,255,25,.05)" : "transparent",
+            }}>
+              <div style={{ fontSize: 9, color: "var(--muted)", fontWeight: 700, letterSpacing: ".06em", marginBottom: 4 }}>{l}</div>
+              <div className="mono" style={{ fontSize: 13, fontWeight: 800, color: c }}>{sym} {fmt(v, currency)}</div>
+            </div>
           ))}
         </div>
-        {currency !== franchise.currency && (
-          <div style={{ fontSize: 10, color: "var(--cyan)", marginTop: 4 }}>
-            Moneda distinta a la base de la sede ({franchise.currency}).
-          </div>
-        )}
-      </Field>
-      <Field label={`Monto neto (${effectiveCur})`}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span className="mono" style={{ color: "var(--muted)", fontSize: 12 }}>{SYM[effectiveCur]}</span>
-          <input type="number" min="0" value={amount} onChange={e => setAmount(parseFloat(e.target.value) || 0)} style={{ width: 200, padding: "8px 10px" }} />
-        </div>
-      </Field>
-      {showIVA && amount > 0 && (
-        <div style={{ background: "rgba(251,191,36,.05)", border: "1px solid rgba(251,191,36,.15)", borderRadius: 6, padding: "10px 14px", marginBottom: 14, fontSize: 12 }}>
-          <div style={{ color: "var(--gold)", fontWeight: 700, marginBottom: 4 }}>IVA 21% — Argentina</div>
-          <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)" }}><span>Neto</span><span className="mono">{fmt(amount, effectiveCur)}</span></div>
-          <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)" }}><span>IVA</span><span className="mono">{fmt(amount * TAX, effectiveCur)}</span></div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, marginTop: 4 }}><span>Total</span><span className="mono" style={{ color: "var(--accent)" }}>{fmt(totalConIVA, effectiveCur)}</span></div>
-        </div>
       )}
+
+      {/* ── Alertas por tipo ── */}
       {type === "PAGO_PAUTA"   && <div style={{ background: "rgba(34,211,238,.05)", border: "1px solid rgba(34,211,238,.15)", borderRadius: 6, padding: "10px 14px", marginBottom: 14, fontSize: 12, color: "var(--cyan)" }}>Cobro anticipado — queda pendiente hasta emitir la factura de pauta.</div>}
       {type === "PAGO_ENVIADO" && <div style={{ background: "rgba(255,85,112,.05)", border: "1px solid rgba(255,85,112,.15)", borderRadius: 6, padding: "10px 14px", marginBottom: 14, fontSize: 12, color: "var(--red)" }}>BIGG transfiere fondos al franquiciado. Aumenta la deuda de BIGG.</div>}
-      <Field label="Referencia / Nro. comprobante">
-        <input type="text" placeholder="Ej: FC-A 0001-00004521 / CAE..." value={ref} onChange={e => setRef(e.target.value)} style={{ width: "100%", padding: "8px 10px" }} />
-      </Field>
-      <Field label="Descripción">
-        <input type="text" placeholder="Ej: Fee enero, Fotos en local, Interusos..." value={nota} onChange={e => setNota(e.target.value)} style={{ width: "100%", padding: "8px 10px" }} />
-      </Field>
-      <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
-        <button className="ghost" onClick={onClose}>Cancelar</button>
-        <button className="btn" disabled={amount <= 0} onClick={handleAdd}>Registrar</button>
+
+      {/* ── Referencia + Descripción ── */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 20 }}>
+        <div>
+          <label style={labelS}>REFERENCIA / NRO. COMPROBANTE</label>
+          <input type="text" placeholder="Ej: FC-A 0001-00004521 / CAE..." value={ref} onChange={e => setRef(e.target.value)} style={inputS} />
+        </div>
+        <div>
+          <label style={labelS}>DESCRIPCIÓN</label>
+          <input type="text" placeholder="Ej: Fee enero, Fotos en local, Interusos..." value={nota} onChange={e => setNota(e.target.value)} style={inputS} />
+        </div>
+      </div>
+
+      {/* ── Acciones ── */}
+      <div style={{ display: "flex", gap: 10 }}>
+        <button className="ghost" style={{ flex: 1, height: 44 }} onClick={onClose}>Cancelar</button>
+        <button className="btn" style={{ flex: 3, height: 44, fontSize: 14 }} disabled={amountNum <= 0} onClick={handleAdd}>✓ Registrar</button>
       </div>
     </Modal>
   );

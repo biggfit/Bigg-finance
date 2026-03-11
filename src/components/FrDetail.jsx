@@ -9,16 +9,27 @@ import CCModal from "./CCModal";
 // ─── FRANCHISE DETAIL MODAL — Estado de cuenta mensual / recordatorio ─────────
 export default function FrDetail({ franchise, month, year, onClose, onAddComp, onDelComp, onEditComp }) {
   const { comps, saldoInicial } = useStore();
-  const [adding,    setAdding]    = useState(false);
-  const [showCC,    setShowCC]    = useState(false);
-  const [editingId, setEditingId] = useState(null);
-  const [editBuf,   setEditBuf]   = useState({});
+  const [adding,      setAdding]      = useState(false);
+  const [showCC,      setShowCC]      = useState(false);
+  const [editingId,   setEditingId]   = useState(null);
+  const [editBuf,     setEditBuf]     = useState({});
+  const [localMonth,  setLocalMonth]  = useState(month);
+  const [localYear,   setLocalYear]   = useState(year);
+
+  const goToPrev = () => {
+    if (localMonth === 0) { setLocalMonth(11); setLocalYear(y => y - 1); }
+    else setLocalMonth(m => m - 1);
+  };
+  const goToNext = () => {
+    if (localMonth === 11) { setLocalMonth(0); setLocalYear(y => y + 1); }
+    else setLocalMonth(m => m + 1);
+  };
 
   const key     = String(franchise.id);
-  const frComps = useMemo(() => (comps[key] ?? []).filter(c => inPeriod(c, month, year)).sort((a, b) => cmpDate(a.date, b.date)), [comps, key, month, year]);
-  const sp      = useMemo(() => computeSaldoPrevMes(franchise.id, year, month, comps, saldoInicial), [franchise.id, year, month, comps, saldoInicial]);
-  const sa      = useMemo(() => computeSaldo(franchise.id, year, month, comps, saldoInicial), [franchise.id, year, month, comps, saldoInicial]);
-  const pautaPend = useMemo(() => computePautaPendiente(franchise.id, comps, year, month), [franchise.id, comps, year, month]);
+  const frComps = useMemo(() => (comps[key] ?? []).filter(c => inPeriod(c, localMonth, localYear)).sort((a, b) => cmpDate(a.date, b.date)), [comps, key, localMonth, localYear]);
+  const sp      = useMemo(() => computeSaldoPrevMes(franchise.id, localYear, localMonth, comps, saldoInicial), [franchise.id, localYear, localMonth, comps, saldoInicial]);
+  const sa      = useMemo(() => computeSaldo(franchise.id, localYear, localMonth, comps, saldoInicial), [franchise.id, localYear, localMonth, comps, saldoInicial]);
+  const pautaPend = useMemo(() => computePautaPendiente(franchise.id, comps, localYear, localMonth), [franchise.id, comps, localYear, localMonth]);
   const handleAdd = useCallback((comp) => onAddComp(franchise.id, comp), [franchise.id, onAddComp]);
 
   const openEdit = (c) => { setEditingId(c.id); setEditBuf({ date: c.date ?? "", nota: c.ref ?? c.nota ?? "", amount: c.amount ?? 0 }); };
@@ -51,9 +62,6 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
 
   return (
     <>
-      {adding  && <AddCompModal franchise={franchise} month={month} year={year} onClose={() => setAdding(false)} onAdd={handleAdd} />}
-      {showCC  && <CCModal franchise={franchise} onClose={() => setShowCC(false)} onDelComp={onDelComp} onEditComp={onEditComp} />}
-
       <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.85)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
         onClick={e => e.target === e.currentTarget && onClose()}>
         <div className="fade" style={{ background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: 14, width: 820, maxWidth: "97vw", maxHeight: "92vh", display: "flex", flexDirection: "column" }}>
@@ -61,10 +69,14 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
           {/* ── Header ── */}
           <div style={{ padding: "16px 24px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
             <div>
-              <div style={{ fontWeight: 800, fontSize: 15 }}>{franchise.name}</div>
-              <div style={{ color: "var(--muted)", fontSize: 11, marginTop: 2 }}>
-                {franchise.razonSocial && <span>{franchise.razonSocial} · </span>}
-                Estado de Cuenta {MONTH_NAMES[month]} {year} · {franchise.currency}
+              <div style={{ fontWeight: 800, fontSize: 15 }}>
+                {franchise.name}
+                {franchise.razonSocial && <span style={{ fontWeight: 400, fontSize: 12, color: "var(--muted)", marginLeft: 8 }}>({franchise.razonSocial})</span>}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 5 }}>
+                <button className="ghost" style={{ fontSize: 15, padding: "0px 7px", lineHeight: 1.3 }} onClick={goToPrev}>‹</button>
+                <span style={{ fontSize: 12, fontWeight: 700, minWidth: 90, textAlign: "center" }}>{MONTH_NAMES[localMonth]} {localYear}</span>
+                <button className="ghost" style={{ fontSize: 15, padding: "0px 7px", lineHeight: 1.3 }} onClick={goToNext}>›</button>
               </div>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
@@ -186,6 +198,9 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
 
         </div>
       </div>
+
+      {adding && <AddCompModal franchise={franchise} month={localMonth} year={localYear} onClose={() => setAdding(false)} onAdd={handleAdd} />}
+      {showCC && <CCModal franchise={franchise} onClose={() => setShowCC(false)} onDelComp={onDelComp} onEditComp={onEditComp} />}
     </>
   );
 }
