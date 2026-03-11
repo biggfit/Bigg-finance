@@ -11,6 +11,7 @@ import { CURRENCIES, MONTHS, AVAILABLE_YEARS, computeSaldo, computeSaldoPrevMes,
 import "./lib/styles";
 import FrDetail from "./components/FrDetail";
 import MaestrosModal from "./components/MaestrosModal";
+import ImportBankModal from "./components/ImportBankModal";
 import TabResumenMes from "./tabs/TabResumenMes";
 import TabSaldos from "./tabs/TabSaldos";
 import TabContabilidad from "./tabs/TabContabilidad";
@@ -22,6 +23,7 @@ const LOGO_SRC = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA9gAAAFeCAYAAAB+
 export default function App() {
   const [user,       setUser]      = useState({ name: "Admin" }); // login deshabilitado para testing
   const [showMaestros, setShowMaestros] = useState(false);
+  const [showImport,   setShowImport]   = useState(false);
   const [franchisor,   setFranchisor]   = useState(() => import.meta.env.VITE_SHEETS_API_URL ? null : DEFAULT_FRANCHISOR);
   const [tab,        setTab]       = useState("resumen");
   const [detailFilteredRows, setDetailFilteredRows] = useState([]);
@@ -232,6 +234,16 @@ export default function App() {
         />
       )}
 
+      {showImport && (
+        <ImportBankModal
+          franchises={franchises}
+          month={month}
+          year={year}
+          addComp={addComp}
+          onClose={() => setShowImport(false)}
+        />
+      )}
+
       {/* HEADER */}
       <div style={{ background: "var(--bg2)", borderBottom: "2px solid var(--accent)", padding: "0 20px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 52, position: "sticky", top: 0, zIndex: 100 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -288,7 +300,8 @@ export default function App() {
             <button key={v} className={`tab${filterCur === v ? " on" : ""}`} style={{ padding: "3px 12px", fontSize: 10 }} onClick={() => setFilterCur(v)}>{l}</button>
           ))}
         </>)}
-        <button className="ghost" style={{ fontSize: 10, marginLeft: "auto" }} onClick={handleExportCSV}>↓ CSV</button>
+        <button className="ghost" style={{ fontSize: 10, marginLeft: "auto" }} onClick={() => setShowImport(true)}>↑ Extracto</button>
+        <button className="ghost" style={{ fontSize: 10 }} onClick={handleExportCSV}>↓ CSV</button>
       </div>
       )}
 
