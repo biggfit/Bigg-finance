@@ -2,7 +2,6 @@ import { useState, useMemo, useCallback, useRef } from "react";
 import * as XLSX from "xlsx";
 import { MONTHS, AVAILABLE_YEARS, computeSaldoPrevMes, fmt, uid } from "../lib/helpers";
 import { useStore } from "../lib/context";
-import { appendComp } from "../lib/sheetsApi";
 
 // ─── AUTO-DISCARD RULES ───────────────────────────────────────────────────────
 const DISCARD_GRUPOS = new Set([
@@ -339,7 +338,6 @@ export default function ImportBankModal({ franchises, month, year, addComp, onCl
         ...(row.entidad ? { nota: row.entidad }   : {}),
       };
       addComp(row.frId, comp);
-      try { await appendComp(row.frId, comp); } catch (_) {}
       if (row.movType in counts) { counts[row.movType]++; totals[row.movType] += row.monto; }
     }
     setSummary({ counts, totals, total: toImport.length });

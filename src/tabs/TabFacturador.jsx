@@ -1046,11 +1046,6 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
       };
       onAddComp(r.franchiseId, comp);
       log.push({ status: "ok", step: "CC", msg: `✓ CC actualizada — ${r.franchiseName}` });
-      if (fr) {
-        const pdfText = isAR ? buildFacturaPDF(fr, null, comp) : buildInvoicePDF(fr, null, comp);
-        downloadTextAsPDF(pdfText, `${isAR ? "Factura" : "Invoice"}_${r.franchiseName}.html`);
-        log.push({ status: "ok", step: isAR ? "Factura" : "Invoice", msg: `✓ PDF generado — ${r.franchiseName}` });
-      }
     }
     setProcessLog(log);
     setStage(FACT_STAGE.DONE);
