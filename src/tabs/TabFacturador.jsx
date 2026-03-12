@@ -1381,7 +1381,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
 }
 
 // ── Tab principal ───────────────────────────────────────────────────────────
-const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, factState, setFactState, franchisor }) {
+const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, factState, setFactState, franchisor, onStartImport }) {
   const [mode, setMode] = useState(EMIT_MODE.SELECT);
   const [prefillFr,   setPrefillFr]   = useState(null);
   const [prefillComp, setPrefillComp] = useState(null);
@@ -1416,7 +1416,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
           <div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 24 }}>
             Seleccioná cómo querés cargar los datos para este lote.
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, maxWidth: 820 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 14, maxWidth: 600 }}>
             {[
               {
                 mode: EMIT_MODE.MANUAL,
@@ -1445,9 +1445,18 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
                 bg: "rgba(222,251,151,.06)",
                 border: "rgba(222,251,151,.2)",
               },
+              {
+                mode: "_extracto",
+                icon: "🏦",
+                title: "Extracto Banco Galicia",
+                desc: "Importá el extracto mensual del Banco Galicia. Clasificación inteligente de pagos recibidos y enviados.",
+                color: "var(--cyan)",
+                bg: "rgba(34,211,238,.06)",
+                border: "rgba(34,211,238,.2)",
+              },
             ].map(opt => (
               <div key={opt.mode}
-                onClick={() => setMode(opt.mode)}
+                onClick={() => opt.mode === "_extracto" ? onStartImport?.() : setMode(opt.mode)}
                 style={{ background: opt.bg, border: `1px solid ${opt.border}`, borderRadius: 12, padding: "22px 20px", cursor: "pointer", transition: "all .15s" }}
                 onMouseEnter={e => e.currentTarget.style.transform = "translateY(-2px)"}
                 onMouseLeave={e => e.currentTarget.style.transform = ""}

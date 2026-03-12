@@ -300,8 +300,7 @@ export default function App() {
             <button key={v} className={`tab${filterCur === v ? " on" : ""}`} style={{ padding: "3px 12px", fontSize: 10 }} onClick={() => setFilterCur(v)}>{l}</button>
           ))}
         </>)}
-        <button className="ghost" style={{ fontSize: 10, marginLeft: "auto" }} onClick={() => setShowImport(true)}>↑ Extracto</button>
-        <button className="ghost" style={{ fontSize: 10 }} onClick={handleExportCSV}>↓ CSV</button>
+        <button className="ghost" style={{ fontSize: 10, marginLeft: "auto" }} onClick={handleExportCSV}>↓ CSV</button>
       </div>
       )}
 
@@ -309,7 +308,7 @@ export default function App() {
 {tab === "resumen"      && <TabResumenMes   allFranchises={allActiveFr} month={month} year={year} onNavigate={handleNavigate} />}
         {tab === "saldos"       && <TabSaldos       franchises={activeFr}    month={month} year={year} onOpenFr={setModalFrId} filterCur={filterCur} />}
         {tab === "contabilidad" && <TabContabilidad key={`${detailFilter}-${detailTipo}-${navCount}`} franchises={filteredFr} month={month} year={year} onOpenFr={setModalFrId} initialFilter={detailFilter} initialTipo={detailTipo} showAll={showAll} multiCurrency={filterCur === "ALL"} filterCur={filterCur} onFilteredChange={setDetailFilteredRows} />}
-        {tab === "facturador"   && <TabFacturador   month={month} year={year} onAddComp={addComp} factState={factState} setFactState={setFactState} franchisor={franchisor} />}
+        {tab === "facturador"   && <TabFacturador   month={month} year={year} onAddComp={addComp} factState={factState} setFactState={setFactState} franchisor={franchisor} onStartImport={() => setShowImport(true)} />}
       </div>
     </StoreCtx.Provider>
   );
