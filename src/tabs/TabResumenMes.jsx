@@ -51,7 +51,7 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
         const pagos         = fc.filter(c => c.type === "PAGO").reduce((a, c) => a + c.amount, 0);
         const pagosACuenta  = fc.filter(c => c.type === "PAGO_PAUTA").reduce((a, c) => a + c.amount, 0);
         const enviados      = fc.filter(c => c.type === "PAGO_ENVIADO").reduce((a, c) => a + c.amount, 0);
-        const pautaPendiente = computePautaPendiente(fr.id, comps, year, month);
+        const pautaPendiente = computePautaPendiente(fr.id, comps, year, month, frCurrency, cur);
 
         return { fr, sp, sa, fee, interusos, pauta, sponsors, otrosIngresos, pagos, pagosACuenta, enviados, pautaPendiente };
       });

@@ -101,7 +101,7 @@ export async function appendComp(frId, comp) {
   const { date, month, year, ...rest } = comp;
   const [dd, mm, yyyy] = (date ?? "").split("/");
   const fecha_emision = dd && mm && yyyy ? `${yyyy}-${mm}-${dd}` : "";
-  return post({ action: "add", frId: String(frId), comp: { ...rest, fecha_emision } });
+  return post({ action: "add", comp: { frId: String(frId), ...rest, fecha_emision } });
 }
 
 /**

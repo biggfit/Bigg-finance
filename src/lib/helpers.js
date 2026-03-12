@@ -133,11 +133,12 @@ export function buildCuentaCorriente(frId, comps, saldoInicial, frCurrency = nul
   return { lines, saldoFinal: saldo };
 }
 
-export function computePautaPendiente(frId, comps, upToYear, upToMonth) {
+export function computePautaPendiente(frId, comps, upToYear, upToMonth, frCurrency = null, filterCurrency = null) {
   const key = String(frId);
   const all = comps[key] ?? [];
-  const cobros = all.filter(c => c.type === "PAGO_PAUTA" && upToPeriod(c, upToYear, upToMonth)).reduce((a, c) => a + c.amount, 0);
-  const facts  = all.filter(c => c.type === makeType("FACTURA","PAUTA") && upToPeriod(c, upToYear, upToMonth)).reduce((a, c) => a + c.amount, 0);
+  const matchCur = c => filterCurrency === null || (c.currency ?? frCurrency) === filterCurrency;
+  const cobros = all.filter(c => c.type === "PAGO_PAUTA" && upToPeriod(c, upToYear, upToMonth) && matchCur(c)).reduce((a, c) => a + c.amount, 0);
+  const facts  = all.filter(c => c.type === makeType("FACTURA","PAUTA") && upToPeriod(c, upToYear, upToMonth) && matchCur(c)).reduce((a, c) => a + c.amount, 0);
   return Math.max(0, cobros - facts);
 }
 
