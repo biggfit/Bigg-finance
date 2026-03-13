@@ -329,7 +329,7 @@ export default function ImportBankModal({ franchises, month, year, addComp, onCl
     const counts = { PAGO: 0, PAGO_PAUTA: 0, PAGO_ENVIADO: 0 };
     const totals = { PAGO: 0, PAGO_PAUTA: 0, PAGO_ENVIADO: 0 };
     for (const row of toImport) {
-      const [dd, mm, yy] = row.fecha.split("/");
+      const [, mm, yy] = row.fecha.split("/");
       const comp = {
         id: uid(), type: row.movType, amount: row.monto,
         date: row.fecha, month: parseInt(mm, 10) - 1, year: parseInt(yy, 10),
