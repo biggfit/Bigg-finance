@@ -68,8 +68,9 @@ export async function fetchComps() {
         // undefined para que el operador ?? en helpers.js active el fallback correcto.
         currency:   c.currency  !== "" ? c.currency  : undefined,
         invoice:    c.invoice   !== "" ? c.invoice   : undefined,
-        loteId:     c.loteId    !== "" ? c.loteId    : undefined,
-        ref:        c.ref       !== "" ? c.ref       : undefined,
+        loteId:       c.loteId       !== "" ? c.loteId       : undefined,
+        facturanteId: c.facturanteId !== "" ? c.facturanteId : undefined,
+        ref:          c.ref          !== "" ? c.ref          : undefined,
         nota:       c.nota      !== "" ? c.nota      : undefined,
         date,   // campo interno del app
         month,  // derivado de fecha_emision

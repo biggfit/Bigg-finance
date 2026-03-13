@@ -159,7 +159,7 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
               {/* Nos deben / Debemos */}
               <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 {nDeben > 0 && (
-                  <div onClick={() => onNavigate("saldos", "deben")} style={{ padding: "10px 12px", borderRadius: 7, background: "rgba(255,85,112,.05)", border: "1px solid rgba(255,85,112,.1)", textAlign: "center", cursor: "pointer", transition: "background .15s", containerType: "inline-size", minWidth: 0, overflow: "hidden" }}
+                  <div onClick={() => onNavigate("saldos", "deben", { moneda: cur })} style={{ padding: "10px 12px", borderRadius: 7, background: "rgba(255,85,112,.05)", border: "1px solid rgba(255,85,112,.1)", textAlign: "center", cursor: "pointer", transition: "background .15s", containerType: "inline-size", minWidth: 0, overflow: "hidden" }}
                     onMouseEnter={e => e.currentTarget.style.background="rgba(255,85,112,.12)"}
                     onMouseLeave={e => e.currentTarget.style.background="rgba(255,85,112,.05)"}>
                     <div style={{ fontSize: 10, fontWeight: 800, color: "var(--red)", letterSpacing: ".08em", marginBottom: 4 }}>NOS DEBEN ↗</div>
@@ -167,8 +167,8 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
                     <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>{nDeben} sede{nDeben !== 1 ? "s" : ""}</div>
                   </div>
                 )}
-                {(() => { const totDebo = Math.abs(cobrarReal.reduce((a,d)=>a+d.sa,0)); return cobrarReal.length > 0 && Math.round(totDebo) > 0 && (
-                  <div onClick={() => onNavigate("saldos", "debemos")} style={{ padding: "10px 12px", borderRadius: 7, background: "rgba(16,217,122,.05)", border: "1px solid rgba(16,217,122,.1)", textAlign: "center", cursor: "pointer", transition: "background .15s", containerType: "inline-size", minWidth: 0, overflow: "hidden" }}
+                {(() => { const totDebo = Math.abs(cobrarReal.reduce((a,d)=>a+d.sa,0)); return (
+                  <div onClick={() => onNavigate("saldos", "debemos", { moneda: cur })} style={{ padding: "10px 12px", borderRadius: 7, background: "rgba(16,217,122,.05)", border: "1px solid rgba(16,217,122,.1)", textAlign: "center", cursor: "pointer", transition: "background .15s", containerType: "inline-size", minWidth: 0, overflow: "hidden" }}
                     onMouseEnter={e => e.currentTarget.style.background="rgba(16,217,122,.12)"}
                     onMouseLeave={e => e.currentTarget.style.background="rgba(16,217,122,.05)"}>
                     <div style={{ fontSize: 10, fontWeight: 800, color: "var(--green)", letterSpacing: ".08em", marginBottom: 4 }}>DEBEMOS ↗</div>
@@ -177,7 +177,7 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
                   </div>
                 ); })()}
                 {pautaPendRows.length > 0 && (
-                  <div onClick={() => onNavigate("detalle", "facturar", { cuenta: ["PAGO_PAUTA", "PAUTA"] })} style={{ padding: "10px 12px", borderRadius: 7, background: "rgba(34,211,238,.05)", border: "1px solid rgba(34,211,238,.15)", textAlign: "center", cursor: "pointer", transition: "background .15s", gridColumn: cobrarReal.length > 0 ? "auto" : "1 / -1", containerType: "inline-size", minWidth: 0, overflow: "hidden" }}
+                  <div onClick={() => onNavigate("detalle", "facturar", { cuenta: ["PAGO_PAUTA", "PAUTA"] })} style={{ padding: "10px 12px", borderRadius: 7, background: "rgba(34,211,238,.05)", border: "1px solid rgba(34,211,238,.15)", textAlign: "center", cursor: "pointer", transition: "background .15s", gridColumn: "auto",containerType: "inline-size", minWidth: 0, overflow: "hidden" }}
                     onMouseEnter={e => e.currentTarget.style.background="rgba(34,211,238,.12)"}
                     onMouseLeave={e => e.currentTarget.style.background="rgba(34,211,238,.05)"}>
                     <div style={{ fontSize: 10, fontWeight: 800, color: "var(--cyan)", letterSpacing: ".08em", marginBottom: 4 }}>A FACTURAR ↗</div>

@@ -16,7 +16,7 @@
 //   Acceso: Cualquier persona
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SHEET_ID = "TU_SHEET_ID_AQUI";
+const SHEET_ID = "18CCRMQ_7dU5TnZWhum5YQE2NVG_vz8vzq5c0iuZf5kk";
 const TOKEN    = "bigg-finance-2026-secreto";
 
 // ─── GET ─────────────────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import { todayDmy } from "../data/franchisor";
 import { TypePill } from "../components/atoms";
 import PendientesPanel from "../components/PendientesPanel";
 import { buildFacturaPDF, buildInvoicePDF, downloadTextAsPDF } from "../lib/pdf";
+import { emitirComprobante, formatInvoiceLabel } from "../lib/facturanteApi";
 
 // ─── TAB: EMISIÓN DE COMPROBANTES ────────────────────────────────────────────
 const EMIT_MODE  = { SELECT: "select", MANUAL: "manual", CRM: "crm", EXCEL: "excel" };
@@ -45,7 +46,7 @@ const TIPOS_MOVIMIENTO  = ["PAGO","PAGO_PAUTA","PAGO_ENVIADO"];
 // ── Wizard emisión manual ────────────────────────────────────────────────────
 // Pasos: 1-tipo  2-sede  3-formulario
 function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, prefillComp }) {
-  const { franchises } = useStore();
+  const { franchises, comps } = useStore();
   const activeFr = franchises.filter(f => f.activa !== false).sort((a,b) => a.name.localeCompare(b.name, "es"));
 
   const todayIso = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}-${String(n.getDate()).padStart(2,"0")}`; };
@@ -61,6 +62,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
   const IVA_RATE = 0.21;
   const parsePrefill = (t) => {
     if (!t) return { doc: "FACTURA", cuenta: "FEE" };
+    if (t === "PAGO_PAUTA") return { doc: "FACTURA", cuenta: "PAUTA" };
     if (t.includes("|")) { const [d,c] = t.split("|"); return { doc: d, cuenta: c }; }
     if (t.startsWith("FACT_")) return { doc: "FACTURA", cuenta: t.replace("FACT_","") };
     if (t.startsWith("NC_"))   return { doc: "NC",      cuenta: t.replace("NC_","") };
@@ -73,6 +75,9 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
   const [concepto,   setConcepto]  = useState(prefillComp ? `Factura por Pago a Cuenta ${MONTHS[prefillComp.month ?? month]} ${prefillComp.year ?? year}` : "");
   const [fechaIso,   setFechaIso]  = useState(todayIso);
   const [preview,    setPreview]   = useState(null);
+  const [emitState, setEmitState] = useState("idle"); // "idle"|"emitting"|"error"
+  const [emitError, setEmitError] = useState(null);
+  const [refCompId, setRefCompId] = useState(null); // facturanteId of referenced invoice (NC only)
 
   // movimiento state
   const [movTipo,    setMovTipo]   = useState("PAGO");
@@ -234,13 +239,41 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
         currency,
       });
     };
-    const handleConfirm = () => {
+    const usaFacturante = isAR && currency === "ARS" && (doc === "FACTURA" || doc === "NC");
+
+    const doConfirm = async (skipFacturante = false) => {
       if (!preview) return;
-      onAddComp(fr.id, preview);
-      const pdfText = isAR ? buildFacturaPDF(fr, franchisor, preview) : buildInvoicePDF(fr, franchisor, preview);
+      let enriched = { ...preview };
+
+      if (usaFacturante && !skipFacturante) {
+        setEmitState("emitting");
+        setEmitError(null);
+        try {
+          const result = await emitirComprobante({
+            franchisor: franchisor?.ar ?? franchisor,
+            franchise:  fr,
+            comp:       { ...preview, applyIVA: applyIVA },
+            referenciaIdComprobante: refCompId ?? undefined,
+          });
+          enriched = {
+            ...preview,
+            invoice:      formatInvoiceLabel(result.tipoComprobante, result.idComprobante, result.puntoVenta),
+            facturanteId: String(result.idComprobante),
+          };
+          setEmitState("idle");
+        } catch (err) {
+          setEmitState("error");
+          setEmitError(err.message ?? "Error al emitir ante AFIP");
+          return; // no continúa — usuario decide reintentar o guardar igual
+        }
+      }
+
+      onAddComp(fr.id, enriched);
+      const pdfText = isAR ? buildFacturaPDF(fr, franchisor, enriched) : buildInvoicePDF(fr, franchisor, enriched);
       downloadTextAsPDF(pdfText, `${isAR ? "Factura" : "Invoice"}_${fr.name}_${MONTHS[preview.month]}_${preview.year}.html`);
       setDone(true);
     };
+    const handleConfirm = () => doConfirm(false);
     const mesComp   = parseInt(fechaIso.split("-")[1]) - 1;
     const anioComp  = parseInt(fechaIso.split("-")[0]);
     const autoConcepto = `${doc === "FACTURA" ? "Factura" : "NC"} - ${CUENTA_LABEL[cuenta] ?? cuenta} - ${MONTHS[mesComp]} ${anioComp}`;
@@ -353,14 +386,43 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
                 <span style={{ color: "var(--muted)" }}>{k}</span><span style={{ fontWeight: 600 }}>{v}</span>
               </div>
             ))}
+            {/* NC reference picker — only for AR + ARS + NC */}
+            {isAR && currency === "ARS" && doc === "NC" && (() => {
+              const frComps = (comps[String(fr?.id)] ?? [])
+                .filter(c => c.type?.startsWith("FACTURA") && c.facturanteId);
+              if (frComps.length === 0) return null;
+              return (
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
+                  <label style={{ fontSize: 9, fontWeight: 800, color: "var(--cyan)", letterSpacing: ".1em", display: "block", marginBottom: 6 }}>FACTURA DE REFERENCIA (OPCIONAL)</label>
+                  <select value={refCompId ?? ""} onChange={e => setRefCompId(e.target.value || null)}
+                    style={{ width: "100%", background: "var(--bg)", border: "1px solid var(--border2)", borderRadius: 6, padding: "6px 10px", color: "var(--text)", fontSize: 12 }}>
+                    <option value="">Sin referencia</option>
+                    {frComps.map(c => (
+                      <option key={c.id} value={c.facturanteId}>{c.invoice ?? c.facturanteId} — {c.date}</option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })()}
           </div>
         )}
 
+        {emitState === "error" && (
+          <div style={{ marginBottom: 12, padding: "10px 14px", background: "rgba(255,85,112,.08)", border: "1px solid rgba(255,85,112,.25)", borderRadius: 8, fontSize: 12 }}>
+            <div style={{ color: "var(--red)", fontWeight: 700, marginBottom: 6 }}>⚠ Error AFIP: {emitError}</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn" style={{ fontSize: 11, padding: "4px 12px" }} onClick={() => doConfirm(false)}>Reintentar</button>
+              <button className="ghost" style={{ fontSize: 11, padding: "4px 12px" }} onClick={() => doConfirm(true)}>Guardar sin factura AFIP</button>
+            </div>
+          </div>
+        )}
         <div style={{ display: "flex", gap: 12 }}>
           {!preview
             ? <button className="btn" style={{ flex: 1, height: 48, fontSize: 15 }} disabled={importeNeto <= 0} onClick={handlePreview}>Vista previa →</button>
             : <><button className="ghost" style={{ flex: 1, height: 48 }} onClick={() => setPreview(null)}>← Editar</button>
-               <button className="btn" style={{ flex: 3, height: 48, fontSize: 15 }} onClick={handleConfirm}>✓ Confirmar y generar {isAR ? "Factura" : "Invoice"}</button></>
+               <button className="btn" style={{ flex: 3, height: 48, fontSize: 15 }} disabled={emitState === "emitting"} onClick={handleConfirm}>
+                 {emitState === "emitting" ? "Emitiendo ante AFIP…" : `✓ Confirmar y generar ${isAR && currency === "ARS" ? "Factura AFIP" : isAR ? "Factura" : "Invoice"}`}
+               </button></>
           }
         </div>
       </div>
@@ -588,27 +650,42 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
 
   const allFilteredSelected = filteredRows.length > 0 && filteredRows.every(r => selected.has(r._origIdx));
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     setStage("done");
     const log = [];
-    billableRows.forEach(r => {
+    for (const r of billableRows) {
       const fr = activeFr.find(f => f.id === r.frId);
-      if (!fr) return;
+      if (!fr) continue;
       const fee = rowFee(r);
       const dto = dtoDisplay(r);
       const isAR = fr.country === "Argentina";
-      const comp = {
+      let comp = {
         id: uid(), type: makeType("FACTURA","FEE"), date: todayDmy(),
         amount: Math.max(0, Math.round(fee * 100) / 100),
         ref: `Fee ${MONTHS[crmMonth]} ${crmYear} — CRM`,
         nota: `Fee Royalty ${MONTHS[crmMonth]} ${crmYear}${dto > 0 ? ` (${dto}% dto.)` : ""}`,
         month: crmMonth, year: crmYear,
+        currency: fr.currency,
       };
+      let facturanteStatus = "omitido";
+      if (isAR && fr.currency === "ARS") {
+        try {
+          const result = await emitirComprobante({
+            franchisor: franchisor?.ar ?? franchisor,
+            franchise:  fr,
+            comp:       { ...comp, applyIVA: !!fr.applyIVA },
+          });
+          comp = { ...comp, invoice: formatInvoiceLabel(result.tipoComprobante, result.idComprobante, result.puntoVenta), facturanteId: String(result.idComprobante) };
+          facturanteStatus = "ok";
+        } catch (err) {
+          facturanteStatus = `sin_factura: ${err.message}`;
+        }
+      }
       onAddComp(r.frId, comp);
       const pdfText = isAR ? buildFacturaPDF(fr, franchisor, comp) : buildInvoicePDF(fr, franchisor, comp);
       downloadTextAsPDF(pdfText, `${isAR ? "Factura" : "Invoice"}_${fr.name}_${MONTHS[crmMonth]}_${crmYear}.html`);
-      log.push({ frName: r.frName, fee, country: r.country, dto });
-    });
+      log.push({ frName: r.frName, fee, country: r.country, dto, facturanteStatus, invoice: comp.invoice });
+    }
     setProcessed(log);
   };
 
@@ -622,7 +699,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
       <div className="card" style={{ textAlign: "left", maxWidth: 540, margin: "0 auto 20px" }}>
         {processed.map((p, i) => (
           <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 14px", borderBottom: "1px solid var(--border)", fontSize: 12 }}>
-            <span>{p.frName}</span>
+            <span>{p.frName}{p.invoice && <span className="mono" style={{ fontSize: 10, color: "var(--accent)", marginLeft: 8 }}>{p.invoice}</span>}</span>
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
               {p.dto > 0 && <span className="pill" style={{ fontSize: 9, color: "var(--gold)", background: "rgba(251,191,36,.1)" }}>{p.dto}% dto.</span>}
               <span className="mono" style={{ fontWeight: 700, color: p.fee <= 0 ? "var(--muted)" : "var(--green)" }}>
@@ -1036,20 +1113,36 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
     const log = [];
     for (const r of activeRows) {
       const fr = franchises.find(f => f.id === r.franchiseId);
-      const isAR = fr?.sociedad === "ÑAKO SRL" || fr?.country === "Argentina";
-      const comp = {
+      const isAR = fr?.country === "Argentina";
+      const doc  = String(r.type ?? "").split("|")[0];
+      const esComp = doc === "FACTURA" || doc === "NC";
+      let comp = {
         id: uid(), type: r.type, date: r.date,
         amount: r.amount, ref: r.ref || `${loteId} — importado`,
         nota: `${COMP_TYPES[r.type]?.label ?? r.type} — ${r.franchiseName}`,
         month: r.month, year: r.year, loteId,
         currency: r.currency,
       };
+      let msg = `✓ CC actualizada — ${r.franchiseName}`;
+      if (isAR && r.currency === "ARS" && esComp && fr) {
+        try {
+          const result = await emitirComprobante({
+            franchisor: franchisor?.ar ?? franchisor,
+            franchise:  fr,
+            comp:       { ...comp, applyIVA: !!fr.applyIVA },
+          });
+          comp = { ...comp, invoice: formatInvoiceLabel(result.tipoComprobante, result.idComprobante, result.puntoVenta), facturanteId: String(result.idComprobante) };
+          msg = `✓ ${comp.invoice} emitida — ${r.franchiseName}`;
+        } catch (err) {
+          msg = `⚠ CC guardada sin AFIP (${err.message}) — ${r.franchiseName}`;
+        }
+      }
       onAddComp(r.franchiseId, comp);
-      log.push({ status: "ok", step: "CC", msg: `✓ CC actualizada — ${r.franchiseName}` });
+      log.push({ status: comp.invoice ? "ok" : "sin_factura", step: "CC", msg });
     }
     setProcessLog(log);
     setStage(FACT_STAGE.DONE);
-  }, [activeRows, franchises, onAddComp, loteId]);
+  }, [activeRows, franchises, onAddComp, loteId, franchisor]);
 
   const downloadPlantilla = () => {
     const wb = XLSX.utils.book_new();
@@ -1377,14 +1470,51 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
 
 // ── Tab principal ───────────────────────────────────────────────────────────
 const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, factState, setFactState, franchisor, onStartImport }) {
+  const { editComp } = useStore();
   const [mode, setMode] = useState(EMIT_MODE.SELECT);
   const [prefillFr,   setPrefillFr]   = useState(null);
   const [prefillComp, setPrefillComp] = useState(null);
 
+  // Abre el wizard manual para PAGO_PAUTA sin factura
   const handleEmitirDesde = (fr, comp) => {
     setPrefillFr(fr);
     setPrefillComp(comp);
     setMode(EMIT_MODE.MANUAL);
+  };
+
+  // Emite directamente ante AFIP un comp ya guardado en Sheets (sin wizard)
+  const handleEmitirAfip = async (fr, comp) => {
+    const result = await emitirComprobante({
+      franchisor: franchisor?.ar ?? franchisor,
+      franchise:  fr,
+      comp:       { ...comp, applyIVA: !!fr.applyIVA },
+      referenciaIdComprobante: comp.facturanteId ?? undefined,
+    });
+    const invoice      = formatInvoiceLabel(result.tipoComprobante, result.idComprobante, result.puntoVenta);
+    const facturanteId = String(result.idComprobante);
+    editComp(fr.id, comp.id, { invoice, facturanteId });
+  };
+
+  // Crea y emite FACTURA_PAUTA para un PAGO_PAUTA sin factura
+  const handleEmitirPago = async (fr, pagoComp) => {
+    const factComp = {
+      id: uid(), type: makeType("FACTURA", "PAUTA"),
+      amount: pagoComp.amount, date: pagoComp.date,
+      month: pagoComp.month, year: pagoComp.year,
+      currency: pagoComp.currency ?? "ARS",
+      ref: `Pauta ${MONTHS[pagoComp.month]} ${pagoComp.year}`,
+      nota: pagoComp.nota ?? `Factura Pauta ${MONTHS[pagoComp.month]} ${pagoComp.year}`,
+    };
+    if (fr.country === "Argentina" && factComp.currency === "ARS") {
+      const result = await emitirComprobante({
+        franchisor: franchisor?.ar ?? franchisor,
+        franchise:  fr,
+        comp:       { ...factComp, applyIVA: !!fr.applyIVA },
+      });
+      factComp.invoice      = formatInvoiceLabel(result.tipoComprobante, result.idComprobante, result.puntoVenta);
+      factComp.facturanteId = String(result.idComprobante);
+    }
+    onAddComp(fr.id, factComp);
   };
 
   const reset = () => {
@@ -1402,7 +1532,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
   return (
     <div className="fade">
       {/* Pendientes */}
-      <PendientesPanel onEmitir={handleEmitirDesde} />
+      <PendientesPanel onEmitir={handleEmitirDesde} onEmitirAfip={handleEmitirAfip} onEmitirPago={handleEmitirPago} franchisor={franchisor} />
 
       {/* Selector de modo */}
       {mode === EMIT_MODE.SELECT ? (

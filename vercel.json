@@ -1,7 +1,6 @@
 {
   "functions": {
-    "api/sheets.js": {
-      "maxDuration": 30
-    }
+    "api/sheets.js":     { "maxDuration": 30 },
+    "api/facturante.js": { "maxDuration": 30 }
   }
 }

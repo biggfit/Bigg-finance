@@ -32,9 +32,9 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
   const pautaPend = useMemo(() => computePautaPendiente(franchise.id, comps, localYear, localMonth), [franchise.id, comps, localYear, localMonth]);
   const handleAdd = useCallback((comp) => onAddComp(franchise.id, comp), [franchise.id, onAddComp]);
 
-  const openEdit = (c) => { setEditingId(c.id); setEditBuf({ date: c.date ?? "", nota: c.ref ?? c.nota ?? "", amount: c.amount ?? 0 }); };
+  const openEdit = (c) => { setEditingId(c.id); setEditBuf({ date: c.date ?? "", nota: c.ref ?? c.nota ?? "", amount: c.amount ?? 0, type: c.type ?? "" }); };
   const saveEdit = () => {
-    if (onEditComp && editingId) onEditComp(franchise.id, editingId, { date: editBuf.date, nota: editBuf.nota, ref: editBuf.nota, amount: parseFloat(String(editBuf.amount).replace(",", ".")) || 0 });
+    if (onEditComp && editingId) onEditComp(franchise.id, editingId, { date: editBuf.date, nota: editBuf.nota, ref: editBuf.nota, amount: parseFloat(String(editBuf.amount).replace(",", ".")) || 0, type: editBuf.type || undefined });
     setEditingId(null);
   };
 
@@ -172,7 +172,16 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
                       </td>
                       {/* Tipo */}
                       <td style={{ overflow: "hidden", padding: "8px 4px" }}>
-                        <TypePill type={c.type} />
+                        {isEd ? (
+                          <select value={editBuf.type} onChange={e => setEditBuf(b => ({ ...b, type: e.target.value }))}
+                            style={{ ...inpS, fontSize: 10, padding: "2px 4px", maxWidth: 140 }}>
+                            {Object.entries(COMP_TYPES).map(([k, v]) => (
+                              <option key={k} value={k}>{v.label}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <TypePill type={c.type} />
+                        )}
                       </td>
                       {/* Importe */}
                       <td className="mono" style={{ textAlign: "right", fontSize: 12, fontWeight: 700, padding: "8px 8px", whiteSpace: "nowrap",

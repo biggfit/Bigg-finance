@@ -309,9 +309,15 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
                   </td>
                   {/* Tipo/Cuenta */}
                   <td style={{ padding: "6px 4px" }}>
-                    {r.isApertura
-                      ? <span className="pill" style={{ color: "var(--accent)", background: "rgba(173,255,25,.08)", fontSize: 9 }}>Saldo Ant.</span>
-                      : <span className="pill" style={{ color: COMP_TYPES[r.tipo]?.color ?? "var(--muted)", background: `${COMP_TYPES[r.tipo]?.color ?? "#fff"}18`, fontSize: 9, whiteSpace: "nowrap" }}>{r.tipoLabel}</span>
+                    {isEd
+                      ? <select value={editBufTC.tipo} onChange={e => setEditBufTC(b => ({ ...b, tipo: e.target.value }))} style={{ ...inpS, fontSize: 10 }}>
+                          <option value="PAGO">Pago Recibido</option>
+                          <option value="PAGO_PAUTA">Pagos a Cuenta</option>
+                          <option value="PAGO_ENVIADO">Trf. Enviada</option>
+                        </select>
+                      : r.isApertura
+                        ? <span className="pill" style={{ color: "var(--accent)", background: "rgba(173,255,25,.08)", fontSize: 9 }}>Saldo Ant.</span>
+                        : <span className="pill" style={{ color: COMP_TYPES[r.tipo]?.color ?? "var(--muted)", background: `${COMP_TYPES[r.tipo]?.color ?? "#fff"}18`, fontSize: 9, whiteSpace: "nowrap" }}>{r.tipoLabel}</span>
                     }
                   </td>
                   {/* Descripción */}
@@ -343,7 +349,7 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
                     {isEd ? (
                       <span style={{ display: "flex", gap: 3, justifyContent: "flex-end" }}>
                         <button className="btn" style={{ fontSize: 10, padding: "2px 7px" }} onClick={() => {
-                          if (editComp) editComp(editBufTC.frId, editRowId, { date: editBufTC.date, nota: editBufTC.concepto, ref: editBufTC.concepto, amount: parseFloat(String(editBufTC.amount).replace(",", ".")) || 0 });
+                          if (editComp) editComp(editBufTC.frId, editRowId, { date: editBufTC.date, nota: editBufTC.concepto, ref: editBufTC.concepto, amount: parseFloat(String(editBufTC.amount).replace(",", ".")) || 0, type: editBufTC.tipo });
                           setEditRowId(null);
                         }}>✓</button>
                         <button className="ghost" style={{ fontSize: 10, padding: "2px 6px" }} onClick={() => setEditRowId(null)}>✕</button>
@@ -363,7 +369,7 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
                         {!r.isApertura && r.compId && (r.tipo === "PAGO" || r.tipo === "PAGO_PAUTA" || r.tipo === "PAGO_ENVIADO") && (
                           <button className="ghost" style={{ fontSize: 12, padding: "2px 5px", opacity: .5, display: "inline-flex", alignItems: "center" }} title="Editar" onClick={() => {
                             setEditRowId(r.compId);
-                            setEditBufTC({ date: r.displayDate, concepto: r.concepto === "—" ? "" : r.concepto, amount: r.debe > 0 ? r.debe : r.haber, frId: r.frId });
+                            setEditBufTC({ date: r.displayDate, concepto: r.concepto === "—" ? "" : r.concepto, amount: r.debe > 0 ? r.debe : r.haber, frId: r.frId, tipo: r.tipo });
                           }}>✎</button>
                         )}
                       </span>

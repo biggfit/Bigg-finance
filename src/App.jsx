@@ -1,8 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { DEFAULT_FRANCHISOR } from "./data/franchisor";
-import { REAL_FRANCHISES } from "./data/franchises";
-import { REAL_SALDO_INICIAL } from "./data/saldos";
-import { REAL_COMPROBANTES } from "./data/comprobantes";
 import { StoreCtx } from "./lib/context";
 import { fetchComps, fetchSaldos, appendComp, updateComp, removeComp,
          fetchFranchises, fetchFranchisor,
@@ -24,16 +21,15 @@ export default function App() {
   const [user,       setUser]      = useState({ name: "Admin" }); // login deshabilitado para testing
   const [showMaestros, setShowMaestros] = useState(false);
   const [showImport,   setShowImport]   = useState(false);
-  const [franchisor,   setFranchisor]   = useState(() => import.meta.env.VITE_SHEETS_API_URL ? null : DEFAULT_FRANCHISOR);
+  const [franchisor,   setFranchisor]   = useState(null);
   const [tab,        setTab]       = useState("resumen");
   const [detailFilteredRows, setDetailFilteredRows] = useState([]);
   const [month,      setMonth]     = useState(1);   // February 2026 — where the data lives
   const [year,       setYear]      = useState(2026);
-  const [franchises, setFranchises]= useState(() => import.meta.env.VITE_SHEETS_API_URL ? [] : REAL_FRANCHISES.map(f => ({ ...f })));
-  const useSheets = !!import.meta.env.VITE_SHEETS_API_URL;
-  const [comps,        setComps]       = useState(() => useSheets ? {} : REAL_COMPROBANTES);
-  const [saldoInicial, setSaldoInicial] = useState(() => useSheets ? {} : REAL_SALDO_INICIAL);
-  const [sheetsReady,  setSheetsReady] = useState(!import.meta.env.VITE_SHEETS_API_URL);
+  const [franchises, setFranchises]= useState([]);
+  const [comps,        setComps]       = useState({});
+  const [saldoInicial, setSaldoInicial] = useState({});
+  const [sheetsReady,  setSheetsReady] = useState(false);
   const [loadError,    setLoadError]   = useState(null);
   const [modalFrId,  setModalFrId] = useState(null);   // null = closed, number = franchise id
   const [factState,  setFactState] = useState({       // Facturador state persists across tab switches
@@ -49,8 +45,7 @@ export default function App() {
 
   const saveFr = useCallback((id, data) => {
     setFranchises(prev => prev.map(f => f.id === id ? { ...f, ...data } : f));
-    if (import.meta.env.VITE_SHEETS_API_URL)
-      sheetsSaveFr(id, data).catch(err => console.error('Sheets saveFr:', err));
+    sheetsSaveFr(id, data).catch(err => console.error('Sheets saveFr:', err));
   }, []);
 
   const deleteFr = useCallback((id) => {
@@ -60,24 +55,21 @@ export default function App() {
       Object.keys(next).forEach(k => { if (k.startsWith(String(id) + "-")) delete next[k]; });
       return next;
     });
-    if (import.meta.env.VITE_SHEETS_API_URL)
-      sheetsDeleteFr(id).catch(err => console.error('Sheets deleteFr:', err));
+    sheetsDeleteFr(id).catch(err => console.error('Sheets deleteFr:', err));
   }, []);
 
   const addFr = useCallback((data) => {
     setFranchises(prev => {
       const maxId = Math.max(0, ...prev.map(f => f.id));
       const newFr = { ...data, id: maxId + 1 };
-      if (import.meta.env.VITE_SHEETS_API_URL)
-        sheetsAddFr(newFr).catch(err => console.error('Sheets addFr:', err));
+      sheetsAddFr(newFr).catch(err => console.error('Sheets addFr:', err));
       return [...prev, newFr];
     });
   }, []);
 
   const saveFranchisor = useCallback((side, data) => {
     setFranchisor(prev => ({ ...prev, [side]: { ...(prev?.[side] ?? {}), ...data } }));
-    if (import.meta.env.VITE_SHEETS_API_URL)
-      sheetsSaveFranchisor(side, data).catch(err => console.error('Sheets saveFranchisor:', err));
+    sheetsSaveFranchisor(side, data).catch(err => console.error('Sheets saveFranchisor:', err));
   }, []);
 
   const handleNavigate = useCallback((tab, filter, { tipo, cuenta, moneda } = {}) => {
@@ -121,15 +113,13 @@ export default function App() {
   const addComp = useCallback((frId, comp) => {
     const key = String(frId);
     setComps(prev => ({ ...prev, [key]: [...(prev[key] ?? []), comp] }));
-    if (import.meta.env.VITE_SHEETS_API_URL)
-      appendComp(frId, comp).catch(err => console.error('Sheets appendComp:', err));
+    appendComp(frId, comp).catch(err => console.error('Sheets appendComp:', err));
   }, []);
 
   const delComp = useCallback((frId, compId) => {
     const key = String(frId);
     setComps(prev => ({ ...prev, [key]: (prev[key] ?? []).filter(c => c.id !== String(compId)) }));
-    if (import.meta.env.VITE_SHEETS_API_URL)
-      removeComp(frId, compId).catch(err => console.error('Sheets removeComp:', err));
+    removeComp(frId, compId).catch(err => console.error('Sheets removeComp:', err));
   }, []);
 
   const editComp = useCallback((frId, compId, patch) => {
@@ -138,8 +128,7 @@ export default function App() {
       ...prev,
       [key]: (prev[key] ?? []).map(c => c.id === String(compId) ? { ...c, ...patch } : c),
     }));
-    if (import.meta.env.VITE_SHEETS_API_URL)
-      updateComp(frId, compId, patch).catch(err => console.error('Sheets updateComp:', err));
+    updateComp(frId, compId, patch).catch(err => console.error('Sheets updateComp:', err));
   }, []);
 
   const handleExportCSV = useCallback(() => {
@@ -172,8 +161,8 @@ export default function App() {
 
   // Context value — stable object ref changes only when comps/saldoInicial/franchises change
   const storeValue = useMemo(
-    () => ({ comps, saldoInicial, franchises, franchiseMap, editComp }),
-    [comps, saldoInicial, franchises, franchiseMap, editComp]
+    () => ({ comps, saldoInicial, franchises, franchiseMap, editComp, deleteComp: delComp }),
+    [comps, saldoInicial, franchises, franchiseMap, editComp, delComp]
   );
 
   const modalFr = modalFrId != null ? franchiseMap.get(modalFrId) : null;
@@ -182,7 +171,6 @@ export default function App() {
 
   // Cargar datos de Google Sheets al montar
   useEffect(() => {
-    if (!import.meta.env.VITE_SHEETS_API_URL) return;
     Promise.allSettled([fetchComps(), fetchSaldos(), fetchFranchises(), fetchFranchisor()])
       .then(([compsRes, saldosRes, frRes, franchisorRes]) => {
         if (compsRes.status === 'fulfilled') setComps(compsRes.value);
@@ -192,7 +180,7 @@ export default function App() {
         else console.error('Sheets saldos:', saldosRes.reason);
 
         if (frRes.status === 'fulfilled') setFranchises(frRes.value);
-        else { console.warn('Sheets franchises (fallback estático):', frRes.reason); setFranchises(REAL_FRANCHISES.map(f => ({ ...f }))); }
+        else { console.error('Sheets franchises:', frRes.reason); }
 
         if (franchisorRes.status === 'fulfilled') setFranchisor(franchisorRes.value);
         else { console.warn('Sheets franchisor (fallback estático):', franchisorRes.reason); setFranchisor(DEFAULT_FRANCHISOR); }

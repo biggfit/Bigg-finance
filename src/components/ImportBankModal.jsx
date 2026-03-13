@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
 import { MONTHS, AVAILABLE_YEARS, computeSaldoPrevMes, fmt, uid } from "../lib/helpers";
 import { useStore } from "../lib/context";
@@ -231,15 +231,28 @@ function SemDot({ color, size = 9 }) {
 export default function ImportBankModal({ franchises, month, year, addComp, onClose }) {
   const { comps, saldoInicial } = useStore();
 
-  const [stage,     setStage]    = useState(1);
-  const [selMonth,  setSelMonth] = useState(month);
-  const [selYear,   setSelYear]  = useState(year);
-  const [rows,      setRows]     = useState([]);
-  const [parseErr,  setParseErr] = useState(null);
-  const [importing, setImporting]= useState(false);
-  const [summary,   setSummary]  = useState(null);
-  const [minimized, setMinimized]= useState(false);
+  const [stage,      setStage]     = useState(1);
+  const [selMonth,   setSelMonth]  = useState(month);
+  const [selYear,    setSelYear]   = useState(year);
+  const [rows,       setRows]      = useState([]);
+  const [parseErr,   setParseErr]  = useState(null);
+  const [importing,  setImporting] = useState(false);
+  const [summary,    setSummary]   = useState(null);
+  const [minimized,  setMinimized] = useState(false);
+  const [savedItems, setSavedItems]= useState([]); // filas guardadas individualmente
   const fileRef = useRef(null);
+
+  // Auto-mostrar resumen cuando todos los movimientos fueron guardados o eliminados
+  useEffect(() => {
+    if (stage === 3 && !summary && savedItems.length > 0 && rows.length > 0 && rows.every(r => r.deleted)) {
+      const counts = { PAGO: 0, PAGO_PAUTA: 0, PAGO_ENVIADO: 0 };
+      const totals = { PAGO: 0, PAGO_PAUTA: 0, PAGO_ENVIADO: 0 };
+      for (const row of savedItems) {
+        if (row.movType in counts) { counts[row.movType]++; totals[row.movType] += row.monto; }
+      }
+      setSummary({ counts, totals, total: savedItems.length });
+    }
+  }, [stage, summary, savedItems, rows]);
 
   const groups = useMemo(() => {
     const seen = new Set();
@@ -252,6 +265,7 @@ export default function ImportBankModal({ franchises, month, year, addComp, onCl
     }, []);
   }, [rows]);
 
+  const dupRows    = rows.filter((r) => r.isDuplicate);
   const activeRows = rows.filter((r) => !r.deleted);
   const canImport  =
     activeRows.length > 0 &&
@@ -291,7 +305,15 @@ export default function ImportBankModal({ franchises, month, year, addComp, onCl
           setParseErr(`No se encontraron movimientos para ${MONTHS[selMonth]} ${selYear} en el extracto.`);
           return;
         }
-        setRows(parsed);
+        // Deduplicación: marcar rows cuyo nroComp ya existe en el store
+        const allComps = Object.values(comps).flat();
+        const existingNros = new Set(allComps.map(c => c.invoice).filter(Boolean));
+        const deduped = parsed.map(r =>
+          r.nroComp && existingNros.has(r.nroComp)
+            ? { ...r, isDuplicate: true, deleted: true }
+            : r
+        );
+        setRows(deduped);
         setStage(3);
       } catch (err) {
         setParseErr(err.message);
@@ -302,6 +324,23 @@ export default function ImportBankModal({ franchises, month, year, addComp, onCl
 
   const deleteRow   = useCallback((id) =>
     setRows((p) => p.map((r) => r.id === id ? { ...r, deleted: true } : r)), []);
+  const restoreRow  = useCallback((id) =>
+    setRows((p) => p.map((r) => r.id === id ? { ...r, deleted: false, isDuplicate: false } : r)), []);
+
+  const handleSaveRow = useCallback((row) => {
+    const [, mm, yy] = row.fecha.split("/");
+    const amount = row.movType === "PAGO_PAUTA" ? Math.round(row.monto / 1.21) : row.monto;
+    const comp = {
+      id: uid(), type: row.movType, amount,
+      date: row.fecha, month: parseInt(mm, 10) - 1, year: parseInt(yy, 10),
+      currency: "ARS",
+      ...(row.nroComp ? { invoice: row.nroComp } : {}),
+      ...(row.entidad ? { nota: row.entidad }   : {}),
+    };
+    addComp(row.frId, comp);
+    deleteRow(row.id);
+    setSavedItems(p => [...p, row]);
+  }, [addComp, deleteRow]);
   const setMovType  = useCallback((id, v) =>
     setRows((p) => p.map((r) => r.id === id ? { ...r, movType: v || null } : r)), []);
   const setMonto    = useCallback((id, v) => {
@@ -430,8 +469,10 @@ export default function ImportBankModal({ franchises, month, year, addComp, onCl
               activeCount={activeRows.length}
               canImport={canImport} importing={importing}
               allFranchises={franchises}
-              onDelete={deleteRow} onSetMovType={setMovType}
+              onDelete={deleteRow} onRestore={restoreRow}
+              onSetMovType={setMovType}
               onSetMonto={setMonto} onSetFrId={setFrId}
+              onSaveRow={handleSaveRow}
               onImport={handleImport}
               onBack={() => { setRows([]); setStage(2); }}
             />
@@ -512,7 +553,7 @@ function Stage2({ selMonth, selYear, fileRef, parseErr, onFile, onBack }) {
 }
 
 // ─── STAGE 3 — Preview table ─────────────────────────────────────────────────
-function PreviewTable({ rows, groups, activeCount, canImport, importing, allFranchises, onDelete, onSetMovType, onSetMonto, onSetFrId, onImport, onBack }) {
+function PreviewTable({ rows, groups, activeCount, canImport, importing, allFranchises, onDelete, onRestore, onSetMovType, onSetMonto, onSetFrId, onSaveRow, onImport, onBack }) {
   const thS = {
     textAlign: "left", fontSize: 10, fontWeight: 600, color: "var(--text2)",
     padding: "6px 10px", whiteSpace: "nowrap", borderBottom: "1px solid var(--border)",
@@ -530,6 +571,56 @@ function PreviewTable({ rows, groups, activeCount, canImport, importing, allFran
     const distOk     = Math.abs(totalDist - montoOrig) <= 0.01;
 
     groupRows.forEach((row) => {
+      // Duplicate rows — render dimmed with restore option
+      if (row.isDuplicate && row.deleted) {
+        const fr = row.frOptions.find((f) => f.id === row.frId);
+        tableRows.push(
+          <tr key={row.id} style={{
+            borderBottom: "1px solid var(--border)",
+            borderLeft: "3px solid rgba(148,163,184,.3)",
+            opacity: 0.45,
+          }}>
+            <td style={{ ...tdS, paddingLeft: 8, paddingRight: 4, whiteSpace: "nowrap" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <div style={{ width: 9, height: 9, borderRadius: "50%", background: "#94a3b8", flexShrink: 0, display: "inline-block" }} />
+              </div>
+            </td>
+            <td style={{ ...tdS, color: "var(--text2)", fontSize: 10, whiteSpace: "nowrap", textDecoration: "line-through" }}>
+              {row.fecha.slice(0, 5)}
+            </td>
+            <td style={{ ...tdS, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: "line-through" }} title={row.entidad}>
+              {row.entidad || "—"}
+            </td>
+            <td style={{ ...tdS, fontFamily: "monospace", fontSize: 10, color: "var(--text2)" }}>
+              {row.cuit || "—"}
+            </td>
+            <td style={tdS}>
+              <span style={{ color: "var(--text2)" }}>{fr?.name ?? "—"}</span>
+            </td>
+            <td style={{ ...tdS, textAlign: "right" }}>
+              <span style={{ fontWeight: 600, fontSize: 11, color: "var(--text2)", textDecoration: "line-through" }}>
+                +{fmt(row.monto, "ARS")}
+              </span>
+            </td>
+            <td style={{ ...tdS, whiteSpace: "nowrap" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 10, color: "#94a3b8", fontStyle: "italic" }}>Ya importado</span>
+                <button
+                  style={{ fontSize: 10, padding: "1px 7px", cursor: "pointer",
+                    background: "rgba(148,163,184,.12)", color: "#94a3b8",
+                    border: "1px solid rgba(148,163,184,.3)", borderRadius: 4, whiteSpace: "nowrap", opacity: 1 }}
+                  onClick={() => onRestore(row.id)}
+                  title="Restaurar y volver a importar"
+                >
+                  Restaurar
+                </button>
+              </div>
+            </td>
+          </tr>
+        );
+        return;
+      }
+
       if (row.deleted) return;
       const status = getStatus(row, rows);
       const fr     = row.frOptions.find((f) => f.id === row.frId);
@@ -547,9 +638,13 @@ function PreviewTable({ rows, groups, activeCount, canImport, importing, allFran
           borderLeft: isMulti ? "3px solid rgba(34,211,238,.45)" : "3px solid transparent",
           background: isMulti ? "rgba(34,211,238,.03)" : undefined,
         }}>
-          {/* Semáforo */}
-          <td style={{ ...tdS, paddingLeft: 8, paddingRight: 4 }}>
-            <SemDot color={status} />
+          {/* Semáforo + Eliminar */}
+          <td style={{ ...tdS, paddingLeft: 8, paddingRight: 4, whiteSpace: "nowrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <SemDot color={status} />
+              <button className="ghost" style={{ fontSize: 11, padding: "0 3px", color: "var(--text2)", lineHeight: 1 }}
+                onClick={() => onDelete(row.id)} title="Eliminar">✕</button>
+            </div>
           </td>
           {/* Fecha */}
           <td style={{ ...tdS, color: "var(--text2)", fontSize: 10, whiteSpace: "nowrap" }}>
@@ -603,31 +698,39 @@ function PreviewTable({ rows, groups, activeCount, canImport, importing, allFran
               </span>
             )}
           </td>
-          {/* Tipo */}
-          <td style={tdS}>
-            {isOut ? (
-              <span style={{ fontSize: 10, color: "var(--orange)" }}>Transf. Enviada</span>
-            ) : (
-              <select
-                value={row.movType ?? ""}
-                onChange={(e) => onSetMovType(row.id, e.target.value)}
-                style={{
-                  fontSize: 11, padding: "2px 6px", background: "var(--bg)",
-                  color: row.movType ? "var(--text)" : "var(--text2)",
-                  border: `1px solid ${status === "yellow" ? "#facc15" : "var(--border)"}`,
-                  borderRadius: 4,
-                }}
-              >
-                <option value="">— Seleccionar —</option>
-                <option value="PAGO">Pago Recibido</option>
-                <option value="PAGO_PAUTA">Pago a Cuenta</option>
-              </select>
-            )}
-          </td>
-          {/* Delete */}
-          <td style={{ ...tdS, textAlign: "center" }}>
-            <button className="ghost" style={{ fontSize: 13, padding: "0 5px", color: "var(--text2)" }}
-              onClick={() => onDelete(row.id)} title="Eliminar">✕</button>
+          {/* Tipo + Guardar */}
+          <td style={{ ...tdS, whiteSpace: "nowrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {isOut ? (
+                <span style={{ fontSize: 10, color: "var(--orange)" }}>Transf. Enviada</span>
+              ) : (
+                <select
+                  value={row.movType ?? ""}
+                  onChange={(e) => onSetMovType(row.id, e.target.value)}
+                  style={{
+                    fontSize: 11, padding: "2px 6px", background: "var(--bg)",
+                    color: row.movType ? "var(--text)" : "var(--text2)",
+                    border: `1px solid ${status === "yellow" ? "#facc15" : "var(--border)"}`,
+                    borderRadius: 4,
+                  }}
+                >
+                  <option value="">— Seleccionar —</option>
+                  <option value="PAGO">Pago Recibido</option>
+                  <option value="PAGO_PAUTA">Pago a Cuenta</option>
+                </select>
+              )}
+              {(status === "green" || status === "auto") && (
+                <button
+                  style={{ fontSize: 10, padding: "2px 8px", cursor: "pointer",
+                    background: "rgba(74,222,128,.12)", color: "var(--green)",
+                    border: "1px solid rgba(74,222,128,.3)", borderRadius: 4, whiteSpace: "nowrap" }}
+                  onClick={() => onSaveRow(row)}
+                  title="Guardar este movimiento"
+                >
+                  Guardar ✓
+                </button>
+              )}
+            </div>
           </td>
         </tr>
       );
@@ -642,7 +745,7 @@ function PreviewTable({ rows, groups, activeCount, canImport, importing, allFran
           borderBottom: "2px solid rgba(34,211,238,.2)",
         }}>
           <td colSpan={5} />
-          <td colSpan={3} style={{ ...tdS, fontSize: 10, color: "var(--text2)", paddingTop: 4, paddingBottom: 4 }}>
+          <td colSpan={2} style={{ ...tdS, fontSize: 10, color: "var(--text2)", paddingTop: 4, paddingBottom: 4 }}>
             <span>Total original: {fmt(montoOrig, "ARS")}</span>
             <span style={{ margin: "0 8px", color: "var(--border2)" }}>|</span>
             <span>Distribuido:{" "}
@@ -656,6 +759,7 @@ function PreviewTable({ rows, groups, activeCount, canImport, importing, allFran
   });
 
   // Stats bar
+  const dupCount    = rows.filter(r => r.isDuplicate).length;
   const greenCount  = activeRows(rows).filter(r => getStatus(r,rows) === "green").length;
   const autoCount   = activeRows(rows).filter(r => getStatus(r,rows) === "auto").length;
   const yellowCount = activeRows(rows).filter(r => getStatus(r,rows) === "yellow").length;
@@ -669,6 +773,7 @@ function PreviewTable({ rows, groups, activeCount, canImport, importing, allFran
         {autoCount  > 0 && <StatBadge color="#facc15" label={`${autoCount} auto-clasificados`} />}
         {yellowCount > 0 && <StatBadge color="#facc15" label={`${yellowCount} pendientes`} />}
         {redCount   > 0 && <StatBadge color="#f87171" label={`${redCount} sin mapeo`} />}
+        {dupCount   > 0 && <StatBadge color="#94a3b8" label={`${dupCount} ya importados`} />}
         <span style={{ marginLeft: "auto", color: "var(--text2)" }}>
           {activeRows(rows).length} movimientos
         </span>
@@ -686,13 +791,12 @@ function PreviewTable({ rows, groups, activeCount, canImport, importing, allFran
               <th style={thS}>Sede</th>
               <th style={{ ...thS, textAlign: "right" }}>Monto</th>
               <th style={thS}>Tipo</th>
-              <th style={{ ...thS, width: 30 }} />
             </tr>
           </thead>
           <tbody>
             {tableRows.length > 0 ? tableRows : (
               <tr>
-                <td colSpan={8} style={{ textAlign: "center", padding: "28px 0", fontSize: 12, color: "var(--text2)" }}>
+                <td colSpan={7} style={{ textAlign: "center", padding: "28px 0", fontSize: 12, color: "var(--text2)" }}>
                   Todos los movimientos fueron eliminados.
                 </td>
               </tr>
@@ -702,24 +806,39 @@ function PreviewTable({ rows, groups, activeCount, canImport, importing, allFran
       </div>
 
       {/* Footer actions */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 8, borderTop: "1px solid var(--border)" }}>
-        <button className="ghost" style={{ fontSize: 12 }} onClick={onBack}>← Volver</button>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {!canImport && activeCount > 0 && (
-            <span style={{ fontSize: 10, color: "var(--text2)" }}>
-              Completá las filas pendientes para importar
-            </span>
-          )}
-          <button
-            className="ghost"
-            style={{ fontSize: 12, fontWeight: 600, padding: "6px 20px", border: "1px solid var(--border2)", opacity: canImport && !importing ? 1 : 0.38, cursor: canImport && !importing ? "pointer" : "not-allowed" }}
-            disabled={!canImport || importing}
-            onClick={onImport}
-          >
-            {importing ? "Importando…" : `Importar ${activeCount} movimiento${activeCount !== 1 ? "s" : ""}`}
-          </button>
-        </div>
-      </div>
+      {(() => {
+        const greenRows = activeRows(rows).filter(r => getStatus(r, rows) === "green" || getStatus(r, rows) === "auto");
+        return (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 8, borderTop: "1px solid var(--border)" }}>
+            <button className="ghost" style={{ fontSize: 12 }} onClick={onBack}>← Volver</button>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {greenRows.length > 0 && (
+                <button
+                  style={{ fontSize: 11, padding: "4px 14px", cursor: "pointer",
+                    background: "rgba(74,222,128,.12)", color: "var(--green)",
+                    border: "1px solid rgba(74,222,128,.3)", borderRadius: 4 }}
+                  onClick={() => greenRows.forEach(r => onSaveRow(r))}
+                >
+                  Guardar {greenRows.length} confirmado{greenRows.length !== 1 ? "s" : ""} ✓
+                </button>
+              )}
+              {!canImport && activeCount > 0 && (
+                <span style={{ fontSize: 10, color: "var(--text2)" }}>
+                  Completá las filas pendientes para importar
+                </span>
+              )}
+              <button
+                className="ghost"
+                style={{ fontSize: 12, fontWeight: 600, padding: "6px 20px", border: "1px solid var(--border2)", opacity: canImport && !importing ? 1 : 0.38, cursor: canImport && !importing ? "pointer" : "not-allowed" }}
+                disabled={!canImport || importing}
+                onClick={onImport}
+              >
+                {importing ? "Importando…" : `Importar ${activeCount} movimiento${activeCount !== 1 ? "s" : ""}`}
+              </button>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -728,9 +847,13 @@ function PreviewTable({ rows, groups, activeCount, canImport, importing, allFran
 function activeRows(rows) { return rows.filter(r => !r.deleted); }
 
 function StatBadge({ color, label }) {
+  const dotColor = color === "#4ade80" ? "green" : color === "#facc15" ? "yellow" : color === "#94a3b8" ? null : "red";
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-      <SemDot color={color === "#4ade80" ? "green" : color === "#facc15" ? "yellow" : "red"} />
+      {dotColor
+        ? <SemDot color={dotColor} />
+        : <div style={{ width: 9, height: 9, borderRadius: "50%", background: "#94a3b8", flexShrink: 0, display: "inline-block" }} />
+      }
       {label}
     </span>
   );
