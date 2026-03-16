@@ -47,18 +47,28 @@ function doGet(e) {
     // Formato v3: frId | empresa | currency | saldo  (4 columnas)
     // Formato v2: frId | empresa | saldo             (3 columnas)
     // Legado v1:  frId | saldo                       (2 columnas)
-    const hasEmpresa  = headers.length >= 3 && String(headers[1]).toLowerCase() === "empresa";
-    const hasCurrency = hasEmpresa && headers.length >= 4 && String(headers[2]).toLowerCase() === "currency";
+    // Buscar columnas por nombre (case-insensitive) — tolerante a cualquier nombre de header
+    const hLow        = headers.map(h => String(h).toLowerCase());
+    const frIdCol     = hLow.findIndex(h => h === "frid" || h === "id" || h === "fr_id");
+    const empresaCol  = hLow.findIndex(h => h === "empresa" || h === "company");
+    const currencyCol = hLow.findIndex(h => h === "currency" || h === "moneda" || h === "cur");
+    const amountCol   = hLow.findIndex(h => h === "saldo" || h === "amount" || h === "balance" || h === "importe" || h === "monto");
+
+    const colFr  = frIdCol  >= 0 ? frIdCol  : 0;
+    const colAmt = amountCol >= 0 ? amountCol : (empresaCol < 0 ? 1 : (currencyCol >= 0 ? 3 : 2));
+
+    const hasEmpresa = empresaCol >= 0;
     if (hasEmpresa) {
       const saldos = {};
       data.forEach(row => {
-        const frId    = String(row[0]);
-        const empresa = row[1] !== "" ? String(row[1]) : "ÑAKO SRL";
-        const currency = hasCurrency ? (row[2] !== "" ? String(row[2]) : null) : null;
-        const saldo   = Number(hasCurrency ? row[3] : row[2]);
+        const frId     = String(row[colFr]);
+        const empresa  = row[empresaCol] !== "" ? String(row[empresaCol]) : "ÑAKO SRL";
+        const currency = currencyCol >= 0 ? (row[currencyCol] !== "" ? String(row[currencyCol]) : null) : null;
+        const saldo    = Number(row[colAmt]);
+        if (isNaN(saldo) || frId === "") return;
         if (!saldos[empresa]) saldos[empresa] = {};
         // En caso de duplicados, conservar el de mayor saldo absoluto
-        const prev = saldos[empresa][frId];
+        const prev    = saldos[empresa][frId];
         const prevAmt = prev != null ? (typeof prev === "object" ? (prev.saldo ?? 0) : prev) : null;
         if (prevAmt === null || Math.abs(saldo) > Math.abs(prevAmt)) {
           saldos[empresa][frId] = { saldo, currency };
@@ -67,9 +77,12 @@ function doGet(e) {
       return json(saldos);
     } else {
       // Formato legado: devolver objeto plano { frId: saldo }
-      const saldos = Object.fromEntries(
-        data.map(([frId, amount]) => [String(frId), Number(amount)])
-      );
+      const saldos = {};
+      data.forEach(row => {
+        const frId  = String(row[colFr]);
+        const saldo = Number(row[colAmt]);
+        if (frId !== "" && !isNaN(saldo)) saldos[frId] = saldo;
+      });
       return json(saldos);
     }
   }
