@@ -43,11 +43,35 @@ function doGet(e) {
   // ── Saldos ────────────────────────────────────────────────────────────────
   if (resource === "saldos") {
     const rows = ss.getSheetByName("saldos").getDataRange().getValues();
-    const [, ...data] = rows;
-    const saldos = Object.fromEntries(
-      data.map(([frId, amount]) => [String(frId), Number(amount)])
-    );
-    return json(saldos);
+    const [headers, ...data] = rows;
+    // Formato v3: frId | empresa | currency | saldo  (4 columnas)
+    // Formato v2: frId | empresa | saldo             (3 columnas)
+    // Legado v1:  frId | saldo                       (2 columnas)
+    const hasEmpresa  = headers.length >= 3 && String(headers[1]).toLowerCase() === "empresa";
+    const hasCurrency = hasEmpresa && headers.length >= 4 && String(headers[2]).toLowerCase() === "currency";
+    if (hasEmpresa) {
+      const saldos = {};
+      data.forEach(row => {
+        const frId    = String(row[0]);
+        const empresa = row[1] !== "" ? String(row[1]) : "ÑAKO SRL";
+        const currency = hasCurrency ? (row[2] !== "" ? String(row[2]) : null) : null;
+        const saldo   = Number(hasCurrency ? row[3] : row[2]);
+        if (!saldos[empresa]) saldos[empresa] = {};
+        // En caso de duplicados, conservar el de mayor saldo absoluto
+        const prev = saldos[empresa][frId];
+        const prevAmt = prev != null ? (typeof prev === "object" ? (prev.saldo ?? 0) : prev) : null;
+        if (prevAmt === null || Math.abs(saldo) > Math.abs(prevAmt)) {
+          saldos[empresa][frId] = { saldo, currency };
+        }
+      });
+      return json(saldos);
+    } else {
+      // Formato legado: devolver objeto plano { frId: saldo }
+      const saldos = Object.fromEntries(
+        data.map(([frId, amount]) => [String(frId), Number(amount)])
+      );
+      return json(saldos);
+    }
   }
 
   // ── Franchises ────────────────────────────────────────────────────────────
