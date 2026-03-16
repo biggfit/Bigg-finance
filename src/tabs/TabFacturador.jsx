@@ -420,10 +420,17 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
         <div style={{ display: "flex", gap: 12 }}>
           {!preview
             ? <button className="btn" style={{ flex: 1, height: 48, fontSize: 15 }} disabled={importeNeto <= 0} onClick={handlePreview}>Vista previa →</button>
-            : <><button className="ghost" style={{ flex: 1, height: 48 }} onClick={() => setPreview(null)}>← Editar</button>
-               <button className="btn" style={{ flex: 3, height: 48, fontSize: 15 }} disabled={emitState === "emitting"} onClick={handleConfirm}>
-                 {emitState === "emitting" ? "Emitiendo ante AFIP…" : `✓ Confirmar y generar ${isAR && currency === "ARS" ? "Factura AFIP" : isAR ? "Factura" : "Invoice"}`}
-               </button></>
+            : <>
+                <button className="ghost" style={{ flex: 1, height: 48 }} onClick={() => setPreview(null)}>← Editar</button>
+                {usaFacturante && (
+                  <button className="ghost" style={{ flex: 2, height: 48, fontSize: 13 }} disabled={emitState === "emitting"} onClick={() => doConfirm(true)}>
+                    Guardar sin emitir
+                  </button>
+                )}
+                <button className="btn" style={{ flex: 3, height: 48, fontSize: 15 }} disabled={emitState === "emitting"} onClick={handleConfirm}>
+                  {emitState === "emitting" ? "Emitiendo ante AFIP…" : `✓ Confirmar y generar ${isAR && currency === "ARS" ? "Factura AFIP" : isAR ? "Factura" : "Invoice"}`}
+                </button>
+              </>
           }
         </div>
       </div>
