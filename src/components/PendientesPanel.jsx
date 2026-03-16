@@ -12,7 +12,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
   const [emitting, setEmitting] = useState({}); // { [compId]: true }
   const [errors,   setErrors]   = useState({}); // { [compId]: string }
 
-  // Adjuntar nro de factura del franquiciado (para NC sin AFIP propia)
+  // Registrar nro de factura recibida del franquiciado
   const [adjuntando, setAdjuntando] = useState({}); // { [compId]: true }
   const [adjuntarVal, setAdjuntarVal] = useState({}); // { [compId]: string }
   const [adjuntarErr, setAdjuntarErr] = useState({}); // { [compId]: string }
@@ -421,7 +421,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
                             style={{ fontSize: 10, padding: "2px 8px", color: openAdj ? "var(--muted)" : "var(--cyan)", whiteSpace: "nowrap", opacity: busy ? 0.4 : 1 }}
                             onClick={() => openAdj ? handleCerrarAdjuntar(comp.id) : handleAbrirAdjuntar(comp.id)}
                           >
-                            {openAdj ? "Cancelar" : "Adjuntar nro →"}
+                            {openAdj ? "Cancelar" : "Registrar factura recibida →"}
                           </button>
                         </div>
                       ) : (
@@ -444,7 +444,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
                           value={adjuntarVal[comp.id] ?? ""}
                           onChange={e => setAdjuntarVal(p => ({ ...p, [comp.id]: e.target.value }))}
                           onKeyDown={e => { if (e.key === "Enter") handleConfirmAdjuntar(fr, comp); if (e.key === "Escape") handleCerrarAdjuntar(comp.id); }}
-                          placeholder="Ej: FA 0001-00000123"
+                          placeholder="Nro. de factura del franquiciado"
                           style={{ flex: 1, background: "var(--bg)", border: "1px solid var(--border2)", borderRadius: 5, padding: "4px 8px", fontSize: 12, color: "var(--text)", fontFamily: "var(--font)" }}
                         />
                         <button
@@ -481,7 +481,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
         </div>
       )}
 
-      {/* ── SIN ASIGNAR (emitidos en Facturante pero sin vincular) ── */}
+      {/* ── FACTURAS PENDIENTES DE FRANQUICIADO ── */}
       {sinAsignar.length > 0 && (
         <div style={{ background: "rgba(251,191,36,.04)", border: "1px solid rgba(251,191,36,.25)", borderRadius: 10, padding: "14px 18px" }}>
           <div
@@ -489,7 +489,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
             onClick={() => setShowSinAsignar(v => !v)}
           >
             <span style={{ fontSize: 10, fontWeight: 800, color: "#fbbf24", letterSpacing: ".1em", flex: 1 }}>
-              ⚠ SIN ASIGNAR EN AFIP — {sinAsignar.length} comprobante{sinAsignar.length !== 1 ? "s" : ""}
+              📥 FACTURAS PENDIENTES DE FRANQUICIADO — {sinAsignar.length} comprobante{sinAsignar.length !== 1 ? "s" : ""}
             </span>
             <span style={{ fontSize: 11, color: "var(--muted)" }}>{showSinAsignar ? "▲" : "▼"}</span>
           </div>
@@ -506,7 +506,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
                     <span className="pill" style={{ color: "#fbbf24", background: "rgba(251,191,36,.1)", fontSize: 9, whiteSpace: "nowrap" }}>
                       {doc} {cuenta}
                     </span>
-                    <span style={{ fontSize: 10, color: "#fbbf24", fontStyle: "italic", whiteSpace: "nowrap" }}>Sin asignar</span>
+                    <span style={{ fontSize: 10, color: "#fbbf24", fontStyle: "italic", whiteSpace: "nowrap" }}>Sin factura recibida</span>
                   </div>
                 );
               })}
