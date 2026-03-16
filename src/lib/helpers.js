@@ -124,7 +124,11 @@ function getSaldoInicial(si, key, empresa, frCurrency = null, filterCurrency = n
 
   if (empresa) {
     const entMap = si[empresa];
-    if (typeof entMap !== "object" || entMap === null) return 0;
+    // Si no existe la clave empresa, puede ser formato legado { frId: number } — hacer fallback
+    if (typeof entMap !== "object" || entMap === null) {
+      if (typeof si[key] === "number") return resolve(si[key]);
+      return 0;
+    }
     return resolve(entMap[key]);
   }
   // Formato legado plano { frId: number }
