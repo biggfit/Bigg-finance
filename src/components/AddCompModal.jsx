@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { Modal } from "./atoms";
-import { CURRENCIES, DOCS, CUENTAS, CUENTA_LABEL, MOV_TYPES, TIPOS_MOVIMIENTO, SYM, fmt, uid, makeType } from "../lib/helpers";
+import { useStore } from "../lib/context";
+import { CURRENCIES, DOCS, CUENTAS, CUENTA_LABEL, MOV_TYPES, TIPOS_MOVIMIENTO, SYM, fmt, uid, makeType, COMPANIES } from "../lib/helpers";
 
 // ─── ADD COMP MODAL ───────────────────────────────────────────────────────────
 const TAX = 0.21;
@@ -8,11 +9,12 @@ const TAX = 0.21;
 const isoToDmy = (iso) => { const [y, m, d] = iso.split("-"); return `${d}/${m}/${y}`; };
 
 export default function AddCompModal({ franchise, month, year, onClose, onAdd }) {
+  const { activeCompany } = useStore();
   const [doc,      setDoc]      = useState("FACTURA");
   const [cuenta,   setCuenta]   = useState("FEE");
   const [isMov,    setIsMov]    = useState(false);
   const [movType,  setMovType]  = useState("PAGO");
-  const [currency, setCurrency] = useState(franchise.currency);
+  const [currency, setCurrency] = useState(COMPANIES[activeCompany]?.currency ?? franchise.currency ?? "ARS");
   const [date,     setDate]     = useState(`${year}-${String(month + 1).padStart(2, "0")}-28`);
   const [amount,   setAmount]   = useState("");
   const [ref,      setRef]      = useState("");
@@ -28,9 +30,9 @@ export default function AddCompModal({ franchise, month, year, onClose, onAdd })
   const labelS = { fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: ".08em", display: "block", marginBottom: 6 };
 
   const handleAdd = useCallback(() => {
-    onAdd({ id: uid(), type, date: isoToDmy(date), amount: totalFinal, amountNeto: amountNum, ref, nota, month, year, currency });
+    onAdd({ id: uid(), type, date: isoToDmy(date), amount: totalFinal, amountNeto: amountNum, ref, nota, month, year, currency, empresa: activeCompany });
     onClose();
-  }, [type, date, totalFinal, amountNum, ref, nota, month, year, currency, onAdd, onClose]);
+  }, [type, date, totalFinal, amountNum, ref, nota, month, year, currency, activeCompany, onAdd, onClose]);
 
   const MONTH_NAMES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 

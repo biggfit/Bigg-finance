@@ -1,19 +1,22 @@
 import { memo, useMemo, useCallback, useState } from "react";
 import { useStore } from "../lib/context";
-import { computeSaldo, computeSaldoPrevMes, computePautaPendiente, makeType, MONTHS, fmt, downloadCSV } from "../lib/helpers";
+import { computeSaldo, computeSaldoPrevMes, computePautaPendiente, compEmpresa, compCurrency, makeType, MONTHS, fmt, downloadCSV, COMPANIES } from "../lib/helpers";
 import { inPeriod } from "../data/franchisor";
 
 // ─── HOOK COMPARTIDO: agrega datos por franquicia ─────────────────────────────
 export function useFrData(franchises, month, year, filterCurrency = null) {
-  const { comps, saldoInicial } = useStore();
+  const { comps, saldoInicial, activeCompany } = useStore();
   return useMemo(() => franchises.map(fr => {
     const key    = String(fr.id);
-    const allFc  = (comps[key] ?? []).filter(c => inPeriod(c, month, year));
+    const allFc  = (comps[key] ?? []).filter(c =>
+      inPeriod(c, month, year) &&
+      compEmpresa(c) === activeCompany
+    );
     const fc     = filterCurrency
-      ? allFc.filter(c => (c.currency ?? fr.currency) === filterCurrency)
+      ? allFc.filter(c => compCurrency(c) === filterCurrency)
       : allFc;
-    const sp     = computeSaldoPrevMes(fr.id, year, month, comps, saldoInicial, fr.currency, filterCurrency);
-    const sa     = computeSaldo(fr.id, year, month, comps, saldoInicial, fr.currency, filterCurrency);
+    const sp     = computeSaldoPrevMes(fr.id, year, month, comps, saldoInicial, null, filterCurrency, activeCompany);
+    const sa     = computeSaldo(fr.id, year, month, comps, saldoInicial, null, filterCurrency, activeCompany);
     // Por cuenta: neto = FACTURA - NC
     const netoCuenta = (cuenta) => {
       const facts = fc.filter(c => c.type === makeType("FACTURA", cuenta)).reduce((a, c) => a + c.amount, 0);
@@ -29,16 +32,18 @@ export function useFrData(franchises, month, year, filterCurrency = null) {
     const pagosACuenta  = fc.filter(c => c.type === "PAGO_PAUTA").reduce((a, c) => a + c.amount, 0);
     const enviados      = fc.filter(c => c.type === "PAGO_ENVIADO").reduce((a, c) => a + c.amount, 0);
     // Pauta pendiente: cobros a cuenta acumulados históricamente sin factura emitida
-    const pautaPendiente = computePautaPendiente(fr.id, comps, year, month);
+    const pautaPendiente = computePautaPendiente(fr.id, comps, year, month, null, filterCurrency, activeCompany);
     return { fr, sp, sa, fee, interusos, pauta, sponsors, otrosIngresos, pagos, pagosACuenta, enviados, pautaPendiente };
-  }), [franchises, comps, saldoInicial, month, year, filterCurrency]);
+  }), [franchises, comps, saldoInicial, month, year, filterCurrency, activeCompany]);
 }
 
 // ─── SALDOS TABLE ──────────────────────────────────────────────────────────────
-export function SaldosTable({ title, data, accentColor, bgColor, borderColor, onOpenFr, month, year, amountFn, showMail = true, showCbu = false }) {
+export function SaldosTable({ title, data, accentColor, bgColor, borderColor, onOpenFr, month, year, amountFn, showMail = true, showCbu = false, displayCurrency }) {
   if (data.length === 0) return null;
   const getAmt = amountFn ?? (d => d.sa);
   const total  = data.reduce((a, d) => a + getAmt(d), 0);
+  const { activeCompany } = useStore();
+  const curLabel = displayCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS";
   const [selected, setSelected] = useState(new Set());
 
   const toggleOne = (id) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -56,8 +61,8 @@ export function SaldosTable({ title, data, accentColor, bgColor, borderColor, on
       ? ["Franquicia", "Moneda", "Saldo", "CBU", "Banco", "Alias"]
       : ["Franquicia", "Moneda", "Saldo"];
     const csvRows = [headers, ...rows.map(d => showCbu
-      ? [d.fr.name, d.fr.currency, Math.abs(getAmt(d)).toFixed(2), d.fr.cbu ?? "", d.fr.banco ?? "", d.fr.alias ?? ""]
-      : [d.fr.name, d.fr.currency, Math.abs(getAmt(d)).toFixed(2)]
+      ? [d.fr.name, curLabel, Math.abs(getAmt(d)).toFixed(2), d.fr.cbu ?? "", d.fr.banco ?? "", d.fr.alias ?? ""]
+      : [d.fr.name, curLabel, Math.abs(getAmt(d)).toFixed(2)]
     )];
     downloadCSV(csvRows, `BIGG_${title.replace(/[^a-zA-Z0-9]/g,"_")}_${MONTHS[month]}_${year}.csv`);
   };
@@ -73,7 +78,7 @@ export function SaldosTable({ title, data, accentColor, bgColor, borderColor, on
         <span style={{ fontWeight: 800, fontSize: 13, color: accentColor, letterSpacing: ".08em", textTransform: "uppercase" }}>{title}</span>
         <span className="pill" style={{ color: accentColor, background: bgColor, border: `1px solid ${borderColor}` }}>{data.length} sede{data.length !== 1 ? "s" : ""}</span>
         <span className="mono" style={{ fontSize: 13, fontWeight: 800, color: accentColor, marginLeft: "auto" }}>
-          {Math.round(Math.abs(total)).toLocaleString("es-AR")} {data[0]?.fr.currency}
+          {Math.round(Math.abs(total)).toLocaleString("es-AR")} {curLabel}
         </span>
       </div>
 
@@ -124,7 +129,7 @@ export function SaldosTable({ title, data, accentColor, bgColor, borderColor, on
                   </td>
                   <td style={{ fontWeight: 600, fontSize: 13, padding: "7px 8px" }}>
                     {d.fr.name}
-                    <span style={{ marginLeft: 6, fontSize: 10, color: "var(--muted)", fontWeight: 400 }}>{d.fr.currency}</span>
+                    <span style={{ marginLeft: 6, fontSize: 10, color: "var(--muted)", fontWeight: 400 }}>{curLabel}</span>
                   </td>
                   <td style={{ textAlign: "right", padding: "7px 24px 7px 8px" }}>
                     <span className="mono" style={{ fontSize: 14, fontWeight: 800, color: accentColor }}>
@@ -155,6 +160,8 @@ export function SaldosTable({ title, data, accentColor, bgColor, borderColor, on
 // ─── TAB: SALDOS ──────────────────────────────────────────────────────────────
 const TabSaldos = memo(function TabSaldos({ franchises, month, year, onOpenFr, filterCur = "ALL" }) {
   const filterCurrency = filterCur === "ALL" ? null : filterCur;
+  const { activeCompany } = useStore();
+  const displayCurrency = filterCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS";
   const frData = useFrData(franchises, month, year, filterCurrency);
 
   const { deben, cobrar, pautaPend, alDia } = useMemo(() => {
@@ -163,31 +170,31 @@ const TabSaldos = memo(function TabSaldos({ franchises, month, year, onOpenFr, f
     const pautaPend = [];
     const alDia     = [];
     for (const d of frData) {
+      const cashDebt = Math.max(0, Math.abs(d.sa) - d.pautaPendiente);
       if (d.sa > 0.01) {
         deben.push(d);
-      } else if (d.pautaPendiente > 0.01) {
-        pautaPend.push(d);
-      } else if (d.sa < -0.01) {
-        cobrar.push(d);
       } else {
-        alDia.push(d);
+        if (cashDebt > 0.01)          cobrar.push(d);
+        if (d.pautaPendiente > 0.01)  pautaPend.push(d);
+        if (cashDebt <= 0.01 && d.pautaPendiente <= 0.01) alDia.push(d);
       }
     }
     return {
       deben:     deben.sort((a, b) => b.sa - a.sa),
-      cobrar:    cobrar.sort((a, b) => a.sa - b.sa),
-      pautaPend: pautaPend.sort((a, b) => a.sa - b.sa),
+      cobrar:    cobrar.sort((a, b) => (Math.abs(b.sa) - b.pautaPendiente) - (Math.abs(a.sa) - a.pautaPendiente)),
+      pautaPend: pautaPend.sort((a, b) => b.pautaPendiente - a.pautaPendiente),
       alDia,
     };
   }, [frData]);
 
   const handleExportCSV = useCallback(() => {
     const rows = [["Franquicia","Moneda","Saldo Final","Estado"]];
+    const cur = filterCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS";
     [...deben, ...cobrar, ...alDia].forEach(({ fr, sa }) =>
-      rows.push([fr.name, fr.currency, sa.toFixed(2), sa > 0.01 ? "NOS DEBEN" : sa < -0.01 ? "DEBEMOS" : "AL DÍA"])
+      rows.push([fr.name, cur, sa.toFixed(2), sa > 0.01 ? "NOS DEBEN" : sa < -0.01 ? "DEBEMOS" : "AL DÍA"])
     );
     downloadCSV(rows, `BIGG_Saldos_${MONTHS[month]}_${year}.csv`);
-  }, [deben, cobrar, alDia, month, year]);
+  }, [deben, cobrar, alDia, month, year, filterCurrency, activeCompany]);
 
   return (
     <div className="fade">
@@ -199,6 +206,7 @@ const TabSaldos = memo(function TabSaldos({ franchises, month, year, onOpenFr, f
         borderColor="rgba(255,107,122,.2)"
         onOpenFr={onOpenFr}
         month={month} year={year}
+        displayCurrency={displayCurrency}
       />
       <SaldosTable
         title={`Debemos pagar (${cobrar.length})`}
@@ -210,6 +218,8 @@ const TabSaldos = memo(function TabSaldos({ franchises, month, year, onOpenFr, f
         month={month} year={year}
         showMail={false}
         showCbu={true}
+        amountFn={d => Math.max(0, Math.abs(d.sa) - d.pautaPendiente)}
+        displayCurrency={displayCurrency}
       />
       <SaldosTable
         title={`Pagos a cuenta — pendiente de facturar (${pautaPend.length})`}
@@ -220,6 +230,7 @@ const TabSaldos = memo(function TabSaldos({ franchises, month, year, onOpenFr, f
         onOpenFr={onOpenFr}
         month={month} year={year}
         amountFn={d => d.pautaPendiente}
+        displayCurrency={displayCurrency}
       />
       {alDia.length > 0 && (
         <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "center", marginTop: 8 }}>

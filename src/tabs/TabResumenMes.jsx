@@ -1,41 +1,28 @@
 import { memo, useMemo } from "react";
-import { fmt, computeSaldo, computeSaldoPrevMes, computePautaPendiente, makeType, SYM } from "../lib/helpers";
+import { fmt, computeSaldo, computeSaldoPrevMes, computePautaPendiente, makeType, SYM, compEmpresa, compCurrency } from "../lib/helpers";
 import { SaldoBadge } from "../components/atoms";
 import { useStore } from "../lib/context";
 import { inPeriod } from "../data/franchisor";
 
 // ─── TAB: RESUMEN MES (solo tarjetas de posición general, sin listas de sedes) ─
 const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, onNavigate }) {
-  const { comps, saldoInicial } = useStore();
+  const { comps, saldoInicial, activeCompany } = useStore();
 
   const tarjetas = useMemo(() => {
     const CUR_ORDER = ["ARS", "USD", "EUR"];
 
-    // Detectar qué monedas tienen comprobantes en este período (por moneda del comprobante)
-    const activeCurs = new Set();
-    for (const fr of allFranchises) {
-      const frCurrency = fr.currency;
-      const key = String(fr.id);
-      for (const c of (comps[key] ?? [])) {
-        if (inPeriod(c, month, year)) activeCurs.add(c.currency ?? frCurrency);
-      }
-      // Incluir la moneda de la franquicia si tiene saldo de apertura
-      if ((saldoInicial[key] ?? 0) !== 0) activeCurs.add(frCurrency);
-    }
-
-    const currs = CUR_ORDER.filter(c => activeCurs.has(c));
-
-    return currs.map(cur => {
-      // Calcular por franquicia filtrando por moneda del comprobante
+    return CUR_ORDER.map(cur => {
+      // Calcular por franquicia filtrando por moneda del comprobante y empresa activa
       const perFr = allFranchises.map(fr => {
-        const frCurrency = fr.currency;
         const key = String(fr.id);
         const fc = (comps[key] ?? []).filter(c =>
-          inPeriod(c, month, year) && (c.currency ?? frCurrency) === cur
+          inPeriod(c, month, year) &&
+          compCurrency(c) === cur &&
+          compEmpresa(c) === activeCompany
         );
 
-        const sp = computeSaldoPrevMes(fr.id, year, month, comps, saldoInicial, frCurrency, cur);
-        const sa = computeSaldo(fr.id, year, month, comps, saldoInicial, frCurrency, cur);
+        const sp = computeSaldoPrevMes(fr.id, year, month, comps, saldoInicial, null, cur, activeCompany);
+        const sa = computeSaldo(fr.id, year, month, comps, saldoInicial, null, cur, activeCompany);
 
         const netoCuenta = (cuenta) => {
           const facts = fc.filter(c => c.type === makeType("FACTURA", cuenta)).reduce((a, c) => a + c.amount, 0);
@@ -51,7 +38,7 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
         const pagos         = fc.filter(c => c.type === "PAGO").reduce((a, c) => a + c.amount, 0);
         const pagosACuenta  = fc.filter(c => c.type === "PAGO_PAUTA").reduce((a, c) => a + c.amount, 0);
         const enviados      = fc.filter(c => c.type === "PAGO_ENVIADO").reduce((a, c) => a + c.amount, 0);
-        const pautaPendiente = computePautaPendiente(fr.id, comps, year, month, frCurrency, cur);
+        const pautaPendiente = computePautaPendiente(fr.id, comps, year, month, null, cur, activeCompany);
 
         return { fr, sp, sa, fee, interusos, pauta, sponsors, otrosIngresos, pagos, pagosACuenta, enviados, pautaPendiente };
       });
@@ -59,14 +46,6 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
       const sum = fn => perFr.reduce((a, d) => a + fn(d), 0);
       const totSP = sum(d => d.sp);
       const totSA = sum(d => d.sa);
-
-      // Omitir tarjeta si no hay actividad
-      const hayActividad = sum(d =>
-        Math.abs(d.sp) + Math.abs(d.sa) +
-        d.fee.neto + d.interusos.neto + d.pauta.neto + d.sponsors.neto + d.otrosIngresos.neto +
-        d.pagos + d.pagosACuenta + d.enviados
-      );
-      if (hayActividad === 0) return null;
 
       return {
         cur,
@@ -86,7 +65,7 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
         totDeben:        perFr.filter(d => d.sa >  0.01).reduce((a, d) => a + d.sa, 0),
       };
     }).filter(Boolean);
-  }, [allFranchises, comps, saldoInicial, month, year]);
+  }, [allFranchises, comps, saldoInicial, month, year, activeCompany]);
 
   const fmtInt = (v, c) => `${SYM[c] || "$"}\u202f${Math.round(Math.abs(v)).toLocaleString("es-AR")}`;
 
@@ -158,15 +137,13 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
 
               {/* Nos deben / Debemos */}
               <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                {nDeben > 0 && (
-                  <div onClick={() => onNavigate("saldos", "deben", { moneda: cur })} style={{ padding: "10px 12px", borderRadius: 7, background: "rgba(255,85,112,.05)", border: "1px solid rgba(255,85,112,.1)", textAlign: "center", cursor: "pointer", transition: "background .15s", containerType: "inline-size", minWidth: 0, overflow: "hidden" }}
+                <div onClick={() => onNavigate("saldos", "deben", { moneda: cur })} style={{ padding: "10px 12px", borderRadius: 7, background: "rgba(255,85,112,.05)", border: "1px solid rgba(255,85,112,.1)", textAlign: "center", cursor: "pointer", transition: "background .15s", containerType: "inline-size", minWidth: 0, overflow: "hidden" }}
                     onMouseEnter={e => e.currentTarget.style.background="rgba(255,85,112,.12)"}
                     onMouseLeave={e => e.currentTarget.style.background="rgba(255,85,112,.05)"}>
                     <div style={{ fontSize: 10, fontWeight: 800, color: "var(--red)", letterSpacing: ".08em", marginBottom: 4 }}>NOS DEBEN ↗</div>
                     <div className="mono" style={{ fontSize: "clamp(10px, 11cqi, 14px)", fontWeight: 800, color: "var(--red)", whiteSpace: "nowrap" }}>{fmtInt(totDeben, cur)}</div>
                     <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>{nDeben} sede{nDeben !== 1 ? "s" : ""}</div>
                   </div>
-                )}
                 {(() => { const totDebo = Math.abs(cobrarReal.reduce((a,d)=>a+d.sa,0)); return (
                   <div onClick={() => onNavigate("saldos", "debemos", { moneda: cur })} style={{ padding: "10px 12px", borderRadius: 7, background: "rgba(16,217,122,.05)", border: "1px solid rgba(16,217,122,.1)", textAlign: "center", cursor: "pointer", transition: "background .15s", containerType: "inline-size", minWidth: 0, overflow: "hidden" }}
                     onMouseEnter={e => e.currentTarget.style.background="rgba(16,217,122,.12)"}
@@ -176,15 +153,13 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
                     <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>{cobrarReal.length} sede{cobrarReal.length !== 1 ? "s" : ""}</div>
                   </div>
                 ); })()}
-                {pautaPendRows.length > 0 && (
-                  <div onClick={() => onNavigate("detalle", "facturar", { cuenta: ["PAGO_PAUTA", "PAUTA"] })} style={{ padding: "10px 12px", borderRadius: 7, background: "rgba(34,211,238,.05)", border: "1px solid rgba(34,211,238,.15)", textAlign: "center", cursor: "pointer", transition: "background .15s", gridColumn: "auto",containerType: "inline-size", minWidth: 0, overflow: "hidden" }}
+                <div onClick={() => onNavigate("detalle", "facturar", { cuenta: ["PAGO_PAUTA", "PAUTA"] })} style={{ padding: "10px 12px", borderRadius: 7, background: "rgba(34,211,238,.05)", border: "1px solid rgba(34,211,238,.15)", textAlign: "center", cursor: "pointer", transition: "background .15s", gridColumn: "auto", containerType: "inline-size", minWidth: 0, overflow: "hidden" }}
                     onMouseEnter={e => e.currentTarget.style.background="rgba(34,211,238,.12)"}
                     onMouseLeave={e => e.currentTarget.style.background="rgba(34,211,238,.05)"}>
                     <div style={{ fontSize: 10, fontWeight: 800, color: "var(--cyan)", letterSpacing: ".08em", marginBottom: 4 }}>A FACTURAR ↗</div>
                     <div className="mono" style={{ fontSize: "clamp(10px, 11cqi, 14px)", fontWeight: 800, color: "var(--cyan)", whiteSpace: "nowrap" }}>{fmtInt(totPautaPend, cur)}</div>
                     <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>Pagos a cuenta · {pautaPendRows.length} sede{pautaPendRows.length !== 1 ? "s" : ""}</div>
                   </div>
-                )}
               </div>
             </div>
           );

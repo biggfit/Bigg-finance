@@ -1,13 +1,15 @@
 import { useState, useCallback } from "react";
 import { useStore } from "../lib/context";
 import { buildCuentaCorriente, COMP_TYPES, fmt, fmtS, downloadCSV } from "../lib/helpers";
+import { COMPANIES } from "../data/franchisor";
 import { dmyToIso, isoToDmy } from "../data/franchisor";
 import { TypePill } from "./atoms";
 
 // ─── CC MODAL — Historial completo tipo base de datos ────────────────────────
 export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
-  const { comps, saldoInicial } = useStore();
-  const { lines } = buildCuentaCorriente(franchise.id, comps, saldoInicial);
+  const { comps, saldoInicial, activeCompany } = useStore();
+  const displayCurrency = COMPANIES[activeCompany]?.currency ?? franchise.currency;
+  const { lines } = buildCuentaCorriente(franchise.id, comps, saldoInicial, null, null, activeCompany);
   const MOV_TYPES = new Set(["PAGO", "PAGO_PAUTA", "PAGO_ENVIADO"]);
   const [confirmId, setConfirmId] = useState(null);
   const [editId,    setEditId]    = useState(null);
@@ -53,7 +55,7 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
             <div style={{ fontWeight: 800, fontSize: 14 }}>{franchise.name} — Cuenta Corriente</div>
             <div style={{ color: "var(--muted)", fontSize: 10, marginTop: 1 }}>
               {franchise.razonSocial && <span>{franchise.razonSocial} · </span>}
-              Historial completo · {franchise.currency}
+              Historial completo · {activeCompany} · {displayCurrency}
             </div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
@@ -132,18 +134,18 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
                     <td className="mono" style={{ textAlign: "right", fontSize: 11, color: "var(--red)", fontWeight: l.debit > 0 ? 700 : 400, padding: "6px 8px", whiteSpace: "nowrap" }}>
                       {isEd && l.debit > 0
                         ? <input type="number" min="0" step="0.01" value={editBuf.amount} onChange={e => setEditBuf(b => ({ ...b, amount: e.target.value }))} style={{ ...inpS, width: 88, textAlign: "right" }} />
-                        : l.debit > 0 ? fmt(l.debit, franchise.currency) : <span style={{ color: "var(--dim)" }}>—</span>}
+                        : l.debit > 0 ? fmt(l.debit, l.currency ?? displayCurrency) : <span style={{ color: "var(--dim)" }}>—</span>}
                     </td>
                     {/* Haber */}
                     <td className="mono" style={{ textAlign: "right", fontSize: 11, color: "var(--green)", fontWeight: l.credit > 0 ? 700 : 400, padding: "6px 8px", whiteSpace: "nowrap" }}>
                       {isEd && l.credit > 0
                         ? <input type="number" min="0" step="0.01" value={editBuf.amount} onChange={e => setEditBuf(b => ({ ...b, amount: e.target.value }))} style={{ ...inpS, width: 88, textAlign: "right" }} />
-                        : l.credit > 0 ? fmt(l.credit, franchise.currency) : <span style={{ color: "var(--dim)" }}>—</span>}
+                        : l.credit > 0 ? fmt(l.credit, l.currency ?? displayCurrency) : <span style={{ color: "var(--dim)" }}>—</span>}
                     </td>
                     {/* Saldo */}
                     <td style={{ textAlign: "right", padding: "6px 8px", whiteSpace: "nowrap" }}>
                       <span className="mono" style={{ fontSize: 11, fontWeight: 700, color: saldoColor(l.saldo) }}>
-                        {fmtS(l.saldo, franchise.currency)}
+                        {fmtS(l.saldo, displayCurrency)}
                       </span>
                     </td>
                     {/* Acciones */}

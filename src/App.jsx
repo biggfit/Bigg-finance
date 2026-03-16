@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { DEFAULT_FRANCHISOR } from "./data/franchisor";
+import { DEFAULT_FRANCHISOR, COMPANIES, COMPANY_NAMES } from "./data/franchisor";
 import { StoreCtx } from "./lib/context";
 import { fetchComps, fetchSaldos, appendComp, updateComp, removeComp,
          fetchFranchises, fetchFranchisor,
@@ -24,8 +24,8 @@ export default function App() {
   const [franchisor,   setFranchisor]   = useState(null);
   const [tab,        setTab]       = useState("resumen");
   const [detailFilteredRows, setDetailFilteredRows] = useState([]);
-  const [month,      setMonth]     = useState(1);   // February 2026 — where the data lives
-  const [year,       setYear]      = useState(2026);
+  const [month,      setMonth]     = useState(() => new Date().getMonth());
+  const [year,       setYear]      = useState(() => new Date().getFullYear());
   const [franchises, setFranchises]= useState([]);
   const [comps,        setComps]       = useState({});
   const [saldoInicial, setSaldoInicial] = useState({});
@@ -38,6 +38,7 @@ export default function App() {
   });
   const [search,     setSearch]    = useState("");
   const [filterCur,  setFilterCur] = useState("ALL");
+  const [activeCompany, setActiveCompany] = useState(COMPANY_NAMES[0]); // default: "ÑAKO SRL"
   const [detailFilter, setDetailFilter] = useState("ALL");
   const [detailTipo,   setDetailTipo]   = useState(undefined);
   const [navCount,     setNavCount]     = useState(0);
@@ -150,19 +151,19 @@ export default function App() {
       downloadCSV(rows, `BIGG_Detalle_${MONTHS[month]}_${year}.csv`);
       return;
     }
-    const rows = [["Franquicia","País","Moneda","Saldo 31/12/2025","Devengado Mes","Saldo Final"]];
+    const rows = [["Franquicia","País","Moneda","Empresa","Saldo 31/12/2025","Devengado Mes","Saldo Final"]];
     filteredFr.forEach(fr => {
-      const sp = computeSaldoPrevMes(fr.id, year, month, comps, saldoInicial);
-      const sa = computeSaldo(fr.id, year, month, comps, saldoInicial);
-      rows.push([fr.name, fr.country, fr.currency, sp.toFixed(2), (sa - sp).toFixed(2), sa.toFixed(2)]);
+      const sp = computeSaldoPrevMes(fr.id, year, month, comps, saldoInicial, null, null, activeCompany);
+      const sa = computeSaldo(fr.id, year, month, comps, saldoInicial, null, null, activeCompany);
+      rows.push([fr.name, fr.country, fr.currency, activeCompany, sp.toFixed(2), (sa - sp).toFixed(2), sa.toFixed(2)]);
     });
     downloadCSV(rows, `BIGG_${MONTHS[month]}_${year}.csv`);
   }, [tab, detailFilteredRows, filteredFr, year, month, comps, saldoInicial]);
 
   // Context value — stable object ref changes only when comps/saldoInicial/franchises change
   const storeValue = useMemo(
-    () => ({ comps, saldoInicial, franchises, franchiseMap, editComp, deleteComp: delComp }),
-    [comps, saldoInicial, franchises, franchiseMap, editComp, delComp]
+    () => ({ comps, saldoInicial, franchises, franchiseMap, editComp, deleteComp: delComp, activeCompany }),
+    [comps, saldoInicial, franchises, franchiseMap, editComp, delComp, activeCompany]
   );
 
   const modalFr = modalFrId != null ? franchiseMap.get(modalFrId) : null;
@@ -260,7 +261,14 @@ export default function App() {
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button className="ghost" style={{ fontSize: 11, fontWeight: 600 }} onClick={() => setShowMaestros(true)}>⚙ Datos maestros</button>
+          {/* Selector de empresa franquiciante */}
+          <select value={activeCompany} onChange={e => { setActiveCompany(e.target.value); setFilterCur(COMPANIES[e.target.value]?.currency ?? "ALL"); }}
+            style={{ padding: "4px 9px", fontSize: 12, background: "var(--bg)", border: "1px solid var(--border2)", color: "var(--text)", borderRadius: 6, fontFamily: "var(--font)", cursor: "pointer", fontWeight: 700 }}>
+            {COMPANY_NAMES.map(name => (
+              <option key={name} value={name}>{COMPANIES[name].flag} {name}</option>
+            ))}
+          </select>
+          <button className="ghost" style={{ fontSize: 15, padding: "4px 8px" }} onClick={() => setShowMaestros(true)} title="Datos maestros">⚙</button>
           <div style={{ width: 1, height: 16, background: "var(--border2)" }} />
           <button className="ghost" style={{ fontSize: 10 }} onClick={() => setUser(null)}>Salir</button>
         </div>

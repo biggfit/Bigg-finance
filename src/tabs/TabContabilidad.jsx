@@ -1,8 +1,8 @@
 import { memo, useState, useMemo, useEffect } from "react";
 import React from "react";
 import { useStore } from "../lib/context";
-import { computeSaldoPrevMes, COMP_TYPES, CUENTAS, CUENTA_LABEL, SKIP_CC_TYPES, fmt, fmtS } from "../lib/helpers";
-import { inPeriod, cmpDate, dmyToIso, isoToDmy } from "../data/franchisor";
+import { computeSaldoPrevMes, compEmpresa, compCurrency, COMP_TYPES, CUENTAS, CUENTA_LABEL, SKIP_CC_TYPES, fmt, fmtS } from "../lib/helpers";
+import { inPeriod, cmpDate, dmyToIso, isoToDmy, COMPANIES } from "../data/franchisor";
 
 // ─── TAB: DETALLE — vista base de datos con filtros por columna ──────────────
 // Para el filtro de Contabilidad filtramos por CUENTA (no por tipo de doc)
@@ -12,7 +12,7 @@ const getCuenta = (type) => {
 };
 
 const TabContabilidad = memo(function TabContabilidad({ franchises, month, year, onOpenFr, initialFilter, initialTipo, showAll, multiCurrency, filterCur = "ALL", onFilteredChange }) {
-  const { comps, saldoInicial, editComp } = useStore();
+  const { comps, saldoInicial, editComp, activeCompany } = useStore();
   const filterCurrency = filterCur === "ALL" ? null : filterCur;
 
   // ── Filtros ──────────────────────────────────────────────────────────────────
@@ -38,7 +38,8 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
       const key      = String(fr.id);
       const allComps = (comps[key] ?? []).filter(c => {
         if (SKIP_CC_TYPES.has(c.type)) return false;
-        if (filterCurrency !== null && (c.currency ?? fr.currency) !== filterCurrency) return false;
+        if (compEmpresa(c) !== activeCompany) return false;
+        if (filterCurrency !== null && compCurrency(c) !== filterCurrency) return false;
         return true;
       });
       const frComps  = !showAll
@@ -46,8 +47,8 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
         : allComps;
       const sorted   = [...frComps].sort((a, b) => cmpDate(a.date, b.date));
       const sp       = !showAll
-        ? computeSaldoPrevMes(fr.id, year, month, comps, saldoInicial, fr.currency, filterCurrency)
-        : (filterCurrency === null || fr.currency === filterCurrency ? (saldoInicial[key] ?? 0) : 0);
+        ? computeSaldoPrevMes(fr.id, year, month, comps, saldoInicial, null, filterCurrency, activeCompany)
+        : computeSaldoPrevMes(fr.id, 2025, 11, comps, saldoInicial, null, filterCurrency, activeCompany);
 
       // Calcular la fecha de cierre del período anterior
       const prevMonth = !showAll ? (month === 0 ? 11 : month - 1) : null;
@@ -65,7 +66,7 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
 
       // Fila apertura
       out.push({
-        frId: fr.id, frName: fr.name, currency: filterCurrency ?? fr.currency,
+        frId: fr.id, frName: fr.name, currency: filterCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS",
         date: !showAll ? `${year}-${String(month).padStart(2,"0")}-00` : "00/00/0000",
         displayDate: aperturaLabel,
         tipo: "__apertura__", tipoLabel: aperturaTipo,
@@ -85,7 +86,7 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
         const haber = sign === -1 ? c.amount : 0;
         saldoAcum  += debe - haber;
         out.push({
-          frId: fr.id, frName: fr.name, currency: c.currency ?? fr.currency,
+          frId: fr.id, frName: fr.name, currency: compCurrency(c),
           date: c.date,
           displayDate: c.date,
           tipo: c.type,
@@ -101,7 +102,7 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
       }
     }
     return out;
-  }, [franchises, comps, saldoInicial, month, year, showAll, filterCurrency]);
+  }, [franchises, comps, saldoInicial, month, year, showAll, filterCurrency, activeCompany]);
 
   // ── Filtrar ──────────────────────────────────────────────────────────────────
   const sedesPresentes = useMemo(() => [...new Set(allRows.map(r => r.frName))].sort(), [allRows]);
@@ -186,7 +187,7 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
       <div className="card" style={{ overflow: "hidden" }}>
         <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse" }}>
           <colgroup>
-            <col style={{ width: 88 }} />   {/* Fecha */}
+            <col style={{ width: 120 }} />  {/* Fecha */}
             <col style={{ width: 150 }} />  {/* Sede */}
             <col style={{ width: 120 }} />  {/* Cuenta */}
             <col />                          {/* Concepto — flex */}
@@ -300,7 +301,7 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
                   {/* Fecha */}
                   <td className="mono" style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap", padding: "6px 8px" }}>
                     {isEd
-                      ? <input type="date" value={dmyToIso(editBufTC.date)} onChange={e => setEditBufTC(b => ({ ...b, date: isoToDmy(e.target.value) }))} style={{ ...inpS, width: 114, colorScheme: "dark" }} />
+                      ? <input type="date" value={dmyToIso(editBufTC.date)} onChange={e => setEditBufTC(b => ({ ...b, date: isoToDmy(e.target.value) }))} style={{ ...inpS, width: "100%", colorScheme: "dark" }} />
                       : r.isApertura ? <span style={{ color: "var(--accent)", fontWeight: 700, fontSize: 10 }}>{r.displayDate}</span> : r.displayDate}
                   </td>
                   {/* Sede */}
@@ -356,7 +357,7 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
                       </span>
                     ) : (
                       <span style={{ display: "flex", gap: 3, justifyContent: "flex-end", alignItems: "center", height: "100%" }}>
-                        {r.invoice && (
+                        {r.invoice && /^(FA|FB|NCA|NCB)\s\d{4}-\d{8}$/.test(r.invoice) && (
                           <button className="ghost" title={r.invoice} style={{ padding: "2px 5px", opacity: .6, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "default" }}>
                             <svg width="12" height="14" viewBox="0 0 12 14" fill="none" xmlns="http://www.w3.org/2000/svg">
                               <rect x="0.6" y="0.6" width="10.8" height="12.8" rx="1.4" stroke="var(--accent)" strokeWidth="1.2"/>
@@ -389,11 +390,11 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
                 <td style={{ padding: "8px 8px" }}>
                   {!multiCurrency && <span style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700 }}>SALDO FINAL</span>}
                 </td>
-                <td className="mono" style={{ textAlign: "right", color: "var(--red)", fontWeight: 800, fontSize: 13, padding: "8px 8px" }}>{fmt(totalDebe, filterCurrency ?? franchises[0]?.currency ?? "ARS")}</td>
-                <td className="mono" style={{ textAlign: "right", color: "var(--green)", fontWeight: 800, fontSize: 13, padding: "8px 8px" }}>{fmt(totalHaber, filterCurrency ?? franchises[0]?.currency ?? "ARS")}</td>
+                <td className="mono" style={{ textAlign: "right", color: "var(--red)", fontWeight: 800, fontSize: 13, padding: "8px 8px" }}>{fmt(totalDebe, filterCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS")}</td>
+                <td className="mono" style={{ textAlign: "right", color: "var(--green)", fontWeight: 800, fontSize: 13, padding: "8px 8px" }}>{fmt(totalHaber, filterCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS")}</td>
                 {!multiCurrency && <td style={{ textAlign: "right", padding: "8px 8px" }}>
                   <span className="mono" style={{ fontSize: 13, fontWeight: 800, color: saldoFinalConsolidado > 0.01 ? "var(--red)" : saldoFinalConsolidado < -0.01 ? "var(--green)" : "var(--muted)" }}>
-                    {fmtS(saldoFinalConsolidado, filterCurrency ?? franchises[0]?.currency ?? "ARS")}
+                    {fmtS(saldoFinalConsolidado, filterCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS")}
                   </span>
                 </td>}
                 <td></td>

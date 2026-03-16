@@ -280,6 +280,7 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
   const [buf,         setBuf]         = useState(EMPTY_FR_BUF);
   const [fbufAR,      setFbufAR]      = useState({ ...franchisor.ar });
   const [fbufUSA,     setFbufUSA]     = useState({ ...franchisor.usa });
+  const [fbufES,      setFbufES]      = useState({ ...franchisor.es });
   const [toast,       setToast]       = useState(null);
   const [newMode,     setNewMode]     = useState(false);
   const [sedeFilter,  setSedeFilter]  = useState("activas"); // "activas" | "inactivas" | "todas"
@@ -294,6 +295,7 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
   const setF   = field => val => setBuf(b => ({ ...b, [field]: val }));
   const setAR  = field => val => setFbufAR(b => ({ ...b, [field]: val }));
   const setUS  = field => val => setFbufUSA(b => ({ ...b, [field]: val }));
+  const setES  = field => val => setFbufES(b => ({ ...b, [field]: val }));
 
   const SECS_CLOSED = { id:false, cc:false, ct:false, fac:false };
 
@@ -367,7 +369,7 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
   // Auto-precarga segun pais
   const handleCountryChange = country => {
     const latam = ["Uruguay","Chile","Colombia","Peru","Mexico","Bolivia","Paraguay","Ecuador"];
-    const europa = ["Espana","Francia","Italia","Alemania","Portugal","Reino Unido"];
+    const europa = ["Espana","España","Francia","Italia","Alemania","Portugal","Reino Unido"];
     let patch = { country };
     if (country === "Argentina") {
       patch.currency = "ARS"; patch.condIVA = "Responsable Inscripto"; patch.applyIVA = true;
@@ -377,7 +379,7 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
       patch.sociedad = fbufUSA.legalName || "BIGG FIT LLC";
     } else if (europa.includes(country)) {
       patch.currency = "EUR"; patch.condIVA = "Exento"; patch.applyIVA = false;
-      patch.sociedad = fbufUSA.legalName || "BIGG FIT LLC";
+      patch.sociedad = fbufES.legalName || "Gestión Deportiva y Wellness SL";
     } else if (country === "USA") {
       patch.currency = "USD"; patch.condIVA = "Exento"; patch.applyIVA = false;
       patch.sociedad = fbufUSA.legalName || "BIGG FIT LLC";
@@ -385,9 +387,9 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
     setBuf(b => ({ ...b, ...patch }));
   };
 
-  const isAR = buf.sociedad !== (fbufUSA.legalName || "BIGG FIT LLC");
+  const isAR = buf.sociedad === (fbufAR.razonSocial || "ÑAKO SRL");
   // Opciones de sociedad contratante dinamicas desde los datos BIGG
-  const sociedadOpts = [fbufAR.razonSocial || "ÑAKO SRL", fbufUSA.legalName || "BIGG FIT LLC"];
+  const sociedadOpts = [fbufAR.razonSocial || "ÑAKO SRL", fbufUSA.legalName || "BIGG FIT LLC", fbufES.legalName || "Gestión Deportiva y Wellness SL"];
 
   const navBtn = active => ({
     padding:"8px 18px", borderRadius:8, fontSize:12, fontWeight:700, cursor:"pointer",
@@ -454,7 +456,7 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
                   if (topSection === "bigg") setBiggSub(null);
                   setActiveFrId(null); setNewMode(false); setSedesOpen(false);
                 }}>
-                <span>BIGG (2)</span>
+                <span>BIGG (3)</span>
                 <span style={{ fontSize:10, opacity:.6 }}>{topSection === "bigg" ? "^" : "v"}</span>
               </button>
               {topSection === "bigg" && (
@@ -462,6 +464,7 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
                   {[
                     ["ar",  fbufAR.razonSocial  || "ÑAKO SRL"],
                     ["usa", fbufUSA.legalName    || "BIGG FIT LLC"],
+                    ["es",  fbufES.legalName     || "Gestión Deportiva y Wellness SL"],
                   ].map(function(item) {
                     var k = item[0], label = item[1];
                     const active = biggSub === k;
@@ -550,10 +553,11 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
 
             {/* BIGG landing */}
             {topSection === "bigg" && !biggSub && (
-              <div style={{ display:"flex", gap:16, paddingTop:20 }}>
+              <div style={{ display:"flex", gap:16, paddingTop:20, flexWrap:"wrap" }}>
                 {[
-                  ["ar",  "AR", "Argentina",   fbufAR.razonSocial  || "ÑAKO SRL", "#b8960088"],
-                  ["usa", "US", "USA",          fbufUSA.legalName   || "BIGG FIT LLC",           "#6ec6f588"],
+                  ["ar",  "🇦🇷", "Argentina",  fbufAR.razonSocial  || "ÑAKO SRL",                    "#b8960088"],
+                  ["usa", "🇺🇸", "USA",         fbufUSA.legalName   || "BIGG FIT LLC",               "#6ec6f588"],
+                  ["es",  "🇪🇸", "España",      fbufES.legalName    || "Gestión Deportiva y Wellness SL", "#f5a62388"],
                 ].map(function(item) {
                   var k = item[0], flag = item[1], country = item[2], name = item[3], borderColor = item[4];
                   return (
@@ -652,6 +656,46 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
                   <button className="btn" onClick={() => {
                     onSaveFranchisor("usa", fbufUSA);
                     showSaved("Datos de '" + (fbufUSA.legalName || "BIGG FIT LLC") + "' guardados");
+                  }}>Guardar</button>
+                </div>
+              </div>
+            )}
+
+            {/* BIGG ES */}
+            {topSection === "bigg" && biggSub === "es" && (
+              <div>
+                <div style={sHdr("var(--orange, #f5a623)")}>GESTIÓN DEPORTIVA Y WELLNESS SL — Datos del franquiciante</div>
+
+                <div style={{ fontSize: 10, color: "var(--orange, #f5a623)", fontWeight: 800, letterSpacing: ".08em", marginBottom: 8, marginTop: 4 }}>IDENTIFICACIÓN</div>
+                <div style={grid2}>
+                  <FieldInput label="Razón social"     value={fbufES.legalName}  onChange={setES("legalName")} />
+                  <FieldInput label="NIF"               value={fbufES.nif}        onChange={setES("nif")}        half />
+                  <FieldInput label="País"              value={fbufES.country}    onChange={setES("country")}    half />
+                </div>
+
+                <div style={{ fontSize: 10, color: "var(--orange, #f5a623)", fontWeight: 800, letterSpacing: ".08em", marginBottom: 8, marginTop: 10 }}>DOMICILIO</div>
+                <div style={grid2}>
+                  <FieldInput label="Dirección"         value={fbufES.address}    onChange={setES("address")} />
+                  <FieldInput label="Ciudad"            value={fbufES.city}       onChange={setES("city")}       half />
+                  <FieldInput label="Código postal"     value={fbufES.cp}         onChange={setES("cp")}         half />
+                </div>
+
+                <div style={{ fontSize: 10, color: "var(--orange, #f5a623)", fontWeight: 800, letterSpacing: ".08em", marginBottom: 8, marginTop: 10 }}>DATOS BANCARIOS</div>
+                <div style={grid2}>
+                  <FieldInput label="Banco"             value={fbufES.bankName}   onChange={setES("bankName")} />
+                  <FieldInput label="IBAN"              value={fbufES.iban}       onChange={setES("iban")}       half />
+                  <FieldInput label="SWIFT / BIC"       value={fbufES.swift}      onChange={setES("swift")}      half />
+                </div>
+
+                <div style={{ fontSize: 10, color: "var(--orange, #f5a623)", fontWeight: 800, letterSpacing: ".08em", marginBottom: 8, marginTop: 10 }}>FACTURACIÓN</div>
+                <div style={grid2}>
+                  <FieldInput label="Texto pie de factura" value={fbufES.notaPie} onChange={setES("notaPie")}   textarea />
+                </div>
+
+                <div style={{ display:"flex", justifyContent:"flex-end" }}>
+                  <button className="btn" onClick={() => {
+                    onSaveFranchisor("es", fbufES);
+                    showSaved("Datos de '" + (fbufES.legalName || "Gestión Deportiva y Wellness SL") + "' guardados");
                   }}>Guardar</button>
                 </div>
               </div>

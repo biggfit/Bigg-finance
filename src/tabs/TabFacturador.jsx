@@ -1,7 +1,7 @@
 import { memo, useState, useMemo, useCallback, useRef } from "react";
 import * as XLSX from "xlsx";
 import { useStore } from "../lib/context";
-import { makeType, MONTHS, AVAILABLE_YEARS, DOCS, CUENTAS, CUENTA_LABEL, COMP_TYPES, SYM, uid, CURRENCIES } from "../lib/helpers";
+import { makeType, MONTHS, AVAILABLE_YEARS, DOCS, CUENTAS, CUENTA_LABEL, COMP_TYPES, SYM, uid, CURRENCIES, COMPANIES } from "../lib/helpers";
 import { todayDmy } from "../data/franchisor";
 import { TypePill } from "../components/atoms";
 import PendientesPanel from "../components/PendientesPanel";
@@ -46,7 +46,8 @@ const TIPOS_MOVIMIENTO  = ["PAGO","PAGO_PAUTA","PAGO_ENVIADO"];
 // ── Wizard emisión manual ────────────────────────────────────────────────────
 // Pasos: 1-tipo  2-sede  3-formulario
 function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, prefillComp }) {
-  const { franchises, comps } = useStore();
+  const { franchises, comps, activeCompany } = useStore();
+  const activeCurrency = COMPANIES[activeCompany]?.currency ?? "ARS";
   const activeFr = franchises.filter(f => f.activa !== false).sort((a,b) => a.name.localeCompare(b.name, "es"));
 
   const todayIso = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}-${String(n.getDate()).padStart(2,"0")}`; };
@@ -84,13 +85,13 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
   const [movImpRaw,  setMovImpRaw] = useState("");
   const [movConcepto,setMovConcepto] = useState("");
   const [movFecha,   setMovFecha]  = useState(todayIso);
-  const [currency,    setCurrency]    = useState(prefillFr?.currency ?? "ARS");
-  const [movCurrency, setMovCurrency] = useState(prefillFr?.currency ?? "ARS");
+  const [currency,    setCurrency]    = useState(activeCurrency);
+  const [movCurrency, setMovCurrency] = useState(activeCurrency);
 
   const fr     = activeFr.find(f => f.id === parseInt(frId));
   const isAR   = fr?.country === "Argentina";
   const applyIVA = !!(fr?.applyIVA);
-  const sym    = SYM[fr?.currency ?? "ARS"] ?? "$";
+  const sym    = SYM[currency] ?? "$";
 
   const importeNeto  = parseCurrencyInput(importeRaw);
   const importeIVA   = applyIVA ? importeNeto * IVA_RATE : 0;
@@ -128,7 +129,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
         </span>
       )}
       {fr && <span style={{ fontSize: 12, fontWeight: 700 }}>{fr.name}</span>}
-      {fr && <span style={{ fontSize: 11, color: "var(--muted)" }}>{fr.currency}</span>}
+      {fr && <span style={{ fontSize: 11, color: "var(--muted)" }}>{currency}</span>}
       <div style={{ flex: 1 }} />
       <div style={{ display: "flex", gap: 6 }}>
         {[1,2,3].map(s => (
@@ -207,13 +208,13 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
       />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 8, maxHeight: 420, overflowY: "auto" }}>
         {filteredFr.map(f => (
-          <div key={f.id} onClick={() => { setFrId(String(f.id)); setCurrency(f.currency ?? "ARS"); setMovCurrency(f.currency ?? "ARS"); setStep(3); }}
+          <div key={f.id} onClick={() => { setFrId(String(f.id)); setStep(3); }}
             style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", borderRadius: 8, border: "1px solid var(--border2)", cursor: "pointer", background: "var(--bg)", transition: "all .1s" }}
             onMouseEnter={e => { e.currentTarget.style.background = "var(--bg2)"; e.currentTarget.style.borderColor = "var(--accent)"; }}
             onMouseLeave={e => { e.currentTarget.style.background = "var(--bg)"; e.currentTarget.style.borderColor = "var(--border2)"; }}
           >
             <span style={{ fontSize: 13, fontWeight: 600 }}>{f.name}</span>
-            <span style={{ fontSize: 10, color: "var(--muted)", background: "var(--bg2)", borderRadius: 4, padding: "2px 6px" }}>{f.currency}</span>
+            <span style={{ fontSize: 10, color: "var(--muted)", background: "var(--bg2)", borderRadius: 4, padding: "2px 6px" }}>{f.country}</span>
           </div>
         ))}
         {filteredFr.length === 0 && <div style={{ color: "var(--muted)", fontSize: 13, padding: 12 }}>Sin resultados</div>}
@@ -552,8 +553,9 @@ function getCountryCur(country) {
 }
 
 function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchisor }) {
-  const { franchises } = useStore();
+  const { franchises, activeCompany } = useStore();
   const activeFr = useMemo(() => franchises.filter(f => f.activa !== false).sort((a,b) => a.name.localeCompare(b.name, "es")), [franchises]);
+  const activeCurrency = COMPANIES[activeCompany]?.currency ?? "ARS";
 
   const [crmMonth, setCrmMonth] = useState(monthProp);
   const [crmYear,  setCrmYear]  = useState(yearProp);
@@ -575,7 +577,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
   });
 
   const makeRows = () => activeFr.map(fr => ({
-    frId: fr.id, frName: fr.name, currency: fr.currency, country: fr.country,
+    frId: fr.id, frName: fr.name, currency: activeCurrency, country: fr.country,
     royaltyContrato: parseFloat(fr.royaltyPct ?? "7"),
     royaltyFactura:  parseFloat(fr.royaltyPct ?? "7"),
     ventas: "",
@@ -665,10 +667,10 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
         ref: `Fee ${MONTHS[crmMonth]} ${crmYear} — CRM`,
         nota: `Fee Royalty ${MONTHS[crmMonth]} ${crmYear}${dto > 0 ? ` (${dto}% dto.)` : ""}`,
         month: crmMonth, year: crmYear,
-        currency: fr.currency,
+        currency: activeCurrency,
       };
       let facturanteStatus = "omitido";
-      if (isAR && fr.currency === "ARS") {
+      if (isAR && activeCompany === "ÑAKO SRL") {
         try {
           const result = await emitirComprobante({
             franchisor: franchisor?.ar ?? franchisor,
@@ -1065,7 +1067,8 @@ function parseExcelRows(data, franchises) {
 }
 
 function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
-  const { franchises } = useStore();
+  const { franchises, activeCompany } = useStore();
+  const activeCurrency = COMPANIES[activeCompany]?.currency ?? "ARS";
   const fileInputRef = useRef(null);
   const [stage,      setStage]      = useState(FACT_STAGE.IDLE);
   const [rows,       setRows]       = useState([]);
@@ -1423,7 +1426,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
                                   if (!fr) return;
                                   setRows(prev => prev.map((row, ri) => {
                                     if (ri !== i) return row;
-                                    const updated = { ...row, franchiseId: fr.id, franchiseName: fr.name, currency: fr.currency };
+                                    const updated = { ...row, franchiseId: fr.id, franchiseName: fr.name, currency: activeCurrency };
                                     updated.errors = validateRow(updated, null);
                                     return updated;
                                   }));
@@ -1470,7 +1473,12 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
 
 // ── Tab principal ───────────────────────────────────────────────────────────
 const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, factState, setFactState, franchisor, onStartImport }) {
-  const { editComp } = useStore();
+  const { editComp, activeCompany } = useStore();
+  // Envuelve onAddComp para inyectar automáticamente la empresa activa en todos los comprobantes
+  const addCompWithEmpresa = useCallback(
+    (frId, comp) => onAddComp(frId, { ...comp, empresa: activeCompany }),
+    [onAddComp, activeCompany]
+  );
   const [mode, setMode] = useState(EMIT_MODE.SELECT);
   const [prefillFr,   setPrefillFr]   = useState(null);
   const [prefillComp, setPrefillComp] = useState(null);
@@ -1514,7 +1522,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
       factComp.invoice      = formatInvoiceLabel(result.tipoComprobante, result.idComprobante, result.puntoVenta);
       factComp.facturanteId = String(result.idComprobante);
     }
-    onAddComp(fr.id, factComp);
+    addCompWithEmpresa(fr.id, factComp);
   };
 
   const reset = () => {
@@ -1605,14 +1613,14 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
             </div>
           )}
           {mode === EMIT_MODE.MANUAL && (
-            <ModoManual month={month} year={year} onAddComp={onAddComp} onDone={reset}
+            <ModoManual month={month} year={year} onAddComp={addCompWithEmpresa} onDone={reset}
               franchisor={franchisor} prefillFr={prefillFr} prefillComp={prefillComp} />
           )}
           {mode === EMIT_MODE.CRM && (
-            <ModoCRM month={month} year={year} onAddComp={onAddComp} onDone={reset} franchisor={franchisor} />
+            <ModoCRM month={month} year={year} onAddComp={addCompWithEmpresa} onDone={reset} franchisor={franchisor} />
           )}
           {mode === EMIT_MODE.EXCEL && (
-            <ModoExcel month={month} year={year} onAddComp={onAddComp} onDone={reset} franchisor={franchisor} />
+            <ModoExcel month={month} year={year} onAddComp={addCompWithEmpresa} onDone={reset} franchisor={franchisor} />
           )}
         </div>
       )}

@@ -29,7 +29,28 @@ export const DEFAULT_FRANCHISOR = {
     swift:          "",
     notaPie:        "",
   },
+  es: {
+    legalName:      "Gestión Deportiva y Wellness SL",
+    nif:            "B09706771",
+    address:        "Calle Eloy Gonzalo 34",
+    city:           "",
+    cp:             "",
+    country:        "España",
+    bankName:       "",
+    iban:           "",
+    swift:          "",
+    notaPie:        "",
+  },
 };
+
+// ─── COMPANIES MAP ────────────────────────────────────────────────────────────
+// Mapa de sociedad franquiciante → config. Clave = razonSocial exacta (campo `empresa` en Sheets).
+export const COMPANIES = {
+  "ÑAKO SRL":                        { side: "ar",  flag: "🇦🇷", currency: "ARS" },
+  "BIGG FIT LLC":                    { side: "usa", flag: "🇺🇸", currency: "USD" },
+  "Gestión Deportiva y Wellness SL": { side: "es",  flag: "🇪🇸", currency: "EUR" },
+};
+export const COMPANY_NAMES = Object.keys(COMPANIES); // ["ÑAKO SRL", "BIGG FIT LLC", "Gestión Deportiva y Wellness SL"]
 
 // ─── DATE HELPERS ─────────────────────────────────────────────────────────────
 // Almacenamiento interno: dd/mm/aaaa  →  comparación: aaaa-mm-dd (temporal)

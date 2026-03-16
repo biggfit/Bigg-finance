@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useStore } from "../lib/context";
-import { makeType, MONTHS, AVAILABLE_YEARS, fmt } from "../lib/helpers";
+import { makeType, MONTHS, AVAILABLE_YEARS, fmt, compCurrency } from "../lib/helpers";
 import { inPeriod, dateMonth, dateYear } from "../data/franchisor";
 
 // ── Pendientes panel ────────────────────────────────────────────────────────
@@ -78,7 +78,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
           .filter(c => {
             const doc = String(c.type ?? "").split("|")[0];
             return (doc === "FACTURA" || doc === "NC") &&
-                   (c.currency === "ARS" || (!c.currency && fr.currency === "ARS")) &&
+                   compCurrency(c) === "ARS" &&
                    !c.facturanteId && !c.invoice;
           })
           .map(c => ({ fr, comp: c }));
@@ -502,7 +502,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
                   <div key={comp.id} style={{ display: "flex", alignItems: "center", gap: 12, background: "var(--bg2)", borderRadius: 7, padding: "8px 12px" }}>
                     <span style={{ fontSize: 12, fontWeight: 700, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fr.name}</span>
                     <span style={{ fontSize: 10, color: "var(--muted)", whiteSpace: "nowrap" }}>{comp.date}</span>
-                    <span className="mono" style={{ fontSize: 12, color: "var(--gold)", fontWeight: 700, whiteSpace: "nowrap" }}>{fmt(comp.amount, comp.currency ?? fr.currency)}</span>
+                    <span className="mono" style={{ fontSize: 12, color: "var(--gold)", fontWeight: 700, whiteSpace: "nowrap" }}>{fmt(comp.amount, compCurrency(comp))}</span>
                     <span className="pill" style={{ color: "#fbbf24", background: "rgba(251,191,36,.1)", fontSize: 9, whiteSpace: "nowrap" }}>
                       {doc} {cuenta}
                     </span>
@@ -552,7 +552,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, background: "var(--bg2)", borderRadius: 7, padding: "8px 12px" }}>
                   <span style={{ fontSize: 12, fontWeight: 700, flex: 1 }}>{fr.name}</span>
                   <span style={{ fontSize: 11, color: "var(--muted)" }}>{MONTHS[comp.month]} {comp.year}</span>
-                  <span className="mono" style={{ fontSize: 12, color: "var(--gold)", fontWeight: 700 }}>{fmt(comp.amount, fr.currency)}</span>
+                  <span className="mono" style={{ fontSize: 12, color: "var(--gold)", fontWeight: 700 }}>{fmt(comp.amount, compCurrency(comp))}</span>
                   <span className="pill" style={{ color: "var(--gold)", background: "rgba(222,251,151,.1)", fontSize: 9 }}>PAGO A CTA</span>
                   <button
                     className="ghost"
