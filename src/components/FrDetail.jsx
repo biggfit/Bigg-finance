@@ -93,17 +93,14 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
       const factAdjs = factsDelMes.map(c => {
         const factHtml = buildFacturaHtmlForMail(franchise, franchisor, c);
         const label    = (c.invoice ?? c.id).replace(/\//g, "-");
-        return { data: htmlToBase64(factHtml), mimeType: "text/html", name: `${label}_${frSlug}.html` };
+        return { data: htmlToBase64(factHtml), mimeType: "application/octet-stream", name: `${label}_${frSlug}.html` };
       });
 
       await sendMailFr({
         to,
         subject:  `Estado de Cuenta ${franchise.name} — ${mesLabel}`,
-        htmlBody: `<p>Estimados,</p><p>Adjunto encontrán el estado de cuenta y las facturas emitidas correspondientes al mes de <strong>${mesLabel}</strong>.</p><p>Ante cualquier consulta, no duden en comunicarse.</p><p>Saludos,<br/>BIGG</p>`,
-        attachments: [
-          { data: htmlToBase64(ccHtml), mimeType: "text/html", name: `CC_${mesLabel.replace(/ /g,"_")}_${frSlug}.html` },
-          ...factAdjs,
-        ],
+        htmlBody: ccHtml,
+        attachments: factAdjs,
       });
       setMailStatus("ok");
     } catch (err) { setMailError(err.message ?? "Error"); setMailStatus("error"); }
