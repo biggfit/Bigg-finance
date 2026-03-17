@@ -4,7 +4,7 @@ import { buildCuentaCorriente, COMP_TYPES, fmt, fmtS, downloadCSV } from "../lib
 import { COMPANIES } from "../data/franchisor";
 import { dmyToIso, isoToDmy } from "../data/franchisor";
 import { TypePill } from "./atoms";
-import { buildCCHtml, htmlToBase64 } from "../lib/pdf";
+import { buildCCHtml } from "../lib/pdf";
 import { sendMailFr } from "../lib/sheetsApi";
 
 // ─── CC MODAL — Historial completo tipo base de datos ────────────────────────
@@ -41,8 +41,8 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
       await sendMailFr({
         to,
         subject:  `Cuenta Corriente ${franchise.name} — ${today}`,
-        htmlBody: `<p>Estimados,</p><p>Adjunto encontrán la cuenta corriente actualizada al día de hoy.</p><p>Ante cualquier consulta, no duden en comunicarse.</p><p>Saludos,<br/>BIGG</p>`,
-        attachments: [{ data: htmlToBase64(ccHtml), mimeType: "text/html", name: `CC_${franchise.name.replace(/ /g,"_")}.html` }],
+        htmlBody: ccHtml,
+        attachments: [],
       });
       setMailStatus("ok");
     } catch (err) { setMailError(err.message ?? "Error"); setMailStatus("error"); }

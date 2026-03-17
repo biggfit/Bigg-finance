@@ -226,7 +226,7 @@ function handleSendMail(data) {
       from:        "pagos@bigg.fit",
       htmlBody:    htmlBody,
       attachments: attachments,
-      name:        "BIGG Finance",
+      name:        "BIGG Administracion",
     });
 
     return json({ ok: true });
