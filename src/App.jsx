@@ -93,7 +93,6 @@ export default function App() {
   const filteredFr = useMemo(() => {
     const q = search.toLowerCase().trim();
     return franchises.filter(f => {
-      if (f.activa === false) return false;
       if (!q) return true;
       const name = f.name.toLowerCase();
       const exactMatch = franchises.some(x => x.name.toLowerCase() === q);
@@ -101,15 +100,12 @@ export default function App() {
     });
   }, [franchises, search]);
 
-  // Base para Resumen y Saldos: activas + filtro moneda, SIN filtro de búsqueda
-  // Garantiza que ambos tabs muestren exactamente las mismas sedes
-  const allActiveFr = useMemo(() =>
-    franchises.filter(f => f.activa !== false)
-  , [franchises]);
+  // Base para Resumen y Saldos: TODAS las sedes (activas e inactivas)
+  // para que los saldos cierren correctamente
+  const allActiveFr = useMemo(() => franchises, [franchises]);
 
   const activeFr = useMemo(() =>
-    franchises.filter(f => f.activa !== false)
-      .sort((a, b) => a.name.localeCompare(b.name, "es"))
+    [...franchises].sort((a, b) => a.name.localeCompare(b.name, "es"))
   , [franchises]);
 
   // Stable mutation handlers — IDs are normalised to strings here, once
