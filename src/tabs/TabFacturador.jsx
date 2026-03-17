@@ -271,22 +271,31 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
         }
       } else if (!usaFacturante && !skipFacturante && (doc === "FACTURA" || doc === "NC")) {
         // ── Invoice USA: asignar correlativo ──────────────────────────────
+        setEmitState("emitting");
+        setEmitError(null);
         try {
           const res = await getNextInvoiceNum(fr.id);
           enriched = { ...enriched, invoice: res.label };
+          setEmitState("idle");
         } catch (e) {
-          console.warn("No se pudo obtener invoice num:", e);
+          setEmitState("error");
+          setEmitError(e.message ?? "Error al obtener número de invoice");
+          return; // no guarda si no pudo asignar número
         }
       }
 
       onAddComp(fr.id, enriched);
 
-      if (!isAR && enriched.invoice && !skipFacturante) {
+      if (isAR) {
+        // AR: siempre descarga la factura
+        downloadTextAsPDF(buildFacturaPDF(fr, franchisor, enriched),
+          `Factura_${fr.name}_${MONTHS[preview.month]}_${preview.year}.html`);
+      } else if (enriched.invoice) {
+        // No-AR con número asignado: abre print dialog
         printInvoice(buildInvoiceHtml(fr, franchisor, enriched));
-      } else {
-        const pdfText = isAR ? buildFacturaPDF(fr, franchisor, enriched) : buildInvoicePDF(fr, franchisor, enriched);
-        downloadTextAsPDF(pdfText, `${isAR ? "Factura" : "Invoice"}_${fr.name}_${MONTHS[preview.month]}_${preview.year}.html`);
       }
+      // No-AR sin número (skipFacturante=true): guarda silenciosamente, sin descarga
+
       setDone(true);
     };
     const handleConfirm = () => doConfirm(false);
@@ -425,10 +434,10 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
 
         {emitState === "error" && (
           <div style={{ marginBottom: 12, padding: "10px 14px", background: "rgba(255,85,112,.08)", border: "1px solid rgba(255,85,112,.25)", borderRadius: 8, fontSize: 12 }}>
-            <div style={{ color: "var(--red)", fontWeight: 700, marginBottom: 6 }}>⚠ Error ARCA: {emitError}</div>
+            <div style={{ color: "var(--red)", fontWeight: 700, marginBottom: 6 }}>⚠ {usaFacturante ? "Error ARCA" : "Error"}: {emitError}</div>
             <div style={{ display: "flex", gap: 8 }}>
               <button className="btn" style={{ fontSize: 11, padding: "4px 12px" }} onClick={() => doConfirm(false)}>Reintentar</button>
-              <button className="ghost" style={{ fontSize: 11, padding: "4px 12px" }} onClick={() => doConfirm(true)}>Guardar sin factura ARCA</button>
+              {usaFacturante && <button className="ghost" style={{ fontSize: 11, padding: "4px 12px" }} onClick={() => doConfirm(true)}>Guardar sin factura ARCA</button>}
             </div>
           </div>
         )}
@@ -441,7 +450,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
                   Guardar sin emitir
                 </button>
                 <button className="btn" style={{ flex: 3, height: 48, fontSize: 15 }} disabled={emitState === "emitting"} onClick={handleConfirm}>
-                  {emitState === "emitting" ? "Emitiendo ante ARCA…" : `✓ Confirmar y generar ${isAR && currency === "ARS" ? "Factura ARCA" : isAR ? "Factura" : "Invoice"}`}
+                  {emitState === "emitting" ? (usaFacturante ? "Emitiendo ante ARCA…" : "Generando Invoice…") : `✓ Confirmar y generar ${isAR && currency === "ARS" ? "Factura ARCA" : isAR ? "Factura" : "Invoice"}`}
                 </button>
               </>
           }
