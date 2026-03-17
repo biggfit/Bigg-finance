@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:accounting": "node ../bigg-accounting/node_modules/vite/bin/vite.js --root ../bigg-accounting --port 5174",
+    "dev:all": "concurrently \"vite\" \"node ../bigg-accounting/node_modules/vite/bin/vite.js --root ../bigg-accounting --port 5174\"",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"
@@ -19,6 +21,7 @@
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
+    "concurrently": "^9.2.1",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
