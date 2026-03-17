@@ -16,7 +16,7 @@ export const REAL_SALDO_INICIAL = {
   "25":  -179387.01,  // Botánico
   "26":    -5725.49,  // Cerro las Rosas
   "27": -1698579.87,  // La Horqueta
-  // "28": 2495538,   // Palermo Rosedal (inactiva)
+  "28": 2495538,     // Palermo Rosedal (inactiva — incluida para cierre contable)
   "29":   732476.87,  // Chacras de Coria
   "31": -2442848.62,  // Saavedra
   "34":  1291669.30,  // Las Lomas

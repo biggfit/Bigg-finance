@@ -164,6 +164,14 @@ export async function sheetsDeleteFr(id) {
   return post({ action: "deleteFr", id: Number(id) });
 }
 
+/**
+ * Obtiene y reserva el próximo correlativo de invoice para una sede USA.
+ * Devuelve { ok, num, label } donde label es "USA-{frId}-{NNNN}".
+ */
+export async function getNextInvoiceNum(frId) {
+  return post({ action: "nextInvoiceNum", frId: Number(frId) });
+}
+
 // ─── Franquiciante ────────────────────────────────────────────────────────────
 
 /**

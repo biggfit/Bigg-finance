@@ -5,8 +5,9 @@ import { makeType, MONTHS, AVAILABLE_YEARS, DOCS, CUENTAS, CUENTA_LABEL, COMP_TY
 import { todayDmy } from "../data/franchisor";
 import { TypePill } from "../components/atoms";
 import PendientesPanel from "../components/PendientesPanel";
-import { buildFacturaPDF, buildInvoicePDF, downloadTextAsPDF } from "../lib/pdf";
+import { buildFacturaPDF, buildInvoicePDF, buildInvoiceHtml, printInvoice, downloadTextAsPDF } from "../lib/pdf";
 import { emitirComprobante, formatInvoiceLabel } from "../lib/facturanteApi";
+import { getNextInvoiceNum } from "../lib/sheetsApi";
 
 // ─── TAB: EMISIÓN DE COMPROBANTES ────────────────────────────────────────────
 const EMIT_MODE  = { SELECT: "select", MANUAL: "manual", CRM: "crm", EXCEL: "excel" };
@@ -247,6 +248,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
       let enriched = { ...preview };
 
       if (usaFacturante && !skipFacturante) {
+        // ── Emisión ante ARCA ──────────────────────────────────────────────
         setEmitState("emitting");
         setEmitError(null);
         try {
@@ -265,13 +267,26 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
         } catch (err) {
           setEmitState("error");
           setEmitError(err.message ?? "Error al emitir ante ARCA");
-          return; // no continúa — usuario decide reintentar o guardar igual
+          return;
+        }
+      } else if (!usaFacturante && !skipFacturante && (doc === "FACTURA" || doc === "NC")) {
+        // ── Invoice USA: asignar correlativo ──────────────────────────────
+        try {
+          const res = await getNextInvoiceNum(fr.id);
+          enriched = { ...enriched, invoice: res.label };
+        } catch (e) {
+          console.warn("No se pudo obtener invoice num:", e);
         }
       }
 
       onAddComp(fr.id, enriched);
-      const pdfText = isAR ? buildFacturaPDF(fr, franchisor, enriched) : buildInvoicePDF(fr, franchisor, enriched);
-      downloadTextAsPDF(pdfText, `${isAR ? "Factura" : "Invoice"}_${fr.name}_${MONTHS[preview.month]}_${preview.year}.html`);
+
+      if (!isAR && enriched.invoice && !skipFacturante) {
+        printInvoice(buildInvoiceHtml(fr, franchisor, enriched));
+      } else {
+        const pdfText = isAR ? buildFacturaPDF(fr, franchisor, enriched) : buildInvoicePDF(fr, franchisor, enriched);
+        downloadTextAsPDF(pdfText, `${isAR ? "Factura" : "Invoice"}_${fr.name}_${MONTHS[preview.month]}_${preview.year}.html`);
+      }
       setDone(true);
     };
     const handleConfirm = () => doConfirm(false);
@@ -722,6 +737,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
       };
       let facturanteStatus = "omitido";
       if (!skipFacturante && isAR && activeCompany === "ÑAKO SRL") {
+        // ── Emisión ARCA ──────────────────────────────────────────────────
         try {
           const result = await emitirComprobante({
             franchisor: franchisor?.ar ?? franchisor,
@@ -733,10 +749,23 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
         } catch (err) {
           facturanteStatus = `sin_factura: ${err.message}`;
         }
+      } else if (!skipFacturante && !isAR) {
+        // ── Invoice USA: asignar correlativo secuencial ───────────────────
+        try {
+          const res = await getNextInvoiceNum(r.frId);
+          comp = { ...comp, invoice: res.label };
+          facturanteStatus = "invoice_ok";
+        } catch (e) {
+          facturanteStatus = `sin_invoice: ${e.message}`;
+        }
       }
       onAddComp(r.frId, comp);
-      const pdfText = isAR ? buildFacturaPDF(fr, franchisor, comp) : buildInvoicePDF(fr, franchisor, comp);
-      downloadTextAsPDF(pdfText, `${isAR ? "Factura" : "Invoice"}_${fr.name}_${MONTHS[crmMonth]}_${crmYear}.html`);
+      if (!isAR && comp.invoice && !skipFacturante) {
+        printInvoice(buildInvoiceHtml(fr, franchisor, comp));
+      } else {
+        const pdfText = isAR ? buildFacturaPDF(fr, franchisor, comp) : buildInvoicePDF(fr, franchisor, comp);
+        downloadTextAsPDF(pdfText, `${isAR ? "Factura" : "Invoice"}_${fr.name}_${MONTHS[crmMonth]}_${crmYear}.html`);
+      }
       log.push({ frName: r.frName, fee, country: r.country, dto, facturanteStatus, invoice: comp.invoice });
     }
     setProcessed(log);

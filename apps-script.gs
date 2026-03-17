@@ -218,6 +218,35 @@ function doPost(e) {
     return err("franquiciante no encontrado: " + body.side);
   }
 
+  // ── Invoice correlativo (USA) ─────────────────────────────────────────────
+  if (body.action === "nextInvoiceNum") {
+    var lock = LockService.getScriptLock();
+    lock.waitLock(10000);
+    try {
+      var fsh     = ss.getSheetByName("franchises");
+      var fdata   = fsh.getDataRange().getValues();
+      var fheads  = fdata[0];
+      var idCol   = fheads.indexOf("id");
+      var seqCol  = fheads.indexOf("invoiceSeq");
+      if (seqCol < 0) {
+        seqCol = fheads.length;
+        fsh.getRange(1, seqCol + 1).setValue("invoiceSeq");
+      }
+      for (var ri = 1; ri < fdata.length; ri++) {
+        if (String(fdata[ri][idCol]) === String(body.frId)) {
+          var prev  = Number(fdata[ri][seqCol]) || 0;
+          var next  = prev + 1;
+          fsh.getRange(ri + 1, seqCol + 1).setValue(next);
+          var label = "USA-" + body.frId + "-" + String(next).padStart(4, "0");
+          return json({ ok: true, num: next, label: label });
+        }
+      }
+      return err("frId not found: " + body.frId);
+    } finally {
+      lock.releaseLock();
+    }
+  }
+
   // ── Recordatorio ──────────────────────────────────────────────────────────
   if (body.action === "addRecordatorio") {
     var sh = ss.getSheetByName("recordatorios");

@@ -180,6 +180,163 @@ export function buildFacturaHtmlForMail(fr, franchisor, comp) {
 <body>${escaped}</body></html>`;
 }
 
+/**
+ * Genera un HTML completo y estilizado para un Invoice USA, apto para imprimir como PDF.
+ */
+export function buildInvoiceHtml(fr, franchisor, comp) {
+  const usa   = franchisor?.usa ?? {};
+  const sym   = comp.currency === "EUR" ? "€" : comp.currency === "ARS" ? "$" : "U$D";
+  const fmtAmt = v => `${sym}\u202f${Number(v).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const period = `${MONTHS[comp.month ?? 0]} ${comp.year ?? new Date().getFullYear()}`;
+  const invoiceNum  = comp.invoice ?? "—";
+  const description = comp.nota ?? comp.ref ?? "";
+  const amount      = comp.amount ?? 0;
+  const footer      = fr.notaFactura ?? usa.notaPie ?? "";
+
+  // Datos del receptor
+  const toName    = fr.razonSocial ?? fr.name ?? "";
+  const toTaxId   = fr.cuit ? `Tax ID / RUC: ${fr.cuit}` : "";
+  const toAddr    = [fr.billingAddress, fr.billingCity, fr.billingState]
+    .filter(Boolean).join(", ");
+  const toCountry = fr.country ?? "";
+
+  // Datos bancarios
+  const hasBankInfo = usa.bankName || usa.routingNumber || usa.accountNumber || usa.swift;
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${invoiceNum}</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: Arial, sans-serif; font-size: 13px; color: #1a1a1a; background: #e8e8e8; }
+.page { max-width: 760px; margin: 32px auto; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,.18); }
+.header { background: #111; padding: 30px 36px; }
+.header-top { display: table; width: 100%; }
+.header-left { display: table-cell; vertical-align: top; }
+.header-right { display: table-cell; vertical-align: top; text-align: right; }
+.brand { color: #adff19; font-size: 26px; font-weight: 900; letter-spacing: .12em; }
+.from-name { color: #fff; font-size: 13px; font-weight: 700; margin-top: 4px; }
+.from-detail { color: rgba(255,255,255,.45); font-size: 10px; line-height: 1.7; margin-top: 2px; }
+.inv-label { color: rgba(255,255,255,.35); font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .1em; }
+.inv-num { color: #adff19; font-size: 18px; font-weight: 900; margin-top: 3px; letter-spacing: .04em; }
+.inv-date { color: rgba(255,255,255,.5); font-size: 11px; margin-top: 4px; }
+.body { padding: 28px 36px; }
+.parties { display: table; width: 100%; border-collapse: collapse; margin-bottom: 28px; }
+.party { display: table-cell; width: 50%; vertical-align: top; padding-right: 24px; }
+.party:last-child { padding-right: 0; padding-left: 24px; border-left: 1px solid #eee; }
+.party-label { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .1em; color: #aaa; margin-bottom: 7px; }
+.party-name { font-size: 14px; font-weight: 800; color: #111; margin-bottom: 3px; }
+.party-detail { font-size: 11px; color: #666; line-height: 1.7; }
+table.items { width: 100%; border-collapse: collapse; margin-bottom: 0; }
+table.items th { padding: 9px 12px; background: #f8f8f8; font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; color: #aaa; text-align: left; border-bottom: 2px solid #eee; }
+table.items th.r { text-align: right; }
+table.items td { padding: 14px 12px; border-bottom: 1px solid #f3f3f3; font-size: 12px; vertical-align: top; }
+table.items td.r { text-align: right; font-family: monospace; font-weight: 700; white-space: nowrap; }
+.total-wrap { border-top: 2px solid #111; padding: 14px 12px; text-align: right; }
+.total-label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .1em; color: #aaa; margin-bottom: 4px; }
+.total-amount { font-family: monospace; font-size: 22px; font-weight: 900; color: #111; }
+.bank { margin: 24px 0 0; background: #f9f9f9; border: 1px solid #eee; border-radius: 7px; padding: 16px 20px; }
+.bank-title { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .1em; color: #aaa; margin-bottom: 10px; }
+.bank-grid { display: table; width: 100%; }
+.bank-cell { display: table-cell; font-size: 11px; color: #555; padding-right: 20px; padding-bottom: 4px; }
+.bank-cell b { display: block; font-size: 9px; color: #aaa; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 1px; }
+.page-footer { padding: 14px 36px 24px; font-size: 10px; color: #aaa; border-top: 1px solid #f0f0f0; margin-top: 4px; }
+@media print {
+  body { background: white; }
+  .page { box-shadow: none; margin: 0; border-radius: 0; max-width: 100%; }
+}
+</style></head>
+<body>
+<div class="page">
+  <div class="header">
+    <div class="header-top">
+      <div class="header-left">
+        <div class="brand">BIGG</div>
+        <div class="from-name">${usa.legalName ?? "BIGG FIT LLC"}</div>
+        <div class="from-detail">
+          ${usa.address ? usa.address + "<br>" : ""}
+          ${[usa.city, usa.state, usa.zip].filter(Boolean).join(", ")}${usa.country ? " &middot; " + usa.country : ""}<br>
+          ${usa.ein ? "EIN: " + usa.ein : ""}
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="inv-label">Invoice</div>
+        <div class="inv-num">${invoiceNum}</div>
+        <div class="inv-date">Date: ${comp.date ?? ""}</div>
+        <div class="inv-date" style="margin-top:2px">Period: ${period}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="parties">
+      <div class="party">
+        <div class="party-label">From</div>
+        <div class="party-name">${usa.legalName ?? "BIGG FIT LLC"}</div>
+        <div class="party-detail">
+          ${usa.address ?? ""}<br>
+          ${[usa.city, usa.state, usa.zip].filter(Boolean).join(", ")}<br>
+          ${usa.ein ? "EIN: " + usa.ein : ""}
+        </div>
+      </div>
+      <div class="party">
+        <div class="party-label">Bill To</div>
+        <div class="party-name">${toName}</div>
+        <div class="party-detail">
+          ${toTaxId ? toTaxId + "<br>" : ""}
+          ${toAddr ? toAddr + "<br>" : ""}
+          ${toCountry}
+        </div>
+      </div>
+    </div>
+
+    <table class="items">
+      <thead>
+        <tr>
+          <th>Description</th>
+          <th class="r">Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>${description}</td>
+          <td class="r">${fmtAmt(amount)}</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="total-wrap">
+      <div class="total-label">Total Due</div>
+      <div class="total-amount">${fmtAmt(amount)}</div>
+    </div>
+
+    ${hasBankInfo ? `
+    <div class="bank">
+      <div class="bank-title">Payment Instructions</div>
+      <div class="bank-grid">
+        ${usa.bankName ? `<span class="bank-cell"><b>Bank</b>${usa.bankName}</span>` : ""}
+        ${usa.routingNumber ? `<span class="bank-cell"><b>Routing</b>${usa.routingNumber}</span>` : ""}
+        ${usa.accountNumber ? `<span class="bank-cell"><b>Account</b>${usa.accountNumber}</span>` : ""}
+        ${usa.swift ? `<span class="bank-cell"><b>SWIFT / BIC</b>${usa.swift}</span>` : ""}
+      </div>
+    </div>` : ""}
+  </div>
+
+  ${footer ? `<div class="page-footer">${footer}</div>` : ""}
+</div>
+</body></html>`;
+}
+
+/**
+ * Abre una nueva ventana con el HTML del invoice y dispara el diálogo de impresión.
+ * El usuario puede elegir "Guardar como PDF" en el diálogo.
+ */
+export function printInvoice(html) {
+  const w = window.open("", "_blank");
+  if (!w) { console.warn("printInvoice: popup bloqueado"); return; }
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  setTimeout(() => w.print(), 400);
+}
+
 export function downloadTextAsPDF(text, filename) {
   // Descarga como HTML (apto para imprimir como PDF desde el navegador)
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${filename}</title>
