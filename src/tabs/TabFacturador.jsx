@@ -1021,7 +1021,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
           ✓ Guardar sin emitir ({toProcess.length})
         </button>
         <button className="btn" disabled={toProcess.length === 0} style={{ opacity: toProcess.length === 0 ? 0.4 : 1 }} onClick={() => handleConfirm(false)}>
-          ✓ Generar {toProcess.length} comprobante{toProcess.length !== 1 ? "s" : ""}
+          ✓ Confirmar y Generar Facturas/Invoice ({toProcess.length})
         </button>
       </div>
     </div>
