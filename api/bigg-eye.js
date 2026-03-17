@@ -77,8 +77,10 @@ export default async function handler(req, res) {
 
     let ventas = 0;
     const items = rows.map((row) => {
-      const total = parseFloat(row.total ?? 0) || 0;
-      ventas += total;
+      const total   = parseFloat(row.total ?? 0) || 0;
+      const isDebit = row.is_debit !== false; // true = venta, false = credit note
+      // Las credit notes (is_debit=false) restan al total neto
+      ventas += isDebit ? total : -total;
       return {
         id:            row.id,
         date:          row.created_at?.slice(0, 10) ?? null,   // "YYYY-MM-DD"
@@ -88,7 +90,7 @@ export default async function handler(req, res) {
         discount:      parseFloat(row.discount_amount ?? 0) || 0,
         total,                                                   // cobrado
         currency:      row.currency     ?? "ARS",
-        is_debit:      row.is_debit     ?? true,
+        is_debit:      isDebit,
         full_refunded: row.full_refunded ?? false,
       };
     });
