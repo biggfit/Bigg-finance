@@ -1,6 +1,7 @@
 // api/bigg-eye.js — Vercel Serverless Function
 //
-// Obtiene las ventas mensuales de una sede desde la API de Bigg Eye.
+// Obtiene las ventas netas mensuales de una sede desde la API de Bigg Eye.
+// Lógica: GET /sales (suma `total`) − GET /credit_notes (suma `amount`)
 //
 // Query params requeridos:
 //   location_id  — ID de la sede en Bigg Eye (número)
@@ -8,14 +9,25 @@
 //   year         — año (ej: 2026)
 //
 // Devuelve:
-//   { ventas: number, count: number, items: [...] }
+//   { ventas: number, sales_total: number, credits_total: number, count: number, items: [...] }
 //   { error: string }   — si algo falla
-//
-// `items` contiene solo los campos útiles de cada venta (filtramos los 20+
-// campos que devuelve la API y que no necesitamos).
 
 const BIGG_EYE_API = "https://api.bigg.fit";
 const TOKEN        = process.env.BIGG_EYE_TOKEN;
+
+async function fetchJson(url) {
+  const res = await fetch(url, {
+    headers: {
+      Accept:        "application/json",
+      Authorization: `Bearer ${TOKEN}`,
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`API error ${res.status}: ${text.slice(0, 200)}`);
+  }
+  return res.json();
+}
 
 export default async function handler(req, res) {
   res.setHeader("Content-Type", "application/json");
@@ -45,58 +57,53 @@ export default async function handler(req, res) {
     return;
   }
 
-  // Calcular start / end del mes
-  const pad   = (n) => String(n).padStart(2, "0");
-  const start = `${yr}-${pad(mo)}-01`;
-  // Último día del mes: día 0 del mes siguiente
+  // Rango del mes
+  const pad     = (n) => String(n).padStart(2, "0");
+  const start   = `${yr}-${pad(mo)}-01`;
   const lastDay = new Date(yr, mo, 0).getDate();
   const end     = `${yr}-${pad(mo)}-${pad(lastDay)}`;
+  const qs      = `start=${start}&end=${end}&location_id=${locId}`;
 
   try {
-    const url = `${BIGG_EYE_API}/sales?start=${start}&end=${end}&location_id=${locId}`;
+    // Llamadas en paralelo: ventas y credit notes
+    const [salesData, creditsData] = await Promise.all([
+      fetchJson(`${BIGG_EYE_API}/sales?${qs}`),
+      fetchJson(`${BIGG_EYE_API}/credit_notes?${qs}`),
+    ]);
 
-    const response = await fetch(url, {
-      headers: {
-        Accept:        "application/json",
-        Authorization: `Bearer ${TOKEN}`,
-      },
-    });
+    const salesRows   = Array.isArray(salesData)   ? salesData   : [];
+    const creditsRows = Array.isArray(creditsData)  ? creditsData : [];
 
-    if (!response.ok) {
-      const text = await response.text();
-      res.statusCode = response.status;
-      res.end(JSON.stringify({ error: `API error ${response.status}: ${text.slice(0, 200)}` }));
-      return;
-    }
+    // /sales → sumar campo `total` (todos los registros, sin filtrar is_debit)
+    const salesTotal = salesRows.reduce((s, r) => s + (parseFloat(r.total) || 0), 0);
 
-    const data = await response.json();
+    // /credit_notes → restar campo `amount`
+    const creditsTotal = creditsRows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
 
-    // La API devuelve un array con 20+ campos por venta; nos quedamos solo
-    // con los que son útiles para mostrar o calcular en el frontend.
-    const rows = Array.isArray(data) ? data : (data ? [data] : []);
+    const ventas = salesTotal - creditsTotal;
 
-    let ventas = 0;
-    const items = rows.map((row) => {
-      const total   = parseFloat(row.total ?? 0) || 0;
-      const isDebit = row.is_debit !== false; // true = venta, false = credit note
-      // Las credit notes (is_debit=false) restan al total neto
-      ventas += isDebit ? total : -total;
-      return {
-        id:            row.id,
-        date:          row.created_at?.slice(0, 10) ?? null,   // "YYYY-MM-DD"
-        customer:      row.customer_name ?? null,
-        description:   row.description  ?? null,
-        amount:        parseFloat(row.amount ?? 0) || 0,        // precio base
-        discount:      parseFloat(row.discount_amount ?? 0) || 0,
-        total,                                                   // cobrado
-        currency:      row.currency     ?? "ARS",
-        is_debit:      isDebit,
-        full_refunded: row.full_refunded ?? false,
-      };
-    });
+    // Items filtrados para el frontend (solo campos útiles)
+    const items = salesRows.map((row) => ({
+      id:            row.id,
+      date:          row.created_at?.slice(0, 10) ?? null,
+      customer:      row.customer_name ?? null,
+      description:   row.description  ?? null,
+      amount:        parseFloat(row.amount  ?? 0) || 0,
+      discount:      parseFloat(row.discount_amount ?? 0) || 0,
+      total:         parseFloat(row.total   ?? 0) || 0,
+      currency:      row.currency ?? "ARS",
+      is_debit:      row.is_debit !== false,
+      full_refunded: row.full_refunded ?? false,
+    }));
 
     res.statusCode = 200;
-    res.end(JSON.stringify({ ventas: Math.round(ventas), count: items.length, items }));
+    res.end(JSON.stringify({
+      ventas:        Math.round(ventas),
+      sales_total:   Math.round(salesTotal),
+      credits_total: Math.round(creditsTotal),
+      count:         items.length,
+      items,
+    }));
   } catch (err) {
     res.statusCode = 500;
     res.end(JSON.stringify({ error: err.message }));
