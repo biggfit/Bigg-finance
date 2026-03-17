@@ -201,7 +201,38 @@ function doPost(e) {
     return err("franquiciante no encontrado: " + body.side);
   }
 
+  // ── Send Mail ─────────────────────────────────────────────────────────────
+  if (body.action === "sendMail") {
+    return handleSendMail(body);
+  }
+
   return err("acción desconocida: " + body.action);
+}
+
+// ─── Send Mail ────────────────────────────────────────────────────────────────
+
+function handleSendMail(data) {
+  try {
+    var to       = data.to;
+    var subject  = data.subject  || "(sin asunto)";
+    var htmlBody = data.htmlBody || "";
+
+    var attachments = (data.attachments || []).map(function(att) {
+      var decoded = Utilities.base64Decode(att.data);
+      return Utilities.newBlob(decoded, att.mimeType, att.name);
+    });
+
+    GmailApp.sendEmail(to, subject, "", {
+      from:        "pagos@bigg.fit",
+      htmlBody:    htmlBody,
+      attachments: attachments,
+      name:        "BIGG Finance",
+    });
+
+    return json({ ok: true });
+  } catch (err) {
+    return json({ error: err.message });
+  }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
