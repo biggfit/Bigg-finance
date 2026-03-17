@@ -141,10 +141,11 @@ export async function fetchFranchises() {
   const rows = await get("franchises");
   return rows.map(f => ({
     ...f,
-    id:       Number(f.id),
-    activa:   f.activa === true || f.activa === "TRUE" || f.activa === "true",
-    applyIVA: f.applyIVA === true || f.applyIVA === "TRUE" || f.applyIVA === "true",
-    taxExempt:f.taxExempt === true || f.taxExempt === "TRUE" || f.taxExempt === "true",
+    id:          Number(f.id),
+    activa:      f.activa === true || f.activa === "TRUE" || f.activa === "true",
+    applyIVA:    f.applyIVA === true || f.applyIVA === "TRUE" || f.applyIVA === "true",
+    taxExempt:   f.taxExempt === true || f.taxExempt === "TRUE" || f.taxExempt === "true",
+    biggEyeId:   f.biggEyeId !== "" && f.biggEyeId != null ? Number(f.biggEyeId) : null,
   }));
 }
 

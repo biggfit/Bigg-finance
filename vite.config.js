@@ -76,6 +76,35 @@ export default defineConfig({
 
         // Sin path en use() para evitar problemas de matching en connect/Vite 7
         server.middlewares.use((req, res, next) => {
+          // ── Proxy /api/bigg-eye → MCP server de Bigg Eye ──────────────────
+          if (req.url && req.url.startsWith('/api/bigg-eye')) {
+            // En dev, importar y ejecutar el handler directamente
+            import('./api/bigg-eye.js').then(mod => {
+              // Parsear query string manualmente
+              const urlObj = new URL('http://localhost' + req.url);
+              const fakeReq = { query: Object.fromEntries(urlObj.searchParams), url: req.url, method: req.method };
+              const chunks = [];
+              let statusCode = 200;
+              const fakeRes = {
+                setHeader: () => {},
+                statusCode: 200,
+                end: (body) => {
+                  res.setHeader('Content-Type', 'application/json');
+                  res.statusCode = fakeRes.statusCode;
+                  res.end(body);
+                },
+              };
+              mod.default(fakeReq, fakeRes).catch(err => {
+                res.statusCode = 500;
+                res.end(JSON.stringify({ error: err.message }));
+              });
+            }).catch(err => {
+              res.statusCode = 500;
+              res.end(JSON.stringify({ error: err.message }));
+            });
+            return;
+          }
+
           if (!req.url || !req.url.startsWith('/api/sheets')) {
             next();
             return;

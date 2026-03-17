@@ -217,6 +217,7 @@ const EMPTY_FR_BUF = {
   billingAddress:"", billingCity:"", billingState:"", billingZip:"",
   taxExempt:false, paymentTerms:"Net 30",
   noteGeneral:"",
+  biggEyeId:"",
 };
 
 export function frToBuf(fr) {
@@ -269,6 +270,7 @@ export function frToBuf(fr) {
     aniosContrato:   fr.aniosContrato   ?? "",
     paymentTerms:    fr.paymentTerms    ?? "Net 30",
     noteGeneral:     fr.noteGeneral     ?? "",
+    biggEyeId:       fr.biggEyeId  != null ? String(fr.biggEyeId)  : "",
   };
 }
 
@@ -815,10 +817,15 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
                   </div>
                   <div style={divider} />
                   <div style={{ fontSize:10, color:"var(--muted)", fontWeight:700, letterSpacing:".08em", margin:"10px 0 8px" }}>CONTACTO</div>
-                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10 }}>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginBottom:10 }}>
                     <FieldInput label="Nombre Operador" value={buf.titular}      onChange={setF("titular")}      half />
                     <FieldInput label="Telefono"         value={buf.telefonoTitular} onChange={setF("telefonoTitular")} half />
                     <FieldInput label="Email"            value={buf.emailComercial}  onChange={setF("emailComercial")}  half />
+                  </div>
+                  <div style={divider} />
+                  <div style={{ fontSize:10, color:"var(--cyan)", fontWeight:700, letterSpacing:".08em", margin:"10px 0 8px" }}>BIGG EYE</div>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 2fr", gap:10 }}>
+                    <FieldInput label="ID en Bigg Eye" value={buf.biggEyeId} onChange={setF("biggEyeId")} half type="number" />
                   </div>
                 </AccordionSection>
 

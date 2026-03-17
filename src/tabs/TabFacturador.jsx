@@ -588,6 +588,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
     royaltyContrato: parseFloat(fr.royaltyPct ?? "7"),
     royaltyFactura:  parseFloat(fr.royaltyPct ?? "7"),
     ventas: "",
+    biggEyeId: fr.biggEyeId ?? null,
   }));
 
   const [rows,     setRows]     = useState(makeRows);
@@ -623,12 +624,51 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
 
   const tcCargados = countriesWithTc.filter(c => parseFloat(tcMap[c]) > 0).length;
 
-  const handleDownloadCRM = () => {
+  const [crmFetchErrors, setCrmFetchErrors] = useState([]);
+
+  const handleDownloadCRM = async () => {
     setCrmLoading(true);
-    setTimeout(() => {
-      setCrmLoading(false);
-      setCrmLoaded(true);
-    }, 1200);
+    setCrmFetchErrors([]);
+
+    const month1 = crmMonth + 1; // crmMonth es 0-indexed, la API espera 1-12
+    const errors = [];
+
+    // Sedes con Bigg Eye ID configurado
+    const rowsWithBE = rows.map((r, i) => ({ ...r, _i: i })).filter(r => r.biggEyeId != null);
+    const rowsWithoutBE = rows.filter(r => r.biggEyeId == null).map(r => r.frName);
+
+    if (rowsWithoutBE.length > 0) {
+      errors.push(`${rowsWithoutBE.length} sede${rowsWithoutBE.length !== 1 ? "s" : ""} sin Bigg Eye ID — ingresar ventas manualmente`);
+    }
+
+    // Llamar a la API para cada sede con biggEyeId
+    const results = await Promise.allSettled(
+      rowsWithBE.map(r =>
+        fetch(`/api/bigg-eye?location_id=${r.biggEyeId}&month=${month1}&year=${crmYear}`)
+          .then(res => res.json())
+          .then(data => ({ _i: r._i, frName: r.frName, ...data }))
+      )
+    );
+
+    setRows(prev => {
+      const next = [...prev];
+      results.forEach((res, i) => {
+        const origIdx = rowsWithBE[i]._i;
+        if (res.status === "fulfilled" && res.value.error == null && res.value.ventas != null) {
+          next[origIdx] = { ...next[origIdx], ventas: String(Math.round(res.value.ventas)) };
+        } else {
+          const msg = res.status === "rejected"
+            ? res.reason?.message
+            : res.value?.error;
+          if (msg) errors.push(`${rowsWithBE[i].frName}: ${msg}`);
+        }
+      });
+      return next;
+    });
+
+    setCrmFetchErrors(errors);
+    setCrmLoading(false);
+    setCrmLoaded(true);
   };
 
   const rowFee = (r) => {
@@ -837,7 +877,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
                     })}
                   </div>
                   <div style={{ marginTop: 10, fontSize: 10, color: "var(--muted)", borderTop: "1px solid var(--border)", paddingTop: 8 }}>
-                    Integración automática pendiente
+                    Las ventas se obtienen de Bigg Eye automáticamente
                   </div>
                 </div>
               )}
@@ -845,6 +885,15 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
           )}
         </div>
       </div>
+
+      {/* Avisos de fetch Bigg Eye */}
+      {crmFetchErrors.length > 0 && (
+        <div className="fade" style={{ marginBottom: 10, padding: "8px 14px", background: "rgba(251,191,36,.06)", border: "1px solid rgba(251,191,36,.2)", borderRadius: 8, fontSize: 11 }}>
+          {crmFetchErrors.map((e, i) => (
+            <div key={i} style={{ color: "var(--gold)", lineHeight: 1.6 }}>⚠ {e}</div>
+          ))}
+        </div>
+      )}
 
       {/* Toolbar selección masiva */}
       {selected.size > 0 && (
