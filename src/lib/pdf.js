@@ -1,4 +1,4 @@
-import { fmt, MONTHS } from "./helpers";
+import { fmt, MONTHS, COMP_TYPES, fmtS } from "./helpers";
 import { todayDmy } from "../data/franchisor";
 
 // ─── PDF GENERATORS ──────────────────────────────────────────────────────────
@@ -61,6 +61,101 @@ export function buildInvoicePDF(fr, franchisor, comp) {
     `SWIFT: ${usa.swift ?? ""}`,
   ];
   return lines.join("\n");
+}
+
+// ─── CC HTML (para adjuntar en mail) ─────────────────────────────────────────
+/**
+ * Genera un HTML standalone con la tabla completa de la CC, listo para adjuntar por mail.
+ * @param {string} frName
+ * @param {string|null} frRazonSocial
+ * @param {object[]} lines  — salida de buildCuentaCorriente()
+ * @param {string} currency — "ARS" | "USD" | "EUR"
+ */
+export function buildCCHtml(frName, frRazonSocial, lines, currency) {
+  const SYM = { ARS: "$", USD: "U$D", EUR: "€" };
+  const sym = SYM[currency] ?? "$";
+  const fmtAmt   = v => v ? `${sym}\u202f${Math.abs(v).toLocaleString("es-AR", { minimumFractionDigits: 2 })}` : "";
+  const fmtSaldo = v => `${v >= 0 ? "+" : "-"}${sym}\u202f${Math.abs(v).toLocaleString("es-AR", { minimumFractionDigits: 2 })}`;
+
+  const rows = lines.map((l, i) => {
+    const isApertura = l.type === "apertura";
+    const label      = isApertura ? "Saldo Anterior" : (COMP_TYPES[l.type]?.label ?? l.type);
+    const sc = l.saldo > 0.01 ? "#dc2626" : l.saldo < -0.01 ? "#16a34a" : "#6b7280";
+    const bg = isApertura ? "#f0fdf4" : i % 2 === 0 ? "#ffffff" : "#f9fafb";
+    const fw = isApertura ? "700" : "400";
+    return `<tr style="background:${bg}">
+      <td style="padding:7px 10px;font-family:monospace;font-size:12px;color:#6b7280;white-space:nowrap;font-weight:${fw}">${l.date ?? "—"}</td>
+      <td style="padding:7px 10px;font-family:monospace;font-size:11px;color:#1d4ed8;font-weight:700">${l.invoice ?? (isApertura ? "" : "—")}</td>
+      <td style="padding:7px 10px;font-size:11px;color:#374151">${label}</td>
+      <td style="padding:7px 10px;font-size:11px;color:#6b7280;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.nota ?? l.ref ?? (isApertura ? "Saldo inicial / apertura" : "—")}</td>
+      <td style="padding:7px 10px;font-family:monospace;font-size:12px;color:#dc2626;text-align:right;font-weight:${l.debit > 0 ? 700 : 400}">${fmtAmt(l.debit)}</td>
+      <td style="padding:7px 10px;font-family:monospace;font-size:12px;color:#16a34a;text-align:right;font-weight:${l.credit > 0 ? 700 : 400}">${fmtAmt(l.credit)}</td>
+      <td style="padding:7px 10px;font-family:monospace;font-size:12px;font-weight:700;text-align:right;color:${sc}">${fmtSaldo(l.saldo)}</td>
+    </tr>`;
+  }).join("");
+
+  const saldoFinal = lines.length ? lines[lines.length - 1].saldo : 0;
+  const scFinal    = saldoFinal > 0.01 ? "#dc2626" : saldoFinal < -0.01 ? "#16a34a" : "#6b7280";
+  const today      = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Cuenta Corriente — ${frName}</title></head>
+<body style="margin:0;padding:32px;font-family:Arial,sans-serif;background:#f3f4f6;color:#111">
+<div style="max-width:900px;margin:auto;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.1)">
+  <div style="background:#111;color:#adff19;padding:22px 28px">
+    <div style="font-size:18px;font-weight:800">${frName}</div>
+    ${frRazonSocial ? `<div style="font-size:12px;opacity:.65;margin-top:2px">${frRazonSocial}</div>` : ""}
+    <div style="font-size:11px;opacity:.5;margin-top:4px">Cuenta Corriente · ${currency} · al ${today}</div>
+  </div>
+  <div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse">
+      <thead>
+        <tr style="background:#f9fafb;border-bottom:2px solid #e5e7eb">
+          <th style="padding:9px 10px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em">Fecha</th>
+          <th style="padding:9px 10px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em">N° Comprobante</th>
+          <th style="padding:9px 10px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em">Tipo</th>
+          <th style="padding:9px 10px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em">Descripción</th>
+          <th style="padding:9px 10px;text-align:right;font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em">Debe</th>
+          <th style="padding:9px 10px;text-align:right;font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em">Haber</th>
+          <th style="padding:9px 10px;text-align:right;font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em">Saldo</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>
+  <div style="padding:16px 28px;border-top:2px solid #e5e7eb;display:flex;justify-content:flex-end;align-items:center;gap:16px">
+    <span style="font-size:13px;color:#6b7280">Saldo al ${today}:</span>
+    <span style="font-family:monospace;font-size:18px;font-weight:800;color:${scFinal}">${fmtSaldo(saldoFinal)}</span>
+  </div>
+</div>
+</body></html>`;
+}
+
+/**
+ * Convierte un string HTML a base64 (UTF-8 safe) para adjuntar vía Apps Script.
+ */
+export function htmlToBase64(html) {
+  const bytes = new TextEncoder().encode(html);
+  let binary = "";
+  bytes.forEach(b => { binary += String.fromCharCode(b); });
+  return btoa(binary);
+}
+
+/**
+ * Construye el HTML de una factura/invoice para adjuntar por mail.
+ * Usa la misma lógica que downloadTextAsPDF pero retorna el string en lugar de descargar.
+ * @param {object} fr         — franquicia
+ * @param {object} franchisor — { ar, usa }
+ * @param {object} comp       — comprobante con invoice, date, etc.
+ */
+export function buildFacturaHtmlForMail(fr, franchisor, comp) {
+  const isAR   = (comp.currency ?? fr.currency ?? "ARS") !== "USD";
+  const text   = isAR ? buildFacturaPDF(fr, franchisor, comp) : buildInvoicePDF(fr, franchisor, comp);
+  const title  = comp.invoice ?? (isAR ? "Factura" : "Invoice");
+  const escaped = text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>
+<style>body{font-family:monospace;font-size:13px;padding:40px;max-width:600px;margin:auto;white-space:pre-wrap;line-height:1.6}
+@media print{body{padding:20px}}</style></head>
+<body>${escaped}</body></html>`;
 }
 
 export function downloadTextAsPDF(text, filename) {

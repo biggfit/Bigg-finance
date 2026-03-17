@@ -178,3 +178,18 @@ export async function fetchFranchisor() {
 export async function sheetsSaveFranchisor(side, data) {
   return post({ action: "saveFranchisor", side, data });
 }
+
+// ─── Mail ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Envía un mail vía GmailApp en el Apps Script.
+ * @param {object} params
+ * @param {string}   params.to          — destinatario (email)
+ * @param {string}   params.subject     — asunto
+ * @param {string}   params.htmlBody    — cuerpo HTML del mail
+ * @param {Array<{ data: string, mimeType: string, name: string }>} params.attachments
+ *   — adjuntos en base64 (UTF-8), mimeType y nombre de archivo
+ */
+export async function sendMailFr({ to, subject, htmlBody, attachments = [] }) {
+  return post({ action: "sendMail", to, subject, htmlBody, attachments });
+}

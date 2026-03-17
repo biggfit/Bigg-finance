@@ -5,16 +5,20 @@ import { dmyToIso, isoToDmy, inPeriod, cmpDate, COMPANIES } from "../data/franch
 import { TypePill } from "./atoms";
 import AddCompModal from "./AddCompModal";
 import CCModal from "./CCModal";
+import { buildCCHtml, htmlToBase64, buildFacturaHtmlForMail } from "../lib/pdf";
+import { sendMailFr } from "../lib/sheetsApi";
 
 // ─── FRANCHISE DETAIL MODAL — Estado de cuenta mensual / recordatorio ─────────
 export default function FrDetail({ franchise, month, year, onClose, onAddComp, onDelComp, onEditComp }) {
-  const { comps, saldoInicial, activeCompany } = useStore();
+  const { comps, saldoInicial, activeCompany, franchisor } = useStore();
   const [adding,      setAdding]      = useState(false);
   const [showCC,      setShowCC]      = useState(false);
   const [editingId,   setEditingId]   = useState(null);
   const [editBuf,     setEditBuf]     = useState({});
   const [localMonth,  setLocalMonth]  = useState(month);
   const [localYear,   setLocalYear]   = useState(year);
+  const [mailStatus,  setMailStatus]  = useState(null); // null | "sending" | "ok" | "error"
+  const [mailError,   setMailError]   = useState("");
 
   const goToPrev = () => {
     if (localMonth === 0) { setLocalMonth(11); setLocalYear(y => y - 1); }
@@ -63,29 +67,47 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
   const inpS = { padding: "3px 7px", fontSize: 11, borderRadius: 5, background: "var(--bg)", border: "1px solid var(--accent)", color: "var(--text)", fontFamily: "var(--font)" };
   const saldoColor = (s) => s > 0.01 ? "var(--red)" : s < -0.01 ? "var(--green)" : "var(--muted)";
 
-  const handleEmailCC = useCallback(() => {
-    const to      = franchise.emailFactura ?? franchise.emailComercial ?? "";
-    const subject = encodeURIComponent(`Estado de Cuenta — ${franchise.name} — ${MONTH_NAMES[localMonth]} ${localYear}`);
-    const lines = [
-      `Estado de Cuenta — ${franchise.name}`,
-      franchise.razonSocial ?? "",
-      `Período: ${MONTH_NAMES[localMonth]} ${localYear}`,
-      "",
-      `Saldo al ${aperturaDate}: ${fmtS(sp, displayCurrency)}`,
-      "",
-      "Fecha        Tipo                    Importe              Saldo",
-      "──────────────────────────────────────────────────────────────",
-      ...compsWithSaldo.map(c => {
-        const sign  = COMP_TYPES[c.type]?.sign ?? 0;
-        const label = (COMP_TYPES[c.type]?.label ?? c.type).padEnd(22);
-        const imp   = fmt(Math.abs(sign * c.amount), c.currency ?? displayCurrency).padStart(14);
-        return `${c.date}   ${label} ${imp}   ${fmtS(c.saldo, displayCurrency)}`;
-      }),
-      "──────────────────────────────────────────────────────────────",
-      `Saldo al ${lastComp?.date ?? aperturaDate}: ${fmtS(sa, displayCurrency)}`,
-    ].filter(Boolean);
-    window.open(`mailto:${to}?subject=${subject}&body=${encodeURIComponent(lines.join("\n"))}`, "_blank");
-  }, [franchise, localMonth, localYear, sp, sa, compsWithSaldo, aperturaDate, lastComp]);
+  const handleEmailCC = useCallback(async () => {
+    const to = franchise.emailFactura ?? franchise.emailComercial ?? "";
+    if (!to) { setMailError("Sin email configurado"); setMailStatus("error"); return; }
+    setMailStatus("sending");
+    setMailError("");
+    try {
+      const mesLabel = `${MONTH_NAMES[localMonth]} ${localYear}`;
+      const frSlug   = franchise.name.replace(/ /g, "_");
+
+      // CC del mes: línea de apertura + movimientos del período (misma estructura que buildCCHtml espera)
+      const ccLines = [
+        { type: "apertura", label: "Saldo anterior", debit: 0, credit: 0, saldo: sp, date: aperturaDate, currency: displayCurrency },
+        ...compsWithSaldo.map(c => {
+          const sign = COMP_TYPES[c.type]?.sign ?? 0;
+          return sign >= 0
+            ? { ...c, debit: c.amount, credit: 0 }
+            : { ...c, debit: 0, credit: c.amount };
+        }),
+      ];
+      const ccHtml = buildCCHtml(franchise.name, franchise.razonSocial ?? null, ccLines, displayCurrency);
+
+      // Facturas del mes con número emitido
+      const factsDelMes = compsWithSaldo.filter(c => c.invoice && c.type?.startsWith("FACTURA"));
+      const factAdjs = factsDelMes.map(c => {
+        const factHtml = buildFacturaHtmlForMail(franchise, franchisor, c);
+        const label    = (c.invoice ?? c.id).replace(/\//g, "-");
+        return { data: htmlToBase64(factHtml), mimeType: "text/html", name: `${label}_${frSlug}.html` };
+      });
+
+      await sendMailFr({
+        to,
+        subject:  `Estado de Cuenta ${franchise.name} — ${mesLabel}`,
+        htmlBody: `<p>Estimados,</p><p>Adjunto encontrán el estado de cuenta y las facturas emitidas correspondientes al mes de <strong>${mesLabel}</strong>.</p><p>Ante cualquier consulta, no duden en comunicarse.</p><p>Saludos,<br/>BIGG</p>`,
+        attachments: [
+          { data: htmlToBase64(ccHtml), mimeType: "text/html", name: `CC_${mesLabel.replace(/ /g,"_")}_${frSlug}.html` },
+          ...factAdjs,
+        ],
+      });
+      setMailStatus("ok");
+    } catch (err) { setMailError(err.message ?? "Error"); setMailStatus("error"); }
+  }, [franchise, franchisor, localMonth, localYear, sp, sa, compsWithSaldo, aperturaDate, displayCurrency]);
 
   return (
     <>
@@ -223,7 +245,19 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
 
           {/* ── Saldo Final (abajo) ── */}
           <div style={{ padding: "14px 24px", borderTop: "2px solid var(--border2)", background: "rgba(255,255,255,.02)", flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <button className="ghost" title={`Enviar CC a ${franchise.emailFactura ?? franchise.emailComercial ?? "—"}`} onClick={handleEmailCC} style={{ fontSize: 16, opacity: .65, padding: "4px 8px" }}>✉</button>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button
+                className="ghost"
+                title={`Enviar estado de cuenta + facturas de ${MONTH_NAMES[localMonth]} ${localYear} a ${franchise.emailFactura ?? franchise.emailComercial ?? "—"}`}
+                onClick={handleEmailCC}
+                disabled={mailStatus === "sending"}
+                style={{ fontSize: 16, opacity: (!franchise.emailFactura && !franchise.emailComercial) ? .3 : .8, padding: "4px 8px" }}
+              >
+                {mailStatus === "sending" ? "…" : "✉"}
+              </button>
+              {mailStatus === "ok"    && <span style={{ fontSize: 10, color: "var(--green)" }}>✓ Enviado</span>}
+              {mailStatus === "error" && <span style={{ fontSize: 10, color: "var(--red)" }} title={mailError}>✕ {mailError}</span>}
+            </div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
               <span style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 }}>
                 {sa < -0.01 ? "Saldo a favor al" : "Saldo adeudado al"} {lastComp?.date ?? aperturaDate}
@@ -232,7 +266,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
                 {fmtS(sa, displayCurrency)}
               </span>
             </div>
-          </div>
+          </div>  {/* ── /footer ── */}
 
         </div>
       </div>

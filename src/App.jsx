@@ -160,10 +160,10 @@ export default function App() {
     downloadCSV(rows, `BIGG_${MONTHS[month]}_${year}.csv`);
   }, [tab, detailFilteredRows, filteredFr, year, month, comps, saldoInicial]);
 
-  // Context value — stable object ref changes only when comps/saldoInicial/franchises change
+  // Context value — stable object ref changes only when relevant state changes
   const storeValue = useMemo(
-    () => ({ comps, saldoInicial, franchises, franchiseMap, editComp, deleteComp: delComp, activeCompany }),
-    [comps, saldoInicial, franchises, franchiseMap, editComp, delComp, activeCompany]
+    () => ({ comps, saldoInicial, franchises, franchiseMap, editComp, deleteComp: delComp, activeCompany, franchisor }),
+    [comps, saldoInicial, franchises, franchiseMap, editComp, delComp, activeCompany, franchisor]
   );
 
   const modalFr = modalFrId != null ? franchiseMap.get(modalFrId) : null;

@@ -14,13 +14,22 @@
 // Estructura de respuesta de get_sales (MCP):
 //   { sales: { results: [{ location_id, date, total_sales, type }] }, avg_ticket: {...}, same_moment: {...} }
 
-const MCP_URL = "https://bigg-eye-mcp-server.mmiauro.workers.dev/mcp";
+const MCP_URL   = "https://bigg-eye-mcp-server.mmiauro.workers.dev/mcp";
+const MCP_TOKEN = process.env.BIGG_EYE_TOKEN; // configurar en Vercel + .env.local
 
 /**
  * Llama a una herramienta del servidor MCP vía Streamable HTTP (JSON-RPC 2.0).
  * Soporta tanto respuestas application/json como text/event-stream (SSE).
  */
 async function callMcpTool(toolName, args) {
+  if (!MCP_TOKEN) throw new Error("BIGG_EYE_TOKEN no configurado en variables de entorno");
+
+  const authHeaders = {
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+    Authorization: `Bearer ${MCP_TOKEN}`,
+  };
+
   // Paso 1: Initialize
   const initPayload = JSON.stringify({
     jsonrpc: "2.0", id: 1, method: "initialize",
@@ -33,7 +42,7 @@ async function callMcpTool(toolName, args) {
 
   const initRes = await fetch(MCP_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+    headers: authHeaders,
     body: initPayload,
   });
 
@@ -48,10 +57,7 @@ async function callMcpTool(toolName, args) {
     params: { name: toolName, arguments: args },
   });
 
-  const callHeaders = {
-    "Content-Type": "application/json",
-    Accept: "application/json, text/event-stream",
-  };
+  const callHeaders = { ...authHeaders };
   if (sessionId) callHeaders["mcp-session-id"] = sessionId;
 
   const callRes  = await fetch(MCP_URL, { method: "POST", headers: callHeaders, body: callPayload });

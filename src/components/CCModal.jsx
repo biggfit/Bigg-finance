@@ -4,6 +4,8 @@ import { buildCuentaCorriente, COMP_TYPES, fmt, fmtS, downloadCSV } from "../lib
 import { COMPANIES } from "../data/franchisor";
 import { dmyToIso, isoToDmy } from "../data/franchisor";
 import { TypePill } from "./atoms";
+import { buildCCHtml, htmlToBase64 } from "../lib/pdf";
+import { sendMailFr } from "../lib/sheetsApi";
 
 // ─── CC MODAL — Historial completo tipo base de datos ────────────────────────
 export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
@@ -11,9 +13,11 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
   const displayCurrency = COMPANIES[activeCompany]?.currency ?? franchise.currency;
   const { lines } = buildCuentaCorriente(franchise.id, comps, saldoInicial, null, null, activeCompany);
   const MOV_TYPES = new Set(["PAGO", "PAGO_PAUTA", "PAGO_ENVIADO"]);
-  const [confirmId, setConfirmId] = useState(null);
-  const [editId,    setEditId]    = useState(null);
-  const [editBuf,   setEditBuf]   = useState({});
+  const [confirmId,  setConfirmId]  = useState(null);
+  const [editId,     setEditId]     = useState(null);
+  const [editBuf,    setEditBuf]    = useState({});
+  const [mailStatus, setMailStatus] = useState(null); // null | "sending" | "ok" | "error"
+  const [mailError,  setMailError]  = useState("");
 
   const openEdit = (l) => {
     setEditId(l.id);
@@ -24,6 +28,26 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
     if (onEditComp && editId) onEditComp(franchise.id, editId, { date: editBuf.date, nota: editBuf.nota, ref: editBuf.nota, amount: parseFloat(String(editBuf.amount).replace(",", ".")) || 0 });
     setEditId(null);
   };
+
+  // ── Enviar CC completa (sin facturas individuales) ──────────────────────────
+  const handleSendMail = useCallback(async () => {
+    const to = franchise.emailFactura || franchise.emailComercial || "";
+    if (!to) { setMailError("Sin email configurado"); setMailStatus("error"); return; }
+    setMailStatus("sending");
+    setMailError("");
+    try {
+      const ccHtml = buildCCHtml(franchise.name, franchise.razonSocial ?? null, lines, displayCurrency);
+      const today  = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "long", year: "numeric" });
+      await sendMailFr({
+        to,
+        subject:  `Cuenta Corriente ${franchise.name} — ${today}`,
+        htmlBody: `<p>Estimados,</p><p>Adjunto encontrán la cuenta corriente actualizada al día de hoy.</p><p>Ante cualquier consulta, no duden en comunicarse.</p><p>Saludos,<br/>BIGG</p>`,
+        attachments: [{ data: htmlToBase64(ccHtml), mimeType: "text/html", name: `CC_${franchise.name.replace(/ /g,"_")}.html` }],
+      });
+      setMailStatus("ok");
+    } catch (err) { setMailError(err.message ?? "Error"); setMailStatus("error"); }
+  }, [franchise, lines, displayCurrency]);
+
 
   const handleExportCSV = useCallback(() => {
     const rows = [["Fecha", "N° Comprobante", "Tipo", "Descripción", "Debe", "Haber", "Saldo"]];
@@ -58,8 +82,19 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
               Historial completo · {activeCompany} · {displayCurrency}
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {mailStatus === "ok"    && <span style={{ fontSize: 11, color: "var(--green)" }}>✓ Enviado</span>}
+            {mailStatus === "error" && <span style={{ fontSize: 11, color: "var(--red)", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={mailError}>✕ {mailError}</span>}
             <button className="ghost" onClick={handleExportCSV}>↓ CSV</button>
+            <button
+              className="ghost"
+              onClick={handleSendMail}
+              disabled={mailStatus === "sending"}
+              title={franchise.emailFactura || franchise.emailComercial || "Sin email configurado"}
+              style={{ opacity: (!franchise.emailFactura && !franchise.emailComercial) ? .4 : 1 }}
+            >
+              {mailStatus === "sending" ? "Enviando…" : "✉ Enviar CC"}
+            </button>
             <button className="ghost" onClick={onClose}>Cerrar</button>
           </div>
         </div>
