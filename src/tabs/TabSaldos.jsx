@@ -121,7 +121,7 @@ export function SaldosTable({ title, data, accentColor, bgColor, borderColor, on
           attachments: [],
         });
         const hoy = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
-        addRecordatorioEntry(d.fr.id, { fecha: hoy, ccMes: month, ccAnio: year, to });
+        addRecordatorioEntry(d.fr.id, { fecha: hoy, ccMes: month + 1, ccAnio: year, to });
         ok.push(d.fr.name);
       } catch (e) { err.push(`${d.fr.name} (${e.message})`); }
     }
@@ -197,7 +197,7 @@ export function SaldosTable({ title, data, accentColor, bgColor, borderColor, on
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, padding: "6px 10px", background: `${accentColor}12`, border: `1px solid ${accentColor}30`, borderRadius: 7 }}>
           <span style={{ fontSize: 11, color: accentColor, fontWeight: 700 }}>{selected.size} seleccionada{selected.size !== 1 ? "s" : ""}</span>
           <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-            {showMail && <button className="ghost" style={{ fontSize: 10 }} onClick={() => handleMail(selectedRows)}>✉ Recordatorio masivo</button>}
+            {showMail && <button className="ghost" style={{ fontSize: 10 }} onClick={() => handleMail(selectedRows)}>✉ Enviar masivo</button>}
             <button className="ghost" style={{ fontSize: 10 }} onClick={() => handleCSV(selectedRows)}>↓ CSV selección{showCbu ? " + CBU" : ""}</button>
           </div>
         </div>
@@ -246,12 +246,12 @@ export function SaldosTable({ title, data, accentColor, bgColor, borderColor, on
                       {Math.round(Math.abs(getAmt(d))).toLocaleString("es-AR")}
                     </span>
                   </td>
-                  <td style={{ padding: "7px 8px", textAlign: "center" }}>
+                  <td style={{ padding: "7px 8px", textAlign: "center", whiteSpace: "nowrap" }}>
                     {showMail && (
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 4, minWidth: 120 }}>
                         <button onClick={() => handleMail([d])} title="Enviar recordatorio"
-                          style={{ background: "rgba(255,255,255,.04)", border: "1px solid var(--border2)", borderRadius: 999, padding: "3px 10px", fontSize: 10, color: "var(--muted)", cursor: "pointer", fontFamily: "var(--font)", fontWeight: 600, whiteSpace: "nowrap" }}>
-                          ✉ Recordatorio
+                          style={{ background: "rgba(255,255,255,.04)", border: "1px solid var(--border2)", borderRadius: 999, padding: "3px 10px", fontSize: 10, color: "var(--muted)", cursor: "pointer", fontFamily: "var(--font)", fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}>
+                          ✉ Enviar
                         </button>
                         <RecordatorioDots dots={dotsForFr(d.fr.id)} />
                       </span>
@@ -329,7 +329,7 @@ const TabSaldos = memo(function TabSaldos({ franchises, month, year, onOpenFr, f
         borderColor="rgba(126,217,160,.2)"
         onOpenFr={onOpenFr}
         month={month} year={year}
-        showMail={false}
+        showMail={true}
         showCbu={true}
         amountFn={d => Math.max(0, Math.abs(d.sa) - d.pautaPendiente)}
         displayCurrency={displayCurrency}
@@ -342,6 +342,7 @@ const TabSaldos = memo(function TabSaldos({ franchises, month, year, onOpenFr, f
         borderColor="rgba(34,211,238,.2)"
         onOpenFr={onOpenFr}
         month={month} year={year}
+        showMail={false}
         amountFn={d => d.pautaPendiente}
         displayCurrency={displayCurrency}
       />

@@ -104,7 +104,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
         attachments: factAdjs,
       });
       const hoy = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
-      addRecordatorioEntry(franchise.id, { fecha: hoy, ccMes: localMonth, ccAnio: localYear, to });
+      addRecordatorioEntry(franchise.id, { fecha: hoy, ccMes: localMonth + 1, ccAnio: localYear, to });
       setMailStatus("ok");
     } catch (err) { setMailError(err.message ?? "Error"); setMailStatus("error"); }
   }, [franchise, franchisor, localMonth, localYear, sp, sa, compsWithSaldo, aperturaDate, displayCurrency, addRecordatorioEntry]);

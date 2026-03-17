@@ -244,7 +244,7 @@ export default function App() {
       )}
 
       {/* HEADER */}
-      <div style={{ background: "var(--bg2)", borderBottom: "2px solid var(--accent)", padding: "0 20px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 52, position: "sticky", top: 0, zIndex: 100 }}>
+      <div style={{ background: "var(--bg2)", borderBottom: "2px solid var(--accent)", padding: "0 20px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 20, height: 52, position: "sticky", top: 0, zIndex: 100 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <img src={LOGO_SRC} alt="BIGG" style={{ height: 34, width: "auto", maxWidth: 90, objectFit: "contain", flexShrink: 0, filter: "invert(1) sepia(1) saturate(10) hue-rotate(52deg)" }} />
           <div style={{ width: 1, height: 22, background: "var(--border2)" }} />
@@ -270,7 +270,7 @@ export default function App() {
             >+</button>
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
           {/* Selector de empresa franquiciante */}
           <select value={activeCompany} onChange={e => { setActiveCompany(e.target.value); setFilterCur(COMPANIES[e.target.value]?.currency ?? "ALL"); }}
             style={{ padding: "4px 9px", fontSize: 12, background: "var(--bg)", border: "1px solid var(--border2)", color: "var(--text)", borderRadius: 6, fontFamily: "var(--font)", cursor: "pointer", fontWeight: 700 }}>
