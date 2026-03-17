@@ -153,7 +153,7 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
                     <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>{cobrarReal.length} sede{cobrarReal.length !== 1 ? "s" : ""}</div>
                   </div>
                 ); })()}
-                <div onClick={() => onNavigate("detalle", "facturar", { cuenta: ["PAGO_PAUTA", "PAUTA"] })} style={{ padding: "10px 12px", borderRadius: 7, background: "rgba(34,211,238,.05)", border: "1px solid rgba(34,211,238,.15)", textAlign: "center", cursor: "pointer", transition: "background .15s", gridColumn: "auto", containerType: "inline-size", minWidth: 0, overflow: "hidden" }}
+                <div onClick={() => onNavigate("detalle", "facturar", { cuenta: ["PAGO_PAUTA", "PAUTA"] })} style={{ padding: "10px 12px", borderRadius: 7, background: "rgba(34,211,238,.05)", border: "1px solid rgba(34,211,238,.15)", textAlign: "center", cursor: "pointer", transition: "background .15s", gridColumn: "1 / -1", containerType: "inline-size", minWidth: 0, overflow: "hidden" }}
                     onMouseEnter={e => e.currentTarget.style.background="rgba(34,211,238,.12)"}
                     onMouseLeave={e => e.currentTarget.style.background="rgba(34,211,238,.05)"}>
                     <div style={{ fontSize: 10, fontWeight: 800, color: "var(--cyan)", letterSpacing: ".08em", marginBottom: 4 }}>A FACTURAR ↗</div>
