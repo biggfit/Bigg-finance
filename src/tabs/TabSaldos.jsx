@@ -1,7 +1,9 @@
 import { memo, useMemo, useCallback, useState } from "react";
 import { useStore } from "../lib/context";
-import { computeSaldo, computeSaldoPrevMes, computePautaPendiente, compEmpresa, compCurrency, makeType, MONTHS, fmt, downloadCSV, COMPANIES } from "../lib/helpers";
+import { computeSaldo, computeSaldoPrevMes, computePautaPendiente, compEmpresa, compCurrency, makeType, MONTHS, fmt, downloadCSV, COMPANIES, COMP_TYPES, cmpDate } from "../lib/helpers";
 import { inPeriod } from "../data/franchisor";
+import { buildCCHtml } from "../lib/pdf";
+import { sendMailFr } from "../lib/sheetsApi";
 
 // ─── HOOK COMPARTIDO: agrega datos por franquicia ─────────────────────────────
 export function useFrData(franchises, month, year, filterCurrency = null) {
@@ -44,16 +46,62 @@ export function SaldosTable({ title, data, accentColor, bgColor, borderColor, on
   const total  = data.reduce((a, d) => a + getAmt(d), 0);
   const { activeCompany } = useStore();
   const curLabel = displayCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS";
-  const [selected, setSelected] = useState(new Set());
+  const [selected,     setSelected]     = useState(new Set());
+  const [confirmRows,  setConfirmRows]  = useState(null);   // rows pendientes de confirmación
+  const [sendingMail,  setSendingMail]  = useState(false);
+  const [mailResult,   setMailResult]   = useState(null);   // { ok: [], err: [] }
+
+  const { comps, saldoInicial } = useStore();
 
   const toggleOne = (id) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleAll = () => setSelected(prev => prev.size === data.length ? new Set() : new Set(data.map(d => d.fr.id)));
   const allChecked  = selected.size === data.length && data.length > 0;
   const someChecked = selected.size > 0 && !allChecked;
 
-  const handleMail = (rows) => {
-    const names = rows.map(d => d.fr.name).join(", ");
-    alert(`Recordatorio enviado a:\n${names}\n\n(Integración de email pendiente)`);
+  const handleMail = (rows) => setConfirmRows(rows);
+
+  const doSendMail = async () => {
+    if (!confirmRows) return;
+    setSendingMail(true);
+    const ok = [], err = [];
+    const DAYS = [31,28,31,30,31,30,31,31,30,31,30,31];
+    for (const d of confirmRows) {
+      const to = d.fr.emailFactura ?? d.fr.emailComercial ?? "";
+      if (!to) { err.push(`${d.fr.name} (sin email)`); continue; }
+      try {
+        // Construir líneas CC del período
+        const frComps = (comps[String(d.fr.id)] ?? [])
+          .filter(c => inPeriod(c, month, year) && compEmpresa(c) === activeCompany)
+          .sort((a, b) => cmpDate(a.date, b.date));
+        const prevM = month === 0 ? 11 : month - 1;
+        const prevY = month === 0 ? year - 1 : year;
+        const aperturaDate = `${String(DAYS[prevM]).padStart(2,"0")}/${String(prevM+1).padStart(2,"0")}/${prevY}`;
+        let running = d.sp;
+        const compsWithSaldo = frComps.map(c => {
+          const sign = COMP_TYPES[c.type]?.sign ?? 0;
+          running += sign * c.amount;
+          return { ...c, saldo: running };
+        });
+        const ccLines = [
+          { type: "apertura", debit: 0, credit: 0, saldo: d.sp, date: aperturaDate },
+          ...compsWithSaldo.map(c => {
+            const sign = COMP_TYPES[c.type]?.sign ?? 0;
+            return sign >= 0 ? { ...c, debit: c.amount, credit: 0 } : { ...c, debit: 0, credit: c.amount };
+          }),
+        ];
+        const ccHtml = buildCCHtml(d.fr.name, d.fr.razonSocial ?? null, ccLines, curLabel, month, year);
+        await sendMailFr({
+          to,
+          subject: `Estado de Cuenta ${d.fr.name} — ${MONTHS[month]} ${year}`,
+          htmlBody: ccHtml,
+          attachments: [],
+        });
+        ok.push(d.fr.name);
+      } catch (e) { err.push(`${d.fr.name} (${e.message})`); }
+    }
+    setSendingMail(false);
+    setConfirmRows(null);
+    setMailResult({ ok, err });
   };
 
   const handleCSV = (rows) => {
@@ -72,6 +120,42 @@ export function SaldosTable({ title, data, accentColor, bgColor, borderColor, on
 
   return (
     <div style={{ marginBottom: 28 }}>
+
+      {/* Modal confirmación envío */}
+      {confirmRows && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div className="fade" style={{ background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: 14, padding: 28, maxWidth: 460, width: "100%" }}>
+            <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 8 }}>Confirmar envío</div>
+            <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 14 }}>
+              Estás por enviar el estado de cuenta de <strong style={{ color: "var(--text)" }}>{MONTHS[month]} {year}</strong> a:
+            </div>
+            <div style={{ marginBottom: 20, maxHeight: 180, overflowY: "auto" }}>
+              {confirmRows.map(d => (
+                <div key={d.fr.id} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid var(--border)", fontSize: 12 }}>
+                  <span style={{ fontWeight: 700 }}>{d.fr.name}</span>
+                  <span style={{ color: "var(--muted)" }}>{d.fr.emailFactura ?? d.fr.emailComercial ?? <span style={{ color: "var(--red)" }}>⚠ sin email</span>}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button className="ghost" onClick={() => setConfirmRows(null)} disabled={sendingMail}>Cancelar</button>
+              <button className="btn" onClick={doSendMail} disabled={sendingMail}>
+                {sendingMail ? "Enviando…" : `✉ Confirmar y enviar (${confirmRows.length})`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Resultado envío */}
+      {mailResult && (
+        <div style={{ marginBottom: 10, padding: "10px 14px", background: "rgba(173,255,25,.06)", border: "1px solid rgba(173,255,25,.2)", borderRadius: 8, fontSize: 12 }}>
+          {mailResult.ok.length > 0 && <div style={{ color: "var(--green)" }}>✓ Enviado a: {mailResult.ok.join(", ")}</div>}
+          {mailResult.err.length > 0 && <div style={{ color: "var(--red)", marginTop: 4 }}>✕ Error: {mailResult.err.join(", ")}</div>}
+          <button className="ghost" style={{ fontSize: 10, marginTop: 6 }} onClick={() => setMailResult(null)}>Cerrar</button>
+        </div>
+      )}
+
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
         <div style={{ height: 3, width: 24, borderRadius: 2, background: accentColor }} />

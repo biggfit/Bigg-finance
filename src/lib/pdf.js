@@ -96,12 +96,15 @@ export function buildCCHtml(frName, frRazonSocial, lines, currency, ccMonth, ccY
 
   const saldoFinal = lines.length ? lines[lines.length - 1].saldo : 0;
   const scFinal    = saldoFinal > 0.01 ? "#dc2626" : saldoFinal < -0.01 ? "#16a34a" : "#6b7280";
-  const today      = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
 
-  // Fecha de vencimiento: basada en el mes del período informado
+  // Fecha de cierre: último día del mes informado (ej: 28/02/2026), o hoy si no se pasó mes
   const pad2     = n => String(n).padStart(2, "0");
   const baseM    = ccMonth  ?? new Date().getMonth();   // 0-based
   const baseY    = ccYear   ?? new Date().getFullYear();
+  const lastDay  = new Date(baseY, baseM + 1, 0).getDate();
+  const today    = ccMonth != null
+    ? `${pad2(lastDay)}/${pad2(baseM + 1)}/${baseY}`
+    : new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
   const nextM    = baseM === 11 ? 0  : baseM + 1;
   const nextY    = baseM === 11 ? baseY + 1 : baseY;
   const dueDay   = saldoFinal > 0.01 ? 10 : 20;        // adeudado → día 10 / a favor → día 20
