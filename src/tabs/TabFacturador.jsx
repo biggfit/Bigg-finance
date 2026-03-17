@@ -985,7 +985,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
                   <td className="mono" style={{ textAlign: "right", fontSize: 12, fontWeight: 700 }}>
                     {hasV
                       ? <span style={{ color: fee <= 0 ? "var(--muted)" : "var(--green)" }}>
-                          {isAR ? `$ ${fee.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "U$D " + fee.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          {isAR ? `$ ${fee.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : `${cc.sym} ${fee.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                           {fee <= 0 && <div style={{ fontSize: 9, color: "var(--muted)", fontWeight: 400 }}>100% dto.</div>}
                         </span>
                       : <span style={{ color: "var(--muted)" }}>—</span>}
