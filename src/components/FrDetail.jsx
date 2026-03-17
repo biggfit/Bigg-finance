@@ -7,10 +7,11 @@ import AddCompModal from "./AddCompModal";
 import CCModal from "./CCModal";
 import { buildCCHtml, htmlToBase64, buildFacturaHtmlForMail } from "../lib/pdf";
 import { sendMailFr } from "../lib/sheetsApi";
+import { RecordatorioDots } from "../tabs/TabSaldos";
 
 // ─── FRANCHISE DETAIL MODAL — Estado de cuenta mensual / recordatorio ─────────
 export default function FrDetail({ franchise, month, year, onClose, onAddComp, onDelComp, onEditComp }) {
-  const { comps, saldoInicial, activeCompany, franchisor } = useStore();
+  const { comps, saldoInicial, activeCompany, franchisor, recordatorios, addRecordatorioEntry } = useStore();
   const [adding,      setAdding]      = useState(false);
   const [showCC,      setShowCC]      = useState(false);
   const [editingId,   setEditingId]   = useState(null);
@@ -102,9 +103,11 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
         htmlBody: ccHtml,
         attachments: factAdjs,
       });
+      const hoy = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
+      addRecordatorioEntry(franchise.id, { fecha: hoy, ccMes: localMonth, ccAnio: localYear, to });
       setMailStatus("ok");
     } catch (err) { setMailError(err.message ?? "Error"); setMailStatus("error"); }
-  }, [franchise, franchisor, localMonth, localYear, sp, sa, compsWithSaldo, aperturaDate, displayCurrency]);
+  }, [franchise, franchisor, localMonth, localYear, sp, sa, compsWithSaldo, aperturaDate, displayCurrency, addRecordatorioEntry]);
 
   return (
     <>
@@ -254,6 +257,13 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
               </button>
               {mailStatus === "ok"    && <span style={{ fontSize: 10, color: "var(--green)" }}>✓ Enviado</span>}
               {mailStatus === "error" && <span style={{ fontSize: 10, color: "var(--red)" }} title={mailError}>✕ {mailError}</span>}
+              <RecordatorioDots dots={(() => {
+                const nowM = new Date().getMonth(), nowY = new Date().getFullYear();
+                return (recordatorios?.[String(franchise.id)] ?? []).filter(r => {
+                  const [, mm, yy] = (r.fecha ?? "").split("/");
+                  return Number(mm) - 1 === nowM && Number(yy) === nowY;
+                });
+              })()} />
             </div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
               <span style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 }}>

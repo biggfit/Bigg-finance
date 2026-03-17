@@ -179,6 +179,25 @@ export async function sheetsSaveFranchisor(side, data) {
   return post({ action: "saveFranchisor", side, data });
 }
 
+// ─── Recordatorios ───────────────────────────────────────────────────────────
+
+/**
+ * Carga todos los recordatorios enviados.
+ * @returns {{ [frId: string]: { fecha: string, ccMes: number, ccAnio: number, to: string }[] }}
+ */
+export async function fetchRecordatorios() {
+  try {
+    return await get("recordatorios");
+  } catch { return {}; }
+}
+
+/**
+ * Guarda un recordatorio enviado en Sheets.
+ */
+export async function saveRecordatorio({ frId, fecha, ccMes, ccAnio, to }) {
+  return post({ action: "addRecordatorio", frId, fecha, ccMes, ccAnio, to });
+}
+
 // ─── Mail ─────────────────────────────────────────────────────────────────────
 
 /**

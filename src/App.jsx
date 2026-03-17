@@ -3,7 +3,8 @@ import { DEFAULT_FRANCHISOR, COMPANIES, COMPANY_NAMES } from "./data/franchisor"
 import { StoreCtx } from "./lib/context";
 import { fetchComps, fetchSaldos, appendComp, updateComp, removeComp,
          fetchFranchises, fetchFranchisor,
-         sheetsSaveFr, sheetsAddFr, sheetsDeleteFr, sheetsSaveFranchisor } from "./lib/sheetsApi";
+         sheetsSaveFr, sheetsAddFr, sheetsDeleteFr, sheetsSaveFranchisor,
+         fetchRecordatorios, saveRecordatorio } from "./lib/sheetsApi";
 import { CURRENCIES, MONTHS, AVAILABLE_YEARS, computeSaldo, computeSaldoPrevMes, downloadCSV } from "./lib/helpers";
 import "./lib/styles";
 import FrDetail from "./components/FrDetail";
@@ -27,8 +28,9 @@ export default function App() {
   const [month,      setMonth]     = useState(() => new Date().getMonth());
   const [year,       setYear]      = useState(() => new Date().getFullYear());
   const [franchises, setFranchises]= useState([]);
-  const [comps,        setComps]       = useState({});
-  const [saldoInicial, setSaldoInicial] = useState({});
+  const [comps,          setComps]          = useState({});
+  const [saldoInicial,   setSaldoInicial]   = useState({});
+  const [recordatorios,  setRecordatorios]  = useState({});
   const [sheetsReady,  setSheetsReady] = useState(false);
   const [loadError,    setLoadError]   = useState(null);
   const [modalFrId,  setModalFrId] = useState(null);   // null = closed, number = franchise id
@@ -161,9 +163,15 @@ export default function App() {
   }, [tab, detailFilteredRows, filteredFr, year, month, comps, saldoInicial]);
 
   // Context value — stable object ref changes only when relevant state changes
+  const addRecordatorioEntry = useCallback((frId, entry) => {
+    const key = String(frId);
+    setRecordatorios(prev => ({ ...prev, [key]: [...(prev[key] ?? []), entry] }));
+    saveRecordatorio({ frId, ...entry }).catch(err => console.error('Sheets recordatorio:', err));
+  }, []);
+
   const storeValue = useMemo(
-    () => ({ comps, saldoInicial, franchises, franchiseMap, editComp, deleteComp: delComp, activeCompany, franchisor }),
-    [comps, saldoInicial, franchises, franchiseMap, editComp, delComp, activeCompany, franchisor]
+    () => ({ comps, saldoInicial, franchises, franchiseMap, editComp, deleteComp: delComp, activeCompany, franchisor, recordatorios, addRecordatorioEntry }),
+    [comps, saldoInicial, franchises, franchiseMap, editComp, delComp, activeCompany, franchisor, recordatorios, addRecordatorioEntry]
   );
 
   const modalFr = modalFrId != null ? franchiseMap.get(modalFrId) : null;
@@ -172,8 +180,8 @@ export default function App() {
 
   // Cargar datos de Google Sheets al montar
   useEffect(() => {
-    Promise.allSettled([fetchComps(), fetchSaldos(), fetchFranchises(), fetchFranchisor()])
-      .then(([compsRes, saldosRes, frRes, franchisorRes]) => {
+    Promise.allSettled([fetchComps(), fetchSaldos(), fetchFranchises(), fetchFranchisor(), fetchRecordatorios()])
+      .then(([compsRes, saldosRes, frRes, franchisorRes, recRes]) => {
         if (compsRes.status === 'fulfilled') setComps(compsRes.value);
         else { console.error('Sheets comps:', compsRes.reason); setLoadError(compsRes.reason.message); }
 
@@ -185,6 +193,8 @@ export default function App() {
 
         if (franchisorRes.status === 'fulfilled') setFranchisor(franchisorRes.value);
         else { console.warn('Sheets franchisor (fallback estático):', franchisorRes.reason); setFranchisor(DEFAULT_FRANCHISOR); }
+
+        if (recRes.status === 'fulfilled') setRecordatorios(recRes.value ?? {});
 
         setSheetsReady(true);
       });

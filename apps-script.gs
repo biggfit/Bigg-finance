@@ -109,6 +109,23 @@ function doGet(e) {
     return json(result);
   }
 
+  // ── Recordatorios ─────────────────────────────────────────────────────────
+  if (resource === "recordatorios") {
+    var sh = ss.getSheetByName("recordatorios");
+    if (!sh) return json({});
+    var rows = sh.getDataRange().getValues();
+    var headers = rows[0];
+    var result = {};
+    for (var i = 1; i < rows.length; i++) {
+      var obj = {};
+      headers.forEach(function(h, j) { obj[h] = rows[i][j]; });
+      var key = String(obj.frId);
+      if (!result[key]) result[key] = [];
+      result[key].push({ fecha: obj.fecha, ccMes: obj.ccMes, ccAnio: obj.ccAnio, to: obj.to });
+    }
+    return json(result);
+  }
+
   return err("recurso desconocido: " + resource);
 }
 
@@ -199,6 +216,17 @@ function doPost(e) {
       }
     }
     return err("franquiciante no encontrado: " + body.side);
+  }
+
+  // ── Recordatorio ──────────────────────────────────────────────────────────
+  if (body.action === "addRecordatorio") {
+    var sh = ss.getSheetByName("recordatorios");
+    if (!sh) {
+      sh = ss.insertSheet("recordatorios");
+      sh.appendRow(["frId", "fecha", "ccMes", "ccAnio", "to"]);
+    }
+    sh.appendRow([body.frId, body.fecha, body.ccMes, body.ccAnio, body.to || ""]);
+    return json({ ok: true });
   }
 
   // ── Send Mail ─────────────────────────────────────────────────────────────

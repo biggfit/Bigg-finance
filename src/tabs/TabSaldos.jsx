@@ -1,5 +1,21 @@
 import { memo, useMemo, useCallback, useState } from "react";
 import { useStore } from "../lib/context";
+
+// ─── Dots: puntos por recordatorio enviado este mes ──────────────────────────
+export function RecordatorioDots({ dots }) {
+  if (!dots || dots.length === 0) return null;
+  const visible = dots.slice(0, 3);
+  const extra   = dots.length - 3;
+  return (
+    <span style={{ display: "inline-flex", gap: 4, alignItems: "center", marginLeft: 6 }}>
+      {visible.map((d, i) => (
+        <span key={i} title={`${d.fecha}${d.to ? ` → ${d.to}` : ""}`}
+          style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", display: "inline-block", cursor: "default", flexShrink: 0 }} />
+      ))}
+      {extra > 0 && <span style={{ fontSize: 9, color: "var(--accent)", fontWeight: 800 }}>+{extra}</span>}
+    </span>
+  );
+}
 import { computeSaldo, computeSaldoPrevMes, computePautaPendiente, compEmpresa, compCurrency, makeType, MONTHS, fmt, downloadCSV, COMPANIES, COMP_TYPES, cmpDate } from "../lib/helpers";
 import { inPeriod } from "../data/franchisor";
 import { buildCCHtml } from "../lib/pdf";
@@ -47,11 +63,19 @@ export function SaldosTable({ title, data, accentColor, bgColor, borderColor, on
   const { activeCompany } = useStore();
   const curLabel = displayCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS";
   const [selected,     setSelected]     = useState(new Set());
-  const [confirmRows,  setConfirmRows]  = useState(null);   // rows pendientes de confirmación
+  const [confirmRows,  setConfirmRows]  = useState(null);
   const [sendingMail,  setSendingMail]  = useState(false);
-  const [mailResult,   setMailResult]   = useState(null);   // { ok: [], err: [] }
+  const [mailResult,   setMailResult]   = useState(null);
 
-  const { comps, saldoInicial } = useStore();
+  const { comps, saldoInicial, recordatorios, addRecordatorioEntry } = useStore();
+
+  // Dots del mes calendario actual para una franquicia
+  const nowM = new Date().getMonth(), nowY = new Date().getFullYear();
+  const dotsForFr = (frId) => (recordatorios?.[String(frId)] ?? [])
+    .filter(r => {
+      const [dd, mm, yy] = (r.fecha ?? "").split("/");
+      return Number(mm) - 1 === nowM && Number(yy) === nowY;
+    });
 
   const toggleOne = (id) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleAll = () => setSelected(prev => prev.size === data.length ? new Set() : new Set(data.map(d => d.fr.id)));
@@ -96,6 +120,8 @@ export function SaldosTable({ title, data, accentColor, bgColor, borderColor, on
           htmlBody: ccHtml,
           attachments: [],
         });
+        const hoy = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
+        addRecordatorioEntry(d.fr.id, { fecha: hoy, ccMes: month, ccAnio: year, to });
         ok.push(d.fr.name);
       } catch (e) { err.push(`${d.fr.name} (${e.message})`); }
     }
@@ -222,10 +248,13 @@ export function SaldosTable({ title, data, accentColor, bgColor, borderColor, on
                   </td>
                   <td style={{ padding: "7px 8px", textAlign: "center" }}>
                     {showMail && (
-                      <button onClick={() => handleMail([d])} title="Enviar recordatorio"
-                        style={{ background: "rgba(255,255,255,.04)", border: "1px solid var(--border2)", borderRadius: 999, padding: "3px 10px", fontSize: 10, color: "var(--muted)", cursor: "pointer", fontFamily: "var(--font)", fontWeight: 600, whiteSpace: "nowrap" }}>
-                        ✉ Recordatorio
-                      </button>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                        <button onClick={() => handleMail([d])} title="Enviar recordatorio"
+                          style={{ background: "rgba(255,255,255,.04)", border: "1px solid var(--border2)", borderRadius: 999, padding: "3px 10px", fontSize: 10, color: "var(--muted)", cursor: "pointer", fontFamily: "var(--font)", fontWeight: 600, whiteSpace: "nowrap" }}>
+                          ✉ Recordatorio
+                        </button>
+                        <RecordatorioDots dots={dotsForFr(d.fr.id)} />
+                      </span>
                     )}
                   </td>
                   <td style={{ textAlign: "right", padding: "7px 16px 7px 8px" }}>
