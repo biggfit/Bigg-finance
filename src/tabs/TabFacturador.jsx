@@ -619,8 +619,8 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
       .filter(fr => fr.country && fr.country !== "Argentina")
       .map(fr => fr.country)
       .filter(c => { if (seen.has(c)) return false; seen.add(c); return true; })
-      // Excluir países cuya moneda local ya es la moneda de facturación (no necesitan TC)
-      .filter(c => { const code = getCountryCur(c).code; return code !== "USD" && code !== activeCurrency; });
+      // EUR y USD son monedas de facturación final — no necesitan TC
+      .filter(c => { const code = getCountryCur(c).code; return code !== "USD" && code !== "EUR"; });
   }, [activeFr]);
 
   const tcCargados = countriesWithTc.filter(c => parseFloat(tcMap[c]) > 0).length;
@@ -677,8 +677,8 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
     const feeLocal = v * (r.royaltyFactura / 100);
     if (r.country === "Argentina") return feeLocal;
     const cc = getCountryCur(r.country);
-    // Sin conversión si la moneda local ya es la moneda de facturación (ej: EUR→EUR, USD→USD)
-    if (cc.code === "USD" || cc.code === activeCurrency) return feeLocal;
+    // EUR y USD ya son monedas de facturación final — no se convierten
+    if (cc.code === "USD" || cc.code === "EUR") return feeLocal;
     const tc = parseFloat(tcMap[r.country] ?? "1") || 1;
     return feeLocal / tc;
   };
