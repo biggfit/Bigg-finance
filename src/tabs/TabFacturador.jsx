@@ -689,7 +689,11 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
   };
 
   const ventasN = (r) => parseFloat(String(r.ventas).replace(/\./g, "").replace(",", ".")) || 0;
-  const billableRows = rows.filter(r => ventasN(r) > 0);
+  const billableRows = rows.map((r, i) => ({ ...r, _origIdx: i })).filter(r => ventasN(r) > 0);
+  // Si hay checkboxes marcados, solo los seleccionados con ventas; si no, todos con ventas
+  const toProcess = selected.size > 0
+    ? billableRows.filter(r => selected.has(r._origIdx))
+    : billableRows;
 
   const filteredRows = useMemo(() =>
     rows.map((r, i) => ({ ...r, _origIdx: i })).filter(r =>
@@ -701,10 +705,10 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
 
   const allFilteredSelected = filteredRows.length > 0 && filteredRows.every(r => selected.has(r._origIdx));
 
-  const handleConfirm = async () => {
+  const handleConfirm = async (skipFacturante = false) => {
     setStage("done");
     const log = [];
-    for (const r of billableRows) {
+    for (const r of toProcess) {
       const fr = activeFr.find(f => f.id === r.frId);
       if (!fr) continue;
       const fee = rowFee(r);
@@ -719,7 +723,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
         currency: activeCurrency,
       };
       let facturanteStatus = "omitido";
-      if (isAR && activeCompany === "ÑAKO SRL") {
+      if (!skipFacturante && isAR && activeCompany === "ÑAKO SRL") {
         try {
           const result = await emitirComprobante({
             franchisor: franchisor?.ar ?? franchisor,
@@ -1006,14 +1010,18 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
         </table></div>
       </div>
 
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 14 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 14, alignItems: "center" }}>
         <span style={{ fontSize: 11, color: "var(--muted)", alignSelf: "center" }}>
           {billableRows.length} con ventas
+          {selected.size > 0 && <span style={{ color: "var(--accent)", marginLeft: 6 }}>· {toProcess.length} seleccionado{toProcess.length !== 1 ? "s" : ""}</span>}
           {rows.filter(r => ventasN(r) > 0 && r.royaltyFactura === 0).length > 0 &&
-            " · " + rows.filter(r => ventasN(r) > 0 && r.royaltyFactura === 0).length + " con 100% dto."}
+            <span style={{ marginLeft: 6 }}>· {rows.filter(r => ventasN(r) > 0 && r.royaltyFactura === 0).length} con 100% dto.</span>}
         </span>
-        <button className="btn" disabled={billableRows.length === 0} style={{ opacity: billableRows.length === 0 ? 0.4 : 1 }} onClick={handleConfirm}>
-          ✓ Generar {billableRows.length} comprobante{billableRows.length !== 1 ? "s" : ""}
+        <button className="ghost" disabled={toProcess.length === 0} style={{ opacity: toProcess.length === 0 ? 0.4 : 1, fontSize: 12 }} onClick={() => handleConfirm(true)}>
+          ✓ Sin Facturante ({toProcess.length})
+        </button>
+        <button className="btn" disabled={toProcess.length === 0} style={{ opacity: toProcess.length === 0 ? 0.4 : 1 }} onClick={() => handleConfirm(false)}>
+          ✓ Generar {toProcess.length} comprobante{toProcess.length !== 1 ? "s" : ""}
         </button>
       </div>
     </div>
