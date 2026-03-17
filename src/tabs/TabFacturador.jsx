@@ -1018,7 +1018,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
             <span style={{ marginLeft: 6 }}>· {rows.filter(r => ventasN(r) > 0 && r.royaltyFactura === 0).length} con 100% dto.</span>}
         </span>
         <button className="ghost" disabled={toProcess.length === 0} style={{ opacity: toProcess.length === 0 ? 0.4 : 1, fontSize: 12 }} onClick={() => handleConfirm(true)}>
-          ✓ Sin Facturante ({toProcess.length})
+          ✓ Guardar sin emitir ({toProcess.length})
         </button>
         <button className="btn" disabled={toProcess.length === 0} style={{ opacity: toProcess.length === 0 ? 0.4 : 1 }} onClick={() => handleConfirm(false)}>
           ✓ Generar {toProcess.length} comprobante{toProcess.length !== 1 ? "s" : ""}
