@@ -22,6 +22,7 @@ function handleSendMail(data) {
     });
 
     GmailApp.sendEmail(to, subject, "", {
+      from:        "pagos@bigg.fit",   // debe ser alias configurado en la cuenta del script
       htmlBody:    htmlBody,
       attachments: attachments,
       name:        "BIGG Finance",
