@@ -264,7 +264,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
           setEmitState("idle");
         } catch (err) {
           setEmitState("error");
-          setEmitError(err.message ?? "Error al emitir ante AFIP");
+          setEmitError(err.message ?? "Error al emitir ante ARCA");
           return; // no continúa — usuario decide reintentar o guardar igual
         }
       }
@@ -410,10 +410,10 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
 
         {emitState === "error" && (
           <div style={{ marginBottom: 12, padding: "10px 14px", background: "rgba(255,85,112,.08)", border: "1px solid rgba(255,85,112,.25)", borderRadius: 8, fontSize: 12 }}>
-            <div style={{ color: "var(--red)", fontWeight: 700, marginBottom: 6 }}>⚠ Error AFIP: {emitError}</div>
+            <div style={{ color: "var(--red)", fontWeight: 700, marginBottom: 6 }}>⚠ Error ARCA: {emitError}</div>
             <div style={{ display: "flex", gap: 8 }}>
               <button className="btn" style={{ fontSize: 11, padding: "4px 12px" }} onClick={() => doConfirm(false)}>Reintentar</button>
-              <button className="ghost" style={{ fontSize: 11, padding: "4px 12px" }} onClick={() => doConfirm(true)}>Guardar sin factura AFIP</button>
+              <button className="ghost" style={{ fontSize: 11, padding: "4px 12px" }} onClick={() => doConfirm(true)}>Guardar sin factura ARCA</button>
             </div>
           </div>
         )}
@@ -422,13 +422,11 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
             ? <button className="btn" style={{ flex: 1, height: 48, fontSize: 15 }} disabled={importeNeto <= 0} onClick={handlePreview}>Vista previa →</button>
             : <>
                 <button className="ghost" style={{ flex: 1, height: 48 }} onClick={() => setPreview(null)}>← Editar</button>
-                {usaFacturante && (
-                  <button className="ghost" style={{ flex: 2, height: 48, fontSize: 13 }} disabled={emitState === "emitting"} onClick={() => doConfirm(true)}>
-                    Guardar sin emitir
-                  </button>
-                )}
+                <button className="ghost" style={{ flex: 2, height: 48, fontSize: 13 }} disabled={emitState === "emitting"} onClick={() => doConfirm(true)}>
+                  Guardar sin emitir
+                </button>
                 <button className="btn" style={{ flex: 3, height: 48, fontSize: 15 }} disabled={emitState === "emitting"} onClick={handleConfirm}>
-                  {emitState === "emitting" ? "Emitiendo ante AFIP…" : `✓ Confirmar y generar ${isAR && currency === "ARS" ? "Factura AFIP" : isAR ? "Factura" : "Invoice"}`}
+                  {emitState === "emitting" ? "Emitiendo ante ARCA…" : `✓ Confirmar y generar ${isAR && currency === "ARS" ? "Factura ARCA" : isAR ? "Factura" : "Invoice"}`}
                 </button>
               </>
           }
@@ -1177,7 +1175,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
     setEditIdx(null);
   }, [editIdx, editBuf]);
 
-  const handleConfirm = useCallback(async () => {
+  const handleConfirm = useCallback(async (skipFacturante = false) => {
     setStage(FACT_STAGE.PROCESSING);
     const log = [];
     for (const r of activeRows) {
@@ -1193,7 +1191,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
         currency: r.currency,
       };
       let msg = `✓ CC actualizada — ${r.franchiseName}`;
-      if (isAR && r.currency === "ARS" && esComp && fr) {
+      if (!skipFacturante && isAR && r.currency === "ARS" && esComp && fr) {
         try {
           const result = await emitirComprobante({
             franchisor: franchisor?.ar ?? franchisor,
@@ -1203,7 +1201,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
           comp = { ...comp, invoice: formatInvoiceLabel(result.tipoComprobante, result.idComprobante, result.puntoVenta), facturanteId: String(result.idComprobante) };
           msg = `✓ ${comp.invoice} emitida — ${r.franchiseName}`;
         } catch (err) {
-          msg = `⚠ CC guardada sin AFIP (${err.message}) — ${r.franchiseName}`;
+          msg = `⚠ CC guardada sin ARCA (${err.message}) — ${r.franchiseName}`;
         }
       }
       onAddComp(r.franchiseId, comp);
@@ -1403,8 +1401,11 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
         )}
         <div style={{ flex: 1 }} />
         <button className="ghost" onClick={() => { setStage(FACT_STAGE.IDLE); setRows([]); }}>← Volver</button>
-        <button className="btn" disabled={activeRows.length === 0} style={{ opacity: activeRows.length === 0 ? 0.4 : 1 }} onClick={handleConfirm}>
-          ✓ Confirmar {activeRows.length} comprobante{activeRows.length !== 1 ? "s" : ""}
+        <button className="ghost" disabled={activeRows.length === 0} style={{ opacity: activeRows.length === 0 ? 0.4 : 1 }} onClick={() => handleConfirm(true)}>
+          Guardar sin emitir ({activeRows.length})
+        </button>
+        <button className="btn" disabled={activeRows.length === 0} style={{ opacity: activeRows.length === 0 ? 0.4 : 1 }} onClick={() => handleConfirm(false)}>
+          ✓ Confirmar y Generar Facturas/Invoice ({activeRows.length})
         </button>
       </div>
       <div className="card">
@@ -1423,8 +1424,8 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
             <tr>
               <th style={{ width: 32 }}>
                 <input type="checkbox" style={{ accentColor: "var(--accent)", cursor: "pointer" }}
-                  checked={rows.every(r => r.excluded)}
-                  onChange={e => setRows(prev => prev.map(r => ({ ...r, excluded: e.target.checked })))} />
+                  checked={rows.every(r => !r.excluded)}
+                  onChange={e => setRows(prev => prev.map(r => ({ ...r, excluded: !e.target.checked })))} />
               </th>
               <th>Fecha</th><th>Tipo</th><th>Sede</th>
               <th style={{ textAlign: "right" }}>Importe</th>
@@ -1438,7 +1439,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
               const hasError  = r.errors.length > 0;
               return (
                 <tr key={r._idx} style={{ background: r.excluded ? "rgba(255,107,122,.07)" : hasError ? "rgba(255,107,122,.04)" : "transparent", opacity: r.excluded ? 0.45 : 1 }}>
-                  <td><input type="checkbox" checked={r.excluded ?? false} onChange={() => toggleExclude(i)} style={{ accentColor: "var(--accent)", cursor: "pointer" }} /></td>
+                  <td><input type="checkbox" checked={!(r.excluded ?? false)} onChange={() => toggleExclude(i)} style={{ accentColor: "var(--accent)", cursor: "pointer" }} /></td>
                   {isEditing ? (
                     <>
                       <td><input value={editBuf.date ?? ""} onChange={e => setEditBuf(b => ({ ...b, date: e.target.value }))} style={{ width: "100%", padding: "4px 6px", borderRadius: 6, fontSize: 11, background: "var(--bg)", border: "1px solid var(--border2)", color: "var(--text)" }} /></td>
