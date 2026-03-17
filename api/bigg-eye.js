@@ -8,8 +8,11 @@
 //   year         — año (ej: 2026)
 //
 // Devuelve:
-//   { ventas: number }  — suma de total_sales del mes para esa sede
+//   { ventas: number, count: number, items: [...] }
 //   { error: string }   — si algo falla
+//
+// `items` contiene solo los campos útiles de cada venta (filtramos los 20+
+// campos que devuelve la API y que no necesitamos).
 
 const BIGG_EYE_API = "https://api.bigg.fit";
 const TOKEN        = process.env.BIGG_EYE_TOKEN;
@@ -68,21 +71,30 @@ export default async function handler(req, res) {
 
     const data = await response.json();
 
-    // La respuesta es un array de ventas; cada objeto tiene:
-    //   total      — importe cobrado (ya con descuento aplicado)
-    //   currency   — "ARS" | "USD" | etc.
-    // Sumamos `total` de todos los registros del período.
+    // La API devuelve un array con 20+ campos por venta; nos quedamos solo
+    // con los que son útiles para mostrar o calcular en el frontend.
+    const rows = Array.isArray(data) ? data : (data ? [data] : []);
+
     let ventas = 0;
-    if (Array.isArray(data)) {
-      for (const row of data) {
-        ventas += parseFloat(row.total ?? 0) || 0;
-      }
-    } else if (typeof data === "object" && data !== null) {
-      ventas = parseFloat(data.total ?? data.total_sales ?? 0) || 0;
-    }
+    const items = rows.map((row) => {
+      const total = parseFloat(row.total ?? 0) || 0;
+      ventas += total;
+      return {
+        id:            row.id,
+        date:          row.created_at?.slice(0, 10) ?? null,   // "YYYY-MM-DD"
+        customer:      row.customer_name ?? null,
+        description:   row.description  ?? null,
+        amount:        parseFloat(row.amount ?? 0) || 0,        // precio base
+        discount:      parseFloat(row.discount_amount ?? 0) || 0,
+        total,                                                   // cobrado
+        currency:      row.currency     ?? "ARS",
+        is_debit:      row.is_debit     ?? true,
+        full_refunded: row.full_refunded ?? false,
+      };
+    });
 
     res.statusCode = 200;
-    res.end(JSON.stringify({ ventas: Math.round(ventas) }));
+    res.end(JSON.stringify({ ventas: Math.round(ventas), count: items.length, items }));
   } catch (err) {
     res.statusCode = 500;
     res.end(JSON.stringify({ error: err.message }));
