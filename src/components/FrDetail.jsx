@@ -86,7 +86,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
             : { ...c, debit: 0, credit: c.amount };
         }),
       ];
-      const ccHtml = buildCCHtml(franchise.name, franchise.razonSocial ?? null, ccLines, displayCurrency);
+      const ccHtml = buildCCHtml(franchise.name, franchise.razonSocial ?? null, ccLines, displayCurrency, localMonth, localYear);
 
       // Facturas del mes con número emitido
       const factsDelMes = compsWithSaldo.filter(c => c.invoice && c.type?.startsWith("FACTURA"));

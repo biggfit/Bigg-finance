@@ -36,7 +36,8 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
     setMailStatus("sending");
     setMailError("");
     try {
-      const ccHtml = buildCCHtml(franchise.name, franchise.razonSocial ?? null, lines, displayCurrency);
+      const now    = new Date();
+      const ccHtml = buildCCHtml(franchise.name, franchise.razonSocial ?? null, lines, displayCurrency, now.getMonth(), now.getFullYear());
       const today  = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "long", year: "numeric" });
       await sendMailFr({
         to,

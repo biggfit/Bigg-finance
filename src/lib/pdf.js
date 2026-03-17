@@ -71,7 +71,7 @@ export function buildInvoicePDF(fr, franchisor, comp) {
  * @param {object[]} lines  — salida de buildCuentaCorriente()
  * @param {string} currency — "ARS" | "USD" | "EUR"
  */
-export function buildCCHtml(frName, frRazonSocial, lines, currency) {
+export function buildCCHtml(frName, frRazonSocial, lines, currency, ccMonth, ccYear) {
   const SYM = { ARS: "$", USD: "U$D", EUR: "€" };
   const sym = SYM[currency] ?? "$";
   const fmtAmt   = v => v ? `${sym}\u202f${Math.abs(v).toLocaleString("es-AR", { minimumFractionDigits: 2 })}` : "";
@@ -98,6 +98,16 @@ export function buildCCHtml(frName, frRazonSocial, lines, currency) {
   const scFinal    = saldoFinal > 0.01 ? "#dc2626" : saldoFinal < -0.01 ? "#16a34a" : "#6b7280";
   const today      = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
 
+  // Fecha de vencimiento: basada en el mes del período informado
+  const pad2     = n => String(n).padStart(2, "0");
+  const baseM    = ccMonth  ?? new Date().getMonth();   // 0-based
+  const baseY    = ccYear   ?? new Date().getFullYear();
+  const nextM    = baseM === 11 ? 0  : baseM + 1;
+  const nextY    = baseM === 11 ? baseY + 1 : baseY;
+  const dueDay   = saldoFinal > 0.01 ? 10 : 20;        // adeudado → día 10 / a favor → día 20
+  const dueDate  = `${pad2(dueDay)}/${pad2(nextM + 1)}/${nextY}`;
+  const dueLabel = saldoFinal > 0.01 ? "Fecha límite de pago" : saldoFinal < -0.01 ? "Acreditación estimada" : "";
+
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Cuenta Corriente — ${frName}</title></head>
 <body style="margin:0;padding:32px;font-family:Arial,sans-serif;background:#f3f4f6;color:#111">
 <div style="max-width:900px;margin:auto;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.1)">
@@ -122,9 +132,18 @@ export function buildCCHtml(frName, frRazonSocial, lines, currency) {
       <tbody>${rows}</tbody>
     </table>
   </div>
-  <div style="padding:16px 28px;border-top:2px solid #e5e7eb;display:flex;justify-content:flex-end;align-items:center;gap:16px">
-    <span style="font-size:13px;color:#6b7280">Saldo al ${today}:</span>
-    <span style="font-family:monospace;font-size:18px;font-weight:800;color:${scFinal}">${fmtSaldo(saldoFinal)}</span>
+  <div style="padding:16px 28px;border-top:2px solid #e5e7eb;background:#f9fafb">
+    <table style="width:100%;border-collapse:collapse">
+      <tr>
+        <td style="vertical-align:middle;padding:0">
+          ${dueLabel ? `<div style="font-size:11px;color:#6b7280;margin-bottom:3px">${dueLabel}</div><div style="font-size:15px;font-weight:700;color:#111">${dueDate}</div>` : ""}
+        </td>
+        <td style="text-align:right;vertical-align:middle;padding:0">
+          <div style="font-size:11px;color:#6b7280;margin-bottom:3px">Saldo al ${today}</div>
+          <div style="font-family:monospace;font-size:20px;font-weight:800;color:${scFinal}">${fmtSaldo(saldoFinal)}</div>
+        </td>
+      </tr>
+    </table>
   </div>
 </div>
 </body></html>`;
