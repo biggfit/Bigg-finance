@@ -23,6 +23,12 @@ function readEnvLocal() {
 const localEnv  = readEnvLocal();
 const sheetsUrl = localEnv['VITE_SHEETS_API_URL'];
 
+// Inyectar todas las vars de .env.local en process.env para que los handlers
+// de /api/* (que corren en Node dentro de Vite) puedan leerlas con process.env
+Object.entries(localEnv).forEach(([k, v]) => {
+  if (process.env[k] == null) process.env[k] = v;
+});
+
 // Proxy server-side que sigue los redirects de Google Apps Script
 // (evita el bloqueo CORS que ocurre cuando el browser intenta seguirlos)
 function proxyToSheets(targetUrl, method, body, res) {
