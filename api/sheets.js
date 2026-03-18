@@ -36,6 +36,7 @@ function proxyToSheets(targetUrl, method, body, res) {
       return;
     }
     res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Cache-Control', 'no-store');
     res.statusCode = upstream.statusCode;
     upstream.pipe(res);
   });

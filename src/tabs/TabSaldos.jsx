@@ -17,7 +17,7 @@ export function RecordatorioDots({ dots }) {
   );
 }
 import { computeSaldo, computeSaldoPrevMes, computePautaPendiente, compEmpresa, compCurrency, makeType, MONTHS, fmt, downloadCSV, COMPANIES, COMP_TYPES, cmpDate } from "../lib/helpers";
-import { inPeriod } from "../data/franchisor";
+import { inPeriod, todayDmy } from "../data/franchisor";
 import { buildCCHtml } from "../lib/pdf";
 import { sendMailFr } from "../lib/sheetsApi";
 
@@ -134,7 +134,7 @@ export function SaldosTable({ title, data, accentColor, bgColor, borderColor, on
           htmlBody: ccHtml,
           attachments: [],
         });
-        const hoy = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
+        const hoy = todayDmy();
         addRecordatorioEntry(d.fr.id, { fecha: hoy, ccMes: month + 1, ccAnio: year, to });
         ok.push(d.fr.name);
       } catch (e) { err.push(`${d.fr.name} (${e.message})`); }

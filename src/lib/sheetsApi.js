@@ -15,7 +15,7 @@ const PROXY_BASE = "/api/sheets";
 async function get(resource) {
   if (!CONFIGURED) throw new Error("VITE_SHEETS_API_URL no configurada");
   const url = `${PROXY_BASE}?resource=${resource}&token=${encodeURIComponent(TOKEN)}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   if (data.error) throw new Error(data.error);
