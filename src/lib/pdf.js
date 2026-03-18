@@ -325,6 +325,32 @@ table.items td.r { text-align: right; font-family: monospace; font-weight: 700; 
 }
 
 /**
+ * Combina múltiples HTMLs de invoice (uno por franquicia) en un único documento
+ * imprimible con saltos de página entre cada invoice.
+ * Útil para el modo CRM/Excel donde se generan varios invoices a la vez.
+ */
+export function buildCombinedInvoicesHtml(htmlArray) {
+  if (!htmlArray || htmlArray.length === 0) return "";
+  if (htmlArray.length === 1) return htmlArray[0];
+
+  // Extraer CSS del primer invoice (idéntico en todos)
+  const cssMatch = htmlArray[0].match(/<style>([\s\S]*?)<\/style>/);
+  const css = cssMatch ? cssMatch[1] : "";
+
+  // Extraer contenido del <body> de cada invoice
+  const pages = htmlArray.map((html, i) => {
+    const bodyMatch = html.match(/<body>([\s\S]*?)<\/body>/);
+    const body = bodyMatch ? bodyMatch[1].trim() : html;
+    const isLast = i === htmlArray.length - 1;
+    return isLast
+      ? body
+      : `<div style="page-break-after:always;break-after:page">${body}</div>`;
+  }).join("\n");
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Invoices (${htmlArray.length})</title>\n<style>${css}</style></head>\n<body>${pages}</body></html>`;
+}
+
+/**
  * Abre una nueva ventana con el HTML del invoice y dispara el diálogo de impresión.
  * El usuario puede elegir "Guardar como PDF" en el diálogo.
  */

@@ -5,7 +5,7 @@ import { makeType, MONTHS, AVAILABLE_YEARS, DOCS, CUENTAS, CUENTA_LABEL, COMP_TY
 import { todayDmy } from "../data/franchisor";
 import { TypePill } from "../components/atoms";
 import PendientesPanel from "../components/PendientesPanel";
-import { buildFacturaPDF, buildInvoicePDF, buildInvoiceHtml, printInvoice, downloadTextAsPDF } from "../lib/pdf";
+import { buildFacturaPDF, buildInvoicePDF, buildInvoiceHtml, buildCombinedInvoicesHtml, printInvoice, downloadTextAsPDF } from "../lib/pdf";
 import { emitirComprobante, formatInvoiceLabel } from "../lib/facturanteApi";
 import { getNextInvoiceNum } from "../lib/sheetsApi";
 
@@ -239,6 +239,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
         ref: notaFinal, nota: notaFinal,
         month: mesComp, year: anioComp,
         currency,
+        empresa: activeCompany,
       });
     };
     const usaFacturante = isAR && currency === "ARS" && (doc === "FACTURA" || doc === "NC");
@@ -553,6 +554,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
               amount: movImporte, ref: nota, nota,
               month: mesMovComp, year: anioMovComp,
               currency: movCurrency,
+              empresa: activeCompany,
             };
             onAddComp(fr.id, comp);
             setDone(true);
@@ -732,19 +734,25 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
   const handleConfirm = async (skipFacturante = false) => {
     setStage("done");
     const log = [];
+    const invoiceHtmls = []; // colectar invoices no-AR para imprimir juntos al final
     for (const r of toProcess) {
       const fr = activeFr.find(f => f.id === r.frId);
       if (!fr) continue;
       const fee = rowFee(r);
       const dto = dtoDisplay(r);
       const isAR = fr.country === "Argentina";
+      // Moneda de facturación por sede: ARS para AR, EUR para Europa, USD para el resto LATAM
+      const billingCur = isAR ? "ARS"
+        : getCountryCur(r.country).code === "EUR" ? "EUR"
+        : "USD";
       let comp = {
         id: uid(), type: makeType("FACTURA","FEE"), date: todayDmy(),
         amount: Math.max(0, Math.round(fee * 100) / 100),
         ref: `Fee ${MONTHS[crmMonth]} ${crmYear} — CRM`,
         nota: `Fee Royalty ${MONTHS[crmMonth]} ${crmYear}${dto > 0 ? ` (${dto}% dto.)` : ""}`,
         month: crmMonth, year: crmYear,
-        currency: activeCurrency,
+        currency: billingCur,
+        empresa: activeCompany,
       };
       let facturanteStatus = "omitido";
       if (!skipFacturante && isAR && activeCompany === "ÑAKO SRL") {
@@ -772,12 +780,21 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
       }
       onAddComp(r.frId, comp);
       if (!isAR && comp.invoice && !skipFacturante) {
-        printInvoice(buildInvoiceHtml(fr, franchisor, comp));
-      } else {
-        const pdfText = isAR ? buildFacturaPDF(fr, franchisor, comp) : buildInvoicePDF(fr, franchisor, comp);
-        downloadTextAsPDF(pdfText, `${isAR ? "Factura" : "Invoice"}_${fr.name}_${MONTHS[crmMonth]}_${crmYear}.html`);
+        // Acumular para imprimir todo junto al final (evita que el bloqueador de popups
+        // cancele ventanas abiertas en rápida sucesión dentro del loop)
+        invoiceHtmls.push(buildInvoiceHtml(fr, franchisor, comp));
+      } else if (isAR) {
+        downloadTextAsPDF(
+          buildFacturaPDF(fr, franchisor, comp),
+          `Factura_${fr.name}_${MONTHS[crmMonth]}_${crmYear}.html`
+        );
       }
+      // non-AR sin número (skipFacturante o error en getNextInvoiceNum): guarda silenciosamente
       log.push({ frName: r.frName, fee, country: r.country, dto, facturanteStatus, invoice: comp.invoice });
+    }
+    // Abrir UNA sola ventana con todos los invoices no-AR (con saltos de página entre ellos)
+    if (invoiceHtmls.length > 0) {
+      printInvoice(buildCombinedInvoicesHtml(invoiceHtmls));
     }
     setProcessed(log);
   };
@@ -1229,9 +1246,11 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
         nota: `${COMP_TYPES[r.type]?.label ?? r.type} — ${r.franchiseName}`,
         month: r.month, year: r.year, loteId,
         currency: r.currency,
+        empresa: activeCompany,
       };
       let msg = `✓ CC actualizada — ${r.franchiseName}`;
-      if (!skipFacturante && isAR && r.currency === "ARS" && esComp && fr) {
+      // ARCA solo si la sociedad activa es ÑAKO SRL (nunca emitir ARCA desde BIGG FIT LLC o GDW)
+      if (!skipFacturante && isAR && r.currency === "ARS" && esComp && fr && activeCompany === "ÑAKO SRL") {
         try {
           const result = await emitirComprobante({
             franchisor: franchisor?.ar ?? franchisor,
