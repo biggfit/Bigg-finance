@@ -121,7 +121,18 @@ function doGet(e) {
       headers.forEach(function(h, j) { obj[h] = rows[i][j]; });
       var key = String(obj.frId);
       if (!result[key]) result[key] = [];
-      result[key].push({ fecha: obj.fecha, ccMes: obj.ccMes, ccAnio: obj.ccAnio, to: obj.to });
+      // Sheets devuelve celdas de fecha como objetos Date → normalizar a DD/MM/YYYY
+      var rawFecha = obj.fecha;
+      var fechaStr;
+      if (rawFecha && typeof rawFecha.getTime === "function") {
+        var dd2   = String(rawFecha.getDate()).padStart(2, "0");
+        var mm2   = String(rawFecha.getMonth() + 1).padStart(2, "0");
+        var yyyy2 = rawFecha.getFullYear();
+        fechaStr  = dd2 + "/" + mm2 + "/" + yyyy2;
+      } else {
+        fechaStr = String(rawFecha ?? "");
+      }
+      result[key].push({ fecha: fechaStr, ccMes: Number(obj.ccMes), ccAnio: Number(obj.ccAnio), to: obj.to });
     }
     return json(result);
   }

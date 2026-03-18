@@ -73,8 +73,22 @@ export function SaldosTable({ title, data, accentColor, bgColor, borderColor, on
   const nowM = new Date().getMonth(), nowY = new Date().getFullYear();
   const dotsForFr = (frId) => (recordatorios?.[String(frId)] ?? [])
     .filter(r => {
-      const [dd, mm, yy] = (r.fecha ?? "").split("/");
-      return Number(mm) - 1 === nowM && Number(yy) === nowY;
+      const fecha = r.fecha ?? "";
+      let mm, yy;
+      if (fecha.includes("/")) {
+        // DD/MM/YYYY (formato interno)
+        const parts = fecha.split("/");
+        mm = Number(parts[1]);
+        yy = Number(parts[2]);
+      } else if (fecha.includes("-")) {
+        // ISO: YYYY-MM-DD o YYYY-MM-DDTHH:mm:ssZ (fallback si Sheets devuelve string ISO)
+        const iso = fecha.slice(0, 10).split("-");
+        yy = Number(iso[0]);
+        mm = Number(iso[1]);
+      } else {
+        return false;
+      }
+      return mm - 1 === nowM && yy === nowY;
     });
 
   const toggleOne = (id) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
