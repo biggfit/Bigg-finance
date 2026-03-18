@@ -446,9 +446,11 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
             ? <button className="btn" style={{ flex: 1, height: 48, fontSize: 15 }} disabled={importeNeto <= 0} onClick={handlePreview}>Vista previa →</button>
             : <>
                 <button className="ghost" style={{ flex: 1, height: 48 }} onClick={() => setPreview(null)}>← Editar</button>
-                <button className="ghost" style={{ flex: 2, height: 48, fontSize: 13 }} disabled={emitState === "emitting"} onClick={() => doConfirm(true)}>
-                  Guardar sin emitir
-                </button>
+                {usaFacturante && (
+                  <button className="ghost" style={{ flex: 2, height: 48, fontSize: 13 }} disabled={emitState === "emitting"} onClick={() => doConfirm(true)}>
+                    Guardar sin emitir
+                  </button>
+                )}
                 <button className="btn" style={{ flex: 3, height: 48, fontSize: 15 }} disabled={emitState === "emitting"} onClick={handleConfirm}>
                   {emitState === "emitting" ? (usaFacturante ? "Emitiendo ante ARCA…" : "Generando Invoice…") : `✓ Confirmar y generar ${isAR && currency === "ARS" ? "Factura ARCA" : isAR ? "Factura" : "Invoice"}`}
                 </button>
