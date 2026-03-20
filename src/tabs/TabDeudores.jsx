@@ -149,15 +149,8 @@ function sumGroup(group) {
   }), { saldoAnt: 0, pagosNet: 0, saldoReal: 0 });
 }
 
-const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr, cutoff, soloPendiente, selectedFrIds, initialSection }) {
+const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr, cutoff, soloPendiente, selectedFrIds, showDeben, setShowDeben, showOtros, setShowOtros }) {
   const { comps, saldoInicial, activeCompany, recordatorios, addRecordatorioEntry } = useStore();
-  const [showDeben, setShowDeben] = useState(() => initialSection !== "debemos");
-  const [showOtros, setShowOtros] = useState(() => initialSection === "debemos");
-
-  useEffect(() => {
-    if (initialSection === "deben")   { setShowDeben(true);  setShowOtros(false); }
-    if (initialSection === "debemos") { setShowDeben(false); setShowOtros(true);  }
-  }, [initialSection]);
   const [sortCol, setSortCol] = useState("saldoReal");
   const [sortDir, setSortDir] = useState("desc");
   const [filterCountry, setFilterCountry] = useState(null);

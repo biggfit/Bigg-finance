@@ -51,6 +51,8 @@ export default function App() {
   const [detailTipo,   setDetailTipo]   = useState(undefined);
   const [navCount,     setNavCount]     = useState(0);
   const [showAll,      setShowAll]      = useState(false);
+  const [showDeben,    setShowDeben]    = useState(true);
+  const [showOtros,    setShowOtros]    = useState(false);
 
   const saveFr = useCallback((id, data) => {
     setFranchises(prev => prev.map(f => f.id === id ? { ...f, ...data } : f));
@@ -87,6 +89,8 @@ export default function App() {
     // cuenta can be a string or array of strings
     setDetailTipo(cuenta ?? tipo ?? undefined);
     if (moneda) setFilterCur(moneda);
+    if (filter === "deben")   { setShowDeben(true);  setShowOtros(false); }
+    if (filter === "debemos") { setShowDeben(false); setShowOtros(true);  }
     setNavCount(n => n + 1);
   }, []);
 
@@ -384,7 +388,7 @@ export default function App() {
 
       <div style={{ padding: "18px 20px", maxWidth: 1600 }}>
         {tab === "resumen"      && <TabResumenMes   allFranchises={allActiveFr} month={month} year={year} onNavigate={handleNavigate} selectedFrIds={selectedFrIds} />}
-        {tab === "saldos"     && <TabDeudores     franchises={activeFr}    filterCur={filterCur} onOpenFr={setModalFrId} cutoff={cutoff} setCutoff={setCutoff} soloPendiente={soloPendiente} setSoloPendiente={setSoloPendiente} selectedFrIds={selectedFrIds} initialSection={detailFilter} />}
+        {tab === "saldos"     && <TabDeudores     franchises={activeFr}    filterCur={filterCur} onOpenFr={setModalFrId} cutoff={cutoff} setCutoff={setCutoff} soloPendiente={soloPendiente} setSoloPendiente={setSoloPendiente} selectedFrIds={selectedFrIds} showDeben={showDeben} setShowDeben={setShowDeben} showOtros={showOtros} setShowOtros={setShowOtros} />}
         {tab === "contabilidad" && <TabContabilidad key={`${detailFilter}-${detailTipo}-${navCount}`} franchises={filteredFr} month={month} year={year} onOpenFr={setModalFrId} initialFilter={detailFilter} initialTipo={detailTipo} showAll={showAll} multiCurrency={filterCur === "ALL"} filterCur={filterCur} onFilteredChange={setDetailFilteredRows} />}
         {tab === "facturador"   && <TabFacturador   month={month} year={year} onAddComp={addComp} factState={factState} setFactState={setFactState} franchisor={franchisor} onStartImport={() => setShowImport(true)} />}
       </div>
