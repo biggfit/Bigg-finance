@@ -2,6 +2,7 @@ import { useState, useCallback } from "react";
 import { Modal } from "./atoms";
 import { useStore } from "../lib/context";
 import { CURRENCIES, DOCS, CUENTAS, CUENTA_LABEL, MOV_TYPES, TIPOS_MOVIMIENTO, SYM, fmt, uid, makeType, COMPANIES } from "../lib/helpers";
+import { getCompanyCurrencies } from "../data/franchisor";
 
 // ─── ADD COMP MODAL ───────────────────────────────────────────────────────────
 const TAX = 0.21;
@@ -9,12 +10,16 @@ const TAX = 0.21;
 const isoToDmy = (iso) => { const [y, m, d] = iso.split("-"); return `${d}/${m}/${y}`; };
 
 export default function AddCompModal({ franchise, month, year, onClose, onAdd }) {
-  const { activeCompany } = useStore();
+  const { activeCompany, franchisor } = useStore();
+  const allowedCurrencies = getCompanyCurrencies(activeCompany, franchisor);
   const [doc,      setDoc]      = useState("FACTURA");
   const [cuenta,   setCuenta]   = useState("FEE");
   const [isMov,    setIsMov]    = useState(false);
   const [movType,  setMovType]  = useState("PAGO");
-  const [currency, setCurrency] = useState(COMPANIES[activeCompany]?.currency ?? franchise.currency ?? "ARS");
+  const [currency, setCurrency] = useState(() => {
+    const def = COMPANIES[activeCompany]?.currency ?? franchise.currency ?? "ARS";
+    return allowedCurrencies.includes(def) ? def : (allowedCurrencies[0] ?? "ARS");
+  });
   const [date,     setDate]     = useState(`${year}-${String(month + 1).padStart(2, "0")}-28`);
   const [amount,   setAmount]   = useState("");
   const [ref,      setRef]      = useState("");
@@ -103,14 +108,19 @@ export default function AddCompModal({ franchise, month, year, onClose, onAdd })
             <div>
               <label style={labelS}>MONEDA</label>
               <div style={{ display: "flex", gap: 6 }}>
-                {CURRENCIES.map(cur => (
-                  <button key={cur} onClick={() => setCurrency(cur)} style={{
-                    padding: "8px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", border: "none", fontFamily: "var(--font)",
-                    background: currency === cur ? "var(--accent)" : "var(--bg)",
-                    color: currency === cur ? "#1e2022" : "var(--muted)",
-                    outline: currency === cur ? "none" : "1px solid var(--border2)",
-                  }}>{cur}</button>
-                ))}
+                {CURRENCIES.map(cur => {
+                  const allowed = allowedCurrencies.includes(cur);
+                  return (
+                    <button key={cur} onClick={() => allowed && setCurrency(cur)} style={{
+                      padding: "8px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700,
+                      cursor: allowed ? "pointer" : "not-allowed", border: "none", fontFamily: "var(--font)",
+                      background: currency === cur ? "var(--accent)" : "var(--bg)",
+                      color: currency === cur ? "#1e2022" : allowed ? "var(--muted)" : "var(--dim)",
+                      outline: currency === cur ? "none" : "1px solid var(--border2)",
+                      opacity: allowed ? 1 : 0.3,
+                    }} title={allowed ? cur : `${cur} no habilitado para ${activeCompany}`}>{cur}</button>
+                  );
+                })}
               </div>
             </div>
             <div>

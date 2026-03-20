@@ -4,8 +4,8 @@ import { useStore } from "../lib/context";
 // ─── Dots: puntos por recordatorio enviado este mes ──────────────────────────
 export function RecordatorioDots({ dots }) {
   if (!dots || dots.length === 0) return null;
-  const visible = dots.slice(0, 3);
-  const extra   = dots.length - 3;
+  const visible = dots.slice(0, 2);
+  const extra   = dots.length - 2;
   return (
     <span style={{ display: "inline-flex", gap: 4, alignItems: "center", marginLeft: 6 }}>
       {visible.map((d, i) => (

@@ -12,7 +12,7 @@ const getCuenta = (type) => {
 };
 
 const TabContabilidad = memo(function TabContabilidad({ franchises, month, year, onOpenFr, initialFilter, initialTipo, showAll, multiCurrency, filterCur = "ALL", onFilteredChange }) {
-  const { comps, saldoInicial, editComp, activeCompany } = useStore();
+  const { comps, saldoInicial, editComp, moveComp, activeCompany } = useStore();
   const filterCurrency = filterCur === "ALL" ? null : filterCur;
 
   // ── Filtros ──────────────────────────────────────────────────────────────────
@@ -306,7 +306,14 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
                   </td>
                   {/* Sede */}
                   <td style={{ padding: "6px 4px", overflow: "hidden" }}>
-                    <button className="ghost" style={{ fontSize: 11, padding: "1px 4px", fontWeight: isNewFr ? 700 : 400, color: isNewFr ? "var(--text)" : "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%", display: "block" }} onClick={() => onOpenFr(r.frId)}>{r.frName}</button>
+                    {isEd
+                      ? <select value={editBufTC.newFrId} onChange={e => setEditBufTC(b => ({ ...b, newFrId: Number(e.target.value) }))} style={{ ...inpS, fontSize: 10, width: "100%" }}>
+                          {[...franchises].sort((a, b) => a.name.localeCompare(b.name, "es")).map(f => (
+                            <option key={f.id} value={f.id}>{f.name}</option>
+                          ))}
+                        </select>
+                      : <button className="ghost" style={{ fontSize: 11, padding: "1px 4px", fontWeight: isNewFr ? 700 : 400, color: isNewFr ? "var(--text)" : "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%", display: "block" }} onClick={() => onOpenFr(r.frId)}>{r.frName}</button>
+                    }
                   </td>
                   {/* Tipo/Cuenta */}
                   <td style={{ padding: "6px 4px" }}>
@@ -350,7 +357,12 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
                     {isEd ? (
                       <span style={{ display: "flex", gap: 3, justifyContent: "flex-end" }}>
                         <button className="btn" style={{ fontSize: 10, padding: "2px 7px" }} onClick={() => {
-                          if (editComp) editComp(editBufTC.frId, editRowId, { date: editBufTC.date, nota: editBufTC.concepto, ref: editBufTC.concepto, amount: parseFloat(String(editBufTC.amount).replace(",", ".")) || 0, type: editBufTC.tipo });
+                          const patch = { date: editBufTC.date, nota: editBufTC.concepto, ref: editBufTC.concepto, amount: parseFloat(String(editBufTC.amount).replace(",", ".")) || 0, type: editBufTC.tipo };
+                          if (editBufTC.newFrId !== editBufTC.frId) {
+                            if (moveComp) moveComp(editBufTC.frId, editBufTC.newFrId, editRowId, patch);
+                          } else {
+                            if (editComp) editComp(editBufTC.frId, editRowId, patch);
+                          }
                           setEditRowId(null);
                         }}>✓</button>
                         <button className="ghost" style={{ fontSize: 10, padding: "2px 6px" }} onClick={() => setEditRowId(null)}>✕</button>
@@ -370,7 +382,7 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
                         {!r.isApertura && r.compId && (r.tipo === "PAGO" || r.tipo === "PAGO_PAUTA" || r.tipo === "PAGO_ENVIADO") && (
                           <button className="ghost" style={{ fontSize: 12, padding: "2px 5px", opacity: .5, display: "inline-flex", alignItems: "center" }} title="Editar" onClick={() => {
                             setEditRowId(r.compId);
-                            setEditBufTC({ date: r.displayDate, concepto: r.concepto === "—" ? "" : r.concepto, amount: r.debe > 0 ? r.debe : r.haber, frId: r.frId, tipo: r.tipo });
+                            setEditBufTC({ date: r.displayDate, concepto: r.concepto === "—" ? "" : r.concepto, amount: r.debe > 0 ? r.debe : r.haber, frId: r.frId, newFrId: r.frId, tipo: r.tipo });
                           }}>✎</button>
                         )}
                       </span>

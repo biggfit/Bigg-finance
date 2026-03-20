@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import React from "react";
-import { COMP_TYPES } from "../lib/helpers";
+import { COMP_TYPES, CURRENCIES } from "../lib/helpers";
 
 // ─── SHARED FIELD COMPONENTS (defined at module scope — no remount on rerender) ─
 export function CountryGroup({ country, sedes, activeFrId, openFr, startOpen }) {
@@ -204,7 +204,7 @@ const SOCIEDAD_OPTS = ["ÑAKO SRL", "BIGG FIT LLC"];
 
 const EMPTY_FR_BUF = {
   name:"", razonSocial:"", cuit:"", condIVA:"Responsable Inscripto",
-  sociedad:"ÑAKO SRL", currency:"ARS", country:"Argentina",
+  sociedad:"ÑAKO SRL", currency:"ARS", currencies:["ARS"], country:"Argentina",
   applyIVA:true, paysFee:true, activa:true,
   feeImporte:"", feeMoneda:"ARS",
   contrato:"", fechaInicio:"", fechaVto:"", fechaApertura:"", aniosContrato:"",
@@ -271,6 +271,9 @@ export function frToBuf(fr) {
     paymentTerms:    fr.paymentTerms    ?? "Net 30",
     noteGeneral:     fr.noteGeneral     ?? "",
     biggEyeId:       fr.biggEyeId  != null ? String(fr.biggEyeId)  : "",
+    currencies:      Array.isArray(fr.currencies) && fr.currencies.length > 0
+                       ? fr.currencies
+                       : [fr.moneda ?? fr.currency ?? "ARS"],
   };
 }
 
@@ -280,9 +283,9 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
   const [activeFrId,  setActiveFrId]  = useState(null);
   const [sedesOpen,   setSedesOpen]   = useState(false);
   const [buf,         setBuf]         = useState(EMPTY_FR_BUF);
-  const [fbufAR,      setFbufAR]      = useState({ ...franchisor.ar });
-  const [fbufUSA,     setFbufUSA]     = useState({ ...franchisor.usa });
-  const [fbufES,      setFbufES]      = useState({ ...franchisor.es });
+  const [fbufAR,      setFbufAR]      = useState({ currencies: ["ARS"],         ...franchisor.ar  });
+  const [fbufUSA,     setFbufUSA]     = useState({ currencies: ["USD", "EUR"],   ...franchisor.usa });
+  const [fbufES,      setFbufES]      = useState({ currencies: ["EUR"],          ...franchisor.es  });
   const [toast,       setToast]       = useState(null);
   const [newMode,     setNewMode]     = useState(false);
   const [sedeFilter,  setSedeFilter]  = useState("activas"); // "activas" | "inactivas" | "todas"
@@ -374,16 +377,16 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
     const europa = ["Espana","España","Francia","Italia","Alemania","Portugal","Reino Unido"];
     let patch = { country };
     if (country === "Argentina") {
-      patch.currency = "ARS"; patch.condIVA = "Responsable Inscripto"; patch.applyIVA = true;
+      patch.currency = "ARS"; patch.currencies = ["ARS"]; patch.condIVA = "Responsable Inscripto"; patch.applyIVA = true;
       patch.sociedad = fbufAR.razonSocial || "ÑAKO SRL";
     } else if (latam.includes(country)) {
-      patch.currency = "USD"; patch.condIVA = "Exento"; patch.applyIVA = false;
+      patch.currency = "USD"; patch.currencies = ["USD"]; patch.condIVA = "Exento"; patch.applyIVA = false;
       patch.sociedad = fbufUSA.legalName || "BIGG FIT LLC";
     } else if (europa.includes(country)) {
-      patch.currency = "EUR"; patch.condIVA = "Exento"; patch.applyIVA = false;
+      patch.currency = "EUR"; patch.currencies = ["EUR"]; patch.condIVA = "Exento"; patch.applyIVA = false;
       patch.sociedad = fbufES.legalName || "Gestión Deportiva y Wellness SL";
     } else if (country === "USA") {
-      patch.currency = "USD"; patch.condIVA = "Exento"; patch.applyIVA = false;
+      patch.currency = "USD"; patch.currencies = ["USD"]; patch.condIVA = "Exento"; patch.applyIVA = false;
       patch.sociedad = fbufUSA.legalName || "BIGG FIT LLC";
     }
     setBuf(b => ({ ...b, ...patch }));
@@ -611,6 +614,22 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
                   <FieldInput label="Texto pie de factura" value={fbufAR.notaPie}    onChange={setAR("notaPie")}      textarea />
                 </div>
 
+                <div style={{ fontSize: 10, color: "var(--gold)", fontWeight: 800, letterSpacing: ".08em", marginBottom: 8, marginTop: 10 }}>MONEDAS PERMITIDAS</div>
+                <div style={{ display: "flex", gap: 20, marginBottom: 16 }}>
+                  {CURRENCIES.map(cur => {
+                    const checked = (fbufAR.currencies ?? ["ARS"]).includes(cur);
+                    const isLast  = checked && (fbufAR.currencies ?? ["ARS"]).length === 1;
+                    return (
+                      <label key={cur} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13, cursor: isLast ? "not-allowed" : "pointer", userSelect: "none", opacity: isLast ? .5 : 1 }}>
+                        <input type="checkbox" checked={checked} disabled={isLast}
+                          onChange={e => setFbufAR(b => { const p = b.currencies ?? ["ARS"]; return { ...b, currencies: e.target.checked ? [...p, cur] : p.filter(c => c !== cur) }; })}
+                          style={{ accentColor: "var(--accent)", width: 14, height: 14 }} />
+                        <span style={{ fontWeight: 700, color: checked ? "var(--text)" : "var(--muted)" }}>{cur}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+
                 <div style={{ display:"flex", justifyContent:"flex-end" }}>
                   <button className="btn" onClick={() => {
                     onSaveFranchisor("ar", fbufAR);
@@ -654,6 +673,22 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
                   <FieldInput label="Texto pie de factura" value={fbufUSA.notaPie}     onChange={setUS("notaPie")}        textarea />
                 </div>
 
+                <div style={{ fontSize: 10, color: "var(--cyan)", fontWeight: 800, letterSpacing: ".08em", marginBottom: 8, marginTop: 10 }}>MONEDAS PERMITIDAS</div>
+                <div style={{ display: "flex", gap: 20, marginBottom: 16 }}>
+                  {CURRENCIES.map(cur => {
+                    const checked = (fbufUSA.currencies ?? ["USD", "EUR"]).includes(cur);
+                    const isLast  = checked && (fbufUSA.currencies ?? ["USD", "EUR"]).length === 1;
+                    return (
+                      <label key={cur} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13, cursor: isLast ? "not-allowed" : "pointer", userSelect: "none", opacity: isLast ? .5 : 1 }}>
+                        <input type="checkbox" checked={checked} disabled={isLast}
+                          onChange={e => setFbufUSA(b => { const p = b.currencies ?? ["USD", "EUR"]; return { ...b, currencies: e.target.checked ? [...p, cur] : p.filter(c => c !== cur) }; })}
+                          style={{ accentColor: "var(--accent)", width: 14, height: 14 }} />
+                        <span style={{ fontWeight: 700, color: checked ? "var(--text)" : "var(--muted)" }}>{cur}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+
                 <div style={{ display:"flex", justifyContent:"flex-end" }}>
                   <button className="btn" onClick={() => {
                     onSaveFranchisor("usa", fbufUSA);
@@ -692,6 +727,22 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
                 <div style={{ fontSize: 10, color: "var(--orange, #f5a623)", fontWeight: 800, letterSpacing: ".08em", marginBottom: 8, marginTop: 10 }}>FACTURACIÓN</div>
                 <div style={grid2}>
                   <FieldInput label="Texto pie de factura" value={fbufES.notaPie} onChange={setES("notaPie")}   textarea />
+                </div>
+
+                <div style={{ fontSize: 10, color: "var(--orange, #f5a623)", fontWeight: 800, letterSpacing: ".08em", marginBottom: 8, marginTop: 10 }}>MONEDAS PERMITIDAS</div>
+                <div style={{ display: "flex", gap: 20, marginBottom: 16 }}>
+                  {CURRENCIES.map(cur => {
+                    const checked = (fbufES.currencies ?? ["EUR"]).includes(cur);
+                    const isLast  = checked && (fbufES.currencies ?? ["EUR"]).length === 1;
+                    return (
+                      <label key={cur} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13, cursor: isLast ? "not-allowed" : "pointer", userSelect: "none", opacity: isLast ? .5 : 1 }}>
+                        <input type="checkbox" checked={checked} disabled={isLast}
+                          onChange={e => setFbufES(b => { const p = b.currencies ?? ["EUR"]; return { ...b, currencies: e.target.checked ? [...p, cur] : p.filter(c => c !== cur) }; })}
+                          style={{ accentColor: "var(--accent)", width: 14, height: 14 }} />
+                        <span style={{ fontWeight: 700, color: checked ? "var(--text)" : "var(--muted)" }}>{cur}</span>
+                      </label>
+                    );
+                  })}
                 </div>
 
                 <div style={{ display:"flex", justifyContent:"flex-end" }}>
@@ -813,7 +864,25 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
                       <CustomSelect value={buf.country} onChange={handleCountryChange}
                         opts={["Argentina","Uruguay","Chile","Colombia","Peru","Mexico","Bolivia","Paraguay","Ecuador","USA","Espana","Francia","Italia","Alemania","Portugal","Reino Unido","Otro"]} />
                     </div>
-                    <FieldInput label="Moneda" value={buf.currency} onChange={setF("currency")} half opts={["ARS","USD","EUR"]} />
+                    <FieldInput label="Moneda principal" value={buf.currency} onChange={v => { setF("currency")(v); setBuf(b => ({ ...b, currencies: (b.currencies ?? [b.currency ?? "ARS"]).includes(v) ? b.currencies : [...(b.currencies ?? [b.currency ?? "ARS"]), v] })); }} half opts={["ARS","USD","EUR"]} />
+                  </div>
+                  <div style={{ marginBottom: 8 }}>
+                    <label style={{ fontSize: 9, color: "var(--muted)", fontWeight: 700, letterSpacing: ".07em", display: "block", marginBottom: 5 }}>MONEDAS QUE OPERA</label>
+                    <div style={{ display: "flex", gap: 16 }}>
+                      {["ARS","USD","EUR"].map(cur => {
+                        const curs   = buf.currencies ?? [buf.currency ?? "ARS"];
+                        const checked = curs.includes(cur);
+                        const isLast  = checked && curs.length === 1;
+                        return (
+                          <label key={cur} style={{ display:"flex", alignItems:"center", gap:5, fontSize:12, cursor: isLast ? "not-allowed" : "pointer", userSelect:"none", opacity: isLast ? .5 : 1 }}>
+                            <input type="checkbox" checked={checked} disabled={isLast}
+                              onChange={e => setBuf(b => { const p = b.currencies ?? [b.currency ?? "ARS"]; return { ...b, currencies: e.target.checked ? [...p, cur] : p.filter(c => c !== cur) }; })}
+                              style={{ accentColor:"var(--accent)", width:13, height:13 }} />
+                            <span style={{ fontWeight:700, color: checked ? "var(--text)" : "var(--muted)" }}>{cur}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
                   </div>
                   <div style={divider} />
                   <div style={{ fontSize:10, color:"var(--muted)", fontWeight:700, letterSpacing:".08em", margin:"10px 0 8px" }}>CONTACTO</div>

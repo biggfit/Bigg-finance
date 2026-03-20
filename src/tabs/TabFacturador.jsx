@@ -1,8 +1,8 @@
-import { memo, useState, useMemo, useCallback, useRef } from "react";
+import { memo, useState, useMemo, useCallback, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
 import { useStore } from "../lib/context";
 import { makeType, MONTHS, AVAILABLE_YEARS, DOCS, CUENTAS, CUENTA_LABEL, COMP_TYPES, SYM, uid, CURRENCIES, COMPANIES } from "../lib/helpers";
-import { todayDmy } from "../data/franchisor";
+import { todayDmy, getCompanyCurrencies, getFranchiseCurrencies } from "../data/franchisor";
 import { TypePill } from "../components/atoms";
 import PendientesPanel from "../components/PendientesPanel";
 import { buildFacturaPDF, buildInvoicePDF, buildInvoiceHtml, buildCombinedInvoicesHtml, printInvoice, downloadTextAsPDF } from "../lib/pdf";
@@ -48,7 +48,8 @@ const TIPOS_MOVIMIENTO  = ["PAGO","PAGO_PAUTA","PAGO_ENVIADO"];
 // Pasos: 1-tipo  2-sede  3-formulario
 function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, prefillComp }) {
   const { franchises, comps, activeCompany } = useStore();
-  const activeCurrency = COMPANIES[activeCompany]?.currency ?? "ARS";
+  const activeCurrency    = COMPANIES[activeCompany]?.currency ?? "ARS";
+  const allowedCurrencies = getCompanyCurrencies(activeCompany, franchisor);
   const activeFr = franchises.filter(f => f.activa !== false).sort((a,b) => a.name.localeCompare(b.name, "es"));
 
   const todayIso = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}-${String(n.getDate()).padStart(2,"0")}`; };
@@ -89,6 +90,15 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
   const [currency,    setCurrency]    = useState(activeCurrency);
   const [movCurrency, setMovCurrency] = useState(activeCurrency);
 
+  // ── Reset sede cuando cambia la sociedad activa ────────────────────────────
+  useEffect(() => {
+    setFrId("");
+    setFrSearch("");
+    setStep(s => s > 1 ? 2 : s);
+    setCurrency(COMPANIES[activeCompany]?.currency ?? "ARS");
+    setMovCurrency(COMPANIES[activeCompany]?.currency ?? "ARS");
+  }, [activeCompany]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const fr     = activeFr.find(f => f.id === parseInt(frId));
   const isAR   = fr?.country === "Argentina";
   const applyIVA = !!(fr?.applyIVA);
@@ -102,9 +112,12 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
 
   const fmtBig = (v) => v.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  const filteredFr = frSearch.trim()
-    ? activeFr.filter(f => f.name.toLowerCase().includes(frSearch.toLowerCase()))
-    : activeFr;
+  const frForCompany = activeFr.filter(f =>
+    getFranchiseCurrencies(f).some(c => allowedCurrencies.includes(c))
+  );
+  const filteredFr = frForCompany.filter(f =>
+    !frSearch.trim() || f.name.toLowerCase().includes(frSearch.toLowerCase())
+  );
 
   const inputS = { padding: "9px 12px", fontSize: 14, borderRadius: 8, background: "var(--bg)", border: "1px solid var(--border2)", color: "var(--text)", fontFamily: "var(--font)", width: "100%", boxSizing: "border-box" };
   const labelS = { fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: ".08em", display: "block", marginBottom: 6 };
@@ -347,14 +360,19 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
               <div>
                 <label style={labelS}>MONEDA</label>
                 <div style={{ display: "flex", gap: 6 }}>
-                  {CURRENCIES.map(cur => (
-                    <button key={cur} onClick={() => { setCurrency(cur); setPreview(null); }} style={{
-                      padding: "8px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", border: "none", fontFamily: "var(--font)",
-                      background: currency === cur ? "var(--accent)" : "var(--bg)",
-                      color: currency === cur ? "#1e2022" : "var(--muted)",
-                      outline: currency === cur ? "none" : "1px solid var(--border2)",
-                    }}>{cur}</button>
-                  ))}
+                  {CURRENCIES.map(cur => {
+                    const allowed = allowedCurrencies.includes(cur);
+                    return (
+                      <button key={cur} onClick={() => { if (allowed) { setCurrency(cur); setPreview(null); } }} style={{
+                        padding: "8px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700,
+                        cursor: allowed ? "pointer" : "not-allowed", border: "none", fontFamily: "var(--font)",
+                        background: currency === cur ? "var(--accent)" : "var(--bg)",
+                        color: currency === cur ? "#1e2022" : allowed ? "var(--muted)" : "var(--dim)",
+                        outline: currency === cur ? "none" : "1px solid var(--border2)",
+                        opacity: allowed ? 1 : 0.3,
+                      }} title={allowed ? cur : `${cur} no habilitado para ${activeCompany}`}>{cur}</button>
+                    );
+                  })}
                 </div>
               </div>
               <div>
@@ -511,14 +529,19 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
               <div>
                 <label style={labelS}>MONEDA</label>
                 <div style={{ display: "flex", gap: 6 }}>
-                  {CURRENCIES.map(cur => (
-                    <button key={cur} onClick={() => setMovCurrency(cur)} style={{
-                      padding: "8px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", border: "none", fontFamily: "var(--font)",
-                      background: movCurrency === cur ? "var(--accent)" : "var(--bg)",
-                      color: movCurrency === cur ? "#1e2022" : "var(--muted)",
-                      outline: movCurrency === cur ? "none" : "1px solid var(--border2)",
-                    }}>{cur}</button>
-                  ))}
+                  {CURRENCIES.map(cur => {
+                    const allowed = allowedCurrencies.includes(cur);
+                    return (
+                      <button key={cur} onClick={() => { if (allowed) setMovCurrency(cur); }} style={{
+                        padding: "8px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700,
+                        cursor: allowed ? "pointer" : "not-allowed", border: "none", fontFamily: "var(--font)",
+                        background: movCurrency === cur ? "var(--accent)" : "var(--bg)",
+                        color: movCurrency === cur ? "#1e2022" : allowed ? "var(--muted)" : "var(--dim)",
+                        outline: movCurrency === cur ? "none" : "1px solid var(--border2)",
+                        opacity: allowed ? 1 : 0.3,
+                      }} title={allowed ? cur : `${cur} no habilitado para ${activeCompany}`}>{cur}</button>
+                    );
+                  })}
                 </div>
               </div>
               <div>
@@ -588,7 +611,13 @@ function getCountryCur(country) {
 function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchisor }) {
   const { franchises, activeCompany } = useStore();
   const activeFr = useMemo(() => franchises.filter(f => f.activa !== false).sort((a,b) => a.name.localeCompare(b.name, "es")), [franchises]);
-  const activeCurrency = COMPANIES[activeCompany]?.currency ?? "ARS";
+  const activeCurrency    = COMPANIES[activeCompany]?.currency ?? "ARS";
+  const allowedCurrencies = getCompanyCurrencies(activeCompany, franchisor);
+
+  // Solo las sedes cuya moneda solapa con las habilitadas para la sociedad activa
+  const frForCompany = useMemo(() =>
+    activeFr.filter(f => getFranchiseCurrencies(f).some(c => allowedCurrencies.includes(c))),
+  [activeFr, allowedCurrencies]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [crmMonth, setCrmMonth] = useState(monthProp);
   const [crmYear,  setCrmYear]  = useState(yearProp);
@@ -609,7 +638,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
     return map;
   });
 
-  const makeRows = () => activeFr.map(fr => ({
+  const makeRows = (fr_list = frForCompany) => fr_list.map(fr => ({
     frId: fr.id, frName: fr.name, currency: activeCurrency, country: fr.country,
     royaltyContrato: parseFloat(fr.royaltyPct ?? "7"),
     royaltyFactura:  parseFloat(fr.royaltyPct ?? "7"),
@@ -617,9 +646,16 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
     biggEyeId: fr.biggEyeId ?? null,
   }));
 
-  const [rows,     setRows]     = useState(makeRows);
+  const [rows,     setRows]     = useState(() => makeRows());
   const [selected, setSelected] = useState(new Set());
   const [filters,  setFilters]  = useState({ frName: "", country: "" });
+
+  // Reset filas cuando cambia la sociedad activa
+  useEffect(() => {
+    setRows(makeRows());
+    setSelected(new Set());
+    setCrmLoaded(false);
+  }, [activeCompany]); // eslint-disable-line react-hooks/exhaustive-deps
   const [openFilter, setOpenFilter] = useState(null);
 
   const updateRow = (idx, field, val) =>
@@ -641,13 +677,13 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
 
   const countriesWithTc = useMemo(() => {
     const seen = new Set();
-    return activeFr
+    return frForCompany
       .filter(fr => fr.country && fr.country !== "Argentina")
       .map(fr => fr.country)
       .filter(c => { if (seen.has(c)) return false; seen.add(c); return true; })
       // EUR y USD son monedas de facturación final — no necesitan TC
       .filter(c => { const code = getCountryCur(c).code; return code !== "USD" && code !== "EUR"; });
-  }, [activeFr]);
+  }, [frForCompany]);
 
   const tcCargados = countriesWithTc.filter(c => parseFloat(tcMap[c]) > 0).length;
 
@@ -715,21 +751,22 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
   };
 
   const ventasN = (r) => parseFloat(String(r.ventas).replace(/\./g, "").replace(",", ".")) || 0;
-  const billableRows = rows.map((r, i) => ({ ...r, _origIdx: i })).filter(r => ventasN(r) > 0);
+  const billableRows  = rows.map((r, i) => ({ ...r, _origIdx: i })).filter(r => ventasN(r) > 0);
+  const fullDtoCount  = rows.filter(r => ventasN(r) > 0 && r.royaltyFactura === 0).length;
   // Si hay checkboxes marcados, solo los seleccionados con ventas; si no, todos con ventas
   const toProcess = selected.size > 0
     ? billableRows.filter(r => selected.has(r._origIdx))
     : billableRows;
 
   const filteredRows = useMemo(() =>
-    rows.map((r, i) => ({ ...r, _origIdx: i })).filter(r =>
-      (!filters.frName  || r.frName.toLowerCase().includes(filters.frName.toLowerCase())) &&
-      (!filters.country || (r.country ?? "").toLowerCase().includes(filters.country.toLowerCase()))
-    ),
+    rows.map((r, i) => ({ ...r, _origIdx: i }))
+      .filter(r =>
+        (!filters.frName  || r.frName.toLowerCase().includes(filters.frName.toLowerCase())) &&
+        (!filters.country || (r.country ?? "").toLowerCase().includes(filters.country.toLowerCase()))
+      )
+      .sort((a, b) => (a.country ?? "").localeCompare(b.country ?? "", "es")),
     [rows, filters]
   );
-
-  const allFilteredSelected = filteredRows.length > 0 && filteredRows.every(r => selected.has(r._origIdx));
 
   const handleConfirm = async (skipFacturante = false) => {
     setStage("done");
@@ -965,112 +1002,145 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
         </div>
       )}
 
-      {/* Tabla */}
-      <div className="card">
-        <div className="tbl-wrap"><table>
-          <thead>
-            <tr>
-              <th style={{ width: 32 }}>
-                <input type="checkbox" style={{ accentColor: "var(--accent)", cursor: "pointer" }}
-                  checked={allFilteredSelected}
-                  onChange={e => {
-                    if (e.target.checked) setSelected(new Set(filteredRows.map(r => r._origIdx)));
-                    else setSelected(new Set());
-                  }} />
-              </th>
-              <th>Sede <FilterPopover col="frName" label="sede" /></th>
-              <th>País <FilterPopover col="country" label="país" /></th>
-              <th style={{ textAlign: "right" }}>Ventas (local)</th>
-              <th style={{ textAlign: "center" }}>Reg. contrato</th>
-              <th style={{ textAlign: "center" }}>Reg. factura</th>
-              <th style={{ textAlign: "center" }}>Dto. efectivo</th>
-              <th style={{ textAlign: "right" }}>Fee</th>
-              <th style={{ width: 32 }}></th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredRows.map(r => {
-              const i      = r._origIdx;
-              const cc     = getCountryCur(r.country);
-              const isAR   = r.country === "Argentina";
-              const hasV   = ventasN(r) > 0;
-              const fee    = rowFee(r);
-              const dto    = dtoDisplay(r);
-              const dtoCol = dto >= 50 ? "var(--red)" : dto > 0 ? "var(--gold)" : "var(--muted)";
-              const isSel  = selected.has(i);
-              return (
-                <tr key={r.frId} style={{ background: isSel ? "rgba(96,165,250,.06)" : "transparent" }}>
-                  <td>
-                    <input type="checkbox" style={{ accentColor: "var(--accent)", cursor: "pointer" }}
-                      checked={isSel}
-                      onChange={e => {
-                        setSelected(prev => { const n = new Set(prev); e.target.checked ? n.add(i) : n.delete(i); return n; });
-                      }} />
-                  </td>
-                  <td style={{ fontSize: 12, fontWeight: 600 }}>
-                    {r.frName}
-                    {!isAR && <span className="pill" style={{ marginLeft: 5, fontSize: 8, color: "var(--cyan)", background: "rgba(34,211,238,.1)" }}>LATAM</span>}
-                  </td>
-                  <td style={{ fontSize: 11, color: "var(--muted)" }}>
-                    {r.country ?? "—"}
-                    {!isAR && <div style={{ fontSize: 9, marginTop: 1 }}>{cc.label}</div>}
-                  </td>
-                  <td>
-                    <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
-                      <span style={{ fontSize: 10, color: "var(--muted)" }}>{cc.sym}</span>
-                      <input value={r.ventas}
-                        onChange={e => updateRow(i, "ventas", e.target.value.replace(/[^\d,.]/g, ""))}
-                        onBlur={e => updateRow(i, "ventas", formatCurrencyInput(e.target.value.replace(/\./g, ""), cc.code))}
-                        onKeyDown={e => { if (e.key === "Enter" || e.key === "Tab") updateRow(i, "ventas", formatCurrencyInput(e.target.value.replace(/\./g, ""), cc.code)); }}
-                        placeholder="0" inputMode="decimal" style={{ ...inS, width: 120 }} />
-                    </div>
-                  </td>
-                  <td style={{ textAlign: "center" }}>
-                    <span className="mono" style={{ fontSize: 12, color: "var(--muted)" }}>{r.royaltyContrato}%</span>
-                  </td>
-                  <td style={{ textAlign: "center" }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 2 }}>
-                      <input type="number" value={r.royaltyFactura} min="0" max={r.royaltyContrato} step="0.5"
-                        onChange={e => updateRow(i, "royaltyFactura", Math.min(r.royaltyContrato, Math.max(0, parseFloat(e.target.value) || 0)))}
-                        style={{ ...inS, width: 52, textAlign: "center", color: r.royaltyFactura < r.royaltyContrato ? "var(--gold)" : "var(--text)" }} />
-                      <span style={{ fontSize: 11, color: "var(--muted)" }}>%</span>
-                    </div>
-                  </td>
-                  <td style={{ textAlign: "center" }}>
-                    {dto > 0
-                      ? <span className="pill mono" style={{ fontSize: 11, fontWeight: 800, color: dtoCol, background: dto >= 50 ? "rgba(255,107,122,.1)" : "rgba(251,191,36,.1)" }}>{dto}%</span>
-                      : <span style={{ color: "var(--muted)", fontSize: 11 }}>—</span>}
-                  </td>
-                  <td className="mono" style={{ textAlign: "right", fontSize: 12, fontWeight: 700 }}>
-                    {hasV
-                      ? <span style={{ color: fee <= 0 ? "var(--muted)" : "var(--green)" }}>
-                          {isAR ? `$ ${fee.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : `${cc.sym} ${fee.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                          {fee <= 0 && <div style={{ fontSize: 9, color: "var(--muted)", fontWeight: 400 }}>100% dto.</div>}
-                        </span>
-                      : <span style={{ color: "var(--muted)" }}>—</span>}
-                  </td>
-                  <td>
-                    <button onClick={() => { deleteRow(i); setSelected(p => { const n=new Set(p); n.delete(i); return n; }); }}
-                      title="Quitar" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 13, padding: "2px 5px", borderRadius: 4 }}
-                      onMouseEnter={e => e.currentTarget.style.color="var(--red)"}
-                      onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}>✕</button>
-                  </td>
-                </tr>
-              );
-            })}
-            {filteredRows.length === 0 && (
-              <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--muted)", fontSize: 12, padding: 24 }}>No hay sedes que coincidan con los filtros</td></tr>
-            )}
-          </tbody>
-        </table></div>
-      </div>
+      {/* Tablas agrupadas por moneda de facturación */}
+      {(() => {
+        // Agrupar filteredRows por moneda de facturación final
+        const groups = {};
+        filteredRows.forEach(r => {
+          const isAR = r.country === "Argentina";
+          const billingCur = isAR ? "ARS" : getCountryCur(r.country).code === "EUR" ? "EUR" : "USD";
+          if (!groups[billingCur]) groups[billingCur] = [];
+          groups[billingCur].push(r);
+        });
+
+        const GROUP_LABEL = { USD: "🌎 Factura en USD", EUR: "🇪🇺 Factura en EUR", ARS: "🇦🇷 Factura en ARS" };
+        const GROUP_COLOR = { USD: "var(--blue)", EUR: "var(--gold)", ARS: "var(--accent)" };
+        const ORDER       = ["ARS", "USD", "EUR"];
+        const present     = ORDER.filter(k => groups[k]?.length > 0);
+
+        if (present.length === 0) return (
+          <div className="card" style={{ padding: "24px", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
+            No hay sedes que coincidan con los filtros
+          </div>
+        );
+
+        return present.map(billingCur => {
+          const groupRows = groups[billingCur];
+          const allGroupSel = groupRows.length > 0 && groupRows.every(r => selected.has(r._origIdx));
+          return (
+            <div key={billingCur} className="card" style={{ marginBottom: 12 }}>
+              {/* Cabecera del bloque */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderBottom: "1px solid var(--border2)" }}>
+                <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".07em", color: GROUP_COLOR[billingCur] }}>
+                  {GROUP_LABEL[billingCur]}
+                </span>
+                <span style={{ fontSize: 11, color: "var(--muted)" }}>{groupRows.length} sede{groupRows.length !== 1 ? "s" : ""}</span>
+              </div>
+              <div className="tbl-wrap"><table style={{ tableLayout: "fixed", width: "100%" }}>
+                <CrmCols />
+                <thead>
+                  <tr>
+                    <th style={{ width: 36 }}>
+                      <input type="checkbox" style={{ accentColor: "var(--accent)", cursor: "pointer" }}
+                        checked={allGroupSel}
+                        onChange={e => {
+                          setSelected(prev => {
+                            const n = new Set(prev);
+                            groupRows.forEach(r => e.target.checked ? n.add(r._origIdx) : n.delete(r._origIdx));
+                            return n;
+                          });
+                        }} />
+                    </th>
+                    <th>Sede <FilterPopover col="frName" label="sede" /></th>
+                    <th>País <FilterPopover col="country" label="país" /></th>
+                    <th style={{ textAlign: "right" }}>Ventas</th>
+                    <th style={{ textAlign: "center" }}>% Cto.</th>
+                    <th style={{ textAlign: "center" }}>% Fact.</th>
+                    <th style={{ textAlign: "center" }}>Dto.</th>
+                    <th style={{ textAlign: "right" }}>Fee</th>
+                    <th style={{ width: 32 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {groupRows.map(r => {
+                    const i      = r._origIdx;
+                    const cc     = getCountryCur(r.country);
+                    const isAR   = r.country === "Argentina";
+                    const hasV   = ventasN(r) > 0;
+                    const fee    = rowFee(r);
+                    const dto    = dtoDisplay(r);
+                    const dtoCol = dto >= 50 ? "var(--red)" : dto > 0 ? "var(--gold)" : "var(--muted)";
+                    const isSel  = selected.has(i);
+                    return (
+                      <tr key={r.frId} style={{ background: isSel ? "rgba(96,165,250,.06)" : "transparent" }}>
+                        <td>
+                          <input type="checkbox" style={{ accentColor: "var(--accent)", cursor: "pointer" }}
+                            checked={isSel}
+                            onChange={e => {
+                              setSelected(prev => { const n = new Set(prev); e.target.checked ? n.add(i) : n.delete(i); return n; });
+                            }} />
+                        </td>
+                        <td style={{ fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.frName}>{r.frName}</td>
+                        <td style={{ fontSize: 11, color: "var(--muted)" }}>
+                          {r.country ?? "—"}
+                          {!isAR && <span style={{ fontSize: 9, color: "var(--dim)", marginLeft: 4 }}>· {cc.code}</span>}
+                        </td>
+                        <td>
+                          <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
+                            <span style={{ fontSize: 10, color: "var(--muted)" }}>{cc.sym}</span>
+                            <input value={r.ventas}
+                              onChange={e => updateRow(i, "ventas", e.target.value.replace(/[^\d,.]/g, ""))}
+                              onBlur={e => updateRow(i, "ventas", formatCurrencyInput(e.target.value.replace(/\./g, ""), cc.code))}
+                              onKeyDown={e => { if (e.key === "Enter" || e.key === "Tab") updateRow(i, "ventas", formatCurrencyInput(e.target.value.replace(/\./g, ""), cc.code)); }}
+                              placeholder="0" inputMode="decimal" style={{ ...inS, width: 120 }} />
+                          </div>
+                        </td>
+                        <td style={{ textAlign: "center" }}>
+                          <span className="mono" style={{ fontSize: 12, color: "var(--muted)" }}>{r.royaltyContrato}%</span>
+                        </td>
+                        <td style={{ textAlign: "center" }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 2 }}>
+                            <input type="number" value={r.royaltyFactura} min="0" max={r.royaltyContrato} step="0.5"
+                              onChange={e => updateRow(i, "royaltyFactura", Math.min(r.royaltyContrato, Math.max(0, parseFloat(e.target.value) || 0)))}
+                              style={{ ...inS, width: 52, textAlign: "center", color: r.royaltyFactura < r.royaltyContrato ? "var(--gold)" : "var(--text)" }} />
+                            <span style={{ fontSize: 11, color: "var(--muted)" }}>%</span>
+                          </div>
+                        </td>
+                        <td style={{ textAlign: "center" }}>
+                          {dto > 0
+                            ? <span className="pill mono" style={{ fontSize: 11, fontWeight: 800, color: dtoCol, background: dto >= 50 ? "rgba(255,107,122,.1)" : "rgba(251,191,36,.1)" }}>{dto}%</span>
+                            : <span style={{ color: "var(--muted)", fontSize: 11 }}>—</span>}
+                        </td>
+                        <td className="mono" style={{ textAlign: "right", fontSize: 12, fontWeight: 700 }}>
+                          {hasV
+                            ? <span style={{ color: fee <= 0 ? "var(--muted)" : "var(--green)" }}>
+                                {isAR ? `$ ${fee.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : `${cc.sym} ${fee.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                                {fee <= 0 && <div style={{ fontSize: 9, color: "var(--muted)", fontWeight: 400 }}>100% dto.</div>}
+                              </span>
+                            : <span style={{ color: "var(--muted)" }}>—</span>}
+                        </td>
+                        <td>
+                          <button onClick={() => { deleteRow(i); setSelected(p => { const n=new Set(p); n.delete(i); return n; }); }}
+                            title="Quitar" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 13, padding: "2px 5px", borderRadius: 4 }}
+                            onMouseEnter={e => e.currentTarget.style.color="var(--red)"}
+                            onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}>✕</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table></div>
+            </div>
+          );
+        });
+      })()}
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 14, alignItems: "center" }}>
         <span style={{ fontSize: 11, color: "var(--muted)", alignSelf: "center" }}>
           {billableRows.length} con ventas
           {selected.size > 0 && <span style={{ color: "var(--accent)", marginLeft: 6 }}>· {toProcess.length} seleccionado{toProcess.length !== 1 ? "s" : ""}</span>}
-          {rows.filter(r => ventasN(r) > 0 && r.royaltyFactura === 0).length > 0 &&
-            <span style={{ marginLeft: 6 }}>· {rows.filter(r => ventasN(r) > 0 && r.royaltyFactura === 0).length} con 100% dto.</span>}
+          {fullDtoCount > 0 &&
+            <span style={{ marginLeft: 6 }}>· {fullDtoCount} con 100% dto.</span>}
         </span>
         <button className="ghost" disabled={toProcess.length === 0} style={{ opacity: toProcess.length === 0 ? 0.4 : 1, fontSize: 12 }} onClick={() => handleConfirm(true)}>
           ✓ Guardar sin emitir ({toProcess.length})
@@ -1085,8 +1155,25 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
 
 
 // ── Excel import helpers (nueva lógica: cuenta + signo determina tipo) ──────
-const CUENTAS_COMP = new Set(["FEE","PAUTA","INTERUSOS","SPONSORS","OTROS_INGRESOS"]);
-const CUENTAS_MOV  = new Set(["PAGO","PAGO_PAUTA","PAGO_ENVIADO"]);
+const CUENTAS_COMP    = new Set(["FEE","PAUTA","INTERUSOS","SPONSORS","OTROS_INGRESOS"]);
+const CUENTAS_MOV     = new Set(["PAGO","PAGO_PAUTA","PAGO_ENVIADO"]);
+const VALID_CURRENCIES = new Set(CURRENCIES); // module-scope — reused across calls
+
+// Columnas fijas del CRM — compartidas entre bloques para alineación visual
+// Total ≈ 748px → cabe sin scroll horizontal en pantallas de 900px+
+const CrmCols = () => (
+  <colgroup>
+    <col style={{ width: 32 }} />
+    <col style={{ width: 130 }} />
+    <col style={{ width: 100 }} />
+    <col style={{ width: 140 }} />
+    <col style={{ width: 72 }} />
+    <col style={{ width: 90 }} />
+    <col style={{ width: 72 }} />
+    <col style={{ width: 80 }} />
+    <col style={{ width: 32 }} />
+  </colgroup>
+);
 
 function parseDate(raw) {
   if (!raw) return null;
@@ -1120,16 +1207,35 @@ function parseDate(raw) {
   return null;
 }
 
-function validateRow(r, _frMap) {
+// frMap: Map<id, franchise> — pre-built by caller for O(1) lookup
+function validateRow(r, frMap, allowedCompanyCurrencies) {
   const errs = [];
   if (!r.franchiseId)         errs.push("Sede no encontrada");
   if (!r.date)                errs.push("Fecha inválida");
   if (!r.amount || isNaN(r.amount) || r.amount === 0) errs.push("Importe inválido o cero");
   if (!r.type)                errs.push("Cuenta inválida");
+
+  // Nivel 1 — moneda vs sociedad activa
+  if (Array.isArray(allowedCompanyCurrencies) && allowedCompanyCurrencies.length > 0 && r.currency) {
+    if (!allowedCompanyCurrencies.includes(r.currency)) {
+      errs.push(`Moneda ${r.currency} no habilitada para la sociedad`);
+    }
+  }
+
+  // Nivel 2 — moneda vs monedas habilitadas de la sede
+  if (r.franchiseId && frMap && r.currency) {
+    const fr = frMap.get(r.franchiseId);
+    if (fr && !getFranchiseCurrencies(fr).includes(r.currency)) {
+      errs.push(`Moneda ${r.currency} no opera en ${fr.name}`);
+    }
+  }
+
   return errs;
 }
 
-function parseExcelRows(data, franchises) {
+function parseExcelRows(data, franchises, allowedCompanyCurrencies) {
+  const frMap = new Map(franchises.map(f => [f.id, f]));
+  const frByName = new Map(franchises.map(f => [f.name.toLowerCase(), f]));
   return data.map((row, idx) => {
     // normalize keys to lowercase
     const r = {};
@@ -1142,11 +1248,10 @@ function parseExcelRows(data, franchises) {
     const conceptoRaw = String(r.concepto ?? r.descripcion ?? r.ref ?? r.referencia ?? "").trim();
     const monedaRaw   = String(r.moneda ?? r.currency ?? r.currencies ?? "").trim().toUpperCase();
 
-    // match sede — exact only, sin fuzzy
-    const fr = franchises.find(f => f.name.toLowerCase() === sedeName.toLowerCase());
+    // match sede — exact only, sin fuzzy (O(1) con Map)
+    const fr = frByName.get(sedeName.toLowerCase());
 
     // moneda: usar la del excel si es válida, sino la de la sede
-    const VALID_CURRENCIES = new Set(["ARS", "USD", "EUR"]);
     const currency = VALID_CURRENCIES.has(monedaRaw) ? monedaRaw : (fr?.currency ?? "ARS");
 
     // deduce type
@@ -1182,14 +1287,16 @@ function parseExcelRows(data, franchises) {
       excluded: false,
       errors:   [],
     };
-    built.errors = validateRow(built, null);
+    built.errors = validateRow(built, frMap, allowedCompanyCurrencies);
     return built;
   });
 }
 
 function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
   const { franchises, activeCompany } = useStore();
-  const activeCurrency = COMPANIES[activeCompany]?.currency ?? "ARS";
+  const activeCurrency      = COMPANIES[activeCompany]?.currency ?? "ARS";
+  const allowedCurrencies   = getCompanyCurrencies(activeCompany, franchisor);
+  const frMap = useMemo(() => new Map(franchises.map(f => [f.id, f])), [franchises]);
   const fileInputRef = useRef(null);
   const [stage,      setStage]      = useState(FACT_STAGE.IDLE);
   const [rows,       setRows]       = useState([]);
@@ -1211,7 +1318,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
       const sheetName = wb.SheetNames.find(n => n.toLowerCase() === "plantilla") ?? wb.SheetNames[0];
       const ws   = wb.Sheets[sheetName];
       const data = XLSX.utils.sheet_to_json(ws, { defval: "", header: undefined });
-      setRows(parseExcelRows(data, franchises));
+      setRows(parseExcelRows(data, franchises, allowedCurrencies));
       setStage(FACT_STAGE.PREVIEW);
     } catch (err) {
       alert("No se pudo leer el archivo. Asegurate de subir un .xlsx o .csv.");
@@ -1226,7 +1333,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
     setRows(prev => prev.map((r, i) => {
       if (i !== editIdx) return r;
       const updated = { ...r, ...editBuf, amount: parseFloat(editBuf.amount) || 0, date: parseDate(editBuf.date) || r.date };
-      updated.errors = validateRow(updated, new Map());
+      updated.errors = validateRow(updated, frMap, allowedCurrencies);
       return updated;
     }));
     setEditIdx(null);
@@ -1553,7 +1660,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
                                   setRows(prev => prev.map((row, ri) => {
                                     if (ri !== i) return row;
                                     const updated = { ...row, franchiseId: fr.id, franchiseName: fr.name, currency: activeCurrency };
-                                    updated.errors = validateRow(updated, null);
+                                    updated.errors = validateRow(updated, frMap, allowedCurrencies);
                                     return updated;
                                   }));
                                 }}

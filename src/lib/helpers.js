@@ -61,6 +61,8 @@ export const TIPOS_MOVIMIENTO  = ["PAGO","PAGO_PAUTA","PAGO_ENVIADO"];
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 /** Format absolute value with currency symbol */
 export const fmt  = (v, c) => `${SYM[c] || "$"}\u202f${Math.abs(v).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/** Format without decimals */
+export const fmt0 = (v, c) => `${SYM[c] || "$"}\u202f${Math.abs(v).toLocaleString("es-AR", { maximumFractionDigits: 0 })}`;
 /** Format with sign prefix */
 export const fmtS = (v, c) => `${v < 0 ? "-" : v > 0 ? "+" : ""}${fmt(v, c)}`;
 /** Stable unique ID for new comprobantes */
@@ -105,7 +107,7 @@ export const compCurrency = (c) => c.currency ?? COMPANIES[compEmpresa(c)]?.curr
  * filterCurrency: si se pasa, solo aplica el saldo cuando la moneda coincide.
  * Si empresa es null, suma todas las empresas (vista consolidada).
  */
-function getSaldoInicial(si, key, empresa, frCurrency = null, filterCurrency = null) {
+export function getSaldoInicial(si, key, empresa, frCurrency = null, filterCurrency = null) {
   const resolve = (entry) => {
     if (entry === undefined || entry === null) return 0;
     if (typeof entry === "object" && "saldo" in entry) {

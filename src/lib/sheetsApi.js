@@ -1,4 +1,5 @@
 // ─── Google Sheets API layer (via Apps Script Web App) ────────────────────────
+import { getFranchiseCurrencies } from "../data/franchisor";
 // Todas las operaciones de lectura/escritura pasan por acá.
 // Configurar en .env.local:
 //   VITE_SHEETS_API_URL=https://script.google.com/macros/s/.../exec
@@ -99,10 +100,10 @@ export async function fetchSaldos() {
 export async function appendComp(frId, comp) {
   // Convertir date (DD/MM/YYYY) → fecha_emision (YYYY-MM-DD) para el Sheet
   // y omitir month/year que son campos derivados internos
-  const { date, month, year, ...rest } = comp;
+  const { date, month, year, frId: _oldFrId, ...rest } = comp;
   const [dd, mm, yyyy] = (date ?? "").split("/");
   const fecha_emision = dd && mm && yyyy ? `${yyyy}-${mm}-${dd}` : "";
-  return post({ action: "add", comp: { frId: String(frId), ...rest, fecha_emision } });
+  return post({ action: "add", comp: { ...rest, frId: String(frId), fecha_emision } });
 }
 
 /**
@@ -133,6 +134,35 @@ export async function removeComp(frId, compId) {
 
 // ─── Franquicias ──────────────────────────────────────────────────────────────
 
+// Países por región → moneda por defecto
+const EUROPA_COUNTRIES  = ["España","Espana","Francia","Italia","Alemania","Portugal","Reino Unido"];
+const LATAM_COUNTRIES   = ["Uruguay","Chile","Colombia","Peru","Mexico","Bolivia","Paraguay","Ecuador"];
+
+/**
+ * Deriva las monedas permitidas de una franquicia a partir de su país,
+ * cuando el campo `currencies` no está guardado en Sheets todavía.
+ * Regla: Argentina→ARS, Europa→EUR, LATAM/USA→USD.
+ * Excepción: "Horneros" opera USD+ARS.
+ */
+function deriveCurrencies(f) {
+  // Si ya tiene currencies guardadas en Sheets, úsalas directamente
+  if (Array.isArray(f.currencies) && f.currencies.length > 0) return f.currencies;
+
+  const name    = (f.name ?? "").toLowerCase();
+  const country = f.country ?? "";
+
+  // Excepción Horneros: opera ARS y USD
+  if (name.includes("horneros")) return ["USD", "ARS"];
+
+  if (country === "Argentina")              return ["ARS"];
+  if (EUROPA_COUNTRIES.includes(country))   return ["EUR"];
+  if (LATAM_COUNTRIES.includes(country))    return ["USD"];
+  if (country === "USA")                    return ["USD"];
+
+  // Fallback: derivar de la moneda principal del registro
+  return getFranchiseCurrencies(f);
+}
+
 /**
  * Carga todas las franquicias desde Sheets.
  * @returns {Franchise[]}
@@ -146,6 +176,7 @@ export async function fetchFranchises() {
     applyIVA:    f.applyIVA === true || f.applyIVA === "TRUE" || f.applyIVA === "true",
     taxExempt:   f.taxExempt === true || f.taxExempt === "TRUE" || f.taxExempt === "true",
     biggEyeId:   f.biggEyeId !== "" && f.biggEyeId != null ? Number(f.biggEyeId) : null,
+    currencies:  deriveCurrencies(f),
   }));
 }
 
