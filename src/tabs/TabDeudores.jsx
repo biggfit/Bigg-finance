@@ -329,25 +329,21 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
     };
   }, [rows, soloPendiente]);
 
-  const downloadXLSX = useCallback(() => {
-    const makeRows = (rows) => rows.map(({ fr, saldoAnt, pagosNet, saldoReal }) => ({
-      "Sede":            fr.name,
-      "País":            fr.country ?? "",
-      "CUIT":            fr.cuit ?? "",
-      "Saldo Anterior":  saldoAnt,
-      "Pagos / Envíos":  pagosNet,
-      "Saldo Real":      saldoReal,
-      "CBU":             fr.cbu ?? "",
-      "Alias":           fr.alias ?? "",
-      "Datos Bancarios": fr.notaFactura ?? "",
+  const downloadDebemos = useCallback((e) => {
+    e.stopPropagation();
+    const data = rowsOtros.map(({ fr, saldoReal }) => ({
+      "Sede":    fr.name ?? "",
+      "CUIT":    fr.cuit ?? "",
+      "Saldo":   saldoReal,
+      "Banco":   fr.banco ?? "",
+      "Cuenta":  fr.alias ?? "",
+      "CBU":     fr.cbu ?? "",
     }));
+    const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
-    const wsDeben = XLSX.utils.json_to_sheet(makeRows(rowsDeben));
-    const wsOtros = XLSX.utils.json_to_sheet(makeRows(rowsOtros));
-    XLSX.utils.book_append_sheet(wb, wsDeben, "NOS DEBEN");
-    XLSX.utils.book_append_sheet(wb, wsOtros, "DEBEMOS");
-    XLSX.writeFile(wb, `saldos_${cutoff.replace(/\//g, "-")}.xlsx`);
-  }, [rowsDeben, rowsOtros, cutoff]);
+    XLSX.utils.book_append_sheet(wb, ws, "DEBEMOS");
+    XLSX.writeFile(wb, `debemos_${cutoff.replace(/\//g, "-")}.xlsx`);
+  }, [rowsOtros, cutoff]);
 
   const thBase = { padding: "8px 12px", fontWeight: 700, fontSize: 11, letterSpacing: ".06em", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" };
 
@@ -436,18 +432,6 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
         </div>
       )}
 
-      {/* Toolbar */}
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <button
-          className="ghost"
-          style={{ fontSize: 11, padding: "3px 10px", display: "flex", alignItems: "center", gap: 5 }}
-          onClick={downloadXLSX}
-          title="Descargar Excel con sedes, saldos y datos bancarios"
-        >
-          ↓ Excel
-        </button>
-      </div>
-
       {/* Caja 1: NOS DEBEN */}
       <div className="card" style={{ overflow: "hidden" }}>
         <div
@@ -493,7 +477,15 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
             </span>
           )}
           <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 400 }}>{rowsOtros.length} sedes</span>
-          <span style={{ marginLeft: "auto", fontSize: 9, color: "var(--muted)", opacity: 0.6 }}>{showOtros ? "▲" : "▼"}</span>
+          <button
+            className="ghost"
+            style={{ marginLeft: "auto", fontSize: 10, padding: "2px 8px", color: "var(--muted)", display: "flex", alignItems: "center", gap: 4 }}
+            onClick={downloadDebemos}
+            title="Descargar Excel: sede, CUIT, saldo, banco, cuenta, CBU"
+          >
+            ↓ XLS
+          </button>
+          <span style={{ fontSize: 9, color: "var(--muted)", opacity: 0.6 }}>{showOtros ? "▲" : "▼"}</span>
         </div>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed" }}>
