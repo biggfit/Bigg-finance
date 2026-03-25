@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
 import { useStore } from "../lib/context";
-import { makeType, MONTHS, AVAILABLE_YEARS, fmt, compCurrency } from "../lib/helpers";
+import { makeType, MONTHS, AVAILABLE_YEARS, fmt, compCurrency, compEmpresa } from "../lib/helpers";
 import { inPeriod, dateMonth, dateYear } from "../data/franchisor";
 
 // ── Pendientes panel ────────────────────────────────────────────────────────
 export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }) {
-  const { franchises, comps, editComp, deleteComp } = useStore();
+  const { franchises, comps, editComp, deleteComp, activeCompany } = useStore();
   const [showAfip,       setShowAfip]       = useState(false);
   const [showSinAsignar, setShowSinAsignar] = useState(false);
   const [showPago,       setShowPago]       = useState(false);
@@ -79,11 +79,12 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
             const doc = String(c.type ?? "").split("|")[0];
             return (doc === "FACTURA" || doc === "NC") &&
                    compCurrency(c) === "ARS" &&
-                   !c.facturanteId && !c.invoice;
+                   !c.facturanteId && !c.invoice &&
+                   (!activeCompany || compEmpresa(c) === activeCompany);
           })
           .map(c => ({ fr, comp: c }));
       });
-  }, [franchises, comps]);
+  }, [franchises, comps, activeCompany]);
 
   // Sedes únicas presentes en sinAfipAll (para el dropdown)
   const frOptions = useMemo(() => {
@@ -119,28 +120,31 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
       .flatMap(fr => {
         const frComps = comps[fr.id] ?? [];
         return frComps
-          .filter(c => c.invoice === "Sin asignar")
+          .filter(c => c.invoice === "Sin asignar" &&
+                       (!activeCompany || compEmpresa(c) === activeCompany))
           .map(c => ({ fr, comp: c }));
       })
       .sort((a, b) => a.fr.name.localeCompare(b.fr.name, "es"));
-  }, [franchises, comps]);
+  }, [franchises, comps, activeCompany]);
 
   // 3. Pagos a cuenta sin factura de pauta
   const pagosSinFactura = useMemo(() => {
     return franchises.filter(f => f.activa !== false).flatMap(fr => {
       const frComps = comps[fr.id] ?? [];
       return frComps
-        .filter(c => c.type === "PAGO_PAUTA")
+        .filter(c => c.type === "PAGO_PAUTA" &&
+                     (!activeCompany || compEmpresa(c) === activeCompany))
         .filter(c => {
           const hasFact = frComps.some(f2 =>
             f2.type === makeType("FACTURA","PAUTA") &&
-            inPeriod(f2, dateMonth(c.date), dateYear(c.date))
+            inPeriod(f2, dateMonth(c.date), dateYear(c.date)) &&
+            (!activeCompany || compEmpresa(f2) === activeCompany)
           );
           return !hasFact;
         })
         .map(c => ({ fr, comp: c }));
     });
-  }, [franchises, comps]);
+  }, [franchises, comps, activeCompany]);
 
   // ── Emitir individual ──
   const handleEmitAfip = async (fr, comp) => {
