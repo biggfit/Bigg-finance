@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 import { useStore } from "../lib/context";
 import { compEmpresa, compCurrency, cmpDate, MONTHS, COMP_TYPES, computeSaldoPrevMes, getSaldoInicial, fmt0 } from "../lib/helpers";
 import { COMPANIES, todayDmy, dmyToIso, isoToDmy } from "../data/franchisor";
@@ -328,6 +329,26 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
     };
   }, [rows, soloPendiente]);
 
+  const downloadXLSX = useCallback(() => {
+    const makeRows = (rows) => rows.map(({ fr, saldoAnt, pagosNet, saldoReal }) => ({
+      "Sede":            fr.name,
+      "País":            fr.country ?? "",
+      "CUIT":            fr.cuit ?? "",
+      "Saldo Anterior":  saldoAnt,
+      "Pagos / Envíos":  pagosNet,
+      "Saldo Real":      saldoReal,
+      "CBU":             fr.cbu ?? "",
+      "Alias":           fr.alias ?? "",
+      "Datos Bancarios": fr.notaFactura ?? "",
+    }));
+    const wb = XLSX.utils.book_new();
+    const wsDeben = XLSX.utils.json_to_sheet(makeRows(rowsDeben));
+    const wsOtros = XLSX.utils.json_to_sheet(makeRows(rowsOtros));
+    XLSX.utils.book_append_sheet(wb, wsDeben, "NOS DEBEN");
+    XLSX.utils.book_append_sheet(wb, wsOtros, "DEBEMOS");
+    XLSX.writeFile(wb, `saldos_${cutoff.replace(/\//g, "-")}.xlsx`);
+  }, [rowsDeben, rowsOtros, cutoff]);
+
   const thBase = { padding: "8px 12px", fontWeight: 700, fontSize: 11, letterSpacing: ".06em", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" };
 
   const thead = () => (
@@ -414,6 +435,18 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
           <button className="ghost" style={{ fontSize: 10, marginTop: 6 }} onClick={() => setMailResult(null)}>Cerrar</button>
         </div>
       )}
+
+      {/* Toolbar */}
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <button
+          className="ghost"
+          style={{ fontSize: 11, padding: "3px 10px", display: "flex", alignItems: "center", gap: 5 }}
+          onClick={downloadXLSX}
+          title="Descargar Excel con sedes, saldos y datos bancarios"
+        >
+          ↓ Excel
+        </button>
+      </div>
 
       {/* Caja 1: NOS DEBEN */}
       <div className="card" style={{ overflow: "hidden" }}>
