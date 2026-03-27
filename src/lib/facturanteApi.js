@@ -33,7 +33,9 @@ export async function emitirComprobante({ franchisor, franchise, comp, referenci
  * Ej: tipoComprobante=1, idComprobante=4521, puntoVenta="0001" → "FA 0001-00004521"
  */
 export function formatInvoiceLabel(tipoComprobante, idComprobante, puntoVenta) {
-  const prefix = { 1: 'FA', 3: 'FB', 6: 'NCA', 8: 'NCB' }[tipoComprobante] ?? 'FC';
+  // Supports both old numeric codes (legacy) and new string codes from Facturante API
+  const legacyMap = { 1: 'FA', 3: 'FB', 6: 'NCA', 8: 'NCB' };
+  const prefix = legacyMap[tipoComprobante] ?? String(tipoComprobante ?? 'FC').toUpperCase();
   const pv  = String(puntoVenta  ?? '1').padStart(4, '0');
   const num = String(idComprobante ?? '0').padStart(8, '0');
   return `${prefix} ${pv}-${num}`;
