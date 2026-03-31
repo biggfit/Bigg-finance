@@ -45,6 +45,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
   // Emisión masiva (pagos a cuenta)
   const [pagoBatchRunning, setPagoBatchRunning]   = useState(false);
   const [pagoBatchProgress, setPagoBatchProgress] = useState(null);
+  const [pagoPreviewQueue, setPagoPreviewQueue]   = useState(null); // null = no preview, array = mostrando preview
 
   // Filtro de período
   const [filterMonth, setFilterMonth] = useState(null);
@@ -551,11 +552,17 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
             >
               ⚠ PAGOS A CUENTA SIN FACTURA — {pagosSinFactura.length} pendiente{pagosSinFactura.length !== 1 ? "s" : ""}
             </span>
-            {!pagoBatchRunning && !pagoBatchProgress && onEmitirPago && (
+            {!pagoBatchRunning && !pagoBatchProgress && !pagoPreviewQueue && onEmitirPago && (
               <button
                 className="btn"
                 style={{ fontSize: 11, padding: "4px 14px", background: "rgba(222,251,151,.18)", color: "var(--gold)", border: "1px solid rgba(222,251,151,.35)" }}
-                onClick={() => handlePagoBatch()}
+                onClick={() => {
+                  const queue = selectedPagoIds.size > 0
+                    ? pagosSinFactura.filter(({ comp }) => selectedPagoIds.has(comp.id))
+                    : pagosSinFactura;
+                  setPagoPreviewQueue(queue);
+                  setShowPago(true);
+                }}
               >
                 ⚡ Emitir {selectedPagoIds.size > 0 ? selectedPagoIds.size : pagosSinFactura.length} documento{(selectedPagoIds.size || pagosSinFactura.length) !== 1 ? "s" : ""}
               </button>
@@ -571,7 +578,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
               <button
                 className="ghost"
                 style={{ fontSize: 10, padding: "3px 10px", color: "var(--red)" }}
-                onClick={() => handlePagoBatch(pagoBatchProgress.errors.map(e => ({ fr: e.fr, comp: e.comp })))}
+                onClick={() => setPagoPreviewQueue(pagoBatchProgress.errors.map(e => ({ fr: e.fr, comp: e.comp })))}
               >
                 ↺ Reintentar {pagoBatchProgress.errors.length} fallido{pagoBatchProgress.errors.length !== 1 ? "s" : ""}
               </button>
@@ -583,6 +590,52 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
               {showPago ? "▲" : "▼"}
             </span>
           </div>
+          {showPago && pagoPreviewQueue && (
+            <div style={{ background: "rgba(0,0,0,.25)", borderRadius: 8, padding: "14px 16px", marginBottom: 8 }}>
+              <div style={{ fontWeight: 800, fontSize: 12, color: "var(--gold)", marginBottom: 10 }}>
+                ⚡ Revisión previa — {pagoPreviewQueue.length} factura{pagoPreviewQueue.length !== 1 ? "s" : ""} a emitir
+              </div>
+              {/* Tabla */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto auto auto", gap: "4px 16px", alignItems: "center", marginBottom: 10 }}>
+                {/* Header */}
+                {["SEDE", "PERÍODO", "TOTAL RECIBIDO", "NETO S/IVA", "IVA 21%"].map(h => (
+                  <span key={h} style={{ fontSize: 9, color: "var(--muted)", fontWeight: 700, letterSpacing: ".08em" }}>{h}</span>
+                ))}
+                {/* Rows */}
+                {pagoPreviewQueue.map(({ fr, comp }, i) => {
+                  const applyIVA   = !!fr.applyIVA;
+                  const total      = comp.amount;
+                  const neto       = applyIVA ? Math.round(total / 1.21 * 100) / 100 : total;
+                  const iva        = applyIVA ? Math.round((total - neto) * 100) / 100 : 0;
+                  const cur        = compCurrency(comp);
+                  return [
+                    <span key={`n${i}`} style={{ fontSize: 12, fontWeight: 700 }}>{fr.name}</span>,
+                    <span key={`p${i}`} style={{ fontSize: 11, color: "var(--muted)" }}>{MONTHS[comp.month]} {comp.year}</span>,
+                    <span key={`t${i}`} className="mono" style={{ fontSize: 12, color: "var(--gold)", fontWeight: 700, textAlign: "right" }}>{fmt(total, cur)}</span>,
+                    <span key={`ne${i}`} className="mono" style={{ fontSize: 11, textAlign: "right" }}>{fmt(neto, cur)}</span>,
+                    <span key={`iv${i}`} className="mono" style={{ fontSize: 11, color: "var(--muted)", textAlign: "right" }}>{applyIVA ? fmt(iva, cur) : "–"}</span>,
+                  ];
+                })}
+              </div>
+              {/* Botones */}
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  className="btn"
+                  style={{ fontSize: 11, padding: "5px 18px", background: "rgba(222,251,151,.2)", color: "var(--gold)", border: "1px solid rgba(222,251,151,.4)" }}
+                  onClick={() => { handlePagoBatch(pagoPreviewQueue); setPagoPreviewQueue(null); }}
+                >
+                  ✓ Confirmar y emitir
+                </button>
+                <button
+                  className="ghost"
+                  style={{ fontSize: 11, padding: "5px 12px" }}
+                  onClick={() => setPagoPreviewQueue(null)}
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
           {showPago && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {/* Fila de selección masiva */}
