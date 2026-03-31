@@ -1,6 +1,6 @@
 // api/facturante.js — Vercel Serverless Function
 //
-// Emite comprobantes electrónicos ante AFIP vía Facturante SOAP API.
+// Emite comprobantes electrónicos ante AFIP vía Facturante SOAP API (WCF).
 // Las credenciales se leen desde variables de entorno (nunca expuestas al browser).
 //
 // Variables de entorno requeridas (Vercel Dashboard → Settings → Environment Variables):
@@ -10,24 +10,37 @@
 //   FACTURANTE_ENDPOINT  →  URL del servicio (testing o producción)
 
 import { request as httpsRequest } from 'https';
+import { request as httpRequest } from 'http';
 
 const ENDPOINT  = process.env.FACTURANTE_ENDPOINT;
 const EMPRESA   = process.env.FACTURANTE_EMPRESA;
 const HASH      = process.env.FACTURANTE_HASH;
 const USUARIO   = process.env.FACTURANTE_USUARIO;
 
+// ─── WCF NAMESPACES (from WSDL) ─────────────────────────────────────────────
+
+const NS_OP  = 'http://www.facturante.com.API';                              // operation namespace
+const NS_DC  = 'http://schemas.datacontract.org/2004/07/FacturanteMVC.API';  // DataContract namespace
+const NS_DTO = 'http://schemas.datacontract.org/2004/07/FacturanteMVC.API.DTOs'; // DTO namespace
+
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 
-// TipoComprobante: doc (FACTURA/NC) × condición IVA del cliente
-const TIPO_COMPROBANTE = {
+// TipoComprobante codes for CrearComprobante (con IVA) — integer IDs
+const TIPO_COMPROBANTE_CON_IVA = {
   'FACTURA|RI': 1,  // Factura A  — Responsable Inscripto
   'FACTURA|EX': 3,  // Factura B  — Exento / Consumidor Final
   'NC|RI':      6,  // Nota de Crédito A
   'NC|EX':      8,  // Nota de Crédito B
 };
 
-// TratamientoImpositivo del cliente receptor
-// Verificar estos códigos contra la documentación de Facturante
+// TipoComprobante codes for CrearComprobanteSinImpuestos — string codes
+const TIPO_COMPROBANTE_SIN_IVA = {
+  'FACTURA': 'F',
+  'NC':      'NC',
+  'ND':      'ND',
+};
+
+// TratamientoImpositivo del cliente receptor (for CrearComprobante)
 const TRAT_IMPOSITIVO = {
   'Responsable Inscripto': 1,
   'Exento':                4,
@@ -35,107 +48,123 @@ const TRAT_IMPOSITIVO = {
   'Monotributista':        6,
 };
 
-// ─── SOAP BUILDERS ────────────────────────────────────────────────────────────
+// ─── SOAP BUILDERS (WCF DataContract format) ─────────────────────────────────
 
-function buildAuth() {
-  return `<Autenticacion>
-      <Empresa>${EMPRESA}</Empresa>
-      <Hash>${HASH}</Hash>
-      <Usuario>${USUARIO}</Usuario>
-    </Autenticacion>`;
+function buildAuthXml() {
+  return `<a:Autenticacion>
+        <b:Empresa>${parseInt(EMPRESA, 10)}</b:Empresa>
+        <b:Hash>${escXml(HASH)}</b:Hash>
+        <b:Usuario>${escXml(USUARIO)}</b:Usuario>
+      </a:Autenticacion>`;
 }
 
-function buildClienteConIVA(franchise) {
+function buildClienteSinIVAXml(franchise) {
   const cuitClean = String(franchise.cuit ?? '').replace(/[-\s]/g, '');
-  return `<Cliente>
-      <NroDocumento>${cuitClean}</NroDocumento>
-      <TipoDocumento>80</TipoDocumento>
-      <RazonSocial>${escXml(franchise.razonSocial ?? '')}</RazonSocial>
-      <DireccionFiscal>${escXml(franchise.domicilio ?? franchise.billingAddress ?? '')}</DireccionFiscal>
-      <Localidad>${escXml(franchise.billingCity ?? '')}</Localidad>
-      <CodigoPostal>${escXml(franchise.billingZip ?? '')}</CodigoPostal>
-      <Provincia>${escXml(franchise.billingState ?? '')}</Provincia>
-      <MailFacturacion>${escXml(franchise.emailFactura ?? '')}</MailFacturacion>
-      <CondicionPago>0</CondicionPago>
-      <TratamientoImpositivo>${TRAT_IMPOSITIVO[franchise.condIVA] ?? 1}</TratamientoImpositivo>
-    </Cliente>`;
+  return `<a:Cliente>
+        <b:CodigoPostal>${escXml(franchise.billingZip ?? '')}</b:CodigoPostal>
+        <b:CondicionPago>0</b:CondicionPago>
+        <b:DireccionFiscal>${escXml(franchise.domicilio ?? franchise.billingAddress ?? '')}</b:DireccionFiscal>
+        <b:Localidad>${escXml(franchise.billingCity ?? '')}</b:Localidad>
+        <b:MailFacturacion>${escXml(franchise.emailFactura ?? '')}</b:MailFacturacion>
+        <b:NroDocumento>${cuitClean}</b:NroDocumento>
+        <b:Provincia>${escXml(franchise.billingState ?? '')}</b:Provincia>
+        <b:RazonSocial>${escXml(franchise.razonSocial ?? '')}</b:RazonSocial>
+      </a:Cliente>`;
 }
 
-function buildClienteSinIVA(franchise) {
+function buildClienteConIVAXml(franchise) {
   const cuitClean = String(franchise.cuit ?? '').replace(/[-\s]/g, '');
-  return `<Cliente>
-      <NroDocumento>${cuitClean}</NroDocumento>
-      <TipoDocumento>80</TipoDocumento>
-      <RazonSocial>${escXml(franchise.razonSocial ?? '')}</RazonSocial>
-      <DireccionFiscal>${escXml(franchise.domicilio ?? franchise.billingAddress ?? '')}</DireccionFiscal>
-      <Localidad>${escXml(franchise.billingCity ?? '')}</Localidad>
-      <CodigoPostal>${escXml(franchise.billingZip ?? '')}</CodigoPostal>
-      <Provincia>${escXml(franchise.billingState ?? '')}</Provincia>
-      <MailFacturacion>${escXml(franchise.emailFactura ?? '')}</MailFacturacion>
-      <CondicionPago>0</CondicionPago>
-    </Cliente>`;
+  return `<a:Cliente>
+        <b:CodigoPostal>${escXml(franchise.billingZip ?? '')}</b:CodigoPostal>
+        <b:CondicionPago>0</b:CondicionPago>
+        <b:DireccionFiscal>${escXml(franchise.domicilio ?? franchise.billingAddress ?? '')}</b:DireccionFiscal>
+        <b:Localidad>${escXml(franchise.billingCity ?? '')}</b:Localidad>
+        <b:MailFacturacion>${escXml(franchise.emailFactura ?? '')}</b:MailFacturacion>
+        <b:NroDocumento>${cuitClean}</b:NroDocumento>
+        <b:Provincia>${escXml(franchise.billingState ?? '')}</b:Provincia>
+        <b:RazonSocial>${escXml(franchise.razonSocial ?? '')}</b:RazonSocial>
+        <b:TipoDocumento>80</b:TipoDocumento>
+        <b:TratamientoImpositivo>${TRAT_IMPOSITIVO[franchise.condIVA] ?? 1}</b:TratamientoImpositivo>
+      </a:Cliente>`;
 }
 
-function buildEncabezado(tipoComprobante, franchisor, comp, referenciaIdComprobante) {
-  const fecha = isoDate(comp.date); // convierte DD/MM/YYYY → YYYY-MM-DD
-  const prefijo = parseInt(franchisor.puntoVenta ?? '1', 10);
+function buildEncabezadoSinIVAXml(tipoStr, franchisor, comp) {
+  const fecha = isoDateTime(comp.date);
+  const prefijo = String(franchisor.puntoVenta ?? '1');
+  return `<a:Encabezado>
+        <b:Bienes>2</b:Bienes>
+        <b:CondicionVenta>1</b:CondicionVenta>
+        <b:EnviarComprobante>true</b:EnviarComprobante>
+        <b:FechaHora>${fecha}</b:FechaHora>
+        <b:Moneda>2</b:Moneda>
+        <b:Observaciones>${escXml(comp.ref ?? '')}</b:Observaciones>
+        <b:Prefijo>${escXml(prefijo)}</b:Prefijo>
+        <b:TipoComprobante>${escXml(tipoStr)}</b:TipoComprobante>
+        <b:TipoDeCambio>1</b:TipoDeCambio>
+      </a:Encabezado>`;
+}
+
+function buildEncabezadoConIVAXml(tipoInt, franchisor, comp, referenciaIdComprobante) {
+  const fecha = isoDateTime(comp.date);
+  const prefijo = String(franchisor.puntoVenta ?? '1');
 
   const asociado = referenciaIdComprobante
-    ? `<Asociados>
-        <ComprobanteAsociado>
-          <IdComprobante>${referenciaIdComprobante}</IdComprobante>
-        </ComprobanteAsociado>
-      </Asociados>`
+    ? `<b:Asociados>
+          <b:ComprobanteAsociado>
+            <b:IdComprobante>${referenciaIdComprobante}</b:IdComprobante>
+          </b:ComprobanteAsociado>
+        </b:Asociados>`
     : '';
 
-  return `<Encabezado>
-      <FechaHora>${fecha}</FechaHora>
-      <Prefijo>${prefijo}</Prefijo>
-      <TipoComprobante>${tipoComprobante}</TipoComprobante>
-      <CondicionVenta>1</CondicionVenta>
-      <Moneda>PES</Moneda>
-      <TipoDeCambio>1</TipoDeCambio>
-      <Observaciones>${escXml(comp.ref ?? '')}</Observaciones>
-      <EnviarComprobante>true</EnviarComprobante>
-      ${asociado}
-    </Encabezado>`;
+  return `<a:Encabezado>
+        ${asociado}
+        <b:Bienes>2</b:Bienes>
+        <b:CondicionVenta>1</b:CondicionVenta>
+        <b:EnviarComprobante>true</b:EnviarComprobante>
+        <b:FechaHora>${fecha}</b:FechaHora>
+        <b:Moneda>2</b:Moneda>
+        <b:Observaciones>${escXml(comp.ref ?? '')}</b:Observaciones>
+        <b:Prefijo>${escXml(prefijo)}</b:Prefijo>
+        <b:TipoComprobante>${tipoInt}</b:TipoComprobante>
+        <b:TipoDeCambio>1</b:TipoDeCambio>
+      </a:Encabezado>`;
 }
 
-function buildItemsConIVA(comp) {
-  const neto = Number(comp.amountNeto ?? comp.amount ?? 0);
-  const ivaRate = comp.applyIVA !== false ? 21 : 0;
-  return `<Items>
-      <ComprobanteItem>
-        <Detalle>${escXml(comp.ref ?? 'Servicio')}</Detalle>
-        <Cantidad>1</Cantidad>
-        <PrecioUnitario>${neto.toFixed(2)}</PrecioUnitario>
-        <IVA>${ivaRate}</IVA>
-        <Gravado>${ivaRate > 0 ? 'true' : 'false'}</Gravado>
-      </ComprobanteItem>
-    </Items>`;
-}
-
-function buildItemsSinIVA(comp) {
+function buildItemsSinIVAXml(comp) {
   const total = Number(comp.amount ?? 0);
-  return `<Items>
-      <ComprobanteItemSinImpuestos>
-        <Detalle>${escXml(comp.ref ?? 'Servicio')}</Detalle>
-        <Cantidad>1</Cantidad>
-        <PrecioUnitario>${total.toFixed(2)}</PrecioUnitario>
-      </ComprobanteItemSinImpuestos>
-    </Items>`;
+  return `<a:Items>
+        <b:ComprobanteItemSinImpuestos>
+          <b:Cantidad>1</b:Cantidad>
+          <b:Detalle>${escXml(comp.ref ?? 'Servicio')}</b:Detalle>
+          <b:PrecioUnitario>${total.toFixed(2)}</b:PrecioUnitario>
+        </b:ComprobanteItemSinImpuestos>
+      </a:Items>`;
 }
 
-function buildEnvelope(operacion, body) {
+function buildItemsConIVAXml(comp) {
+  const neto = Number(comp.amountNeto ?? comp.amount ?? 0);
+  return `<a:Items>
+        <b:ComprobanteItem>
+          <b:Cantidad>1</b:Cantidad>
+          <b:Detalle>${escXml(comp.ref ?? 'Servicio')}</b:Detalle>
+          <b:Gravado>true</b:Gravado>
+          <b:IVA>21</b:IVA>
+          <b:PrecioUnitario>${neto.toFixed(2)}</b:PrecioUnitario>
+        </b:ComprobanteItem>
+      </a:Items>`;
+}
+
+function buildEnvelope(operacion, requestBody) {
   return `<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
-               xmlns:tns="http://tempuri.org/">
-  <soap:Body>
-    <tns:${operacion}>
-      ${body}
-    </tns:${operacion}>
-  </soap:Body>
-</soap:Envelope>`;
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <${operacion} xmlns="${NS_OP}">
+      <request xmlns:a="${NS_DC}" xmlns:b="${NS_DTO}" xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+      ${requestBody}
+      </request>
+    </${operacion}>
+  </s:Body>
+</s:Envelope>`;
 }
 
 // ─── SOAP CALL ────────────────────────────────────────────────────────────────
@@ -152,14 +181,16 @@ function soapCall(endpoint, soapAction, envelope) {
       method:   'POST',
       headers: {
         'Content-Type':   'text/xml; charset=utf-8',
-        'SOAPAction':     `"http://tempuri.org/IComprobantes/${soapAction}"`,
-        'Content-Length': body.length,
+        'SOAPAction':     `"${NS_OP}/IComprobantes/${soapAction}"`,
+        'Content-Length':  body.length,
       },
     };
 
     const timer = setTimeout(() => reject(new Error('timeout')), 15000);
 
-    const req = httpsRequest(options, (upstream) => {
+    const doRequest = url.protocol === 'https:' ? httpsRequest : httpRequest;
+    const req = doRequest(options, (upstream) => {
+      upstream.setEncoding('utf8');
       let data = '';
       upstream.on('data', chunk => { data += chunk; });
       upstream.on('end', () => {
@@ -182,12 +213,10 @@ function extractTag(xml, tag) {
 }
 
 function parseResponse(xml) {
-  // Busca el resultado dentro del elemento de respuesta
-  const codigo       = extractTag(xml, 'Codigo');
   const estado       = extractTag(xml, 'Estado');
   const mensaje      = extractTag(xml, 'Mensaje');
   const idComp       = extractTag(xml, 'IdComprobante');
-  return { codigo, estado, mensaje, idComprobante: idComp ? parseInt(idComp, 10) : null };
+  return { estado, mensaje, idComprobante: idComp ? parseInt(idComp, 10) : null };
 }
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -201,12 +230,11 @@ function escXml(str) {
     .replace(/'/g,  '&apos;');
 }
 
-function isoDate(dmy) {
-  if (!dmy) return new Date().toISOString().slice(0, 10);
+function isoDateTime(dmy) {
+  if (!dmy) return new Date().toISOString();
   const parts = String(dmy).split('/');
-  if (parts.length === 3) return `${parts[2]}-${parts[1]}-${parts[0]}`;
-  // Already ISO
-  return dmy.slice(0, 10);
+  if (parts.length === 3) return `${parts[2]}-${parts[1]}-${parts[0]}T00:00:00`;
+  return dmy.includes('T') ? dmy : `${dmy.slice(0, 10)}T00:00:00`;
 }
 
 // ─── HANDLER ──────────────────────────────────────────────────────────────────
@@ -224,7 +252,6 @@ export default async function handler(req, res) {
     return res.end(JSON.stringify({ error: 'Variables FACTURANTE_* no configuradas' }));
   }
 
-  // Leer body
   let rawBody = '';
   await new Promise((resolve) => {
     req.on('data', chunk => { rawBody += chunk; });
@@ -249,30 +276,46 @@ export default async function handler(req, res) {
     return res.end(JSON.stringify({ error: `Acción desconocida: ${action}` }));
   }
 
-  // Determinar tipo de comprobante
   const doc = String(comp.type ?? '').split('|')[0]; // "FACTURA" o "NC"
-  const cat = franchise.condIVA === 'Responsable Inscripto' ? 'RI' : 'EX';
-  const tipoComprobante = TIPO_COMPROBANTE[`${doc}|${cat}`];
+  const usaIVA = franchise.applyIVA === true;
 
-  if (!tipoComprobante) {
-    res.statusCode = 400;
-    return res.end(JSON.stringify({ error: `Tipo de comprobante no soportado: ${doc} / ${franchise.condIVA}` }));
+  let operacion, requestBody, tipoComprobante;
+
+  if (usaIVA) {
+    // CrearComprobante — con IVA, tipos enteros
+    operacion = 'CrearComprobante';
+    const cat = franchise.condIVA === 'Responsable Inscripto' ? 'RI' : 'EX';
+    tipoComprobante = TIPO_COMPROBANTE_CON_IVA[`${doc}|${cat}`];
+
+    if (!tipoComprobante) {
+      res.statusCode = 400;
+      return res.end(JSON.stringify({ error: `Tipo no soportado: ${doc} / ${franchise.condIVA}` }));
+    }
+
+    requestBody = `
+      ${buildAuthXml()}
+      ${buildClienteConIVAXml(franchise)}
+      ${buildEncabezadoConIVAXml(tipoComprobante, franchisor, comp, referenciaIdComprobante)}
+      ${buildItemsConIVAXml(comp)}`;
+  } else {
+    // CrearComprobanteSinImpuestos — sin IVA, tipos string
+    operacion = 'CrearComprobanteSinImpuestos';
+    const tipoStr = TIPO_COMPROBANTE_SIN_IVA[doc];
+    tipoComprobante = tipoStr;
+
+    if (!tipoStr) {
+      res.statusCode = 400;
+      return res.end(JSON.stringify({ error: `Tipo no soportado para SinImpuestos: ${doc}` }));
+    }
+
+    requestBody = `
+      ${buildAuthXml()}
+      ${buildClienteSinIVAXml(franchise)}
+      ${buildEncabezadoSinIVAXml(tipoStr, franchisor, comp)}
+      ${buildItemsSinIVAXml(comp)}`;
   }
 
-  // Decidir operación y construir envelope
-  const usaIVA = franchise.applyIVA === true;
-  const operacion = usaIVA ? 'CrearComprobante' : 'CrearComprobanteSinImpuestos';
-
-  const cliente   = usaIVA ? buildClienteConIVA(franchise) : buildClienteSinIVA(franchise);
-  const encabezado = buildEncabezado(tipoComprobante, franchisor, comp, referenciaIdComprobante);
-  const items     = usaIVA ? buildItemsConIVA({ ...comp, applyIVA: true }) : buildItemsSinIVA(comp);
-
-  const envelope = buildEnvelope(operacion, `
-    ${buildAuth()}
-    ${cliente}
-    ${encabezado}
-    ${items}
-  `);
+  const envelope = buildEnvelope(operacion, requestBody);
 
   try {
     const { status, body } = await soapCall(ENDPOINT, operacion, envelope);
@@ -284,13 +327,12 @@ export default async function handler(req, res) {
 
     const parsed = parseResponse(body);
 
-    // Códigos de error: Codigo != "0" o Estado contiene "Error"
-    const isError = parsed.codigo && parsed.codigo !== '0';
-    if (isError) {
+    // Success: idComprobante present and mensaje does not indicate error
+    const isSuccess = parsed.idComprobante != null && parsed.idComprobante > 0;
+    if (!isSuccess) {
       return res.end(JSON.stringify({
         ok:     false,
         error:  parsed.mensaje ?? 'Error de Facturante',
-        codigo: parsed.codigo,
         estado: parsed.estado,
       }));
     }
