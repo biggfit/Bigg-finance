@@ -1,12 +1,13 @@
 /**
  * invoicePdf.jsx — Invoice / Factura PDF unificado
- * Layout basado en el estilo Revolut (clean, blanco/negro, minimal).
+ * Layout estilo Revolut: limpio, blanco/negro, minimal.
  *
- * - EUR  (Gestión Deportiva y Wellness SL / ES): columnas + resumen con IVA 21% y Retención opcional
- * - USD  (BIGG FIT LLC / USA)                  : misma estructura, IVA = $0.00
+ * - EUR  (Gestión Deportiva y Wellness SL / ES): IVA 21%, descuento comercial opcional, en español
+ * - USD  (BIGG FIT LLC / USA, factura en USD): IVA $0.00, en inglés
+ * - EUR  (BIGG FIT LLC / USA, factura en EUR): IVA $0.00, cuenta bancaria EUR, en inglés
  *
- * Nota: fmtAmt usa locale de-DE para EUR ("1.234,56€") y en-US para USD ("$1,234.56"),
- *       diferente de fmt() en helpers.js que usa es-AR.
+ * Logo: usar issuer.logoUrl (URL pública) o colocar el PNG en public/bigg-logo.png
+ *       y poner "/bigg-logo.png" como logoUrl en Maestros.
  */
 import React from "react";
 import { Document, Page, View, Text, Image, StyleSheet, pdf } from "@react-pdf/renderer";
@@ -70,7 +71,6 @@ const S = StyleSheet.create({
 
   colConcepto:  { flex: 3 },
   colPrecio:    { flex: 1.3, alignItems: "flex-end" },
-  colUnd:       { width: 44, alignItems: "center" },
   colSubtotal:  { flex: 1.3, alignItems: "flex-end" },
   colIvaPct:    { width: 42, alignItems: "center" },
   colTotal:     { flex: 1.3, alignItems: "flex-end" },
@@ -87,11 +87,20 @@ const S = StyleSheet.create({
   sumRowFinal:   { flexDirection: "row", justifyContent: "space-between", paddingVertical: 5.5,
                    borderTopWidth: 1.2, borderTopStyle: "solid", borderTopColor: BLACK, marginTop: 2 },
 
-  // ── Pie ──────────────────────────────────────────────────────────────────────
+  // ── Payment terms ─────────────────────────────────────────────────────────────
+  paySection:  { marginTop: 20, borderTopWidth: 0.5, borderTopStyle: "solid", borderTopColor: BORDER, paddingTop: 10 },
+  payTitle:    { fontFamily: "Helvetica-Bold", fontSize: 8.5, color: BLACK, marginBottom: 5 },
+  payLine:     { fontSize: 8, color: GRAY, lineHeight: 1.7 },
+
+  // ── Nota pie ────────────────────────────────────────────────────────────────
+  noteFooter: { marginTop: 14, fontSize: 7.5, color: GRAY, lineHeight: 1.6 },
+
+  // ── Pie de página ────────────────────────────────────────────────────────────
   footer:  { position: "absolute", bottom: 22, left: 50, right: 50, textAlign: "center", fontSize: 8, color: GRAY },
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+// en-US para USD ($1,234.56) y de-DE para EUR (1.234,56€) — distinto de fmt() en helpers.js (es-AR)
 function fmtAmt(amount, currency) {
   const n = Number(amount);
   if (currency === "EUR")
@@ -109,13 +118,15 @@ function InvoicePage({ fr, issuer, comp, isES }) {
 
   // ── Montos ──────────────────────────────────────────────────────────────────
   const neto        = comp.amount ?? 0;
+  const discount    = comp.discount ?? 0;                          // descuento comercial (sobre neto)
+  const base        = Math.round((neto - discount) * 100) / 100;  // base imponible después de descuento
   const ivaRate     = isES ? (comp.applyIVA !== false ? 0.21 : 0) : 0;
   const retRate     = isES && comp.retencionPct ? comp.retencionPct / 100 : 0;
-  const ivaAmt      = Math.round(neto * ivaRate * 100) / 100;
-  const retAmt      = Math.round(neto * retRate * 100) / 100;
-  const total       = Math.round((neto + ivaAmt - retAmt) * 100) / 100;
+  const ivaAmt      = Math.round(base * ivaRate * 100) / 100;
+  const retAmt      = Math.round(base * retRate * 100) / 100;
+  const total       = Math.round((base + ivaAmt - retAmt) * 100) / 100;
 
-  // ── Texto de concepto ───────────────────────────────────────────────────────
+  // ── Concepto ────────────────────────────────────────────────────────────────
   const cuentaRaw = String(comp.type ?? "").split("|")[1] ?? "";
   const concepto  = CUENTA_LABEL[cuentaRaw] || (isES ? "Servicio" : "Service");
   const period    = `${MONTHS[comp.month ?? 0]} ${comp.year ?? new Date().getFullYear()}`;
@@ -141,35 +152,65 @@ function InvoicePage({ fr, issuer, comp, isES }) {
   const clientEmail   = fr.emailFactura ?? fr.email ?? "";
   const clientLines   = [clientTaxId, clientAddr, clientCountry, clientEmail].filter(Boolean);
 
+  // ── Payment terms: para USA elige USD o EUR según moneda de la factura ──────
+  const useEurBank    = !isES && currency === "EUR" && issuer.bankNameEUR;
+  const paymentTerms  = useEurBank ? (issuer.paymentTermsEUR || issuer.paymentTerms)
+                      : issuer.paymentTerms;
+  const bankLines = isES
+    ? [ issuer.bankName,
+        issuer.bankAddress,
+        issuer.iban  && `IBAN: ${issuer.iban}`,
+        issuer.swift && `SWIFT: ${issuer.swift}`,
+      ].filter(Boolean)
+    : useEurBank
+    ? [ issuer.bankNameEUR,
+        issuer.bankAddressEUR,
+        issuer.ibanEUR            && `IBAN: ${issuer.ibanEUR}`,
+        issuer.swiftEUR           && `SWIFT: ${issuer.swiftEUR}`,
+        issuer.beneficiaryNameEUR && `Beneficiary: ${issuer.beneficiaryNameEUR}`,
+        issuer.accountNumberEUR   && `Account #: ${issuer.accountNumberEUR}`,
+      ].filter(Boolean)
+    : [ issuer.bankName,
+        issuer.bankAddress,
+        issuer.routingNumber   && `ABA: ${issuer.routingNumber}`,
+        issuer.swift           && `SWIFT: ${issuer.swift}`,
+        issuer.beneficiaryName && `Beneficiary: ${issuer.beneficiaryName}`,
+        issuer.accountNumber   && `Account #: ${issuer.accountNumber}`,
+      ].filter(Boolean);
+
+  const hasBankInfo = bankLines.length > 0;
+
   // ── Labels por idioma ────────────────────────────────────────────────────────
   const L = isES ? {
-    title:        `FACTURA #${comp.invoice ?? "—"}`,
-    dateLabel:    "Fecha:",
-    clientLabel:  "Cliente:",
-    thConcepto:   "Concepto",
-    thPrecio:     "Precio",
-    thUnd:        "Unidades",
-    thSubtotal:   "Subtotal",
-    thIva:        "IVA",
-    thTotal:      "Total",
-    sumBase:      "Base imponible",
-    sumIva:       `IVA ${pct(ivaRate)}`,
-    sumRet:       retRate ? `Retención ${pct(retRate)}` : null,
-    sumTotal:     "TOTAL",
+    title:       `FACTURA #${comp.invoice ?? "—"}`,
+    dateLabel:   "Fecha:",
+    clientLabel: "Cliente:",
+    thConcepto:  "Concepto",
+    thPrecio:    "Precio",
+    thSubtotal:  "Subtotal",
+    thIva:       "IVA",
+    thTotal:     "Total",
+    sumBase:     "Base imponible",
+    sumDisc:     "Descuento comercial",
+    sumIva:      `IVA ${pct(ivaRate)}`,
+    sumRet:      retRate ? `Retención ${pct(retRate)}` : null,
+    sumTotal:    "TOTAL",
+    payLabel:    "Condiciones de pago:",
   } : {
-    title:        `INVOICE #${comp.invoice ?? "—"}`,
-    dateLabel:    "Date:",
-    clientLabel:  "Bill To:",
-    thConcepto:   "Concept",
-    thPrecio:     "Price",
-    thUnd:        "Qty",
-    thSubtotal:   "Subtotal",
-    thIva:        "Tax",
-    thTotal:      "Total",
-    sumBase:      "Net",
-    sumIva:       `Tax (${pct(ivaRate)})`,
-    sumRet:       null,
-    sumTotal:     "TOTAL",
+    title:       `INVOICE #${comp.invoice ?? "—"}`,
+    dateLabel:   "Date:",
+    clientLabel: "Bill To:",
+    thConcepto:  "Concept",
+    thPrecio:    "Price",
+    thSubtotal:  "Subtotal",
+    thIva:       "Tax",
+    thTotal:     "Total",
+    sumBase:     "Net",
+    sumDisc:     "Discount",
+    sumIva:      `Tax (${pct(ivaRate)})`,
+    sumRet:      null,
+    sumTotal:    "TOTAL",
+    payLabel:    "Payment Terms:",
   };
 
   return (
@@ -194,7 +235,7 @@ function InvoicePage({ fr, issuer, comp, isES }) {
 
       {/* ─── EMISOR ──────────────────────────────────────────────────────── */}
       <Text style={S.issuerName}>{issuerName}</Text>
-      <Text style={S.issuerDetail}>{issuerLines.join("\n")}</Text>
+      {issuerLines.length > 0 && <Text style={S.issuerDetail}>{issuerLines.join("\n")}</Text>}
 
       <View style={S.hr} />
 
@@ -211,20 +252,18 @@ function InvoicePage({ fr, issuer, comp, isES }) {
       {/* ─── TABLA ───────────────────────────────────────────────────────── */}
       <View>
         <View style={S.tableHead}>
-          <View style={S.colConcepto} ><Text style={S.th}>{L.thConcepto}</Text></View>
-          <View style={S.colPrecio}   ><Text style={S.th}>{L.thPrecio}</Text></View>
-          <View style={S.colUnd}      ><Text style={S.th}>{L.thUnd}</Text></View>
-          <View style={S.colSubtotal} ><Text style={S.th}>{L.thSubtotal}</Text></View>
-          <View style={S.colIvaPct}   ><Text style={S.th}>{L.thIva}</Text></View>
-          <View style={S.colTotal}    ><Text style={S.th}>{L.thTotal}</Text></View>
+          <View style={S.colConcepto}><Text style={S.th}>{L.thConcepto}</Text></View>
+          <View style={S.colPrecio}  ><Text style={S.th}>{L.thPrecio}</Text></View>
+          <View style={S.colSubtotal}><Text style={S.th}>{L.thSubtotal}</Text></View>
+          <View style={S.colIvaPct}  ><Text style={S.th}>{L.thIva}</Text></View>
+          <View style={S.colTotal}   ><Text style={S.th}>{L.thTotal}</Text></View>
         </View>
         <View style={S.tableRow}>
-          <View style={S.colConcepto} ><Text style={S.tdText}>{concepto}{descr !== concepto ? `\n${descr}` : ""}</Text></View>
-          <View style={S.colPrecio}   ><Text style={S.tdNum}>{fmtAmt(neto, currency)}</Text></View>
-          <View style={S.colUnd}      ><Text style={S.tdNum}>1</Text></View>
-          <View style={S.colSubtotal} ><Text style={S.tdNum}>{fmtAmt(neto, currency)}</Text></View>
-          <View style={S.colIvaPct}   ><Text style={S.tdMuted}>{pct(ivaRate)}</Text></View>
-          <View style={S.colTotal}    ><Text style={S.tdNum}>{fmtAmt(isES ? neto + ivaAmt : total, currency)}</Text></View>
+          <View style={S.colConcepto}><Text style={S.tdText}>{concepto}{descr !== concepto ? `\n${descr}` : ""}</Text></View>
+          <View style={S.colPrecio}  ><Text style={S.tdNum}>{fmtAmt(neto, currency)}</Text></View>
+          <View style={S.colSubtotal}><Text style={S.tdNum}>{fmtAmt(neto, currency)}</Text></View>
+          <View style={S.colIvaPct}  ><Text style={S.tdMuted}>{pct(ivaRate)}</Text></View>
+          <View style={S.colTotal}   ><Text style={S.tdNum}>{fmtAmt(isES ? neto + Math.round(neto * ivaRate * 100) / 100 : neto, currency)}</Text></View>
         </View>
       </View>
 
@@ -235,6 +274,12 @@ function InvoicePage({ fr, issuer, comp, isES }) {
             <Text style={S.sumLabel}>{L.sumBase}</Text>
             <Text style={S.sumVal}>{fmtAmt(neto, currency)}</Text>
           </View>
+          {discount > 0 && (
+            <View style={S.sumRow}>
+              <Text style={S.sumLabel}>{L.sumDisc}</Text>
+              <Text style={S.sumVal}>-{fmtAmt(discount, currency)}</Text>
+            </View>
+          )}
           <View style={S.sumRow}>
             <Text style={S.sumLabel}>{L.sumIva}</Text>
             <Text style={S.sumVal}>{fmtAmt(ivaAmt, currency)}</Text>
@@ -252,10 +297,21 @@ function InvoicePage({ fr, issuer, comp, isES }) {
         </View>
       </View>
 
-      {/* ─── NOTA PIE ────────────────────────────────────────────────────── */}
-      {(fr.notaFactura ?? issuer.notaPie) ? (
-        <View style={{ marginTop: 20, borderTopWidth: 0.5, borderTopStyle: "solid", borderTopColor: BORDER, paddingTop: 8 }}>
-          <Text style={{ fontSize: 7.5, color: GRAY, lineHeight: 1.6 }}>{fr.notaFactura ?? issuer.notaPie}</Text>
+      {/* ─── PAYMENT TERMS / DATOS BANCARIOS ────────────────────────────── */}
+      {(paymentTerms || hasBankInfo) && (
+        <View style={S.paySection}>
+          <Text style={S.payTitle}>{L.payLabel}</Text>
+          {paymentTerms && <Text style={S.payLine}>{paymentTerms}</Text>}
+          {bankLines.map((line, i) => (
+            <Text key={i} style={S.payLine}>{line}</Text>
+          ))}
+        </View>
+      )}
+
+      {/* ─── NOTA PIE (solo issuer.notaPie) ─────────────────────────────── */}
+      {issuer.notaPie ? (
+        <View style={S.noteFooter}>
+          <Text>{issuer.notaPie}</Text>
         </View>
       ) : null}
 
@@ -269,12 +325,12 @@ function InvoicePage({ fr, issuer, comp, isES }) {
 
 // ─── Documentos PDF ───────────────────────────────────────────────────────────
 function InvoiceDoc({ fr, franchisor, comp }) {
-  const isES   = comp.currency === "EUR";
+  const isES   = comp.currency === "EUR" && franchisor?.es?.nif;  // ES si hay NIF de GDW activo
   const issuer = isES ? (franchisor?.es ?? {}) : (franchisor?.usa ?? {});
   return (
     <Document>
       <Page size="A4" style={S.page}>
-        <InvoicePage fr={fr} issuer={issuer} comp={comp} isES={isES} />
+        <InvoicePage fr={fr} issuer={issuer} comp={comp} isES={!!isES} />
       </Page>
     </Document>
   );
@@ -301,13 +357,11 @@ function triggerBlobDownload(blob, filename) {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  // Revocamos en el siguiente tick para dar tiempo al browser a iniciar la descarga
   setTimeout(() => URL.revokeObjectURL(url), 100);
 }
 
 /**
- * Genera el Blob PDF de un invoice sin descargarlo.
- * Útil para adjuntar el PDF a un email.
+ * Genera el Blob PDF de un invoice sin descargarlo (para adjuntar a emails).
  */
 export async function generateInvoicePdfBlob(fr, franchisor, comp) {
   return pdf(<InvoiceDoc fr={fr} franchisor={franchisor} comp={comp} />).toBlob();
@@ -324,14 +378,12 @@ export async function downloadInvoicePdf(fr, franchisor, comp) {
 
 /**
  * Genera y descarga un PDF con múltiples invoices (una página por invoice).
- * @param {Array<{fr, comp}>} items
- * @param {object} franchisor
  */
 export async function downloadBatchInvoicePdf(items, franchisor) {
   const docItems = items.map(({ fr, comp }) => {
-    const isES   = comp.currency === "EUR";
+    const isES   = comp.currency === "EUR" && franchisor?.es?.nif;
     const issuer = isES ? (franchisor?.es ?? {}) : (franchisor?.usa ?? {});
-    return { fr, issuer, isES, comp };
+    return { fr, issuer, isES: !!isES, comp };
   });
   const blob = await pdf(<InvoiceBatchDoc items={docItems} />).toBlob();
   triggerBlobDownload(blob, `Invoices_batch_${new Date().toISOString().slice(0, 10)}.pdf`);

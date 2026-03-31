@@ -34,6 +34,14 @@ export const DEFAULT_FRANCHISOR = {
     beneficiaryName: "",
     swift:           "",
     paymentTerms:    "",
+    // EUR-specific bank info (for EUR invoices from BIGG FIT LLC)
+    paymentTermsEUR:    "",
+    bankNameEUR:        "",
+    bankAddressEUR:     "",
+    ibanEUR:            "",
+    swiftEUR:           "",
+    beneficiaryNameEUR: "",
+    accountNumberEUR:   "",
     notaPie:         "",
   },
   es: {

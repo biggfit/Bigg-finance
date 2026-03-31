@@ -664,14 +664,25 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
                   <FieldInput label="País"               value={fbufUSA.country}        onChange={setUS("country")}        half />
                 </div>
 
-                <div style={{ fontSize: 10, color: "var(--cyan)", fontWeight: 800, letterSpacing: ".08em", marginBottom: 8, marginTop: 10 }}>DATOS BANCARIOS</div>
+                <div style={{ fontSize: 10, color: "var(--cyan)", fontWeight: 800, letterSpacing: ".08em", marginBottom: 8, marginTop: 10 }}>DATOS BANCARIOS USD</div>
                 <div style={grid2}>
-                  <FieldInput label="Banco"                       value={fbufUSA.bankName}          onChange={setUS("bankName")} />
-                  <FieldInput label="Dirección del banco"         value={fbufUSA.bankAddress ?? ""}  onChange={setUS("bankAddress")} />
-                  <FieldInput label="Número de ruta (ABA/Routing)" value={fbufUSA.routingNumber}    onChange={setUS("routingNumber")}    half />
-                  <FieldInput label="Número de cuenta"            value={fbufUSA.accountNumber}     onChange={setUS("accountNumber")}   half />
-                  <FieldInput label="Nombre del beneficiario"     value={fbufUSA.beneficiaryName ?? ""} onChange={setUS("beneficiaryName")} half />
-                  <FieldInput label="SWIFT / BIC"                 value={fbufUSA.swift}             onChange={setUS("swift")}           half />
+                  <FieldInput label="Banco"                          value={fbufUSA.bankName}              onChange={setUS("bankName")} />
+                  <FieldInput label="Dirección del banco"            value={fbufUSA.bankAddress ?? ""}     onChange={setUS("bankAddress")} />
+                  <FieldInput label="Número de ruta (ABA/Routing)"  value={fbufUSA.routingNumber}         onChange={setUS("routingNumber")}         half />
+                  <FieldInput label="Número de cuenta"               value={fbufUSA.accountNumber}         onChange={setUS("accountNumber")}         half />
+                  <FieldInput label="Nombre del beneficiario"        value={fbufUSA.beneficiaryName ?? ""} onChange={setUS("beneficiaryName")}       half />
+                  <FieldInput label="SWIFT / BIC"                    value={fbufUSA.swift}                 onChange={setUS("swift")}                 half />
+                </div>
+
+                <div style={{ fontSize: 10, color: "var(--cyan)", fontWeight: 800, letterSpacing: ".08em", marginBottom: 8, marginTop: 10 }}>DATOS BANCARIOS EUR</div>
+                <div style={grid2}>
+                  <FieldInput label="Condición de pago EUR"          value={fbufUSA.paymentTermsEUR ?? ""}    onChange={setUS("paymentTermsEUR")} />
+                  <FieldInput label="Banco EUR"                      value={fbufUSA.bankNameEUR ?? ""}        onChange={setUS("bankNameEUR")} />
+                  <FieldInput label="Dirección del banco EUR"        value={fbufUSA.bankAddressEUR ?? ""}     onChange={setUS("bankAddressEUR")} />
+                  <FieldInput label="IBAN"                           value={fbufUSA.ibanEUR ?? ""}            onChange={setUS("ibanEUR")}            half />
+                  <FieldInput label="SWIFT / BIC EUR"                value={fbufUSA.swiftEUR ?? ""}           onChange={setUS("swiftEUR")}           half />
+                  <FieldInput label="Nombre del beneficiario EUR"    value={fbufUSA.beneficiaryNameEUR ?? ""} onChange={setUS("beneficiaryNameEUR")} half />
+                  <FieldInput label="Número de cuenta EUR"           value={fbufUSA.accountNumberEUR ?? ""}  onChange={setUS("accountNumberEUR")}   half />
                 </div>
 
                 <div style={{ fontSize: 10, color: "var(--cyan)", fontWeight: 800, letterSpacing: ".08em", marginBottom: 8, marginTop: 10 }}>FACTURACIÓN</div>

@@ -248,7 +248,8 @@ function doPost(e) {
           var prev  = Number(fdata[ri][seqCol]) || 0;
           var next  = prev + 1;
           fsh.getRange(ri + 1, seqCol + 1).setValue(next);
-          var label = "USA-" + body.frId + "-" + String(next).padStart(4, "0");
+          var prefix = body.prefix || "USA";
+          var label = prefix + "-" + body.frId + "-" + String(next).padStart(4, "0");
           return json({ ok: true, num: next, label: label });
         }
       }

@@ -300,7 +300,8 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
         setEmitState("emitting");
         setEmitError(null);
         try {
-          const res = await getNextInvoiceNum(fr.id);
+          const invoicePrefix = COMPANIES[activeCompany]?.side === "es" ? "ESP" : "USA";
+          const res = await getNextInvoiceNum(fr.id, invoicePrefix);
           enriched = { ...enriched, invoice: res.label };
           setEmitState("idle");
         } catch (e) {
@@ -820,7 +821,8 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
       } else if (!skipFacturante && !isAR) {
         // ── Invoice USA: asignar correlativo secuencial ───────────────────
         try {
-          const res = await getNextInvoiceNum(r.frId);
+          const invoicePrefix = COMPANIES[activeCompany]?.side === "es" ? "ESP" : "USA";
+          const res = await getNextInvoiceNum(r.frId, invoicePrefix);
           comp = { ...comp, invoice: res.label };
           facturanteStatus = "invoice_ok";
         } catch (e) {
