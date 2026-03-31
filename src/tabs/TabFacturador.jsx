@@ -74,7 +74,14 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
   const prefill = parsePrefill(prefillComp?.type);
   const [doc,        setDoc]       = useState(prefill.doc);
   const [cuenta,     setCuenta]    = useState(prefill.cuenta);
-  const [importeRaw, setImporteRaw] = useState(prefillComp?.amount ? formatCurrencyInput(String(prefillComp.amount), "ARS") : "");
+  // Cuando viene de un pago a cuenta, el amount es el TOTAL transferido → back-calcular neto
+  const initNeto = (() => {
+    if (!prefillComp?.amount) return "";
+    const applyIVA = !!prefillFr?.applyIVA;
+    const neto = applyIVA ? prefillComp.amount / (1 + IVA_RATE) : prefillComp.amount;
+    return formatCurrencyInput(String(Math.round(neto)), "ARS");
+  })();
+  const [importeRaw, setImporteRaw] = useState(initNeto);
   const [concepto,   setConcepto]  = useState(prefillComp ? `Factura por Pago a Cuenta ${MONTHS[prefillComp.month ?? month]} ${prefillComp.year ?? year}` : "");
   const [fechaIso,   setFechaIso]  = useState(todayIso);
   const [preview,    setPreview]   = useState(null);
@@ -1846,7 +1853,8 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
             </div>
           )}
           {mode === EMIT_MODE.MANUAL && (
-            <ModoManual month={month} year={year} onAddComp={addCompWithEmpresa} onDone={reset}
+            <ModoManual key={`${prefillFr?.id ?? 'none'}-${prefillComp?.id ?? 'none'}`}
+              month={month} year={year} onAddComp={addCompWithEmpresa} onDone={reset}
               franchisor={franchisor} prefillFr={prefillFr} prefillComp={prefillComp} />
           )}
           {mode === EMIT_MODE.CRM && (
