@@ -5,7 +5,8 @@ import { makeType, MONTHS, AVAILABLE_YEARS, DOCS, CUENTAS, CUENTA_LABEL, COMP_TY
 import { todayDmy, getCompanyCurrencies, getFranchiseCurrencies } from "../data/franchisor";
 import { TypePill } from "../components/atoms";
 import PendientesPanel from "../components/PendientesPanel";
-import { buildFacturaPDF, buildInvoicePDF, buildInvoiceHtml, buildCombinedInvoicesHtml, printInvoice, downloadTextAsPDF } from "../lib/pdf";
+import { buildFacturaPDF, downloadTextAsPDF } from "../lib/pdf";
+import { downloadInvoicePdf, downloadBatchInvoicePdf } from "../lib/invoicePdf";
 import { emitirComprobante, formatInvoiceLabel } from "../lib/facturanteApi";
 import { getNextInvoiceNum } from "../lib/sheetsApi";
 
@@ -316,8 +317,8 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
         downloadTextAsPDF(buildFacturaPDF(fr, franchisor, enriched),
           `Factura_${fr.name}_${MONTHS[preview.month]}_${preview.year}.html`);
       } else if (enriched.invoice) {
-        // No-AR con número asignado: abre print dialog
-        printInvoice(buildInvoiceHtml(fr, franchisor, enriched));
+        // No-AR con número asignado: descarga PDF
+        downloadInvoicePdf(fr, franchisor, enriched).catch(console.error);
       }
       // No-AR sin número (skipFacturante=true): guarda silenciosamente, sin descarga
 
@@ -782,7 +783,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
   const handleConfirm = async (skipFacturante = false) => {
     setStage("done");
     const log = [];
-    const invoiceHtmls = []; // colectar invoices no-AR para imprimir juntos al final
+    const invoiceBatchItems = []; // colectar invoices no-AR para descargar en un PDF al final
     for (const r of toProcess) {
       const fr = activeFr.find(f => f.id === r.frId);
       if (!fr) continue;
@@ -828,9 +829,8 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
       }
       onAddComp(r.frId, comp);
       if (!isAR && comp.invoice && !skipFacturante) {
-        // Acumular para imprimir todo junto al final (evita que el bloqueador de popups
-        // cancele ventanas abiertas en rápida sucesión dentro del loop)
-        invoiceHtmls.push(buildInvoiceHtml(fr, franchisor, comp));
+        // Acumular para generar PDF combinado al final
+        invoiceBatchItems.push({ fr, comp });
       } else if (isAR) {
         downloadTextAsPDF(
           buildFacturaPDF(fr, franchisor, comp),
@@ -840,9 +840,9 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
       // non-AR sin número (skipFacturante o error en getNextInvoiceNum): guarda silenciosamente
       log.push({ frName: r.frName, fee, country: r.country, dto, facturanteStatus, invoice: comp.invoice });
     }
-    // Abrir UNA sola ventana con todos los invoices no-AR (con saltos de página entre ellos)
-    if (invoiceHtmls.length > 0) {
-      printInvoice(buildCombinedInvoicesHtml(invoiceHtmls));
+    // Descargar PDF con todos los invoices no-AR (una página por invoice)
+    if (invoiceBatchItems.length > 0) {
+      downloadBatchInvoicePdf(invoiceBatchItems, franchisor).catch(console.error);
     }
     setProcessed(log);
   };
