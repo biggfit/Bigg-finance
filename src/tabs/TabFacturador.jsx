@@ -79,7 +79,8 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
     if (!prefillComp?.amount) return "";
     const applyIVA = !!prefillFr?.applyIVA;
     const neto = applyIVA ? prefillComp.amount / (1 + IVA_RATE) : prefillComp.amount;
-    return formatCurrencyInput(String(Math.round(neto)), "ARS");
+    // Mantener 2 decimales para que neto+IVA = total exacto (formato AR: "578.512,40")
+    return formatCurrencyInput(neto.toFixed(2).replace(".", ","), "ARS");
   })();
   const [importeRaw, setImporteRaw] = useState(initNeto);
   const [concepto,   setConcepto]  = useState(prefillComp ? `Factura por Pago a Cuenta ${MONTHS[prefillComp.month ?? month]} ${prefillComp.year ?? year}` : "");
@@ -97,8 +98,11 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
   const [currency,    setCurrency]    = useState(activeCurrency);
   const [movCurrency, setMovCurrency] = useState(activeCurrency);
 
-  // ── Reset sede cuando cambia la sociedad activa ────────────────────────────
+  // ── Reset sede cuando cambia la sociedad activa (no en el mount inicial) ──
+  const prevCompanyRef = useRef(activeCompany);
   useEffect(() => {
+    if (prevCompanyRef.current === activeCompany) return; // skip mount / StrictMode double-run
+    prevCompanyRef.current = activeCompany;
     setFrId("");
     setFrSearch("");
     setStep(s => s > 1 ? 2 : s);
