@@ -112,7 +112,8 @@ function InvoicePage({ fr, usa, comp }) {
   const country     = usa.country ?? "United States";
 
   // ── Franquiciado (lado derecho info) ─────────────────────────────────────
-  const clientName    = fr.razonSocial ?? fr.name ?? "";
+  const clientSede    = fr.name ?? "";
+  const clientLegal   = (fr.razonSocial && fr.razonSocial !== fr.name) ? fr.razonSocial : "";
   const clientTaxId   = fr.cuit ? `RUC: ${fr.cuit}` : (fr.taxId ? `Tax ID: ${fr.taxId}` : "");
   const clientAddr    = [fr.billingAddress ?? fr.domicilio, fr.billingCity, fr.billingState].filter(Boolean).join(", ");
   const clientCountry = fr.billingCountry ?? fr.country ?? "";
@@ -198,7 +199,8 @@ function InvoicePage({ fr, usa, comp }) {
 
         {/* Derecha: datos del cliente */}
         <View style={S.infoRight}>
-          <Text style={S.clientName}>{clientName}</Text>
+          <Text style={S.clientName}>{clientSede}</Text>
+          {clientLegal ? <Text style={{ fontSize: 8.5, color: GRAY, marginBottom: 3 }}>{clientLegal}</Text> : null}
           <Text style={S.clientDetail}>
             {[clientTaxId, clientAddr, clientCountry, clientEmail].filter(Boolean).join("\n")}
           </Text>

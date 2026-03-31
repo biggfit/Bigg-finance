@@ -399,15 +399,15 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
                 <td colSpan={3} style={{ fontSize: 11, color: "var(--muted)", padding: "8px 10px", fontWeight: 700 }}>
                   TOTALES — {filtered.filter(r => !r.isApertura).length} movimientos
                 </td>
-                <td style={{ padding: "8px 8px" }}>
-                  {!multiCurrency && <span style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700 }}>SALDO FINAL</span>}
-                </td>
                 <td className="mono" style={{ textAlign: "right", color: "var(--red)", fontWeight: 800, fontSize: 13, padding: "8px 8px" }}>{fmt(totalDebe, filterCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS")}</td>
                 <td className="mono" style={{ textAlign: "right", color: "var(--green)", fontWeight: 800, fontSize: 13, padding: "8px 8px" }}>{fmt(totalHaber, filterCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS")}</td>
                 {!multiCurrency && <td style={{ textAlign: "right", padding: "8px 8px" }}>
-                  <span className="mono" style={{ fontSize: 13, fontWeight: 800, color: saldoFinalConsolidado > 0.01 ? "var(--red)" : saldoFinalConsolidado < -0.01 ? "var(--green)" : "var(--muted)" }}>
-                    {fmtS(saldoFinalConsolidado, filterCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS")}
-                  </span>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                    <span style={{ fontSize: 9, color: "var(--muted)", fontWeight: 700, letterSpacing: 0.5 }}>SALDO FINAL</span>
+                    <span className="mono" style={{ fontSize: 13, fontWeight: 800, color: saldoFinalConsolidado > 0.01 ? "var(--red)" : saldoFinalConsolidado < -0.01 ? "var(--green)" : "var(--muted)" }}>
+                      {fmtS(saldoFinalConsolidado, filterCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS")}
+                    </span>
+                  </div>
                 </td>}
                 <td></td>
               </tr>
