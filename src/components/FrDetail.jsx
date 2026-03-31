@@ -6,6 +6,7 @@ import { TypePill } from "./atoms";
 import AddCompModal from "./AddCompModal";
 import CCModal from "./CCModal";
 import { buildCCHtml, htmlToBase64, buildFacturaHtmlForMail } from "../lib/pdf";
+import { generateInvoicePdfBlob } from "../lib/invoicePdf";
 import { sendMailFr } from "../lib/sheetsApi";
 import { RecordatorioDots } from "../tabs/TabSaldos";
 
@@ -90,12 +91,23 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
       const ccHtml = buildCCHtml(franchise.name, franchise.razonSocial ?? null, ccLines, displayCurrency, localMonth, localYear);
 
       // Facturas del mes con número emitido
+      const isAR        = franchise.country === "Argentina";
       const factsDelMes = compsWithSaldo.filter(c => c.invoice && c.type?.startsWith("FACTURA"));
-      const factAdjs = factsDelMes.map(c => {
-        const factHtml = buildFacturaHtmlForMail(franchise, franchisor, c);
-        const label    = (c.invoice ?? c.id).replace(/\//g, "-");
-        return { data: htmlToBase64(factHtml), mimeType: "application/octet-stream", name: `${label}_${frSlug}.html` };
-      });
+      const factAdjs    = await Promise.all(factsDelMes.map(async (c) => {
+        const label = (c.invoice ?? c.id).replace(/\//g, "-");
+        if (isAR) {
+          // AR: adjuntar como HTML (formato AFIP)
+          const factHtml = buildFacturaHtmlForMail(franchise, franchisor, c);
+          return { data: htmlToBase64(factHtml), mimeType: "application/octet-stream", name: `${label}_${frSlug}.html` };
+        }
+        // USA / ES: generar PDF y convertir a base64
+        const blob        = await generateInvoicePdfBlob(franchise, franchisor, c);
+        const arrayBuffer = await blob.arrayBuffer();
+        const bytes       = new Uint8Array(arrayBuffer);
+        let binary = "";
+        for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+        return { data: btoa(binary), mimeType: "application/pdf", name: `Invoice_${label}_${frSlug}.pdf` };
+      }));
 
       await sendMailFr({
         to,

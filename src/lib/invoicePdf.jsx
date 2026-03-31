@@ -306,10 +306,18 @@ function triggerBlobDownload(blob, filename) {
 }
 
 /**
+ * Genera el Blob PDF de un invoice sin descargarlo.
+ * Útil para adjuntar el PDF a un email.
+ */
+export async function generateInvoicePdfBlob(fr, franchisor, comp) {
+  return pdf(<InvoiceDoc fr={fr} franchisor={franchisor} comp={comp} />).toBlob();
+}
+
+/**
  * Genera y descarga un PDF para un único invoice.
  */
 export async function downloadInvoicePdf(fr, franchisor, comp) {
-  const blob  = await pdf(<InvoiceDoc fr={fr} franchisor={franchisor} comp={comp} />).toBlob();
+  const blob  = await generateInvoicePdfBlob(fr, franchisor, comp);
   const label = comp.invoice ? String(comp.invoice).replace(/\//g, "-") : comp.id;
   triggerBlobDownload(blob, `Invoice_${label}_${fr.name}.pdf`);
 }
