@@ -712,28 +712,34 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
 
                 <div style={{ fontSize: 10, color: "var(--orange, #f5a623)", fontWeight: 800, letterSpacing: ".08em", marginBottom: 8, marginTop: 4 }}>IDENTIFICACIÓN</div>
                 <div style={grid2}>
-                  <FieldInput label="Razón social"     value={fbufES.legalName}  onChange={setES("legalName")} />
-                  <FieldInput label="NIF"               value={fbufES.nif}        onChange={setES("nif")}        half />
-                  <FieldInput label="País"              value={fbufES.country}    onChange={setES("country")}    half />
+                  <FieldInput label="Razón social"          value={fbufES.legalName}      onChange={setES("legalName")} />
+                  <FieldInput label="NIF"                   value={fbufES.nif}            onChange={setES("nif")}            half />
+                  <FieldInput label="País"                  value={fbufES.country}        onChange={setES("country")}        half />
+                  <FieldInput label="Sitio web"             value={fbufES.website ?? ""}  onChange={setES("website")}        half />
+                  <FieldInput label="Email de contacto"     value={fbufES.email ?? ""}    onChange={setES("email")}          half />
+                  <FieldInput label="Teléfono"              value={fbufES.phone ?? ""}    onChange={setES("phone")}          half />
+                  <FieldInput label="URL del logo (imagen)" value={fbufES.logoUrl ?? ""}  onChange={setES("logoUrl")}        half />
                 </div>
 
                 <div style={{ fontSize: 10, color: "var(--orange, #f5a623)", fontWeight: 800, letterSpacing: ".08em", marginBottom: 8, marginTop: 10 }}>DOMICILIO</div>
                 <div style={grid2}>
-                  <FieldInput label="Dirección"         value={fbufES.address}    onChange={setES("address")} />
-                  <FieldInput label="Ciudad"            value={fbufES.city}       onChange={setES("city")}       half />
-                  <FieldInput label="Código postal"     value={fbufES.cp}         onChange={setES("cp")}         half />
+                  <FieldInput label="Dirección"             value={fbufES.address}        onChange={setES("address")} />
+                  <FieldInput label="Suite / Piso"          value={fbufES.suite ?? ""}    onChange={setES("suite")}          half />
+                  <FieldInput label="Ciudad"                value={fbufES.city}           onChange={setES("city")}           half />
+                  <FieldInput label="Código postal"         value={fbufES.cp}             onChange={setES("cp")}             half />
                 </div>
 
                 <div style={{ fontSize: 10, color: "var(--orange, #f5a623)", fontWeight: 800, letterSpacing: ".08em", marginBottom: 8, marginTop: 10 }}>DATOS BANCARIOS</div>
                 <div style={grid2}>
-                  <FieldInput label="Banco"             value={fbufES.bankName}   onChange={setES("bankName")} />
-                  <FieldInput label="IBAN"              value={fbufES.iban}       onChange={setES("iban")}       half />
-                  <FieldInput label="SWIFT / BIC"       value={fbufES.swift}      onChange={setES("swift")}      half />
+                  <FieldInput label="Banco"                 value={fbufES.bankName}       onChange={setES("bankName")} />
+                  <FieldInput label="IBAN"                  value={fbufES.iban}           onChange={setES("iban")}           half />
+                  <FieldInput label="SWIFT / BIC"           value={fbufES.swift}          onChange={setES("swift")}          half />
                 </div>
 
                 <div style={{ fontSize: 10, color: "var(--orange, #f5a623)", fontWeight: 800, letterSpacing: ".08em", marginBottom: 8, marginTop: 10 }}>FACTURACIÓN</div>
                 <div style={grid2}>
-                  <FieldInput label="Texto pie de factura" value={fbufES.notaPie} onChange={setES("notaPie")}   textarea />
+                  <FieldInput label="Condición de pago"     value={fbufES.paymentTerms ?? ""} onChange={setES("paymentTerms")} />
+                  <FieldInput label="Texto pie de factura"  value={fbufES.notaPie}        onChange={setES("notaPie")}        textarea />
                 </div>
 
                 <div style={{ fontSize: 10, color: "var(--orange, #f5a623)", fontWeight: 800, letterSpacing: ".08em", marginBottom: 8, marginTop: 10 }}>MONEDAS PERMITIDAS</div>
