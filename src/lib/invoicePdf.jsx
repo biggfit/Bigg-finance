@@ -1,6 +1,8 @@
 /**
  * invoicePdf.jsx — Generación de INVOICE en PDF para BIGG FIT LLC (y ES)
  * Usa @react-pdf/renderer v4.
+ * Nota: fmtAmt usa locale en-US (formato $1,234.56) a diferencia de fmt() en helpers.js
+ * que usa es-AR. Esto es intencional para invoices en inglés dirigidas al exterior.
  */
 import React from "react";
 import { Document, Page, View, Text, Image, StyleSheet, pdf } from "@react-pdf/renderer";
@@ -46,18 +48,19 @@ const S = StyleSheet.create({
   invoiceTitle: { fontFamily: "Helvetica-Bold", fontSize: 14, color: TEAL, marginTop: 10, marginBottom: 10 },
 
   // ── Bloque de información ───────────────────────────────────────────────────
-  infoBlock: { flexDirection: "row", marginTop: 4, marginBottom: 16 },
-  infoLeft:  { flex: 1.1, paddingRight: 18 },
-  infoRow:   { flexDirection: "row", marginBottom: 5 },
-  infoLabel: { width: 112, fontSize: 8.5, color: GRAY },
-  infoVal:   { fontFamily: "Helvetica-Bold", fontSize: 8.5, color: BLACK },
-  infoRight: { flex: 1, paddingLeft: 18, borderLeftWidth: 0.5, borderLeftStyle: "solid", borderLeftColor: BORDER },
+  infoBlock:    { flexDirection: "row", marginTop: 4, marginBottom: 16 },
+  infoLeft:     { flex: 1.1, paddingRight: 18 },
+  infoRow:      { flexDirection: "row", marginBottom: 5 },
+  infoLabel:    { width: 112, fontSize: 8.5, color: GRAY },
+  infoVal:      { fontFamily: "Helvetica-Bold", fontSize: 8.5, color: BLACK },
+  infoRight:    { flex: 1, paddingLeft: 18, borderLeftWidth: 0.5, borderLeftStyle: "solid", borderLeftColor: BORDER },
   clientName:   { fontFamily: "Helvetica-Bold", fontSize: 10, color: BLACK, marginBottom: 4 },
+  clientLegal:  { fontSize: 8.5, color: GRAY, marginBottom: 3 },
   clientDetail: { fontSize: 8.5, color: GRAY, lineHeight: 1.7 },
 
   // ── Tabla ───────────────────────────────────────────────────────────────────
-  tableHead: { flexDirection: "row", paddingVertical: 8, paddingHorizontal: 10, backgroundColor: LGRAY },
-  tableRow:  { flexDirection: "row", paddingVertical: 11, paddingHorizontal: 10, borderBottomWidth: 0.5, borderBottomColor: "#f0f0f0", borderBottomStyle: "solid" },
+  tableHead:   { flexDirection: "row", paddingVertical: 8, paddingHorizontal: 10, backgroundColor: LGRAY },
+  tableRow:    { flexDirection: "row", paddingVertical: 11, paddingHorizontal: 10, borderBottomWidth: 0.5, borderBottomColor: "#f0f0f0", borderBottomStyle: "solid" },
   colConcepto: { flex: 2 },
   colDesc:     { flex: 1.8 },
   colUnit:     { flex: 1.4, alignItems: "flex-end" },
@@ -78,7 +81,6 @@ const S = StyleSheet.create({
   sumRow:      { flexDirection: "row", justifyContent: "space-between", paddingVertical: 4, borderBottomWidth: 0.5, borderBottomColor: "#f0f0f0", borderBottomStyle: "solid" },
   sumLabel:    { fontSize: 8.5, color: GRAY },
   sumVal:      { fontSize: 8.5, color: BLACK },
-  sumRowBold:  { flexDirection: "row", justifyContent: "space-between", paddingVertical: 4, borderBottomWidth: 0.5, borderBottomColor: "#f0f0f0", borderBottomStyle: "solid" },
   sumLabelB:   { fontFamily: "Helvetica-Bold", fontSize: 8.5, color: BLACK },
   sumValB:     { fontFamily: "Helvetica-Bold", fontSize: 8.5, color: BLACK },
   sumRowFinal: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 4.5, borderTopWidth: 1.5, borderTopColor: BLACK, borderTopStyle: "solid", marginTop: 4 },
@@ -88,6 +90,7 @@ const S = StyleSheet.create({
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+// Formato en-US ($1,234.56) para invoices en inglés — distinto de fmt() en helpers.js (es-AR)
 function fmtAmt(amount, currency = "USD") {
   const sym = currency === "EUR" ? "€" : "$";
   return `${sym}${Number(amount).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -97,8 +100,10 @@ function fmtAmt(amount, currency = "USD") {
 function InvoicePage({ fr, usa, comp }) {
   const amount    = comp.amount ?? 0;
   const currency  = comp.currency ?? "USD";
+  const amtStr    = fmtAmt(amount, currency);   // calculado una sola vez
+  const zerStr    = fmtAmt(0, currency);
   const cuentaRaw = String(comp.type ?? "").split("|")[1] ?? "";
-  const concepto  = CUENTA_LABEL[cuentaRaw] ?? cuentaRaw ?? "Service";
+  const concepto  = CUENTA_LABEL[cuentaRaw] || "Service";
   const period    = `${MONTHS[comp.month ?? 0]} ${comp.year ?? new Date().getFullYear()}`;
   const descr     = comp.nota ?? comp.ref ?? period;
 
@@ -124,10 +129,10 @@ function InvoicePage({ fr, usa, comp }) {
   const bankLines = [
     usa.bankName,
     usa.bankAddress,
-    usa.routingNumber && `ABA: ${usa.routingNumber}`,
-    usa.swift         && `SWIFT: ${usa.swift}`,
-    usa.beneficiaryName   && `Beneficiary Name: ${usa.beneficiaryName}`,
-    usa.accountNumber && `Beneficiary Account #: ${usa.accountNumber}`,
+    usa.routingNumber   && `ABA: ${usa.routingNumber}`,
+    usa.swift           && `SWIFT: ${usa.swift}`,
+    usa.beneficiaryName && `Beneficiary Name: ${usa.beneficiaryName}`,
+    usa.accountNumber   && `Beneficiary Account #: ${usa.accountNumber}`,
   ].filter(Boolean);
 
   return (
@@ -149,16 +154,16 @@ function InvoicePage({ fr, usa, comp }) {
         {/* Centro: nombre + contacto */}
         <View style={S.headerCenter}>
           <Text style={S.headerCompany}>{companyName}</Text>
-          {website    && <Text style={S.headerDetail}>{website}</Text>}
-          {emailFac   && <Text style={S.headerDetail}>{emailFac}</Text>}
+          {website  && <Text style={S.headerDetail}>{website}</Text>}
+          {emailFac && <Text style={S.headerDetail}>{emailFac}</Text>}
         </View>
 
         {/* Derecha: dirección */}
         <View style={S.headerRight}>
-          {address1  && <Text style={S.headerAddress}>{address1}</Text>}
-          {suite     && <Text style={S.headerAddress}>{suite}</Text>}
-          {cityLine  && <Text style={S.headerAddress}>{cityLine}</Text>}
-          {country   && <Text style={S.headerAddress}>{country}</Text>}
+          {address1 && <Text style={S.headerAddress}>{address1}</Text>}
+          {suite    && <Text style={S.headerAddress}>{suite}</Text>}
+          {cityLine && <Text style={S.headerAddress}>{cityLine}</Text>}
+          {country  && <Text style={S.headerAddress}>{country}</Text>}
         </View>
       </View>
 
@@ -189,18 +194,18 @@ function InvoicePage({ fr, usa, comp }) {
           </View>
           <View style={S.infoRow}>
             <Text style={S.infoLabel}>Total</Text>
-            <Text style={S.infoVal}>{fmtAmt(amount, currency)}</Text>
+            <Text style={S.infoVal}>{amtStr}</Text>
           </View>
           <View style={S.infoRow}>
             <Text style={S.infoLabel}>Pending</Text>
-            <Text style={S.infoVal}>{fmtAmt(amount, currency)}</Text>
+            <Text style={S.infoVal}>{amtStr}</Text>
           </View>
         </View>
 
         {/* Derecha: datos del cliente */}
         <View style={S.infoRight}>
           <Text style={S.clientName}>{clientSede}</Text>
-          {clientLegal ? <Text style={{ fontSize: 8.5, color: GRAY, marginBottom: 3 }}>{clientLegal}</Text> : null}
+          {clientLegal ? <Text style={S.clientLegal}>{clientLegal}</Text> : null}
           <Text style={S.clientDetail}>
             {[clientTaxId, clientAddr, clientCountry, clientEmail].filter(Boolean).join("\n")}
           </Text>
@@ -224,9 +229,9 @@ function InvoicePage({ fr, usa, comp }) {
         <View style={S.tableRow}>
           <View style={S.colConcepto}><Text style={S.tdConcepto}>{concepto}</Text></View>
           <View style={S.colDesc}>    <Text style={S.tdDesc}>{descr}</Text></View>
-          <View style={S.colUnit}>    <Text style={S.tdNum}>{fmtAmt(amount, currency)}</Text></View>
+          <View style={S.colUnit}>    <Text style={S.tdNum}>{amtStr}</Text></View>
           <View style={S.colQty}>     <Text style={S.tdNum}>1</Text></View>
-          <View style={S.colTotal}>   <Text style={S.tdNum}>{fmtAmt(amount, currency)}</Text></View>
+          <View style={S.colTotal}>   <Text style={S.tdNum}>{amtStr}</Text></View>
         </View>
       </View>
 
@@ -245,23 +250,23 @@ function InvoicePage({ fr, usa, comp }) {
         <View style={S.footerRight}>
           <View style={S.sumRow}>
             <Text style={S.sumLabel}>Net</Text>
-            <Text style={S.sumVal}>{fmtAmt(amount, currency)}</Text>
+            <Text style={S.sumVal}>{amtStr}</Text>
           </View>
           <View style={S.sumRow}>
             <Text style={S.sumLabel}>Subtotal</Text>
-            <Text style={S.sumVal}>{fmtAmt(amount, currency)}</Text>
+            <Text style={S.sumVal}>{amtStr}</Text>
           </View>
-          <View style={S.sumRowBold}>
+          <View style={S.sumRow}>
             <Text style={S.sumLabelB}>Total</Text>
-            <Text style={S.sumValB}>{fmtAmt(amount, currency)}</Text>
+            <Text style={S.sumValB}>{amtStr}</Text>
           </View>
           <View style={S.sumRow}>
             <Text style={S.sumLabel}>Paid</Text>
-            <Text style={S.sumVal}>{fmtAmt(0, currency)}</Text>
+            <Text style={S.sumVal}>{zerStr}</Text>
           </View>
           <View style={S.sumRowFinal}>
             <Text style={S.sumLabelB}>Pending</Text>
-            <Text style={S.sumValB}>{fmtAmt(amount, currency)}</Text>
+            <Text style={S.sumValB}>{amtStr}</Text>
           </View>
         </View>
       </View>
@@ -309,14 +314,15 @@ function triggerBlobDownload(blob, filename) {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  // Revocamos en el siguiente tick para dar tiempo al browser a iniciar la descarga
+  setTimeout(() => URL.revokeObjectURL(url), 100);
 }
 
 /**
  * Genera y descarga un PDF para un único invoice.
  */
 export async function downloadInvoicePdf(fr, franchisor, comp) {
-  const blob = await pdf(<InvoiceDoc fr={fr} franchisor={franchisor} comp={comp} />).toBlob();
+  const blob  = await pdf(<InvoiceDoc fr={fr} franchisor={franchisor} comp={comp} />).toBlob();
   const label = comp.invoice ? String(comp.invoice).replace(/\//g, "-") : comp.id;
   triggerBlobDownload(blob, `Invoice_${label}_${fr.name}.pdf`);
 }

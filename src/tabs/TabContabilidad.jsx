@@ -152,6 +152,7 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
 
   const totalDebe  = filtered.filter(r => !r.isApertura).reduce((a, r) => a + r.debe,  0);
   const totalHaber = filtered.filter(r => !r.isApertura).reduce((a, r) => a + r.haber, 0);
+  const activeCur  = filterCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS";
   // saldo ya es acumulado global — el último valor cronológico es el total final
   const saldoFinalConsolidado = useMemo(() => {
     const cronRows = [...filtered].sort((a, b) => cmpDate(a.date, b.date) || a.frName.localeCompare(b.frName));
@@ -400,13 +401,13 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
                   TOTALES — {filtered.filter(r => !r.isApertura).length} movimientos
                 </td>
                 <td style={{ padding: "8px 8px" }} />
-                <td className="mono" style={{ textAlign: "right", color: "var(--red)", fontWeight: 800, fontSize: 13, padding: "8px 8px" }}>{fmt(totalDebe, filterCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS")}</td>
-                <td className="mono" style={{ textAlign: "right", color: "var(--green)", fontWeight: 800, fontSize: 13, padding: "8px 8px" }}>{fmt(totalHaber, filterCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS")}</td>
+                <td className="mono" style={{ textAlign: "right", color: "var(--red)", fontWeight: 800, fontSize: 13, padding: "8px 8px" }}>{fmt(totalDebe, activeCur)}</td>
+                <td className="mono" style={{ textAlign: "right", color: "var(--green)", fontWeight: 800, fontSize: 13, padding: "8px 8px" }}>{fmt(totalHaber, activeCur)}</td>
                 {!multiCurrency && <td style={{ textAlign: "right", padding: "8px 8px" }}>
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
                     <span style={{ fontSize: 9, color: "var(--muted)", fontWeight: 700, letterSpacing: 0.5 }}>SALDO FINAL</span>
                     <span className="mono" style={{ fontSize: 13, fontWeight: 800, color: saldoFinalConsolidado > 0.01 ? "var(--red)" : saldoFinalConsolidado < -0.01 ? "var(--green)" : "var(--muted)" }}>
-                      {fmtS(saldoFinalConsolidado, filterCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS")}
+                      {fmtS(saldoFinalConsolidado, activeCur)}
                     </span>
                   </div>
                 </td>}
