@@ -50,13 +50,27 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
   const [filterMonth, setFilterMonth] = useState(null);
   const [filterYear,  setFilterYear]  = useState(null);
 
-  // Selección individual para emisión masiva
+  // Selección individual para emisión masiva (sinAfip)
   const [selectedIds, setSelectedIds] = useState(new Set()); // comp.ids seleccionados
   const toggleSelect = (id) => setSelectedIds(prev => {
     const next = new Set(prev);
     next.has(id) ? next.delete(id) : next.add(id);
     return next;
   });
+
+  // Selección individual para pagos a cuenta
+  const [selectedPagoIds, setSelectedPagoIds] = useState(new Set());
+  const togglePagoSelect = (id) => setSelectedPagoIds(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+  const toggleAllPagos = () => {
+    if (selectedPagoIds.size === pagosSinFactura.length)
+      setSelectedPagoIds(new Set());
+    else
+      setSelectedPagoIds(new Set(pagosSinFactura.map(({ comp }) => comp.id)));
+  };
 
   // Filtro multi-sede
   const [filterFrIds, setFilterFrIds] = useState(new Set()); // vacío = todas
@@ -184,20 +198,26 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
       }
       done++;
       setBatchProgress({ done, total, ok, errors: [...batchErrors] });
+      if (done < total) await new Promise(r => setTimeout(r, 600));
     }
 
     setBatchRunning(false);
   };
 
-  const handlePagoBatch = async () => {
-    if (pagoBatchRunning || pagosSinFactura.length === 0 || !onEmitirPago) return;
+  const handlePagoBatch = async (retryList = null) => {
+    if (pagoBatchRunning || !onEmitirPago) return;
+    const queue = retryList
+      ?? (selectedPagoIds.size > 0
+          ? pagosSinFactura.filter(({ comp }) => selectedPagoIds.has(comp.id))
+          : pagosSinFactura);
+    if (queue.length === 0) return;
     setPagoBatchRunning(true);
-    const total = pagosSinFactura.length;
+    const total = queue.length;
     let done = 0, ok = 0;
     const batchErrors = [];
     setPagoBatchProgress({ done: 0, total, ok: 0, errors: [] });
 
-    for (const { fr, comp } of pagosSinFactura) {
+    for (const { fr, comp } of queue) {
       try {
         await onEmitirPago(fr, comp);
         ok++;
@@ -206,9 +226,11 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
       }
       done++;
       setPagoBatchProgress({ done, total, ok, errors: [...batchErrors] });
+      if (done < total) await new Promise(r => setTimeout(r, 600));
     }
 
     setPagoBatchRunning(false);
+    setSelectedPagoIds(new Set());
   };
 
   if (sinAfipAll.length === 0 && sinAsignar.length === 0 && pagosSinFactura.length === 0) return null;
@@ -533,18 +555,29 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
               <button
                 className="btn"
                 style={{ fontSize: 11, padding: "4px 14px", background: "rgba(222,251,151,.18)", color: "var(--gold)", border: "1px solid rgba(222,251,151,.35)" }}
-                onClick={handlePagoBatch}
+                onClick={() => handlePagoBatch()}
               >
-                ⚡ Emitir {pagosSinFactura.length} documento{pagosSinFactura.length !== 1 ? "s" : ""}
+                ⚡ Emitir {selectedPagoIds.size > 0 ? selectedPagoIds.size : pagosSinFactura.length} documento{(selectedPagoIds.size || pagosSinFactura.length) !== 1 ? "s" : ""}
               </button>
             )}
             {pagoBatchProgress && (
               <span style={{ fontSize: 10, color: "var(--text2)" }}>
-                {pagoBatchRunning ? `Emitiendo… ${pagoBatchProgress.done}/${pagoBatchProgress.total}` : `✓ ${pagoBatchProgress.ok}/${pagoBatchProgress.total}`}
+                {pagoBatchRunning
+                  ? `Emitiendo… ${pagoBatchProgress.done}/${pagoBatchProgress.total}`
+                  : `✓ ${pagoBatchProgress.ok}/${pagoBatchProgress.total}${pagoBatchProgress.errors.length ? ` — ${pagoBatchProgress.errors.length} error${pagoBatchProgress.errors.length !== 1 ? "es" : ""}` : ""}`}
               </span>
             )}
+            {pagoBatchProgress && !pagoBatchRunning && pagoBatchProgress.errors.length > 0 && (
+              <button
+                className="ghost"
+                style={{ fontSize: 10, padding: "3px 10px", color: "var(--red)" }}
+                onClick={() => handlePagoBatch(pagoBatchProgress.errors.map(e => ({ fr: e.fr, comp: e.comp })))}
+              >
+                ↺ Reintentar {pagoBatchProgress.errors.length} fallido{pagoBatchProgress.errors.length !== 1 ? "s" : ""}
+              </button>
+            )}
             {pagoBatchProgress && !pagoBatchRunning && (
-              <button className="ghost" style={{ fontSize: 10, padding: "3px 10px" }} onClick={() => setPagoBatchProgress(null)}>✕ Cerrar</button>
+              <button className="ghost" style={{ fontSize: 10, padding: "3px 10px" }} onClick={() => { setPagoBatchProgress(null); setSelectedPagoIds(new Set()); }}>✕ Cerrar</button>
             )}
             <span style={{ fontSize: 11, color: "var(--muted)", cursor: "pointer" }} onClick={() => setShowPago(v => !v)}>
               {showPago ? "▲" : "▼"}
@@ -552,8 +585,30 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
           </div>
           {showPago && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {/* Fila de selección masiva */}
+              {!pagoBatchRunning && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 4, borderBottom: "1px solid var(--border2)" }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedPagoIds.size === pagosSinFactura.length && pagosSinFactura.length > 0}
+                    onChange={toggleAllPagos}
+                    style={{ cursor: "pointer" }}
+                  />
+                  <span style={{ fontSize: 10, color: "var(--muted)" }}>
+                    {selectedPagoIds.size > 0 ? `${selectedPagoIds.size} seleccionado${selectedPagoIds.size !== 1 ? "s" : ""}` : "Seleccionar todos"}
+                  </span>
+                </div>
+              )}
               {pagosSinFactura.map(({ fr, comp }, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, background: "var(--bg2)", borderRadius: 7, padding: "8px 12px" }}>
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, background: "var(--bg2)", borderRadius: 7, padding: "8px 12px", opacity: pagoBatchRunning ? 0.6 : 1 }}>
+                  {!pagoBatchRunning && (
+                    <input
+                      type="checkbox"
+                      checked={selectedPagoIds.has(comp.id)}
+                      onChange={() => togglePagoSelect(comp.id)}
+                      style={{ cursor: "pointer", flexShrink: 0 }}
+                    />
+                  )}
                   <span style={{ fontSize: 12, fontWeight: 700, flex: 1 }}>{fr.name}</span>
                   <span style={{ fontSize: 11, color: "var(--muted)" }}>{MONTHS[comp.month]} {comp.year}</span>
                   <span className="mono" style={{ fontSize: 12, color: "var(--gold)", fontWeight: 700 }}>{fmt(comp.amount, compCurrency(comp))}</span>
@@ -561,6 +616,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
                   <button
                     className="ghost"
                     style={{ fontSize: 10, padding: "2px 8px", color: "var(--gold)" }}
+                    disabled={pagoBatchRunning}
                     onClick={() => onEmitir(fr, comp)}
                   >
                     Emitir factura →
@@ -569,6 +625,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
                     className="ghost"
                     style={{ fontSize: 11, padding: "0 5px", color: "var(--text2)" }}
                     title="Eliminar"
+                    disabled={pagoBatchRunning}
                     onClick={() => deleteComp(fr.id, comp.id)}
                   >✕</button>
                 </div>

@@ -1749,9 +1749,16 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
 
   // Crea y emite FACTURA_PAUTA para un PAGO_PAUTA sin factura
   const handleEmitirPago = async (fr, pagoComp) => {
+    // pagoComp.amount es el TOTAL transferido → back-calcular neto e IVA
+    const applyIVA    = !!fr.applyIVA;
+    const amountTotal = pagoComp.amount;
+    const amountNeto  = applyIVA ? Math.round(amountTotal / 1.21 * 100) / 100 : amountTotal;
+    const amountIVA   = applyIVA ? Math.round((amountTotal - amountNeto) * 100) / 100 : 0;
+
     const factComp = {
       id: uid(), type: makeType("FACTURA", "PAUTA"),
-      amount: pagoComp.amount, date: pagoComp.date,
+      amount: amountTotal, amountNeto, amountIVA,
+      date: pagoComp.date,
       month: pagoComp.month, year: pagoComp.year,
       currency: pagoComp.currency ?? "ARS",
       ref: `Pauta ${MONTHS[pagoComp.month]} ${pagoComp.year}`,
@@ -1761,7 +1768,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
       const result = await emitirComprobante({
         franchisor: franchisor?.ar ?? franchisor,
         franchise:  fr,
-        comp:       { ...factComp, applyIVA: !!fr.applyIVA },
+        comp:       { ...factComp, applyIVA },
       });
       factComp.invoice      = formatInvoiceLabel(result.tipoComprobante, result.idComprobante, result.puntoVenta);
       factComp.facturanteId = String(result.idComprobante);
