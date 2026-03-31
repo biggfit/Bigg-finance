@@ -112,6 +112,13 @@ function pct(rate) {
   return `${Math.round(rate * 100)}%`;
 }
 
+// Convierte URL relativa a absoluta para que react-pdf pueda fetchearla
+function resolveUrl(url) {
+  if (!url) return null;
+  if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:")) return url;
+  return window.location.origin + (url.startsWith("/") ? url : `/${url}`);
+}
+
 // ─── Componente página ────────────────────────────────────────────────────────
 function InvoicePage({ fr, issuer, comp, isES }) {
   const currency = comp.currency ?? (isES ? "EUR" : "USD");
@@ -218,7 +225,7 @@ function InvoicePage({ fr, issuer, comp, isES }) {
       {/* ─── TOP ROW: logo + ref ─────────────────────────────────────────── */}
       <View style={S.topRow}>
         {issuer.logoUrl ? (
-          <Image src={issuer.logoUrl} style={S.logoImg} />
+          <Image src={resolveUrl(issuer.logoUrl)} style={S.logoImg} />
         ) : (
           <View style={S.logoWrap}>
             <View style={S.logoInner}>
