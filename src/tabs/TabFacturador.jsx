@@ -1755,14 +1755,16 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
     const amountNeto  = applyIVA ? Math.round(amountTotal / 1.21 * 100) / 100 : amountTotal;
     const amountIVA   = applyIVA ? Math.round((amountTotal - amountNeto) * 100) / 100 : 0;
 
+    const cuentaUsada   = pagoComp._cuenta   ?? "PAUTA";
+    const conceptoBase  = `${CUENTA_LABEL[cuentaUsada] ?? cuentaUsada} ${MONTHS[pagoComp.month]} ${pagoComp.year}`;
+    const conceptoFinal = pagoComp._concepto ?? pagoComp.nota ?? `Factura ${conceptoBase}`;
     const factComp = {
-      id: uid(), type: makeType("FACTURA", "PAUTA"),
+      id: uid(), type: makeType("FACTURA", cuentaUsada),
       amount: amountTotal, amountNeto, amountIVA,
       date: pagoComp.date,
       month: pagoComp.month, year: pagoComp.year,
       currency: pagoComp.currency ?? "ARS",
-      ref: `Pauta ${MONTHS[pagoComp.month]} ${pagoComp.year}`,
-      nota: pagoComp.nota ?? `Factura Pauta ${MONTHS[pagoComp.month]} ${pagoComp.year}`,
+      ref: conceptoFinal, nota: conceptoFinal,
     };
     if (fr.country === "Argentina" && factComp.currency === "ARS") {
       const result = await emitirComprobante({
