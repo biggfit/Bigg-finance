@@ -399,6 +399,7 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
                 <td colSpan={3} style={{ fontSize: 11, color: "var(--muted)", padding: "8px 10px", fontWeight: 700 }}>
                   TOTALES — {filtered.filter(r => !r.isApertura).length} movimientos
                 </td>
+                <td style={{ padding: "8px 8px" }} />
                 <td className="mono" style={{ textAlign: "right", color: "var(--red)", fontWeight: 800, fontSize: 13, padding: "8px 8px" }}>{fmt(totalDebe, filterCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS")}</td>
                 <td className="mono" style={{ textAlign: "right", color: "var(--green)", fontWeight: 800, fontSize: 13, padding: "8px 8px" }}>{fmt(totalHaber, filterCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS")}</td>
                 {!multiCurrency && <td style={{ textAlign: "right", padding: "8px 8px" }}>
