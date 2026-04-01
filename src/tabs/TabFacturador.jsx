@@ -1781,16 +1781,20 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
   };
 
   // Emite directamente ante AFIP un comp ya guardado en Sheets (sin wizard)
-  const handleEmitirAfip = async (fr, comp) => {
+  // dateOverride: string dd/mm/yyyy — si viene, se usa como fecha de emisión en vez de comp.date
+  const handleEmitirAfip = async (fr, comp, dateOverride) => {
+    const compToEmit = dateOverride ? { ...comp, date: dateOverride } : comp;
     const result = await emitirComprobante({
       franchisor: franchisor?.ar ?? franchisor,
       franchise:  fr,
-      comp:       { ...comp, applyIVA: !!fr.applyIVA },
+      comp:       { ...compToEmit, applyIVA: !!fr.applyIVA },
       referenciaInvoice: comp.invoice ?? undefined,
     });
     const invoice      = formatInvoiceLabel(result.tipoComprobante, result.afipNumero ?? result.idComprobante, result.afipPrefijo ?? result.puntoVenta);
     const facturanteId = String(result.idComprobante);
-    editComp(fr.id, comp.id, { invoice, facturanteId });
+    const updates = { invoice, facturanteId };
+    if (dateOverride) updates.date = dateOverride;
+    editComp(fr.id, comp.id, updates);
   };
 
   // Crea y emite FACTURA_PAUTA para un PAGO_PAUTA sin factura
@@ -1801,14 +1805,19 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
     const amountNeto  = applyIVA ? Math.round(amountTotal / 1.21 * 100) / 100 : amountTotal;
     const amountIVA   = applyIVA ? Math.round((amountTotal - amountNeto) * 100) / 100 : 0;
 
+    // _fecha override (dd/mm/yyyy) viene del batch con fecha personalizada
+    const fechaFinal = pagoComp._fecha ?? pagoComp.date;
+    const monthFinal = pagoComp._fecha ? parseInt(pagoComp._fecha.split("/")[1], 10) - 1 : pagoComp.month;
+    const yearFinal  = pagoComp._fecha ? parseInt(pagoComp._fecha.split("/")[2], 10)     : pagoComp.year;
+
     const cuentaUsada   = pagoComp._cuenta   ?? "PAUTA";
-    const conceptoBase  = `${CUENTA_LABEL[cuentaUsada] ?? cuentaUsada} ${MONTHS[pagoComp.month]} ${pagoComp.year}`;
+    const conceptoBase  = `${CUENTA_LABEL[cuentaUsada] ?? cuentaUsada} ${MONTHS[monthFinal]} ${yearFinal}`;
     const conceptoFinal = pagoComp._concepto ?? pagoComp.nota ?? `Factura ${conceptoBase}`;
     const factComp = {
       id: uid(), type: makeType("FACTURA", cuentaUsada),
       amount: amountTotal, amountNeto, amountIVA,
-      date: pagoComp.date,
-      month: pagoComp.month, year: pagoComp.year,
+      date: fechaFinal,
+      month: monthFinal, year: yearFinal,
       currency: pagoComp.currency ?? "ARS",
       ref: conceptoFinal, nota: conceptoFinal,
     };

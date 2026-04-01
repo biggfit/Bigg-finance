@@ -41,10 +41,13 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
   // Emisión masiva (sinAfip)
   const [batchRunning, setBatchRunning]   = useState(false);
   const [batchProgress, setBatchProgress] = useState(null); // { done, total, ok, errors }
+  const [batchDatePending, setBatchDatePending] = useState(false); // true = mostrando input de fecha
+  const [batchDate, setBatchDate]         = useState(""); // yyyy-mm-dd (para input type=date)
 
   // Emisión masiva (pagos a cuenta)
   const [pagoBatchRunning, setPagoBatchRunning]   = useState(false);
   const [pagoBatchProgress, setPagoBatchProgress] = useState(null);
+  const [pagoBatchDate, setPagoBatchDate]         = useState(""); // yyyy-mm-dd
   const [pagoPreviewQueue, setPagoPreviewQueue]   = useState(null); // null = no preview, array = mostrando preview
   const [pagoPreviewEdits, setPagoPreviewEdits]   = useState({});   // { [comp.id]: { cuenta, concepto } }
 
@@ -196,10 +199,15 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
     ? sinAfip.filter(({ comp }) => selectedIds.has(comp.id))
     : sinAfip;
 
+  // Convierte yyyy-mm-dd → dd/mm/yyyy
+  const toAR = (isoDate) => isoDate ? `${isoDate.slice(8,10)}/${isoDate.slice(5,7)}/${isoDate.slice(0,4)}` : null;
+
   const handleBatch = async () => {
     if (batchRunning || toEmit.length === 0) return;
     setBatchRunning(true);
+    setBatchDatePending(false);
     setErrors({});
+    const dateOverride = batchDate ? toAR(batchDate) : null;
     const total = toEmit.length;
     let done = 0, ok = 0;
     const batchErrors = [];
@@ -207,7 +215,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
 
     for (const { fr, comp } of toEmit) {
       try {
-        await onEmitirAfip(fr, comp);
+        await onEmitirAfip(fr, comp, dateOverride);
         ok++;
       } catch (err) {
         batchErrors.push({ fr, comp, msg: err.message ?? "Error AFIP" });
@@ -276,14 +284,26 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
             <div style={{ flex: 1 }} />
 
             {/* Botón emisión masiva */}
-            {!batchRunning && !batchDone && toEmit.length > 0 && (
+            {!batchRunning && !batchDone && toEmit.length > 0 && !batchDatePending && (
               <button
                 className="btn"
                 style={{ fontSize: 11, padding: "4px 14px", background: "rgba(255,107,122,.18)", color: "var(--red)", border: "1px solid rgba(255,107,122,.35)" }}
-                onClick={handleBatch}
+                onClick={() => { setBatchDatePending(true); setBatchDate(""); }}
               >
                 ⚡ Emitir {toEmit.length} documento{toEmit.length !== 1 ? "s" : ""}
               </button>
+            )}
+            {batchDatePending && !batchRunning && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <label style={{ fontSize: 10, fontWeight: 700, color: "var(--red)", letterSpacing: ".06em" }}>Fecha emisión ARCA:</label>
+                <input type="date" value={batchDate} onChange={e => setBatchDate(e.target.value)}
+                  style={{ background: "var(--bg)", border: "1px solid var(--red)", color: "var(--text)", borderRadius: 6, padding: "3px 8px", fontSize: 11, fontFamily: "var(--font)" }} />
+                <button className="btn" style={{ fontSize: 10, padding: "3px 12px", background: "rgba(255,107,122,.25)", color: "var(--red)", border: "1px solid rgba(255,107,122,.4)" }}
+                  onClick={handleBatch} disabled={!batchDate}>
+                  Confirmar
+                </button>
+                <button className="ghost" style={{ fontSize: 10, padding: "3px 8px" }} onClick={() => setBatchDatePending(false)}>✕</button>
+              </div>
             )}
             {batchDone && (
               <button className="ghost" style={{ fontSize: 10, padding: "3px 10px" }} onClick={() => setBatchProgress(null)}>
@@ -576,6 +596,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
                     ? pagosSinFactura.filter(({ comp }) => selectedPagoIds.has(comp.id))
                     : pagosSinFactura;
                   initPreview(queue);
+                  setPagoBatchDate("");
                   setShowPago(true);
                 }}
               >
@@ -638,15 +659,24 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
                   ];
                 })}
               </div>
+              {/* Fecha emisión ARCA */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                <label style={{ fontSize: 10, fontWeight: 700, color: "var(--gold)", letterSpacing: ".06em" }}>Fecha emisión ARCA:</label>
+                <input type="date" value={pagoBatchDate} onChange={e => setPagoBatchDate(e.target.value)}
+                  style={{ background: "var(--bg)", border: "1px solid var(--gold)", color: "var(--text)", borderRadius: 6, padding: "3px 8px", fontSize: 11, fontFamily: "var(--font)" }} />
+                {!pagoBatchDate && <span style={{ fontSize: 10, color: "var(--orange)" }}>Obligatorio</span>}
+              </div>
               {/* Botones */}
               <div style={{ display: "flex", gap: 8 }}>
                 <button
                   className="btn"
-                  style={{ fontSize: 11, padding: "5px 18px", background: "rgba(222,251,151,.2)", color: "var(--gold)", border: "1px solid rgba(222,251,151,.4)" }}
+                  style={{ fontSize: 11, padding: "5px 18px", background: "rgba(222,251,151,.2)", color: "var(--gold)", border: "1px solid rgba(222,251,151,.4)", opacity: pagoBatchDate ? 1 : 0.4 }}
+                  disabled={!pagoBatchDate}
                   onClick={() => {
+                    const fechaOverride = pagoBatchDate ? toAR(pagoBatchDate) : null;
                     const augmented = pagoPreviewQueue.map(({ fr, comp }) => ({
                       fr,
-                      comp: { ...comp, _cuenta: pagoPreviewEdits[comp.id]?.cuenta ?? "PAUTA", _concepto: pagoPreviewEdits[comp.id]?.concepto },
+                      comp: { ...comp, _cuenta: pagoPreviewEdits[comp.id]?.cuenta ?? "PAUTA", _concepto: pagoPreviewEdits[comp.id]?.concepto, _fecha: fechaOverride },
                     }));
                     handlePagoBatch(augmented);
                     setPagoPreviewQueue(null);
