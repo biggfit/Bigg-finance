@@ -482,8 +482,12 @@ export default async function handler(req, res) {
 
   const envelope = buildEnvelope(operacion, requestBody);
 
+  // Debug: loguear el XML enviado (solo en dev / cuando hay un NC)
+  if (doc === 'NC') console.log('[facturante] NC envelope:\n', envelope);
+
   try {
     const { status, body } = await soapCall(ENDPOINT, operacion, envelope);
+    if (doc === 'NC') console.log('[facturante] NC response:\n', body);
 
     if (status !== 200) {
       res.statusCode = 502;
@@ -495,10 +499,15 @@ export default async function handler(req, res) {
     // Success: idComprobante present and mensaje does not indicate error
     const isSuccess = parsed.idComprobante != null && parsed.idComprobante > 0;
     if (!isSuccess) {
+      // Extraer todos los mensajes de error disponibles para debug
+      const codigo  = extractTag(body, 'Codigo');
+      const detalle = extractTag(body, 'Detalle') ?? extractTag(body, 'MensajeError') ?? extractTag(body, 'Descripcion');
+      const errMsg  = [parsed.mensaje, detalle].filter(Boolean).join(' — ') || 'Error de Facturante';
       return res.end(JSON.stringify({
         ok:     false,
-        error:  parsed.mensaje ?? 'Error de Facturante',
+        error:  errMsg,
         estado: parsed.estado,
+        codigo,
       }));
     }
 
