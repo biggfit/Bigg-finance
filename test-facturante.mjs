@@ -118,8 +118,8 @@ const envelope = `<?xml version="1.0" encoding="utf-8"?>
           <fac2:CondicionVenta>${condVenta}</fac2:CondicionVenta>
           <fac2:EnviarComprobante>true</fac2:EnviarComprobante>
           <fac2:FechaHora>${fecha}T00:00:00</fac2:FechaHora>
-          <fac2:FechaServDesde xsi:nil="true" />
-          <fac2:FechaServHasta xsi:nil="true" />
+          <fac2:FechaServDesde>2026-03-01T00:00:00</fac2:FechaServDesde>
+          <fac2:FechaServHasta>2026-03-31T00:00:00</fac2:FechaServHasta>
           ${fechaVtoPago ? `<fac2:FechaVtoPago>${fechaVtoPago}</fac2:FechaVtoPago>` : '<fac2:FechaVtoPago xsi:nil="true" />'}
           <fac2:ImporteImpuestosInternos>0</fac2:ImporteImpuestosInternos>
           <fac2:ImportePercepcionesMunic>0</fac2:ImportePercepcionesMunic>

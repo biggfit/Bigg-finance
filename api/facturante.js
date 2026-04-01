@@ -89,9 +89,10 @@ function buildClienteConIVAXml(franchise, condPago) {
 }
 
 function buildEncabezadoSinIVAXml(tipoStr, franchisor, comp, contado, fechaVtoPago) {
-  const fecha   = isoDateTime(comp.date);
-  const prefijo = String(franchisor.puntoVenta ?? '1');
-  const condVenta = contado ? 1 : 2; // 1=Contado, 2=Cuenta Corriente
+  const fecha     = isoDateTime(comp.date);
+  const prefijo   = String(franchisor.puntoVenta ?? '1');
+  const condVenta = contado ? 1 : 2;
+  const periodo   = calcPeriodoServicio(comp);
   const vtoPagoXml = (!contado && fechaVtoPago)
     ? `<b:FechaVtoPago>${fechaVtoPago}</b:FechaVtoPago>`
     : '';
@@ -100,6 +101,8 @@ function buildEncabezadoSinIVAXml(tipoStr, franchisor, comp, contado, fechaVtoPa
         <b:CondicionVenta>${condVenta}</b:CondicionVenta>
         <b:EnviarComprobante>true</b:EnviarComprobante>
         <b:FechaHora>${fecha}</b:FechaHora>
+        <b:FechaServDesde>${periodo.desde}</b:FechaServDesde>
+        <b:FechaServHasta>${periodo.hasta}</b:FechaServHasta>
         ${vtoPagoXml}
         <b:Moneda>2</b:Moneda>
         <b:Observaciones>${escXml(comp.ref ?? '')}</b:Observaciones>
@@ -109,10 +112,11 @@ function buildEncabezadoSinIVAXml(tipoStr, franchisor, comp, contado, fechaVtoPa
       </a:Encabezado>`;
 }
 
-function buildEncabezadoConIVAXml(tipoInt, franchisor, comp, referenciaIdComprobante, contado, fechaVtoPago) {
-  const fecha   = isoDateTime(comp.date);
-  const prefijo = String(franchisor.puntoVenta ?? '1');
-  const condVenta = contado ? 1 : 2; // 1=Contado, 2=Cuenta Corriente
+function buildEncabezadoConIVAXml(tipoStr, franchisor, comp, referenciaIdComprobante, contado, fechaVtoPago) {
+  const fecha     = isoDateTime(comp.date);
+  const prefijo   = String(franchisor.puntoVenta ?? '1');
+  const condVenta = contado ? 1 : 2;
+  const periodo   = calcPeriodoServicio(comp);
 
   const asociado = referenciaIdComprobante
     ? `<b:Asociados>
@@ -132,11 +136,13 @@ function buildEncabezadoConIVAXml(tipoInt, franchisor, comp, referenciaIdComprob
         <b:CondicionVenta>${condVenta}</b:CondicionVenta>
         <b:EnviarComprobante>true</b:EnviarComprobante>
         <b:FechaHora>${fecha}</b:FechaHora>
+        <b:FechaServDesde>${periodo.desde}</b:FechaServDesde>
+        <b:FechaServHasta>${periodo.hasta}</b:FechaServHasta>
         ${vtoPagoXml}
         <b:Moneda>2</b:Moneda>
         <b:Observaciones>${escXml(comp.ref ?? '')}</b:Observaciones>
         <b:Prefijo>${escXml(prefijo)}</b:Prefijo>
-        <b:TipoComprobante>${tipoInt}</b:TipoComprobante>
+        <b:TipoComprobante>${escXml(tipoStr)}</b:TipoComprobante>
         <b:TipoDeCambio>1</b:TipoDeCambio>
       </a:Encabezado>`;
 }
@@ -246,6 +252,33 @@ function isoDateTime(dmy) {
   const parts = String(dmy).split('/');
   if (parts.length === 3) return `${parts[2]}-${parts[1]}-${parts[0]}T00:00:00`;
   return dmy.includes('T') ? dmy : `${dmy.slice(0, 10)}T00:00:00`;
+}
+
+/**
+ * Devuelve FechaServDesde y FechaServHasta: primer y último día del mes del comprobante.
+ * comp.month es 0-indexed (0=Enero), comp.year es el año completo.
+ * Fallback: deriva de comp.date (dd/mm/yyyy).
+ */
+function calcPeriodoServicio(comp) {
+  let month, year;
+  if (comp.month != null && comp.year != null) {
+    month = parseInt(comp.month, 10); // 0-indexed
+    year  = parseInt(comp.year,  10);
+  } else if (comp.date) {
+    const parts = String(comp.date).split('/');
+    month = parseInt(parts[1], 10) - 1; // dd/mm/yyyy → 0-indexed
+    year  = parseInt(parts[2], 10);
+  } else {
+    const now = new Date();
+    month = now.getMonth();
+    year  = now.getFullYear();
+  }
+  const mm       = String(month + 1).padStart(2, '0');
+  const lastDay  = new Date(year, month + 1, 0).getDate(); // día 0 del mes siguiente = último día del mes actual
+  return {
+    desde: `${year}-${mm}-01T00:00:00`,
+    hasta: `${year}-${mm}-${String(lastDay).padStart(2, '0')}T00:00:00`,
+  };
 }
 
 /**
