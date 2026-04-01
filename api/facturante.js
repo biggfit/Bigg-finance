@@ -313,11 +313,14 @@ async function getDetalleComprobante(idComprobante) {
   try {
     const { status, body } = await soapCall(ENDPOINT, 'DetalleComprobanteFull', envelope);
     if (status !== 200) return {};
-    const numeroRaw = extractTag(body, 'Numero');
+    // Eliminar bloque Asociados antes de extraer Numero/Prefijo para evitar capturar
+    // el número del comprobante referenciado en lugar del número propio.
+    const bodyClean = body.replace(/<[^:>/]*:?Asociados[\s\S]*?<\/[^:>/]*:?Asociados>/g, '');
+    const numeroRaw = extractTag(bodyClean, 'Numero');
     return {
       urlPdf:  extractTag(body, 'URLPDF') || null,
       numero:  numeroRaw ? (parseInt(numeroRaw, 10) || null) : null,
-      prefijo: extractTag(body, 'Prefijo') || null,
+      prefijo: extractTag(bodyClean, 'Prefijo') || null,
     };
   } catch {
     return {};
