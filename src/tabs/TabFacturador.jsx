@@ -89,7 +89,8 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
   const [preview,    setPreview]   = useState(null);
   const [emitState, setEmitState] = useState("idle"); // "idle"|"emitting"|"error"
   const [emitError, setEmitError] = useState(null);
-  const [refCompId, setRefCompId] = useState(null); // facturanteId of referenced invoice (NC only)
+  const [refCompId,     setRefCompId]     = useState(null);  // facturanteId of referenced invoice (NC only)
+  const [refCompManual, setRefCompManual] = useState("");    // manual entry when FA has no facturanteId
 
   // movimiento state
   const [movTipo,    setMovTipo]   = useState("PAGO");
@@ -270,7 +271,10 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
       });
     };
     const usaFacturante  = isAR && currency === "ARS" && (doc === "FACTURA" || doc === "NC");
-    const ncSinRef       = usaFacturante && doc === "NC" && !refCompId; // NC sin referencia → bloquear emit
+    // Para NC: el ID efectivo de Facturante a referenciar (desde FA con facturanteId o ingreso manual)
+    const refFAComp      = doc === "NC" ? (comps[String(fr?.id)] ?? []).find(c => c.id === refCompId) : null;
+    const efectiveRefId  = refFAComp?.facturanteId || (refCompManual ? refCompManual : null);
+    const ncSinRef       = usaFacturante && doc === "NC" && !efectiveRefId; // NC sin referencia → bloquear emit
 
     const doConfirm = async (skipFacturante = false) => {
       if (!preview) return;
@@ -285,7 +289,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
             franchisor: franchisor?.ar ?? franchisor,
             franchise:  fr,
             comp:       { ...preview, applyIVA: applyIVA },
-            referenciaIdComprobante: refCompId ?? undefined,
+            referenciaIdComprobante: efectiveRefId ?? undefined,
           });
           enriched = {
             ...preview,
@@ -464,24 +468,50 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
             ))}
             {/* NC reference picker — obligatoria para AR + ARS + NC (Facturante lo requiere) */}
             {isAR && currency === "ARS" && doc === "NC" && (() => {
-              const frComps = (comps[String(fr?.id)] ?? [])
-                .filter(c => c.type?.startsWith("FACTURA") && c.facturanteId);
+              // Todas las FAs con número de comprobante (con o sin facturanteId)
+              const allFAs  = (comps[String(fr?.id)] ?? [])
+                .filter(c => c.type?.startsWith("FACTURA") && c.invoice)
+                .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+              // La FA seleccionada en el dropdown
+              const selFA   = allFAs.find(c => c.id === refCompId);
+              // El ID efectivo que se mandará a Facturante
+              const efectiveRefId = selFA?.facturanteId || refCompManual || null;
+              const hasRef  = !!efectiveRefId;
+
               return (
                 <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
                   <label style={{ fontSize: 9, fontWeight: 800, color: "var(--red)", letterSpacing: ".1em", display: "block", marginBottom: 6 }}>
-                    FACTURA DE REFERENCIA <span style={{ color: "var(--muted)" }}>(obligatoria ante ARCA)</span>
+                    FACTURA DE REFERENCIA <span style={{ color: "var(--muted)", fontWeight: 400 }}>(obligatoria ante ARCA)</span>
                   </label>
-                  {frComps.length === 0
+                  {allFAs.length === 0
                     ? <div style={{ fontSize: 11, color: "var(--muted)", padding: "8px 10px", background: "var(--bg2)", borderRadius: 6 }}>
-                        Esta sede no tiene facturas emitidas ante ARCA. Emitir una FA primero.
+                        Esta sede no tiene facturas registradas. Emitir una FA primero.
                       </div>
-                    : <select value={refCompId ?? ""} onChange={e => setRefCompId(e.target.value || null)}
-                        style={{ width: "100%", background: "var(--bg)", border: `1px solid ${refCompId ? "var(--border2)" : "var(--red)"}`, borderRadius: 6, padding: "6px 10px", color: "var(--text)", fontSize: 12 }}>
-                        <option value="">— Seleccionar factura —</option>
-                        {frComps.map(c => (
-                          <option key={c.id} value={c.facturanteId}>{c.invoice ?? c.facturanteId} — {c.date}</option>
-                        ))}
-                      </select>
+                    : <>
+                        <select value={refCompId ?? ""} onChange={e => { setRefCompId(e.target.value || null); setRefCompManual(""); }}
+                          style={{ width: "100%", background: "var(--bg)", border: `1px solid ${hasRef ? "var(--border2)" : "var(--red)"}`, borderRadius: 6, padding: "6px 10px", color: "var(--text)", fontSize: 12 }}>
+                          <option value="">— Seleccionar factura —</option>
+                          {allFAs.map(c => (
+                            <option key={c.id} value={c.id}>
+                              {c.invoice} — {c.date}{c.facturanteId ? "" : " ⚠ sin ID"}
+                            </option>
+                          ))}
+                        </select>
+                        {/* Si la FA seleccionada no tiene facturanteId, pedir ingreso manual */}
+                        {selFA && !selFA.facturanteId && (
+                          <div style={{ marginTop: 8 }}>
+                            <label style={{ fontSize: 9, color: "var(--orange)", fontWeight: 700, letterSpacing: ".08em", display: "block", marginBottom: 4 }}>
+                              ID FACTURANTE (buscarlo en el portal testing.facturante.com)
+                            </label>
+                            <input
+                              type="number" placeholder="Ej: 1161205"
+                              value={refCompManual}
+                              onChange={e => setRefCompManual(e.target.value)}
+                              style={{ width: "100%", padding: "6px 10px", fontSize: 12, borderRadius: 6, background: "var(--bg)", border: `1px solid ${refCompManual ? "var(--border2)" : "var(--orange)"}`, color: "var(--text)", boxSizing: "border-box" }}
+                            />
+                          </div>
+                        )}
+                      </>
                   }
                 </div>
               );
