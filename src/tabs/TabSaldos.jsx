@@ -18,7 +18,9 @@ export function RecordatorioDots({ dots }) {
 }
 import { computeSaldo, computeSaldoPrevMes, computePautaPendiente, compEmpresa, compCurrency, makeType, MONTHS, fmt, downloadCSV, COMPANIES, COMP_TYPES, cmpDate } from "../lib/helpers";
 import { inPeriod, todayDmy } from "../data/franchisor";
-import { buildCCHtml } from "../lib/pdf";
+import { buildCCHtml, buildFacturaHtmlForMail, htmlToBase64, blobToBase64 } from "../lib/pdf";
+import { generateInvoicePdfBlob } from "../lib/invoicePdf";
+import { downloadFacturantePdfBlob } from "../lib/facturanteApi";
 import { sendMailFr } from "../lib/sheetsApi";
 
 // ─── HOOK COMPARTIDO: agrega datos por franquicia ─────────────────────────────
@@ -60,36 +62,16 @@ export function SaldosTable({ title, data, accentColor, bgColor, borderColor, on
   if (data.length === 0) return null;
   const getAmt = amountFn ?? (d => d.sa);
   const total  = data.reduce((a, d) => a + getAmt(d), 0);
-  const { activeCompany } = useStore();
+  const { comps, saldoInicial, recordatorios, addRecordatorioEntry, franchisor, activeCompany } = useStore();
   const curLabel = displayCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS";
   const [selected,     setSelected]     = useState(new Set());
   const [confirmRows,  setConfirmRows]  = useState(null);
   const [sendingMail,  setSendingMail]  = useState(false);
   const [mailResult,   setMailResult]   = useState(null);
 
-  const { comps, saldoInicial, recordatorios, addRecordatorioEntry } = useStore();
-
-  // Dots del mes calendario actual para una franquicia
-  const nowM = new Date().getMonth(), nowY = new Date().getFullYear();
+  // Dots: muestra envíos cuyo período (ccMes/ccAnio) coincide con el mes visualizado
   const dotsForFr = (frId) => (recordatorios?.[String(frId)] ?? [])
-    .filter(r => {
-      const fecha = r.fecha ?? "";
-      let mm, yy;
-      if (fecha.includes("/")) {
-        // DD/MM/YYYY (formato interno)
-        const parts = fecha.split("/");
-        mm = Number(parts[1]);
-        yy = Number(parts[2]);
-      } else if (fecha.includes("-")) {
-        // ISO: YYYY-MM-DD o YYYY-MM-DDTHH:mm:ssZ (fallback si Sheets devuelve string ISO)
-        const iso = fecha.slice(0, 10).split("-");
-        yy = Number(iso[0]);
-        mm = Number(iso[1]);
-      } else {
-        return false;
-      }
-      return mm - 1 === nowM && yy === nowY;
-    });
+    .filter(r => Number(r.ccMes) - 1 === month && Number(r.ccAnio) === year);
 
   const toggleOne = (id) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleAll = () => setSelected(prev => prev.size === data.length ? new Set() : new Set(data.map(d => d.fr.id)));
@@ -128,11 +110,32 @@ export function SaldosTable({ title, data, accentColor, bgColor, borderColor, on
           }),
         ];
         const ccHtml = buildCCHtml(d.fr.name, d.fr.razonSocial ?? null, ccLines, curLabel, month, year);
+
+        // Adjuntar facturas del período
+        const isAR = d.fr.country === "Argentina";
+        const frSlug = d.fr.name.replace(/ /g, "_");
+        const factsDelMes = frComps.filter(c => c.invoice && c.type?.startsWith("FACTURA"));
+        const factAdjs = await Promise.all(factsDelMes.map(async (c) => {
+          const label = (c.invoice ?? c.id).replace(/\//g, "-");
+          if (isAR) {
+            if (c.facturanteId) {
+              try {
+                const blob = await downloadFacturantePdfBlob(c.facturanteId);
+                return { data: await blobToBase64(blob), mimeType: "application/pdf", name: `${label}_${frSlug}.pdf` };
+              } catch { /* fallback HTML */ }
+            }
+            const factHtml = buildFacturaHtmlForMail(d.fr, franchisor, c);
+            return { data: htmlToBase64(factHtml), mimeType: "application/octet-stream", name: `${label}_${frSlug}.html` };
+          }
+          const blob = await generateInvoicePdfBlob(d.fr, franchisor, c);
+          return { data: await blobToBase64(blob), mimeType: "application/pdf", name: `Invoice_${label}_${frSlug}.pdf` };
+        }));
+
         await sendMailFr({
           to,
           subject: `Estado de Cuenta ${d.fr.name} — ${MONTHS[month]} ${year}`,
           htmlBody: ccHtml,
-          attachments: [],
+          attachments: factAdjs,
         });
         const hoy = todayDmy();
         addRecordatorioEntry(d.fr.id, { fecha: hoy, ccMes: month + 1, ccAnio: year, to });

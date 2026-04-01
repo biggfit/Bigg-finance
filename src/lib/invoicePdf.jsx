@@ -170,12 +170,14 @@ function InvoicePage({ fr, issuer, comp, isES }) {
         issuer.swift && `SWIFT: ${issuer.swift}`,
       ].filter(Boolean)
     : useEurBank
-    ? [ issuer.bankNameEUR,
+    ? [ issuer.intermediaryBankEUR && `Intermediary Bank: ${issuer.intermediaryBankEUR}`,
+        issuer.intermediarySwiftEUR && `Intermediary SWIFT: ${issuer.intermediarySwiftEUR}`,
+        issuer.bankNameEUR          && `Beneficiary Bank: ${issuer.bankNameEUR}`,
         issuer.bankAddressEUR,
-        issuer.ibanEUR            && `IBAN: ${issuer.ibanEUR}`,
-        issuer.swiftEUR           && `SWIFT: ${issuer.swiftEUR}`,
-        issuer.beneficiaryNameEUR && `Beneficiary: ${issuer.beneficiaryNameEUR}`,
-        issuer.accountNumberEUR   && `Account #: ${issuer.accountNumberEUR}`,
+        issuer.ibanEUR              && `IBAN: ${issuer.ibanEUR}`,
+        issuer.swiftEUR             && `SWIFT: ${issuer.swiftEUR}`,
+        issuer.beneficiaryNameEUR   && `Account Name: ${issuer.beneficiaryNameEUR}`,
+        issuer.accountNumberEUR     && `Account #: ${issuer.accountNumberEUR}`,
       ].filter(Boolean)
     : [ issuer.bankName,
         issuer.bankAddress,
@@ -266,7 +268,7 @@ function InvoicePage({ fr, issuer, comp, isES }) {
           <View style={S.colTotal}   ><Text style={S.th}>{L.thTotal}</Text></View>
         </View>
         <View style={S.tableRow}>
-          <View style={S.colConcepto}><Text style={S.tdText}>{concepto}{descr !== concepto ? `\n${descr}` : ""}</Text></View>
+          <View style={S.colConcepto}><Text style={S.tdText}>{descr || concepto}</Text></View>
           <View style={S.colPrecio}  ><Text style={S.tdNum}>{fmtAmt(neto, currency)}</Text></View>
           <View style={S.colSubtotal}><Text style={S.tdNum}>{fmtAmt(neto, currency)}</Text></View>
           <View style={S.colIvaPct}  ><Text style={S.tdMuted}>{pct(ivaRate)}</Text></View>

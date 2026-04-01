@@ -1,12 +1,13 @@
 import { useState, useMemo, useCallback } from "react";
 import { useStore } from "../lib/context";
 import { computeSaldo, computeSaldoPrevMes, computePautaPendiente, compEmpresa, COMP_TYPES, fmt, fmtS } from "../lib/helpers";
-import { dmyToIso, isoToDmy, inPeriod, cmpDate, COMPANIES } from "../data/franchisor";
+import { dmyToIso, isoToDmy, inPeriod, cmpDate, COMPANIES, todayDmy } from "../data/franchisor";
 import { TypePill } from "./atoms";
 import AddCompModal from "./AddCompModal";
 import CCModal from "./CCModal";
-import { buildCCHtml, htmlToBase64, buildFacturaHtmlForMail } from "../lib/pdf";
+import { buildCCHtml, htmlToBase64, blobToBase64, buildFacturaHtmlForMail } from "../lib/pdf";
 import { generateInvoicePdfBlob } from "../lib/invoicePdf";
+import { downloadFacturantePdfBlob } from "../lib/facturanteApi";
 import { sendMailFr } from "../lib/sheetsApi";
 import { RecordatorioDots } from "../tabs/TabSaldos";
 
@@ -96,17 +97,19 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
       const factAdjs    = await Promise.all(factsDelMes.map(async (c) => {
         const label = (c.invoice ?? c.id).replace(/\//g, "-");
         if (isAR) {
-          // AR: adjuntar como HTML (formato AFIP)
+          // AR: intentar adjuntar PDF oficial de ARCA
+          if (c.facturanteId) {
+            try {
+              const blob = await downloadFacturantePdfBlob(c.facturanteId);
+              return { data: await blobToBase64(blob), mimeType: "application/pdf", name: `${label}_${frSlug}.pdf` };
+            } catch (e) { console.error("[CC email] PDF download failed, fallback HTML:", e); }
+          }
           const factHtml = buildFacturaHtmlForMail(franchise, franchisor, c);
           return { data: htmlToBase64(factHtml), mimeType: "application/octet-stream", name: `${label}_${frSlug}.html` };
         }
         // USA / ES: generar PDF y convertir a base64
-        const blob        = await generateInvoicePdfBlob(franchise, franchisor, c);
-        const arrayBuffer = await blob.arrayBuffer();
-        const bytes       = new Uint8Array(arrayBuffer);
-        let binary = "";
-        for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-        return { data: btoa(binary), mimeType: "application/pdf", name: `Invoice_${label}_${frSlug}.pdf` };
+        const blob = await generateInvoicePdfBlob(franchise, franchisor, c);
+        return { data: await blobToBase64(blob), mimeType: "application/pdf", name: `Invoice_${label}_${frSlug}.pdf` };
       }));
 
       await sendMailFr({
@@ -115,7 +118,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
         htmlBody: ccHtml,
         attachments: factAdjs,
       });
-      const hoy = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
+      const hoy = todayDmy();
       addRecordatorioEntry(franchise.id, { fecha: hoy, ccMes: localMonth + 1, ccAnio: localYear, to });
       setMailStatus("ok");
     } catch (err) { setMailError(err.message ?? "Error"); setMailStatus("error"); }
@@ -269,13 +272,11 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
               </button>
               {mailStatus === "ok"    && <span style={{ fontSize: 10, color: "var(--green)" }}>✓ Enviado</span>}
               {mailStatus === "error" && <span style={{ fontSize: 10, color: "var(--red)" }} title={mailError}>✕ {mailError}</span>}
-              <RecordatorioDots dots={(() => {
-                const nowM = new Date().getMonth(), nowY = new Date().getFullYear();
-                return (recordatorios?.[String(franchise.id)] ?? []).filter(r => {
-                  const [, mm, yy] = (r.fecha ?? "").split("/");
-                  return Number(mm) - 1 === nowM && Number(yy) === nowY;
-                });
-              })()} />
+              <RecordatorioDots dots={
+                (recordatorios?.[String(franchise.id)] ?? []).filter(r =>
+                  Number(r.ccMes) - 1 === localMonth && Number(r.ccAnio) === localYear
+                )
+              } />
             </div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
               <span style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 }}>

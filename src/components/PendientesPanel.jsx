@@ -56,7 +56,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
     queue.forEach(({ comp }) => {
       edits[comp.id] = {
         cuenta:   "PAUTA",
-        concepto: `Factura por Pago a Cuenta ${MONTHS[comp.month]} ${comp.year}`,
+        concepto: `Pauta ${MONTHS[comp.month]} ${comp.year}`,
       };
     });
     setPagoPreviewEdits(edits);

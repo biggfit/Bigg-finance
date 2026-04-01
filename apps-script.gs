@@ -137,6 +137,97 @@ function doGet(e) {
     return json(result);
   }
 
+  // ── All (un solo request para evitar throttling de Google) ────────────────
+  if (resource === "all") {
+    // Comps
+    var compRows = ss.getSheetByName("comprobantes").getDataRange().getValues();
+    var compH = compRows[0], compD = compRows.slice(1);
+    var comps = {};
+    compD.forEach(function(row) {
+      var obj = {};
+      compH.forEach(function(h, i) { obj[h] = row[i]; });
+      var key = String(obj.frId);
+      if (!comps[key]) comps[key] = [];
+      comps[key].push(obj);
+    });
+
+    // Saldos
+    var salRows = ss.getSheetByName("saldos").getDataRange().getValues();
+    var salH = salRows[0], salD = salRows.slice(1);
+    var hLow2 = salH.map(function(h) { return String(h).toLowerCase(); });
+    var frIdCol2     = hLow2.indexOf("frid") >= 0 ? hLow2.indexOf("frid") : (hLow2.indexOf("id") >= 0 ? hLow2.indexOf("id") : hLow2.indexOf("fr_id"));
+    var empresaCol2  = hLow2.indexOf("empresa") >= 0 ? hLow2.indexOf("empresa") : hLow2.indexOf("company");
+    var currencyCol2 = hLow2.indexOf("currency") >= 0 ? hLow2.indexOf("currency") : (hLow2.indexOf("moneda") >= 0 ? hLow2.indexOf("moneda") : hLow2.indexOf("cur"));
+    var amountCol2   = ["saldo","amount","balance","importe","monto"].reduce(function(found, name) { return found >= 0 ? found : hLow2.indexOf(name); }, -1);
+    var colFr2  = frIdCol2 >= 0 ? frIdCol2 : 0;
+    var colAmt2 = amountCol2 >= 0 ? amountCol2 : (empresaCol2 < 0 ? 1 : (currencyCol2 >= 0 ? 3 : 2));
+    var saldos = {};
+    if (empresaCol2 >= 0) {
+      salD.forEach(function(row) {
+        var frId = String(row[colFr2]);
+        var empresa = row[empresaCol2] !== "" ? String(row[empresaCol2]) : "ÑAKO SRL";
+        var currency = currencyCol2 >= 0 ? (row[currencyCol2] !== "" ? String(row[currencyCol2]) : null) : null;
+        var saldo = Number(row[colAmt2]);
+        if (isNaN(saldo) || frId === "") return;
+        if (!saldos[empresa]) saldos[empresa] = {};
+        var prev = saldos[empresa][frId];
+        var prevAmt = prev != null ? (typeof prev === "object" ? (prev.saldo || 0) : prev) : null;
+        if (prevAmt === null || Math.abs(saldo) > Math.abs(prevAmt)) {
+          saldos[empresa][frId] = { saldo: saldo, currency: currency };
+        }
+      });
+    } else {
+      salD.forEach(function(row) {
+        var frId = String(row[colFr2]);
+        var saldo = Number(row[colAmt2]);
+        if (frId !== "" && !isNaN(saldo)) saldos[frId] = saldo;
+      });
+    }
+
+    // Franchises
+    var frRows = ss.getSheetByName("franchises").getDataRange().getValues();
+    var frH = frRows[0], frD = frRows.slice(1);
+    var franchises = frD.map(function(row) {
+      var obj = {};
+      frH.forEach(function(h, i) { obj[h] = row[i]; });
+      return obj;
+    });
+
+    // Franchisor
+    var fsorRows = ss.getSheetByName("franchisor").getDataRange().getValues();
+    var fsorH = fsorRows[0], fsorD = fsorRows.slice(1);
+    var franchisor = {};
+    fsorD.forEach(function(row) {
+      var obj = {};
+      fsorH.forEach(function(h, i) { obj[h] = row[i]; });
+      franchisor[obj.side] = obj;
+    });
+
+    // Recordatorios
+    var recSh = ss.getSheetByName("recordatorios");
+    var recordatorios = {};
+    if (recSh) {
+      var recRows = recSh.getDataRange().getValues();
+      var recH = recRows[0];
+      for (var ri = 1; ri < recRows.length; ri++) {
+        var rObj = {};
+        recH.forEach(function(h, j) { rObj[h] = recRows[ri][j]; });
+        var rKey = String(rObj.frId);
+        if (!recordatorios[rKey]) recordatorios[rKey] = [];
+        var rawF = rObj.fecha;
+        var fStr;
+        if (rawF && typeof rawF.getTime === "function") {
+          fStr = String(rawF.getDate()).padStart(2,"0") + "/" + String(rawF.getMonth()+1).padStart(2,"0") + "/" + rawF.getFullYear();
+        } else {
+          fStr = String(rawF || "");
+        }
+        recordatorios[rKey].push({ fecha: fStr, ccMes: Number(rObj.ccMes), ccAnio: Number(rObj.ccAnio), to: rObj.to });
+      }
+    }
+
+    return json({ comps: comps, saldos: saldos, franchises: franchises, franchisor: franchisor, recordatorios: recordatorios });
+  }
+
   return err("recurso desconocido: " + resource);
 }
 

@@ -683,6 +683,8 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
                   <FieldInput label="SWIFT / BIC EUR"                value={fbufUSA.swiftEUR ?? ""}           onChange={setUS("swiftEUR")}           half />
                   <FieldInput label="Nombre del beneficiario EUR"    value={fbufUSA.beneficiaryNameEUR ?? ""} onChange={setUS("beneficiaryNameEUR")} half />
                   <FieldInput label="Número de cuenta EUR"           value={fbufUSA.accountNumberEUR ?? ""}  onChange={setUS("accountNumberEUR")}   half />
+                  <FieldInput label="Banco intermediario EUR"        value={fbufUSA.intermediaryBankEUR ?? ""}  onChange={setUS("intermediaryBankEUR")}  half />
+                  <FieldInput label="SWIFT intermediario EUR"        value={fbufUSA.intermediarySwiftEUR ?? ""} onChange={setUS("intermediarySwiftEUR")} half />
                 </div>
 
                 <div style={{ fontSize: 10, color: "var(--cyan)", fontWeight: 800, letterSpacing: ".08em", marginBottom: 8, marginTop: 10 }}>FACTURACIÓN</div>

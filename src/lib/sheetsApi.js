@@ -39,47 +39,71 @@ async function post(body) {
 
 // ─── Lectura ──────────────────────────────────────────────────────────────────
 
-/**
- * Carga todos los comprobantes desde Sheets.
- * @returns {{ [frId: string]: Comprobante[] }}
- */
-export async function fetchComps() {
-  const raw = await get("comps");
+/** Transforma comps crudos de Sheets al formato interno */
+function parseComps(raw) {
   const result = {};
   for (const [frId, comps] of Object.entries(raw)) {
     result[frId] = comps.map(c => {
-      // fecha_emision viene como "YYYY-MM-DD" o "YYYY-MM-DDTHH:mm:ss.sssZ" (Google Sheets
-      // convierte columnas de fecha a ISO datetime al serializarlas en Apps Script JSON).
-      // Tomamos solo los primeros 10 chars para obtener siempre "YYYY-MM-DD".
       const fechaStr = String(c.fecha_emision).slice(0, 10);
-      const d = new Date(fechaStr + "T12:00:00"); // T12 evita desfase por timezone
-      const month = d.getMonth();       // 0-indexed
+      const d = new Date(fechaStr + "T12:00:00");
+      const month = d.getMonth();
       const year  = d.getFullYear();
       const dd    = String(d.getDate()).padStart(2, "0");
       const mm    = String(d.getMonth() + 1).padStart(2, "0");
-      const date  = `${dd}/${mm}/${year}`; // formato interno del app: DD/MM/YYYY
-
+      const date  = `${dd}/${mm}/${year}`;
       return {
         ...c,
         frId:       Number(c.frId),
         amount:     Number(c.amount)     || 0,
         amountNeto: c.amountNeto !== "" ? Number(c.amountNeto) : undefined,
         amountIVA:  c.amountIVA  !== "" ? Number(c.amountIVA)  : undefined,
-        // Sheets devuelve strings vacíos para campos opcionales; los convertimos a
-        // undefined para que el operador ?? en helpers.js active el fallback correcto.
         currency:   c.currency  !== "" ? c.currency  : undefined,
         invoice:    c.invoice   !== "" ? c.invoice   : undefined,
         loteId:       c.loteId       !== "" ? c.loteId       : undefined,
         facturanteId: c.facturanteId !== "" ? c.facturanteId : undefined,
         ref:          c.ref          !== "" ? c.ref          : undefined,
         nota:       c.nota      !== "" ? c.nota      : undefined,
-        date,   // campo interno del app
-        month,  // derivado de fecha_emision
-        year,   // derivado de fecha_emision
+        date, month, year,
       };
     });
   }
   return result;
+}
+
+/**
+ * Carga TODOS los datos en un solo request (comps, saldos, franchises, franchisor, recordatorios).
+ * Evita hacer 5 requests simultáneas que Google Apps Script throttlea.
+ */
+/** Normaliza una franquicia cruda de Sheets a los tipos esperados. */
+function parseFranchise(f) {
+  return {
+    ...f,
+    id:          Number(f.id),
+    activa:      f.activa === true || f.activa === "TRUE" || f.activa === "true",
+    applyIVA:    f.applyIVA === true || f.applyIVA === "TRUE" || f.applyIVA === "true",
+    taxExempt:   f.taxExempt === true || f.taxExempt === "TRUE" || f.taxExempt === "true",
+    biggEyeId:   f.biggEyeId !== "" && f.biggEyeId != null ? Number(f.biggEyeId) : null,
+    currencies:  deriveCurrencies(f),
+  };
+}
+
+export async function fetchAll() {
+  const raw = await get("all");
+  return {
+    comps:          parseComps(raw.comps ?? {}),
+    saldos:         raw.saldos ?? {},
+    franchises:     (raw.franchises ?? []).map(parseFranchise),
+    franchisor:     raw.franchisor ?? null,
+    recordatorios:  raw.recordatorios ?? {},
+  };
+}
+
+/**
+ * Carga todos los comprobantes desde Sheets.
+ * @returns {{ [frId: string]: Comprobante[] }}
+ */
+export async function fetchComps() {
+  return parseComps(await get("comps"));
 }
 
 /**
@@ -169,15 +193,7 @@ function deriveCurrencies(f) {
  */
 export async function fetchFranchises() {
   const rows = await get("franchises");
-  return rows.map(f => ({
-    ...f,
-    id:          Number(f.id),
-    activa:      f.activa === true || f.activa === "TRUE" || f.activa === "true",
-    applyIVA:    f.applyIVA === true || f.applyIVA === "TRUE" || f.applyIVA === "true",
-    taxExempt:   f.taxExempt === true || f.taxExempt === "TRUE" || f.taxExempt === "true",
-    biggEyeId:   f.biggEyeId !== "" && f.biggEyeId != null ? Number(f.biggEyeId) : null,
-    currencies:  deriveCurrencies(f),
-  }));
+  return rows.map(parseFranchise);
 }
 
 /** Guarda cambios de una franquicia existente en Sheets. */
@@ -226,8 +242,9 @@ export async function sheetsSaveFranchisor(side, data) {
  */
 export async function fetchRecordatorios() {
   try {
-    return await get("recordatorios");
-  } catch { return {}; }
+    const data = await get("recordatorios");
+    return data;
+  } catch (e) { console.error("[fetchRecordatorios] FAILED:", e); return {}; }
 }
 
 /**

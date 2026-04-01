@@ -92,12 +92,13 @@ export default defineConfig({
                   on: (ev, cb) => { if (ev === 'data') cb(body); if (ev === 'end') cb(); return mockReq; },
                 });
                 let sent = false;
+                let contentType = 'application/json';
                 const fakeRes = {
                   statusCode: 200,
-                  setHeader: () => {},
+                  setHeader: (k, v) => { if (k.toLowerCase() === 'content-type') contentType = v; },
                   end: (responseBody) => {
                     if (sent) return; sent = true;
-                    res.setHeader('Content-Type', 'application/json');
+                    res.setHeader('Content-Type', contentType);
                     res.statusCode = fakeRes.statusCode;
                     res.end(responseBody);
                   },

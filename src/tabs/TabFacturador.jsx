@@ -84,7 +84,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
     return formatCurrencyInput(neto.toFixed(2).replace(".", ","), "ARS");
   })();
   const [importeRaw, setImporteRaw] = useState(initNeto);
-  const [concepto,   setConcepto]  = useState(prefillComp ? `Factura por Pago a Cuenta ${MONTHS[prefillComp.month ?? month]} ${prefillComp.year ?? year}` : "");
+  const [concepto,   setConcepto]  = useState(prefillComp ? `Pauta ${MONTHS[prefillComp.month ?? month]} ${prefillComp.year ?? year}` : "");
   const [fechaIso,   setFechaIso]  = useState(prefillComp ? "" : todayIso);
   const [preview,    setPreview]   = useState(null);
   const [emitState, setEmitState] = useState("idle"); // "idle"|"emitting"|"error"
@@ -257,7 +257,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
       if (!tipo || importeNeto <= 0) return;
       const mesComp  = parseInt(fechaIso.split("-")[1]) - 1;
       const anioComp = parseInt(fechaIso.split("-")[0]);
-      const autoConcepto = `${doc === "FACTURA" ? "Factura" : "NC"} - ${CUENTA_LABEL[cuenta] ?? cuenta} - ${MONTHS[mesComp]} ${anioComp}`;
+      const autoConcepto = `${CUENTA_LABEL[cuenta] ?? cuenta} ${MONTHS[mesComp]} ${anioComp}`;
       const notaFinal = concepto || autoConcepto;
       setPreview({
         id: uid(), type: tipo, date: inputDateToDmy(fechaIso),
@@ -1327,7 +1327,7 @@ function parseExcelRows(data, franchises, allowedCompanyCurrencies) {
     // auto-concepto
     const autoConcepto = type
       ? (CUENTAS_COMP.has(cuentaRaw)
-          ? `${importeRaw >= 0 ? "Factura" : "NC"} - ${CUENTA_LABEL[cuentaRaw] ?? cuentaRaw} - ${MONTHS[mesRow]} ${anioRow}`
+          ? `${CUENTA_LABEL[cuentaRaw] ?? cuentaRaw} ${MONTHS[mesRow]} ${anioRow}`
           : `${COMP_TYPES[type]?.label ?? type} - ${MONTHS[mesRow]} ${anioRow}`)
       : "";
 
@@ -1812,7 +1812,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
 
     const cuentaUsada   = pagoComp._cuenta   ?? "PAUTA";
     const conceptoBase  = `${CUENTA_LABEL[cuentaUsada] ?? cuentaUsada} ${MONTHS[monthFinal]} ${yearFinal}`;
-    const conceptoFinal = pagoComp._concepto ?? pagoComp.nota ?? `Factura ${conceptoBase}`;
+    const conceptoFinal = pagoComp._concepto ?? pagoComp.nota ?? conceptoBase;
     const factComp = {
       id: uid(), type: makeType("FACTURA", cuentaUsada),
       amount: amountTotal, amountNeto, amountIVA,

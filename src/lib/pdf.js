@@ -163,6 +163,17 @@ export function htmlToBase64(html) {
 }
 
 /**
+ * Convierte un Blob a base64 (para adjuntar PDFs vía Apps Script).
+ */
+export async function blobToBase64(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const chunks = [];
+  for (let i = 0; i < bytes.length; i += 8192)
+    chunks.push(String.fromCharCode(...bytes.subarray(i, i + 8192)));
+  return btoa(chunks.join(""));
+}
+
+/**
  * Construye el HTML de una factura/invoice para adjuntar por mail.
  * Usa la misma lógica que downloadTextAsPDF pero retorna el string en lugar de descargar.
  * @param {object} fr         — franquicia
@@ -200,8 +211,11 @@ export function buildInvoiceHtml(fr, franchisor, comp) {
     .filter(Boolean).join(", ");
   const toCountry = fr.country ?? "";
 
-  // Datos bancarios
-  const hasBankInfo = usa.bankName || usa.routingNumber || usa.accountNumber || usa.swift;
+  // Datos bancarios — elige USD o EUR según moneda
+  const isEUR = comp.currency === "EUR" && usa.bankNameEUR;
+  const hasBankInfo = isEUR
+    ? (usa.bankNameEUR || usa.ibanEUR || usa.swiftEUR || usa.accountNumberEUR)
+    : (usa.bankName || usa.routingNumber || usa.accountNumber || usa.swift);
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${invoiceNum}</title>
 <style>
@@ -309,12 +323,23 @@ table.items td.r { text-align: right; font-family: monospace; font-weight: 700; 
 
     ${hasBankInfo ? `
     <div class="bank">
-      <div class="bank-title">Payment Instructions</div>
+      <div class="bank-title">Wire Transfer Instructions${isEUR ? " (EUR)" : ""}</div>
       <div class="bank-grid">
+        ${isEUR ? `
+        ${usa.intermediaryBankEUR ? `<span class="bank-cell"><b>Intermediary Bank</b>${usa.intermediaryBankEUR}</span>` : ""}
+        ${usa.intermediarySwiftEUR ? `<span class="bank-cell"><b>Intermediary SWIFT</b>${usa.intermediarySwiftEUR}</span>` : ""}
+        ${usa.bankNameEUR ? `<span class="bank-cell"><b>Beneficiary Bank</b>${usa.bankNameEUR}</span>` : ""}
+        ${usa.bankAddressEUR ? `<span class="bank-cell"><b>Bank Address</b>${usa.bankAddressEUR}</span>` : ""}
+        ${usa.swiftEUR ? `<span class="bank-cell"><b>SWIFT / BIC</b>${usa.swiftEUR}</span>` : ""}
+        ${usa.ibanEUR ? `<span class="bank-cell"><b>IBAN</b>${usa.ibanEUR}</span>` : ""}
+        ${usa.beneficiaryNameEUR ? `<span class="bank-cell"><b>Account Name</b>${usa.beneficiaryNameEUR}</span>` : ""}
+        ${usa.accountNumberEUR ? `<span class="bank-cell"><b>Account #</b>${usa.accountNumberEUR}</span>` : ""}
+        ` : `
         ${usa.bankName ? `<span class="bank-cell"><b>Bank</b>${usa.bankName}</span>` : ""}
         ${usa.routingNumber ? `<span class="bank-cell"><b>Routing</b>${usa.routingNumber}</span>` : ""}
         ${usa.accountNumber ? `<span class="bank-cell"><b>Account</b>${usa.accountNumber}</span>` : ""}
         ${usa.swift ? `<span class="bank-cell"><b>SWIFT / BIC</b>${usa.swift}</span>` : ""}
+        `}
       </div>
     </div>` : ""}
   </div>
