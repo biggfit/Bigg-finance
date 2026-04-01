@@ -684,6 +684,10 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
   const [crmLoading, setCrmLoading] = useState(false);
   const [crmLoaded,  setCrmLoaded]  = useState(false);
 
+  // Fecha de emisión para los comprobantes — default último día del mes seleccionado
+  const lastDay = (m, y) => { const d = new Date(y, m + 1, 0); return `${String(d.getDate()).padStart(2,"0")}/${String(m+1).padStart(2,"0")}/${y}`; };
+  const [crmDate, setCrmDate] = useState(() => lastDay(monthProp, yearProp));
+
   const [tcMap, setTcMap] = useState(() => {
     const map = {};
     activeFr.forEach(fr => {
@@ -840,7 +844,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
         : getCountryCur(r.country).code === "EUR" ? "EUR"
         : "USD";
       let comp = {
-        id: uid(), type: makeType("FACTURA","FEE"), date: todayDmy(),
+        id: uid(), type: makeType("FACTURA","FEE"), date: crmDate,
         amount: Math.max(0, Math.round(fee * 100) / 100),
         ref: `Fee ${MONTHS[crmMonth]} ${crmYear} — CRM`,
         nota: `Fee Royalty ${MONTHS[crmMonth]} ${crmYear}${dto > 0 ? ` (${dto}% dto.)` : ""}`,
@@ -987,10 +991,10 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
         <div style={{ display: "flex", alignItems: "center", gap: 8 }} onClick={e => e.stopPropagation()}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: 8, padding: "5px 10px" }}>
             <span style={{ fontSize: 9, fontWeight: 700, color: "var(--muted)", letterSpacing: ".08em" }}>PERÍODO</span>
-            <select value={crmMonth} onChange={e => setCrmMonth(parseInt(e.target.value))} style={selS}>
+            <select value={crmMonth} onChange={e => { const m = parseInt(e.target.value); setCrmMonth(m); setCrmDate(lastDay(m, crmYear)); }} style={selS}>
               {MONTHS.map((m, i) => <option key={i} value={i}>{m}</option>)}
             </select>
-            <select value={crmYear} onChange={e => setCrmYear(parseInt(e.target.value))} style={{ ...selS, width: 78 }}>
+            <select value={crmYear} onChange={e => { const y = parseInt(e.target.value); setCrmYear(y); setCrmDate(lastDay(crmMonth, y)); }} style={{ ...selS, width: 78 }}>
               {AVAILABLE_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
             </select>
           </div>
@@ -1171,7 +1175,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
                         <td className="mono" style={{ textAlign: "right", fontSize: 12, fontWeight: 700 }}>
                           {hasV
                             ? <span style={{ color: fee <= 0 ? "var(--muted)" : "var(--green)" }}>
-                                {isAR ? `$ ${fee.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : `${cc.sym} ${fee.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                                {`${SYM[billingCur] || cc.sym} ${fee.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                                 {fee <= 0 && <div style={{ fontSize: 9, color: "var(--muted)", fontWeight: 400 }}>100% dto.</div>}
                               </span>
                             : <span style={{ color: "var(--muted)" }}>—</span>}
@@ -1192,13 +1196,20 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
         });
       })()}
 
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 14, alignItems: "center" }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 14, alignItems: "center", flexWrap: "wrap" }}>
         <span style={{ fontSize: 11, color: "var(--muted)", alignSelf: "center" }}>
           {billableRows.length} con ventas
           {selected.size > 0 && <span style={{ color: "var(--accent)", marginLeft: 6 }}>· {toProcess.length} seleccionado{toProcess.length !== 1 ? "s" : ""}</span>}
           {fullDtoCount > 0 &&
             <span style={{ marginLeft: 6 }}>· {fullDtoCount} con 100% dto.</span>}
         </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: "auto" }}>
+          <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)" }}>Fecha emisión</label>
+          <input type="date"
+            value={(() => { const p = crmDate.split("/"); return `${p[2]}-${p[1]}-${p[0]}`; })()}
+            onChange={e => { const [y, m, d] = e.target.value.split("-"); setCrmDate(`${d}/${m}/${y}`); }}
+            style={{ ...inS, width: 140, fontSize: 12 }} />
+        </div>
         <button className="ghost" disabled={toProcess.length === 0} style={{ opacity: toProcess.length === 0 ? 0.4 : 1, fontSize: 12 }} onClick={() => handleConfirm(true)}>
           ✓ Guardar sin emitir ({toProcess.length})
         </button>

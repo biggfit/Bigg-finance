@@ -125,8 +125,11 @@ export default function App() {
   const addComp = useCallback((frId, comp) => {
     const key = String(frId);
     setComps(prev => ({ ...prev, [key]: [...(prev[key] ?? []), comp] }));
-    appendComp(frId, comp).catch(err => console.error('Sheets appendComp:', err));
-  }, []);
+    // Inyectar frName para que quede persistido en el Sheet
+    const fr = franchises.find(f => f.id === Number(frId) || String(f.id) === String(frId));
+    const enriched = fr ? { ...comp, frName: fr.name } : comp;
+    appendComp(frId, enriched).catch(err => console.error('Sheets appendComp:', err));
+  }, [franchises]);
 
   const delComp = useCallback((frId, compId) => {
     const key = String(frId);
