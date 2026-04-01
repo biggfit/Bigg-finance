@@ -85,7 +85,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
   })();
   const [importeRaw, setImporteRaw] = useState(initNeto);
   const [concepto,   setConcepto]  = useState(prefillComp ? `Factura por Pago a Cuenta ${MONTHS[prefillComp.month ?? month]} ${prefillComp.year ?? year}` : "");
-  const [fechaIso,   setFechaIso]  = useState(todayIso);
+  const [fechaIso,   setFechaIso]  = useState(prefillComp ? "" : todayIso);
   const [preview,    setPreview]   = useState(null);
   const [emitState, setEmitState] = useState("idle"); // "idle"|"emitting"|"error"
   const [emitError, setEmitError] = useState(null);
