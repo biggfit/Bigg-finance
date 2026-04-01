@@ -90,7 +90,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
   const [emitState, setEmitState] = useState("idle"); // "idle"|"emitting"|"error"
   const [emitError, setEmitError] = useState(null);
   const [refCompId,     setRefCompId]     = useState(null);  // facturanteId of referenced invoice (NC only)
-  const [refCompManual, setRefCompManual] = useState("");    // manual entry when FA has no facturanteId
+  // refCompManual eliminado — ya no necesitamos facturanteId para NC
 
   // movimiento state
   const [movTipo,    setMovTipo]   = useState("PAGO");
@@ -271,11 +271,9 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
       });
     };
     const usaFacturante  = isAR && currency === "ARS" && (doc === "FACTURA" || doc === "NC");
-    // Para NC: el ID efectivo de Facturante a referenciar (desde FA con facturanteId o ingreso manual)
+    // Para NC: la FA referenciada (necesitamos su invoice label, ej "FA 0100-00000014")
     const refFAComp      = doc === "NC" ? (comps[String(fr?.id)] ?? []).find(c => c.id === refCompId) : null;
-    const efectiveRefId  = refFAComp?.facturanteId || (refCompManual ? refCompManual : null);
-    // Para Facturante AR necesitamos el invoice label de la FA ("FA 0100-00000010") para construir ComprobanteAsociado
-    const ncSinRef       = usaFacturante && doc === "NC" && !refFAComp?.invoice; // NC sin referencia válida → bloquear emit
+    const ncSinRef       = usaFacturante && doc === "NC" && !refFAComp?.invoice;
 
     const doConfirm = async (skipFacturante = false) => {
       if (!preview) return;
@@ -290,7 +288,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
             franchisor:              franchisor?.ar ?? franchisor,
             franchise:               fr,
             comp:                    { ...preview, applyIVA: applyIVA },
-            referenciaIdComprobante: refFAComp?.facturanteId ?? efectiveRefId ?? undefined,
+            referenciaInvoice:       refFAComp?.invoice ?? undefined,
             referenciaDate:          refFAComp?.date ?? undefined,
           });
           enriched = {
@@ -471,15 +469,12 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
             ))}
             {/* NC reference picker — obligatoria para AR + ARS + NC (Facturante lo requiere) */}
             {isAR && currency === "ARS" && doc === "NC" && (() => {
-              // Todas las FAs con número de comprobante (con o sin facturanteId)
+              // Todas las FAs con invoice label (tipo + número AFIP)
               const allFAs  = (comps[String(fr?.id)] ?? [])
                 .filter(c => c.type?.startsWith("FACTURA") && c.invoice)
                 .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
-              // La FA seleccionada en el dropdown
               const selFA   = allFAs.find(c => c.id === refCompId);
-              // El ID efectivo que se mandará a Facturante
-              const efectiveRefId = selFA?.facturanteId || refCompManual || null;
-              const hasRef  = !!efectiveRefId;
+              const hasRef  = !!selFA?.invoice;
 
               return (
                 <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
@@ -491,7 +486,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
                         Esta sede no tiene facturas registradas. Emitir una FA primero.
                       </div>
                     : <>
-                        <select value={refCompId ?? ""} onChange={e => { setRefCompId(e.target.value || null); setRefCompManual(""); }}
+                        <select value={refCompId ?? ""} onChange={e => setRefCompId(e.target.value || null)}
                           style={{ width: "100%", background: "var(--bg)", border: `1px solid ${hasRef ? "var(--border2)" : "var(--red)"}`, borderRadius: 6, padding: "6px 10px", color: "var(--text)", fontSize: 12 }}>
                           <option value="">— Seleccionar factura —</option>
                           {allFAs.map(c => {
@@ -499,25 +494,11 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
                             const importe = c.amount ? `$${c.amount.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "";
                             return (
                               <option key={c.id} value={c.id}>
-                                {c.invoice} — {c.date} — {cuenta} — {importe}{c.facturanteId ? "" : " ⚠ sin ID"}
+                                {c.invoice} — {c.date} — {cuenta} — {importe}
                               </option>
                             );
                           })}
                         </select>
-                        {/* Si la FA seleccionada no tiene facturanteId, pedir ingreso manual */}
-                        {selFA && !selFA.facturanteId && (
-                          <div style={{ marginTop: 8 }}>
-                            <label style={{ fontSize: 9, color: "var(--orange)", fontWeight: 700, letterSpacing: ".08em", display: "block", marginBottom: 4 }}>
-                              ID FACTURANTE (buscarlo en el portal testing.facturante.com)
-                            </label>
-                            <input
-                              type="number" placeholder="Ej: 1161205"
-                              value={refCompManual}
-                              onChange={e => setRefCompManual(e.target.value)}
-                              style={{ width: "100%", padding: "6px 10px", fontSize: 12, borderRadius: 6, background: "var(--bg)", border: `1px solid ${refCompManual ? "var(--border2)" : "var(--orange)"}`, color: "var(--text)", boxSizing: "border-box" }}
-                            />
-                          </div>
-                        )}
                       </>
                   }
                 </div>
@@ -876,7 +857,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
             franchise:  fr,
             comp:       { ...comp, applyIVA: !!fr.applyIVA },
           });
-          comp = { ...comp, invoice: formatInvoiceLabel(result.tipoComprobante, result.idComprobante, result.puntoVenta), facturanteId: String(result.idComprobante) };
+          comp = { ...comp, invoice: formatInvoiceLabel(result.tipoComprobante, result.afipNumero ?? result.idComprobante, result.afipPrefijo ?? result.puntoVenta), facturanteId: String(result.idComprobante) };
           facturanteStatus = "ok";
         } catch (err) {
           facturanteStatus = `sin_factura: ${err.message}`;
@@ -1440,7 +1421,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
             franchise:  fr,
             comp:       { ...comp, applyIVA: !!fr.applyIVA },
           });
-          comp = { ...comp, invoice: formatInvoiceLabel(result.tipoComprobante, result.idComprobante, result.puntoVenta), facturanteId: String(result.idComprobante) };
+          comp = { ...comp, invoice: formatInvoiceLabel(result.tipoComprobante, result.afipNumero ?? result.idComprobante, result.afipPrefijo ?? result.puntoVenta), facturanteId: String(result.idComprobante) };
           msg = `✓ ${comp.invoice} emitida — ${r.franchiseName}`;
         } catch (err) {
           msg = `⚠ CC guardada sin ARCA (${err.message}) — ${r.franchiseName}`;
@@ -1805,9 +1786,9 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
       franchisor: franchisor?.ar ?? franchisor,
       franchise:  fr,
       comp:       { ...comp, applyIVA: !!fr.applyIVA },
-      referenciaIdComprobante: comp.facturanteId ?? undefined,
+      referenciaInvoice: comp.invoice ?? undefined,
     });
-    const invoice      = formatInvoiceLabel(result.tipoComprobante, result.idComprobante, result.puntoVenta);
+    const invoice      = formatInvoiceLabel(result.tipoComprobante, result.afipNumero ?? result.idComprobante, result.afipPrefijo ?? result.puntoVenta);
     const facturanteId = String(result.idComprobante);
     editComp(fr.id, comp.id, { invoice, facturanteId });
   };
@@ -1837,7 +1818,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
         franchise:  fr,
         comp:       { ...factComp, applyIVA },
       });
-      factComp.invoice      = formatInvoiceLabel(result.tipoComprobante, result.idComprobante, result.puntoVenta);
+      factComp.invoice      = formatInvoiceLabel(result.tipoComprobante, result.afipNumero ?? result.idComprobante, result.afipPrefijo ?? result.puntoVenta);
       factComp.facturanteId = String(result.idComprobante);
     }
     addCompWithEmpresa(fr.id, factComp);

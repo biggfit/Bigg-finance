@@ -375,6 +375,17 @@ function fetchPdfBuffer(pdfUrl) {
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
+/**
+ * Parsea un invoice label como "FA 0100-00000014" o "NCA 00100-00000001".
+ * @returns {{ tipo: string, prefijo: string, numero: number } | null}
+ */
+function parseInvoiceLabel(label) {
+  if (!label) return null;
+  const m = String(label).match(/^(FA|FB|NCA|NCB|NDA|NDB)\s*0*(\d+)-0*(\d+)$/);
+  if (!m) return null;
+  return { tipo: m[1], prefijo: m[2], numero: parseInt(m[3], 10) };
+}
+
 function escXml(str) {
   return String(str)
     .replace(/&/g,  '&amp;')
@@ -475,7 +486,7 @@ export default async function handler(req, res) {
     return res.end(JSON.stringify({ error: 'JSON inválido' }));
   }
 
-  const { action, franchisor, franchise, comp, referenciaIdComprobante, referenciaDate } = payload;
+  const { action, franchisor, franchise, comp, referenciaInvoice, referenciaDate } = payload;
 
   if (action === 'anular') {
     res.statusCode = 501;
@@ -519,17 +530,17 @@ export default async function handler(req, res) {
   const fechaVtoPago  = contado ? null : calcFechaVtoPago(comp.date);
   const condPago      = contado ? 1 : 30; // 1=contado, 30=cuenta corriente (ARCA solo acepta valores estándar)
 
-  // Para NC: obtener el número AFIP real de la FA referenciada via DetalleComprobanteFull
-  // (no parseamos el invoice label — usamos el ID interno de Facturante para lookup directo)
+  // Para NC: parsear invoice label de la FA referenciada (ej "FA 0100-00000014")
   let refAfip = null;
-  if (doc === 'NC' && referenciaIdComprobante) {
-    refAfip = await getDetalleComprobante(referenciaIdComprobante);
-    if (!refAfip?.numero || refAfip.numero <= 0) {
+  if (doc === 'NC' && referenciaInvoice) {
+    const parsed = parseInvoiceLabel(referenciaInvoice);
+    if (!parsed || !parsed.numero || parsed.numero <= 0) {
       return res.end(JSON.stringify({
         ok:    false,
-        error: 'La FA referenciada aún no fue procesada por AFIP. Esperá unos segundos e intentá de nuevo.',
+        error: `No se pudo parsear el invoice label de la FA referenciada: "${referenciaInvoice}"`,
       }));
     }
+    refAfip = { numero: parsed.numero, prefijo: String(parsed.prefijo).padStart(4, '0') };
   }
 
   let operacion, requestBody, tipoComprobante;
@@ -580,12 +591,12 @@ export default async function handler(req, res) {
 
   const envelope = buildEnvelope(operacion, requestBody);
 
-  // Debug: loguear el XML enviado (solo en dev / cuando hay un NC)
-  if (doc === 'NC') console.log('[facturante] NC envelope:\n', envelope);
+  // Debug NC (descomentar para troubleshooting):
+  // if (doc === 'NC') console.log('[facturante] NC envelope:\n', envelope);
 
   try {
     const { status, body } = await soapCall(ENDPOINT, operacion, envelope);
-    if (doc === 'NC') console.log('[facturante] NC response:\n', body);
+    // if (doc === 'NC') console.log('[facturante] NC response:\n', body);
 
     if (status !== 200) {
       res.statusCode = 502;

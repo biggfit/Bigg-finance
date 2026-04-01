@@ -11,16 +11,17 @@ const BASE = '/api/facturante';
  * @param {object} opts.franchisor  - { cuit, razonSocial, condIVA, puntoVenta }
  * @param {object} opts.franchise   - { cuit, razonSocial, condIVA, applyIVA, domicilio, emailFactura, ... }
  * @param {object} opts.comp        - { type, date, amount, amountNeto, amountIVA, ref, currency }
- * @param {string} [opts.referenciaIdComprobante] - IdComprobante de la factura original (solo para NC)
+ * @param {string} [opts.referenciaInvoice] - Invoice label de la FA referenciada (ej "FA 0100-00000014", solo para NC)
+ * @param {string} [opts.referenciaDate]   - Fecha de la FA referenciada (dd/mm/yyyy)
  *
- * @returns {{ ok, idComprobante, tipoComprobante, puntoVenta, mensaje }}
+ * @returns {{ ok, idComprobante, afipNumero, afipPrefijo, tipoComprobante, puntoVenta, mensaje }}
  * @throws  Error con mensaje legible si falla
  */
-export async function emitirComprobante({ franchisor, franchise, comp, referenciaIdComprobante, referenciaDate }) {
+export async function emitirComprobante({ franchisor, franchise, comp, referenciaInvoice, referenciaDate }) {
   const res = await fetch(BASE, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ action: 'emitir', franchisor, franchise, comp, referenciaIdComprobante, referenciaDate }),
+    body:    JSON.stringify({ action: 'emitir', franchisor, franchise, comp, referenciaInvoice, referenciaDate }),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
