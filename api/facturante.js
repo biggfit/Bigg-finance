@@ -115,29 +115,62 @@ function buildEncabezadoSinIVAXml(tipoStr, franchisor, comp, contado, fechaVtoPa
 // NCA referencia FA, NCB referencia FB
 const NC_TIPO_REFERENCIA = { 'NCA': 'FA', 'NCB': 'FB' };
 
+/** Encabezado para FA — usa ComprobanteEncabezado (CrearComprobante) */
+function buildEncabezadoConIVAXml(tipoStr, franchisor, comp, contado, fechaVtoPago) {
+  const fecha      = isoDateTime(comp.date);
+  const prefijo    = String(franchisor.puntoVenta ?? '1');
+  const condVenta  = contado ? 1 : 2;
+  const periodo    = calcPeriodoServicio(comp);
+  const neto       = Number(comp.amountNeto ?? comp.amount ?? 0);
+  const total      = Number(comp.amount ?? (neto * 1.21));
+  const vtoPagoVal = fechaVtoPago ?? fecha;
+
+  return `<a:Encabezado>
+        <b:Bienes>2</b:Bienes>
+        <b:CondicionVenta>${condVenta}</b:CondicionVenta>
+        <b:EnviarComprobante>true</b:EnviarComprobante>
+        <b:FechaHora>${fecha}</b:FechaHora>
+        <b:FechaServDesde>${periodo.desde}</b:FechaServDesde>
+        <b:FechaServHasta>${periodo.hasta}</b:FechaServHasta>
+        <b:FechaVtoPago>${vtoPagoVal}</b:FechaVtoPago>
+        <b:Moneda>2</b:Moneda>
+        <b:Observaciones>${escXml(comp.ref ?? '')}</b:Observaciones>
+        <b:Prefijo>${escXml(prefijo)}</b:Prefijo>
+        <b:TipoComprobante>${escXml(tipoStr)}</b:TipoComprobante>
+        <b:TipoDeCambio>1</b:TipoDeCambio>
+      </a:Encabezado>`;
+}
+
 /**
- * @param {string} tipoStr  - tipo del comprobante a emitir ("NCA","NCB","FA","FB")
- * @param {{ numero, prefijo }} refAfip  - datos AFIP del comprobante asociado (de DetalleComprobanteFull)
- * @param {string} refDate  - fecha de emisión del comprobante asociado (dd/mm/yyyy)
+ * Encabezado para NC — usa ComprobanteEncabezadoFull (CrearComprobanteFull)
+ * que SÍ tiene el campo Asociados para CbteAsoc.
+ * @param {{ numero, prefijo }} refAfip  - datos AFIP de la FA referenciada
+ * @param {string} refDate               - fecha de la FA referenciada (dd/mm/yyyy)
  */
-function buildEncabezadoConIVAXml(tipoStr, franchisor, comp, refAfip, refDate, contado, fechaVtoPago) {
-  const fecha     = isoDateTime(comp.date);
-  const prefijo   = String(franchisor.puntoVenta ?? '1');
-  const condVenta = contado ? 1 : 2;
-  const periodo   = calcPeriodoServicio(comp);
-  const neto      = Number(comp.amountNeto ?? comp.amount ?? 0);
-  const total     = Number(comp.amount ?? (neto * 1.21));
+function buildEncabezadoConIVAFullXml(tipoStr, franchisor, comp, refAfip, refDate, contado, fechaVtoPago) {
+  const fecha      = isoDateTime(comp.date);
+  const prefijo    = String(franchisor.puntoVenta ?? '1');
+  const condVenta  = contado ? 1 : 2;
+  const periodo    = calcPeriodoServicio(comp);
+  const neto       = Number(comp.amountNeto ?? comp.amount ?? 0);
+  const total      = Number(comp.amount ?? (neto * 1.21));
+  const vtoPagoVal = fechaVtoPago ?? fecha;
 
-  // Para NC con servicios (Bienes=2), AFIP acepta PeriodoAsoc como alternativa a CbteAsoc.
-  // Enviamos Asociados nil: Facturante usará FechaServDesde/Hasta como PeriodoAsoc.
-  // Guardamos refAfip para uso futuro pero no lo mandamos en el XML.
-  const asociado = `<b:Asociados i:nil="true"/>`;
-
-  // FechaVtoPago: obligatoria cuando FechaServDesde/Hasta están presentes (AFIP error 10035)
-  // Para NC (contado) → misma fecha que la factura (vence al contado)
-  // Para FA con CC   → día 10 del mes siguiente
-  const vtoPagoVal = fechaVtoPago ?? fecha; // fecha ya es "yyyy-MM-ddT00:00:00"
-  const vtoPagoXml = `<b:FechaVtoPago>${vtoPagoVal}</b:FechaVtoPago>`;
+  // Bloque Asociados con campos WSDL correctos: FechaEmision, Numero, PuntoVenta, Tipo
+  let asociado = '<b:Asociados i:nil="true"/>';
+  if (refAfip?.numero > 0) {
+    const fechaEmision = isoDateTime(refDate ?? comp.date);
+    const refTipo      = NC_TIPO_REFERENCIA[tipoStr] ?? 'FA';
+    const refPtoVenta  = parseInt(String(refAfip.prefijo ?? franchisor.puntoVenta ?? '100'), 10);
+    asociado = `<b:Asociados>
+          <b:ComprobanteAsociado>
+            <b:FechaEmision>${fechaEmision}</b:FechaEmision>
+            <b:Numero>${refAfip.numero}</b:Numero>
+            <b:PuntoVenta>${refPtoVenta}</b:PuntoVenta>
+            <b:Tipo>${escXml(refTipo)}</b:Tipo>
+          </b:ComprobanteAsociado>
+        </b:Asociados>`;
+  }
 
   return `<a:Encabezado>
         ${asociado}
@@ -147,17 +180,27 @@ function buildEncabezadoConIVAXml(tipoStr, franchisor, comp, refAfip, refDate, c
         <b:FechaHora>${fecha}</b:FechaHora>
         <b:FechaServDesde>${periodo.desde}</b:FechaServDesde>
         <b:FechaServHasta>${periodo.hasta}</b:FechaServHasta>
-        ${vtoPagoXml}
+        <b:FechaVtoPago>${vtoPagoVal}</b:FechaVtoPago>
         <b:Moneda>2</b:Moneda>
         <b:Observaciones>${escXml(comp.ref ?? '')}</b:Observaciones>
         <b:Prefijo>${escXml(prefijo)}</b:Prefijo>
-        <b:SubTotal>${neto.toFixed(2)}</b:SubTotal>
-        <b:SubTotalExcento>0.00</b:SubTotalExcento>
         <b:TipoComprobante>${escXml(tipoStr)}</b:TipoComprobante>
         <b:TipoDeCambio>1</b:TipoDeCambio>
-        <b:Total>${total.toFixed(2)}</b:Total>
-        <b:TotalNeto>${neto.toFixed(2)}</b:TotalNeto>
       </a:Encabezado>`;
+}
+
+/** Items para CrearComprobanteFull — usa ComprobanteItemFull (sin campo Total) */
+function buildItemsConIVAFullXml(comp) {
+  const neto = Number(comp.amountNeto ?? comp.amount ?? 0);
+  return `<a:Items>
+        <b:ComprobanteItemFull>
+          <b:Cantidad>1</b:Cantidad>
+          <b:Detalle>${escXml(comp.ref ?? 'Servicio')}</b:Detalle>
+          <b:Gravado>true</b:Gravado>
+          <b:IVA>21.000</b:IVA>
+          <b:PrecioUnitario>${neto.toFixed(2)}</b:PrecioUnitario>
+        </b:ComprobanteItemFull>
+      </a:Items>`;
 }
 
 function buildItemsSinIVAXml(comp) {
@@ -499,11 +542,21 @@ export default async function handler(req, res) {
       return res.end(JSON.stringify({ error: `Tipo no soportado: ${doc} / ${franchise.condIVA}` }));
     }
 
-    requestBody = `
-      ${buildAuthXml()}
-      ${buildClienteConIVAXml(franchise, condPago)}
-      ${buildEncabezadoConIVAXml(tipoComprobante, franchisor, comp, refAfip, referenciaDate, contado, fechaVtoPago)}
-      ${buildItemsConIVAXml(comp)}`;
+    if (doc === 'NC') {
+      // NC: usa CrearComprobanteFull que sí tiene campo Asociados en ComprobanteEncabezadoFull
+      operacion = 'CrearComprobanteFull';
+      requestBody = `
+        ${buildAuthXml()}
+        ${buildClienteConIVAXml(franchise, condPago)}
+        ${buildEncabezadoConIVAFullXml(tipoComprobante, franchisor, comp, refAfip, referenciaDate, contado, fechaVtoPago)}
+        ${buildItemsConIVAFullXml(comp)}`;
+    } else {
+      requestBody = `
+        ${buildAuthXml()}
+        ${buildClienteConIVAXml(franchise, condPago)}
+        ${buildEncabezadoConIVAXml(tipoComprobante, franchisor, comp, contado, fechaVtoPago)}
+        ${buildItemsConIVAXml(comp)}`;
+    }
   } else {
     // CrearComprobanteSinImpuestos — sin IVA, tipos string
     operacion = 'CrearComprobanteSinImpuestos';
