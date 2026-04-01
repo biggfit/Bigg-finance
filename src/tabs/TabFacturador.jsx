@@ -491,11 +491,15 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
                         <select value={refCompId ?? ""} onChange={e => { setRefCompId(e.target.value || null); setRefCompManual(""); }}
                           style={{ width: "100%", background: "var(--bg)", border: `1px solid ${hasRef ? "var(--border2)" : "var(--red)"}`, borderRadius: 6, padding: "6px 10px", color: "var(--text)", fontSize: 12 }}>
                           <option value="">— Seleccionar factura —</option>
-                          {allFAs.map(c => (
-                            <option key={c.id} value={c.id}>
-                              {c.invoice} — {c.date}{c.facturanteId ? "" : " ⚠ sin ID"}
-                            </option>
-                          ))}
+                          {allFAs.map(c => {
+                            const cuenta  = CUENTA_LABEL[c.type?.split("|")[1]] ?? c.type?.split("|")[1] ?? "";
+                            const importe = c.amount ? `$${c.amount.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "";
+                            return (
+                              <option key={c.id} value={c.id}>
+                                {c.invoice} — {c.date} — {cuenta} — {importe}{c.facturanteId ? "" : " ⚠ sin ID"}
+                              </option>
+                            );
+                          })}
                         </select>
                         {/* Si la FA seleccionada no tiene facturanteId, pedir ingreso manual */}
                         {selFA && !selFA.facturanteId && (
