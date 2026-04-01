@@ -112,24 +112,15 @@ function buildEncabezadoSinIVAXml(tipoStr, franchisor, comp, contado, fechaVtoPa
       </a:Encabezado>`;
 }
 
-// Maps Facturante string type codes → AFIP integer codes (for ComprobanteAsociado)
-const AFIP_TIPO_CODE = { 'FA': 1, 'FB': 6, 'NCA': 3, 'NCB': 8 };
+// NCA referencia FA, NCB referencia FB
+const NC_TIPO_REFERENCIA = { 'NCA': 'FA', 'NCB': 'FB' };
 
 /**
- * Parsea el label de factura (ej. "FA 0100-00000010") para obtener los campos AFIP
- * que requiere ComprobanteAsociado: tipo (AFIP int), ptoVta, nro.
+ * @param {string} tipoStr  - tipo del comprobante a emitir ("NCA","NCB","FA","FB")
+ * @param {{ numero, prefijo }} refAfip  - datos AFIP del comprobante asociado (de DetalleComprobanteFull)
+ * @param {string} refDate  - fecha de emisión del comprobante asociado (dd/mm/yyyy)
  */
-function parseInvoiceLabel(label) {
-  if (!label) return null;
-  const m = String(label).match(/^([A-Za-z]+)\s+(\d+)-(\d+)$/);
-  if (!m) return null;
-  const tipo   = m[1].toUpperCase();
-  const ptoVta = parseInt(m[2], 10);
-  const nro    = parseInt(m[3], 10);
-  return { tipo, afipTipo: AFIP_TIPO_CODE[tipo] ?? 1, ptoVta, nro };
-}
-
-function buildEncabezadoConIVAXml(tipoStr, franchisor, comp, referenciaInvoice, referenciaDate, contado, fechaVtoPago) {
+function buildEncabezadoConIVAXml(tipoStr, franchisor, comp, refAfip, refDate, contado, fechaVtoPago) {
   const fecha     = isoDateTime(comp.date);
   const prefijo   = String(franchisor.puntoVenta ?? '1');
   const condVenta = contado ? 1 : 2;
@@ -137,18 +128,19 @@ function buildEncabezadoConIVAXml(tipoStr, franchisor, comp, referenciaInvoice, 
   const neto      = Number(comp.amountNeto ?? comp.amount ?? 0);
   const total     = Number(comp.amount ?? (neto * 1.21));
 
-  // Bloque Asociados: campos exactos del schema WSDL de Facturante (ComprobanteAsociado)
-  // FechaEmision, Numero (int), PuntoVenta (int), Tipo (string "FA"/"NCA"/etc.)
+  // Bloque Asociados: campos exactos del schema WSDL (FechaEmision, Numero, PuntoVenta, Tipo)
+  // refAfip viene de DetalleComprobanteFull → siempre tiene el número AFIP real
   let asociado = '';
-  const ref = parseInvoiceLabel(referenciaInvoice);
-  if (ref) {
-    const fechaEmision = isoDateTime(referenciaDate ?? comp.date);
+  if (refAfip?.numero > 0) {
+    const fechaEmision = isoDateTime(refDate ?? comp.date);
+    const refTipo      = NC_TIPO_REFERENCIA[tipoStr] ?? 'FA';
+    const refPtoVenta  = parseInt(String(refAfip.prefijo ?? franchisor.puntoVenta ?? '100'), 10);
     asociado = `<b:Asociados>
           <b:ComprobanteAsociado>
             <b:FechaEmision>${fechaEmision}</b:FechaEmision>
-            <b:Numero>${ref.nro}</b:Numero>
-            <b:PuntoVenta>${ref.ptoVta}</b:PuntoVenta>
-            <b:Tipo>${escXml(ref.tipo)}</b:Tipo>
+            <b:Numero>${refAfip.numero}</b:Numero>
+            <b:PuntoVenta>${refPtoVenta}</b:PuntoVenta>
+            <b:Tipo>${escXml(refTipo)}</b:Tipo>
           </b:ComprobanteAsociado>
         </b:Asociados>`;
   }
@@ -310,7 +302,7 @@ async function getUrlPdf(idComprobante) {
  * Espera hasta que AFIP asigne el número secuencial al comprobante (polling).
  * Retorna { numero, prefijo } o null si no se obtuvo en los reintentos.
  */
-async function pollAfipNumero(idComprobante, maxAttempts = 4, delayMs = 1500) {
+async function pollAfipNumero(idComprobante, maxAttempts = 8, delayMs = 2500) {
   for (let i = 0; i < maxAttempts; i++) {
     if (i > 0) await new Promise(r => setTimeout(r, delayMs));
     const det = await getDetalleComprobante(idComprobante);
@@ -449,7 +441,7 @@ export default async function handler(req, res) {
     return res.end(JSON.stringify({ error: 'JSON inválido' }));
   }
 
-  const { action, franchisor, franchise, comp, referenciaIdComprobante, referenciaInvoice, referenciaDate } = payload;
+  const { action, franchisor, franchise, comp, referenciaIdComprobante, referenciaDate } = payload;
 
   if (action === 'anular') {
     res.statusCode = 501;
@@ -493,6 +485,19 @@ export default async function handler(req, res) {
   const fechaVtoPago  = contado ? null : calcFechaVtoPago(comp.date);
   const condPago      = contado ? 1 : calcCondicionPagoDias(comp.date);
 
+  // Para NC: obtener el número AFIP real de la FA referenciada via DetalleComprobanteFull
+  // (no parseamos el invoice label — usamos el ID interno de Facturante para lookup directo)
+  let refAfip = null;
+  if (doc === 'NC' && referenciaIdComprobante) {
+    refAfip = await getDetalleComprobante(referenciaIdComprobante);
+    if (!refAfip?.numero || refAfip.numero <= 0) {
+      return res.end(JSON.stringify({
+        ok:    false,
+        error: 'La FA referenciada aún no fue procesada por AFIP. Esperá unos segundos e intentá de nuevo.',
+      }));
+    }
+  }
+
   let operacion, requestBody, tipoComprobante;
 
   if (usaIVA) {
@@ -509,7 +514,7 @@ export default async function handler(req, res) {
     requestBody = `
       ${buildAuthXml()}
       ${buildClienteConIVAXml(franchise, condPago)}
-      ${buildEncabezadoConIVAXml(tipoComprobante, franchisor, comp, referenciaInvoice, referenciaDate, contado, fechaVtoPago)}
+      ${buildEncabezadoConIVAXml(tipoComprobante, franchisor, comp, refAfip, referenciaDate, contado, fechaVtoPago)}
       ${buildItemsConIVAXml(comp)}`;
   } else {
     // CrearComprobanteSinImpuestos — sin IVA, tipos string

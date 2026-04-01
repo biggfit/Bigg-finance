@@ -287,11 +287,11 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
         setEmitError(null);
         try {
           const result = await emitirComprobante({
-            franchisor: franchisor?.ar ?? franchisor,
-            franchise:  fr,
-            comp:       { ...preview, applyIVA: applyIVA },
-            referenciaInvoice: refFAComp?.invoice ?? undefined,
-            referenciaDate:    refFAComp?.date    ?? undefined,
+            franchisor:              franchisor?.ar ?? franchisor,
+            franchise:               fr,
+            comp:                    { ...preview, applyIVA: applyIVA },
+            referenciaIdComprobante: refFAComp?.facturanteId ?? efectiveRefId ?? undefined,
+            referenciaDate:          refFAComp?.date ?? undefined,
           });
           enriched = {
             ...preview,
