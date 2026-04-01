@@ -365,7 +365,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
             <div>
               <label style={labelS}>FECHA</label>
               <input type="date" value={fechaIso} onChange={e => { setFechaIso(e.target.value); setPreview(null); }}
-                style={{ ...inputS, cursor: "pointer", colorScheme: "dark", fontWeight: 700 }} />
+                style={{ ...inputS, cursor: "pointer", colorScheme: "dark", fontWeight: 700, border: fechaIso ? "1px solid var(--border2)" : "2px solid var(--red)" }} />
             </div>
             <div>
               <label style={labelS}>CUENTA</label>
@@ -518,7 +518,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
         )}
         <div style={{ display: "flex", gap: 12 }}>
           {!preview
-            ? <button className="btn" style={{ flex: 1, height: 48, fontSize: 15 }} disabled={importeNeto <= 0} onClick={handlePreview}>Vista previa →</button>
+            ? <button className="btn" style={{ flex: 1, height: 48, fontSize: 15 }} disabled={importeNeto <= 0 || !fechaIso} onClick={handlePreview}>Vista previa →</button>
             : <>
                 <button className="ghost" style={{ flex: 1, height: 48 }} onClick={() => setPreview(null)}>← Editar</button>
                 {usaFacturante && (
@@ -528,7 +528,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
                 )}
                 <button className="btn" style={{ flex: 3, height: 48, fontSize: 15 }} disabled={emitState === "emitting" || ncSinRef} onClick={handleConfirm}
                   title={ncSinRef ? "Seleccioná la factura de referencia antes de emitir" : undefined}>
-                  {emitState === "emitting" ? (usaFacturante ? "Emitiendo ante ARCA…" : "Generando Invoice…") : `✓ Confirmar y generar ${isAR && currency === "ARS" ? "Factura ARCA" : isAR ? "Factura" : "Invoice"}`}
+                  {emitState === "emitting" ? (usaFacturante ? "Emitiendo ante ARCA…" : "Generando Invoice…") : `✓ Confirmar y generar ${isAR && currency === "ARS" ? (doc === "NC" ? "Nota de Crédito ARCA" : "Factura ARCA") : isAR ? (doc === "NC" ? "Nota de Crédito" : "Factura") : "Invoice"}`}
                 </button>
               </>
           }
