@@ -271,13 +271,13 @@ function parseResponse(xml) {
   return { estado, mensaje, idComprobante: idComp ? parseInt(idComp, 10) : null };
 }
 
-// ─── PDF ─────────────────────────────────────────────────────────────────────
+// ─── DETALLE COMPROBANTE ──────────────────────────────────────────────────────
 
 /**
- * Llama a DetalleComprobanteFull y extrae la URLPDF del comprobante.
- * Devuelve null si el comprobante aún no está procesado o no tiene URL.
+ * Llama a DetalleComprobanteFull y devuelve los campos relevantes.
+ * @returns {{ urlPdf, numero, prefijo }} — numero=null si AFIP aún no lo procesó
  */
-async function getUrlPdf(idComprobante) {
+async function getDetalleComprobante(idComprobante) {
   const requestBody = `
     <a:Autenticacion>
       <b:Empresa>${parseInt(EMPRESA, 10)}</b:Empresa>
@@ -289,12 +289,34 @@ async function getUrlPdf(idComprobante) {
   const envelope = buildEnvelope('DetalleComprobanteFull', requestBody);
   try {
     const { status, body } = await soapCall(ENDPOINT, 'DetalleComprobanteFull', envelope);
-    if (status !== 200) return null;
-    const urlPdf = extractTag(body, 'URLPDF');
-    return urlPdf || null;
+    if (status !== 200) return {};
+    const numeroRaw = extractTag(body, 'Numero');
+    return {
+      urlPdf:  extractTag(body, 'URLPDF') || null,
+      numero:  numeroRaw ? (parseInt(numeroRaw, 10) || null) : null,
+      prefijo: extractTag(body, 'Prefijo') || null,
+    };
   } catch {
-    return null;
+    return {};
   }
+}
+
+async function getUrlPdf(idComprobante) {
+  const det = await getDetalleComprobante(idComprobante);
+  return det.urlPdf ?? null;
+}
+
+/**
+ * Espera hasta que AFIP asigne el número secuencial al comprobante (polling).
+ * Retorna { numero, prefijo } o null si no se obtuvo en los reintentos.
+ */
+async function pollAfipNumero(idComprobante, maxAttempts = 4, delayMs = 1500) {
+  for (let i = 0; i < maxAttempts; i++) {
+    if (i > 0) await new Promise(r => setTimeout(r, delayMs));
+    const det = await getDetalleComprobante(idComprobante);
+    if (det.numero > 0) return { numero: det.numero, prefijo: det.prefijo };
+  }
+  return null;
 }
 
 /**
@@ -538,9 +560,14 @@ export default async function handler(req, res) {
       }));
     }
 
+    // Esperar a que AFIP asigne el número secuencial real (necesario para CbteAsoc de futuras NC)
+    const afip = await pollAfipNumero(parsed.idComprobante);
+
     return res.end(JSON.stringify({
       ok:             true,
       idComprobante:  parsed.idComprobante,
+      afipNumero:     afip?.numero ?? null,   // número secuencial AFIP (ej. 10)
+      afipPrefijo:    afip?.prefijo ?? null,  // prefijo/punto de venta (ej. "0100")
       tipoComprobante,
       puntoVenta:     franchisor.puntoVenta,
       mensaje:        parsed.mensaje,

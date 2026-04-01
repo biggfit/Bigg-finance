@@ -295,7 +295,8 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
           });
           enriched = {
             ...preview,
-            invoice:      formatInvoiceLabel(result.tipoComprobante, result.idComprobante, result.puntoVenta),
+            // Usar número AFIP real (afipNumero) si disponible; fallback al ID interno de Facturante
+            invoice:      formatInvoiceLabel(result.tipoComprobante, result.afipNumero ?? result.idComprobante, result.afipPrefijo ?? result.puntoVenta),
             facturanteId: String(result.idComprobante),
           };
           setEmitState("idle");
