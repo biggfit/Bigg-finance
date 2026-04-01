@@ -332,7 +332,7 @@ function InvoicePage({ fr, issuer, comp, isES }) {
 
 // ─── Documentos PDF ───────────────────────────────────────────────────────────
 function InvoiceDoc({ fr, franchisor, comp }) {
-  const isES   = comp.currency === "EUR" && franchisor?.es?.nif;  // ES si hay NIF de GDW activo
+  const isES   = comp.empresa === "Gestión Deportiva y Wellness SL";
   const issuer = isES ? (franchisor?.es ?? {}) : (franchisor?.usa ?? {});
   return (
     <Document>
@@ -388,7 +388,7 @@ export async function downloadInvoicePdf(fr, franchisor, comp) {
  */
 export async function downloadBatchInvoicePdf(items, franchisor) {
   const docItems = items.map(({ fr, comp }) => {
-    const isES   = comp.currency === "EUR" && franchisor?.es?.nif;
+    const isES   = comp.empresa === "Gestión Deportiva y Wellness SL";
     const issuer = isES ? (franchisor?.es ?? {}) : (franchisor?.usa ?? {});
     return { fr, issuer, isES: !!isES, comp };
   });
