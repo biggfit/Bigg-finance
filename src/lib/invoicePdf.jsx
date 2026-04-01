@@ -224,8 +224,8 @@ function InvoicePage({ fr, issuer, comp, isES }) {
     <>
       {/* ─── TOP ROW: logo + ref ─────────────────────────────────────────── */}
       <View style={S.topRow}>
-        {issuer.logoUrl ? (
-          <Image src={resolveUrl(issuer.logoUrl)} style={S.logoImg} />
+        {resolveUrl(issuer.logoUrl || "/Logo.jpg") ? (
+          <Image src={resolveUrl(issuer.logoUrl || "/Logo.jpg")} style={S.logoImg} />
         ) : (
           <View style={S.logoWrap}>
             <View style={S.logoInner}>
