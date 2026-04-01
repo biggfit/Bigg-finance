@@ -168,8 +168,8 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
           <div style={{ overflowY: "auto", flex: 1 }}>
             <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
               <colgroup>
-                <col style={{ width: "11%" }} />  {/* Fecha */}
-                <col style={{ width: "24%" }} />  {/* N° Comprobante */}
+                <col style={{ width: "14%" }} />  {/* Fecha */}
+                <col style={{ width: "21%" }} />  {/* N° Comprobante */}
                 <col style={{ width: "19%" }} />  {/* Tipo */}
                 <col style={{ width: "19%" }} />  {/* Importe */}
                 <col style={{ width: "19%" }} />  {/* Saldo */}
@@ -201,7 +201,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
                       {/* Fecha */}
                       <td className="mono" style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap", padding: "8px 8px" }}>
                         {isEd
-                          ? <input type="date" value={dmyToIso(editBuf.date)} onChange={e => setEditBuf(b => ({ ...b, date: isoToDmy(e.target.value) }))} style={{ ...inpS, width: 112, colorScheme: "dark" }} />
+                          ? <input type="date" value={dmyToIso(editBuf.date)} onChange={e => setEditBuf(b => ({ ...b, date: isoToDmy(e.target.value) }))} style={{ ...inpS, width: "100%", boxSizing: "border-box", colorScheme: "dark" }} />
                           : c.date ?? "—"}
                       </td>
                       {/* N° Comprobante */}
