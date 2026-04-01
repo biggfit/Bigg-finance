@@ -185,7 +185,8 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
     setEmitting(p => ({ ...p, [comp.id]: true }));
     setErrors(p => { const n = { ...p }; delete n[comp.id]; return n; });
     try {
-      await onEmitirAfip(fr, comp);
+      const dateOverride = batchDate ? toAR(batchDate) : null;
+      await onEmitirAfip(fr, comp, dateOverride);
     } catch (err) {
       setErrors(p => ({ ...p, [comp.id]: err.message ?? "Error AFIP" }));
     } finally {
@@ -283,27 +284,23 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
 
             <div style={{ flex: 1 }} />
 
+            {/* Fecha emisión ARCA — siempre visible, afecta tanto batch como individual */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <label style={{ fontSize: 10, fontWeight: 700, color: "var(--red)", letterSpacing: ".06em", whiteSpace: "nowrap" }}>Fecha ARCA:</label>
+              <input type="date" value={batchDate} onChange={e => setBatchDate(e.target.value)}
+                style={{ background: "var(--bg)", border: `1px solid ${batchDate ? "var(--green)" : "var(--red)"}`, color: "var(--text)", borderRadius: 6, padding: "3px 8px", fontSize: 11, fontFamily: "var(--font)" }} />
+            </div>
+
             {/* Botón emisión masiva */}
-            {!batchRunning && !batchDone && toEmit.length > 0 && !batchDatePending && (
+            {!batchRunning && !batchDone && toEmit.length > 0 && (
               <button
                 className="btn"
-                style={{ fontSize: 11, padding: "4px 14px", background: "rgba(255,107,122,.18)", color: "var(--red)", border: "1px solid rgba(255,107,122,.35)" }}
-                onClick={() => { setBatchDatePending(true); setBatchDate(""); }}
+                style={{ fontSize: 11, padding: "4px 14px", background: "rgba(255,107,122,.18)", color: "var(--red)", border: "1px solid rgba(255,107,122,.35)", opacity: batchDate ? 1 : 0.4 }}
+                disabled={!batchDate}
+                onClick={handleBatch}
               >
                 ⚡ Emitir {toEmit.length} documento{toEmit.length !== 1 ? "s" : ""}
               </button>
-            )}
-            {batchDatePending && !batchRunning && (
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <label style={{ fontSize: 10, fontWeight: 700, color: "var(--red)", letterSpacing: ".06em" }}>Fecha emisión ARCA:</label>
-                <input type="date" value={batchDate} onChange={e => setBatchDate(e.target.value)}
-                  style={{ background: "var(--bg)", border: "1px solid var(--red)", color: "var(--text)", borderRadius: 6, padding: "3px 8px", fontSize: 11, fontFamily: "var(--font)" }} />
-                <button className="btn" style={{ fontSize: 10, padding: "3px 12px", background: "rgba(255,107,122,.25)", color: "var(--red)", border: "1px solid rgba(255,107,122,.4)" }}
-                  onClick={handleBatch} disabled={!batchDate}>
-                  Confirmar
-                </button>
-                <button className="ghost" style={{ fontSize: 10, padding: "3px 8px" }} onClick={() => setBatchDatePending(false)}>✕</button>
-              </div>
             )}
             {batchDone && (
               <button className="ghost" style={{ fontSize: 10, padding: "3px 10px" }} onClick={() => setBatchProgress(null)}>
