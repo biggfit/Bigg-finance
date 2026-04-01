@@ -290,6 +290,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
             franchise:  fr,
             comp:       { ...preview, applyIVA: applyIVA },
             referenciaIdComprobante: efectiveRefId ?? undefined,
+            referenciaInvoice:       refFAComp?.invoice ?? undefined,
           });
           enriched = {
             ...preview,

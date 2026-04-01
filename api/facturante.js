@@ -89,13 +89,13 @@ function buildClienteConIVAXml(franchise, condPago) {
 }
 
 function buildEncabezadoSinIVAXml(tipoStr, franchisor, comp, contado, fechaVtoPago) {
-  const fecha     = isoDateTime(comp.date);
-  const prefijo   = String(franchisor.puntoVenta ?? '1');
-  const condVenta = contado ? 1 : 2;
-  const periodo   = calcPeriodoServicio(comp);
-  const vtoPagoXml = (!contado && fechaVtoPago)
-    ? `<b:FechaVtoPago>${fechaVtoPago}</b:FechaVtoPago>`
-    : '';
+  const fecha      = isoDateTime(comp.date);
+  const prefijo    = String(franchisor.puntoVenta ?? '1');
+  const condVenta  = contado ? 1 : 2;
+  const periodo    = calcPeriodoServicio(comp);
+  // FechaVtoPago obligatoria cuando FechaServDesde/Hasta presentes (AFIP error 10035)
+  const vtoPagoVal = fechaVtoPago ?? fecha;
+  const vtoPagoXml = `<b:FechaVtoPago>${vtoPagoVal}</b:FechaVtoPago>`;
   return `<a:Encabezado>
         <b:Bienes>2</b:Bienes>
         <b:CondicionVenta>${condVenta}</b:CondicionVenta>
@@ -112,7 +112,24 @@ function buildEncabezadoSinIVAXml(tipoStr, franchisor, comp, contado, fechaVtoPa
       </a:Encabezado>`;
 }
 
-function buildEncabezadoConIVAXml(tipoStr, franchisor, comp, referenciaIdComprobante, contado, fechaVtoPago) {
+// Maps Facturante string type codes → AFIP integer codes (for ComprobanteAsociado)
+const AFIP_TIPO_CODE = { 'FA': 1, 'FB': 6, 'NCA': 3, 'NCB': 8 };
+
+/**
+ * Parsea el label de factura (ej. "FA 0100-00000010") para obtener los campos AFIP
+ * que requiere ComprobanteAsociado: tipo (AFIP int), ptoVta, nro.
+ */
+function parseInvoiceLabel(label) {
+  if (!label) return null;
+  const m = String(label).match(/^([A-Za-z]+)\s+(\d+)-(\d+)$/);
+  if (!m) return null;
+  const tipo   = m[1].toUpperCase();
+  const ptoVta = parseInt(m[2], 10);
+  const nro    = parseInt(m[3], 10);
+  return { tipo, afipTipo: AFIP_TIPO_CODE[tipo] ?? 1, ptoVta, nro };
+}
+
+function buildEncabezadoConIVAXml(tipoStr, franchisor, comp, referenciaIdComprobante, referenciaInvoice, contado, fechaVtoPago) {
   const fecha     = isoDateTime(comp.date);
   const prefijo   = String(franchisor.puntoVenta ?? '1');
   const condVenta = contado ? 1 : 2;
@@ -120,17 +137,28 @@ function buildEncabezadoConIVAXml(tipoStr, franchisor, comp, referenciaIdComprob
   const neto      = Number(comp.amountNeto ?? comp.amount ?? 0);
   const total     = Number(comp.amount ?? (neto * 1.21));
 
-  const asociado = referenciaIdComprobante
-    ? `<b:Asociados>
+  // Bloque Asociados: para NC incluir los campos AFIP requeridos (Tipo, PtoVta, Nro)
+  let asociado = '';
+  if (referenciaIdComprobante) {
+    const ref     = parseInvoiceLabel(referenciaInvoice);
+    const afipNro = ref ? `<b:Nro>${ref.nro}</b:Nro>` : '';
+    const afipPv  = ref ? `<b:PtoVta>${ref.ptoVta}</b:PtoVta>` : '';
+    const afipTp  = ref ? `<b:Tipo>${ref.afipTipo}</b:Tipo>` : '';
+    asociado = `<b:Asociados>
           <b:ComprobanteAsociado>
             <b:IdComprobante>${referenciaIdComprobante}</b:IdComprobante>
+            ${afipNro}
+            ${afipPv}
+            ${afipTp}
           </b:ComprobanteAsociado>
-        </b:Asociados>`
-    : '';
+        </b:Asociados>`;
+  }
 
-  const vtoPagoXml = (!contado && fechaVtoPago)
-    ? `<b:FechaVtoPago>${fechaVtoPago}</b:FechaVtoPago>`
-    : '';
+  // FechaVtoPago: obligatoria cuando FechaServDesde/Hasta están presentes (AFIP error 10035)
+  // Para NC (contado) → misma fecha que la factura (vence al contado)
+  // Para FA con CC   → día 10 del mes siguiente
+  const vtoPagoVal = fechaVtoPago ?? fecha; // fecha ya es "yyyy-MM-ddT00:00:00"
+  const vtoPagoXml = `<b:FechaVtoPago>${vtoPagoVal}</b:FechaVtoPago>`;
 
   return `<a:Encabezado>
         ${asociado}
@@ -400,7 +428,7 @@ export default async function handler(req, res) {
     return res.end(JSON.stringify({ error: 'JSON inválido' }));
   }
 
-  const { action, franchisor, franchise, comp, referenciaIdComprobante } = payload;
+  const { action, franchisor, franchise, comp, referenciaIdComprobante, referenciaInvoice } = payload;
 
   if (action === 'anular') {
     res.statusCode = 501;
@@ -460,7 +488,7 @@ export default async function handler(req, res) {
     requestBody = `
       ${buildAuthXml()}
       ${buildClienteConIVAXml(franchise, condPago)}
-      ${buildEncabezadoConIVAXml(tipoComprobante, franchisor, comp, referenciaIdComprobante, contado, fechaVtoPago)}
+      ${buildEncabezadoConIVAXml(tipoComprobante, franchisor, comp, referenciaIdComprobante, referenciaInvoice, contado, fechaVtoPago)}
       ${buildItemsConIVAXml(comp)}`;
   } else {
     // CrearComprobanteSinImpuestos — sin IVA, tipos string
