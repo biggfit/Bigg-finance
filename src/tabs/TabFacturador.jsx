@@ -269,7 +269,8 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
         contado: prefillComp?.type === "PAGO_PAUTA",
       });
     };
-    const usaFacturante = isAR && currency === "ARS" && (doc === "FACTURA" || doc === "NC");
+    const usaFacturante  = isAR && currency === "ARS" && (doc === "FACTURA" || doc === "NC");
+    const ncSinRef       = usaFacturante && doc === "NC" && !refCompId; // NC sin referencia → bloquear emit
 
     const doConfirm = async (skipFacturante = false) => {
       if (!preview) return;
@@ -461,21 +462,27 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
                 <span style={{ color: "var(--muted)" }}>{k}</span><span style={{ fontWeight: 600 }}>{v}</span>
               </div>
             ))}
-            {/* NC reference picker — only for AR + ARS + NC */}
+            {/* NC reference picker — obligatoria para AR + ARS + NC (Facturante lo requiere) */}
             {isAR && currency === "ARS" && doc === "NC" && (() => {
               const frComps = (comps[String(fr?.id)] ?? [])
                 .filter(c => c.type?.startsWith("FACTURA") && c.facturanteId);
-              if (frComps.length === 0) return null;
               return (
                 <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
-                  <label style={{ fontSize: 9, fontWeight: 800, color: "var(--cyan)", letterSpacing: ".1em", display: "block", marginBottom: 6 }}>FACTURA DE REFERENCIA (OPCIONAL)</label>
-                  <select value={refCompId ?? ""} onChange={e => setRefCompId(e.target.value || null)}
-                    style={{ width: "100%", background: "var(--bg)", border: "1px solid var(--border2)", borderRadius: 6, padding: "6px 10px", color: "var(--text)", fontSize: 12 }}>
-                    <option value="">Sin referencia</option>
-                    {frComps.map(c => (
-                      <option key={c.id} value={c.facturanteId}>{c.invoice ?? c.facturanteId} — {c.date}</option>
-                    ))}
-                  </select>
+                  <label style={{ fontSize: 9, fontWeight: 800, color: "var(--red)", letterSpacing: ".1em", display: "block", marginBottom: 6 }}>
+                    FACTURA DE REFERENCIA <span style={{ color: "var(--muted)" }}>(obligatoria ante ARCA)</span>
+                  </label>
+                  {frComps.length === 0
+                    ? <div style={{ fontSize: 11, color: "var(--muted)", padding: "8px 10px", background: "var(--bg2)", borderRadius: 6 }}>
+                        Esta sede no tiene facturas emitidas ante ARCA. Emitir una FA primero.
+                      </div>
+                    : <select value={refCompId ?? ""} onChange={e => setRefCompId(e.target.value || null)}
+                        style={{ width: "100%", background: "var(--bg)", border: `1px solid ${refCompId ? "var(--border2)" : "var(--red)"}`, borderRadius: 6, padding: "6px 10px", color: "var(--text)", fontSize: 12 }}>
+                        <option value="">— Seleccionar factura —</option>
+                        {frComps.map(c => (
+                          <option key={c.id} value={c.facturanteId}>{c.invoice ?? c.facturanteId} — {c.date}</option>
+                        ))}
+                      </select>
+                  }
                 </div>
               );
             })()}
@@ -501,7 +508,8 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
                     Guardar sin emitir
                   </button>
                 )}
-                <button className="btn" style={{ flex: 3, height: 48, fontSize: 15 }} disabled={emitState === "emitting"} onClick={handleConfirm}>
+                <button className="btn" style={{ flex: 3, height: 48, fontSize: 15 }} disabled={emitState === "emitting" || ncSinRef} onClick={handleConfirm}
+                  title={ncSinRef ? "Seleccioná la factura de referencia antes de emitir" : undefined}>
                   {emitState === "emitting" ? (usaFacturante ? "Emitiendo ante ARCA…" : "Generando Invoice…") : `✓ Confirmar y generar ${isAR && currency === "ARS" ? "Factura ARCA" : isAR ? "Factura" : "Invoice"}`}
                 </button>
               </>
