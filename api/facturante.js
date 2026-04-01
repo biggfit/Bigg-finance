@@ -25,12 +25,12 @@ const NS_DTO = 'http://schemas.datacontract.org/2004/07/FacturanteMVC.API.DTOs';
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 
-// TipoComprobante codes for CrearComprobante (con IVA) — integer IDs
+// TipoComprobante codes for CrearComprobante (con IVA) — string codes de Facturante
 const TIPO_COMPROBANTE_CON_IVA = {
-  'FACTURA|RI': 1,  // Factura A  — Responsable Inscripto
-  'FACTURA|EX': 3,  // Factura B  — Exento / Consumidor Final
-  'NC|RI':      6,  // Nota de Crédito A
-  'NC|EX':      8,  // Nota de Crédito B
+  'FACTURA|RI': 'FA',  // Factura A  — Responsable Inscripto
+  'FACTURA|EX': 'FB',  // Factura B  — Exento / Consumidor Final
+  'NC|RI':      'NCA', // Nota de Crédito A
+  'NC|EX':      'NCB', // Nota de Crédito B
 };
 
 // TipoComprobante codes for CrearComprobanteSinImpuestos — string codes
