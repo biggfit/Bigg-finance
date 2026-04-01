@@ -329,7 +329,7 @@ export default function ImportBankModal({ franchises, month, year, addComp, onCl
 
   const handleSaveRow = useCallback((row) => {
     const [, mm, yy] = row.fecha.split("/");
-    const amount = row.movType === "PAGO_PAUTA" ? Math.round(row.monto / 1.21) : row.monto;
+    const amount = row.monto;
     const comp = {
       id: uid(), type: row.movType, amount,
       date: row.fecha, month: parseInt(mm, 10) - 1, year: parseInt(yy, 10),
@@ -365,6 +365,23 @@ export default function ImportBankModal({ franchises, month, year, addComp, onCl
   const handleImport = useCallback(async () => {
     setImporting(true);
     const toImport = rows.filter((r) => !r.deleted);
+
+    // ── Backup: descargar JSON con los datos crudos del import ──
+    try {
+      const backup = toImport.map(r => ({
+        frId: r.frId, frName: r.frName, fecha: r.fecha, monto: r.monto,
+        movType: r.movType, entidad: r.entidad, nroComp: r.nroComp, cuit: r.cuit,
+      }));
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const now = new Date();
+      a.href = url;
+      a.download = `import-galicia-${now.getFullYear()}${String(now.getMonth()+1).padStart(2,"0")}${String(now.getDate()).padStart(2,"0")}-${String(now.getHours()).padStart(2,"0")}${String(now.getMinutes()).padStart(2,"0")}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) { console.warn("Backup download failed:", e); }
+
     const counts = { PAGO: 0, PAGO_PAUTA: 0, PAGO_ENVIADO: 0 };
     const totals = { PAGO: 0, PAGO_PAUTA: 0, PAGO_ENVIADO: 0 };
     for (const row of toImport) {
