@@ -517,7 +517,7 @@ export default async function handler(req, res) {
   // Las NC siempre heredan la condición de la factura original → contado
   const contado       = comp.contado === true || doc === 'NC';
   const fechaVtoPago  = contado ? null : calcFechaVtoPago(comp.date);
-  const condPago      = contado ? 1 : calcCondicionPagoDias(comp.date);
+  const condPago      = contado ? 1 : 30; // 1=contado, 30=cuenta corriente (ARCA solo acepta valores estándar)
 
   // Para NC: obtener el número AFIP real de la FA referenciada via DetalleComprobanteFull
   // (no parseamos el invoice label — usamos el ID interno de Facturante para lookup directo)
