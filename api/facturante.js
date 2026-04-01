@@ -117,6 +117,8 @@ function buildEncabezadoConIVAXml(tipoStr, franchisor, comp, referenciaIdComprob
   const prefijo   = String(franchisor.puntoVenta ?? '1');
   const condVenta = contado ? 1 : 2;
   const periodo   = calcPeriodoServicio(comp);
+  const neto      = Number(comp.amountNeto ?? comp.amount ?? 0);
+  const total     = Number(comp.amount ?? (neto * 1.21));
 
   const asociado = referenciaIdComprobante
     ? `<b:Asociados>
@@ -142,8 +144,12 @@ function buildEncabezadoConIVAXml(tipoStr, franchisor, comp, referenciaIdComprob
         <b:Moneda>2</b:Moneda>
         <b:Observaciones>${escXml(comp.ref ?? '')}</b:Observaciones>
         <b:Prefijo>${escXml(prefijo)}</b:Prefijo>
+        <b:SubTotal>${neto.toFixed(2)}</b:SubTotal>
+        <b:SubTotalExcento>0.00</b:SubTotalExcento>
         <b:TipoComprobante>${escXml(tipoStr)}</b:TipoComprobante>
         <b:TipoDeCambio>1</b:TipoDeCambio>
+        <b:Total>${total.toFixed(2)}</b:Total>
+        <b:TotalNeto>${neto.toFixed(2)}</b:TotalNeto>
       </a:Encabezado>`;
 }
 
@@ -159,14 +165,16 @@ function buildItemsSinIVAXml(comp) {
 }
 
 function buildItemsConIVAXml(comp) {
-  const neto = Number(comp.amountNeto ?? comp.amount ?? 0);
+  const neto  = Number(comp.amountNeto ?? comp.amount ?? 0);
+  const total = Number(comp.amount ?? (neto * 1.21));
   return `<a:Items>
         <b:ComprobanteItem>
           <b:Cantidad>1</b:Cantidad>
           <b:Detalle>${escXml(comp.ref ?? 'Servicio')}</b:Detalle>
           <b:Gravado>true</b:Gravado>
-          <b:IVA>21</b:IVA>
+          <b:IVA>21.000</b:IVA>
           <b:PrecioUnitario>${neto.toFixed(2)}</b:PrecioUnitario>
+          <b:Total>${total.toFixed(2)}</b:Total>
         </b:ComprobanteItem>
       </a:Items>`;
 }

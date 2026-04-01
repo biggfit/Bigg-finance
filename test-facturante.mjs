@@ -31,7 +31,7 @@ const FRANCHISE = {
 
 const COMP = {
   type:        'FACTURA|FEE',
-  date:        '26/03/2026',
+  date:        '31/03/2026',
   amountNeto:  10000,
   amountIVA:   2100,
   amount:      12100,
