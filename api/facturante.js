@@ -128,22 +128,10 @@ function buildEncabezadoConIVAXml(tipoStr, franchisor, comp, refAfip, refDate, c
   const neto      = Number(comp.amountNeto ?? comp.amount ?? 0);
   const total     = Number(comp.amount ?? (neto * 1.21));
 
-  // Bloque Asociados: campos exactos del schema WSDL (FechaEmision, Numero, PuntoVenta, Tipo)
-  // refAfip viene de DetalleComprobanteFull → siempre tiene el número AFIP real
-  let asociado = '';
-  if (refAfip?.numero > 0) {
-    const fechaEmision = isoDateTime(refDate ?? comp.date);
-    const refTipo      = NC_TIPO_REFERENCIA[tipoStr] ?? 'FA';
-    const refPtoVenta  = parseInt(String(refAfip.prefijo ?? franchisor.puntoVenta ?? '100'), 10);
-    asociado = `<b:Asociados>
-          <b:ComprobanteAsociado>
-            <b:FechaEmision>${fechaEmision}</b:FechaEmision>
-            <b:Numero>${refAfip.numero}</b:Numero>
-            <b:PuntoVenta>${refPtoVenta}</b:PuntoVenta>
-            <b:Tipo>${escXml(refTipo)}</b:Tipo>
-          </b:ComprobanteAsociado>
-        </b:Asociados>`;
-  }
+  // Para NC con servicios (Bienes=2), AFIP acepta PeriodoAsoc como alternativa a CbteAsoc.
+  // Enviamos Asociados nil: Facturante usará FechaServDesde/Hasta como PeriodoAsoc.
+  // Guardamos refAfip para uso futuro pero no lo mandamos en el XML.
+  const asociado = `<b:Asociados i:nil="true"/>`;
 
   // FechaVtoPago: obligatoria cuando FechaServDesde/Hasta están presentes (AFIP error 10035)
   // Para NC (contado) → misma fecha que la factura (vence al contado)
