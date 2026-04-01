@@ -58,11 +58,11 @@ function buildAuthXml() {
       </a:Autenticacion>`;
 }
 
-function buildClienteSinIVAXml(franchise) {
+function buildClienteSinIVAXml(franchise, condPago) {
   const cuitClean = String(franchise.cuit ?? '').replace(/[-\s]/g, '');
   return `<a:Cliente>
         <b:CodigoPostal>${escXml(franchise.billingZip ?? '')}</b:CodigoPostal>
-        <b:CondicionPago>0</b:CondicionPago>
+        <b:CondicionPago>${condPago}</b:CondicionPago>
         <b:DireccionFiscal>${escXml(franchise.domicilio ?? franchise.billingAddress ?? '')}</b:DireccionFiscal>
         <b:Localidad>${escXml(franchise.billingCity ?? '')}</b:Localidad>
         <b:MailFacturacion>${escXml(franchise.emailFactura ?? '')}</b:MailFacturacion>
@@ -72,11 +72,11 @@ function buildClienteSinIVAXml(franchise) {
       </a:Cliente>`;
 }
 
-function buildClienteConIVAXml(franchise) {
+function buildClienteConIVAXml(franchise, condPago) {
   const cuitClean = String(franchise.cuit ?? '').replace(/[-\s]/g, '');
   return `<a:Cliente>
         <b:CodigoPostal>${escXml(franchise.billingZip ?? '')}</b:CodigoPostal>
-        <b:CondicionPago>0</b:CondicionPago>
+        <b:CondicionPago>${condPago}</b:CondicionPago>
         <b:DireccionFiscal>${escXml(franchise.domicilio ?? franchise.billingAddress ?? '')}</b:DireccionFiscal>
         <b:Localidad>${escXml(franchise.billingCity ?? '')}</b:Localidad>
         <b:MailFacturacion>${escXml(franchise.emailFactura ?? '')}</b:MailFacturacion>
@@ -88,14 +88,19 @@ function buildClienteConIVAXml(franchise) {
       </a:Cliente>`;
 }
 
-function buildEncabezadoSinIVAXml(tipoStr, franchisor, comp) {
-  const fecha = isoDateTime(comp.date);
+function buildEncabezadoSinIVAXml(tipoStr, franchisor, comp, contado, fechaVtoPago) {
+  const fecha   = isoDateTime(comp.date);
   const prefijo = String(franchisor.puntoVenta ?? '1');
+  const condVenta = contado ? 1 : 2; // 1=Contado, 2=Cuenta Corriente
+  const vtoPagoXml = (!contado && fechaVtoPago)
+    ? `<b:FechaVtoPago>${fechaVtoPago}</b:FechaVtoPago>`
+    : '';
   return `<a:Encabezado>
         <b:Bienes>2</b:Bienes>
-        <b:CondicionVenta>1</b:CondicionVenta>
+        <b:CondicionVenta>${condVenta}</b:CondicionVenta>
         <b:EnviarComprobante>true</b:EnviarComprobante>
         <b:FechaHora>${fecha}</b:FechaHora>
+        ${vtoPagoXml}
         <b:Moneda>2</b:Moneda>
         <b:Observaciones>${escXml(comp.ref ?? '')}</b:Observaciones>
         <b:Prefijo>${escXml(prefijo)}</b:Prefijo>
@@ -104,9 +109,10 @@ function buildEncabezadoSinIVAXml(tipoStr, franchisor, comp) {
       </a:Encabezado>`;
 }
 
-function buildEncabezadoConIVAXml(tipoInt, franchisor, comp, referenciaIdComprobante) {
-  const fecha = isoDateTime(comp.date);
+function buildEncabezadoConIVAXml(tipoInt, franchisor, comp, referenciaIdComprobante, contado, fechaVtoPago) {
+  const fecha   = isoDateTime(comp.date);
   const prefijo = String(franchisor.puntoVenta ?? '1');
+  const condVenta = contado ? 1 : 2; // 1=Contado, 2=Cuenta Corriente
 
   const asociado = referenciaIdComprobante
     ? `<b:Asociados>
@@ -116,12 +122,17 @@ function buildEncabezadoConIVAXml(tipoInt, franchisor, comp, referenciaIdComprob
         </b:Asociados>`
     : '';
 
+  const vtoPagoXml = (!contado && fechaVtoPago)
+    ? `<b:FechaVtoPago>${fechaVtoPago}</b:FechaVtoPago>`
+    : '';
+
   return `<a:Encabezado>
         ${asociado}
         <b:Bienes>2</b:Bienes>
-        <b:CondicionVenta>1</b:CondicionVenta>
+        <b:CondicionVenta>${condVenta}</b:CondicionVenta>
         <b:EnviarComprobante>true</b:EnviarComprobante>
         <b:FechaHora>${fecha}</b:FechaHora>
+        ${vtoPagoXml}
         <b:Moneda>2</b:Moneda>
         <b:Observaciones>${escXml(comp.ref ?? '')}</b:Observaciones>
         <b:Prefijo>${escXml(prefijo)}</b:Prefijo>
@@ -237,6 +248,36 @@ function isoDateTime(dmy) {
   return dmy.includes('T') ? dmy : `${dmy.slice(0, 10)}T00:00:00`;
 }
 
+/**
+ * Calcula la fecha de vencimiento: día 10 del mes siguiente a la fecha de factura.
+ * @param {string} dmy  - fecha en formato dd/mm/yyyy
+ * @returns {string}     - ISO datetime "yyyy-MM-10T00:00:00"
+ */
+function calcFechaVtoPago(dmy) {
+  if (!dmy) return null;
+  const parts = String(dmy).split('/');
+  if (parts.length !== 3) return null;
+  const month   = parseInt(parts[1], 10); // 1-12
+  const year    = parseInt(parts[2], 10);
+  const nextMon = month === 12 ? 1 : month + 1;
+  const nextYr  = month === 12 ? year + 1 : year;
+  return `${nextYr}-${String(nextMon).padStart(2, '0')}-10T00:00:00`;
+}
+
+/**
+ * Días entre la fecha de factura y el día 10 del mes siguiente (mínimo 1).
+ * Se usa como valor de CondicionPago en el bloque Cliente.
+ */
+function calcCondicionPagoDias(dmy) {
+  if (!dmy) return 30;
+  const vto  = calcFechaVtoPago(dmy);
+  if (!vto) return 30;
+  const inv  = new Date(isoDateTime(dmy).slice(0, 10));
+  const due  = new Date(vto.slice(0, 10));
+  const days = Math.ceil((due - inv) / 86400000);
+  return Math.max(1, days);
+}
+
 // ─── HANDLER ──────────────────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
@@ -276,8 +317,16 @@ export default async function handler(req, res) {
     return res.end(JSON.stringify({ error: `Acción desconocida: ${action}` }));
   }
 
-  const doc = String(comp.type ?? '').split('|')[0]; // "FACTURA" o "NC"
+  const doc    = String(comp.type ?? '').split('|')[0]; // "FACTURA" o "NC"
   const usaIVA = franchise.applyIVA === true;
+
+  // ── Condición de pago ──────────────────────────────────────────────────────
+  // comp.contado = true  → factura ya pagada (pago a cuenta), vence al contado
+  // comp.contado = false → vence el día 10 del mes siguiente
+  // Las NC siempre heredan la condición de la factura original → contado
+  const contado       = comp.contado === true || doc === 'NC';
+  const fechaVtoPago  = contado ? null : calcFechaVtoPago(comp.date);
+  const condPago      = contado ? 1 : calcCondicionPagoDias(comp.date);
 
   let operacion, requestBody, tipoComprobante;
 
@@ -294,8 +343,8 @@ export default async function handler(req, res) {
 
     requestBody = `
       ${buildAuthXml()}
-      ${buildClienteConIVAXml(franchise)}
-      ${buildEncabezadoConIVAXml(tipoComprobante, franchisor, comp, referenciaIdComprobante)}
+      ${buildClienteConIVAXml(franchise, condPago)}
+      ${buildEncabezadoConIVAXml(tipoComprobante, franchisor, comp, referenciaIdComprobante, contado, fechaVtoPago)}
       ${buildItemsConIVAXml(comp)}`;
   } else {
     // CrearComprobanteSinImpuestos — sin IVA, tipos string
@@ -310,8 +359,8 @@ export default async function handler(req, res) {
 
     requestBody = `
       ${buildAuthXml()}
-      ${buildClienteSinIVAXml(franchise)}
-      ${buildEncabezadoSinIVAXml(tipoStr, franchisor, comp)}
+      ${buildClienteSinIVAXml(franchise, condPago)}
+      ${buildEncabezadoSinIVAXml(tipoStr, franchisor, comp, contado, fechaVtoPago)}
       ${buildItemsSinIVAXml(comp)}`;
   }
 

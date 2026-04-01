@@ -450,7 +450,7 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
             {COLGROUP}
             {thead()}
             <tbody>
-              <tr style={{ borderBottom: "2px solid rgba(255,85,112,.4)", background: "rgba(255,85,112,.04)" }}>
+              <tr style={{ borderBottom: "3px solid rgba(255,85,112,.75)", background: "rgba(255,85,112,.04)" }}>
                 <SubtotalCells label="SUBTOTAL" tot={totDeben} f={f} color="var(--red)" />
               </tr>
               {showDeben && (rowsDeben.length === 0
@@ -492,7 +492,7 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
             {COLGROUP}
             {thead()}
             <tbody>
-              <tr style={{ borderBottom: "2px solid rgba(16,217,122,.4)", background: "rgba(16,217,122,.04)" }}>
+              <tr style={{ borderBottom: "3px solid rgba(16,217,122,.75)", background: "rgba(16,217,122,.04)" }}>
                 <SubtotalCells label="SUBTOTAL" tot={totOtros} f={f} color="var(--green)" />
               </tr>
               {showOtros && (rowsOtros.length === 0

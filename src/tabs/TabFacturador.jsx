@@ -265,6 +265,8 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
         month: mesComp, year: anioComp,
         currency,
         empresa: activeCompany,
+        // Pago a cuenta: el monto ya fue recibido → condición contado
+        contado: prefillComp?.type === "PAGO_PAUTA",
       });
     };
     const usaFacturante = isAR && currency === "ARS" && (doc === "FACTURA" || doc === "NC");

@@ -37,6 +37,7 @@ const COMP = {
   amount:      12100,
   ref:         'Fee Marzo 2026 - PRUEBA',
   currency:    'ARS',
+  contado:     false, // false = vence el 10 del mes siguiente; true = pago a cuenta / contado
 };
 
 // ─── Build envelope (mismo código que api/facturante.js) ──────────────────────
@@ -67,6 +68,23 @@ const moneda    = MONEDA[COMP.currency] ?? 2;
 const trat      = TRAT[FRANCHISE.condIVA] ?? 2;
 const cuitClean = FRANCHISE.cuit.replace(/[-\s]/g, '');
 
+// Condición de pago: día 10 del mes siguiente
+const contado = COMP.contado === true;
+function calcVtoPago(dmy) {
+  const [, mm, yy] = dmy.split('/');
+  const m = parseInt(mm, 10), y = parseInt(yy, 10);
+  const nm = m === 12 ? 1 : m + 1, ny = m === 12 ? y + 1 : y;
+  return `${ny}-${String(nm).padStart(2, '0')}-10T00:00:00`;
+}
+function calcDias(dmy) {
+  const vto = new Date(calcVtoPago(dmy).slice(0, 10));
+  const inv = new Date(isoDate(dmy));
+  return Math.max(1, Math.ceil((vto - inv) / 86400000));
+}
+const condVenta   = contado ? 1 : 2;
+const condPago    = contado ? 1 : calcDias(COMP.date);
+const fechaVtoPago = contado ? null : calcVtoPago(COMP.date);
+
 const envelope = `<?xml version="1.0" encoding="utf-8"?>
 <soapenv:Envelope ${NS_HTTP} ${NS_XSI} ${NS_FAC} ${NS_FAC1} ${NS_FAC2}>
   <soapenv:Header/>
@@ -80,7 +98,7 @@ const envelope = `<?xml version="1.0" encoding="utf-8"?>
         </fac1:Autenticacion>
         <fac1:Cliente>
           <fac2:CodigoPostal>${esc(FRANCHISE.billingZip)}</fac2:CodigoPostal>
-          <fac2:CondicionPago>0</fac2:CondicionPago>
+          <fac2:CondicionPago>${condPago}</fac2:CondicionPago>
           <fac2:DireccionFiscal>${esc(FRANCHISE.domicilio)}</fac2:DireccionFiscal>
           <fac2:EnviarComprobante>false</fac2:EnviarComprobante>
           <fac2:Localidad>${esc(FRANCHISE.billingCity)}</fac2:Localidad>
@@ -97,12 +115,12 @@ const envelope = `<?xml version="1.0" encoding="utf-8"?>
           <fac2:Asociados xsi:nil="true" />
           <fac2:Bienes>1</fac2:Bienes>
           <fac2:CodigoPagoElectronico xsi:nil="true" />
-          <fac2:CondicionVenta>1</fac2:CondicionVenta>
+          <fac2:CondicionVenta>${condVenta}</fac2:CondicionVenta>
           <fac2:EnviarComprobante>true</fac2:EnviarComprobante>
           <fac2:FechaHora>${fecha}T00:00:00</fac2:FechaHora>
           <fac2:FechaServDesde xsi:nil="true" />
           <fac2:FechaServHasta xsi:nil="true" />
-          <fac2:FechaVtoPago xsi:nil="true" />
+          ${fechaVtoPago ? `<fac2:FechaVtoPago>${fechaVtoPago}</fac2:FechaVtoPago>` : '<fac2:FechaVtoPago xsi:nil="true" />'}
           <fac2:ImporteImpuestosInternos>0</fac2:ImporteImpuestosInternos>
           <fac2:ImportePercepcionesMunic>0</fac2:ImportePercepcionesMunic>
           <fac2:Moneda>${moneda}</fac2:Moneda>
@@ -164,17 +182,18 @@ const req = httpRequest({
     console.log('HTTP Status:', res.statusCode);
     console.log('');
     // Pretty print relevant parts
-    const codigo  = data.match(/<[^:>]+:?Codigo[^>]*>([^<]*)</)?.[1];
     const estado  = data.match(/<[^:>]+:?Estado[^>]*>([^<]*)</)?.[1];
     const mensaje = data.match(/<[^:>]+:?Mensaje[^>]*>([^<]*)</)?.[1];
     const idComp  = data.match(/<[^:>]+:?IdComprobante[^>]*>([^<]*)</)?.[1];
-    if (codigo !== undefined) {
-      console.log('Codigo:        ', codigo);
+    const idNum   = idComp ? parseInt(idComp, 10) : 0;
+    if (estado !== undefined) {
       console.log('Estado:        ', estado);
       console.log('Mensaje:       ', mensaje);
       console.log('IdComprobante: ', idComp);
-      if (codigo === '0') console.log('\n✅ ÉXITO — Comprobante emitido en testing!');
-      else                console.log('\n❌ ERROR de Facturante');
+      console.log('FechaVtoPago:  ', contado ? '(contado)' : fechaVtoPago);
+      console.log('CondicionVenta:', condVenta, '| CondicionPago:', condPago, 'días');
+      if (idNum > 0) console.log('\n✅ ÉXITO — Comprobante aceptado por Facturante (IdComprobante:', idNum, ')');
+      else           console.log('\n❌ ERROR de Facturante:', mensaje);
     } else {
       console.log('Respuesta raw (primeros 2000 chars):');
       console.log(data.slice(0, 2000));
