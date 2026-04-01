@@ -83,7 +83,7 @@ function buildClienteConIVAXml(franchise, condPago) {
         <b:NroDocumento>${cuitClean}</b:NroDocumento>
         <b:Provincia>${escXml(franchise.billingState ?? '')}</b:Provincia>
         <b:RazonSocial>${escXml(franchise.razonSocial ?? '')}</b:RazonSocial>
-        <b:TipoDocumento>80</b:TipoDocumento>
+        <b:TipoDocumento>6</b:TipoDocumento><!-- 6 = CUIT en catálogo Facturante -->
         <b:TratamientoImpositivo>${TRAT_IMPOSITIVO[franchise.condIVA] ?? 1}</b:TratamientoImpositivo>
       </a:Cliente>`;
 }
