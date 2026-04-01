@@ -29,6 +29,29 @@ export async function emitirComprobante({ franchisor, franchise, comp, referenci
 }
 
 /**
+ * Descarga el PDF oficial de AFIP de un comprobante emitido por Facturante.
+ * Devuelve un Blob PDF listo para descargar.
+ * Lanza Error si el PDF aún no está disponible o hubo un problema.
+ *
+ * @param {number|string} idComprobante
+ * @returns {Promise<Blob>}
+ */
+export async function downloadFacturantePdfBlob(idComprobante) {
+  const res = await fetch(BASE, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ action: 'getPdf', idComprobante }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const ct = res.headers.get('Content-Type') ?? '';
+  if (!ct.includes('pdf')) {
+    const data = await res.json();
+    throw new Error(data.error ?? 'PDF no disponible');
+  }
+  return res.blob();
+}
+
+/**
  * Formatea el número de comprobante para mostrar en pantalla y guardar en Sheets.
  * Ej: tipoComprobante=1, idComprobante=4521, puntoVenta="0001" → "FA 0001-00004521"
  */

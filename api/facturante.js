@@ -236,6 +236,60 @@ function parseResponse(xml) {
   return { estado, mensaje, idComprobante: idComp ? parseInt(idComp, 10) : null };
 }
 
+// ─── PDF ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Llama a DetalleComprobanteFull y extrae la URLPDF del comprobante.
+ * Devuelve null si el comprobante aún no está procesado o no tiene URL.
+ */
+async function getUrlPdf(idComprobante) {
+  const requestBody = `
+    <a:Autenticacion>
+      <b:Empresa>${parseInt(EMPRESA, 10)}</b:Empresa>
+      <b:Hash>${escXml(HASH)}</b:Hash>
+      <b:Usuario>${escXml(USUARIO)}</b:Usuario>
+    </a:Autenticacion>
+    <a:IdComprobante>${idComprobante}</a:IdComprobante>`;
+
+  const envelope = buildEnvelope('DetalleComprobanteFull', requestBody);
+  try {
+    const { status, body } = await soapCall(ENDPOINT, 'DetalleComprobanteFull', envelope);
+    if (status !== 200) return null;
+    const urlPdf = extractTag(body, 'URLPDF');
+    return urlPdf || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetchea el PDF desde la URL de Facturante y lo devuelve como Buffer.
+ */
+function fetchPdfBuffer(pdfUrl) {
+  return new Promise((resolve, reject) => {
+    let url;
+    try { url = new URL(pdfUrl); } catch { return reject(new Error('URL PDF inválida')); }
+
+    const doRequest = url.protocol === 'https:' ? httpsRequest : httpRequest;
+    const timer = setTimeout(() => reject(new Error('timeout PDF')), 15000);
+
+    const req = doRequest({
+      hostname: url.hostname,
+      path:     url.pathname + url.search,
+      method:   'GET',
+    }, (upstream) => {
+      const chunks = [];
+      upstream.on('data', chunk => chunks.push(chunk));
+      upstream.on('end', () => {
+        clearTimeout(timer);
+        resolve(Buffer.concat(chunks));
+      });
+    });
+    req.on('error', (err) => { clearTimeout(timer); reject(err); });
+    req.end();
+  });
+}
+
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
 function escXml(str) {
@@ -343,6 +397,27 @@ export default async function handler(req, res) {
   if (action === 'anular') {
     res.statusCode = 501;
     return res.end(JSON.stringify({ error: 'Anulación no implementada aún' }));
+  }
+
+  // ── Acción: getPdf ─────────────────────────────────────────────────────────
+  if (action === 'getPdf') {
+    const { idComprobante } = payload;
+    if (!idComprobante) {
+      res.statusCode = 400;
+      return res.end(JSON.stringify({ ok: false, error: 'idComprobante requerido' }));
+    }
+    const urlPdf = await getUrlPdf(idComprobante);
+    if (!urlPdf) {
+      return res.end(JSON.stringify({ ok: false, error: 'PDF aún no disponible' }));
+    }
+    try {
+      const pdfBuffer = await fetchPdfBuffer(urlPdf);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.statusCode = 200;
+      return res.end(pdfBuffer);
+    } catch (err) {
+      return res.end(JSON.stringify({ ok: false, error: err.message }));
+    }
   }
 
   if (action !== 'emitir') {

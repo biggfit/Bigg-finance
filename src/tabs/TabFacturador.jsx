@@ -7,7 +7,7 @@ import { TypePill } from "../components/atoms";
 import PendientesPanel from "../components/PendientesPanel";
 import { buildFacturaPDF, downloadTextAsPDF } from "../lib/pdf";
 import { downloadInvoicePdf, downloadBatchInvoicePdf } from "../lib/invoicePdf";
-import { emitirComprobante, formatInvoiceLabel } from "../lib/facturanteApi";
+import { emitirComprobante, formatInvoiceLabel, downloadFacturantePdfBlob } from "../lib/facturanteApi";
 import { getNextInvoiceNum } from "../lib/sheetsApi";
 
 // ─── TAB: EMISIÓN DE COMPROBANTES ────────────────────────────────────────────
@@ -315,15 +315,31 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
 
       onAddComp(fr.id, enriched);
 
-      if (isAR) {
-        // AR: siempre descarga la factura
+      if (isAR && enriched.facturanteId) {
+        // AR emitida por Facturante: bajar el PDF oficial de AFIP
+        const filename = `Factura_${enriched.invoice ?? enriched.facturanteId}_${fr.name}.pdf`;
+        downloadFacturantePdfBlob(enriched.facturanteId)
+          .then(blob => {
+            const url = URL.createObjectURL(blob);
+            const a   = document.createElement("a");
+            a.href = url; a.download = filename;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 100);
+          })
+          .catch(() => {
+            // Fallback: PDF propio si Facturante aún no lo procesó
+            downloadTextAsPDF(buildFacturaPDF(fr, franchisor, enriched),
+              `Factura_${fr.name}_${MONTHS[preview.month]}_${preview.year}.html`);
+          });
+      } else if (isAR) {
+        // AR guardada sin emitir: HTML de respaldo
         downloadTextAsPDF(buildFacturaPDF(fr, franchisor, enriched),
           `Factura_${fr.name}_${MONTHS[preview.month]}_${preview.year}.html`);
       } else if (enriched.invoice) {
-        // No-AR con número asignado: descarga PDF
+        // No-AR con número asignado: descarga PDF propio
         downloadInvoicePdf(fr, franchisor, enriched).catch(console.error);
       }
-      // No-AR sin número (skipFacturante=true): guarda silenciosamente, sin descarga
+      // Sin número (skipFacturante=true): guarda silenciosamente, sin descarga
 
       setDone(true);
     };
