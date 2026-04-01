@@ -82,6 +82,38 @@ export default defineConfig({
 
         // Sin path en use() para evitar problemas de matching en connect/Vite 7
         server.middlewares.use((req, res, next) => {
+          // ── Proxy /api/facturante → serverless handler local ──────────────
+          if (req.url && req.url.startsWith('/api/facturante')) {
+            let body = '';
+            req.on('data', chunk => { body += chunk; });
+            req.on('end', () => {
+              import('./api/facturante.js').then(mod => {
+                const mockReq = Object.assign(Object.create(req), {
+                  on: (ev, cb) => { if (ev === 'data') cb(body); if (ev === 'end') cb(); return mockReq; },
+                });
+                let sent = false;
+                const fakeRes = {
+                  statusCode: 200,
+                  setHeader: () => {},
+                  end: (responseBody) => {
+                    if (sent) return; sent = true;
+                    res.setHeader('Content-Type', 'application/json');
+                    res.statusCode = fakeRes.statusCode;
+                    res.end(responseBody);
+                  },
+                };
+                mod.default(mockReq, fakeRes).catch(err => {
+                  res.statusCode = 500;
+                  res.end(JSON.stringify({ error: err.message }));
+                });
+              }).catch(err => {
+                res.statusCode = 500;
+                res.end(JSON.stringify({ error: err.message }));
+              });
+            });
+            return;
+          }
+
           // ── Proxy /api/bigg-eye → MCP server de Bigg Eye ──────────────────
           if (req.url && req.url.startsWith('/api/bigg-eye')) {
             // En dev, importar y ejecutar el handler directamente
