@@ -274,7 +274,8 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
     // Para NC: el ID efectivo de Facturante a referenciar (desde FA con facturanteId o ingreso manual)
     const refFAComp      = doc === "NC" ? (comps[String(fr?.id)] ?? []).find(c => c.id === refCompId) : null;
     const efectiveRefId  = refFAComp?.facturanteId || (refCompManual ? refCompManual : null);
-    const ncSinRef       = usaFacturante && doc === "NC" && !efectiveRefId; // NC sin referencia → bloquear emit
+    // Para Facturante AR necesitamos el invoice label de la FA ("FA 0100-00000010") para construir ComprobanteAsociado
+    const ncSinRef       = usaFacturante && doc === "NC" && !refFAComp?.invoice; // NC sin referencia válida → bloquear emit
 
     const doConfirm = async (skipFacturante = false) => {
       if (!preview) return;
@@ -289,8 +290,8 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
             franchisor: franchisor?.ar ?? franchisor,
             franchise:  fr,
             comp:       { ...preview, applyIVA: applyIVA },
-            referenciaIdComprobante: efectiveRefId ?? undefined,
-            referenciaInvoice:       refFAComp?.invoice ?? undefined,
+            referenciaInvoice: refFAComp?.invoice ?? undefined,
+            referenciaDate:    refFAComp?.date    ?? undefined,
           });
           enriched = {
             ...preview,

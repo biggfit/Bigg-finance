@@ -129,7 +129,7 @@ function parseInvoiceLabel(label) {
   return { tipo, afipTipo: AFIP_TIPO_CODE[tipo] ?? 1, ptoVta, nro };
 }
 
-function buildEncabezadoConIVAXml(tipoStr, franchisor, comp, referenciaIdComprobante, referenciaInvoice, contado, fechaVtoPago) {
+function buildEncabezadoConIVAXml(tipoStr, franchisor, comp, referenciaInvoice, referenciaDate, contado, fechaVtoPago) {
   const fecha     = isoDateTime(comp.date);
   const prefijo   = String(franchisor.puntoVenta ?? '1');
   const condVenta = contado ? 1 : 2;
@@ -137,19 +137,18 @@ function buildEncabezadoConIVAXml(tipoStr, franchisor, comp, referenciaIdComprob
   const neto      = Number(comp.amountNeto ?? comp.amount ?? 0);
   const total     = Number(comp.amount ?? (neto * 1.21));
 
-  // Bloque Asociados: para NC incluir los campos AFIP requeridos (Tipo, PtoVta, Nro)
+  // Bloque Asociados: campos exactos del schema WSDL de Facturante (ComprobanteAsociado)
+  // FechaEmision, Numero (int), PuntoVenta (int), Tipo (string "FA"/"NCA"/etc.)
   let asociado = '';
-  if (referenciaIdComprobante) {
-    const ref     = parseInvoiceLabel(referenciaInvoice);
-    const afipNro = ref ? `<b:Nro>${ref.nro}</b:Nro>` : '';
-    const afipPv  = ref ? `<b:PtoVta>${ref.ptoVta}</b:PtoVta>` : '';
-    const afipTp  = ref ? `<b:Tipo>${ref.afipTipo}</b:Tipo>` : '';
+  const ref = parseInvoiceLabel(referenciaInvoice);
+  if (ref) {
+    const fechaEmision = isoDateTime(referenciaDate ?? comp.date);
     asociado = `<b:Asociados>
           <b:ComprobanteAsociado>
-            <b:IdComprobante>${referenciaIdComprobante}</b:IdComprobante>
-            ${afipNro}
-            ${afipPv}
-            ${afipTp}
+            <b:FechaEmision>${fechaEmision}</b:FechaEmision>
+            <b:Numero>${ref.nro}</b:Numero>
+            <b:PuntoVenta>${ref.ptoVta}</b:PuntoVenta>
+            <b:Tipo>${escXml(ref.tipo)}</b:Tipo>
           </b:ComprobanteAsociado>
         </b:Asociados>`;
   }
@@ -428,7 +427,7 @@ export default async function handler(req, res) {
     return res.end(JSON.stringify({ error: 'JSON inválido' }));
   }
 
-  const { action, franchisor, franchise, comp, referenciaIdComprobante, referenciaInvoice } = payload;
+  const { action, franchisor, franchise, comp, referenciaIdComprobante, referenciaInvoice, referenciaDate } = payload;
 
   if (action === 'anular') {
     res.statusCode = 501;
@@ -488,7 +487,7 @@ export default async function handler(req, res) {
     requestBody = `
       ${buildAuthXml()}
       ${buildClienteConIVAXml(franchise, condPago)}
-      ${buildEncabezadoConIVAXml(tipoComprobante, franchisor, comp, referenciaIdComprobante, referenciaInvoice, contado, fechaVtoPago)}
+      ${buildEncabezadoConIVAXml(tipoComprobante, franchisor, comp, referenciaInvoice, referenciaDate, contado, fechaVtoPago)}
       ${buildItemsConIVAXml(comp)}`;
   } else {
     // CrearComprobanteSinImpuestos — sin IVA, tipos string

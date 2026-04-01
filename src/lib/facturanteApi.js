@@ -16,11 +16,11 @@ const BASE = '/api/facturante';
  * @returns {{ ok, idComprobante, tipoComprobante, puntoVenta, mensaje }}
  * @throws  Error con mensaje legible si falla
  */
-export async function emitirComprobante({ franchisor, franchise, comp, referenciaIdComprobante, referenciaInvoice }) {
+export async function emitirComprobante({ franchisor, franchise, comp, referenciaInvoice, referenciaDate }) {
   const res = await fetch(BASE, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ action: 'emitir', franchisor, franchise, comp, referenciaIdComprobante, referenciaInvoice }),
+    body:    JSON.stringify({ action: 'emitir', franchisor, franchise, comp, referenciaInvoice, referenciaDate }),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
