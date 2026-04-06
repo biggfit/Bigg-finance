@@ -3,7 +3,7 @@ import React from "react";
 import { COMP_TYPES, CURRENCIES } from "../lib/helpers";
 
 // ─── SHARED FIELD COMPONENTS (defined at module scope — no remount on rerender) ─
-export function CountryGroup({ country, sedes, activeFrId, openFr, startOpen }) {
+function CountryGroup({ country, sedes, activeFrId, openFr, startOpen }) {
   const hasActive = sedes.some(fr => fr.id === activeFrId);
   const isTodas = country === "Todas";
   const [open, setOpen] = React.useState(startOpen !== undefined ? startOpen : hasActive);
@@ -37,7 +37,7 @@ export function CountryGroup({ country, sedes, activeFrId, openFr, startOpen }) 
   );
 }
 
-export function AccordionSection({ label, open, onToggle, accent, children }) {
+function AccordionSection({ label, open, onToggle, accent, children }) {
   return (
     <div style={{ marginBottom:8, border:"1px solid var(--border2)", borderRadius:10, overflow:"hidden" }}>
       <button onClick={onToggle} style={{
@@ -61,7 +61,7 @@ export function AccordionSection({ label, open, onToggle, accent, children }) {
 }
 
 // CustomSelect: position:fixed calculado desde getBoundingClientRect para escapar overflow
-export function CustomSelect({ value, onChange, opts, style: extStyle }) {
+function CustomSelect({ value, onChange, opts, style: extStyle }) {
   const [open, setOpen] = React.useState(false);
   const [pos, setPos] = React.useState({ top:0, left:0, width:0 });
   const triggerRef = React.useRef(null);
@@ -138,7 +138,7 @@ export function CustomSelect({ value, onChange, opts, style: extStyle }) {
   );
 }
 
-export function FieldInput({ label, value, onChange, type="text", opts=null, half=false, textarea=false }) {
+function FieldInput({ label, value, onChange, type="text", opts=null, half=false, textarea=false }) {
   const style = { padding:"7px 10px", borderRadius:6, fontSize:12, background:"var(--bg)", border:"1px solid var(--border2)", color:"var(--text)", width:"100%", boxSizing:"border-box" };
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:4, gridColumn: half ? "auto" : "1 / -1" }}>
@@ -160,7 +160,7 @@ export function FieldInput({ label, value, onChange, type="text", opts=null, hal
 }
 
 // DateInput: valida dd/mm/aaaa, autocompleta cero en dia/mes al salir del campo
-export function DateInput({ label, value, onChange, half=false }) {
+function DateInput({ label, value, onChange, half=false }) {
   const [err, setErr] = React.useState(false);
   const inputStyle = {
     padding:"8px 12px", borderRadius:6, fontSize:13, width:"100%", boxSizing:"border-box",
@@ -220,7 +220,7 @@ const EMPTY_FR_BUF = {
   biggEyeId:"",
 };
 
-export function frToBuf(fr) {
+function frToBuf(fr) {
   return {
     name:            fr.name            ?? "",
     razonSocial:     fr.razonSocial     ?? "",

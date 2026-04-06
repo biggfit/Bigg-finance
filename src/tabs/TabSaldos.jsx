@@ -24,7 +24,7 @@ import { downloadFacturantePdfBlob } from "../lib/facturanteApi";
 import { sendMailFr } from "../lib/sheetsApi";
 
 // ─── HOOK COMPARTIDO: agrega datos por franquicia ─────────────────────────────
-export function useFrData(franchises, month, year, filterCurrency = null) {
+function useFrData(franchises, month, year, filterCurrency = null) {
   const { comps, saldoInicial, activeCompany } = useStore();
   return useMemo(() => franchises.map(fr => {
     const key    = String(fr.id);
@@ -58,7 +58,7 @@ export function useFrData(franchises, month, year, filterCurrency = null) {
 }
 
 // ─── SALDOS TABLE ──────────────────────────────────────────────────────────────
-export function SaldosTable({ title, data, accentColor, bgColor, borderColor, onOpenFr, month, year, amountFn, showMail = true, showCbu = false, displayCurrency }) {
+function SaldosTable({ title, data, accentColor, bgColor, borderColor, onOpenFr, month, year, amountFn, showMail = true, showCbu = false, displayCurrency }) {
   if (data.length === 0) return null;
   const getAmt = amountFn ?? (d => d.sa);
   const total  = data.reduce((a, d) => a + getAmt(d), 0);
@@ -374,4 +374,4 @@ const TabSaldos = memo(function TabSaldos({ franchises, month, year, onOpenFr, f
   );
 });
 
-export default TabSaldos;
+// TabSaldos is kept as internal component (not currently routed)

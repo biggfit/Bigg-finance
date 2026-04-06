@@ -1,4 +1,4 @@
-import { dmyToIso, isoToDmy, cmpDate, todayDmy, dateMonth, dateYear, inPeriod, upToPeriod, COMPANIES } from "../data/franchisor";
+import { upToPeriod } from "../data/franchisor";
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 export const CURRENCIES = ["ARS", "USD", "EUR"];
@@ -10,7 +10,7 @@ export const MONTHS     = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Jul
 // Documentos posibles (emisión propia)
 export const DOCS   = ["FACTURA", "NC"];
 // Documentos recibidos (no se emiten, se registran)
-export const DOCS_RECIBIDOS = ["FC_RECIBIDA"];
+const DOCS_RECIBIDOS = ["FC_RECIBIDA"];
 // Cuentas posibles
 export const CUENTAS = ["FEE", "INTERUSOS", "PAUTA", "SPONSORS", "OTROS_INGRESOS"];
 export const CUENTA_LABEL = {
@@ -57,7 +57,7 @@ DOCS_RECIBIDOS.forEach(doc => {
 // Helper: construir type key desde doc + cuenta
 export const makeType = (doc, cuenta) => `${doc}|${cuenta}`;
 // Helper: extraer doc y cuenta de un type
-export const parseType = (type) => {
+const parseType = (type) => {
   if (!type || !type.includes("|")) return { doc: null, cuenta: null };
   const [doc, cuenta] = type.split("|");
   return { doc, cuenta };
@@ -221,4 +221,4 @@ export function computePautaPendiente(frId, comps, upToYear, upToMonth, frCurren
 }
 
 // ─── RE-EXPORT DATE HELPERS from data/franchisor ─────────────────────────────
-export { dmyToIso, isoToDmy, cmpDate, todayDmy, dateMonth, dateYear, inPeriod, upToPeriod, COMPANIES } from "../data/franchisor";
+export { cmpDate, COMPANIES } from "../data/franchisor";

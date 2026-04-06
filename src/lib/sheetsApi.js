@@ -87,7 +87,7 @@ function parseFranchise(f) {
   };
 }
 
-export async function fetchAll() {
+async function fetchAll() {
   const raw = await get("all");
   return {
     comps:          parseComps(raw.comps ?? {}),

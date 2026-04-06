@@ -16,7 +16,7 @@ export const TypePill = memo(function TypePill({ type }) {
   return <span className="pill" style={{ color: ct.color, background: `${ct.color}18`, border: `1px solid ${ct.color}30` }}>{ct.label}</span>;
 });
 
-export function Field({ label, children }) {
+function Field({ label, children }) {
   return (
     <div style={{ marginBottom: 13 }}>
       <div style={{ fontSize: 10, color: "var(--muted)", letterSpacing: ".1em", textTransform: "uppercase", marginBottom: 5 }}>{label}</div>

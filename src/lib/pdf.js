@@ -31,7 +31,7 @@ export function buildFacturaPDF(fr, franchisor, comp) {
   return lines.join("\n");
 }
 
-export function buildInvoicePDF(fr, franchisor, comp) {
+function buildInvoicePDF(fr, franchisor, comp) {
   const usa = franchisor?.usa ?? {};
   const lines = [
     `INVOICE`,
@@ -249,7 +249,7 @@ export function buildFacturaHtmlForMail(fr, franchisor, comp) {
 /**
  * Genera un HTML completo y estilizado para un Invoice USA, apto para imprimir como PDF.
  */
-export function buildInvoiceHtml(fr, franchisor, comp) {
+function buildInvoiceHtml(fr, franchisor, comp) {
   const usa   = franchisor?.usa ?? {};
   const sym   = comp.currency === "EUR" ? "€" : comp.currency === "ARS" ? "$" : "U$D";
   const fmtAmt = v => `${sym}\u202f${Number(v).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -409,7 +409,7 @@ table.items td.r { text-align: right; font-family: monospace; font-weight: 700; 
  * imprimible con saltos de página entre cada invoice.
  * Útil para el modo CRM/Excel donde se generan varios invoices a la vez.
  */
-export function buildCombinedInvoicesHtml(htmlArray) {
+function buildCombinedInvoicesHtml(htmlArray) {
   if (!htmlArray || htmlArray.length === 0) return "";
   if (htmlArray.length === 1) return htmlArray[0];
 
@@ -434,7 +434,7 @@ export function buildCombinedInvoicesHtml(htmlArray) {
  * Abre una nueva ventana con el HTML del invoice y dispara el diálogo de impresión.
  * El usuario puede elegir "Guardar como PDF" en el diálogo.
  */
-export function printInvoice(html) {
+function printInvoice(html) {
   const w = window.open("", "_blank");
   if (!w) { console.warn("printInvoice: popup bloqueado"); return; }
   w.document.write(html);
