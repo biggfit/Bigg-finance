@@ -279,7 +279,10 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
 
     const doConfirm = async (skipFacturante = false) => {
       if (!preview) return;
-      let enriched = { ...preview };
+      // Siempre persiste la referencia a la FA en NC, incluso al guardar sin emitir
+      let enriched = doc === "NC" && refFAComp?.invoice
+        ? { ...preview, refInvoice: refFAComp.invoice, refDate: refFAComp.date }
+        : { ...preview };
 
       if (usaFacturante && !skipFacturante) {
         // ── Emisión ante ARCA ──────────────────────────────────────────────
@@ -524,7 +527,10 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
             : <>
                 <button className="ghost" style={{ flex: 1, height: 48 }} onClick={() => setPreview(null)}>← Editar</button>
                 {usaFacturante && (
-                  <button className="ghost" style={{ flex: 2, height: 48, fontSize: 13 }} disabled={emitState === "emitting"} onClick={() => doConfirm(true)}>
+                  <button className="ghost" style={{ flex: 2, height: 48, fontSize: 13 }}
+                    disabled={emitState === "emitting" || ncSinRef}
+                    title={ncSinRef ? "Seleccioná la factura de referencia antes de guardar" : undefined}
+                    onClick={() => doConfirm(true)}>
                     Guardar sin emitir
                   </button>
                 )}
@@ -1928,7 +1934,8 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
       franchisor: franchisor?.ar ?? franchisor,
       franchise:  fr,
       comp:       { ...compToEmit, applyIVA: !!(COMPANIES[activeCompany]?.applyIVA) },
-      referenciaInvoice: comp.invoice ?? undefined,
+      referenciaInvoice: comp.refInvoice ?? undefined,
+      referenciaDate:    comp.refDate    ?? undefined,
     });
     const invoice      = formatInvoiceLabel(result.tipoComprobante, result.afipNumero ?? result.idComprobante, result.afipPrefijo ?? result.puntoVenta);
     const facturanteId = String(result.idComprobante);

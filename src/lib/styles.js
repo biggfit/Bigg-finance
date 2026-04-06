@@ -24,7 +24,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--accent)}
 .btn{background:var(--accent);color:#1e2022;border:none;border-radius:999px;padding:8px 20px;font-family:var(--font);font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;cursor:pointer}
 .btn:hover{opacity:.85}.btn:disabled{opacity:.35;cursor:default}
 .ghost{background:transparent;color:var(--muted);border:1.5px solid var(--border2);border-radius:999px;padding:5px 14px;font-family:var(--font);font-size:11px;font-weight:700;cursor:pointer;transition:all .15s}
-.ghost:hover{color:var(--accent);border-color:var(--accent)}
+.ghost:hover{color:var(--accent);border-color:var(--accent)}.ghost:disabled{opacity:.35;cursor:default;pointer-events:none}
 .del{background:transparent;color:var(--red);border:1px solid rgba(255,107,122,.2);border-radius:999px;padding:3px 10px;font-size:10px;font-weight:700;cursor:pointer;font-family:var(--font)}
 table{width:100%;border-collapse:collapse}
 th{font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);padding:9px 12px;border-bottom:1px solid var(--border);white-space:nowrap;text-align:left}

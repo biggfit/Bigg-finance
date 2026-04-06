@@ -478,26 +478,15 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
                       <span className="pill" style={{ color: isNC ? "var(--red)" : "var(--cyan)", background: isNC ? "rgba(255,107,122,.1)" : "rgba(34,211,238,.1)", fontSize: 9, whiteSpace: "nowrap" }}>
                         {doc} {cuenta}
                       </span>
-                      {/* Para NCs: dos opciones apiladas */}
                       {isNC ? (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 3, alignItems: "flex-end" }}>
-                          <button
-                            className="ghost"
-                            disabled={busy || openAdj}
-                            style={{ fontSize: 10, padding: "2px 8px", color: busy ? "var(--muted)" : "var(--red)", whiteSpace: "nowrap", opacity: (busy || openAdj) ? 0.4 : 1 }}
-                            onClick={() => handleEmitAfip(fr, comp)}
-                          >
-                            {busy ? "⏳…" : "Emitir AFIP →"}
-                          </button>
-                          <button
-                            className="ghost"
-                            disabled={busy}
-                            style={{ fontSize: 10, padding: "2px 8px", color: openAdj ? "var(--muted)" : "var(--cyan)", whiteSpace: "nowrap", opacity: busy ? 0.4 : 1 }}
-                            onClick={() => openAdj ? handleCerrarAdjuntar(comp.id) : handleAbrirAdjuntar(comp.id)}
-                          >
-                            {openAdj ? "Cancelar" : "Registrar factura recibida →"}
-                          </button>
-                        </div>
+                        <button
+                          className="ghost"
+                          disabled={busy}
+                          style={{ fontSize: 10, padding: "2px 8px", color: busy ? "var(--muted)" : "var(--red)", whiteSpace: "nowrap", opacity: busy ? 0.4 : 1 }}
+                          onClick={() => handleEmitAfip(fr, comp)}
+                        >
+                          {busy ? "⏳…" : "Emitir AFIP →"}
+                        </button>
                       ) : (
                         <button
                           className="ghost"
