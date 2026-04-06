@@ -88,6 +88,10 @@ export function formatInvoiceLabel(tipoComprobante, afipNumero, puntoVenta) {
  * Devuelve undefined si AFIP aún no asignó número (afipNumero es null).
  * Nunca usa idComprobante (ID interno de Facturante) como número de factura.
  */
+export function afipSaveFailedMsg(invoice, facturanteId) {
+  return `Emitida en AFIP (${invoice ?? facturanteId}) pero falló al guardar. Reintentá o anotá ID=${facturanteId}`;
+}
+
 export function invoiceFromResult(result) {
   if (!result?.afipNumero) return undefined;
   return formatInvoiceLabel(result.tipoComprobante, result.afipNumero, result.afipPrefijo ?? result.puntoVenta);

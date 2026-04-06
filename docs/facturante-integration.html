@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Facturante - Como funciona</title>
+<style>
+  @font-face { font-family: 'Messina Sans'; src: url('MessinaSansWeb-Regular.ttf') format('truetype'); font-weight: 400; font-style: normal; }
+  @font-face { font-family: 'Messina Sans'; src: url('MessinaSansWeb-SemiBold.ttf') format('truetype'); font-weight: 600; font-style: normal; }
+  @font-face { font-family: 'Messina Sans'; src: url('MessinaSansWeb-Bold.ttf') format('truetype'); font-weight: 700; font-style: normal; }
+  @font-face { font-family: 'Messina Sans'; src: url('MessinaSansWeb-Black.ttf') format('truetype'); font-weight: 900; font-style: normal; }
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #242836;
+    --border: #2e3348;
+    --text: #e2e4ed;
+    --text2: #8b90a5;
+    --accent: #6c5ce7;
+    --accent2: #a29bfe;
+    --green: #00b894;
+    --green2: #55efc4;
+    --orange: #fdcb6e;
+    --red: #ff6b6b;
+    --blue: #74b9ff;
+    --pink: #fd79a8;
+    --cyan: #81ecec;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Messina Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.6; overflow-x: hidden;
+  }
+
+  /* Hero */
+  .hero {
+    text-align: center; padding: 80px 24px 60px;
+    background: linear-gradient(180deg, #1e1640 0%, var(--bg) 100%);
+    position: relative; overflow: hidden;
+  }
+  .hero::before {
+    content: ''; position: absolute; top: -200px; left: 50%; transform: translateX(-50%);
+    width: 600px; height: 600px;
+    background: radial-gradient(circle, rgba(108,92,231,.15) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .hero h1 {
+    font-size: 2.8rem; font-weight: 800;
+    background: linear-gradient(135deg, var(--accent2), var(--cyan));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    margin-bottom: 12px;
+  }
+  .hero p { color: var(--text2); font-size: 1.15rem; max-width: 620px; margin: 0 auto; }
+
+  .container { max-width: 1000px; margin: 0 auto; padding: 0 24px; }
+  section { margin-bottom: 72px; }
+  section h2 {
+    font-size: 1.55rem; font-weight: 700; margin-bottom: 8px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  section h2 .num {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: var(--accent); color: #fff;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: .85rem; font-weight: 700;
+  }
+  section .subtitle { color: var(--text2); margin-bottom: 32px; font-size: .95rem; }
+
+  /* Arch layers */
+  .arch-flow { display: flex; flex-direction: column; align-items: center; }
+  .arch-layer {
+    width: 100%; max-width: 780px;
+    border: 1px solid var(--border); border-radius: 16px;
+    background: var(--surface); padding: 26px 30px; position: relative;
+  }
+  .arch-layer .tag {
+    position: absolute; top: -12px; left: 24px;
+    background: var(--bg); padding: 0 10px;
+    font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px;
+  }
+  .arch-layer h3 { font-size: 1.05rem; margin-bottom: 4px; }
+  .arch-layer p  { color: var(--text2); font-size: .88rem; }
+  .arch-layer.l1 { border-color: #3d3593; } .arch-layer.l1 .tag { color: var(--accent2); }
+  .arch-layer.l2 { border-color: #1d6d5e; } .arch-layer.l2 .tag { color: var(--green); }
+  .arch-layer.l3 { border-color: #6d4c1d; } .arch-layer.l3 .tag { color: var(--orange); }
+  .arch-layer.l4 { border-color: #6d1d2c; } .arch-layer.l4 .tag { color: var(--red); }
+  .arch-arrow {
+    display: flex; flex-direction: column; align-items: center;
+    padding: 8px 0; color: var(--text2); font-size: .78rem; font-weight: 600;
+  }
+  .arch-arrow svg { width: 20px; height: 28px; }
+
+  /* Highlight boxes inside layers */
+  .hl-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+  .hl {
+    flex: 1; min-width: 180px;
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .hl h4 { font-size: .85rem; margin-bottom: 3px; }
+  .hl p  { font-size: .78rem; color: var(--text2); }
+
+  /* Timeline flow */
+  .flow { display: flex; flex-direction: column; position: relative; }
+  .flow::before {
+    content: ''; position: absolute; left: 23px; top: 20px; bottom: 20px;
+    width: 2px; background: var(--border);
+  }
+  .flow-step { display: flex; gap: 18px; padding: 14px 0; position: relative; }
+  .flow-step .dot {
+    width: 48px; height: 48px; min-width: 48px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: .9rem; z-index: 1; border: 2px solid;
+  }
+  .dot.purple { background: rgba(108,92,231,.15); border-color: var(--accent); color: var(--accent2); }
+  .dot.green  { background: rgba(0,184,148,.12);  border-color: var(--green);  color: var(--green2); }
+  .dot.orange { background: rgba(253,203,110,.1);  border-color: var(--orange); color: var(--orange); }
+  .dot.blue   { background: rgba(116,185,255,.1);  border-color: var(--blue);   color: var(--blue); }
+  .dot.red    { background: rgba(255,107,107,.1);   border-color: var(--red);    color: var(--red); }
+  .flow-step .body { padding-top: 4px; }
+  .flow-step .body h4 { font-size: .95rem; margin-bottom: 3px; }
+  .flow-step .body p  { font-size: .85rem; color: var(--text2); }
+
+  /* Cards grid */
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px,1fr)); gap: 16px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    padding: 24px; text-align: center; position: relative; overflow: hidden;
+  }
+  .card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; }
+  .card.fa::before  { background: var(--green); }
+  .card.fb::before  { background: var(--blue); }
+  .card.nca::before { background: var(--orange); }
+  .card.ncb::before { background: var(--pink); }
+  .card .code { font-size: 2rem; font-weight: 800; margin-bottom: 4px; }
+  .card.fa  .code { color: var(--green2); }
+  .card.fb  .code { color: var(--blue); }
+  .card.nca .code { color: var(--orange); }
+  .card.ncb .code { color: var(--pink); }
+  .card .desc { font-size: .88rem; color: var(--text2); }
+  .card .tag2 {
+    display: inline-block; margin-top: 10px; font-size: .75rem; font-weight: 600;
+    padding: 3px 12px; background: var(--surface2); border-radius: 20px;
+  }
+
+  /* Decision */
+  .decision { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .q {
+    padding: 16px 28px; border-radius: 12px; text-align: center;
+    font-size: .92rem; font-weight: 600; background: var(--surface2);
+    border: 2px solid var(--accent); max-width: 420px;
+  }
+  .a {
+    padding: 14px 22px; border-radius: 10px; text-align: center;
+    font-size: .88rem; font-weight: 600;
+    background: var(--surface2); border: 1px solid var(--border);
+  }
+  .branches { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; width: 100%; }
+  .branch { display: flex; flex-direction: column; align-items: center; gap: 10px; flex: 1; min-width: 190px; max-width: 340px; }
+  .lbl {
+    font-size: .72rem; font-weight: 700; text-transform: uppercase;
+    padding: 3px 12px; border-radius: 20px;
+  }
+  .lbl.si { background: rgba(0,184,148,.15); color: var(--green2); }
+  .lbl.no { background: rgba(255,107,107,.15); color: var(--red); }
+
+  /* Batch */
+  .batch {
+    display: flex; gap: 12px; flex-wrap: wrap; justify-content: center;
+    padding: 28px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  }
+  .batch-item {
+    width: 76px; height: 76px; border-radius: 12px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-size: .75rem; font-weight: 700; border: 2px solid; transition: transform .2s;
+  }
+  .batch-item:hover { transform: scale(1.08); }
+  .batch-item.ok   { border-color: var(--green); background: rgba(0,184,148,.08); color: var(--green2); }
+  .batch-item.fail { border-color: var(--red);   background: rgba(255,107,107,.08); color: var(--red); }
+  .batch-item.wait { border-color: var(--border); background: var(--surface2); color: var(--text2); }
+  .batch-item .icon { font-size: 1.3rem; margin-bottom: 2px; }
+  .legend { text-align: center; margin-top: 16px; font-size: .84rem; color: var(--text2); }
+
+  /* Table */
+  .tbl {
+    width: 100%; border-collapse: collapse;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
+  }
+  .tbl th {
+    background: var(--surface2); text-align: left;
+    padding: 12px 18px; font-size: .8rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .5px; color: var(--text2);
+  }
+  .tbl td { padding: 12px 18px; font-size: .85rem; border-top: 1px solid var(--border); }
+  .pill {
+    display: inline-block; padding: 2px 10px; border-radius: 20px;
+    font-size: .75rem; font-weight: 600;
+  }
+  .pill.yes { background: rgba(0,184,148,.12); color: var(--green2); }
+  .pill.no  { background: rgba(255,107,107,.12); color: var(--red); }
+
+  /* Timing */
+  .timing {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 24px;
+  }
+  .t-row { display: flex; align-items: center; gap: 12px; height: 38px; }
+  .t-row .t-lbl {
+    width: 140px; min-width: 140px; text-align: right;
+    font-size: .82rem; font-weight: 600; color: var(--text2);
+  }
+  .t-row .t-wrap {
+    flex: 1; height: 28px; position: relative;
+    background: var(--surface2); border-radius: 6px; overflow: hidden;
+  }
+  .t-row .t-bar {
+    position: absolute; top: 3px; bottom: 3px; border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: .7rem; font-weight: 700; color: #fff;
+  }
+  .t-bar.b1 { background: var(--accent); left: 0; width: 42%; }
+  .t-bar.b2 { background: var(--green); opacity: .8; left: 44%; width: 56%; }
+  .t-bar.b3 { background: var(--orange); opacity: .6; left: 0; width: 100%; }
+
+  footer {
+    text-align: center; padding: 40px 24px;
+    color: var(--text2); font-size: .8rem;
+    border-top: 1px solid var(--border); margin-top: 40px;
+  }
+  @media (max-width: 640px) {
+    .hero h1 { font-size: 1.8rem; }
+    .hl-row { flex-direction: column; }
+    .t-row .t-lbl { width: 90px; min-width: 90px; font-size: .72rem; }
+  }
+</style>
+</head>
+<body>
+
+<!-- HERO -->
+<div class="hero">
+  <h1>Facturante</h1>
+  <p>Como funciona la integracion de facturacion electronica con AFIP en bigg-finance</p>
+</div>
+
+<div class="container">
+
+<!-- 1. QUE ES -->
+<section>
+  <h2><span class="num">1</span> Que es Facturante</h2>
+  <p class="subtitle">Facturante es el servicio externo que se encarga de emitir comprobantes electronicos ante AFIP. bigg-finance le envia los datos de la factura o nota de credito, Facturante lo procesa con AFIP, y nos devuelve el numero oficial y el PDF del comprobante.</p>
+</section>
+
+<!-- 2. ARQUITECTURA -->
+<section>
+  <h2><span class="num">2</span> Como estan conectadas las partes</h2>
+  <p class="subtitle">El flujo pasa por 4 capas</p>
+
+  <div class="arch-flow">
+
+    <div class="arch-layer l1">
+      <span class="tag">Pantalla del usuario</span>
+      <h3>bigg-finance (navegador)</h3>
+      <p>El usuario completa el formulario de facturacion: elige la franquicia, tipo de comprobante, monto, fecha. Puede emitir una factura individual o muchas a la vez (masiva).</p>
+      <div class="hl-row">
+        <div class="hl"><h4>Facturador</h4><p>Crear factura o nota de credito individual</p></div>
+        <div class="hl"><h4>Pendientes</h4><p>Ver facturas que todavia no se emitieron</p></div>
+        <div class="hl"><h4>Detalle franquicia</h4><p>Ver estado de cuenta y descargar PDFs</p></div>
+      </div>
+    </div>
+
+    <div class="arch-arrow">
+      <svg viewBox="0 0 20 28"><path d="M10 0 L10 20 M4 15 L10 22 L16 15" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+      Envia los datos de la factura
+    </div>
+
+    <div class="arch-layer l2">
+      <span class="tag">Servidor (Vercel)</span>
+      <h3>Funcion intermedia</h3>
+      <p>Recibe los datos del navegador, los transforma al formato que necesita Facturante, agrega las credenciales de autenticacion (que nunca salen del servidor por seguridad) y hace la llamada.</p>
+    </div>
+
+    <div class="arch-arrow">
+      <svg viewBox="0 0 20 28"><path d="M10 0 L10 20 M4 15 L10 22 L16 15" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+      Envia el comprobante armado
+    </div>
+
+    <div class="arch-layer l3">
+      <span class="tag">Facturante</span>
+      <h3>Servicio de facturacion</h3>
+      <p>Recibe el comprobante, lo valida, y lo presenta ante AFIP para su autorizacion. Tambien genera el PDF oficial del comprobante.</p>
+    </div>
+
+    <div class="arch-arrow">
+      <svg viewBox="0 0 20 28"><path d="M10 0 L10 20 M4 15 L10 22 L16 15" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+      Solicita autorizacion
+    </div>
+
+    <div class="arch-layer l4">
+      <span class="tag">AFIP</span>
+      <h3>Administracion Federal de Ingresos Publicos</h3>
+      <p>Autoriza el comprobante y le asigna un numero oficial unico (ej: FA 0100-00000010). Este numero es el que aparece en la factura impresa.</p>
+    </div>
+
+  </div>
+</section>
+
+<!-- 3. FLUJO EMISION -->
+<section>
+  <h2><span class="num">3</span> Flujo de emision de una factura</h2>
+  <p class="subtitle">Que pasa desde que el usuario hace click hasta que tiene su factura</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="dot purple">1</div>
+      <div class="body">
+        <h4>El usuario completa el formulario</h4>
+        <p>Elige: tipo de comprobante (Factura o Nota de Credito), franquicia, fecha, monto neto, y la cuenta a la que aplica (Fee, Pauta, etc).</p>
+      </div>
+    </div>
+    <div class="flow-step">
+      <div class="dot purple">2</div>
+      <div class="body">
+        <h4>Se verifica si corresponde emitir por Facturante</h4>
+        <p>Solo se emite electronicamente si la franquicia es de Argentina, la moneda es pesos (ARS) y la empresa emisora es NAKO SRL. Si no cumple, se asigna un numero manual.</p>
+      </div>
+    </div>
+    <div class="flow-step">
+      <div class="dot green">3</div>
+      <div class="body">
+        <h4>Se arma el comprobante con todos los datos</h4>
+        <p>Se incluye: datos del emisor y receptor (CUIT, razon social, condicion IVA), tipo de comprobante, montos con o sin IVA, periodo del servicio, condicion de pago.</p>
+      </div>
+    </div>
+    <div class="flow-step">
+      <div class="dot orange">4</div>
+      <div class="body">
+        <h4>Se envia a Facturante</h4>
+        <p>Facturante recibe el comprobante, lo valida y lo presenta ante AFIP. Si hay algun dato incorrecto, devuelve un error con el detalle del problema.</p>
+      </div>
+    </div>
+    <div class="flow-step">
+      <div class="dot orange">5</div>
+      <div class="body">
+        <h4>AFIP procesa y asigna el numero</h4>
+        <p>AFIP puede tardar unos segundos en procesar. El sistema consulta repetidamente (hasta 8 veces) hasta obtener el numero oficial asignado.</p>
+      </div>
+    </div>
+    <div class="flow-step">
+      <div class="dot blue">6</div>
+      <div class="body">
+        <h4>Se guarda el resultado</h4>
+        <p>Se almacena el numero de factura (ej: "FA 0100-00000010") y el ID interno de Facturante (necesario para descargar el PDF oficial despues).</p>
+      </div>
+    </div>
+    <div class="flow-step">
+      <div class="dot blue">7</div>
+      <div class="body">
+        <h4>Se descarga el PDF automaticamente</h4>
+        <p>Si esta disponible, se baja el PDF oficial de AFIP. Si todavia no esta listo, se genera un HTML como alternativa temporal.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 4. TIPOS -->
+<section>
+  <h2><span class="num">4</span> Tipos de comprobante</h2>
+  <p class="subtitle">Que tipo de factura o nota de credito se emite segun la condicion del receptor</p>
+
+  <div class="card-grid">
+    <div class="card fa">
+      <div class="code">FA</div>
+      <div class="desc">Factura A</div>
+      <span class="tag2">Receptor: Responsable Inscripto</span>
+    </div>
+    <div class="card fb">
+      <div class="code">FB</div>
+      <div class="desc">Factura B</div>
+      <span class="tag2">Receptor: Exento / Cons. Final / Mono</span>
+    </div>
+    <div class="card nca">
+      <div class="code">NCA</div>
+      <div class="desc">Nota de Credito A</div>
+      <span class="tag2">Anula o ajusta una Factura A</span>
+    </div>
+    <div class="card ncb">
+      <div class="code">NCB</div>
+      <div class="desc">Nota de Credito B</div>
+      <span class="tag2">Anula o ajusta una Factura B</span>
+    </div>
+  </div>
+</section>
+
+<!-- 5. NOTA DE CREDITO -->
+<section>
+  <h2><span class="num">5</span> Como funciona una Nota de Credito</h2>
+  <p class="subtitle">Las notas de credito siempre hacen referencia a una factura emitida previamente</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="dot pink">1</div>
+      <div class="body">
+        <h4>Se selecciona la factura original</h4>
+        <p>El usuario elige de un listado cual es la factura que quiere anular o ajustar. Solo aparecen facturas ya emitidas con numero AFIP.</p>
+      </div>
+    </div>
+    <div class="flow-step">
+      <div class="dot pink">2</div>
+      <div class="body">
+        <h4>Se completa el monto a acreditar</h4>
+        <p>Puede ser el total de la factura (anulacion completa) o un monto parcial (ajuste).</p>
+      </div>
+    </div>
+    <div class="flow-step">
+      <div class="dot orange">3</div>
+      <div class="body">
+        <h4>Se emite con referencia al comprobante original</h4>
+        <p>La nota de credito incluye el numero y fecha de la factura original. AFIP requiere esta referencia para validarla. Si la factura era tipo A, la NC es NCA; si era B, es NCB.</p>
+      </div>
+    </div>
+    <div class="flow-step">
+      <div class="dot green">4</div>
+      <div class="body">
+        <h4>Siempre se emite como "contado"</h4>
+        <p>Independientemente de como se haya cobrado la factura original, las notas de credito siempre se registran con condicion de pago contado.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 6. CONDICION PAGO -->
+<section>
+  <h2><span class="num">6</span> Condicion de pago</h2>
+  <p class="subtitle">Como se determina si la factura es al contado o a cuenta corriente</p>
+
+  <div class="decision">
+    <div class="q">Es una Nota de Credito?</div>
+    <div class="branches">
+      <div class="branch">
+        <span class="lbl si">SI</span>
+        <div class="a" style="border-color:var(--green)">Siempre <strong>CONTADO</strong></div>
+      </div>
+      <div class="branch">
+        <span class="lbl no">NO (es Factura)</span>
+        <div class="q" style="border-color:var(--blue);font-size:.85rem">La franquicia ya pago?</div>
+        <div class="branches" style="margin-top:10px">
+          <div class="branch">
+            <span class="lbl si">SI</span>
+            <div class="a" style="border-color:var(--green)"><strong>CONTADO</strong><br><small style="color:var(--text2)">Pago ya registrado</small></div>
+          </div>
+          <div class="branch">
+            <span class="lbl no">NO</span>
+            <div class="a" style="border-color:var(--orange)"><strong>CUENTA CORRIENTE</strong><br><small style="color:var(--text2)">Vencimiento: dia 10 del mes siguiente</small></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 7. FACTURACION MASIVA -->
+<section>
+  <h2><span class="num">7</span> Facturacion masiva</h2>
+  <p class="subtitle">Se pueden emitir facturas para multiples franquicias de una sola vez. El sistema las procesa una por una: si alguna falla, sigue con la siguiente y muestra un resumen al final.</p>
+
+  <div class="batch">
+    <div class="batch-item ok"><span class="icon">&#10003;</span>FR-001</div>
+    <div class="batch-item ok"><span class="icon">&#10003;</span>FR-002</div>
+    <div class="batch-item fail"><span class="icon">&#10007;</span>FR-003</div>
+    <div class="batch-item ok"><span class="icon">&#10003;</span>FR-004</div>
+    <div class="batch-item ok"><span class="icon">&#10003;</span>FR-005</div>
+    <div class="batch-item ok"><span class="icon">&#10003;</span>FR-006</div>
+    <div class="batch-item fail"><span class="icon">&#10007;</span>FR-007</div>
+    <div class="batch-item ok"><span class="icon">&#10003;</span>FR-008</div>
+    <div class="batch-item wait"><span class="icon">&#8987;</span>FR-009</div>
+    <div class="batch-item wait"><span class="icon">&#8987;</span>FR-010</div>
+  </div>
+  <p class="legend">
+    <span style="color:var(--green2)">&#9632;</span> Emitida OK &nbsp;&nbsp;
+    <span style="color:var(--red)">&#9632;</span> Error (se loguea y se sigue) &nbsp;&nbsp;
+    <span style="color:var(--text2)">&#9632;</span> Pendiente de procesar
+  </p>
+</section>
+
+<!-- 8. DESCARGA PDF -->
+<section>
+  <h2><span class="num">8</span> Descarga del PDF oficial</h2>
+  <p class="subtitle">Como se obtiene el comprobante en PDF despues de emitido</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="dot blue">1</div>
+      <div class="body">
+        <h4>Automatico despues de emitir</h4>
+        <p>Apenas se emite una factura, el sistema intenta descargar el PDF oficial de AFIP automaticamente.</p>
+      </div>
+    </div>
+    <div class="flow-step">
+      <div class="dot blue">2</div>
+      <div class="body">
+        <h4>Manual desde el detalle de franquicia</h4>
+        <p>En cualquier momento se puede hacer click en el numero de factura para volver a descargar el PDF.</p>
+      </div>
+    </div>
+    <div class="flow-step">
+      <div class="dot green">3</div>
+      <div class="body">
+        <h4>Se consulta a Facturante</h4>
+        <p>El servidor pide a Facturante la URL del PDF generado y lo descarga.</p>
+      </div>
+    </div>
+    <div class="flow-step">
+      <div class="dot orange">4</div>
+      <div class="body">
+        <h4>Alternativa si no esta listo</h4>
+        <p>Si AFIP todavia no proceso el comprobante, se puede descargar una version en HTML generada localmente como alternativa temporal.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 9. TIEMPOS -->
+<section>
+  <h2><span class="num">9</span> Cuanto tarda</h2>
+  <p class="subtitle">El proceso completo puede tomar hasta 30 segundos en el peor caso</p>
+
+  <div class="timing">
+    <div class="t-row">
+      <span class="t-lbl">Envio a Facturante</span>
+      <div class="t-wrap"><div class="t-bar b1">hasta ~15 seg</div></div>
+    </div>
+    <div class="t-row" style="margin-top:6px">
+      <span class="t-lbl">Espera numero AFIP</span>
+      <div class="t-wrap"><div class="t-bar b2">hasta ~20 seg</div></div>
+    </div>
+    <div class="t-row" style="margin-top:6px">
+      <span class="t-lbl">Tiempo total maximo</span>
+      <div class="t-wrap"><div class="t-bar b3">~30 segundos</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- 10. ERRORES -->
+<section>
+  <h2><span class="num">10</span> Que pasa si algo falla</h2>
+  <p class="subtitle">Cada etapa tiene su propia estrategia de manejo de errores</p>
+
+  <table class="tbl">
+    <thead>
+      <tr><th>Situacion</th><th>Reintenta?</th><th>Que pasa</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Facturante rechaza el comprobante</td>
+        <td><span class="pill no">No</span></td>
+        <td>Se muestra el error de AFIP al usuario para que corrija los datos</td>
+      </tr>
+      <tr>
+        <td>AFIP tarda en asignar el numero</td>
+        <td><span class="pill yes">Si, 8 veces</span></td>
+        <td>Consulta cada 2.5 segundos. Si no llega, la factura queda emitida pero sin numero visible todavia</td>
+      </tr>
+      <tr>
+        <td>El PDF no esta disponible</td>
+        <td><span class="pill no">No</span></td>
+        <td>Se ofrece descargar una version HTML alternativa. El PDF se puede reintentar despues</td>
+      </tr>
+      <tr>
+        <td>Falla una factura en emision masiva</td>
+        <td><span class="pill no">No</span></td>
+        <td>Se registra el error y se continua con la siguiente franquicia</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 11. QUE SE GUARDA -->
+<section>
+  <h2><span class="num">11</span> Que informacion se guarda</h2>
+  <p class="subtitle">Despues de emitir, estos son los datos clave que quedan registrados</p>
+
+  <table class="tbl">
+    <thead>
+      <tr><th>Dato</th><th>Ejemplo</th><th>Para que sirve</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>Numero de factura</strong></td><td>FA 0100-00000010</td><td>Identificacion oficial ante AFIP</td></tr>
+      <tr><td><strong>ID de Facturante</strong></td><td>4521</td><td>Necesario para descargar el PDF despues</td></tr>
+      <tr><td><strong>Franquicia</strong></td><td>Buenos Aires Centro</td><td>A quien se le emitio</td></tr>
+      <tr><td><strong>Tipo</strong></td><td>Factura / Fee</td><td>Que concepto se facturo</td></tr>
+      <tr><td><strong>Fecha</strong></td><td>31/03/2026</td><td>Fecha de emision del comprobante</td></tr>
+      <tr><td><strong>Monto neto + IVA</strong></td><td>$10.000 + $2.100</td><td>Desglose para contabilidad</td></tr>
+      <tr><td><strong>Total</strong></td><td>$12.100</td><td>Monto total del comprobante</td></tr>
+      <tr><td><strong>Moneda</strong></td><td>ARS</td><td>Pesos argentinos</td></tr>
+    </tbody>
+  </table>
+</section>
+
+</div>
+
+<footer>
+  bigg-finance &mdash; Integracion Facturante &mdash; 2026
+</footer>
+
+</body>
+</html>

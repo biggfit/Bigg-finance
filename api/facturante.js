@@ -635,7 +635,7 @@ export default async function handler(req, res) {
     }
 
     // Esperar a que AFIP asigne el número secuencial real (necesario para CbteAsoc de futuras NC)
-    const afip = await pollAfipNumero(parsed.idComprobante);
+    const afip = await pollAfipNumero(parsed.idComprobante, 5, 2000);
 
     return res.end(JSON.stringify({
       ok:             true,

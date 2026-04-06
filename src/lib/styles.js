@@ -2,7 +2,7 @@
 // Injected once outside the component tree — not re-injected on every render.
 const styleEl = document.createElement("style");
 styleEl.textContent = `
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
   --bg:#1e2022;--bg2:#282b2e;--bg3:#323639;
@@ -11,7 +11,7 @@ styleEl.textContent = `
   --accent:#ADFF19;
   --blue:#6ec6f5;--purple:#b8a9f5;--red:#ff6b7a;--green:#7ed9a0;
   --gold:#DEFB97;--orange:#f5c46e;--cyan:#7ed9d9;
-  --font:'DM Sans',sans-serif;--mono:'JetBrains Mono',monospace;
+  --font:'Messina Sans',sans-serif;--mono:'JetBrains Mono',monospace;
 }
 body{background:var(--bg);color:var(--text);font-family:var(--font)}
 input,select,textarea{font-family:var(--font);background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:20px;outline:none;transition:border-color .15s;font-size:13px}

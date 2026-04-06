@@ -7,7 +7,7 @@ import { TypePill } from "../components/atoms";
 import PendientesPanel from "../components/PendientesPanel";
 import { buildFacturaPDF, downloadTextAsPDF } from "../lib/pdf";
 import { downloadInvoicePdf, downloadBatchInvoicePdf } from "../lib/invoicePdf";
-import { emitirComprobante, formatInvoiceLabel, invoiceFromResult, fetchAfipNumero, downloadFacturantePdfBlob } from "../lib/facturanteApi";
+import { emitirComprobante, formatInvoiceLabel, invoiceFromResult, fetchAfipNumero, downloadFacturantePdfBlob, afipSaveFailedMsg } from "../lib/facturanteApi";
 import { getNextInvoiceNum } from "../lib/sheetsApi";
 
 // ─── TAB: EMISIÓN DE COMPROBANTES ────────────────────────────────────────────
@@ -278,7 +278,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
     const ncSinRef       = usaFacturante && doc === "NC" && !refFAComp?.invoice;
 
     const doConfirm = async (skipFacturante = false) => {
-      if (!preview) return;
+      if (!preview || emitState === "emitting") return;
       // Siempre persiste la referencia a la FA en NC, incluso al guardar sin emitir
       let enriched = doc === "NC" && refFAComp?.invoice
         ? { ...preview, refInvoice: refFAComp.invoice, refDate: refFAComp.date }
@@ -323,7 +323,13 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
         }
       }
 
-      onAddComp(fr.id, enriched);
+      try {
+        onAddComp(fr.id, enriched);
+      } catch {
+        setEmitState("error");
+        setEmitError(afipSaveFailedMsg(enriched.invoice, enriched.facturanteId));
+        return;
+      }
 
       if (isAR && enriched.facturanteId) {
         // AR emitida por Facturante: bajar el PDF oficial de AFIP
@@ -999,7 +1005,11 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
           facturanteStatus = `sin_invoice: ${e.message}`;
         }
       }
-      onAddComp(r.frId, comp);
+      try {
+        onAddComp(r.frId, comp);
+      } catch {
+        if (comp.facturanteId) facturanteStatus = `GUARDADO_FALLIDO (AFIP OK, ID=${comp.facturanteId})`;
+      }
       if (!isAR && comp.invoice && !skipFacturante) {
         // Acumular para generar PDF combinado al final
         invoiceBatchItems.push({ fr, comp });
@@ -1572,7 +1582,11 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
           msg = `⚠ CC guardada sin ARCA (${err.message}) — ${r.franchiseName}`;
         }
       }
-      onAddComp(r.franchiseId, comp);
+      try {
+        onAddComp(r.franchiseId, comp);
+      } catch {
+        if (comp.facturanteId) msg = `⚠ AFIP OK (ID=${comp.facturanteId}) pero falló al guardar — ${r.franchiseName}`;
+      }
       log.push({ status: comp.invoice ? "ok" : "sin_factura", step: "CC", msg });
     }
     setProcessLog(log);
@@ -1922,6 +1936,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
     (frId, comp) => onAddComp(frId, { ...comp, empresa: activeCompany }),
     [onAddComp, activeCompany]
   );
+  const emitLockRef = useRef(new Set());
   const [mode, setMode] = useState(EMIT_MODE.SELECT);
   const [prefillFr,   setPrefillFr]   = useState(null);
   const [prefillComp, setPrefillComp] = useState(null);
@@ -1936,19 +1951,30 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
   // Emite directamente ante AFIP un comp ya guardado en Sheets (sin wizard)
   // dateOverride: string dd/mm/yyyy — si viene, se usa como fecha de emisión en vez de comp.date
   const handleEmitirAfip = async (fr, comp, dateOverride) => {
-    const compToEmit = dateOverride ? { ...comp, date: dateOverride } : comp;
-    const result = await emitirComprobante({
-      franchisor: franchisor?.ar ?? franchisor,
-      franchise:  fr,
-      comp:       { ...compToEmit, applyIVA: !!(COMPANIES[activeCompany]?.applyIVA) },
-      referenciaInvoice: comp.refInvoice ?? undefined,
-      referenciaDate:    comp.refDate    ?? undefined,
-    });
-    const invoice      = invoiceFromResult(result);
-    const facturanteId = String(result.idComprobante);
-    const updates = { invoice, facturanteId };
-    if (dateOverride) updates.date = dateOverride;
-    editComp(fr.id, comp.id, updates);
+    const lockKey = `afip-${comp.id}`;
+    if (emitLockRef.current.has(lockKey)) return;
+    emitLockRef.current.add(lockKey);
+    try {
+      const compToEmit = dateOverride ? { ...comp, date: dateOverride } : comp;
+      const result = await emitirComprobante({
+        franchisor: franchisor?.ar ?? franchisor,
+        franchise:  fr,
+        comp:       { ...compToEmit, applyIVA: !!(COMPANIES[activeCompany]?.applyIVA) },
+        referenciaInvoice: comp.refInvoice ?? undefined,
+        referenciaDate:    comp.refDate    ?? undefined,
+      });
+      const invoice      = invoiceFromResult(result);
+      const facturanteId = String(result.idComprobante);
+      const updates = { invoice, facturanteId };
+      if (dateOverride) updates.date = dateOverride;
+      try {
+        editComp(fr.id, comp.id, updates);
+      } catch {
+        throw new Error(afipSaveFailedMsg(invoice, facturanteId));
+      }
+    } finally {
+      emitLockRef.current.delete(lockKey);
+    }
   };
 
   // Re-consulta el número AFIP para un comp con facturanteId pero sin invoice
@@ -1961,38 +1987,49 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
 
   // Crea y emite FACTURA_PAUTA para un PAGO_PAUTA sin factura
   const handleEmitirPago = async (fr, pagoComp) => {
-    // pagoComp.amount es el TOTAL transferido → back-calcular neto e IVA
-    const applyIVA    = !!(COMPANIES[activeCompany]?.applyIVA);
-    const amountTotal = pagoComp.amount;
-    const amountNeto  = applyIVA ? Math.round(amountTotal / 1.21 * 100) / 100 : amountTotal;
-    const amountIVA   = applyIVA ? Math.round((amountTotal - amountNeto) * 100) / 100 : 0;
+    const lockKey = `pago-${pagoComp.id}`;
+    if (emitLockRef.current.has(lockKey)) return;
+    emitLockRef.current.add(lockKey);
+    try {
+      // pagoComp.amount es el TOTAL transferido → back-calcular neto e IVA
+      const applyIVA    = !!(COMPANIES[activeCompany]?.applyIVA);
+      const amountTotal = pagoComp.amount;
+      const amountNeto  = applyIVA ? Math.round(amountTotal / 1.21 * 100) / 100 : amountTotal;
+      const amountIVA   = applyIVA ? Math.round((amountTotal - amountNeto) * 100) / 100 : 0;
 
-    // _fecha override (dd/mm/yyyy) viene del batch con fecha personalizada
-    const fechaFinal = pagoComp._fecha ?? pagoComp.date;
-    const monthFinal = pagoComp._fecha ? parseInt(pagoComp._fecha.split("/")[1], 10) - 1 : pagoComp.month;
-    const yearFinal  = pagoComp._fecha ? parseInt(pagoComp._fecha.split("/")[2], 10)     : pagoComp.year;
+      // _fecha override (dd/mm/yyyy) viene del batch con fecha personalizada
+      const fechaFinal = pagoComp._fecha ?? pagoComp.date;
+      const monthFinal = pagoComp._fecha ? parseInt(pagoComp._fecha.split("/")[1], 10) - 1 : pagoComp.month;
+      const yearFinal  = pagoComp._fecha ? parseInt(pagoComp._fecha.split("/")[2], 10)     : pagoComp.year;
 
-    const cuentaUsada   = pagoComp._cuenta   ?? "PAUTA";
-    const conceptoBase  = `${CUENTA_LABEL[cuentaUsada] ?? cuentaUsada} ${MONTHS[monthFinal]} ${yearFinal}`;
-    const conceptoFinal = pagoComp._concepto ?? pagoComp.nota ?? conceptoBase;
-    const factComp = {
-      id: uid(), type: makeType("FACTURA", cuentaUsada),
-      amount: amountTotal, amountNeto, amountIVA,
-      date: fechaFinal,
-      month: monthFinal, year: yearFinal,
-      currency: pagoComp.currency ?? "ARS",
-      ref: conceptoFinal, nota: conceptoFinal,
-    };
-    if (fr.country === "Argentina" && factComp.currency === "ARS") {
-      const result = await emitirComprobante({
-        franchisor: franchisor?.ar ?? franchisor,
-        franchise:  fr,
-        comp:       { ...factComp, applyIVA },
-      });
-      factComp.invoice      = invoiceFromResult(result);
-      factComp.facturanteId = String(result.idComprobante);
+      const cuentaUsada   = pagoComp._cuenta   ?? "PAUTA";
+      const conceptoBase  = `${CUENTA_LABEL[cuentaUsada] ?? cuentaUsada} ${MONTHS[monthFinal]} ${yearFinal}`;
+      const conceptoFinal = pagoComp._concepto ?? pagoComp.nota ?? conceptoBase;
+      const factComp = {
+        id: uid(), type: makeType("FACTURA", cuentaUsada),
+        amount: amountTotal, amountNeto, amountIVA,
+        date: fechaFinal,
+        month: monthFinal, year: yearFinal,
+        currency: pagoComp.currency ?? "ARS",
+        ref: conceptoFinal, nota: conceptoFinal,
+      };
+      if (fr.country === "Argentina" && factComp.currency === "ARS") {
+        const result = await emitirComprobante({
+          franchisor: franchisor?.ar ?? franchisor,
+          franchise:  fr,
+          comp:       { ...factComp, applyIVA },
+        });
+        factComp.invoice      = invoiceFromResult(result);
+        factComp.facturanteId = String(result.idComprobante);
+      }
+      try {
+        addCompWithEmpresa(fr.id, factComp);
+      } catch {
+        throw new Error(afipSaveFailedMsg(factComp.invoice, factComp.facturanteId));
+      }
+    } finally {
+      emitLockRef.current.delete(lockKey);
     }
-    addCompWithEmpresa(fr.id, factComp);
   };
 
   const reset = () => {
