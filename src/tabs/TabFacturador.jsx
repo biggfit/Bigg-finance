@@ -7,7 +7,7 @@ import { TypePill } from "../components/atoms";
 import PendientesPanel from "../components/PendientesPanel";
 import { buildFacturaPDF, downloadTextAsPDF } from "../lib/pdf";
 import { downloadInvoicePdf, downloadBatchInvoicePdf } from "../lib/invoicePdf";
-import { emitirComprobante, formatInvoiceLabel, downloadFacturantePdfBlob } from "../lib/facturanteApi";
+import { emitirComprobante, formatInvoiceLabel, invoiceFromResult, fetchAfipNumero, downloadFacturantePdfBlob } from "../lib/facturanteApi";
 import { getNextInvoiceNum } from "../lib/sheetsApi";
 
 // ─── TAB: EMISIÓN DE COMPROBANTES ────────────────────────────────────────────
@@ -298,8 +298,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
           });
           enriched = {
             ...preview,
-            // Usar número AFIP real (afipNumero) si disponible; fallback al ID interno de Facturante
-            invoice:      formatInvoiceLabel(result.tipoComprobante, result.afipNumero ?? result.idComprobante, result.afipPrefijo ?? result.puntoVenta),
+            invoice:      invoiceFromResult(result),
             facturanteId: String(result.idComprobante),
           };
           setEmitState("idle");
@@ -965,9 +964,14 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
       const billingCur = isAR ? "ARS"
         : getCountryCur(r.country).code === "EUR" ? "EUR"
         : "USD";
+      // Para AR con IVA: fee es el neto → calcular total y IVA correctamente
+      const applyIVA   = isAR && !!(COMPANIES[activeCompany]?.applyIVA);
+      const amountNeto = Math.max(0, Math.round(fee * 100) / 100);
+      const amountIVA  = applyIVA ? Math.round(amountNeto * 0.21 * 100) / 100 : 0;
+      const amountTotal = Math.round((amountNeto + amountIVA) * 100) / 100;
       let comp = {
         id: uid(), type: makeType("FACTURA","FEE"), date: crmDate,
-        amount: Math.max(0, Math.round(fee * 100) / 100),
+        amount: amountTotal, amountNeto, amountIVA,
         ref: `Fee ${MONTHS[crmMonth]} ${crmYear} — CRM`,
         nota: `Fee Royalty ${MONTHS[crmMonth]} ${crmYear}${dto > 0 ? ` (${dto}% dto.)` : ""}`,
         month: crmMonth, year: crmYear,
@@ -983,10 +987,11 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
             franchise:  fr,
             comp:       { ...comp, applyIVA: !!(COMPANIES[activeCompany]?.applyIVA) },
           });
-          comp = { ...comp, invoice: formatInvoiceLabel(result.tipoComprobante, result.afipNumero ?? result.idComprobante, result.afipPrefijo ?? result.puntoVenta), facturanteId: String(result.idComprobante) };
-          facturanteStatus = "ok";
+          comp = { ...comp, invoice: invoiceFromResult(result), facturanteId: String(result.idComprobante) };
+          facturanteStatus = result.afipNumero ? "ok" : "sin_numero_afip";
         } catch (err) {
-          facturanteStatus = `sin_factura: ${err.message}`;
+          facturanteStatus = `ERROR: ${err.message}`;
+          console.error("[CRM Facturante]", fr.name, err.message);
         }
       } else if (!skipFacturante && !isAR) {
         // ── Invoice USA: asignar correlativo secuencial ───────────────────
@@ -1010,7 +1015,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
         );
       }
       // non-AR sin número (skipFacturante o error en getNextInvoiceNum): guarda silenciosamente
-      log.push({ frName: r.frName, fee, country: r.country, dto, facturanteStatus, invoice: comp.invoice });
+      log.push({ frName: r.frName, fee, country: r.country, dto, facturanteStatus, invoice: comp.invoice ?? null });
     }
     // Descargar PDF con todos los invoices no-AR (una página por invoice)
     if (invoiceBatchItems.length > 0) {
@@ -1028,16 +1033,21 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
       </div>
       <div className="card" style={{ textAlign: "left", maxWidth: 540, margin: "0 auto 20px" }}>
         {processed.map((p, i) => (
-          <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 14px", borderBottom: "1px solid var(--border)", fontSize: 12 }}>
-            <span>{p.frName}{p.invoice && <span className="mono" style={{ fontSize: 10, color: "var(--accent)", marginLeft: 8 }}>{p.invoice}</span>}</span>
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              {p.dto > 0 && <span className="pill" style={{ fontSize: 9, color: "var(--gold)", background: "rgba(251,191,36,.1)" }}>{p.dto}% dto.</span>}
-              <span className="mono" style={{ fontWeight: 700, color: p.fee <= 0 ? "var(--muted)" : "var(--green)" }}>
-                {p.country === "Argentina"
-                  ? `$ ${p.fee.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                  : `U$D ${p.fee.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-              </span>
+          <div key={i} style={{ borderBottom: "1px solid var(--border)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 14px", fontSize: 12 }}>
+              <span>{p.frName}{p.invoice && <span className="mono" style={{ fontSize: 10, color: "var(--accent)", marginLeft: 8 }}>{p.invoice}</span>}</span>
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                {p.dto > 0 && <span className="pill" style={{ fontSize: 9, color: "var(--gold)", background: "rgba(251,191,36,.1)" }}>{p.dto}% dto.</span>}
+                <span className="mono" style={{ fontWeight: 700, color: p.fee <= 0 ? "var(--muted)" : "var(--green)" }}>
+                  {p.country === "Argentina"
+                    ? `$ ${p.fee.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                    : `U$D ${p.fee.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                </span>
+              </div>
             </div>
+            {p.facturanteStatus && p.facturanteStatus !== "ok" && p.facturanteStatus !== "omitido" && p.facturanteStatus !== "invoice_ok" && (
+              <div style={{ padding: "3px 14px 6px", fontSize: 10, color: "var(--red)" }}>{p.facturanteStatus}</div>
+            )}
           </div>
         ))}
       </div>
@@ -1332,9 +1342,11 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
             onChange={e => { const [y, m, d] = e.target.value.split("-"); setCrmDate(`${d}/${m}/${y}`); }}
             style={{ ...inS, width: 140, fontSize: 12 }} />
         </div>
-        <button className="ghost" disabled={toProcess.length === 0} style={{ opacity: toProcess.length === 0 ? 0.4 : 1, fontSize: 12 }} onClick={() => handleConfirm(true)}>
-          ✓ Guardar sin emitir ({toProcess.length})
-        </button>
+        {activeCurrency === "ARS" && (
+          <button className="ghost" disabled={toProcess.length === 0} style={{ opacity: toProcess.length === 0 ? 0.4 : 1, fontSize: 12 }} onClick={() => handleConfirm(true)}>
+            ✓ Guardar sin emitir ({toProcess.length})
+          </button>
+        )}
         <button className="btn" disabled={toProcess.length === 0} style={{ opacity: toProcess.length === 0 ? 0.4 : 1 }} onClick={() => handleConfirm(false)}>
           ✓ Confirmar y Generar Facturas/Invoice ({toProcess.length})
         </button>
@@ -1559,8 +1571,8 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
             franchise:  fr,
             comp:       { ...comp, applyIVA: !!(COMPANIES[activeCompany]?.applyIVA) },
           });
-          comp = { ...comp, invoice: formatInvoiceLabel(result.tipoComprobante, result.afipNumero ?? result.idComprobante, result.afipPrefijo ?? result.puntoVenta), facturanteId: String(result.idComprobante) };
-          msg = `✓ ${comp.invoice} emitida — ${r.franchiseName}`;
+          comp = { ...comp, invoice: invoiceFromResult(result), facturanteId: String(result.idComprobante) };
+          msg = `✓ ${comp.invoice ?? "emitida (nro. AFIP pendiente)"} — ${r.franchiseName}`;
         } catch (err) {
           msg = `⚠ CC guardada sin ARCA (${err.message}) — ${r.franchiseName}`;
         }
@@ -1937,11 +1949,19 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
       referenciaInvoice: comp.refInvoice ?? undefined,
       referenciaDate:    comp.refDate    ?? undefined,
     });
-    const invoice      = formatInvoiceLabel(result.tipoComprobante, result.afipNumero ?? result.idComprobante, result.afipPrefijo ?? result.puntoVenta);
+    const invoice      = invoiceFromResult(result);
     const facturanteId = String(result.idComprobante);
     const updates = { invoice, facturanteId };
     if (dateOverride) updates.date = dateOverride;
     editComp(fr.id, comp.id, updates);
+  };
+
+  // Re-consulta el número AFIP para un comp con facturanteId pero sin invoice
+  const handleFetchAfipNumero = async (fr, comp) => {
+    const { numero, prefijo } = await fetchAfipNumero(comp.facturanteId);
+    const tipoStr = String(comp.type ?? "").split("|")[0] === "NC" ? "NCA" : "FA";
+    const invoice = formatInvoiceLabel(tipoStr, numero, prefijo);
+    editComp(fr.id, comp.id, { invoice });
   };
 
   // Crea y emite FACTURA_PAUTA para un PAGO_PAUTA sin factura
@@ -1974,7 +1994,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
         franchise:  fr,
         comp:       { ...factComp, applyIVA },
       });
-      factComp.invoice      = formatInvoiceLabel(result.tipoComprobante, result.afipNumero ?? result.idComprobante, result.afipPrefijo ?? result.puntoVenta);
+      factComp.invoice      = invoiceFromResult(result);
       factComp.facturanteId = String(result.idComprobante);
     }
     addCompWithEmpresa(fr.id, factComp);
@@ -1995,7 +2015,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
   return (
     <div className="fade">
       {/* Pendientes */}
-      <PendientesPanel onEmitir={handleEmitirDesde} onEmitirAfip={handleEmitirAfip} onEmitirPago={handleEmitirPago} franchisor={franchisor} />
+      <PendientesPanel onEmitir={handleEmitirDesde} onEmitirAfip={handleEmitirAfip} onEmitirPago={handleEmitirPago} onFetchAfipNumero={handleFetchAfipNumero} franchisor={franchisor} />
 
       {/* Selector de modo */}
       {mode === EMIT_MODE.SELECT ? (

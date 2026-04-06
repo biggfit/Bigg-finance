@@ -514,6 +514,20 @@ export default async function handler(req, res) {
     }
   }
 
+  // ── Acción: getNumero — consulta número AFIP de un comp ya emitido ──────────
+  if (action === 'getNumero') {
+    const { idComprobante } = payload;
+    if (!idComprobante) {
+      res.statusCode = 400;
+      return res.end(JSON.stringify({ ok: false, error: 'idComprobante requerido' }));
+    }
+    const det = await getDetalleComprobante(idComprobante);
+    if (!det.numero) {
+      return res.end(JSON.stringify({ ok: false, error: 'Número AFIP aún no disponible' }));
+    }
+    return res.end(JSON.stringify({ ok: true, numero: det.numero, prefijo: det.prefijo }));
+  }
+
   if (action !== 'emitir') {
     res.statusCode = 400;
     return res.end(JSON.stringify({ error: `Acción desconocida: ${action}` }));

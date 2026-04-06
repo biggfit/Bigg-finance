@@ -37,6 +37,24 @@ export async function emitirComprobante({ franchisor, franchise, comp, referenci
  * @param {number|string} idComprobante
  * @returns {Promise<Blob>}
  */
+/**
+ * Consulta el número AFIP de un comprobante ya emitido (facturanteId conocido).
+ * Útil cuando la emisión se completó pero pollAfipNumero devolvió null.
+ * @returns {{ numero: number, prefijo: string }}
+ * @throws Error si aún no está disponible
+ */
+export async function fetchAfipNumero(idComprobante) {
+  const res = await fetch(BASE, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ action: 'getNumero', idComprobante }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error ?? 'Número AFIP no disponible');
+  return { numero: data.numero, prefijo: data.prefijo };
+}
+
 export async function downloadFacturantePdfBlob(idComprobante) {
   const res = await fetch(BASE, {
     method:  'POST',
@@ -54,13 +72,23 @@ export async function downloadFacturantePdfBlob(idComprobante) {
 
 /**
  * Formatea el número de comprobante para mostrar en pantalla y guardar en Sheets.
- * Ej: tipoComprobante=1, idComprobante=4521, puntoVenta="0001" → "FA 0001-00004521"
+ * Ej: tipoComprobante=1, afipNumero=4521, puntoVenta="0001" → "FA 0001-00004521"
  */
-export function formatInvoiceLabel(tipoComprobante, idComprobante, puntoVenta) {
+export function formatInvoiceLabel(tipoComprobante, afipNumero, puntoVenta) {
   // Supports both old numeric codes (legacy) and new string codes from Facturante API
   const legacyMap = { 1: 'FA', 3: 'FB', 6: 'NCA', 8: 'NCB' };
   const prefix = legacyMap[tipoComprobante] ?? String(tipoComprobante ?? 'FC').toUpperCase();
   const pv  = String(puntoVenta  ?? '1').padStart(4, '0');
-  const num = String(idComprobante ?? '0').padStart(8, '0');
+  const num = String(afipNumero  ?? '0').padStart(8, '0');
   return `${prefix} ${pv}-${num}`;
+}
+
+/**
+ * Convierte el resultado de emitirComprobante en un invoice label AFIP.
+ * Devuelve undefined si AFIP aún no asignó número (afipNumero es null).
+ * Nunca usa idComprobante (ID interno de Facturante) como número de factura.
+ */
+export function invoiceFromResult(result) {
+  if (!result?.afipNumero) return undefined;
+  return formatInvoiceLabel(result.tipoComprobante, result.afipNumero, result.afipPrefijo ?? result.puntoVenta);
 }

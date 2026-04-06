@@ -4,12 +4,15 @@ import { makeType, MONTHS, AVAILABLE_YEARS, fmt, compCurrency, compEmpresa, CUEN
 import { inPeriod, dateMonth, dateYear } from "../data/franchisor";
 
 // ── Pendientes panel ────────────────────────────────────────────────────────
-export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }) {
+export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, onFetchAfipNumero }) {
   const { franchises, comps, editComp, deleteComp, activeCompany } = useStore();
   const [showAfip,       setShowAfip]       = useState(false);
+  const [showSinNumero,  setShowSinNumero]  = useState(false);
   const [showSinAsignar, setShowSinAsignar] = useState(false);
   const [showPago,       setShowPago]       = useState(false);
   const [showFcRecibidas, setShowFcRecibidas] = useState(false);
+  const [fetchingNumero, setFetchingNumero] = useState({}); // { [compId]: true }
+  const [fetchNumeroErr, setFetchNumeroErr] = useState({}); // { [compId]: string }
   const [emitting, setEmitting] = useState({}); // { [compId]: true }
   const [errors,   setErrors]   = useState({}); // { [compId]: string }
 
@@ -119,6 +122,38 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
           .map(c => ({ fr, comp: c }));
       });
   }, [franchises, comps, activeCompany]);
+
+  // 1b. Comprobantes AR+ARS con facturanteId pero sin invoice (número AFIP no obtenido)
+  const sinNumeroAfip = useMemo(() => {
+    return franchises
+      .filter(f => f.activa !== false && f.country === "Argentina")
+      .flatMap(fr => {
+        const frComps = comps[fr.id] ?? [];
+        return frComps
+          .filter(c => {
+            const doc = String(c.type ?? "").split("|")[0];
+            return (doc === "FACTURA" || doc === "NC") &&
+                   compCurrency(c) === "ARS" &&
+                   c.facturanteId && !c.invoice &&
+                   (!activeCompany || compEmpresa(c) === activeCompany);
+          })
+          .map(c => ({ fr, comp: c }));
+      })
+      .sort((a, b) => a.fr.name.localeCompare(b.fr.name, "es"));
+  }, [franchises, comps, activeCompany]);
+
+  const handleFetchNumero = async (fr, comp) => {
+    if (fetchingNumero[comp.id] || !onFetchAfipNumero) return;
+    setFetchingNumero(p => ({ ...p, [comp.id]: true }));
+    setFetchNumeroErr(p => { const n = { ...p }; delete n[comp.id]; return n; });
+    try {
+      await onFetchAfipNumero(fr, comp);
+    } catch (err) {
+      setFetchNumeroErr(p => ({ ...p, [comp.id]: err.message ?? "Error" }));
+    } finally {
+      setFetchingNumero(p => { const n = { ...p }; delete n[comp.id]; return n; });
+    }
+  };
 
   // Sedes únicas presentes en sinAfipAll (para el dropdown)
   const frOptions = useMemo(() => {
@@ -539,6 +574,53 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
           {batchRunning && (
             <div style={{ textAlign: "center", padding: "20px 0", color: "var(--muted)", fontSize: 12 }}>
               Emitiendo comprobante {batchProgress?.done + 1} de {batchProgress?.total}…
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── NÚMERO AFIP PENDIENTE ── */}
+      {sinNumeroAfip.length > 0 && (
+        <div style={{ background: "rgba(251,191,36,.04)", border: "1px solid rgba(251,191,36,.30)", borderRadius: 10, padding: "14px 18px" }}>
+          <div
+            style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: showSinNumero ? 10 : 0 }}
+            onClick={() => setShowSinNumero(v => !v)}
+          >
+            <span style={{ fontSize: 10, fontWeight: 800, color: "#fbbf24", letterSpacing: ".1em", flex: 1 }}>
+              ⏳ NÚMERO AFIP PENDIENTE — {sinNumeroAfip.length} comprobante{sinNumeroAfip.length !== 1 ? "s" : ""}
+            </span>
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>{showSinNumero ? "▲" : "▼"}</span>
+          </div>
+          {showSinNumero && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {sinNumeroAfip.map(({ fr, comp }) => {
+                const doc    = String(comp.type ?? "").split("|")[0];
+                const cuenta = String(comp.type ?? "").split("|")[1] ?? "";
+                const busy   = !!fetchingNumero[comp.id];
+                const err    = fetchNumeroErr[comp.id];
+                return (
+                  <div key={comp.id}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--bg2)", borderRadius: err ? "7px 7px 0 0" : 7, padding: "8px 12px" }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fr.name}</span>
+                      <span style={{ fontSize: 10, color: "var(--muted)", whiteSpace: "nowrap" }}>{comp.date}</span>
+                      <span className="mono" style={{ fontSize: 12, color: "var(--green)", fontWeight: 700, whiteSpace: "nowrap" }}>{fmt(comp.amount, "ARS")}</span>
+                      <span className="pill" style={{ color: "var(--cyan)", background: "rgba(34,211,238,.1)", fontSize: 9, whiteSpace: "nowrap" }}>{doc} {cuenta}</span>
+                      <span style={{ fontSize: 9, color: "#fbbf24", fontStyle: "italic", whiteSpace: "nowrap" }}>ID {comp.facturanteId}</span>
+                      <button
+                        className="ghost"
+                        disabled={busy}
+                        style={{ fontSize: 10, padding: "2px 8px", whiteSpace: "nowrap", opacity: busy ? 0.4 : 1 }}
+                        onClick={() => handleFetchNumero(fr, comp)}
+                      >
+                        {busy ? "⏳…" : "Obtener nro. AFIP →"}
+                      </button>
+                    </div>
+                    {err && (
+                      <div style={{ background: "rgba(255,107,122,.08)", borderRadius: "0 0 7px 7px", padding: "4px 12px", fontSize: 10, color: "var(--red)" }}>{err}</div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
