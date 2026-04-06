@@ -1,5 +1,11 @@
 import { memo, useMemo, useCallback, useState } from "react";
 import { useStore } from "../lib/context";
+import { computeSaldo, computeSaldoPrevMes, computePautaPendiente, compEmpresa, compCurrency, makeType, MONTHS, fmt, downloadCSV, COMPANIES, COMP_TYPES, cmpDate } from "../lib/helpers";
+import { inPeriod, todayDmy } from "../data/franchisor";
+import { buildCCHtml, fetchLogoDataUrl, buildFacturaHtmlForMail, htmlToBase64, blobToBase64 } from "../lib/pdf";
+import { generateInvoicePdfBlob } from "../lib/invoicePdf";
+import { downloadFacturantePdfBlob } from "../lib/facturanteApi";
+import { sendMailFr } from "../lib/sheetsApi";
 
 // ─── Dots: puntos por recordatorio enviado este mes ──────────────────────────
 export function RecordatorioDots({ dots }) {
@@ -16,12 +22,6 @@ export function RecordatorioDots({ dots }) {
     </span>
   );
 }
-import { computeSaldo, computeSaldoPrevMes, computePautaPendiente, compEmpresa, compCurrency, makeType, MONTHS, fmt, downloadCSV, COMPANIES, COMP_TYPES, cmpDate } from "../lib/helpers";
-import { inPeriod, todayDmy } from "../data/franchisor";
-import { buildCCHtml, fetchLogoDataUrl, buildFacturaHtmlForMail, htmlToBase64, blobToBase64 } from "../lib/pdf";
-import { generateInvoicePdfBlob } from "../lib/invoicePdf";
-import { downloadFacturantePdfBlob } from "../lib/facturanteApi";
-import { sendMailFr } from "../lib/sheetsApi";
 
 // ─── HOOK COMPARTIDO: agrega datos por franquicia ─────────────────────────────
 function useFrData(franchises, month, year, filterCurrency = null) {
