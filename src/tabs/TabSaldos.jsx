@@ -18,7 +18,7 @@ export function RecordatorioDots({ dots }) {
 }
 import { computeSaldo, computeSaldoPrevMes, computePautaPendiente, compEmpresa, compCurrency, makeType, MONTHS, fmt, downloadCSV, COMPANIES, COMP_TYPES, cmpDate } from "../lib/helpers";
 import { inPeriod, todayDmy } from "../data/franchisor";
-import { buildCCHtml, buildFacturaHtmlForMail, htmlToBase64, blobToBase64 } from "../lib/pdf";
+import { buildCCHtml, fetchLogoDataUrl, buildFacturaHtmlForMail, htmlToBase64, blobToBase64 } from "../lib/pdf";
 import { generateInvoicePdfBlob } from "../lib/invoicePdf";
 import { downloadFacturantePdfBlob } from "../lib/facturanteApi";
 import { sendMailFr } from "../lib/sheetsApi";
@@ -37,10 +37,10 @@ export function useFrData(franchises, month, year, filterCurrency = null) {
       : allFc;
     const sp     = computeSaldoPrevMes(fr.id, year, month, comps, saldoInicial, null, filterCurrency, activeCompany);
     const sa     = computeSaldo(fr.id, year, month, comps, saldoInicial, null, filterCurrency, activeCompany);
-    // Por cuenta: neto = FACTURA - NC
+    // Por cuenta: neto = FACTURA - NC - FC_RECIBIDA
     const netoCuenta = (cuenta) => {
       const facts = fc.filter(c => c.type === makeType("FACTURA", cuenta)).reduce((a, c) => a + c.amount, 0);
-      const ncs   = fc.filter(c => c.type === makeType("NC",      cuenta)).reduce((a, c) => a + c.amount, 0);
+      const ncs   = fc.filter(c => c.type === makeType("NC", cuenta) || c.type === makeType("FC_RECIBIDA", cuenta)).reduce((a, c) => a + c.amount, 0);
       return { facts, ncs, neto: facts - ncs };
     };
     const fee           = netoCuenta("FEE");
@@ -85,8 +85,10 @@ export function SaldosTable({ title, data, accentColor, bgColor, borderColor, on
     setSendingMail(true);
     const ok = [], err = [];
     const DAYS = [31,28,31,30,31,30,31,31,30,31,30,31];
+    const logoUrl     = franchisor?.usa?.logoUrl || franchisor?.es?.logoUrl || "/Logo.jpg";
+    const logoDataUrl = await fetchLogoDataUrl(logoUrl);
     for (const d of confirmRows) {
-      const to = d.fr.emailFactura ?? d.fr.emailComercial ?? "";
+      const to = [d.fr.emailFactura, d.fr.emailComercial].filter(Boolean).join(",");
       if (!to) { err.push(`${d.fr.name} (sin email)`); continue; }
       try {
         // Construir líneas CC del período
@@ -109,7 +111,7 @@ export function SaldosTable({ title, data, accentColor, bgColor, borderColor, on
             return sign >= 0 ? { ...c, debit: c.amount, credit: 0 } : { ...c, debit: 0, credit: c.amount };
           }),
         ];
-        const ccHtml = buildCCHtml(d.fr.name, d.fr.razonSocial ?? null, ccLines, curLabel, month, year);
+        const ccHtml = buildCCHtml(d.fr.name, d.fr.razonSocial ?? null, ccLines, curLabel, month, year, logoDataUrl, activeCompany);
 
         // Adjuntar facturas del período
         const isAR = d.fr.country === "Argentina";

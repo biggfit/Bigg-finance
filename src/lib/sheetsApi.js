@@ -244,7 +244,7 @@ export async function fetchRecordatorios() {
   try {
     const data = await get("recordatorios");
     return data;
-  } catch (e) { console.error("[fetchRecordatorios] FAILED:", e); return {}; }
+  } catch (e) { console.error("[fetchRecordatorios] FAILED:", e); return null; }
 }
 
 /**

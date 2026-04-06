@@ -7,8 +7,10 @@ export const SKIP_CC_TYPES = new Set([]); // todos los tipos se muestran en el d
 export const SYM        = { ARS: "$", USD: "U$D", EUR: "€" };
 export const MONTHS     = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 
-// Documentos posibles
+// Documentos posibles (emisión propia)
 export const DOCS   = ["FACTURA", "NC"];
+// Documentos recibidos (no se emiten, se registran)
+export const DOCS_RECIBIDOS = ["FC_RECIBIDA"];
 // Cuentas posibles
 export const CUENTAS = ["FEE", "INTERUSOS", "PAUTA", "SPONSORS", "OTROS_INGRESOS"];
 export const CUENTA_LABEL = {
@@ -34,13 +36,21 @@ export const COMP_TYPES = {
   PAGO_PAUTA:   { label: "Pagos a Cuenta",       sign: -1, color: "var(--cyan)",   doc: null, cuenta: null },
   PAGO_ENVIADO: { label: "Transferencia Enviada",sign: +1, color: "var(--orange)", doc: null, cuenta: null },
 };
-// Generar dinámicamente todos los tipos FACTURA|X y NC|X
+// Generar dinámicamente todos los tipos FACTURA|X, NC|X
 DOCS.forEach(doc => {
   CUENTAS.forEach(cuenta => {
     const key = `${doc}|${cuenta}`;
     const sign = doc === "FACTURA" ? +1 : -1;
     const color = doc === "FACTURA" ? "var(--red)" : "var(--green)";
-    COMP_TYPES[key] = { label: `${doc === "FACTURA" ? "Factura" : "NC"} ${CUENTA_LABEL[cuenta]}`, sign, color, doc, cuenta };
+    const label = doc === "FACTURA" ? "Factura" : "NC";
+    COMP_TYPES[key] = { label: `${label} ${CUENTA_LABEL[cuenta]}`, sign, color, doc, cuenta };
+  });
+});
+// Generar FC_RECIBIDA|X (documentos recibidos, sign -1, no se emiten)
+DOCS_RECIBIDOS.forEach(doc => {
+  CUENTAS.forEach(cuenta => {
+    const key = `${doc}|${cuenta}`;
+    COMP_TYPES[key] = { label: `FC Recibida ${CUENTA_LABEL[cuenta]}`, sign: -1, color: "var(--blue)", doc, cuenta };
   });
 });
 

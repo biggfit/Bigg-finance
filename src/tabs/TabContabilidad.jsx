@@ -38,7 +38,7 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
       const key      = String(fr.id);
       const allComps = (comps[key] ?? []).filter(c => {
         if (SKIP_CC_TYPES.has(c.type)) return false;
-        if (compEmpresa(c) !== activeCompany) return false;
+        if (activeCompany && compEmpresa(c) !== activeCompany) return false;
         if (filterCurrency !== null && compCurrency(c) !== filterCurrency) return false;
         return true;
       });
@@ -122,24 +122,23 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
     // ── 2. Ordenar cronológicamente (fecha, luego sede alfabético) para acumular
     rows = [...rows].sort((a, b) => cmpDate(a.date, b.date) || a.frName.localeCompare(b.frName));
 
-    // ── 3. Calcular saldo individual por sede (para colorear) y acumulado global (para columna)
-    const acumSede = {};
-    let   acumGlobal = 0;
-    rows = rows.map(r => {
-      const sedeSaldo = (acumSede[r.frId] ?? 0) + r.debe - r.haber;
-      acumSede[r.frId] = sedeSaldo;
-      acumGlobal += r.debe - r.haber;
-      return { ...r, saldo: acumGlobal, saldoSede: sedeSaldo };
-    });
-
-    // ── 4. Aplicar sort del usuario
-    return [...rows].sort((a, b) => {
+    // ── 3. Aplicar sort del usuario
+    rows = [...rows].sort((a, b) => {
       if (sortCol === "date")  return sortDir * cmpDate(a.date, b.date) || a.frName.localeCompare(b.frName);
       if (sortCol === "sede")  return sortDir * a.frName.localeCompare(b.frName) || cmpDate(a.date, b.date);
       if (sortCol === "debe")  return sortDir * (b.debe - a.debe);
       if (sortCol === "haber") return sortDir * (b.haber - a.haber);
-      if (sortCol === "saldo") return sortDir * (b.saldo - a.saldo);
       return 0;
+    });
+
+    // ── 4. Recalcular saldo acumulado según el orden actual de la tabla
+    const acumSede = {};
+    let   acumGlobal = 0;
+    return rows.map(r => {
+      const sedeSaldo = (acumSede[r.frId] ?? 0) + r.debe - r.haber;
+      acumSede[r.frId] = sedeSaldo;
+      acumGlobal += r.debe - r.haber;
+      return { ...r, saldo: acumGlobal, saldoSede: sedeSaldo };
     });
   }, [allRows, fSede, fCuenta, fConcepto, sortCol, sortDir]);
 
@@ -153,11 +152,8 @@ const TabContabilidad = memo(function TabContabilidad({ franchises, month, year,
   const totalDebe  = filtered.filter(r => !r.isApertura).reduce((a, r) => a + r.debe,  0);
   const totalHaber = filtered.filter(r => !r.isApertura).reduce((a, r) => a + r.haber, 0);
   const activeCur  = filterCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS";
-  // saldo ya es acumulado global — el último valor cronológico es el total final
-  const saldoFinalConsolidado = useMemo(() => {
-    const cronRows = [...filtered].sort((a, b) => cmpDate(a.date, b.date) || a.frName.localeCompare(b.frName));
-    return cronRows.length > 0 ? cronRows[cronRows.length - 1].saldo : 0;
-  }, [filtered]);
+  // saldo ya se acumula según el orden de visualización actual — tomar el último row
+  const saldoFinalConsolidado = filtered.length > 0 ? filtered[filtered.length - 1].saldo : 0;
 
   const [openFilter, setOpenFilter] = useState(null);
   const [filterPos, setFilterPos] = React.useState({ top: 0, left: 0 });

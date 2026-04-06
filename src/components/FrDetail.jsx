@@ -5,7 +5,7 @@ import { dmyToIso, isoToDmy, inPeriod, cmpDate, COMPANIES, todayDmy } from "../d
 import { TypePill } from "./atoms";
 import AddCompModal from "./AddCompModal";
 import CCModal from "./CCModal";
-import { buildCCHtml, htmlToBase64, blobToBase64, buildFacturaHtmlForMail } from "../lib/pdf";
+import { buildCCHtml, fetchLogoDataUrl, htmlToBase64, blobToBase64, buildFacturaHtmlForMail } from "../lib/pdf";
 import { generateInvoicePdfBlob } from "../lib/invoicePdf";
 import { downloadFacturantePdfBlob } from "../lib/facturanteApi";
 import { sendMailFr } from "../lib/sheetsApi";
@@ -62,7 +62,12 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
   const prevYear      = localMonth === 0 ? localYear - 1 : localYear;
   const prevLastDay   = DAYS_IN_MONTH[prevMonth];
   const aperturaDate  = `${String(prevLastDay).padStart(2,"0")}/${String(prevMonth + 1).padStart(2,"0")}/${prevYear}`;
-  const lastComp      = compsWithSaldo[compsWithSaldo.length - 1];
+  const periodCutoff = useMemo(() => {
+    const last = new Date(localYear, localMonth + 1, 0);
+    const now = new Date();
+    const isActive = localMonth === (now.getMonth() === 0 ? 11 : now.getMonth() - 1) && localYear === (now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear());
+    return isActive ? todayDmy() : `${String(last.getDate()).padStart(2,"0")}/${String(last.getMonth()+1).padStart(2,"0")}/${last.getFullYear()}`;
+  }, [localMonth, localYear]);
 
   // Moneda de visualización: derivada de la empresa activa
   const displayCurrency = COMPANIES[activeCompany]?.currency ?? franchise.currency;
@@ -89,11 +94,14 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
             : { ...c, debit: 0, credit: c.amount };
         }),
       ];
-      const ccHtml = buildCCHtml(franchise.name, franchise.razonSocial ?? null, ccLines, displayCurrency, localMonth, localYear);
+      const logoUrl     = franchisor?.usa?.logoUrl || franchisor?.es?.logoUrl || "/Logo.jpg";
+      const logoDataUrl = await fetchLogoDataUrl(logoUrl);
+      const ccHtml      = buildCCHtml(franchise.name, franchise.razonSocial ?? null, ccLines, displayCurrency, localMonth, localYear, logoDataUrl, activeCompany);
 
-      // Facturas del mes con número emitido
+      // Comprobantes del mes con número emitido (Facturas, NC, FC_RECIBIDA)
       const isAR        = franchise.country === "Argentina";
-      const factsDelMes = compsWithSaldo.filter(c => c.invoice && c.type?.startsWith("FACTURA"));
+      const docTypes    = ["FACTURA", "NC", "FC_RECIBIDA"];
+      const factsDelMes = compsWithSaldo.filter(c => c.invoice && docTypes.some(d => c.type?.startsWith(d)));
       const factAdjs    = await Promise.all(factsDelMes.map(async (c) => {
         const label = (c.invoice ?? c.id).replace(/\//g, "-");
         if (isAR) {
@@ -108,8 +116,10 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
           return { data: htmlToBase64(factHtml), mimeType: "application/octet-stream", name: `${label}_${frSlug}.html` };
         }
         // USA / ES: generar PDF y convertir a base64
+        const doc = String(c.type ?? "").split("|")[0];
+        const prefix = doc === "NC" ? "CreditNote" : doc === "FC_RECIBIDA" ? "FCRecibida" : "Invoice";
         const blob = await generateInvoicePdfBlob(franchise, franchisor, c);
-        return { data: await blobToBase64(blob), mimeType: "application/pdf", name: `Invoice_${label}_${frSlug}.pdf` };
+        return { data: await blobToBase64(blob), mimeType: "application/pdf", name: `${prefix}_${label}_${frSlug}.pdf` };
       }));
 
       await sendMailFr({
@@ -140,9 +150,9 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
               )}
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <button className="ghost" style={{ fontSize: 15, padding: "0 6px", lineHeight: 1.3 }} onClick={goToPrev}>‹</button>
+              <button className="ghost" style={{ fontSize: 15, padding: "4px 10px", lineHeight: 1 }} onClick={goToPrev}>‹</button>
               <span style={{ fontSize: 12, fontWeight: 700, minWidth: 80, textAlign: "center" }}>{MONTH_NAMES[localMonth]} {localYear}</span>
-              <button className="ghost" style={{ fontSize: 15, padding: "0 6px", lineHeight: 1.3 }} onClick={goToNext}>›</button>
+              <button className="ghost" style={{ fontSize: 15, padding: "4px 10px", lineHeight: 1 }} onClick={goToNext}>›</button>
               <button className="ghost" onClick={() => setAdding(true)}>+ Comprobante</button>
               <button className="ghost" onClick={() => setShowCC(true)}>📋 CC</button>
               <button className="ghost" onClick={onClose}>Cerrar</button>
@@ -280,7 +290,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
             </div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
               <span style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 }}>
-                {sa < -0.01 ? "Saldo a favor al" : "Saldo adeudado al"} {lastComp?.date ?? aperturaDate}
+                {sa < -0.01 ? "Saldo a favor al" : "Saldo adeudado al"} {periodCutoff}
               </span>
               <span className="mono" style={{ fontSize: 22, fontWeight: 800, color: saldoColor(sa) }}>
                 {fmtS(sa, displayCurrency)}

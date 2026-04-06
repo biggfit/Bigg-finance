@@ -14,7 +14,7 @@ export default function AddCompModal({ franchise, month, year, onClose, onAdd })
   const allowedCurrencies = getCompanyCurrencies(activeCompany, franchisor);
   const [doc,      setDoc]      = useState("FACTURA");
   const [cuenta,   setCuenta]   = useState("FEE");
-  const [isMov,    setIsMov]    = useState(false);
+  const [mode,     setMode]     = useState("comprobante"); // "comprobante"|"fc_recibida"|"movimiento"
   const [movType,  setMovType]  = useState("PAGO");
   const [currency, setCurrency] = useState(() => {
     const def = COMPANIES[activeCompany]?.currency ?? franchise.currency ?? "ARS";
@@ -25,8 +25,10 @@ export default function AddCompModal({ franchise, month, year, onClose, onAdd })
   const [ref,      setRef]      = useState("");
   const [nota,     setNota]     = useState("");
 
-  const type       = isMov ? movType : makeType(doc, cuenta);
-  const showIVA    = !isMov && franchise.applyIVA;
+  const isMov      = mode === "movimiento";
+  const isFcRec    = mode === "fc_recibida";
+  const type       = isMov ? movType : isFcRec ? makeType("FC_RECIBIDA", cuenta) : makeType(doc, cuenta);
+  const showIVA    = (mode === "comprobante" || mode === "fc_recibida") && (COMPANIES[activeCompany]?.applyIVA ?? franchise.applyIVA);
   const amountNum  = parseFloat(String(amount).replace(",", ".")) || 0;
   const totalFinal = showIVA ? amountNum * (1 + TAX) : amountNum;
   const sym        = SYM[currency] ?? currency;
@@ -44,14 +46,18 @@ export default function AddCompModal({ franchise, month, year, onClose, onAdd })
   return (
     <Modal title={`Nuevo comprobante — ${franchise.name}`} subtitle={`${MONTH_NAMES[month]} ${year}`} onClose={onClose} width={540}>
 
-      {/* ── Comprobante / Movimiento toggle ── */}
+      {/* ── Comprobante / FC Recibida / Movimiento toggle ── */}
       <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1.5px solid var(--border2)", marginBottom: 18 }}>
-        {[["🧾 Comprobante", false], ["💸 Movimiento", true]].map(([lbl, v]) => (
-          <div key={String(v)} onClick={() => setIsMov(v)} style={{
-            flex: 1, padding: "9px 18px", cursor: "pointer", fontWeight: 800, fontSize: 13, textAlign: "center",
-            background: isMov === v ? "rgba(173,255,25,.12)" : "transparent",
-            color: isMov === v ? "var(--accent)" : "var(--muted)",
-            borderRight: !v ? "1px solid var(--border2)" : "none",
+        {[
+          ["🧾 Comprobante",  "comprobante",  "var(--red)"],
+          ["📥 FC Recibida",  "fc_recibida",  "var(--blue)"],
+          ["💸 Movimiento",   "movimiento",   "var(--green)"],
+        ].map(([lbl, v, clr], i) => (
+          <div key={v} onClick={() => setMode(v)} style={{
+            flex: 1, padding: "9px 12px", cursor: "pointer", fontWeight: 800, fontSize: 12, textAlign: "center",
+            background: mode === v ? `color-mix(in srgb, ${clr} 14%, transparent)` : "transparent",
+            color: mode === v ? clr : "var(--muted)",
+            borderRight: i < 2 ? "1px solid var(--border2)" : "none",
             transition: "all .12s",
           }}>{lbl}</div>
         ))}
@@ -67,18 +73,18 @@ export default function AddCompModal({ franchise, month, year, onClose, onAdd })
             <input type="date" value={date} onChange={e => setDate(e.target.value)}
               style={{ ...inputS, cursor: "pointer", colorScheme: "dark", fontWeight: 700 }} />
           </div>
-          {!isMov ? (
-            <div>
-              <label style={labelS}>CUENTA</label>
-              <select value={cuenta} onChange={e => setCuenta(e.target.value)} style={{ ...inputS, fontWeight: 700, fontSize: 13 }}>
-                {CUENTAS.map(c => <option key={c} value={c}>{CUENTA_LABEL[c]}</option>)}
-              </select>
-            </div>
-          ) : (
+          {isMov ? (
             <div>
               <label style={labelS}>TIPO DE MOVIMIENTO</label>
               <select value={movType} onChange={e => setMovType(e.target.value)} style={{ ...inputS, fontWeight: 700, fontSize: 13 }}>
                 {TIPOS_MOVIMIENTO.map(t => <option key={t} value={t}>{MOV_TYPES[t].label}</option>)}
+              </select>
+            </div>
+          ) : (
+            <div>
+              <label style={labelS}>CUENTA</label>
+              <select value={cuenta} onChange={e => setCuenta(e.target.value)} style={{ ...inputS, fontWeight: 700, fontSize: 13 }}>
+                {CUENTAS.map(c => <option key={c} value={c}>{CUENTA_LABEL[c]}</option>)}
               </select>
             </div>
           )}
@@ -86,16 +92,16 @@ export default function AddCompModal({ franchise, month, year, onClose, onAdd })
 
         {/* Columna derecha: Tipo doc (solo comprobante) + Moneda + Importe */}
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {!isMov && (
+          {mode === "comprobante" && (
             <div>
               <label style={labelS}>TIPO DE DOCUMENTO</label>
               <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1.5px solid var(--border2)" }}>
-                {DOCS.map(d => (
+                {DOCS.map((d, i) => (
                   <div key={d} onClick={() => setDoc(d)} style={{
                     flex: 1, padding: "9px 12px", cursor: "pointer", fontWeight: 800, fontSize: 13, textAlign: "center",
                     background: doc === d ? (d === "FACTURA" ? "rgba(255,85,112,.18)" : "rgba(16,217,122,.18)") : "transparent",
                     color: doc === d ? (d === "FACTURA" ? "var(--red)" : "var(--green)") : "var(--muted)",
-                    borderRight: d === "FACTURA" ? "1px solid var(--border2)" : "none",
+                    borderRight: i < DOCS.length - 1 ? "1px solid var(--border2)" : "none",
                     transition: "all .12s",
                   }}>
                     {d === "FACTURA" ? "🧾 Factura" : "📋 NC"}

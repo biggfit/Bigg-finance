@@ -4,7 +4,7 @@ import { useStore } from "../lib/context";
 import { compEmpresa, compCurrency, cmpDate, MONTHS, COMP_TYPES, computeSaldoPrevMes, getSaldoInicial, fmt0 } from "../lib/helpers";
 import { COMPANIES, todayDmy, dmyToIso, isoToDmy } from "../data/franchisor";
 import { RecordatorioDots } from "./TabSaldos";
-import { buildCCHtml } from "../lib/pdf";
+import { buildCCHtml, fetchLogoDataUrl } from "../lib/pdf";
 import { sendMailFr } from "../lib/sheetsApi";
 
 // Último día del mes anterior al cutoff (DD/MM/YYYY → DD/MM/YYYY)
@@ -22,12 +22,12 @@ function monthStart(dmy) {
 
 // Columnas ordenables
 const COLS = [
-  { key: "name",      label: "SEDE",           align: "left",  color: "var(--muted)" },
-  { key: "country",   label: "PAÍS",           align: "left",  color: "var(--muted)", filterable: true },
-  { key: "saldoAnt",  label: "SALDO ANT.",     align: "right", color: "var(--accent)" },
-  { key: "pagosNet",  label: "PAGOS / ENVÍOS", align: "right", color: "var(--green)" },
-  { key: "saldoReal", label: "SALDO REAL",     align: "right", color: "var(--accent)" },
-  { key: "actions",   label: "",               align: "right", color: "var(--muted)", noSort: true },
+  { key: "name",      label: "SEDE",       align: "left",  color: "var(--muted)" },
+  { key: "country",   label: "PAÍS",       align: "left",  color: "var(--muted)", filterable: true },
+  { key: "saldoAnt",  label: "SALDO ANT.", align: "right", color: "var(--accent)" },
+  { key: "pagosNet",  label: "PAGOS",      align: "right", color: "var(--green)" },
+  { key: "saldoReal", label: "SALDO REAL", align: "right", color: "var(--accent)" },
+  { key: "actions",   label: "",           align: "right", color: "var(--muted)", noSort: true },
 ];
 
 function SortIcon({ dir }) {
@@ -75,10 +75,13 @@ function CountryDropdown({ countries, value, onChange, onClose }) {
   );
 }
 
-function RowDeudor({ fr, saldoAnt, pagosNet, saldoReal, i, f, onOpenFr, handleMail, dotsForFr }) {
+function RowDeudor({ fr, saldoAnt, pagosNet, saldoReal, i, f, onOpenFr, handleMail, dotsForFr, sinFc, checked, onToggle }) {
   return (
-    <tr style={{ borderBottom: "1px solid var(--border)", background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,.012)" }}>
-      <td style={{ padding: "7px 12px" }}>
+    <tr style={{ borderBottom: "1px solid var(--border)", background: checked ? "rgba(173,255,25,.04)" : i % 2 === 0 ? "transparent" : "rgba(255,255,255,.012)" }}>
+      <td style={{ padding: "0 8px", textAlign: "center" }}>
+        <input type="checkbox" checked={!!checked} onChange={onToggle} style={{ cursor: "pointer", accentColor: "var(--accent)" }} />
+      </td>
+      <td style={{ padding: "7px 4px 7px 0" }}>
         <button className="ghost" style={{ fontWeight: 600, fontSize: 12, padding: "1px 4px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 175, display: "block" }}
           onClick={() => onOpenFr?.(fr.id)}>{fr.name}</button>
       </td>
@@ -96,6 +99,9 @@ function RowDeudor({ fr, saldoAnt, pagosNet, saldoReal, i, f, onOpenFr, handleMa
       </td>
       <td style={{ padding: "7px 16px 7px 8px", textAlign: "right", whiteSpace: "nowrap" }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 5, justifyContent: "flex-end" }}>
+          {sinFc
+            ? <span title="Pendiente de recibir factura" style={{ fontSize: 9, fontWeight: 800, color: "#ef4444", background: "rgba(239,68,68,.12)", border: "1px solid rgba(239,68,68,.3)", borderRadius: 4, padding: "1px 5px", whiteSpace: "nowrap", minWidth: 34, textAlign: "center", display: "inline-block" }}>✕ FC</span>
+            : <span style={{ display: "inline-block", minWidth: 34 }} />}
           <button className="ghost" style={{ fontSize: 10, padding: "2px 7px" }} onClick={() => onOpenFr?.(fr.id)}>CC</button>
           <button onClick={() => handleMail([{ fr, saldoAnt }])} title="Enviar recordatorio"
             style={{ background: "rgba(255,255,255,.04)", border: "1px solid var(--border2)", borderRadius: 999,
@@ -116,7 +122,7 @@ function SubtotalCells({ label, tot, f, color, grand }) {
   const fs = grand ? 14 : 13;
   const fw = grand ? 800 : 700;
   return (<>
-    <td colSpan={2} style={{ padding: "8px 12px", fontWeight: fw, fontSize: fs, color: "var(--muted)" }}>{label}</td>
+    <td colSpan={3} style={{ padding: "8px 12px", fontWeight: fw, fontSize: fs, color: "var(--muted)" }}>{label}</td>
     <td className="mono" style={{ textAlign: "right", padding: "8px 12px", fontWeight: fw, fontSize: fs,
       color: tot.saldoAnt > 0.01 ? "var(--red)" : tot.saldoAnt < -0.01 ? "var(--green)" : "var(--muted)" }}>
       {Math.abs(tot.saldoAnt) > 0.01 ? `${tot.saldoAnt < 0 ? "-" : ""}${f(Math.abs(tot.saldoAnt))}` : "—"}
@@ -133,14 +139,27 @@ function SubtotalCells({ label, tot, f, color, grand }) {
 
 const COLGROUP = (
   <colgroup>
-    <col style={{ width: 155 }} />
+    <col style={{ width: 28 }} />
+    <col style={{ width: 145 }} />
+    <col style={{ width: 70 }} />
+    <col style={{ width: 100 }} />
     <col style={{ width: 85 }} />
+    <col style={{ width: 100 }} />
     <col style={{ width: 115 }} />
-    <col style={{ width: 115 }} />
-    <col style={{ width: 115 }} />
-    <col style={{ width: 120 }} />
   </colgroup>
 );
+
+function sortRows(arr, sc, sd) {
+  return [...arr].sort((a, b) => {
+    let av, bv;
+    if (sc === "name")         { av = a.fr.name?.toLowerCase() ?? ""; bv = b.fr.name?.toLowerCase() ?? ""; }
+    else if (sc === "country") { av = a.fr.country?.toLowerCase() ?? ""; bv = b.fr.country?.toLowerCase() ?? ""; }
+    else { av = a[sc] ?? 0; bv = b[sc] ?? 0; }
+    if (av < bv) return sd === "asc" ? -1 : 1;
+    if (av > bv) return sd === "asc" ? 1 : -1;
+    return 0;
+  });
+}
 
 function sumGroup(group) {
   return group.reduce((acc, r) => ({
@@ -150,63 +169,66 @@ function sumGroup(group) {
   }), { saldoAnt: 0, pagosNet: 0, saldoReal: 0 });
 }
 
-const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr, cutoff, soloPendiente, selectedFrIds, showDeben, setShowDeben, showOtros, setShowOtros }) {
-  const { comps, saldoInicial, activeCompany, recordatorios, addRecordatorioEntry } = useStore();
-  const [sortCol, setSortCol] = useState("saldoReal");
-  const [sortDir, setSortDir] = useState("desc");
+const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr, cutoff, periodMonth, periodYear, soloPendiente, selectedFrIds, showDeben, setShowDeben, showOtros, setShowOtros }) {
+  const { comps, saldoInicial, activeCompany, recordatorios, addRecordatorioEntry, franchisor } = useStore();
+  const [sortCol,      setSortCol]      = useState("saldoReal");
+  const [sortDir,      setSortDir]      = useState("desc");
+  const [sortColOtros, setSortColOtros] = useState("saldoReal");
+  const [sortDirOtros, setSortDirOtros] = useState("desc");
   const [filterCountry, setFilterCountry] = useState(null);
   const [countryDropOpen, setCountryDropOpen] = useState(false);
   const [confirmRows, setConfirmRows] = useState(null);
   const [sendingMail, setSendingMail] = useState(false);
   const [mailResult, setMailResult] = useState(null);
+  const [selectedDeben, setSelectedDeben] = useState(new Set());
+  const [selectedOtros, setSelectedOtros] = useState(new Set());
 
   const filterCurrency = filterCur === "ALL" ? null : filterCur;
   const cur = filterCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS";
   const f = (v) => fmt0(v, cur);
 
-  // Período del mail: mes/año del cutoff
-  const [, cutoffMM, cutoffYYYY] = cutoff.split("/");
-  const mailMonth = parseInt(cutoffMM, 10) - 1; // 0-based
-  const mailYear  = parseInt(cutoffYYYY, 10);
 
-  // Dots: recordatorios del mes calendario actual
-  const dotsForFr = useCallback((frId) => {
-    const nowM = new Date().getMonth(), nowY = new Date().getFullYear();
-    return (recordatorios?.[String(frId)] ?? []).filter(r => {
-      const fecha = r.fecha ?? "";
-      let mm, yy;
-      if (fecha.includes("/")) { const p = fecha.split("/"); mm = Number(p[1]); yy = Number(p[2]); }
-      else if (fecha.includes("-")) { const iso = fecha.slice(0, 10).split("-"); yy = Number(iso[0]); mm = Number(iso[1]); }
-      else return false;
-      return mm - 1 === nowM && yy === nowY;
-    });
-  }, [recordatorios]);
+  // Dots: recordatorios del período (ccMes/ccAnio) igual que FrDetail
+  const dotsForFr = useCallback((frId) =>
+    (recordatorios?.[String(frId)] ?? []).filter(r =>
+      Number(r.ccMes) - 1 === periodMonth && Number(r.ccAnio) === periodYear
+    )
+  , [recordatorios, periodMonth, periodYear]);
 
   const handleMail = useCallback((rows) => setConfirmRows(rows), []);
+
+  const toggleDeben = useCallback((id) => setSelectedDeben(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; }), []);
+  const toggleOtros = useCallback((id) => setSelectedOtros(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; }), []);
+  const toggleAllDeben = useCallback((allIds) => setSelectedDeben(prev => prev.size === allIds.length ? new Set() : new Set(allIds)), []);
+  const toggleAllOtros = useCallback((allIds) => setSelectedOtros(prev => prev.size === allIds.length ? new Set() : new Set(allIds)), []);
 
   const doSendMail = useCallback(async () => {
     if (!confirmRows) return;
     setSendingMail(true);
     const ok = [], err = [];
+    const logoUrl     = franchisor?.usa?.logoUrl || franchisor?.es?.logoUrl || "/Logo.jpg";
+    const logoDataUrl = await fetchLogoDataUrl(logoUrl);
     for (const d of confirmRows) {
-      const to = d.fr.emailFactura ?? d.fr.emailComercial ?? "";
+      const to = [d.fr.emailFactura, d.fr.emailComercial].filter(Boolean).join(",");
       if (!to) { err.push(`${d.fr.name} (sin email)`); continue; }
       try {
-        // Ventana de 2 meses: desde el 1er día del mes anterior al cutoff, hasta el cutoff
-        const prevMonthEndDate   = prevMonthEnd(cutoff);           // e.g. "28/02/2026"
-        const prevMonthStartDate = monthStart(prevMonthEndDate);   // e.g. "01/02/2026"
-        const aperturaDate       = prevMonthEnd(prevMonthEndDate); // e.g. "31/01/2026"
+        // Ventana exacta del período: 01/periodMonth → cutoff
+        const mm          = String(periodMonth + 1).padStart(2, "0");
+        const windowStart = `01/${mm}/${periodYear}`;  // e.g. "01/02/2026"
 
-        // Saldo apertura = saldo al fin del mes antes de la ventana
-        const [, prevMM, prevYYYY] = prevMonthStartDate.split("/");
-        const prevMonth = parseInt(prevMM, 10) - 1;
-        const prevYear  = parseInt(prevYYYY, 10);
-        const sp = computeSaldoPrevMes(d.fr.id, prevYear, prevMonth, comps, saldoInicial, null, filterCurrency, activeCompany);
+        // aperturaDate: último día del mes anterior al período de facturación
+        const apM       = periodMonth === 0 ? 11 : periodMonth - 1;
+        const apY       = periodMonth === 0 ? periodYear - 1 : periodYear;
+        const apLast    = new Date(apY, apM + 1, 0);
+        const aperturaDate = `${String(apLast.getDate()).padStart(2,"0")}/${String(apLast.getMonth()+1).padStart(2,"0")}/${apLast.getFullYear()}`;
 
-        // Movimientos en la ventana: 01/prev → cutoff
+        // Saldo apertura = saldo al fin del mes anterior al período de facturación
+        const sp = computeSaldoPrevMes(d.fr.id, periodYear, periodMonth, comps, saldoInicial, null, filterCurrency, activeCompany);
+
+        // Movimientos en la ventana: 01/periodMonth → cutoff
         const frComps = (comps[String(d.fr.id)] ?? [])
           .filter(c =>
-            cmpDate(c.date, prevMonthStartDate) >= 0 &&
+            cmpDate(c.date, windowStart) >= 0 &&
             cmpDate(c.date, cutoff) <= 0 &&
             compEmpresa(c) === activeCompany &&
             (!filterCurrency || compCurrency(c) === filterCurrency)
@@ -226,23 +248,25 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
             return sign >= 0 ? { ...c, debit: c.amount, credit: 0 } : { ...c, debit: 0, credit: c.amount };
           }),
         ];
-        const ccHtml = buildCCHtml(d.fr.name, d.fr.razonSocial ?? null, ccLines, cur, mailMonth, mailYear);
+        const ccHtml = buildCCHtml(d.fr.name, d.fr.razonSocial ?? null, ccLines, cur, periodMonth, periodYear, logoDataUrl, activeCompany);
         await sendMailFr({
           to,
-          subject: `Estado de Cuenta ${d.fr.name} — ${MONTHS[mailMonth]} ${mailYear}`,
+          subject: `Estado de Cuenta ${d.fr.name} — ${MONTHS[periodMonth]} ${periodYear}`,
           htmlBody: ccHtml,
           attachments: [],
         });
-        addRecordatorioEntry(d.fr.id, { fecha: todayDmy(), ccMes: mailMonth + 1, ccAnio: mailYear, to });
+        addRecordatorioEntry(d.fr.id, { fecha: todayDmy(), ccMes: periodMonth + 1, ccAnio: periodYear, to });
         ok.push(d.fr.name);
       } catch (e) { err.push(`${d.fr.name} (${e.message})`); }
     }
     setSendingMail(false);
     setConfirmRows(null);
+    setSelectedDeben(new Set());
+    setSelectedOtros(new Set());
     setMailResult({ ok, err });
-  }, [confirmRows, comps, saldoInicial, activeCompany, cutoff, filterCurrency, cur, mailMonth, mailYear, addRecordatorioEntry]);
+  }, [confirmRows, comps, saldoInicial, activeCompany, cutoff, filterCurrency, cur, periodMonth, periodYear, franchisor, addRecordatorioEntry]);
 
-  const mesInicio = useMemo(() => monthStart(cutoff), [cutoff]);
+  const mesInicio = useMemo(() => `01/${String(periodMonth + 1).padStart(2, "0")}/${periodYear}`, [periodMonth, periodYear]);
 
   // Países disponibles (de las franquicias activas, ordenados)
   const countries = useMemo(() => {
@@ -250,14 +274,12 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
     return [...set].sort();
   }, [franchises]);
 
-  const handleSort = (key) => {
-    if (sortCol === key) {
-      setSortDir(d => d === "asc" ? "desc" : "asc");
-    } else {
-      setSortCol(key);
-      setSortDir(key === "name" || key === "country" ? "asc" : "desc");
-    }
+  const makeHandleSort = (sc, setCol, setDir) => (key) => {
+    if (sc === key) setDir(d => d === "asc" ? "desc" : "asc");
+    else { setCol(key); setDir(key === "name" || key === "country" ? "asc" : "desc"); }
   };
+  const handleSort      = makeHandleSort(sortCol,      setSortCol,      setSortDir);
+  const handleSortOtros = makeHandleSort(sortColOtros, setSortColOtros, setSortDirOtros);
 
   const rows = useMemo(() => {
     const data = franchises
@@ -280,11 +302,11 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
           const t      = c.type ?? "";
           const enMes  = cmpDate(c.date, mesInicio) >= 0;
 
-          if      (t.startsWith("FACTURA|")) { if (enMes) fMes  += amt; else fAnt  += amt; }
-          else if (t.startsWith("NC|"))      { if (enMes) ncMes += amt; else ncAnt += amt; }
-          else if (t === "PAGO")             { if (enMes) pMes  += amt; else pAnt  += amt; }
-          else if (t === "PAGO_PAUTA")       { if (enMes) ppMes += amt; else ppAnt += amt; }
-          else if (t === "PAGO_ENVIADO")     { if (enMes) eMes  += amt; else eAnt  += amt; }
+          if      (t.startsWith("FACTURA|"))      { if (enMes) fMes  += amt; else fAnt  += amt; }
+          else if (t.startsWith("NC|") || t.startsWith("FC_RECIBIDA|")) { if (enMes) ncMes += amt; else ncAnt += amt; }
+          else if (t === "PAGO")                { if (enMes) pMes  += amt; else pAnt  += amt; }
+          else if (t === "PAGO_PAUTA")          { if (enMes) ppMes += amt; else ppAnt += amt; }
+          else if (t === "PAGO_ENVIADO")        { if (enMes) eMes  += amt; else eAnt  += amt; }
         }
 
         // Saldo ant: todo incluido (PAGO_PAUTA del mes anterior ya tiene su FC)
@@ -303,35 +325,39 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
       })
       .filter(Boolean);
 
-    return data.sort((a, b) => {
-      let av, bv;
-      if (sortCol === "name")         { av = a.fr.name?.toLowerCase() ?? ""; bv = b.fr.name?.toLowerCase() ?? ""; }
-      else if (sortCol === "country") { av = a.fr.country?.toLowerCase() ?? ""; bv = b.fr.country?.toLowerCase() ?? ""; }
-      else { av = a[sortCol] ?? 0; bv = b[sortCol] ?? 0; }
-      if (av < bv) return sortDir === "asc" ? -1 : 1;
-      if (av > bv) return sortDir === "asc" ? 1 : -1;
-      return 0;
-    });
-  }, [franchises, comps, saldoInicial, activeCompany, cutoff, mesInicio, filterCurrency, sortCol, sortDir, filterCountry, selectedFrIds]);
+    return data;
+  }, [franchises, comps, saldoInicial, activeCompany, cutoff, mesInicio, filterCurrency, filterCountry, selectedFrIds]);
 
-  // Si nos debían (saldoAnt > 0) y pagaron, van a NOS DEBEN aunque saldoReal ≤ 0
-  // umbral 0.5: coincide con el redondeo de maximumFractionDigits:0 (< 0.5 muestra "$0")
-  const { rowsDeben, rowsOtros, totDeben, totOtros, totGrand } = useMemo(() => {
+  // NOS DEBEN: saldoReal > 0, o saldoAnt > 0 y pagaron quedando en ~0 (saldoReal > -0.5)
+  // Si el saldoReal es claramente negativo (< -0.5) va a DEBEMOS aunque haya tenido deuda anterior
+  const { debe, otros, totDeben, totOtros, totGrand } = useMemo(() => {
     const visible = soloPendiente ? rows.filter(r => Math.abs(r.saldoReal) >= 0.5) : rows;
-    const debe = visible.filter(r => r.saldoReal > 0.01 || r.saldoAnt > 0.01);
-    const otros = visible.filter(r => r.saldoReal <= 0.01 && r.saldoAnt <= 0.01);
-    return {
-      rowsDeben: debe,
-      rowsOtros: otros,
-      totDeben:  sumGroup(debe),
-      totOtros:  sumGroup(otros),
-      totGrand:  sumGroup(visible),
-    };
+    const debe  = visible.filter(r => r.saldoReal > 0.01 || (r.saldoAnt > 0.01 && r.saldoReal > -0.5));
+    const otros = visible.filter(r => !(r.saldoReal > 0.01 || (r.saldoAnt > 0.01 && r.saldoReal > -0.5)));
+    return { debe, otros, totDeben: sumGroup(debe), totOtros: sumGroup(otros), totGrand: sumGroup(visible) };
   }, [rows, soloPendiente]);
+
+  const rowsDeben = useMemo(() => sortRows(debe,  sortCol,      sortDir),      [debe,  sortCol,      sortDir]);
+  const rowsOtros = useMemo(() => sortRows(otros, sortColOtros, sortDirOtros), [otros, sortColOtros, sortDirOtros]);
+
+  // IDs de franquicias con FC_RECIBIDA sin número de factura (pendiente de recibir)
+  const frIdsSinFc = useMemo(() => {
+    const ids = new Set();
+    for (const [frId, frComps] of Object.entries(comps)) {
+      for (const c of frComps) {
+        const doc = String(c.type ?? "").split("|")[0];
+        if (doc === "FC_RECIBIDA" && !c.invoice && compEmpresa(c) === activeCompany) {
+          ids.add(Number(frId));
+        }
+      }
+    }
+    return ids;
+  }, [comps, activeCompany]);
 
   const downloadDebemos = useCallback((e) => {
     e.stopPropagation();
-    const data = rowsOtros.map(({ fr, saldoReal }) => ({
+    const source = selectedOtros.size > 0 ? rowsOtros.filter(r => selectedOtros.has(r.fr.id)) : rowsOtros;
+    const data = source.map(({ fr, saldoReal }) => ({
       "Sede":    fr.name ?? "",
       "CUIT":    fr.cuit ?? "",
       "Saldo":   saldoReal,
@@ -343,13 +369,22 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "DEBEMOS");
     XLSX.writeFile(wb, `debemos_${cutoff.replace(/\//g, "-")}.xlsx`);
-  }, [rowsOtros, cutoff]);
+  }, [rowsOtros, selectedOtros, cutoff]);
 
-  const thBase = { padding: "8px 12px", fontWeight: 700, fontSize: 11, letterSpacing: ".06em", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" };
+  const thBase = { padding: "8px 8px", fontWeight: 700, fontSize: 11, letterSpacing: ".06em", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" };
 
-  const thead = () => (
+  const thead = (sc, sd, onSort, selState) => (
     <thead>
       <tr style={{ borderBottom: "2px solid var(--border2)", background: "var(--bg2)" }}>
+        <th style={{ width: 32, padding: "0 8px", textAlign: "center" }}>
+          {selState && (
+            <input type="checkbox"
+              checked={selState.allIds.length > 0 && selState.allIds.every(id => selState.selected.has(id))}
+              onChange={selState.onToggleAll}
+              style={{ cursor: "pointer", accentColor: "var(--accent)" }}
+            />
+          )}
+        </th>
         {COLS.map(col => (
           <th
             key={col.key}
@@ -357,9 +392,9 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
               ...thBase,
               position: "relative",
               textAlign: col.align,
-              color: (sortCol === col.key || (col.filterable && filterCountry)) ? col.color : "var(--muted)",
-              opacity: (sortCol === col.key || (col.filterable && filterCountry)) ? 1 : 0.75,
-              paddingLeft: col.align === "left" ? (col.key === "country" ? 8 : 12) : undefined,
+              color: (sc === col.key || (col.filterable && filterCountry)) ? col.color : "var(--muted)",
+              opacity: (sc === col.key || (col.filterable && filterCountry)) ? 1 : 0.75,
+              paddingLeft: col.align === "left" ? (col.key === "country" ? 8 : col.key === "name" ? 4 : 12) : undefined,
               paddingRight: col.align === "left" ? (col.key === "country" ? 8 : 12) : undefined,
             }}
             onClick={() => {
@@ -367,14 +402,14 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
               if (col.filterable && countries.length > 1) {
                 setCountryDropOpen(v => !v);
               } else {
-                handleSort(col.key);
+                onSort(col.key);
               }
             }}
           >
             {col.label}
             {col.filterable && countries.length > 1
               ? <span style={{ marginLeft: 3, fontSize: 9, opacity: filterCountry ? 1 : 0.4 }}>▾</span>
-              : <SortIcon dir={sortCol === col.key ? sortDir : null} />
+              : <SortIcon dir={sc === col.key ? sd : null} />
             }
             {filterCountry && col.filterable && (
               <span style={{ marginLeft: 2, fontSize: 9, color: "var(--accent)" }}>({filterCountry})</span>
@@ -403,7 +438,7 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
           <div className="fade" style={{ background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: 14, padding: 28, maxWidth: 460, width: "100%" }}>
             <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 8 }}>Confirmar envío</div>
             <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 14 }}>
-              Estás por enviar el estado de cuenta de <strong style={{ color: "var(--text)" }}>{MONTHS[mailMonth]} {mailYear}</strong> a:
+              Estás por enviar el estado de cuenta de <strong style={{ color: "var(--text)" }}>{MONTHS[periodMonth]} {periodYear}</strong> a:
             </div>
             <div style={{ marginBottom: 20, maxHeight: 180, overflowY: "auto" }}>
               {confirmRows.map(d => (
@@ -443,20 +478,26 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
             <span style={{ fontSize: 13, color: "var(--red)", fontWeight: 800 }}>{f(totDeben.saldoReal)}</span>
           )}
           <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 400 }}>{rowsDeben.length} sedes</span>
+          {selectedDeben.size > 0 && (
+            <button className="ghost" style={{ fontSize: 10, padding: "2px 8px", marginLeft: 4 }}
+              onClick={e => { e.stopPropagation(); handleMail(rowsDeben.filter(r => selectedDeben.has(r.fr.id)).map(r => ({ fr: r.fr, saldoAnt: r.saldoAnt }))); }}>
+              ✉ Enviar {selectedDeben.size}
+            </button>
+          )}
           <span style={{ marginLeft: "auto", fontSize: 9, color: "var(--muted)", opacity: 0.6 }}>{showDeben ? "▲" : "▼"}</span>
         </div>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed" }}>
             {COLGROUP}
-            {thead()}
+            {thead(sortCol, sortDir, handleSort, { selected: selectedDeben, allIds: rowsDeben.map(r => r.fr.id), onToggleAll: () => toggleAllDeben(rowsDeben.map(r => r.fr.id)) })}
             <tbody>
               <tr style={{ borderBottom: "3px solid rgba(255,85,112,.75)", background: "rgba(255,85,112,.04)" }}>
                 <SubtotalCells label="SUBTOTAL" tot={totDeben} f={f} color="var(--red)" />
               </tr>
               {showDeben && (rowsDeben.length === 0
-                ? <tr><td colSpan={6} style={{ textAlign: "center", padding: 20, color: "var(--muted)", fontSize: 12 }}>Sin deudores</td></tr>
+                ? <tr><td colSpan={7} style={{ textAlign: "center", padding: 20, color: "var(--muted)", fontSize: 12 }}>Sin deudores</td></tr>
                 : rowsDeben.map(({ fr, saldoAnt, pagosNet, saldoReal }, i) => (
-                    <RowDeudor key={fr.id} fr={fr} saldoAnt={saldoAnt} pagosNet={pagosNet} saldoReal={saldoReal} i={i} f={f} onOpenFr={onOpenFr} handleMail={handleMail} dotsForFr={dotsForFr} />
+                    <RowDeudor key={fr.id} fr={fr} saldoAnt={saldoAnt} pagosNet={pagosNet} saldoReal={saldoReal} i={i} f={f} onOpenFr={onOpenFr} handleMail={handleMail} dotsForFr={dotsForFr} checked={selectedDeben.has(fr.id)} onToggle={() => toggleDeben(fr.id)} />
                   ))
               )}
             </tbody>
@@ -477,6 +518,12 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
             </span>
           )}
           <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 400 }}>{rowsOtros.length} sedes</span>
+          {selectedOtros.size > 0 && (
+            <button className="ghost" style={{ fontSize: 10, padding: "2px 8px" }}
+              onClick={e => { e.stopPropagation(); handleMail(rowsOtros.filter(r => selectedOtros.has(r.fr.id)).map(r => ({ fr: r.fr, saldoAnt: r.saldoAnt }))); }}>
+              ✉ Enviar {selectedOtros.size}
+            </button>
+          )}
           <button
             className="ghost"
             style={{ marginLeft: "auto", fontSize: 10, padding: "2px 8px", color: "var(--muted)", display: "flex", alignItems: "center", gap: 4 }}
@@ -490,15 +537,15 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed" }}>
             {COLGROUP}
-            {thead()}
+            {thead(sortColOtros, sortDirOtros, handleSortOtros, { selected: selectedOtros, allIds: rowsOtros.map(r => r.fr.id), onToggleAll: () => toggleAllOtros(rowsOtros.map(r => r.fr.id)) })}
             <tbody>
               <tr style={{ borderBottom: "3px solid rgba(16,217,122,.75)", background: "rgba(16,217,122,.04)" }}>
                 <SubtotalCells label="SUBTOTAL" tot={totOtros} f={f} color="var(--green)" />
               </tr>
               {showOtros && (rowsOtros.length === 0
-                ? <tr><td colSpan={6} style={{ textAlign: "center", padding: 20, color: "var(--muted)", fontSize: 12 }}>Sin registros</td></tr>
+                ? <tr><td colSpan={7} style={{ textAlign: "center", padding: 20, color: "var(--muted)", fontSize: 12 }}>Sin registros</td></tr>
                 : rowsOtros.map(({ fr, saldoAnt, pagosNet, saldoReal }, i) => (
-                    <RowDeudor key={fr.id} fr={fr} saldoAnt={saldoAnt} pagosNet={pagosNet} saldoReal={saldoReal} i={i} f={f} onOpenFr={onOpenFr} handleMail={handleMail} dotsForFr={dotsForFr} />
+                    <RowDeudor key={fr.id} fr={fr} saldoAnt={saldoAnt} pagosNet={pagosNet} saldoReal={saldoReal} i={i} f={f} onOpenFr={onOpenFr} handleMail={handleMail} dotsForFr={dotsForFr} sinFc={frIdsSinFc.has(fr.id)} checked={selectedOtros.has(fr.id)} onToggle={() => toggleOtros(fr.id)} />
                   ))
               )}
             </tbody>

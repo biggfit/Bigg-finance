@@ -4,12 +4,12 @@ import { buildCuentaCorriente, COMP_TYPES, fmt, fmtS, downloadCSV } from "../lib
 import { COMPANIES } from "../data/franchisor";
 import { dmyToIso, isoToDmy } from "../data/franchisor";
 import { TypePill } from "./atoms";
-import { buildCCHtml } from "../lib/pdf";
+import { buildCCHtml, fetchLogoDataUrl } from "../lib/pdf";
 import { sendMailFr } from "../lib/sheetsApi";
 
 // ─── CC MODAL — Historial completo tipo base de datos ────────────────────────
 export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
-  const { comps, saldoInicial, activeCompany } = useStore();
+  const { comps, saldoInicial, activeCompany, franchisor } = useStore();
   const displayCurrency = COMPANIES[activeCompany]?.currency ?? franchise.currency;
   const { lines } = buildCuentaCorriente(franchise.id, comps, saldoInicial, null, null, activeCompany);
   const MOV_TYPES = new Set(["PAGO", "PAGO_PAUTA", "PAGO_ENVIADO"]);
@@ -31,13 +31,15 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
 
   // ── Enviar CC completa (sin facturas individuales) ──────────────────────────
   const handleSendMail = useCallback(async () => {
-    const to = franchise.emailFactura || franchise.emailComercial || "";
+    const to = [franchise.emailFactura, franchise.emailComercial].filter(Boolean).join(",");
     if (!to) { setMailError("Sin email configurado"); setMailStatus("error"); return; }
     setMailStatus("sending");
     setMailError("");
     try {
-      const now    = new Date();
-      const ccHtml = buildCCHtml(franchise.name, franchise.razonSocial ?? null, lines, displayCurrency, now.getMonth(), now.getFullYear());
+      const now         = new Date();
+      const logoUrl     = franchisor?.usa?.logoUrl || franchisor?.es?.logoUrl || "/Logo.jpg";
+      const logoDataUrl = await fetchLogoDataUrl(logoUrl);
+      const ccHtml      = buildCCHtml(franchise.name, franchise.razonSocial ?? null, lines, displayCurrency, null, null, logoDataUrl, activeCompany);
       const today  = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "long", year: "numeric" });
       await sendMailFr({
         to,

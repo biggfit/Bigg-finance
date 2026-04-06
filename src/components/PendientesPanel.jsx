@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useStore } from "../lib/context";
-import { makeType, MONTHS, AVAILABLE_YEARS, fmt, compCurrency, compEmpresa, CUENTAS, CUENTA_LABEL } from "../lib/helpers";
+import { makeType, MONTHS, AVAILABLE_YEARS, fmt, compCurrency, compEmpresa, CUENTAS, CUENTA_LABEL, COMPANIES } from "../lib/helpers";
 import { inPeriod, dateMonth, dateYear } from "../data/franchisor";
 
 // ── Pendientes panel ────────────────────────────────────────────────────────
@@ -9,6 +9,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
   const [showAfip,       setShowAfip]       = useState(false);
   const [showSinAsignar, setShowSinAsignar] = useState(false);
   const [showPago,       setShowPago]       = useState(false);
+  const [showFcRecibidas, setShowFcRecibidas] = useState(false);
   const [emitting, setEmitting] = useState({}); // { [compId]: true }
   const [errors,   setErrors]   = useState({}); // { [compId]: string }
 
@@ -179,6 +180,21 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
     });
   }, [franchises, comps, activeCompany]);
 
+  // 4. FC Recibidas pendientes de recibir factura (sin invoice)
+  const fcRecibidasPendientes = useMemo(() => {
+    return franchises.filter(f => f.activa !== false).flatMap(fr => {
+      const frComps = comps[fr.id] ?? [];
+      return frComps
+        .filter(c => {
+          const doc = String(c.type ?? "").split("|")[0];
+          return doc === "FC_RECIBIDA" &&
+                 !c.invoice &&
+                 (!activeCompany || compEmpresa(c) === activeCompany);
+        })
+        .map(c => ({ fr, comp: c }));
+    }).sort((a, b) => a.fr.name.localeCompare(b.fr.name, "es"));
+  }, [franchises, comps, activeCompany]);
+
   // ── Emitir individual ──
   const handleEmitAfip = async (fr, comp) => {
     if (emitting[comp.id] || batchRunning) return;
@@ -258,7 +274,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
     setSelectedPagoIds(new Set());
   };
 
-  if (sinAfipAll.length === 0 && sinAsignar.length === 0 && pagosSinFactura.length === 0) return null;
+  if (sinAfipAll.length === 0 && sinAsignar.length === 0 && pagosSinFactura.length === 0 && fcRecibidasPendientes.length === 0) return null;
 
   const selS = { background: "var(--bg)", border: "1px solid var(--border2)", color: "var(--text)", borderRadius: 6, padding: "4px 8px", fontSize: 11, fontFamily: "var(--font)", cursor: "pointer" };
   const thS  = { fontSize: 10, fontWeight: 700, color: "var(--muted)", padding: "6px 10px", letterSpacing: ".04em", textAlign: "left", borderBottom: "1px solid var(--border)" };
@@ -273,102 +289,101 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
       {sinAfipAll.length > 0 && (
         <div style={{ background: "rgba(255,107,122,.04)", border: "1px solid rgba(255,107,122,.22)", borderRadius: 10, padding: "14px 18px" }}>
 
-          {/* Header — fila 1: título + batch button + toggle */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-            <span
-              style={{ fontSize: 10, fontWeight: 800, color: "var(--red)", letterSpacing: ".1em", cursor: "pointer" }}
-              onClick={() => setShowAfip(v => !v)}
-            >
+          {/* Header — título + toggle */}
+          <div
+            style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: showAfip ? 10 : 0 }}
+            onClick={() => setShowAfip(v => !v)}
+          >
+            <span style={{ fontSize: 10, fontWeight: 800, color: "var(--red)", letterSpacing: ".1em", flex: 1 }}>
               ⚡ SIN EMISIÓN AFIP — {sinAfip.length}{sinAfip.length !== sinAfipAll.length ? `/${sinAfipAll.length}` : ""} comprobante{sinAfipAll.length !== 1 ? "s" : ""}
             </span>
-
-            <div style={{ flex: 1 }} />
-
-            {/* Fecha emisión ARCA — siempre visible, afecta tanto batch como individual */}
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <label style={{ fontSize: 10, fontWeight: 700, color: "var(--red)", letterSpacing: ".06em", whiteSpace: "nowrap" }}>Fecha ARCA:</label>
-              <input type="date" value={batchDate} onChange={e => setBatchDate(e.target.value)}
-                style={{ background: "var(--bg)", border: `1px solid ${batchDate ? "var(--green)" : "var(--red)"}`, color: "var(--text)", borderRadius: 6, padding: "3px 8px", fontSize: 11, fontFamily: "var(--font)" }} />
-            </div>
-
-            {/* Botón emisión masiva */}
-            {!batchRunning && !batchDone && toEmit.length > 0 && (
-              <button
-                className="btn"
-                style={{ fontSize: 11, padding: "4px 14px", background: "rgba(255,107,122,.18)", color: "var(--red)", border: "1px solid rgba(255,107,122,.35)", opacity: batchDate ? 1 : 0.4 }}
-                disabled={!batchDate}
-                onClick={handleBatch}
-              >
-                ⚡ Emitir {toEmit.length} documento{toEmit.length !== 1 ? "s" : ""}
-              </button>
-            )}
-            {batchDone && (
-              <button className="ghost" style={{ fontSize: 10, padding: "3px 10px" }} onClick={() => setBatchProgress(null)}>
-                ✕ Cerrar resumen
-              </button>
-            )}
-
-            <span style={{ fontSize: 11, color: "var(--muted)", cursor: "pointer" }} onClick={() => setShowAfip(v => !v)}>
-              {showAfip ? "▲" : "▼"}
-            </span>
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>{showAfip ? "▲" : "▼"}</span>
           </div>
 
-          {/* Header — fila 2: filtros */}
-          <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: (showAfip && !batchProgress) ? 12 : batchProgress ? 12 : 0, flexWrap: "wrap" }}>
-            {/* Filtro período */}
-            <select value={filterMonth ?? ""} onChange={e => { setFilterMonth(e.target.value === "" ? null : parseInt(e.target.value)); setBatchProgress(null); }} style={selS} disabled={batchRunning}>
-              <option value="">Todos los meses</option>
-              {MONTHS.map((m, i) => <option key={i} value={i}>{m}</option>)}
-            </select>
-            <select value={filterYear ?? ""} onChange={e => { setFilterYear(e.target.value === "" ? null : parseInt(e.target.value)); setBatchProgress(null); }} style={{ ...selS, width: 72 }} disabled={batchRunning}>
-              <option value="">Todos</option>
-              {AVAILABLE_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
-            </select>
-            {(filterMonth != null || filterYear != null) && !batchRunning && (
-              <button onClick={() => { setFilterMonth(null); setFilterYear(null); setBatchProgress(null); }} style={{ ...selS, color: "var(--muted)", padding: "4px 6px" }}>✕</button>
-            )}
+          {/* Controles — solo visibles cuando está desplegado */}
+          {showAfip && (
+            <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+              {/* Filtro período */}
+              <select value={filterMonth ?? ""} onChange={e => { setFilterMonth(e.target.value === "" ? null : parseInt(e.target.value)); setBatchProgress(null); }} style={selS} disabled={batchRunning}>
+                <option value="">Todos los meses</option>
+                {MONTHS.map((m, i) => <option key={i} value={i}>{m}</option>)}
+              </select>
+              <select value={filterYear ?? ""} onChange={e => { setFilterYear(e.target.value === "" ? null : parseInt(e.target.value)); setBatchProgress(null); }} style={{ ...selS, width: 72 }} disabled={batchRunning}>
+                <option value="">Todos</option>
+                {AVAILABLE_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+              {(filterMonth != null || filterYear != null) && !batchRunning && (
+                <button onClick={() => { setFilterMonth(null); setFilterYear(null); setBatchProgress(null); }} style={{ ...selS, color: "var(--muted)", padding: "4px 6px" }}>✕</button>
+              )}
 
-            {/* Filtro multi-sede */}
-            <div style={{ position: "relative" }}>
-              <button
-                style={{ ...selS, color: filterFrIds.size > 0 ? "var(--cyan)" : "var(--muted)", borderColor: filterFrIds.size > 0 ? "rgba(34,211,238,.4)" : undefined }}
-                disabled={batchRunning}
-                onClick={() => setFrDropOpen(v => !v)}
-              >
-                {filterFrIds.size === 0 ? "Todas las sedes" : `${filterFrIds.size} sede${filterFrIds.size !== 1 ? "s" : ""}`} ▾
-              </button>
-              {frDropOpen && (
-                <div
-                  style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 50, background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: 8, padding: "6px 0", minWidth: 200, maxHeight: 240, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,.4)" }}
-                  onMouseLeave={() => setFrDropOpen(false)}
+              {/* Filtro multi-sede */}
+              <div style={{ position: "relative" }}>
+                <button
+                  style={{ ...selS, color: filterFrIds.size > 0 ? "var(--cyan)" : "var(--muted)", borderColor: filterFrIds.size > 0 ? "rgba(34,211,238,.4)" : undefined }}
+                  disabled={batchRunning}
+                  onClick={() => setFrDropOpen(v => !v)}
                 >
-                  {filterFrIds.size > 0 && (
-                    <button
-                      onClick={() => { setFilterFrIds(new Set()); setFrDropOpen(false); }}
-                      style={{ display: "block", width: "100%", textAlign: "left", background: "none", border: "none", padding: "5px 12px", fontSize: 11, color: "var(--muted)", cursor: "pointer" }}
-                    >
-                      ✕ Limpiar selección
-                    </button>
-                  )}
-                  {frOptions.map(fr => (
-                    <label key={fr.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 12px", cursor: "pointer", fontSize: 12, color: filterFrIds.has(fr.id) ? "var(--cyan)" : "var(--text)" }}>
-                      <input
-                        type="checkbox"
-                        checked={filterFrIds.has(fr.id)}
-                        onChange={() => toggleFr(fr.id)}
-                        style={{ accentColor: "var(--cyan)", cursor: "pointer" }}
-                      />
-                      {fr.name}
-                    </label>
-                  ))}
-                </div>
+                  {filterFrIds.size === 0 ? "Todas las sedes" : `${filterFrIds.size} sede${filterFrIds.size !== 1 ? "s" : ""}`} ▾
+                </button>
+                {frDropOpen && (
+                  <div
+                    style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 50, background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: 8, padding: "6px 0", minWidth: 200, maxHeight: 240, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,.4)" }}
+                    onMouseLeave={() => setFrDropOpen(false)}
+                  >
+                    {filterFrIds.size > 0 && (
+                      <button
+                        onClick={() => { setFilterFrIds(new Set()); setFrDropOpen(false); }}
+                        style={{ display: "block", width: "100%", textAlign: "left", background: "none", border: "none", padding: "5px 12px", fontSize: 11, color: "var(--muted)", cursor: "pointer" }}
+                      >
+                        ✕ Limpiar selección
+                      </button>
+                    )}
+                    {frOptions.map(fr => (
+                      <label key={fr.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 12px", cursor: "pointer", fontSize: 12, color: filterFrIds.has(fr.id) ? "var(--cyan)" : "var(--text)" }}>
+                        <input
+                          type="checkbox"
+                          checked={filterFrIds.has(fr.id)}
+                          onChange={() => toggleFr(fr.id)}
+                          style={{ accentColor: "var(--cyan)", cursor: "pointer" }}
+                        />
+                        {fr.name}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ flex: 1 }} />
+
+              {/* Fecha emisión ARCA */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <label style={{ fontSize: 10, fontWeight: 700, color: "var(--red)", letterSpacing: ".06em", whiteSpace: "nowrap" }}>Fecha ARCA:</label>
+                <input type="date" value={batchDate} onChange={e => setBatchDate(e.target.value)}
+                  style={{ background: "var(--bg)", border: `1px solid ${batchDate ? "var(--green)" : "var(--red)"}`, color: "var(--text)", borderRadius: 6, padding: "3px 8px", fontSize: 11, fontFamily: "var(--font)" }} />
+              </div>
+
+              {/* Botón emisión masiva */}
+              {!batchRunning && !batchDone && toEmit.length > 0 && (
+                <button
+                  className="btn"
+                  style={{ fontSize: 11, padding: "4px 14px", background: "rgba(255,107,122,.18)", color: "var(--red)", border: "1px solid rgba(255,107,122,.35)", opacity: batchDate ? 1 : 0.4 }}
+                  disabled={!batchDate}
+                  onClick={handleBatch}
+                >
+                  ⚡ Emitir {toEmit.length} documento{toEmit.length !== 1 ? "s" : ""}
+                </button>
+              )}
+              {batchDone && (
+                <button className="ghost" style={{ fontSize: 10, padding: "3px 10px" }} onClick={() => setBatchProgress(null)}>
+                  ✕ Cerrar resumen
+                </button>
               )}
             </div>
-          </div>
+          )}
 
           {/* Barra de progreso batch */}
-          {batchProgress && (
-            <div style={{ marginBottom: showAfip ? 12 : 0 }}>
+          {showAfip && batchProgress && (
+            <div style={{ marginBottom: 12 }}>
               {/* Barra */}
               <div style={{ height: 4, borderRadius: 2, background: "var(--border2)", marginBottom: 8, overflow: "hidden" }}>
                 <div style={{
@@ -636,7 +651,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
                 ))}
                 {/* Rows */}
                 {pagoPreviewQueue.map(({ fr, comp }, i) => {
-                  const applyIVA = !!fr.applyIVA;
+                  const applyIVA = !!(COMPANIES[activeCompany]?.applyIVA);
                   const total    = comp.amount;
                   const neto     = applyIVA ? Math.round(total / 1.21 * 100) / 100 : total;
                   const iva      = applyIVA ? Math.round((total - neto) * 100) / 100 : 0;
@@ -738,6 +753,80 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago }
                   >✕</button>
                 </div>
               ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── PENDIENTES DE RECIBIR FACTURA (FC_RECIBIDA sin invoice) ── */}
+      {fcRecibidasPendientes.length > 0 && (
+        <div style={{ background: "rgba(96,165,250,.04)", border: "1px solid rgba(96,165,250,.22)", borderRadius: 10, padding: "14px 18px" }}>
+          <div
+            style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: showFcRecibidas ? 10 : 0 }}
+            onClick={() => setShowFcRecibidas(v => !v)}
+          >
+            <span style={{ fontSize: 10, fontWeight: 800, color: "var(--blue)", letterSpacing: ".1em", flex: 1 }}>
+              📥 PENDIENTES DE RECIBIR FACTURA — {fcRecibidasPendientes.length} comprobante{fcRecibidasPendientes.length !== 1 ? "s" : ""}
+            </span>
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>{showFcRecibidas ? "▲" : "▼"}</span>
+          </div>
+          {showFcRecibidas && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {fcRecibidasPendientes.map(({ fr, comp }) => {
+                const cuenta   = String(comp.type ?? "").split("|")[1] ?? "";
+                const openAdj  = !!adjuntando[comp.id];
+                const adjErr   = adjuntarErr[comp.id];
+                const cur      = compCurrency(comp);
+                return (
+                  <div key={comp.id}>
+                    <div style={{
+                      display: "flex", alignItems: "center", gap: 12,
+                      background: "var(--bg2)", borderRadius: openAdj || adjErr ? "7px 7px 0 0" : 7,
+                      padding: "8px 12px",
+                    }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fr.name}</span>
+                      <span style={{ fontSize: 10, color: "var(--muted)", whiteSpace: "nowrap" }}>{comp.date}</span>
+                      <span className="mono" style={{ fontSize: 12, color: "var(--blue)", fontWeight: 700, whiteSpace: "nowrap" }}>{fmt(comp.amount, cur)}</span>
+                      <span className="pill" style={{ color: "var(--blue)", background: "rgba(96,165,250,.1)", fontSize: 9, whiteSpace: "nowrap" }}>
+                        FC Recibida {CUENTA_LABEL[cuenta] ?? cuenta}
+                      </span>
+                      <button
+                        className="ghost"
+                        style={{ fontSize: 10, padding: "2px 8px", color: openAdj ? "var(--muted)" : "var(--blue)", whiteSpace: "nowrap" }}
+                        onClick={() => openAdj ? handleCerrarAdjuntar(comp.id) : handleAbrirAdjuntar(comp.id)}
+                      >
+                        {openAdj ? "Cancelar" : "Adjuntar nro →"}
+                      </button>
+                    </div>
+                    {/* Input adjuntar inline */}
+                    {openAdj && (
+                      <div style={{ background: "rgba(96,165,250,.05)", border: "1px solid rgba(96,165,250,.2)", borderTop: "none", borderRadius: adjErr ? 0 : "0 0 7px 7px", padding: "8px 12px", display: "flex", gap: 8, alignItems: "center" }}>
+                        <span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>Nro. factura recibida:</span>
+                        <input
+                          autoFocus
+                          value={adjuntarVal[comp.id] ?? ""}
+                          onChange={e => setAdjuntarVal(p => ({ ...p, [comp.id]: e.target.value }))}
+                          onKeyDown={e => { if (e.key === "Enter") handleConfirmAdjuntar(fr, comp); if (e.key === "Escape") handleCerrarAdjuntar(comp.id); }}
+                          placeholder="Nro. de factura del franquiciado"
+                          style={{ flex: 1, background: "var(--bg)", border: "1px solid var(--border2)", borderRadius: 5, padding: "4px 8px", fontSize: 12, color: "var(--text)", fontFamily: "var(--font)" }}
+                        />
+                        <button
+                          className="btn"
+                          style={{ fontSize: 11, padding: "3px 12px", background: "rgba(96,165,250,.15)", color: "var(--blue)", border: "1px solid rgba(96,165,250,.3)" }}
+                          onClick={() => handleConfirmAdjuntar(fr, comp)}
+                        >
+                          Guardar
+                        </button>
+                      </div>
+                    )}
+                    {adjErr && (
+                      <div style={{ background: "rgba(255,107,122,.08)", border: "1px solid rgba(255,107,122,.2)", borderTop: "none", borderRadius: "0 0 7px 7px", padding: "6px 12px", fontSize: 11, color: "var(--red)" }}>
+                        ✕ {adjErr}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

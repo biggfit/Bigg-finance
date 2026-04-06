@@ -70,9 +70,9 @@ export const DEFAULT_FRANCHISOR = {
 // Mapa de sociedad franquiciante → config. Clave = razonSocial exacta (campo `empresa` en Sheets).
 // `currencies` lista las monedas habilitadas para emitir comprobantes (configurable en Maestros).
 export const COMPANIES = {
-  "ÑAKO SRL":                        { side: "ar",  flag: "🇦🇷", currency: "ARS", currencies: ["ARS"] },
-  "BIGG FIT LLC":                    { side: "usa", flag: "🇺🇸", currency: "USD", currencies: ["USD", "EUR"] },
-  "Gestión Deportiva y Wellness SL": { side: "es",  flag: "🇪🇸", currency: "EUR", currencies: ["EUR"] },
+  "ÑAKO SRL":                        { side: "ar",  flag: "🇦🇷", currency: "ARS", currencies: ["ARS"], applyIVA: true },
+  "BIGG FIT LLC":                    { side: "usa", flag: "🇺🇸", currency: "USD", currencies: ["USD", "EUR"], applyIVA: false },
+  "Gestión Deportiva y Wellness SL": { side: "es",  flag: "🇪🇸", currency: "EUR", currencies: ["EUR"], applyIVA: true },
 };
 export const COMPANY_NAMES = Object.keys(COMPANIES); // ["ÑAKO SRL", "BIGG FIT LLC", "Gestión Deportiva y Wellness SL"]
 

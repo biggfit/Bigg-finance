@@ -165,7 +165,6 @@ function InvoicePage({ fr, issuer, comp, isES }) {
                       : issuer.paymentTerms;
   const bankLines = isES
     ? [ issuer.bankName,
-        issuer.bankAddress,
         issuer.iban  && `IBAN: ${issuer.iban}`,
         issuer.swift && `SWIFT: ${issuer.swift}`,
       ].filter(Boolean)
@@ -189,9 +188,16 @@ function InvoicePage({ fr, issuer, comp, isES }) {
 
   const hasBankInfo = bankLines.length > 0;
 
+  // ── Tipo de documento ─────────────────────────────────────────────────────────
+  const docType = String(comp.type ?? "").split("|")[0];
+  const isNC    = docType === "NC";
+  const isFcRec = docType === "FC_RECIBIDA";
+
   // ── Labels por idioma ────────────────────────────────────────────────────────
   const L = isES ? {
-    title:       `FACTURA #${comp.invoice ?? "—"}`,
+    title:       isNC ? `NOTA DE CRÉDITO #${comp.invoice ?? "—"}`
+               : isFcRec ? `FACTURA RECIBIDA #${comp.invoice ?? "—"}`
+               : `FACTURA #${comp.invoice ?? "—"}`,
     dateLabel:   "Fecha:",
     clientLabel: "Cliente:",
     thConcepto:  "Concepto",
@@ -206,7 +212,9 @@ function InvoicePage({ fr, issuer, comp, isES }) {
     sumTotal:    "TOTAL",
     payLabel:    "Condiciones de pago:",
   } : {
-    title:       `INVOICE #${comp.invoice ?? "—"}`,
+    title:       isNC ? `CREDIT NOTE #${comp.invoice ?? "—"}`
+               : isFcRec ? `RECEIVED INVOICE #${comp.invoice ?? "—"}`
+               : `INVOICE #${comp.invoice ?? "—"}`,
     dateLabel:   "Date:",
     clientLabel: "Bill To:",
     thConcepto:  "Concept",

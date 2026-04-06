@@ -78,7 +78,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
   // Cuando viene de un pago a cuenta, el amount es el TOTAL transferido → back-calcular neto
   const initNeto = (() => {
     if (!prefillComp?.amount) return "";
-    const applyIVA = !!prefillFr?.applyIVA;
+    const applyIVA = !!(COMPANIES[activeCompany]?.applyIVA);
     const neto = applyIVA ? prefillComp.amount / (1 + IVA_RATE) : prefillComp.amount;
     // Mantener 2 decimales para que neto+IVA = total exacto (formato AR: "578.512,40")
     return formatCurrencyInput(neto.toFixed(2).replace(".", ","), "ARS");
@@ -114,7 +114,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
 
   const fr     = activeFr.find(f => f.id === parseInt(frId));
   const isAR   = fr?.country === "Argentina";
-  const applyIVA = !!(fr?.applyIVA);
+  const applyIVA = !!(COMPANIES[activeCompany]?.applyIVA);
   const sym    = SYM[currency] ?? "$";
 
   const importeNeto  = parseCurrencyInput(importeRaw);
@@ -149,10 +149,10 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
       {wizType && (
         <span className="pill" style={{
           fontSize: 10, padding: "2px 8px",
-          color: wizType === "comprobante" ? "var(--blue)" : "var(--green)",
-          background: wizType === "comprobante" ? "rgba(96,165,250,.12)" : "rgba(16,217,122,.12)"
+          color: wizType === "comprobante" ? "var(--red)" : wizType === "fc_recibida" ? "var(--blue)" : "var(--green)",
+          background: wizType === "comprobante" ? "rgba(255,107,122,.12)" : wizType === "fc_recibida" ? "rgba(96,165,250,.12)" : "rgba(16,217,122,.12)"
         }}>
-          {wizType === "comprobante" ? "🧾 Comprobante" : "💸 Movimiento"}
+          {wizType === "comprobante" ? "🧾 Comprobante" : wizType === "fc_recibida" ? "📥 FC Recibida" : "💸 Movimiento"}
         </span>
       )}
       {fr && <span style={{ fontSize: 12, fontWeight: 700 }}>{fr.name}</span>}
@@ -176,7 +176,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
     <div className="fade" style={{ textAlign: "center", padding: "60px 0" }}>
       <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
       <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 8 }}>
-        {wizType === "comprobante" ? "Comprobante generado" : "Movimiento registrado"}
+        {wizType === "comprobante" ? "Comprobante generado" : wizType === "fc_recibida" ? "Comprobante recibido registrado" : "Movimiento registrado"}
       </div>
       <div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 28 }}>
         Para <strong>{fr?.name}</strong> — registrado en CC
@@ -196,12 +196,14 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
         <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 6 }}>¿Qué querés registrar?</div>
         <div style={{ color: "var(--muted)", fontSize: 13 }}>Paso 1 de 3</div>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
         {[
-          { k: "comprobante", icon: "🧾", label: "Comprobante", color: "var(--blue)", bg: "rgba(96,165,250,.06)", border: "rgba(96,165,250,.2)",
-            lines: ["Factura o Nota de Crédito", "Con IVA — genera documento descargable"] },
-          { k: "movimiento",  icon: "💸", label: "Movimiento financiero", color: "var(--green)", bg: "rgba(16,217,122,.06)", border: "rgba(16,217,122,.2)",
-            lines: ["Pago recibido, pago a cuenta", "Sin impuestos — se imputa directo a CC"] },
+          { k: "comprobante",  icon: "🧾", label: "Emitir comprobante",      color: "var(--red)",   bg: "rgba(255,107,122,.06)", border: "rgba(255,107,122,.2)",
+            lines: ["Factura o Nota de Crédito", "Con IVA — genera documento"] },
+          { k: "fc_recibida",  icon: "📥", label: "Comprobante recibido",     color: "var(--blue)",  bg: "rgba(96,165,250,.06)",  border: "rgba(96,165,250,.2)",
+            lines: ["Factura del franquiciado", "Se registra en CC sin emitir"] },
+          { k: "movimiento",   icon: "💸", label: "Movimiento financiero",    color: "var(--green)", bg: "rgba(16,217,122,.06)",  border: "rgba(16,217,122,.2)",
+            lines: ["Pago recibido, pago a cuenta", "Sin impuestos — directo a CC"] },
         ].map(opt => (
           <div key={opt.k} onClick={() => { setWizType(opt.k); setStep(2); }}
             style={{ background: opt.bg, border: `1.5px solid ${opt.border}`, borderRadius: 14, padding: "28px 24px", cursor: "pointer", transition: "all .15s" }}
@@ -645,6 +647,120 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
     );
   }
 
+  // — comprobante recibido (FC_RECIBIDA) —
+  if (step === 3 && wizType === "fc_recibida") {
+    const symFcr = SYM[currency] ?? "$";
+    const fcrNeto = parseCurrencyInput(importeRaw);
+    const fcrIVA  = applyIVA ? fcrNeto * IVA_RATE : 0;
+    const fcrTotal = fcrNeto + fcrIVA;
+    const mesComp    = parseInt(fechaIso.split("-")[1]) - 1;
+    const anioComp   = parseInt(fechaIso.split("-")[0]);
+
+    return (
+      <div className="fade">
+        <Crumb />
+
+        {/* 2 columnas: izq = Fecha + Cuenta / der = Moneda + Importe */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1.6fr", gap: 14, marginBottom: 16, alignItems: "start" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div>
+              <label style={labelS}>FECHA</label>
+              <input type="date" value={fechaIso} onChange={e => setFechaIso(e.target.value)}
+                style={{ ...inputS, cursor: "pointer", colorScheme: "dark", fontWeight: 700, border: fechaIso ? "1px solid var(--border2)" : "2px solid var(--red)" }} />
+            </div>
+            <div>
+              <label style={labelS}>CUENTA</label>
+              <select value={cuenta} onChange={e => setCuenta(e.target.value)}
+                style={{ ...inputS, fontWeight: 700, fontSize: 13 }}>
+                {CUENTAS.map(c => <option key={c} value={c}>{CUENTA_LABEL[c]}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 10, alignItems: "start" }}>
+              <div>
+                <label style={labelS}>MONEDA</label>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {CURRENCIES.map(cur => {
+                    const allowed = allowedCurrencies.includes(cur);
+                    return (
+                      <button key={cur} onClick={() => { if (allowed) setCurrency(cur); }} style={{
+                        padding: "8px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700,
+                        cursor: allowed ? "pointer" : "not-allowed", border: "none", fontFamily: "var(--font)",
+                        background: currency === cur ? "var(--accent)" : "var(--bg)",
+                        color: currency === cur ? "#1e2022" : allowed ? "var(--muted)" : "var(--dim)",
+                        outline: currency === cur ? "none" : "1px solid var(--border2)",
+                        opacity: allowed ? 1 : 0.3,
+                      }} title={allowed ? cur : `${cur} no habilitado para ${activeCompany}`}>{cur}</button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div>
+                <label style={labelS}>{applyIVA ? "NETO (sin IVA)" : "IMPORTE"}</label>
+                <div style={{ position: "relative" }}>
+                  <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--muted)", fontSize: 13, pointerEvents: "none" }}>{symFcr}</span>
+                  <input value={importeRaw}
+                    onChange={e => { if (!e.target.value) { setImporteRaw(""); return; } setImporteRaw(formatCurrencyInput(e.target.value.replace(/[^\d,]/g,""), currency)); }}
+                    placeholder="0,00" inputMode="decimal"
+                    style={{ ...inputS, paddingLeft: 26, textAlign: "right", fontWeight: 700 }} />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* IVA breakdown */}
+        {applyIVA && fcrNeto > 0 && (
+          <div style={{ display: "flex", gap: 0, border: "1px solid var(--border2)", borderRadius: 8, overflow: "hidden", marginBottom: 16 }}>
+            {[["NETO", fcrNeto, "var(--text)"], ["IVA 21%", fcrIVA, "var(--blue)"], ["TOTAL", fcrTotal, "var(--accent)"]].map(([l, v, c], i) => (
+              <div key={l} style={{
+                flex: 1, padding: "8px 16px", textAlign: "center",
+                borderRight: i < 2 ? "1px solid var(--border2)" : "none",
+                background: i === 2 ? "rgba(173,255,25,.05)" : "transparent",
+              }}>
+                <div style={{ fontSize: 9, color: "var(--muted)", fontWeight: 700, letterSpacing: ".06em", marginBottom: 4 }}>{l}</div>
+                <div className="mono" style={{ fontSize: 13, fontWeight: 800, color: c, whiteSpace: "nowrap" }}>{symFcr} {fmtBig(v)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Referencia (nro factura del franquiciado) + Descripción */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 20 }}>
+          <div>
+            <label style={labelS}>NRO. FACTURA RECIBIDA <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>— opcional</span></label>
+            <input value={concepto}
+              onChange={e => setConcepto(e.target.value)}
+              placeholder="Ej: FC-A 0001-00004521"
+              style={inputS} />
+          </div>
+        </div>
+
+        <button className="btn" style={{ width: "100%", height: 48, fontSize: 15, background: "rgba(96,165,250,.15)", color: "var(--blue)", border: "1px solid rgba(96,165,250,.3)" }}
+          disabled={fcrNeto <= 0 || !fechaIso}
+          onClick={() => {
+            if (fcrNeto <= 0) return;
+            const tipo = makeType("FC_RECIBIDA", cuenta);
+            const nota = `FC Recibida - ${CUENTA_LABEL[cuenta] ?? cuenta} - ${MONTHS[mesComp]} ${anioComp}`;
+            const comp = {
+              id: uid(), type: tipo, date: inputDateToDmy(fechaIso),
+              amount: fcrTotal, amountNeto: fcrNeto,
+              ref: nota, nota,
+              invoice: concepto.trim() || "",
+              month: mesComp, year: anioComp,
+              currency,
+              empresa: activeCompany,
+            };
+            onAddComp(fr.id, comp);
+            setDone(true);
+          }}>
+          ✓ Registrar comprobante recibido
+        </button>
+      </div>
+    );
+  }
+
   return null;
 }
 
@@ -859,7 +975,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
           const result = await emitirComprobante({
             franchisor: franchisor?.ar ?? franchisor,
             franchise:  fr,
-            comp:       { ...comp, applyIVA: !!fr.applyIVA },
+            comp:       { ...comp, applyIVA: !!(COMPANIES[activeCompany]?.applyIVA) },
           });
           comp = { ...comp, invoice: formatInvoiceLabel(result.tipoComprobante, result.afipNumero ?? result.idComprobante, result.afipPrefijo ?? result.puntoVenta), facturanteId: String(result.idComprobante) };
           facturanteStatus = "ok";
@@ -1310,7 +1426,8 @@ function parseExcelRows(data, franchises, allowedCompanyCurrencies) {
     for (const k of Object.keys(row)) r[k.toLowerCase().trim()] = row[k];
 
     const sedeName    = String(r.sede ?? r.franquicia ?? r.franchise ?? "").trim();
-    const cuentaRaw   = String(r.cuenta ?? r.account ?? r.tipo ?? "").trim().toUpperCase();
+    const cuentaRaw   = String(r.cuenta ?? r.account ?? "").trim().toUpperCase();
+    const tipoRaw     = String(r.tipo ?? r.type ?? r.doc ?? "").trim().toUpperCase();
     const importeRaw  = parseFloat(String(r.importe ?? r.monto ?? r.amount ?? "0").replace(/[^0-9.,\-]/g,"").replace(",",".")) || 0;
     const fechaRaw    = r.fecha ?? r.date ?? r.fecha_doc ?? "";
     const conceptoRaw = String(r.concepto ?? r.descripcion ?? r.ref ?? r.referencia ?? "").trim();
@@ -1325,7 +1442,11 @@ function parseExcelRows(data, franchises, allowedCompanyCurrencies) {
     // deduce type
     let type = null;
     if (CUENTAS_COMP.has(cuentaRaw)) {
-      type = importeRaw >= 0 ? `FACTURA|${cuentaRaw}` : `NC|${cuentaRaw}`;
+      if (tipoRaw === "FC_RECIBIDA") {
+        type = `FC_RECIBIDA|${cuentaRaw}`;
+      } else {
+        type = importeRaw >= 0 ? `FACTURA|${cuentaRaw}` : `NC|${cuentaRaw}`;
+      }
     } else if (CUENTAS_MOV.has(cuentaRaw)) {
       type = cuentaRaw;
     }
@@ -1430,7 +1551,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
           const result = await emitirComprobante({
             franchisor: franchisor?.ar ?? franchisor,
             franchise:  fr,
-            comp:       { ...comp, applyIVA: !!fr.applyIVA },
+            comp:       { ...comp, applyIVA: !!(COMPANIES[activeCompany]?.applyIVA) },
           });
           comp = { ...comp, invoice: formatInvoiceLabel(result.tipoComprobante, result.afipNumero ?? result.idComprobante, result.afipPrefijo ?? result.puntoVenta), facturanteId: String(result.idComprobante) };
           msg = `✓ ${comp.invoice} emitida — ${r.franchiseName}`;
@@ -1466,6 +1587,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
       [""],
       ["COLUMNAS OPCIONALES"],
       ["──────────────────────────────────────────────────────────────────────"],
+      ["tipo      →  FC_RECIBIDA para facturas recibidas del franquiciado. Si se omite, se deduce por signo (+ = Factura, - = NC)."],
       ["moneda    →  ARS, USD o EUR. Si se omite, se usa la moneda base de la sede."],
       ["concepto  →  Descripción libre. Si se deja vacío se genera automáticamente."],
       [""],
@@ -1479,8 +1601,11 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
       [""],
       ["CÓMO SE DEDUCE EL TIPO DE DOCUMENTO"],
       ["──────────────────────────────────────────────────────────────────────"],
-      ["Importe POSITIVO  →  Se genera una FACTURA  (suma deuda al franquiciado)"],
-      ["Importe NEGATIVO  →  Se genera una NC        (reduce deuda del franquiciado)"],
+      ["Si la columna TIPO está vacía:"],
+      ["  Importe POSITIVO  →  Se genera una FACTURA  (suma deuda al franquiciado)"],
+      ["  Importe NEGATIVO  →  Se genera una NC        (reduce deuda del franquiciado)"],
+      ["Si la columna TIPO = FC_RECIBIDA:"],
+      ["  Se genera una FC Recibida (factura recibida del franquiciado, reduce deuda)"],
       [""],
       ["CUENTAS VÁLIDAS PARA MOVIMIENTOS FINANCIEROS"],
       ["──────────────────────────────────────────────────────────────────────"],
@@ -1491,24 +1616,26 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
       [""],
       ["EJEMPLOS"],
       ["──────────────────────────────────────────────────────────────────────"],
-      ["sede", "cuenta", "importe", "fecha", "moneda", "concepto"],
-      ["Caballito", "FEE", 250000, "28/02/2026", "ARS", "Fee Febrero 2026"],
-      ["Nordelta Ruta 27", "PAUTA", -30000, "28/02/2026", "ARS", "Ajuste pauta febrero"],
-      ["Caballito", "PAGO", 200000, "05/02/2026", "ARS", "Transf. CBU 123456"],
-      ["Herrera", "FEE", 1200, "28/02/2026", "USD", "Fee Febrero 2026"],
-      ["Poblenou", "PAGO", 950, "05/02/2026", "EUR", "Transferencia recibida"],
+      ["sede", "cuenta", "importe", "fecha", "tipo", "moneda", "concepto"],
+      ["Caballito", "FEE", 250000, "28/02/2026", "", "ARS", "Fee Febrero 2026"],
+      ["Nordelta Ruta 27", "PAUTA", -30000, "28/02/2026", "", "ARS", "Ajuste pauta febrero"],
+      ["Caballito", "INTERUSOS", 80000, "28/02/2026", "FC_RECIBIDA", "ARS", "FC recibida interusos"],
+      ["Caballito", "PAGO", 200000, "05/02/2026", "", "ARS", "Transf. CBU 123456"],
+      ["Herrera", "FEE", 1200, "28/02/2026", "", "USD", "Fee Febrero 2026"],
+      ["Poblenou", "PAGO", 950, "05/02/2026", "", "EUR", "Transferencia recibida"],
     ]);
     wsInstr["!cols"] = [{ wch: 90 }];
     XLSX.utils.book_append_sheet(wb, wsInstr, "Instrucciones");
 
     const wsPlant = XLSX.utils.aoa_to_sheet([
-      ["sede", "cuenta", "importe", "fecha", "moneda", "concepto"],
-      ["Caballito", "FEE", 250000, "28/02/2026", "ARS", ""],
-      ["Nordelta Ruta 27", "PAUTA", 80000, "28/02/2026", "ARS", ""],
-      ["Caballito", "PAGO", 200000, "05/02/2026", "ARS", "Transferencia 123456"],
-      ["Herrera", "FEE", 1200, "28/02/2026", "USD", ""],
+      ["sede", "cuenta", "importe", "fecha", "tipo", "moneda", "concepto"],
+      ["Caballito", "FEE", 250000, "28/02/2026", "", "ARS", ""],
+      ["Nordelta Ruta 27", "PAUTA", 80000, "28/02/2026", "", "ARS", ""],
+      ["Caballito", "INTERUSOS", 80000, "28/02/2026", "FC_RECIBIDA", "ARS", ""],
+      ["Caballito", "PAGO", 200000, "05/02/2026", "", "ARS", "Transferencia 123456"],
+      ["Herrera", "FEE", 1200, "28/02/2026", "", "USD", ""],
     ]);
-    wsPlant["!cols"] = [{ wch: 26 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 8 }, { wch: 36 }];
+    wsPlant["!cols"] = [{ wch: 26 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 8 }, { wch: 36 }];
     XLSX.utils.book_append_sheet(wb, wsPlant, "Plantilla");
     XLSX.writeFile(wb, "Plantilla_Importacion_BIGG.xlsx");
   };
@@ -1542,7 +1669,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr>
-                {[["sede",""],["cuenta",""],["importe",""],["fecha",""],["moneda","opcional"],["concepto","opcional"]].map(([col, sub]) => (
+                {[["sede",""],["cuenta",""],["importe",""],["fecha",""],["tipo","opcional"],["moneda","opcional"],["concepto","opcional"]].map(([col, sub]) => (
                   <th key={col} style={{ textAlign: "left", padding: "6px 12px", background: "rgba(173,255,25,.08)", border: "1px solid var(--border2)", fontFamily: "monospace", fontWeight: 700, color: "var(--accent)", whiteSpace: "nowrap" }}>
                     {col} {sub && <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: 10 }}>({sub})</span>}
                   </th>
@@ -1551,18 +1678,20 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
             </thead>
             <tbody>
               {[
-                ["Caballito",        "FEE",   "250.000",  "28/02/2026", "ARS", "→ Factura FEE",   "var(--red)"],
-                ["Nordelta Ruta 27", "PAUTA",  "80.000",  "28/02/2026", "ARS", "→ Factura PAUTA", "var(--red)"],
-                ["Caballito",        "FEE",   "-15.000",  "28/02/2026", "ARS", "→ NC (negativo)", "var(--green)"],
-                ["Caballito",        "PAGO",  "200.000",  "05/02/2026", "ARS", "→ Pago recibido", "var(--muted)"],
-                ["Herrera",          "FEE",    "1.200",   "28/02/2026", "USD", "→ en USD",        "var(--red)"],
+                ["Caballito",        "FEE",        "250.000",  "28/02/2026", "",            "ARS", "→ Factura FEE",       "var(--red)"],
+                ["Nordelta Ruta 27", "PAUTA",       "80.000",  "28/02/2026", "",            "ARS", "→ Factura PAUTA",     "var(--red)"],
+                ["Caballito",        "FEE",        "-15.000",  "28/02/2026", "",            "ARS", "→ NC (negativo)",     "var(--green)"],
+                ["Caballito",        "INTERUSOS",   "80.000",  "28/02/2026", "FC_RECIBIDA", "ARS", "→ FC Recibida",       "var(--blue)"],
+                ["Caballito",        "PAGO",       "200.000",  "05/02/2026", "",            "ARS", "→ Pago recibido",     "var(--muted)"],
+                ["Herrera",          "FEE",          "1.200",  "28/02/2026", "",            "USD", "→ en USD",            "var(--red)"],
               ].map((row, i) => (
                 <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                   {row.slice(0,4).map((cell, j) => (
                     <td key={j} style={{ padding: "7px 12px", color: "var(--text)", fontFamily: j === 1 ? "monospace" : "inherit", fontWeight: j === 1 ? 700 : 400 }}>{cell}</td>
                   ))}
-                  <td style={{ padding: "7px 12px", fontFamily: "monospace", fontWeight: 700, color: "var(--accent)", fontSize: 11 }}>{row[4]}</td>
-                  <td style={{ padding: "7px 12px", color: row[6], fontSize: 11, fontStyle: "italic" }}>{row[5]}</td>
+                  <td style={{ padding: "7px 12px", fontFamily: "monospace", fontWeight: 700, color: row[4] ? "var(--blue)" : "var(--muted)", fontSize: 11 }}>{row[4] || "—"}</td>
+                  <td style={{ padding: "7px 12px", fontFamily: "monospace", fontWeight: 700, color: "var(--accent)", fontSize: 11 }}>{row[5]}</td>
+                  <td style={{ padding: "7px 12px", color: row[7], fontSize: 11, fontStyle: "italic" }}>{row[6]}</td>
                 </tr>
               ))}
             </tbody>
@@ -1570,7 +1699,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
         </div>
         <div style={{ marginTop: 12, display: "flex", gap: 20, flexWrap: "wrap" }}>
           <div style={{ fontSize: 11, color: "var(--muted)" }}>
-            <span style={{ color: "var(--text)", fontWeight: 700 }}>Importe positivo</span> → Factura &nbsp;·&nbsp; <span style={{ color: "var(--text)", fontWeight: 700 }}>Importe negativo</span> → Nota de Crédito
+            <span style={{ color: "var(--text)", fontWeight: 700 }}>Importe positivo</span> → Factura &nbsp;·&nbsp; <span style={{ color: "var(--text)", fontWeight: 700 }}>Importe negativo</span> → Nota de Crédito &nbsp;·&nbsp; <span style={{ color: "var(--blue)", fontWeight: 700 }}>Tipo FC_RECIBIDA</span> → FC Recibida
           </div>
           <div style={{ fontSize: 11, color: "var(--muted)" }}>
             Cuentas: {["FEE","PAUTA","INTERUSOS","SPONSORS","OTROS_INGRESOS"].map((c,i) => <span key={c}><span style={{ fontFamily: "monospace", color: "var(--text)" }}>{c}</span>{i < 4 ? " · " : ""}</span>)}
@@ -1798,7 +1927,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
     const result = await emitirComprobante({
       franchisor: franchisor?.ar ?? franchisor,
       franchise:  fr,
-      comp:       { ...compToEmit, applyIVA: !!fr.applyIVA },
+      comp:       { ...compToEmit, applyIVA: !!(COMPANIES[activeCompany]?.applyIVA) },
       referenciaInvoice: comp.invoice ?? undefined,
     });
     const invoice      = formatInvoiceLabel(result.tipoComprobante, result.afipNumero ?? result.idComprobante, result.afipPrefijo ?? result.puntoVenta);
@@ -1811,7 +1940,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
   // Crea y emite FACTURA_PAUTA para un PAGO_PAUTA sin factura
   const handleEmitirPago = async (fr, pagoComp) => {
     // pagoComp.amount es el TOTAL transferido → back-calcular neto e IVA
-    const applyIVA    = !!fr.applyIVA;
+    const applyIVA    = !!(COMPANIES[activeCompany]?.applyIVA);
     const amountTotal = pagoComp.amount;
     const amountNeto  = applyIVA ? Math.round(amountTotal / 1.21 * 100) / 100 : amountTotal;
     const amountIVA   = applyIVA ? Math.round((amountTotal - amountNeto) * 100) / 100 : 0;
