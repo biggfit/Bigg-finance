@@ -216,7 +216,7 @@ function buildItemsSinIVAXml(comp) {
 
 function buildItemsConIVAXml(comp) {
   const neto  = Number(comp.amountNeto ?? comp.amount ?? 0);
-  const total = Number(comp.amount ?? (neto * 1.21));
+  const total = Math.round(neto * 1.21 * 100) / 100;
   return `<a:Items>
         <b:ComprobanteItem>
           <b:Cantidad>1</b:Cantidad>

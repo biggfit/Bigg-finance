@@ -964,14 +964,9 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
       const billingCur = isAR ? "ARS"
         : getCountryCur(r.country).code === "EUR" ? "EUR"
         : "USD";
-      // Para AR con IVA: fee es el neto → calcular total y IVA correctamente
-      const applyIVA   = isAR && !!(COMPANIES[activeCompany]?.applyIVA);
-      const amountNeto = Math.max(0, Math.round(fee * 100) / 100);
-      const amountIVA  = applyIVA ? Math.round(amountNeto * 0.21 * 100) / 100 : 0;
-      const amountTotal = Math.round((amountNeto + amountIVA) * 100) / 100;
       let comp = {
         id: uid(), type: makeType("FACTURA","FEE"), date: crmDate,
-        amount: amountTotal, amountNeto, amountIVA,
+        amount: Math.max(0, Math.round(fee * 100) / 100),
         ref: `Fee ${MONTHS[crmMonth]} ${crmYear} — CRM`,
         nota: `Fee Royalty ${MONTHS[crmMonth]} ${crmYear}${dto > 0 ? ` (${dto}% dto.)` : ""}`,
         month: crmMonth, year: crmYear,
