@@ -146,6 +146,13 @@ export default function App() {
     [...franchises].sort((a, b) => a.name.localeCompare(b.name, "es"))
   , [franchises]);
 
+  // Cola serial de escrituras — evita saturar Apps Script con writes simultáneos
+  const writeQueueRef = useRef(Promise.resolve());
+  const queueWrite = useCallback((fn) => {
+    writeQueueRef.current = writeQueueRef.current.then(() => fn().catch(err => console.error('Sheets write:', err)));
+    return writeQueueRef.current;
+  }, []);
+
   // Stable mutation handlers — IDs are normalised to strings here, once
   const addComp = useCallback((frId, comp) => {
     const key = String(frId);
@@ -153,8 +160,8 @@ export default function App() {
     // Inyectar frName para que quede persistido en el Sheet
     const fr = franchises.find(f => f.id === Number(frId) || String(f.id) === String(frId));
     const enriched = fr ? { ...comp, frName: fr.name } : comp;
-    appendComp(frId, enriched).catch(err => console.error('Sheets appendComp:', err));
-  }, [franchises]);
+    return queueWrite(() => appendComp(frId, enriched));
+  }, [franchises, queueWrite]);
 
   const delComp = useCallback((frId, compId) => {
     const key = String(frId);
