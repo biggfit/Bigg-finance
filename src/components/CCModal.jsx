@@ -244,7 +244,7 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
     {showConfirmCC && (
       <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 600, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
         onClick={e => e.target === e.currentTarget && setShowConfirmCC(false)}>
-        <div className="fade" style={{ background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: 14, padding: 28, maxWidth: 400, width: "100%" }}>
+        <div className="fade" style={{ background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: 14, padding: 28, maxWidth: 460, width: "100%" }}>
           <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 8 }}>Enviar estado de cuenta</div>
           <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 6 }}>
             Destinatario: <strong style={{ color: "var(--text)" }}>{to}</strong>
