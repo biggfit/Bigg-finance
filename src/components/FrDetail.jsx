@@ -73,8 +73,9 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
     return isActive ? todayDmy() : `${String(last.getDate()).padStart(2,"0")}/${String(last.getMonth()+1).padStart(2,"0")}/${last.getFullYear()}`;
   }, [localMonth, localYear]);
 
-  // Moneda de visualización: derivada de la empresa activa
-  const displayCurrency = COMPANIES[activeCompany]?.currency ?? franchise.currency;
+  // Moneda de visualización: la franquicia tiene prioridad sobre la empresa activa
+  const frCurrency      = franchise.currency ?? franchise.moneda ?? null;
+  const displayCurrency = frCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS";
 
   const inpS = { padding: "3px 7px", fontSize: 11, borderRadius: 5, background: "var(--bg)", border: "1px solid var(--accent)", color: "var(--text)", fontFamily: "var(--font)" };
   const saldoColor = (s) => s > 0.01 ? "var(--red)" : s < -0.01 ? "var(--green)" : "var(--muted)";
@@ -90,7 +91,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
 
       // CC del mes: línea de apertura + movimientos del período (misma estructura que buildCCHtml espera)
       const ccLines = [
-        { type: "apertura", label: "Saldo anterior", debit: 0, credit: 0, saldo: sp, date: aperturaDate, currency: displayCurrency },
+        { type: "apertura", label: "Saldo anterior", debit: 0, credit: 0, saldo: sp, date: aperturaDate, currency: frCurrency ?? displayCurrency },
         ...compsWithSaldo.map(c => {
           const sign = COMP_TYPES[c.type]?.sign ?? 0;
           return sign >= 0
@@ -255,7 +256,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
                       {/* Saldo */}
                       <td style={{ textAlign: "right", padding: "8px 8px", whiteSpace: "nowrap" }}>
                         <span className="mono" style={{ fontSize: 12, fontWeight: 700, color: saldoColor(c.saldo) }}>
-                          {fmtS(c.saldo, displayCurrency)}
+                          {fmtS(c.saldo, c.currency ?? displayCurrency)}
                         </span>
                       </td>
                       {/* Acciones */}
