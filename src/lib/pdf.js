@@ -173,9 +173,8 @@ export function buildCCHtml(frName, frRazonSocial, lines, currency, ccMonth, ccY
           ${totalDebe === 0 && totalHaber === 0
             ? `<span style="color:#9ca3af;font-size:13px;font-weight:400">sin movimientos</span>`
             : `<table style="width:100%;border-collapse:collapse;font-size:11px">
-            ${totalFacturado > 0 ? `<tr><td style="color:#6b7280;padding:1px 4px;text-align:left">Facturado</td><td style="font-family:monospace;font-weight:700;color:#dc2626;text-align:right;padding:1px 4px">${fmtSaldo(totalFacturado)}</td></tr>` : ""}
-            ${totalNC        > 0 ? `<tr><td style="color:#6b7280;padding:1px 4px;text-align:left">NC</td><td style="font-family:monospace;font-weight:700;color:#16a34a;text-align:right;padding:1px 4px">${fmtSaldo(-totalNC)}</td></tr>` : ""}
-            ${totalCobros    > 0 ? `<tr><td style="color:#6b7280;padding:1px 4px;text-align:left">Cobros</td><td style="font-family:monospace;font-weight:700;color:#16a34a;text-align:right;padding:1px 4px">${fmtSaldo(-totalCobros)}</td></tr>` : ""}
+            ${(totalFacturado > 0 || totalNC > 0) ? (() => { const netComp = totalFacturado - totalNC; const c = netComp > 0.01 ? "#dc2626" : netComp < -0.01 ? "#16a34a" : "#6b7280"; return `<tr><td style="color:#6b7280;padding:1px 4px;text-align:left">Facturas − NC</td><td style="font-family:monospace;font-weight:700;color:${c};text-align:right;padding:1px 4px">${fmtSaldo(netComp)}</td></tr>`; })() : ""}
+            ${totalCobros    > 0 ? `<tr><td style="color:#6b7280;padding:1px 4px;text-align:left">Cobros / Envíos</td><td style="font-family:monospace;font-weight:700;color:#16a34a;text-align:right;padding:1px 4px">${fmtSaldo(-totalCobros)}</td></tr>` : ""}
             <tr><td colspan="2" style="padding:3px 4px 1px"><div style="border-top:1px solid #e5e7eb"></div></td></tr>
             <tr><td style="color:#374151;font-weight:600;padding:1px 4px;text-align:left">Neto</td><td style="font-family:monospace;font-size:13px;font-weight:800;color:${(totalDebe-totalHaber)>0.01?"#dc2626":(totalDebe-totalHaber)<-0.01?"#16a34a":"#6b7280"};text-align:right;padding:1px 4px">${fmtSaldo(totalDebe-totalHaber)}</td></tr>
           </table>`}
