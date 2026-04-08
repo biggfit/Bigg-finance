@@ -107,7 +107,7 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
               <CuentaRow label="Interusos"      data={interusos}     cur={cur} cuenta="INTERUSOS"     />
               <CuentaRow label="Pauta"          data={pauta}         cur={cur} cuenta="PAUTA"         />
               <CuentaRow label="Sponsors"       data={sponsors}      cur={cur} cuenta="SPONSORS"      />
-              <CuentaRow label="Otros Ingresos" data={otrosIngresos} cur={cur} cuenta="OTROS_INGRESOS"/>
+              <CuentaRow label="Otros"          data={otrosIngresos} cur={cur} cuenta="OTROS_INGRESOS"/>
 
               {/* Movimientos financieros */}
               <div style={{ marginTop: 8 }}>

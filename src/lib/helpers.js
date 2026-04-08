@@ -18,7 +18,7 @@ export const CUENTA_LABEL = {
   INTERUSOS:      "Interusos",
   PAUTA:          "Pauta",
   SPONSORS:       "Sponsors",
-  OTROS_INGRESOS: "Otros Ingresos",
+  OTROS_INGRESOS: "Otros",
 };
 // Movimientos financieros (no tienen cuenta)
 export const MOV_TYPES = {
