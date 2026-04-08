@@ -1631,7 +1631,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
       ["PAUTA           →  Contribución a fondo de publicidad"],
       ["INTERUSOS       →  Uso de espacios o servicios compartidos"],
       ["SPONSORS        →  Ingresos por sponsoreo"],
-      ["OTROS_INGRESOS  →  Cualquier otro concepto de facturación"],
+      ["OTROS_INGRESOS  →  Otros (cualquier otro concepto de facturación)"],
       [""],
       ["CÓMO SE DEDUCE EL TIPO DE DOCUMENTO"],
       ["──────────────────────────────────────────────────────────────────────"],
@@ -1736,7 +1736,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
             <span style={{ color: "var(--text)", fontWeight: 700 }}>Importe positivo</span> → Factura &nbsp;·&nbsp; <span style={{ color: "var(--text)", fontWeight: 700 }}>Importe negativo</span> → Nota de Crédito &nbsp;·&nbsp; <span style={{ color: "var(--blue)", fontWeight: 700 }}>Tipo FC_RECIBIDA</span> → FC Recibida
           </div>
           <div style={{ fontSize: 11, color: "var(--muted)" }}>
-            Cuentas: {["FEE","PAUTA","INTERUSOS","SPONSORS","OTROS_INGRESOS"].map((c,i) => <span key={c}><span style={{ fontFamily: "monospace", color: "var(--text)" }}>{c}</span>{i < 4 ? " · " : ""}</span>)}
+            Cuentas: {["FEE","PAUTA","INTERUSOS","SPONSORS","OTROS_INGRESOS"].map((c,i) => <span key={c}><span style={{ fontFamily: "monospace", color: "var(--text)" }}>{CUENTA_LABEL[c] ?? c}</span>{i < 4 ? " · " : ""}</span>)}
           </div>
           <div style={{ fontSize: 11, color: "var(--muted)" }}>
             Movimientos: {["PAGO","PAGO_PAUTA","PAGO_ENVIADO"].map((c,i) => <span key={c}><span style={{ fontFamily: "monospace", color: "var(--green)" }}>{c}</span>{i < 2 ? " · " : ""}</span>)}
