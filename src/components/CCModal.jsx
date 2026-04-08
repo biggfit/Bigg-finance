@@ -245,16 +245,17 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
       <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 600, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
         onClick={e => e.target === e.currentTarget && setShowConfirmCC(false)}>
         <div className="fade" style={{ background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: 14, padding: 28, maxWidth: 400, width: "100%" }}>
-          <div style={{ fontSize: 13, marginBottom: 20 }}>
-            <span style={{ fontWeight: 800 }}>Enviar CC</span>
-            <span style={{ color: "var(--muted)" }}> a </span>
-            <strong>{to}</strong>
-            <span style={{ color: "var(--muted)" }}> — ¿adjuntar facturas?</span>
+          <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 8 }}>Enviar estado de cuenta</div>
+          <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 6 }}>
+            Destinatario: <strong style={{ color: "var(--text)" }}>{to}</strong>
+          </div>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 20 }}>
+            ¿Incluir las facturas del período como adjuntos?
           </div>
           <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-            <button className="ghost" style={{ whiteSpace: "nowrap" }} onClick={() => setShowConfirmCC(false)}>Cancelar</button>
-            <button className="ghost" style={{ whiteSpace: "nowrap" }} onClick={() => handleSendMail(true)}>✉ Con adjuntos</button>
-            <button className="btn"   style={{ whiteSpace: "nowrap" }} onClick={() => handleSendMail(false)}>✉ Sin adjuntos</button>
+            <button className="ghost" onClick={() => setShowConfirmCC(false)}>Cancelar</button>
+            <button className="ghost" onClick={() => handleSendMail(true)}>✉ Con adjuntos</button>
+            <button className="btn"   onClick={() => handleSendMail(false)}>✉ Sin adjuntos</button>
           </div>
         </div>
       </div>
