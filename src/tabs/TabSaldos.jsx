@@ -47,7 +47,7 @@ function useFrData(franchises, month, year, filterCurrency = null) {
     const interusos     = netoCuenta("INTERUSOS");
     const pauta         = netoCuenta("PAUTA");
     const sponsors      = netoCuenta("SPONSORS");
-    const otrosIngresos = netoCuenta("OTROS_INGRESOS");
+    const otrosIngresos = netoCuenta("OTROS");
     const pagos         = fc.filter(c => c.type === "PAGO").reduce((a, c) => a + c.amount, 0);
     const pagosACuenta  = fc.filter(c => c.type === "PAGO_PAUTA").reduce((a, c) => a + c.amount, 0);
     const enviados      = fc.filter(c => c.type === "PAGO_ENVIADO").reduce((a, c) => a + c.amount, 0);

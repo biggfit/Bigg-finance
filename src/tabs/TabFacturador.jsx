@@ -1369,7 +1369,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
 
 
 // ── Excel import helpers (nueva lógica: cuenta + signo determina tipo) ──────
-const CUENTAS_COMP    = new Set(["FEE","PAUTA","INTERUSOS","SPONSORS","OTROS_INGRESOS"]);
+const CUENTAS_COMP    = new Set(["FEE","PAUTA","INTERUSOS","SPONSORS","OTROS"]);
 const CUENTAS_MOV     = new Set(["PAGO","PAGO_PAUTA","PAGO_ENVIADO"]);
 const VALID_CURRENCIES = new Set(CURRENCIES); // module-scope — reused across calls
 
@@ -1631,7 +1631,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
       ["PAUTA           →  Contribución a fondo de publicidad"],
       ["INTERUSOS       →  Uso de espacios o servicios compartidos"],
       ["SPONSORS        →  Ingresos por sponsoreo"],
-      ["OTROS_INGRESOS  →  Otros (cualquier otro concepto de facturación)"],
+      ["OTROS  →  Otros (cualquier otro concepto de facturación)"],
       [""],
       ["CÓMO SE DEDUCE EL TIPO DE DOCUMENTO"],
       ["──────────────────────────────────────────────────────────────────────"],
@@ -1736,7 +1736,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
             <span style={{ color: "var(--text)", fontWeight: 700 }}>Importe positivo</span> → Factura &nbsp;·&nbsp; <span style={{ color: "var(--text)", fontWeight: 700 }}>Importe negativo</span> → Nota de Crédito &nbsp;·&nbsp; <span style={{ color: "var(--blue)", fontWeight: 700 }}>Tipo FC_RECIBIDA</span> → FC Recibida
           </div>
           <div style={{ fontSize: 11, color: "var(--muted)" }}>
-            Cuentas: {["FEE","PAUTA","INTERUSOS","SPONSORS","OTROS_INGRESOS"].map((c,i) => <span key={c}><span style={{ fontFamily: "monospace", color: "var(--text)" }}>{CUENTA_LABEL[c] ?? c}</span>{i < 4 ? " · " : ""}</span>)}
+            Cuentas: {["FEE","PAUTA","INTERUSOS","SPONSORS","OTROS"].map((c,i) => <span key={c}><span style={{ fontFamily: "monospace", color: "var(--text)" }}>{CUENTA_LABEL[c] ?? c}</span>{i < 4 ? " · " : ""}</span>)}
           </div>
           <div style={{ fontSize: 11, color: "var(--muted)" }}>
             Movimientos: {["PAGO","PAGO_PAUTA","PAGO_ENVIADO"].map((c,i) => <span key={c}><span style={{ fontFamily: "monospace", color: "var(--green)" }}>{c}</span>{i < 2 ? " · " : ""}</span>)}

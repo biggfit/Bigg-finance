@@ -12,13 +12,13 @@ export const DOCS   = ["FACTURA", "NC"];
 // Documentos recibidos (no se emiten, se registran)
 const DOCS_RECIBIDOS = ["FC_RECIBIDA"];
 // Cuentas posibles
-export const CUENTAS = ["FEE", "INTERUSOS", "PAUTA", "SPONSORS", "OTROS_INGRESOS"];
+export const CUENTAS = ["FEE", "INTERUSOS", "PAUTA", "SPONSORS", "OTROS"];
 export const CUENTA_LABEL = {
-  FEE:            "Fee",
-  INTERUSOS:      "Interusos",
-  PAUTA:          "Pauta",
-  SPONSORS:       "Sponsors",
-  OTROS_INGRESOS: "Otros",
+  FEE:       "Fee",
+  INTERUSOS: "Interusos",
+  PAUTA:     "Pauta",
+  SPONSORS:  "Sponsors",
+  OTROS:     "Otros",
 };
 // Movimientos financieros (no tienen cuenta)
 export const MOV_TYPES = {

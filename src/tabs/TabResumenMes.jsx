@@ -36,7 +36,7 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
         const interusos     = netoCuenta("INTERUSOS");
         const pauta         = netoCuenta("PAUTA");
         const sponsors      = netoCuenta("SPONSORS");
-        const otrosIngresos = netoCuenta("OTROS_INGRESOS");
+        const otrosIngresos = netoCuenta("OTROS");
         const pagos         = fc.filter(c => c.type === "PAGO").reduce((a, c) => a + c.amount, 0);
         const pagosACuenta  = fc.filter(c => c.type === "PAGO_PAUTA").reduce((a, c) => a + c.amount, 0);
         const enviados      = fc.filter(c => c.type === "PAGO_ENVIADO").reduce((a, c) => a + c.amount, 0);
@@ -107,7 +107,7 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
               <CuentaRow label="Interusos"      data={interusos}     cur={cur} cuenta="INTERUSOS"     />
               <CuentaRow label="Pauta"          data={pauta}         cur={cur} cuenta="PAUTA"         />
               <CuentaRow label="Sponsors"       data={sponsors}      cur={cur} cuenta="SPONSORS"      />
-              <CuentaRow label="Otros"          data={otrosIngresos} cur={cur} cuenta="OTROS_INGRESOS"/>
+              <CuentaRow label="Otros"          data={otrosIngresos} cur={cur} cuenta="OTROS"/>
 
               {/* Movimientos financieros */}
               <div style={{ marginTop: 8 }}>
