@@ -252,15 +252,10 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
           <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 20 }}>
             ¿Incluir las facturas del período como adjuntos?
           </div>
-          <button className="btn" onClick={() => handleSendMail(false)}
-            style={{ width: "100%", marginBottom: 10, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-            ✉ Enviar estado de cuenta
-          </button>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <button className="ghost" style={{ fontSize: 12 }} onClick={() => setShowConfirmCC(false)}>Cancelar</button>
-            <button className="ghost" style={{ fontSize: 12, opacity: .7 }} onClick={() => handleSendMail(true)}>
-              + adjuntar facturas
-            </button>
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+            <button className="ghost" onClick={() => setShowConfirmCC(false)}>Cancelar</button>
+            <button className="ghost" onClick={() => handleSendMail(true)}>✉ Con adjuntos</button>
+            <button className="btn"   onClick={() => handleSendMail(false)}>✉ Sin adjuntos</button>
           </div>
         </div>
       </div>
