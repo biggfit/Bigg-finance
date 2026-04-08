@@ -1577,7 +1577,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
       // El importe importado desde Excel es el TOTAL (con IVA incluido).
       // Calcular desglose neto/IVA para que el backend de Facturante use amountNeto en lugar
       // de hacer fallback a amount (que trataría el total como neto y doblaría el IVA).
-      const applyIVA = !!(COMPANIES[activeCompany]?.applyIVA);
+      const applyIVA = COMPANIES[activeCompany]?.applyIVA ?? false;
       if (applyIVA && esComp && (r.type?.startsWith("FACTURA|") || r.type?.startsWith("NC|"))) {
         const amountNeto = Math.round(r.amount / 1.21 * 100) / 100;
         comp = { ...comp, amountNeto, amountIVA: Math.round((r.amount - amountNeto) * 100) / 100 };
