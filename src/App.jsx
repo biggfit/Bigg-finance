@@ -351,15 +351,14 @@ export default function App() {
                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
               }}
               onClick={() => {
-                const cycle = [null, ...COMPANY_NAMES];
-                const idx   = cycle.indexOf(activeCompany);
-                const next  = cycle[(idx + 1) % cycle.length];
+                const idx  = COMPANY_NAMES.indexOf(activeCompany);
+                const next = COMPANY_NAMES[(idx + 1) % COMPANY_NAMES.length];
                 setActiveCompany(next);
-                setFilterCur(next ? (COMPANIES[next]?.currency ?? "ALL") : "ALL");
+                setFilterCur(COMPANIES[next]?.currency ?? "ALL");
               }}
               title="Cambiar sociedad"
             >
-              {activeCompany ? `${COMPANIES[activeCompany]?.flag} ${activeCompany}` : "🌐 Todas las soc."}
+              {COMPANIES[activeCompany]?.flag} {activeCompany}
             </button>
           </div>
 
