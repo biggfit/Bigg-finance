@@ -132,7 +132,7 @@ function doGet(e) {
       } else {
         fechaStr = String(rawFecha ?? "");
       }
-      result[key].push({ fecha: fechaStr, ccMes: Number(obj.ccMes), ccAnio: Number(obj.ccAnio), to: obj.to });
+      result[key].push({ fecha: fechaStr, ccMes: Number(obj.ccMes || 0), ccAnio: Number(obj.ccAnio || 0), to: obj.to || "", frName: obj.frName || "", tipo: obj.tipo || "cc" });
     }
     return json(result);
   }
@@ -221,7 +221,7 @@ function doGet(e) {
         } else {
           fStr = String(rawF || "");
         }
-        recordatorios[rKey].push({ fecha: fStr, ccMes: Number(rObj.ccMes), ccAnio: Number(rObj.ccAnio), to: rObj.to });
+        recordatorios[rKey].push({ fecha: fStr, ccMes: Number(rObj.ccMes || 0), ccAnio: Number(rObj.ccAnio || 0), to: rObj.to || "", frName: rObj.frName || "", tipo: rObj.tipo || "cc" });
       }
     }
 
@@ -355,9 +355,19 @@ function doPost(e) {
     var sh = ss.getSheetByName("recordatorios");
     if (!sh) {
       sh = ss.insertSheet("recordatorios");
-      sh.appendRow(["frId", "fecha", "ccMes", "ccAnio", "to"]);
+      sh.appendRow(["frId", "fecha", "ccMes", "ccAnio", "to", "frName", "tipo"]);
+    } else {
+      // Migración: agregar columnas nuevas si aún no existen
+      var hRow = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+      if (hRow.indexOf("frName") === -1) sh.getRange(1, hRow.length + 1).setValue("frName");
+      if (hRow.indexOf("tipo")   === -1) sh.getRange(1, sh.getLastColumn()).setValue("tipo");
     }
-    sh.appendRow([body.frId, body.fecha, body.ccMes, body.ccAnio, body.to || ""]);
+    sh.appendRow([
+      body.frId, body.fecha,
+      body.ccMes   || "", body.ccAnio  || "",
+      body.to      || "", body.frName  || "",
+      body.tipo    || "cc"
+    ]);
     return json({ ok: true });
   }
 

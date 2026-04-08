@@ -233,6 +233,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
       try {
         await sendMailFr({ to, subject: `Solicitud de factura — ${fr.name}`, htmlBody });
         addRecordatorioEntry(fr.id, {
+          frName: fr.name,
           tipo: "solicitud_factura",
           fecha: todayDmy(),
           to,
@@ -243,6 +244,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
       } catch (e) {
         const msg = e.message ?? "Error";
         addRecordatorioEntry(fr.id, {
+          frName: fr.name,
           tipo: "solicitud_factura",
           fecha: todayDmy(),
           to,

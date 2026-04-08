@@ -149,7 +149,7 @@ function SaldosTable({ title, data, accentColor, bgColor, borderColor, onOpenFr,
           attachments: factAdjs,
         });
         const hoy = todayDmy();
-        addRecordatorioEntry(d.fr.id, { fecha: hoy, ccMes: month + 1, ccAnio: year, to });
+        addRecordatorioEntry(d.fr.id, { frName: d.fr.name, tipo: "cc", fecha: hoy, ccMes: month + 1, ccAnio: year, to });
         ok.push(d.fr.name);
       } catch (e) { err.push(`${d.fr.name} (${e.message})`); }
     }

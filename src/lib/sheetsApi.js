@@ -250,8 +250,8 @@ export async function fetchRecordatorios() {
 /**
  * Guarda un recordatorio enviado en Sheets.
  */
-export async function saveRecordatorio({ frId, fecha, ccMes, ccAnio, to }) {
-  return post({ action: "addRecordatorio", frId, fecha, ccMes, ccAnio, to });
+export async function saveRecordatorio({ frId, fecha, ccMes, ccAnio, to, frName, tipo }) {
+  return post({ action: "addRecordatorio", frId, fecha, ccMes: ccMes ?? "", ccAnio: ccAnio ?? "", to, frName: frName ?? "", tipo: tipo ?? "cc" });
 }
 
 // ─── Mail ─────────────────────────────────────────────────────────────────────
