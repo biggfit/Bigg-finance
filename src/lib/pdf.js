@@ -169,7 +169,7 @@ export function buildCCHtml(frName, frRazonSocial, lines, currency, ccMonth, ccY
           <div style="font-family:monospace;font-size:16px;font-weight:700;color:${scAnterior}">${fmtSaldo(saldoAnterior)}</div>
         </td>
         <td class="sum-cell sum-bg" style="padding:14px 12px;text-align:center;width:34%;border-left:1px solid #e5e7eb;border-right:1px solid #e5e7eb;background:#fff">
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#6b7280;margin-bottom:8px">${ccMonth === null ? "Movimientos" : `Movimientos ${mesLabel}`}</div>
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#6b7280;margin-bottom:8px">${ccMonth === null ? "Movimientos del período" : `Movimientos ${mesLabel}`}</div>
           ${totalDebe === 0 && totalHaber === 0
             ? `<span style="color:#9ca3af;font-size:13px;font-weight:400">sin movimientos</span>`
             : `<table style="width:100%;border-collapse:collapse;font-size:11px">
