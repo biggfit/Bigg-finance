@@ -4,7 +4,9 @@ import { buildCuentaCorriente, COMP_TYPES, fmt, fmtS, downloadCSV } from "../lib
 import { COMPANIES } from "../data/franchisor";
 import { dmyToIso, isoToDmy } from "../data/franchisor";
 import { TypePill } from "./atoms";
-import { buildCCHtml, fetchLogoDataUrl } from "../lib/pdf";
+import { buildCCHtml, fetchLogoDataUrl, blobToBase64, htmlToBase64, buildFacturaHtmlForMail } from "../lib/pdf";
+import { generateInvoicePdfBlob } from "../lib/invoicePdf";
+import { downloadFacturantePdfBlob } from "../lib/facturanteApi";
 import { sendMailFr } from "../lib/sheetsApi";
 
 // ─── CC MODAL — Historial completo tipo base de datos ────────────────────────
@@ -16,8 +18,10 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
   const [confirmId,  setConfirmId]  = useState(null);
   const [editId,     setEditId]     = useState(null);
   const [editBuf,    setEditBuf]    = useState({});
-  const [mailStatus, setMailStatus] = useState(null); // null | "sending" | "ok" | "error"
-  const [mailError,  setMailError]  = useState("");
+  const [mailStatus,   setMailStatus]   = useState(null); // null | "sending" | "ok" | "error"
+  const [mailError,    setMailError]    = useState("");
+  const [showConfirmCC, setShowConfirmCC] = useState(false);
+  const to = [franchise.emailFactura, franchise.emailComercial].filter(Boolean).join(",");
 
   const openEdit = (l) => {
     setEditId(l.id);
@@ -29,27 +33,47 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
     setEditId(null);
   };
 
-  // ── Enviar CC completa (sin facturas individuales) ──────────────────────────
-  const handleSendMail = useCallback(async () => {
-    const to = [franchise.emailFactura, franchise.emailComercial].filter(Boolean).join(",");
+  // ── Enviar CC completa ───────────────────────────────────────────────────────
+  const handleSendMail = useCallback(async (withPdfs = true) => {
+    setShowConfirmCC(false);
     if (!to) { setMailError("Sin email configurado"); setMailStatus("error"); return; }
     setMailStatus("sending");
     setMailError("");
     try {
-      const now         = new Date();
       const logoUrl     = franchisor?.usa?.logoUrl || franchisor?.es?.logoUrl || "/Logo.jpg";
       const logoDataUrl = await fetchLogoDataUrl(logoUrl);
       const ccHtml      = buildCCHtml(franchise.name, franchise.razonSocial ?? null, lines, displayCurrency, null, null, logoDataUrl, activeCompany);
-      const today  = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "long", year: "numeric" });
-      await sendMailFr({
-        to,
-        subject:  `Cuenta Corriente ${franchise.name} — ${today}`,
-        htmlBody: ccHtml,
-        attachments: [],
-      });
+      const today       = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "long", year: "numeric" });
+
+      let factAdjs = [];
+      if (withPdfs) {
+        const isAR     = franchise.country === "Argentina";
+        const frSlug   = franchise.name.replace(/ /g, "_");
+        const docTypes = ["FACTURA", "NC", "FC_RECIBIDA"];
+        const factsConInvoice = lines.filter(c => c.invoice && docTypes.some(d => c.type?.startsWith(d)));
+        factAdjs = (await Promise.all(factsConInvoice.map(async (c) => {
+          const label = (c.invoice ?? c.id).replace(/\//g, "-");
+          if (isAR) {
+            if (c.facturanteId) {
+              try {
+                const blob = await downloadFacturantePdfBlob(c.facturanteId);
+                return { data: await blobToBase64(blob), mimeType: "application/pdf", name: `${label}_${frSlug}.pdf` };
+              } catch { /* fallback */ }
+            }
+            const html = buildFacturaHtmlForMail(franchise, franchisor, c);
+            return { data: htmlToBase64(html), mimeType: "application/octet-stream", name: `${label}_${frSlug}.html` };
+          }
+          const doc    = String(c.type ?? "").split("|")[0];
+          const prefix = doc === "NC" ? "CreditNote" : doc === "FC_RECIBIDA" ? "FCRecibida" : "Invoice";
+          const blob   = await generateInvoicePdfBlob(franchise, franchisor, c);
+          return { data: await blobToBase64(blob), mimeType: "application/pdf", name: `${prefix}_${label}_${frSlug}.pdf` };
+        }))).filter(Boolean);
+      }
+
+      await sendMailFr({ to, subject: `Cuenta Corriente ${franchise.name} — ${today}`, htmlBody: ccHtml, attachments: factAdjs });
       setMailStatus("ok");
     } catch (err) { setMailError(err.message ?? "Error"); setMailStatus("error"); }
-  }, [franchise, lines, displayCurrency]);
+  }, [franchise, franchisor, lines, displayCurrency, activeCompany, to]);
 
 
   const handleExportCSV = useCallback(() => {
@@ -72,6 +96,7 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
   const saldoColor = (s) => s > 0.01 ? "var(--red)" : s < -0.01 ? "var(--green)" : "var(--muted)";
 
   return (
+    <>
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.92)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
       onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="fade" style={{ background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: 14, width: 1060, maxWidth: "97vw", maxHeight: "92vh", display: "flex", flexDirection: "column" }}>
@@ -91,10 +116,10 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
             <button className="ghost" onClick={handleExportCSV}>↓ CSV</button>
             <button
               className="ghost"
-              onClick={handleSendMail}
+              onClick={() => to ? setShowConfirmCC(true) : (setMailError("Sin email configurado"), setMailStatus("error"))}
               disabled={mailStatus === "sending"}
-              title={franchise.emailFactura || franchise.emailComercial || "Sin email configurado"}
-              style={{ opacity: (!franchise.emailFactura && !franchise.emailComercial) ? .4 : 1 }}
+              title={to || "Sin email configurado"}
+              style={{ opacity: !to ? .4 : 1 }}
             >
               {mailStatus === "sending" ? "Enviando…" : "✉ Enviar CC"}
             </button>
@@ -214,5 +239,27 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
 
       </div>
     </div>
+
+    {/* ── Mini-modal: ¿adjuntar PDFs? ── */}
+    {showConfirmCC && (
+      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 600, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+        onClick={e => e.target === e.currentTarget && setShowConfirmCC(false)}>
+        <div className="fade" style={{ background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: 14, padding: 28, maxWidth: 400, width: "100%" }}>
+          <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 8 }}>Enviar estado de cuenta</div>
+          <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 6 }}>
+            Destinatario: <strong style={{ color: "var(--text)" }}>{to}</strong>
+          </div>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 20 }}>
+            ¿Incluir las facturas del período como adjuntos?
+          </div>
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
+            <button className="ghost" onClick={() => setShowConfirmCC(false)}>Cancelar</button>
+            <button className="ghost" onClick={() => handleSendMail(false)}>✉ Sin adjuntos</button>
+            <button className="btn"   onClick={() => handleSendMail(true)}>✉ Con adjuntos</button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
