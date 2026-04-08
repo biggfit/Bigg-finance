@@ -96,8 +96,11 @@ export function buildCCHtml(frName, frRazonSocial, lines, currency, ccMonth, ccY
   const apertura = lines.find(l => l.type === "apertura");
   const movs     = lines.filter(l => l.type !== "apertura");
   const saldoAnterior = apertura?.saldo ?? 0;
-  const totalDebe  = movs.reduce((a, l) => a + (l.debit ?? 0), 0);
-  const totalHaber = movs.reduce((a, l) => a + (l.credit ?? 0), 0);
+  const totalDebe      = movs.reduce((a, l) => a + (l.debit ?? 0), 0);
+  const totalHaber     = movs.reduce((a, l) => a + (l.credit ?? 0), 0);
+  const totalFacturado = movs.filter(l => l.type?.startsWith("FACTURA")).reduce((a, l) => a + (l.debit ?? 0), 0);
+  const totalNC        = movs.filter(l => l.type?.startsWith("NC")).reduce((a, l) => a + (l.credit ?? 0), 0);
+  const totalCobros    = movs.filter(l => ["PAGO","PAGO_PAUTA","PAGO_ENVIADO"].includes(l.type)).reduce((a, l) => a + (l.credit ?? 0), 0);
 
   // ── Filas con IMPORTE y TOTAL MES acumulado ──
   let runningMes = 0;
@@ -165,11 +168,17 @@ export function buildCCHtml(frName, frRazonSocial, lines, currency, ccMonth, ccY
           <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#6b7280;margin-bottom:4px">Saldo anterior</div>
           <div style="font-family:monospace;font-size:16px;font-weight:700;color:${scAnterior}">${fmtSaldo(saldoAnterior)}</div>
         </td>
-        <td class="sum-cell sum-bg" style="padding:16px 0;text-align:center;width:34%;border-left:1px solid #e5e7eb;border-right:1px solid #e5e7eb;background:#fff">
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#6b7280;margin-bottom:4px">${ccMonth === null ? "Total movimientos" : `Movimientos ${mesLabel}`}</div>
-          <div style="font-family:monospace;font-size:16px;font-weight:700;margin-top:2px;color:${(totalDebe - totalHaber) > 0.01 ? "#dc2626" : (totalDebe - totalHaber) < -0.01 ? "#16a34a" : "#6b7280"}">
-            ${totalDebe === 0 && totalHaber === 0 ? `<span style="color:#9ca3af;font-size:13px;font-weight:400">sin movimientos</span>` : fmtSaldo(totalDebe - totalHaber)}
-          </div>
+        <td class="sum-cell sum-bg" style="padding:14px 12px;text-align:center;width:34%;border-left:1px solid #e5e7eb;border-right:1px solid #e5e7eb;background:#fff">
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#6b7280;margin-bottom:8px">${ccMonth === null ? "Movimientos" : `Movimientos ${mesLabel}`}</div>
+          ${totalDebe === 0 && totalHaber === 0
+            ? `<span style="color:#9ca3af;font-size:13px;font-weight:400">sin movimientos</span>`
+            : `<table style="width:100%;border-collapse:collapse;font-size:11px">
+            ${totalFacturado > 0 ? `<tr><td style="color:#6b7280;padding:1px 4px;text-align:left">Facturado</td><td style="font-family:monospace;font-weight:700;color:#dc2626;text-align:right;padding:1px 4px">${fmtSaldo(totalFacturado)}</td></tr>` : ""}
+            ${totalNC        > 0 ? `<tr><td style="color:#6b7280;padding:1px 4px;text-align:left">NC</td><td style="font-family:monospace;font-weight:700;color:#16a34a;text-align:right;padding:1px 4px">${fmtSaldo(-totalNC)}</td></tr>` : ""}
+            ${totalCobros    > 0 ? `<tr><td style="color:#6b7280;padding:1px 4px;text-align:left">Cobros</td><td style="font-family:monospace;font-weight:700;color:#16a34a;text-align:right;padding:1px 4px">${fmtSaldo(-totalCobros)}</td></tr>` : ""}
+            <tr><td colspan="2" style="padding:3px 4px 1px"><div style="border-top:1px solid #e5e7eb"></div></td></tr>
+            <tr><td style="color:#374151;font-weight:600;padding:1px 4px;text-align:left">Neto</td><td style="font-family:monospace;font-size:13px;font-weight:800;color:${(totalDebe-totalHaber)>0.01?"#dc2626":(totalDebe-totalHaber)<-0.01?"#16a34a":"#6b7280"};text-align:right;padding:1px 4px">${fmtSaldo(totalDebe-totalHaber)}</td></tr>
+          </table>`}
         </td>
         <td class="sum-cell" style="padding:16px 0;text-align:center;width:33%">
           <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#6b7280;margin-bottom:4px">Nuevo saldo</div>
