@@ -62,14 +62,22 @@ export default function App() {
   const lastBP    = useMemo(() => lastBillingPeriod(), []);
   const nowPeriod = useMemo(() => { const n = new Date(); return { month: n.getMonth(), year: n.getFullYear() }; }, []);
   const cutoff = useMemo(() => {
-    if (periodYear === lastBP.year && periodMonth === lastBP.month) return todayDmy();
+    // Mes calendario actual → cutoff = hoy
+    if (periodYear === nowPeriod.year && periodMonth === nowPeriod.month) return todayDmy();
+    // Meses pasados → cutoff = último día del mes
     const last = new Date(periodYear, periodMonth + 1, 0);
     return `${String(last.getDate()).padStart(2,"0")}/${String(last.getMonth()+1).padStart(2,"0")}/${last.getFullYear()}`;
-  }, [periodMonth, periodYear, lastBP]);
+  }, [periodMonth, periodYear, nowPeriod]);
   const cutoffRange = useMemo(() => {
     const [dd, mm] = cutoff.split("/");
+    const isCurrentMonth = periodYear === nowPeriod.year && periodMonth === nowPeriod.month;
+    if (isCurrentMonth) {
+      // Mes actual: mostrar desde el 1ro del mes anterior
+      const prevMm = String(periodMonth === 0 ? 12 : periodMonth).padStart(2, "0");
+      return `01/${prevMm} → ${dd}/${mm}`;
+    }
     return `01/${String(periodMonth + 1).padStart(2, "0")} → ${dd}/${mm}`;
-  }, [cutoff]);
+  }, [cutoff, periodMonth, periodYear, nowPeriod]);
   const [soloPendiente, setSoloPendiente] = useState(false);
   const [selectedFrIds, setSelectedFrIds] = useState(new Set());
   const [activeCompany, setActiveCompany] = useState(() => {

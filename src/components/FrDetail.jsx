@@ -69,8 +69,9 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
   const periodCutoff = useMemo(() => {
     const last = new Date(localYear, localMonth + 1, 0);
     const now = new Date();
-    const isActive = localMonth === (now.getMonth() === 0 ? 11 : now.getMonth() - 1) && localYear === (now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear());
-    return isActive ? todayDmy() : `${String(last.getDate()).padStart(2,"0")}/${String(last.getMonth()+1).padStart(2,"0")}/${last.getFullYear()}`;
+    // Mes calendario actual → cutoff = hoy; meses pasados → último día del mes
+    const isCurrentMonth = localMonth === now.getMonth() && localYear === now.getFullYear();
+    return isCurrentMonth ? todayDmy() : `${String(last.getDate()).padStart(2,"0")}/${String(last.getMonth()+1).padStart(2,"0")}/${last.getFullYear()}`;
   }, [localMonth, localYear]);
 
   // Moneda de visualización: la franquicia tiene prioridad sobre la empresa activa
