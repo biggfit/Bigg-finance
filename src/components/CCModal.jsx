@@ -12,8 +12,10 @@ import { sendMailFr } from "../lib/sheetsApi";
 // ─── CC MODAL — Historial completo tipo base de datos ────────────────────────
 export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
   const { comps, saldoInicial, activeCompany, franchisor } = useStore();
-  const displayCurrency = COMPANIES[activeCompany]?.currency ?? franchise.currency;
-  const { lines } = buildCuentaCorriente(franchise.id, comps, saldoInicial, null, null, activeCompany);
+  // Franchise's own currency takes precedence over company default
+  const frCurrency     = franchise.currency ?? franchise.moneda ?? null;
+  const displayCurrency = frCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS";
+  const { lines } = buildCuentaCorriente(franchise.id, comps, saldoInicial, frCurrency, null, activeCompany);
   const MOV_TYPES = new Set(["PAGO", "PAGO_PAUTA", "PAGO_ENVIADO"]);
   const [confirmId,  setConfirmId]  = useState(null);
   const [editId,     setEditId]     = useState(null);
@@ -208,7 +210,7 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
                     {/* Saldo */}
                     <td style={{ textAlign: "right", padding: "6px 8px", whiteSpace: "nowrap" }}>
                       <span className="mono" style={{ fontSize: 11, fontWeight: 700, color: saldoColor(l.saldo) }}>
-                        {fmtS(l.saldo, displayCurrency)}
+                        {fmtS(l.saldo, l.currency ?? displayCurrency)}
                       </span>
                     </td>
                     {/* Acciones */}
