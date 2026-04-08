@@ -4,7 +4,9 @@ import { useStore } from "../lib/context";
 import { compEmpresa, compCurrency, cmpDate, MONTHS, COMP_TYPES, computeSaldoPrevMes, getSaldoInicial, fmt } from "../lib/helpers";
 import { COMPANIES, todayDmy, dmyToIso, isoToDmy } from "../data/franchisor";
 import { RecordatorioDots } from "./TabSaldos";
-import { buildCCHtml, fetchLogoDataUrl } from "../lib/pdf";
+import { buildCCHtml, fetchLogoDataUrl, blobToBase64, htmlToBase64, buildFacturaHtmlForMail } from "../lib/pdf";
+import { generateInvoicePdfBlob } from "../lib/invoicePdf";
+import { downloadFacturantePdfBlob } from "../lib/facturanteApi";
 import { sendMailFr } from "../lib/sheetsApi";
 
 // Último día del mes anterior al cutoff (DD/MM/YYYY → DD/MM/YYYY)
@@ -249,11 +251,35 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
           }),
         ];
         const ccHtml = buildCCHtml(d.fr.name, d.fr.razonSocial ?? null, ccLines, cur, periodMonth, periodYear, logoDataUrl, activeCompany);
+
+        // Adjuntar facturas/NC del período (igual que FrDetail)
+        const isAR     = d.fr.country === "Argentina";
+        const frSlug   = d.fr.name.replace(/ /g, "_");
+        const docTypes = ["FACTURA", "NC", "FC_RECIBIDA"];
+        const factsDelMes = compsWithSaldo.filter(c => c.invoice && docTypes.some(dt => c.type?.startsWith(dt)));
+        const factAdjs = await Promise.all(factsDelMes.map(async (c) => {
+          const label = (c.invoice ?? c.id).replace(/\//g, "-");
+          if (isAR) {
+            if (c.facturanteId) {
+              try {
+                const blob = await downloadFacturantePdfBlob(c.facturanteId);
+                return { data: await blobToBase64(blob), mimeType: "application/pdf", name: `${label}_${frSlug}.pdf` };
+              } catch (e) { console.error("[Deudores email] PDF ARCA failed, fallback HTML:", e); }
+            }
+            const factHtml = buildFacturaHtmlForMail(d.fr, franchisor, c);
+            return { data: htmlToBase64(factHtml), mimeType: "application/octet-stream", name: `${label}_${frSlug}.html` };
+          }
+          const doc    = String(c.type ?? "").split("|")[0];
+          const prefix = doc === "NC" ? "CreditNote" : doc === "FC_RECIBIDA" ? "FCRecibida" : "Invoice";
+          const blob   = await generateInvoicePdfBlob(d.fr, franchisor, c);
+          return { data: await blobToBase64(blob), mimeType: "application/pdf", name: `${prefix}_${label}_${frSlug}.pdf` };
+        }));
+
         await sendMailFr({
           to,
           subject: `Estado de Cuenta ${d.fr.name} — ${MONTHS[periodMonth]} ${periodYear}`,
           htmlBody: ccHtml,
-          attachments: [],
+          attachments: factAdjs,
         });
         addRecordatorioEntry(d.fr.id, { fecha: todayDmy(), ccMes: periodMonth + 1, ccAnio: periodYear, to });
         ok.push(d.fr.name);
