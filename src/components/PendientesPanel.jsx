@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
 import { useStore } from "../lib/context";
 import { makeType, MONTHS, AVAILABLE_YEARS, fmt, compCurrency, compEmpresa, CUENTAS, CUENTA_LABEL, COMPANIES } from "../lib/helpers";
-import { inPeriod, dateMonth, dateYear } from "../data/franchisor";
+import { inPeriod, dateMonth, dateYear, todayDmy } from "../data/franchisor";
+import { sendMailFr } from "../lib/sheetsApi";
 
 // ── Pendientes panel ────────────────────────────────────────────────────────
 export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, onFetchAfipNumero }) {
-  const { franchises, comps, editComp, deleteComp, activeCompany } = useStore();
+  const { franchises, comps, editComp, deleteComp, activeCompany, recordatorios, addRecordatorioEntry } = useStore();
   const [showAfip,       setShowAfip]       = useState(false);
   const [showSinNumero,  setShowSinNumero]  = useState(false);
   const [showSinAsignar, setShowSinAsignar] = useState(false);
@@ -13,8 +14,15 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
   const [showFcRecibidas, setShowFcRecibidas] = useState(false);
   const [fetchingNumero, setFetchingNumero] = useState({}); // { [compId]: true }
   const [fetchNumeroErr, setFetchNumeroErr] = useState({}); // { [compId]: string }
+  const [discardingId,   setDiscardingId]   = useState({}); // { [compId]: true }
   const [emitting, setEmitting] = useState({}); // { [compId]: true }
   const [errors,   setErrors]   = useState({}); // { [compId]: string }
+
+  // Recordatorio "solicitud de factura" al franquiciado
+  const [selectedSinAsignar,  setSelectedSinAsignar]  = useState(new Set()); // sinAsignar
+  const [selectedFcRecibidas, setSelectedFcRecibidas] = useState(new Set()); // fcRecibidasPendientes
+  const [sendingFcReminder,   setSendingFcReminder]   = useState(false);
+  const [fcReminderResult,    setFcReminderResult]    = useState(null); // { ok: [], err: [] }
 
   // Registrar nro de factura recibida del franquiciado
   const [adjuntando, setAdjuntando] = useState({}); // { [compId]: true }
@@ -153,6 +161,102 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
     } finally {
       setFetchingNumero(p => { const n = { ...p }; delete n[comp.id]; return n; });
     }
+  };
+
+  // Descarta el facturanteId → el comp vuelve a "SIN EMISIÓN AFIP" para poder re-emitir
+  const handleDescartarAfipId = async (fr, comp) => {
+    if (discardingId[comp.id]) return;
+    setDiscardingId(p => ({ ...p, [comp.id]: true }));
+    try {
+      await editComp(fr.id, comp.id, { facturanteId: null });
+      setFetchNumeroErr(p => { const n = { ...p }; delete n[comp.id]; return n; });
+    } finally {
+      setDiscardingId(p => { const n = { ...p }; delete n[comp.id]; return n; });
+    }
+  };
+
+  // Envía mail recordatorio a los franquiciados con facturas pendientes seleccionados
+  const handleSendFcReminder = async (collection, selectedIds, clearSelection) => {
+    if (!selectedIds.size || sendingFcReminder) return;
+    setSendingFcReminder(true);
+    setFcReminderResult(null);
+
+    // Agrupar comps seleccionados por fr.id → un único mail por franquiciado
+    const byFr = new Map();
+    for (const { fr, comp } of collection) {
+      if (!selectedIds.has(comp.id)) continue;
+      if (!byFr.has(fr.id)) byFr.set(fr.id, { fr, comps: [] });
+      byFr.get(fr.id).comps.push(comp);
+    }
+
+    const ok = [], err = [];
+    for (const { fr, comps: frComps } of byFr.values()) {
+      const to = fr.emailFactura ?? fr.emailComercial ?? "";
+      if (!to) { err.push(`${fr.name} (sin email)`); continue; }
+
+      const rows = frComps.map(c => {
+        const cuenta = String(c.type ?? "").split("|")[1] ?? "";
+        const cur    = compCurrency(c);
+        const label  = CUENTA_LABEL[cuenta] ?? cuenta;
+        const total  = c.amount ?? 0;
+        const neto   = c.amountNeto != null ? c.amountNeto : Math.round(total / 1.21 * 100) / 100;
+        const iva    = c.amountIVA  != null ? c.amountIVA  : Math.round((total - neto) * 100) / 100;
+        return `<tr style="border-bottom:1px solid #e2e8f0">
+          <td style="padding:10px 12px;white-space:nowrap">${c.date}</td>
+          <td style="padding:10px 12px;font-weight:600">${label}</td>
+          <td style="padding:10px 12px;text-align:right;font-family:monospace">${fmt(neto, cur)}</td>
+          <td style="padding:10px 12px;text-align:right;font-family:monospace">${fmt(iva, cur)}</td>
+          <td style="padding:10px 12px;text-align:right;font-family:monospace;font-weight:700">${fmt(total, cur)}</td>
+        </tr>`;
+      }).join("");
+
+      const htmlBody = `
+        <div style="font-family:sans-serif;max-width:640px;margin:0 auto;color:#1e293b">
+          <h2 style="margin-bottom:4px;font-size:18px">Solicitud de emisión de factura</h2>
+          <p>Estimados,</p>
+          <p>Les solicitamos la emisión de ${frComps.length === 1 ? "la siguiente factura" : "las siguientes facturas"} con los datos indicados a continuación. <strong>Es importante que utilicen la fecha de emisión indicada</strong> para que el comprobante quede con la fecha fiscal correcta.</p>
+          <table style="width:100%;border-collapse:collapse;margin:20px 0;font-size:14px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden">
+            <thead>
+              <tr style="background:#f8fafc">
+                <th style="padding:10px 12px;text-align:left;font-weight:600;color:#475569;border-bottom:2px solid #e2e8f0">Fecha de emisión</th>
+                <th style="padding:10px 12px;text-align:left;font-weight:600;color:#475569;border-bottom:2px solid #e2e8f0">Concepto</th>
+                <th style="padding:10px 12px;text-align:right;font-weight:600;color:#475569;border-bottom:2px solid #e2e8f0">Neto</th>
+                <th style="padding:10px 12px;text-align:right;font-weight:600;color:#475569;border-bottom:2px solid #e2e8f0">IVA (21%)</th>
+                <th style="padding:10px 12px;text-align:right;font-weight:600;color:#475569;border-bottom:2px solid #e2e8f0">Total</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+          <p>Una vez emitida, por favor envíen el número de comprobante a la brevedad.</p>
+        </div>`;
+
+      try {
+        await sendMailFr({ to, subject: `Solicitud de factura — ${fr.name}`, htmlBody });
+        addRecordatorioEntry(fr.id, {
+          tipo: "solicitud_factura",
+          fecha: todayDmy(),
+          to,
+          status: "ok",
+          compIds: frComps.map(c => c.id),
+        });
+        ok.push(fr.name);
+      } catch (e) {
+        const msg = e.message ?? "Error";
+        addRecordatorioEntry(fr.id, {
+          tipo: "solicitud_factura",
+          fecha: todayDmy(),
+          to,
+          status: "error",
+          error: msg,
+          compIds: frComps.map(c => c.id),
+        });
+        err.push(`${fr.name} (${msg})`);
+      }
+    }
+
+    clearSelection(new Set());
+    setSendingFcReminder(false);
+    setFcReminderResult({ ok, err });
   };
 
   // Sedes únicas presentes en sinAfipAll (para el dropdown)
@@ -316,6 +420,17 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
   const tdS  = { fontSize: 12, padding: "7px 10px", borderBottom: "1px solid rgba(255,255,255,.04)" };
 
   const batchDone = batchProgress && !batchRunning;
+
+  // frId → todos los envíos "solicitud_factura" (para mostrar un dot por envío)
+  const fcReminderSent = useMemo(() => {
+    const m = new Map();
+    for (const { fr } of [...sinAsignar, ...fcRecibidasPendientes]) {
+      if (m.has(fr.id)) continue;
+      const entries = (recordatorios[String(fr.id)] ?? []).filter(r => r.tipo === "solicitud_factura");
+      if (entries.length) m.set(fr.id, entries);
+    }
+    return m;
+  }, [sinAsignar, fcRecibidasPendientes, recordatorios]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
@@ -596,11 +711,13 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
               {sinNumeroAfip.map(({ fr, comp }) => {
                 const doc    = String(comp.type ?? "").split("|")[0];
                 const cuenta = String(comp.type ?? "").split("|")[1] ?? "";
-                const busy   = !!fetchingNumero[comp.id];
-                const err    = fetchNumeroErr[comp.id];
+                const busy        = !!fetchingNumero[comp.id];
+                const discarding  = !!discardingId[comp.id];
+                const err         = fetchNumeroErr[comp.id];
+                const hasFooter   = !!err;
                 return (
                   <div key={comp.id}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--bg2)", borderRadius: err ? "7px 7px 0 0" : 7, padding: "8px 12px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--bg2)", borderRadius: hasFooter ? "7px 7px 0 0" : 7, padding: "8px 12px" }}>
                       <span style={{ fontSize: 12, fontWeight: 700, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fr.name}</span>
                       <span style={{ fontSize: 10, color: "var(--muted)", whiteSpace: "nowrap" }}>{comp.date}</span>
                       <span className="mono" style={{ fontSize: 12, color: "var(--green)", fontWeight: 700, whiteSpace: "nowrap" }}>{fmt(comp.amount, "ARS")}</span>
@@ -608,11 +725,20 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                       <span style={{ fontSize: 9, color: "#fbbf24", fontStyle: "italic", whiteSpace: "nowrap" }}>ID {comp.facturanteId}</span>
                       <button
                         className="ghost"
-                        disabled={busy}
-                        style={{ fontSize: 10, padding: "2px 8px", whiteSpace: "nowrap", opacity: busy ? 0.4 : 1 }}
+                        disabled={busy || discarding}
+                        style={{ fontSize: 10, padding: "2px 8px", whiteSpace: "nowrap", opacity: (busy || discarding) ? 0.4 : 1 }}
                         onClick={() => handleFetchNumero(fr, comp)}
                       >
                         {busy ? "⏳…" : "Obtener nro. AFIP →"}
+                      </button>
+                      <button
+                        className="ghost"
+                        disabled={busy || discarding}
+                        title="Descartar el ID de Facturante y mover a Sin emisión AFIP para re-emitir"
+                        style={{ fontSize: 10, padding: "2px 8px", whiteSpace: "nowrap", opacity: (busy || discarding) ? 0.4 : 1, color: "var(--red)" }}
+                        onClick={() => handleDescartarAfipId(fr, comp)}
+                      >
+                        {discarding ? "⏳…" : "↩ Sin AFIP"}
                       </button>
                     </div>
                     {err && (
@@ -628,30 +754,80 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
 
       {/* ── FACTURAS PENDIENTES DE FRANQUICIADO ── */}
       {sinAsignar.length > 0 && (
-        <div style={{ background: "rgba(251,191,36,.04)", border: "1px solid rgba(251,191,36,.25)", borderRadius: 10, padding: "14px 18px" }}>
-          <div
-            style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: showSinAsignar ? 10 : 0 }}
-            onClick={() => setShowSinAsignar(v => !v)}
-          >
-            <span style={{ fontSize: 10, fontWeight: 800, color: "#fbbf24", letterSpacing: ".1em", flex: 1 }}>
-              📥 FACTURAS PENDIENTES DE FRANQUICIADO — {sinAsignar.length} comprobante{sinAsignar.length !== 1 ? "s" : ""}
+        <div style={{ background: "rgba(96,165,250,.04)", border: "1px solid rgba(96,165,250,.22)", borderRadius: 10, padding: "14px 18px" }}>
+          {/* Header */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: showSinAsignar ? 10 : 0 }}>
+            <input
+              type="checkbox"
+              style={{ cursor: "pointer", flexShrink: 0 }}
+              checked={selectedSinAsignar.size === sinAsignar.length && sinAsignar.length > 0}
+              onChange={e => setSelectedSinAsignar(e.target.checked ? new Set(sinAsignar.map(x => x.comp.id)) : new Set())}
+              onClick={e => e.stopPropagation()}
+            />
+            <span
+              style={{ fontSize: 10, fontWeight: 800, color: "var(--blue)", letterSpacing: ".1em", flex: 1, cursor: "pointer" }}
+              onClick={() => setShowSinAsignar(v => !v)}
+            >
+              📥 PENDIENTES DE RECIBIR FACTURA — {sinAsignar.length} comprobante{sinAsignar.length !== 1 ? "s" : ""}
             </span>
-            <span style={{ fontSize: 11, color: "var(--muted)" }}>{showSinAsignar ? "▲" : "▼"}</span>
+            {selectedSinAsignar.size > 0 && (
+              <button
+                className="ghost"
+                disabled={sendingFcReminder}
+                style={{ fontSize: 10, padding: "2px 10px", whiteSpace: "nowrap", color: "var(--blue)", opacity: sendingFcReminder ? 0.5 : 1 }}
+                onClick={e => { e.stopPropagation(); handleSendFcReminder(sinAsignar, selectedSinAsignar, setSelectedSinAsignar); }}
+              >
+                {sendingFcReminder ? "Enviando…" : `✉ Recordatorio (${selectedSinAsignar.size})`}
+              </button>
+            )}
+            <span style={{ fontSize: 11, color: "var(--muted)", cursor: "pointer" }} onClick={() => setShowSinAsignar(v => !v)}>
+              {showSinAsignar ? "▲" : "▼"}
+            </span>
           </div>
+          {/* Resultado del envío */}
+          {fcReminderResult && (
+            <div style={{ fontSize: 11, padding: "2px 0 8px", color: fcReminderResult.err.length && !fcReminderResult.ok.length ? "var(--red)" : "var(--green)" }}>
+              {fcReminderResult.ok.length > 0 && `✓ Enviado a: ${fcReminderResult.ok.join(", ")}. `}
+              {fcReminderResult.err.length > 0 && <span style={{ color: "var(--red)" }}>✕ Error: {fcReminderResult.err.join(", ")}</span>}
+            </div>
+          )}
           {showSinAsignar && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {sinAsignar.map(({ fr, comp }) => {
                 const doc    = String(comp.type ?? "").split("|")[0];
                 const cuenta = String(comp.type ?? "").split("|")[1] ?? "";
+                const sent   = fcReminderSent.get(fr.id);
                 return (
-                  <div key={comp.id} style={{ display: "flex", alignItems: "center", gap: 12, background: "var(--bg2)", borderRadius: 7, padding: "8px 12px" }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fr.name}</span>
+                  <div key={comp.id} style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--bg2)", borderRadius: 7, padding: "8px 12px" }}>
+                    <input
+                      type="checkbox"
+                      style={{ cursor: "pointer", flexShrink: 0 }}
+                      checked={selectedSinAsignar.has(comp.id)}
+                      onChange={() => setSelectedSinAsignar(prev => {
+                        const next = new Set(prev);
+                        next.has(comp.id) ? next.delete(comp.id) : next.add(comp.id);
+                        return next;
+                      })}
+                    />
+                    <span style={{ fontSize: 12, fontWeight: 700, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 5 }}>
+                      {fr.name}
+                      {sent && (
+                        <span
+                          title={`Recordatorio enviado el ${sent.fecha}${sent.status === "error" ? ` — Error: ${sent.error}` : ""}`}
+                          style={{
+                            width: 7, height: 7, borderRadius: "50%", flexShrink: 0, display: "inline-block",
+                            background: sent.status === "error" ? "#ef4444" : "#60a5fa",
+                            boxShadow: sent.status === "error" ? "0 0 5px #ef4444" : "0 0 5px #60a5fa",
+                          }}
+                        />
+                      )}
+                    </span>
                     <span style={{ fontSize: 10, color: "var(--muted)", whiteSpace: "nowrap" }}>{comp.date}</span>
-                    <span className="mono" style={{ fontSize: 12, color: "var(--gold)", fontWeight: 700, whiteSpace: "nowrap" }}>{fmt(comp.amount, compCurrency(comp))}</span>
-                    <span className="pill" style={{ color: "#fbbf24", background: "rgba(251,191,36,.1)", fontSize: 9, whiteSpace: "nowrap" }}>
+                    <span className="mono" style={{ fontSize: 12, color: "var(--blue)", fontWeight: 700, whiteSpace: "nowrap" }}>{fmt(comp.amount, compCurrency(comp))}</span>
+                    <span className="pill" style={{ color: "var(--blue)", background: "rgba(96,165,250,.1)", fontSize: 9, whiteSpace: "nowrap" }}>
                       {doc} {cuenta}
                     </span>
-                    <span style={{ fontSize: 10, color: "#fbbf24", fontStyle: "italic", whiteSpace: "nowrap" }}>Sin factura recibida</span>
+                    <span style={{ fontSize: 10, color: "var(--muted)", fontStyle: "italic", whiteSpace: "nowrap" }}>Sin factura recibida</span>
                   </div>
                 );
               })}
@@ -832,15 +1008,40 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
       {/* ── PENDIENTES DE RECIBIR FACTURA (FC_RECIBIDA sin invoice) ── */}
       {fcRecibidasPendientes.length > 0 && (
         <div style={{ background: "rgba(96,165,250,.04)", border: "1px solid rgba(96,165,250,.22)", borderRadius: 10, padding: "14px 18px" }}>
-          <div
-            style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: showFcRecibidas ? 10 : 0 }}
-            onClick={() => setShowFcRecibidas(v => !v)}
-          >
-            <span style={{ fontSize: 10, fontWeight: 800, color: "var(--blue)", letterSpacing: ".1em", flex: 1 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: showFcRecibidas ? 10 : 0 }}>
+            <input
+              type="checkbox"
+              style={{ cursor: "pointer", flexShrink: 0 }}
+              checked={selectedFcRecibidas.size === fcRecibidasPendientes.length && fcRecibidasPendientes.length > 0}
+              onChange={e => setSelectedFcRecibidas(e.target.checked ? new Set(fcRecibidasPendientes.map(x => x.comp.id)) : new Set())}
+              onClick={e => e.stopPropagation()}
+            />
+            <span
+              style={{ fontSize: 10, fontWeight: 800, color: "var(--blue)", letterSpacing: ".1em", flex: 1, cursor: "pointer" }}
+              onClick={() => setShowFcRecibidas(v => !v)}
+            >
               📥 PENDIENTES DE RECIBIR FACTURA — {fcRecibidasPendientes.length} comprobante{fcRecibidasPendientes.length !== 1 ? "s" : ""}
             </span>
-            <span style={{ fontSize: 11, color: "var(--muted)" }}>{showFcRecibidas ? "▲" : "▼"}</span>
+            {selectedFcRecibidas.size > 0 && (
+              <button
+                className="ghost"
+                disabled={sendingFcReminder}
+                style={{ fontSize: 10, padding: "2px 10px", whiteSpace: "nowrap", color: "var(--blue)", opacity: sendingFcReminder ? 0.5 : 1 }}
+                onClick={e => { e.stopPropagation(); handleSendFcReminder(fcRecibidasPendientes, selectedFcRecibidas, setSelectedFcRecibidas); }}
+              >
+                {sendingFcReminder ? "Enviando…" : `✉ Recordatorio (${selectedFcRecibidas.size})`}
+              </button>
+            )}
+            <span style={{ fontSize: 11, color: "var(--muted)", cursor: "pointer" }} onClick={() => setShowFcRecibidas(v => !v)}>
+              {showFcRecibidas ? "▲" : "▼"}
+            </span>
           </div>
+          {fcReminderResult && selectedFcRecibidas.size === 0 && (
+            <div style={{ fontSize: 11, padding: "2px 0 8px", color: fcReminderResult.err.length && !fcReminderResult.ok.length ? "var(--red)" : "var(--green)" }}>
+              {fcReminderResult.ok.length > 0 && `✓ Enviado a: ${fcReminderResult.ok.join(", ")}. `}
+              {fcReminderResult.err.length > 0 && <span style={{ color: "var(--red)" }}>✕ Error: {fcReminderResult.err.join(", ")}</span>}
+            </div>
+          )}
           {showFcRecibidas && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {fcRecibidasPendientes.map(({ fr, comp }) => {
@@ -848,14 +1049,34 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                 const openAdj  = !!adjuntando[comp.id];
                 const adjErr   = adjuntarErr[comp.id];
                 const cur      = compCurrency(comp);
+                const sent     = fcReminderSent.get(fr.id);
                 return (
                   <div key={comp.id}>
                     <div style={{
-                      display: "flex", alignItems: "center", gap: 12,
+                      display: "flex", alignItems: "center", gap: 8,
                       background: "var(--bg2)", borderRadius: openAdj || adjErr ? "7px 7px 0 0" : 7,
                       padding: "8px 12px",
                     }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fr.name}</span>
+                      <input
+                        type="checkbox"
+                        style={{ cursor: "pointer", flexShrink: 0 }}
+                        checked={selectedFcRecibidas.has(comp.id)}
+                        onChange={() => setSelectedFcRecibidas(prev => {
+                          const next = new Set(prev);
+                          next.has(comp.id) ? next.delete(comp.id) : next.add(comp.id);
+                          return next;
+                        })}
+                      />
+                      <span style={{ fontSize: 12, fontWeight: 700, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 5 }}>
+                        {fr.name}
+                        {(fcReminderSent.get(fr.id) ?? []).map((entry, i) => (
+                          <span
+                            key={i}
+                            title={`Recordatorio enviado el ${entry.fecha}${entry.status === "error" ? ` — Error: ${entry.error}` : ""}`}
+                            style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, display: "inline-block", cursor: "default", background: entry.status === "error" ? "#ef4444" : "var(--accent)", boxShadow: entry.status === "error" ? "0 0 5px #ef4444" : "none" }}
+                          />
+                        ))}
+                      </span>
                       <span style={{ fontSize: 10, color: "var(--muted)", whiteSpace: "nowrap" }}>{comp.date}</span>
                       <span className="mono" style={{ fontSize: 12, color: "var(--blue)", fontWeight: 700, whiteSpace: "nowrap" }}>{fmt(comp.amount, cur)}</span>
                       <span className="pill" style={{ color: "var(--blue)", background: "rgba(96,165,250,.1)", fontSize: 9, whiteSpace: "nowrap" }}>
