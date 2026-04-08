@@ -305,6 +305,10 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
   }, [confirmRows, comps, saldoInicial, activeCompany, cutoff, filterCurrency, cur, periodMonth, periodYear, franchisor, addRecordatorioEntry]);
 
   const mesInicio = useMemo(() => `01/${String(periodMonth + 1).padStart(2, "0")}/${periodYear}`, [periodMonth, periodYear]);
+  const mesFin    = useMemo(() => {
+    const last = new Date(periodYear, periodMonth + 1, 0);
+    return `${String(last.getDate()).padStart(2,"0")}/${String(last.getMonth()+1).padStart(2,"0")}/${last.getFullYear()}`;
+  }, [periodMonth, periodYear]);
 
   // Países disponibles (de las franquicias activas, ordenados)
   const countries = useMemo(() => {
@@ -336,9 +340,13 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
           if (cmpDate(c.date, cutoff) > 0) continue;
           if (activeCompany && compEmpresa(c) !== activeCompany) continue;
           if (filterCurrency && compCurrency(c) !== filterCurrency) continue;
-          const amt    = c.amount ?? 0;
-          const t      = c.type ?? "";
-          const enMes  = cmpDate(c.date, mesInicio) >= 0;
+          const amt        = c.amount ?? 0;
+          const t          = c.type ?? "";
+          const beforeMes  = cmpDate(c.date, mesInicio) < 0;
+          const enMes      = !beforeMes && cmpDate(c.date, mesFin) <= 0;
+          // Transactions after mesFin (e.g. current month viewed mid-next-month) are excluded
+          // from both buckets so saldoReal = end-of-month balance = saldoAnt of next month
+          if (!beforeMes && !enMes) continue;
 
           if      (t.startsWith("FACTURA|"))      { if (enMes) fMes  += amt; else fAnt  += amt; }
           else if (t.startsWith("NC|") || t.startsWith("FC_RECIBIDA|")) { if (enMes) ncMes += amt; else ncAnt += amt; }
@@ -364,7 +372,7 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
       .filter(Boolean);
 
     return data;
-  }, [franchises, comps, saldoInicial, activeCompany, cutoff, mesInicio, filterCurrency, filterCountry, selectedFrIds]);
+  }, [franchises, comps, saldoInicial, activeCompany, cutoff, mesInicio, mesFin, filterCurrency, filterCountry, selectedFrIds]);
 
   // NOS DEBEN: saldoReal > 0, o saldoAnt > 0 y pagaron quedando en ~0 (saldoReal > -0.5)
   // Si el saldoReal es claramente negativo (< -0.5) va a DEBEMOS aunque haya tenido deuda anterior
