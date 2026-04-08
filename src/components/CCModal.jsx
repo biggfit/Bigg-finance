@@ -40,7 +40,7 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
     setMailStatus("sending");
     setMailError("");
     try {
-      const logoUrl     = franchisor?.usa?.logoUrl || franchisor?.es?.logoUrl || "/Logo.jpg";
+      const logoUrl     = franchisor?.ar?.logoUrl || franchisor?.usa?.logoUrl || franchisor?.es?.logoUrl || "/Logo.jpg";
       const logoDataUrl = await fetchLogoDataUrl(logoUrl);
       const ccHtml      = buildCCHtml(franchise.name, franchise.razonSocial ?? null, lines, displayCurrency, null, null, logoDataUrl, activeCompany);
       const today       = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "long", year: "numeric" });
