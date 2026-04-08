@@ -288,9 +288,14 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
           htmlBody: ccHtml,
           attachments: factAdjs,
         });
-        addRecordatorioEntry(d.fr.id, { fecha: todayDmy(), ccMes: periodMonth + 1, ccAnio: periodYear, to });
+        addRecordatorioEntry(d.fr.id, { fecha: todayDmy(), ccMes: periodMonth + 1, ccAnio: periodYear, to, status: "ok" });
         ok.push(d.fr.name);
-      } catch (e) { err.push(`${d.fr.name} (${e.message})`); }
+      } catch (e) {
+        const msg = e.message ?? "Error desconocido";
+        err.push(`${d.fr.name} (${msg})`);
+        // Guardar el fallo como punto rojo para no perder registro del intento
+        addRecordatorioEntry(d.fr.id, { fecha: todayDmy(), ccMes: periodMonth + 1, ccAnio: periodYear, to, status: "error", error: msg });
+      }
     }
     setSendingMail(false);
     setSendProgress(null);

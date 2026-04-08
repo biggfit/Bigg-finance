@@ -133,9 +133,13 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
         attachments: factAdjs,
       });
       const hoy = todayDmy();
-      addRecordatorioEntry(franchise.id, { fecha: hoy, ccMes: localMonth + 1, ccAnio: localYear, to });
+      addRecordatorioEntry(franchise.id, { fecha: hoy, ccMes: localMonth + 1, ccAnio: localYear, to, status: "ok" });
       setMailStatus("ok");
-    } catch (err) { setMailError(err.message ?? "Error"); setMailStatus("error"); }
+    } catch (err) {
+      const msg = err.message ?? "Error";
+      setMailError(msg); setMailStatus("error");
+      addRecordatorioEntry(franchise.id, { fecha: todayDmy(), ccMes: localMonth + 1, ccAnio: localYear, to, status: "error", error: msg });
+    }
   }, [franchise, franchisor, localMonth, localYear, sp, sa, compsWithSaldo, aperturaDate, displayCurrency, addRecordatorioEntry]);
 
   return (

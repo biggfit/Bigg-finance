@@ -10,14 +10,23 @@ import { sendMailFr } from "../lib/sheetsApi";
 // ─── Dots: puntos por recordatorio enviado este mes ──────────────────────────
 export function RecordatorioDots({ dots }) {
   if (!dots || dots.length === 0) return null;
-  const visible = dots.slice(0, 2);
-  const extra   = dots.length - 2;
+  const visible = dots.slice(0, 3);
+  const extra   = dots.length - 3;
   return (
     <span style={{ display: "inline-flex", gap: 4, alignItems: "center", marginLeft: 6 }}>
-      {visible.map((d, i) => (
-        <span key={i} title={`${d.fecha}${d.to ? ` → ${d.to}` : ""}`}
-          style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", display: "inline-block", cursor: "default", flexShrink: 0 }} />
-      ))}
+      {visible.map((d, i) => {
+        const isErr = d.status === "error";
+        const color = isErr ? "var(--red)" : "var(--accent)";
+        const tip   = `${d.fecha}${d.to ? ` → ${d.to}` : ""}${isErr ? ` ✕ ${d.error ?? "Error"}` : ""}`;
+        return (
+          <span key={i} title={tip} style={{
+            width: 7, height: 7, borderRadius: "50%",
+            background: color, display: "inline-block",
+            cursor: "default", flexShrink: 0,
+            boxShadow: isErr ? `0 0 4px ${color}` : "none",
+          }} />
+        );
+      })}
       {extra > 0 && <span style={{ fontSize: 9, color: "var(--accent)", fontWeight: 800 }}>+{extra}</span>}
     </span>
   );
