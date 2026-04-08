@@ -8,6 +8,7 @@ import { fetchComps, fetchSaldos, appendComp, updateComp, removeComp,
 import { CURRENCIES, MONTHS, AVAILABLE_YEARS, computeSaldo, computeSaldoPrevMes, downloadCSV } from "./lib/helpers";
 import "./lib/styles";
 import FrDetail from "./components/FrDetail";
+import AddCompModal from "./components/AddCompModal";
 import MaestrosModal from "./components/MaestrosModal";
 import ImportBankModal from "./components/ImportBankModal";
 import TabResumenMes from "./tabs/TabResumenMes";
@@ -31,8 +32,9 @@ function lastBillingPeriod() {
 // ─── ROOT APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [user,       setUser]      = useState({ name: "Admin" }); // login deshabilitado para testing
-  const [showMaestros, setShowMaestros] = useState(false);
-  const [showImport,   setShowImport]   = useState(false);
+  const [showMaestros,  setShowMaestros]  = useState(false);
+  const [showImport,    setShowImport]    = useState(false);
+  const [showQuickAdd,  setShowQuickAdd]  = useState(false);
   const [franchisor,   setFranchisor]   = useState(null);
   const [tab,        setTab]       = useState("resumen");
   const [detailFilteredRows, setDetailFilteredRows] = useState([]);
@@ -290,6 +292,16 @@ export default function App() {
         />
       )}
 
+      {showQuickAdd && (
+        <AddCompModal
+          franchise={null}
+          month={month}
+          year={year}
+          onClose={() => setShowQuickAdd(false)}
+          onAdd={addComp}
+        />
+      )}
+
       {showMaestros && (
         <MaestrosModal
           franchises={franchises}
@@ -377,7 +389,25 @@ export default function App() {
               <>
                 <div style={{ flex: 1, padding: "10px 0", display: "flex", flexDirection: "column", gap: 2 }}>
                   {navBtn(() => setTab("resumen"),      "◫", "Resumen",        tab === "resumen")}
-                  {navBtn(() => setTab("facturador"),   "+", "Facturador",    tab === "facturador")}
+                  {/* Facturador + botón rápido "+" */}
+                  <div style={{ display: "flex", alignItems: "center", position: "relative" }}>
+                    <div style={{ flex: 1 }}>{navBtn(() => setTab("facturador"), "◈", "Facturador", tab === "facturador")}</div>
+                    <button
+                      onClick={() => setShowQuickAdd(true)}
+                      title="Nuevo comprobante rápido"
+                      style={{
+                        position: "absolute", right: 8,
+                        width: 24, height: 24, borderRadius: "50%",
+                        background: "rgba(173,255,25,.15)", border: "1px solid rgba(173,255,25,.3)",
+                        color: "var(--accent)", fontSize: 16, lineHeight: 1,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        cursor: "pointer", fontFamily: "var(--font)", flexShrink: 0,
+                        transition: "background .15s",
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = "rgba(173,255,25,.3)"}
+                      onMouseLeave={e => e.currentTarget.style.background = "rgba(173,255,25,.15)"}
+                    >+</button>
+                  </div>
                   {navBtn(() => setTab("saldos"),       "⇌", "Saldos por Sede", tab === "saldos")}
                   {navBtn(() => setTab("contabilidad"), "☰", "Movimientos",   tab === "contabilidad")}
                 </div>
@@ -448,6 +478,15 @@ export default function App() {
               >{filterCur === "ALL" ? "TODAS" : filterCur}</button>
               <div style={{ marginLeft: "auto" }}><FrSearch franchises={activeFr} selected={selectedFrIds} onChange={setSelectedFrIds} /></div>
             </div>
+          )}
+
+          {/* CIERRE DE MES — solo en tab Facturador */}
+          {tab === "facturador" && (
+            <CierrePanel
+              periodMonth={month}
+              periodYear={year}
+              onStartImport={() => setShowImport(true)}
+            />
           )}
 
           {/* CONTENIDO */}

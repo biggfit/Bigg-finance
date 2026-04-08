@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { useStore } from "../lib/context";
-import { compEmpresa, compCurrency, cmpDate, MONTHS, COMP_TYPES, computeSaldoPrevMes, getSaldoInicial, fmt0 } from "../lib/helpers";
+import { compEmpresa, compCurrency, cmpDate, MONTHS, COMP_TYPES, computeSaldoPrevMes, getSaldoInicial, fmt } from "../lib/helpers";
 import { COMPANIES, todayDmy, dmyToIso, isoToDmy } from "../data/franchisor";
 import { RecordatorioDots } from "./TabSaldos";
 import { buildCCHtml, fetchLogoDataUrl } from "../lib/pdf";
@@ -185,7 +185,7 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
 
   const filterCurrency = filterCur === "ALL" ? null : filterCur;
   const cur = filterCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS";
-  const f = (v) => fmt0(v, cur);
+  const f = (v) => fmt(v, cur);
 
 
   // Dots: recordatorios del período (ccMes/ccAnio) igual que FrDetail

@@ -3,7 +3,9 @@ import { useStore } from "../lib/context";
 import { compEmpresa, compCurrency, MONTHS } from "../lib/helpers";
 
 // ─── Panel de Cierre de Mes ───────────────────────────────────────────────────
+// TODO: desarrollar lógica completa
 export default function CierrePanel({ periodMonth, periodYear, onStartImport }) {
+  return null;
   const { comps } = useStore();
   const storageKey = `cierre_${periodMonth}_${periodYear}`;
 

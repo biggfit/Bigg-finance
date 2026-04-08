@@ -118,8 +118,15 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
   const sym    = SYM[currency] ?? "$";
 
   const importeNeto  = parseCurrencyInput(importeRaw);
-  const importeIVA   = applyIVA ? importeNeto * IVA_RATE : 0;
-  const importeTotal = importeNeto + importeIVA;
+  const importeIVA   = applyIVA ? Math.round(importeNeto * IVA_RATE * 100) / 100 : 0;
+  // Si el neto es el back-calculado exacto del prefill, usar prefillComp.amount como total
+  const importeTotal = (() => {
+    if (applyIVA && prefillComp?.amount != null) {
+      const prefillNetoRounded = Math.round(prefillComp.amount / (1 + IVA_RATE) * 100) / 100;
+      if (importeNeto === prefillNetoRounded) return prefillComp.amount;
+    }
+    return Math.round((importeNeto + importeIVA) * 100) / 100;
+  })();
   const tipo         = makeType(doc, cuenta);
   const movImporte   = parseCurrencyInput(movImpRaw);
 

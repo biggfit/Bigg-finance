@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { useStore } from "../lib/context";
 import { computeSaldo, computeSaldoPrevMes, computePautaPendiente, compEmpresa, COMP_TYPES, fmt, fmtS } from "../lib/helpers";
 import { dmyToIso, isoToDmy, inPeriod, cmpDate, COMPANIES, todayDmy } from "../data/franchisor";
@@ -15,6 +15,7 @@ import { RecordatorioDots } from "../tabs/TabSaldos";
 export default function FrDetail({ franchise, month, year, onClose, onAddComp, onDelComp, onEditComp }) {
   const { comps, saldoInicial, activeCompany, franchisor, recordatorios, addRecordatorioEntry } = useStore();
   const [adding,      setAdding]      = useState(false);
+  const [addingPrefill, setAddingPrefill] = useState(null);
   const [showCC,      setShowCC]      = useState(false);
   const [editingId,   setEditingId]   = useState(null);
   const [editBuf,     setEditBuf]     = useState({});
@@ -22,6 +23,9 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
   const [localYear,   setLocalYear]   = useState(year);
   const [mailStatus,  setMailStatus]  = useState(null); // null | "sending" | "ok" | "error"
   const [mailError,   setMailError]   = useState("");
+
+  // Resetear estado del mail al navegar entre meses
+  useEffect(() => { setMailStatus(null); setMailError(""); }, [localMonth, localYear]);
 
   const goToPrev = () => {
     if (localMonth === 0) { setLocalMonth(11); setLocalYear(y => y - 1); }
@@ -37,7 +41,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
   const sp      = useMemo(() => computeSaldoPrevMes(franchise.id, localYear, localMonth, comps, saldoInicial, null, null, activeCompany), [franchise.id, localYear, localMonth, comps, saldoInicial, activeCompany]);
   const sa      = useMemo(() => computeSaldo(franchise.id, localYear, localMonth, comps, saldoInicial, null, null, activeCompany), [franchise.id, localYear, localMonth, comps, saldoInicial, activeCompany]);
   const pautaPend = useMemo(() => computePautaPendiente(franchise.id, comps, localYear, localMonth, null, null, activeCompany), [franchise.id, comps, localYear, localMonth, activeCompany]);
-  const handleAdd = useCallback((comp) => onAddComp(franchise.id, comp), [franchise.id, onAddComp]);
+  const handleAdd = useCallback((frId, comp) => onAddComp(frId, comp), [onAddComp]);
 
   const openEdit = (c) => { setEditingId(c.id); setEditBuf({ date: c.date ?? "", nota: c.ref ?? c.nota ?? "", amount: c.amount ?? 0, type: c.type ?? "" }); };
   const saveEdit = () => {
@@ -153,7 +157,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
               <button className="ghost" style={{ fontSize: 15, padding: "4px 10px", lineHeight: 1 }} onClick={goToPrev}>‹</button>
               <span style={{ fontSize: 12, fontWeight: 700, minWidth: 80, textAlign: "center" }}>{MONTH_NAMES[localMonth]} {localYear}</span>
               <button className="ghost" style={{ fontSize: 15, padding: "4px 10px", lineHeight: 1 }} onClick={goToNext}>›</button>
-              <button className="ghost" onClick={() => setAdding(true)}>+ Comprobante</button>
+              <button className="ghost" onClick={() => { setAddingPrefill(null); setAdding(true); }}>+ Comprobante</button>
               <button className="ghost" onClick={() => setShowCC(true)}>📋 CC</button>
               <button className="ghost" onClick={onClose}>Cerrar</button>
             </div>
@@ -170,10 +174,13 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
           </div>
 
           {/* ── Alerta pauta pendiente ── */}
-          {pautaPend > 0 && (
+          {pautaPend >= 1 && (
             <div style={{ padding: "8px 24px", background: "rgba(34,211,238,.05)", borderBottom: "1px solid rgba(34,211,238,.15)", flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12 }}>
               <span style={{ color: "var(--cyan)" }}>💰 Pauta cobrada pendiente de facturar: <strong>{fmt(pautaPend, displayCurrency)}</strong></span>
-              <button className="ghost" style={{ fontSize: 10 }} onClick={() => setAdding(true)}>Emitir FC Pauta</button>
+              <button className="ghost" style={{ fontSize: 10 }} onClick={() => {
+                setAddingPrefill({ doc: "FACTURA", cuenta: "PAUTA", amount: pautaPend, concepto: `Pauta ${MONTH_NAMES[localMonth]} ${localYear}` });
+                setAdding(true);
+              }}>Emitir FC Pauta</button>
             </div>
           )}
 
@@ -242,7 +249,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
                           : fmt(Math.abs(importe), c.currency ?? displayCurrency)}
                       </td>
                       {/* Saldo */}
-                      <td style={{ textAlign: "right", padding: "8px 8px" }}>
+                      <td style={{ textAlign: "right", padding: "8px 8px", whiteSpace: "nowrap" }}>
                         <span className="mono" style={{ fontSize: 12, fontWeight: 700, color: saldoColor(c.saldo) }}>
                           {fmtS(c.saldo, displayCurrency)}
                         </span>
@@ -301,7 +308,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
         </div>
       </div>
 
-      {adding && <AddCompModal franchise={franchise} month={localMonth} year={localYear} onClose={() => setAdding(false)} onAdd={handleAdd} />}
+      {adding && <AddCompModal franchise={franchise} month={localMonth} year={localYear} onClose={() => { setAdding(false); setAddingPrefill(null); }} onAdd={handleAdd} prefill={addingPrefill} />}
       {showCC && <CCModal franchise={franchise} onClose={() => setShowCC(false)} onDelComp={onDelComp} onEditComp={onEditComp} />}
     </>
   );
