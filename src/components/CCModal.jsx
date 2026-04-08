@@ -254,7 +254,7 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
           </div>
           <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
             <button className="ghost" onClick={() => setShowConfirmCC(false)}>Cancelar</button>
-            <button className="ghost" onClick={() => handleSendMail(true)}>✉ Con adjuntos</button>
+            <button className="ghost" style={{ whiteSpace: "nowrap" }} onClick={() => handleSendMail(true)}>✉ Con adjuntos</button>
             <button className="btn"   onClick={() => handleSendMail(false)} style={{ whiteSpace: "nowrap" }}>✉ Sin adjuntos</button>
           </div>
         </div>
