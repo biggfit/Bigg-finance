@@ -179,9 +179,10 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
   const [sortDirOtros, setSortDirOtros] = useState("desc");
   const [filterCountry, setFilterCountry] = useState(null);
   const [countryDropOpen, setCountryDropOpen] = useState(false);
-  const [confirmRows, setConfirmRows] = useState(null);
-  const [sendingMail, setSendingMail] = useState(false);
-  const [mailResult, setMailResult] = useState(null);
+  const [confirmRows,   setConfirmRows]   = useState(null);
+  const [sendingMail,   setSendingMail]   = useState(false);
+  const [sendProgress,  setSendProgress]  = useState(null); // { current, total, name } | null
+  const [mailResult,    setMailResult]    = useState(null);
   const [selectedDeben, setSelectedDeben] = useState(new Set());
   const [selectedOtros, setSelectedOtros] = useState(new Set());
 
@@ -206,11 +207,17 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
 
   const doSendMail = useCallback(async () => {
     if (!confirmRows) return;
+    const rows = confirmRows;
+    // Cerrar el modal de confirmación inmediatamente — el proceso corre detrás
+    setConfirmRows(null);
     setSendingMail(true);
+    setSendProgress({ current: 0, total: rows.length, name: "" });
     const ok = [], err = [];
     const logoUrl     = franchisor?.usa?.logoUrl || franchisor?.es?.logoUrl || "/Logo.jpg";
     const logoDataUrl = await fetchLogoDataUrl(logoUrl);
-    for (const d of confirmRows) {
+    for (let i = 0; i < rows.length; i++) {
+      const d = rows[i];
+      setSendProgress({ current: i + 1, total: rows.length, name: d.fr.name });
       const to = [d.fr.emailFactura, d.fr.emailComercial].filter(Boolean).join(",");
       if (!to) { err.push(`${d.fr.name} (sin email)`); continue; }
       try {
@@ -286,7 +293,7 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
       } catch (e) { err.push(`${d.fr.name} (${e.message})`); }
     }
     setSendingMail(false);
-    setConfirmRows(null);
+    setSendProgress(null);
     setSelectedDeben(new Set());
     setSelectedOtros(new Set());
     setMailResult({ ok, err });
@@ -480,6 +487,33 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
                 {sendingMail ? "Enviando…" : `✉ Confirmar y enviar (${confirmRows.length})`}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast de progreso — flotante, no bloquea la UI */}
+      {sendProgress && (
+        <div style={{
+          position: "fixed", bottom: 24, right: 24, zIndex: 600,
+          background: "var(--bg2)", border: "1px solid var(--border2)",
+          borderRadius: 12, padding: "14px 20px", minWidth: 280, boxShadow: "0 8px 32px rgba(0,0,0,.5)",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+            <div style={{ width: 14, height: 14, border: "2px solid var(--border2)", borderTopColor: "var(--accent)", borderRadius: "50%", animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
+            <span style={{ fontSize: 12, fontWeight: 700 }}>
+              Enviando {sendProgress.current}/{sendProgress.total}
+            </span>
+          </div>
+          {/* Barra de progreso */}
+          <div style={{ height: 4, borderRadius: 2, background: "var(--border2)", marginBottom: 8, overflow: "hidden" }}>
+            <div style={{
+              height: "100%", borderRadius: 2, background: "var(--accent)",
+              width: `${(sendProgress.current / sendProgress.total) * 100}%`,
+              transition: "width .3s ease",
+            }} />
+          </div>
+          <div style={{ fontSize: 11, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {sendProgress.name}
           </div>
         </div>
       )}
