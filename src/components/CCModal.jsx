@@ -21,7 +21,7 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
   const [mailStatus,   setMailStatus]   = useState(null); // null | "sending" | "ok" | "error"
   const [mailError,    setMailError]    = useState("");
   const [showConfirmCC, setShowConfirmCC] = useState(false);
-  const to = [franchise.emailFactura, franchise.emailComercial].filter(Boolean).join(",");
+  const to = franchise.emailFactura ?? franchise.emailComercial ?? "";
 
   const openEdit = (l) => {
     setEditId(l.id);
