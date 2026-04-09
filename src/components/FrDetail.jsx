@@ -49,13 +49,14 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
 
   const frComps = useMemo(() => {
     const base = (comps[key] ?? []).filter(c => compEmpresa(c) === activeCompany);
-    if (isCurrentMonth) {
-      // Incluir mes anterior + mes actual, ambos hasta hoy
-      return base
-        .filter(c => (inPeriod(c, localMonth, localYear) || inPeriod(c, rangeStartMonth, rangeStartYear)) && cmpDate(c.date, todayDmy()) <= 0)
-        .sort((a, b) => cmpDate(a.date, b.date));
-    }
-    return base.filter(c => inPeriod(c, localMonth, localYear)).sort((a, b) => cmpDate(a.date, b.date));
+    // Rango: desde el 1ro de rangeStartMonth hasta el último día del mes (o hoy si es mes actual)
+    const from = `01/${String(rangeStartMonth + 1).padStart(2,"0")}/${rangeStartYear}`;
+    const to   = isCurrentMonth
+      ? todayDmy()
+      : `${String(new Date(localYear, localMonth + 1, 0).getDate()).padStart(2,"0")}/${String(localMonth + 1).padStart(2,"0")}/${localYear}`;
+    return base
+      .filter(c => c.date && cmpDate(c.date, from) >= 0 && cmpDate(c.date, to) <= 0)
+      .sort((a, b) => cmpDate(a.date, b.date));
   }, [comps, key, localMonth, localYear, activeCompany, isCurrentMonth, rangeStartMonth, rangeStartYear]);
 
   // sp: saldo acumulado hasta el inicio del rango (fin del mes previo al rango)
