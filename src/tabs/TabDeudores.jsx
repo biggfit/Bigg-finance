@@ -221,20 +221,26 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
       const to = [d.fr.emailFactura, d.fr.emailComercial].filter(Boolean).join(",");
       if (!to) { err.push(`${d.fr.name} (sin email)`); continue; }
       try {
-        // Ventana exacta del período: 01/periodMonth → cutoff
-        const mm          = String(periodMonth + 1).padStart(2, "0");
-        const windowStart = `01/${mm}/${periodYear}`;  // e.g. "01/02/2026"
+        // Detectar si estamos en el mes calendario actual → rango extendido (mes anterior + mes actual)
+        const _now = new Date();
+        const isCurrentPeriod = periodMonth === _now.getMonth() && periodYear === _now.getFullYear();
+        const rangeStartMonth = isCurrentPeriod ? (periodMonth === 0 ? 11 : periodMonth - 1) : periodMonth;
+        const rangeStartYear  = isCurrentPeriod ? (periodMonth === 0 ? periodYear - 1 : periodYear) : periodYear;
 
-        // aperturaDate: último día del mes anterior al período de facturación
-        const apM       = periodMonth === 0 ? 11 : periodMonth - 1;
-        const apY       = periodMonth === 0 ? periodYear - 1 : periodYear;
+        // Ventana: 01/rangeStartMonth → cutoff (hoy si mes actual, último día si mes pasado)
+        const rsMm        = String(rangeStartMonth + 1).padStart(2, "0");
+        const windowStart = `01/${rsMm}/${rangeStartYear}`;
+
+        // aperturaDate: último día del mes anterior al inicio del rango
+        const apM       = rangeStartMonth === 0 ? 11 : rangeStartMonth - 1;
+        const apY       = rangeStartMonth === 0 ? rangeStartYear - 1 : rangeStartYear;
         const apLast    = new Date(apY, apM + 1, 0);
         const aperturaDate = `${String(apLast.getDate()).padStart(2,"0")}/${String(apLast.getMonth()+1).padStart(2,"0")}/${apLast.getFullYear()}`;
 
-        // Saldo apertura = saldo al fin del mes anterior al período de facturación
-        const sp = computeSaldoPrevMes(d.fr.id, periodYear, periodMonth, comps, saldoInicial, null, filterCurrency, activeCompany);
+        // Saldo apertura = saldo al fin del mes anterior al inicio del rango
+        const sp = computeSaldoPrevMes(d.fr.id, rangeStartYear, rangeStartMonth, comps, saldoInicial, null, filterCurrency, activeCompany);
 
-        // Movimientos en la ventana: 01/periodMonth → cutoff
+        // Movimientos en la ventana
         const frComps = (comps[String(d.fr.id)] ?? [])
           .filter(c =>
             cmpDate(c.date, windowStart) >= 0 &&
@@ -257,7 +263,7 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
             return sign >= 0 ? { ...c, debit: c.amount, credit: 0 } : { ...c, debit: 0, credit: c.amount };
           }),
         ];
-        const ccHtml = buildCCHtml(d.fr.name, d.fr.razonSocial ?? null, ccLines, cur, periodMonth, periodYear, logoDataUrl, activeCompany);
+        const ccHtml = buildCCHtml(d.fr.name, d.fr.razonSocial ?? null, ccLines, cur, rangeStartMonth, periodYear, logoDataUrl, activeCompany);
 
         // Adjuntar facturas/NC del período (igual que FrDetail)
         const isAR     = d.fr.country === "Argentina";
@@ -284,7 +290,9 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
 
         await sendMailFr({
           to,
-          subject: `Estado de Cuenta ${d.fr.name} — ${MONTHS[periodMonth]} ${periodYear}`,
+          subject: isCurrentPeriod
+            ? `Estado de Cuenta ${d.fr.name} — ${MONTHS[rangeStartMonth]} - ${MONTHS[periodMonth]} ${periodYear}`
+            : `Estado de Cuenta ${d.fr.name} — ${MONTHS[periodMonth]} ${periodYear}`,
           htmlBody: ccHtml,
           attachments: factAdjs,
         });
