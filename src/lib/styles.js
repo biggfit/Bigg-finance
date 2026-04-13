@@ -34,6 +34,7 @@ tr:last-child td{border-bottom:none}
 .tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
 .pill{display:inline-block;padding:2px 10px;border-radius:999px;font-size:10px;font-weight:700;letter-spacing:.08em}
 .mono{font-family:var(--mono);white-space:nowrap}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
 input[type=number]{-moz-appearance:textfield}
 `;
