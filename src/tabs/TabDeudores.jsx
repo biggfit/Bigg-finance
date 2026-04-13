@@ -263,7 +263,7 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
             return sign >= 0 ? { ...c, debit: c.amount, credit: 0 } : { ...c, debit: 0, credit: c.amount };
           }),
         ];
-        const ccHtml = buildCCHtml(d.fr.name, d.fr.razonSocial ?? null, ccLines, cur, rangeStartMonth, periodYear, logoDataUrl, activeCompany);
+        const ccHtml = buildCCHtml(d.fr.name, d.fr.razonSocial ?? null, ccLines, cur, rangeStartMonth, rangeStartYear, logoDataUrl, activeCompany);
 
         // Adjuntar facturas/NC del período (igual que FrDetail)
         const isAR     = d.fr.country === "Argentina";

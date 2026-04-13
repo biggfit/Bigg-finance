@@ -82,11 +82,10 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
   }, [frComps, sp]);
 
   // Fecha de apertura = último día del mes previo al inicio del rango
-  const DAYS_IN_MONTH  = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   const MONTH_NAMES    = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
   const apertMonth     = rangeStartMonth === 0 ? 11 : rangeStartMonth - 1;
   const apertYear      = rangeStartMonth === 0 ? rangeStartYear - 1 : rangeStartYear;
-  const apertLastDay   = DAYS_IN_MONTH[apertMonth];
+  const apertLastDay   = new Date(apertYear, apertMonth + 1, 0).getDate(); // soporta años bisiestos
   const aperturaDate   = `${String(apertLastDay).padStart(2,"0")}/${String(apertMonth + 1).padStart(2,"0")}/${apertYear}`;
   const periodCutoff = useMemo(() => {
     const last = new Date(localYear, localMonth + 1, 0);
@@ -126,7 +125,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
       ];
       const logoUrl     = franchisor?.usa?.logoUrl || franchisor?.es?.logoUrl || "/Logo.jpg";
       const logoDataUrl = await fetchLogoDataUrl(logoUrl);
-      const ccHtml      = buildCCHtml(franchise.name, franchise.razonSocial ?? null, ccLines, displayCurrency, rangeStartMonth, localYear, logoDataUrl, activeCompany);
+      const ccHtml      = buildCCHtml(franchise.name, franchise.razonSocial ?? null, ccLines, displayCurrency, rangeStartMonth, rangeStartYear, logoDataUrl, activeCompany);
 
       // Comprobantes del mes con número emitido (Facturas, NC, FC_RECIBIDA)
       const isAR        = franchise.country === "Argentina";
@@ -166,7 +165,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
       setMailError(msg); setMailStatus("error");
       addRecordatorioEntry(franchise.id, { frName: franchise.name, tipo: "cc", fecha: todayDmy(), ccMes: localMonth + 1, ccAnio: localYear, to, status: "error", error: msg });
     }
-  }, [franchise, franchisor, localMonth, localYear, sp, sa, compsWithSaldo, aperturaDate, displayCurrency, addRecordatorioEntry]);
+  }, [franchise, franchisor, localMonth, localYear, rangeStartMonth, rangeStartYear, sp, compsWithSaldo, aperturaDate, displayCurrency, activeCompany, addRecordatorioEntry]);
 
   return (
     <>
