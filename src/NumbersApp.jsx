@@ -5,6 +5,7 @@ import PantallaDashboard from "./numbers/PantallaDashboard";
 import PantallaEgresos   from "./numbers/PantallaEgresos";
 import PantallaIngresos  from "./numbers/PantallaIngresos";
 import PantallaMaestros  from "./numbers/PantallaMaestros";
+import PantallaTesoreria from "./numbers/PantallaTesoreria";
 
 // ─── Secciones del sidebar ────────────────────────────────────────────────────
 const SECTIONS = [
@@ -12,11 +13,7 @@ const SECTIONS = [
   { id:"ingresos",  label:"Ingresos",  icon:"↑", component: PantallaIngresos  },
   { id:"egresos",   label:"Egresos",   icon:"↓", component: PantallaEgresos   },
   { id:"maestros",  label:"Maestros",  icon:"⚙", component: PantallaMaestros  },
-  {
-    id:"tesoreria", label:"Tesorería", icon:"⬡",
-    placeholder: { desc:"Cuentas bancarias, movimientos y conciliación bancaria.",
-      features:["ABM de cuentas bancarias","Movimientos de caja y banco","Conciliación de extracto","Posición por moneda"] }
-  },
+  { id:"tesoreria", label:"Tesorería", icon:"⬡", component: PantallaTesoreria },
   {
     id:"reportes",  label:"Reportes",  icon:"▦",
     placeholder: { desc:"P&L, Cash Flow y reconciliación de resultados.",
