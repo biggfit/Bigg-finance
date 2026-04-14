@@ -351,18 +351,179 @@ export const CLIENTES_SEED = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helper: obtener CCs permitidos para una cuenta
-// Retorna null si no hay restricción, o array de IDs de CC
+// PLAN DE CUENTAS — BALANCE
+//
+// Estas cuentas NO las elige el usuario directamente al imputar un gasto/ingreso.
+// El sistema las asigna automáticamente según el tipo de operación:
+//
+//   Gasto pagado      → Débito: cuenta resultado  / Crédito: cuenta ACTIVO (banco)
+//   Gasto pendiente   → Débito: cuenta resultado  / Crédito: cuenta PASIVO (según tipo)
+//   Ingreso cobrado   → Débito: cuenta ACTIVO     / Crédito: cuenta resultado
+//   Ingreso pendiente → Débito: cuenta ACTIVO     / Crédito: cuenta resultado
+//
+// El usuario solo ve "¿desde qué banco?" o "¿qué tipo de deuda?".
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ── ACTIVO ──────────────────────────────────────────────────────────────────
+// Las cuentas bancarias concretas se generan desde el ABM de Tesorería.
+// Estas son las categorías de activo que usa el sistema internamente.
+export const CUENTAS_ACTIVO = [
+  {
+    id: "bancos",
+    nombre: "Caja y Bancos",
+    descripcion: "Efectivo y saldos bancarios. Cada cuenta bancaria del ABM mapea aquí.",
+    icono: "🏦",
+  },
+  {
+    id: "ctas_cobrar",
+    nombre: "Cuentas a Cobrar",
+    descripcion: "Ingresos facturados pendientes de cobro (clientes).",
+    icono: "📥",
+  },
+];
+
+// ── PASIVO ───────────────────────────────────────────────────────────────────
+// El usuario elige UNO de estos buckets cuando registra una deuda pendiente.
+// Simple y claro — sin subdivisiones contables internas.
+export const CUENTAS_PASIVO = [
+  {
+    id: "ctas_pagar_proveedores",
+    nombre: "Proveedores",
+    descripcion: "Facturas recibidas de proveedores pendientes de pago.",
+    icono: "🧾",
+    color: "var(--red)",
+  },
+  {
+    id: "ctas_pagar_sueldos",
+    nombre: "Sueldos",
+    descripcion: "Remuneraciones devengadas pendientes de acreditación.",
+    icono: "👥",
+    color: "var(--orange)",
+  },
+  {
+    id: "ctas_pagar_impuestos",
+    nombre: "Impuestos",
+    descripcion: "Obligaciones fiscales (IVA, IIBB, Ganancias, AFIP, etc.) pendientes.",
+    icono: "🏛",
+    color: "var(--purple)",
+  },
+  {
+    id: "ctas_pagar_tarjetas",
+    nombre: "Tarjetas de Crédito",
+    descripcion: "Consumos realizados con tarjeta aún no debitados de la cuenta bancaria.",
+    icono: "💳",
+    color: "var(--blue)",
+  },
+  {
+    id: "ctas_pagar_prestamos",
+    nombre: "Préstamos",
+    descripcion: "Deudas financieras con bancos u otras entidades.",
+    icono: "🏦",
+    color: "var(--gold)",
+  },
+];
+
+// ── PATRIMONIO ───────────────────────────────────────────────────────────────
+// Calculado — nunca se imputa manualmente.
+export const CUENTAS_PATRIMONIO = [
+  {
+    id: "resultado_ejercicio",
+    nombre: "Resultado del Ejercicio",
+    descripcion: "Suma de ingresos menos gastos del período. Calculado automáticamente.",
+    icono: "📊",
+  },
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LÓGICA DE CONTRAPARTIDA AUTOMÁTICA
+//
+// Dado un tipo de operación, el sistema resuelve qué cuenta de balance usar.
+// El usuario nunca ve esto — es la "fontanería" contable interna.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Tipos de operación y su mapeo automático de contrapartida
+export const TIPOS_OPERACION = [
+  {
+    id: "gasto_pago_inmediato",
+    label: "Pago de gasto",
+    descripcion: "Registrar un gasto que ya se pagó desde una cuenta bancaria.",
+    ladoResultado: "debe",        // Débito en la cuenta de gasto
+    contrapartida: "bancos",      // Crédito en Caja y Bancos
+    requiereBanco: true,
+    requierePasivo: false,
+    icono: "↓",
+    color: "var(--red)",
+  },
+  {
+    id: "gasto_pendiente",
+    label: "Gasto pendiente de pago",
+    descripcion: "Registrar una deuda (factura recibida no pagada todavía).",
+    ladoResultado: "debe",
+    contrapartida: "pasivo",      // Crédito en la cuenta de pasivo elegida
+    requiereBanco: false,
+    requierePasivo: true,         // Usuario elige: Proveedores / Sueldos / Impuestos / etc.
+    icono: "⏳",
+    color: "var(--orange)",
+  },
+  {
+    id: "pago_deuda",
+    label: "Pago de deuda existente",
+    descripcion: "Cancelar total o parcialmente una deuda ya registrada.",
+    ladoResultado: null,          // No toca resultado — es balance contra balance
+    contrapartida: "bancos",
+    requiereBanco: true,
+    requierePasivo: false,
+    icono: "✓",
+    color: "var(--green)",
+  },
+  {
+    id: "ingreso_cobrado",
+    label: "Ingreso cobrado",
+    descripcion: "Registrar un ingreso que ya entró a la cuenta bancaria.",
+    ladoResultado: "haber",       // Crédito en la cuenta de ingreso
+    contrapartida: "bancos",      // Débito en Caja y Bancos
+    requiereBanco: true,
+    requierePasivo: false,
+    icono: "↑",
+    color: "var(--green)",
+  },
+  {
+    id: "ingreso_pendiente",
+    label: "Ingreso pendiente de cobro",
+    descripcion: "Registrar una factura emitida no cobrada todavía.",
+    ladoResultado: "haber",
+    contrapartida: "ctas_cobrar", // Débito en Cuentas a Cobrar
+    requiereBanco: false,
+    requierePasivo: false,
+    icono: "📥",
+    color: "var(--blue)",
+  },
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Obtener CCs permitidos para una cuenta de resultado
 export function getCCsPermitidos(cuentaId) {
   const cuenta = CUENTAS.find(c => c.id === cuentaId);
   return cuenta?.centrosCostoPermitidos ?? null;
 }
 
-// Helper: validar si una combinación cuenta+CC es válida
-// Retorna: "ok" | "advertencia" | "invalido"
+// Validar combinación cuenta + centro de costo
+// Retorna: "ok" | "advertencia"
 export function validarCuentaCC(cuentaId, ccId) {
   const permitidos = getCCsPermitidos(cuentaId);
   if (!permitidos) return "ok";
   return permitidos.includes(ccId) ? "ok" : "advertencia";
+}
+
+// Obtener cuentas de resultado filtradas por tipo
+export function getCuentasByTipo(tipo) {
+  return CUENTAS.filter(c => c.tipo === tipo);
+}
+
+// Obtener el tipo de operación por id
+export function getTipoOperacion(id) {
+  return TIPOS_OPERACION.find(t => t.id === id) ?? null;
 }
