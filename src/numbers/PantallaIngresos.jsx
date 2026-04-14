@@ -1,11 +1,20 @@
 import { useState, useMemo } from "react";
 import { T, ESTADO_INGRESO, fmtMoney, Badge, SummaryCard, PageHeader, Btn } from "./theme";
 import { INGRESOS_SAMPLE } from "./data";
+import NuevoIngresoModal from "./NuevoIngresoModal";
 
 export default function PantallaIngresos() {
   const [busqueda, setBusqueda]         = useState("");
   const [filtroEstado, setFiltroEstado] = useState("todos");
-  const ingresos = INGRESOS_SAMPLE;
+  const [showNuevo, setShowNuevo]       = useState(false);
+  const [ingresos, setIngresos]         = useState(INGRESOS_SAMPLE);
+
+  const handleSave = (ingreso) => setIngresos(prev => [{
+    ...ingreso,
+    cliente: ingreso.clienteNombre ?? "Nuevo",
+    fecha:   ingreso.fecha?.split("-").reverse().join("/") ?? "—",
+    vto:     ingreso.vto?.split("-").reverse().join("/")   ?? "—",
+  }, ...prev]);
 
   const rows = useMemo(() => ingresos.filter(e => {
     const matchEstado = filtroEstado === "todos" || e.estado === filtroEstado;
@@ -26,7 +35,7 @@ export default function PantallaIngresos() {
       <PageHeader
         title="Ingresos"
         subtitle="Facturas emitidas, cobros y cuentas a cobrar"
-        action={<Btn variant="accent">+ Nuevo Ingreso</Btn>}
+        action={<Btn variant="accent" onClick={()=>setShowNuevo(true)}>+ Nuevo Ingreso</Btn>}
       />
 
       <div style={{ display:"flex", gap:12, marginBottom:24, flexWrap:"wrap" }}>
@@ -95,6 +104,8 @@ export default function PantallaIngresos() {
           </tbody>
         </table>
       </div>
+
+      {showNuevo && <NuevoIngresoModal onClose={()=>setShowNuevo(false)} onSave={handleSave} />}
     </div>
   );
 }

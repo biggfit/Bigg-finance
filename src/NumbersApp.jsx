@@ -1,16 +1,17 @@
 import { useState } from "react";
-import "../src/lib/styles";
 import "./lib/styles";
 import { T } from "./numbers/theme";
 import PantallaDashboard from "./numbers/PantallaDashboard";
 import PantallaEgresos   from "./numbers/PantallaEgresos";
 import PantallaIngresos  from "./numbers/PantallaIngresos";
+import PantallaMaestros  from "./numbers/PantallaMaestros";
 
 // ─── Secciones del sidebar ────────────────────────────────────────────────────
 const SECTIONS = [
   { id:"dashboard", label:"Dashboard", icon:"◈", component: PantallaDashboard },
   { id:"ingresos",  label:"Ingresos",  icon:"↑", component: PantallaIngresos  },
   { id:"egresos",   label:"Egresos",   icon:"↓", component: PantallaEgresos   },
+  { id:"maestros",  label:"Maestros",  icon:"⚙", component: PantallaMaestros  },
   {
     id:"tesoreria", label:"Tesorería", icon:"⬡",
     placeholder: { desc:"Cuentas bancarias, movimientos y conciliación bancaria.",
@@ -51,8 +52,7 @@ function Placeholder({ section }) {
 }
 
 export default function NumbersApp({ onGoToFranquicias }) {
-  const [activeId, setActiveId]       = useState("dashboard");
-  const [showMaestros, setShowMaestros] = useState(false);
+  const [activeId, setActiveId] = useState("dashboard");
 
   const section = SECTIONS.find(s => s.id === activeId);
 
@@ -108,18 +108,6 @@ export default function NumbersApp({ onGoToFranquicias }) {
           </button>
         </div>
 
-        <div style={{ padding:"8px", borderTop:"1px solid rgba(255,255,255,.07)", marginTop:4 }}>
-          <button onClick={()=>setShowMaestros(true)} style={{
-            width:"100%", background:"transparent", border:"none", borderRadius:8,
-            color:"rgba(255,255,255,.4)", padding:"8px 12px", fontSize:12,
-            fontFamily:T.font, cursor:"pointer", fontWeight:600,
-            display:"flex", alignItems:"center", gap:8, transition:"all .12s",
-          }}
-          onMouseEnter={e=>e.currentTarget.style.color="rgba(255,255,255,.8)"}
-          onMouseLeave={e=>e.currentTarget.style.color="rgba(255,255,255,.4)"}>
-            <span>⚙</span>Maestros
-          </button>
-        </div>
       </div>
 
       {/* ── CONTENIDO ── */}
@@ -142,22 +130,6 @@ export default function NumbersApp({ onGoToFranquicias }) {
         </div>
       </div>
 
-      {/* Modal Maestros */}
-      {showMaestros && (
-        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.4)", zIndex:300,
-          display:"flex", alignItems:"center", justifyContent:"center" }}
-          onClick={()=>setShowMaestros(false)}>
-          <div className="fade" style={{ background:T.card, borderRadius:14, padding:32,
-            width:480, textAlign:"center", boxShadow:T.shadowMd }} onClick={e=>e.stopPropagation()}>
-            <div style={{ fontSize:32, marginBottom:16 }}>📋</div>
-            <h2 style={{ fontSize:18, fontWeight:800, color:T.text, margin:"0 0 8px" }}>Maestros</h2>
-            <p style={{ fontSize:13, color:T.muted, lineHeight:1.6, margin:"0 0 24px" }}>
-              Plan de Cuentas · Centros de Costo · Proveedores<br/>Cuentas Bancarias — En desarrollo.
-            </p>
-            <button className="ghost" onClick={()=>setShowMaestros(false)}>Cerrar</button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
