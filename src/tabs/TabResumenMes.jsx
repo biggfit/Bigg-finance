@@ -1,5 +1,5 @@
 import { memo, useMemo } from "react";
-import { fmt, computeSaldo, computeSaldoPrevMes, computePautaPendiente, makeType, SYM, compEmpresa, compCurrency } from "../lib/helpers";
+import { fmt, computeSaldo, computeSaldoPrevMes, computePautaPendiente, makeType, SYM, compEmpresa, compCurrency, COMP_TYPES } from "../lib/helpers";
 import { SaldoBadge } from "../components/atoms";
 import { useStore } from "../lib/context";
 import { inPeriod } from "../data/franchisor";
@@ -27,8 +27,14 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
         const sa = computeSaldo(fr.id, year, month, comps, saldoInicial, null, cur, activeCompany);
 
         const netoCuenta = (cuenta) => {
-          const facts = fc.filter(c => c.type === makeType("FACTURA", cuenta)).reduce((a, c) => a + c.amount, 0);
-          const ncs   = fc.filter(c => c.type === makeType("NC",      cuenta)).reduce((a, c) => a + c.amount, 0);
+          // Incluye todos los tipos para esa cuenta (FACTURA, NC, FC_RECIBIDA, etc.)
+          // usando sign de COMP_TYPES — igual que TabContabilidad
+          const relevant = fc.filter(c => {
+            const parts = (c.type ?? "").split("|");
+            return parts.length === 2 && parts[1] === cuenta;
+          });
+          const facts = relevant.filter(c => (COMP_TYPES[c.type]?.sign ?? 0) === +1).reduce((a, c) => a + c.amount, 0);
+          const ncs   = relevant.filter(c => (COMP_TYPES[c.type]?.sign ?? 0) === -1).reduce((a, c) => a + c.amount, 0);
           return { facts, ncs, neto: facts - ncs };
         };
 

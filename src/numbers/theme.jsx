@@ -36,9 +36,16 @@ export const ESTADO_EGRESO = {
 };
 
 export const ESTADO_INGRESO = {
-  cobrado:    { label: "Cobrado",    bg: "#dcfce7", color: "#16a34a" },
-  a_cobrar:   { label: "A Cobrar",   bg: "#dbeafe", color: "#2563eb" },
-  vencido:    { label: "Vencido",    bg: "#fee2e2", color: "#dc2626" },
+  cobrado:  { label: "Cobrado",   bg: "#dcfce7", color: "#16a34a" },
+  a_cobrar: { label: "A Cobrar",  bg: "#dbeafe", color: "#2563eb" },
+  vencido:  { label: "Vencido",   bg: "#fee2e2", color: "#dc2626" },
+};
+
+export const fmtDate = (str) => {
+  if (!str) return "—";
+  const m = String(str).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+  return str;
 };
 
 export const fmtMoney = (n, cur = "ARS") => {
@@ -70,6 +77,19 @@ export function SummaryCard({ label, value, color, sub, icon }) {
         {value}
       </div>
       {sub && <div style={{ fontSize:11, color:T.dim, marginTop:4 }}>{sub}</div>}
+    </div>
+  );
+}
+
+export function CompactCard({ label, value, color, sub }) {
+  return (
+    <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:T.radius,
+      padding:"8px 14px", boxShadow:T.shadow, flex:1, minWidth:110 }}>
+      <div style={{ fontSize:10, color:T.muted, fontWeight:700, letterSpacing:".07em",
+        textTransform:"uppercase", marginBottom:3 }}>{label}</div>
+      <div style={{ fontSize:15, fontWeight:800, color: color ?? T.text, fontFamily:T.mono,
+        whiteSpace:"nowrap" }}>{value}</div>
+      {sub && <div style={{ fontSize:10, color:T.dim, marginTop:3 }}>{sub}</div>}
     </div>
   );
 }

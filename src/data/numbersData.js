@@ -19,242 +19,90 @@ export const CENTROS_COSTO = [
   { id: "17 - Huergo",        nombre: "Huergo",             grupo: "operaciones", activo: true },
 
   // ── HQ — Departamentos ──
-  { id: "10 - HQ",                    nombre: "HQ General",          grupo: "marca", activo: true },
-  { id: "HQ - Administracion",        nombre: "Administración",      grupo: "marca", activo: true },
-  { id: "HQ - BI",                    nombre: "BI & Analytics",      grupo: "marca", activo: true },
-  { id: "HQ - Design",                nombre: "Design",              grupo: "marca", activo: true },
-  { id: "HQ - Gerencia General",      nombre: "Gerencia General",    grupo: "marca", activo: true },
-  { id: "HQ - Impuestos",             nombre: "Impuestos",           grupo: "marca", activo: true },
-  { id: "HQ - Infraestructura IT",    nombre: "Infraestructura IT",  grupo: "marca", activo: true },
-  { id: "HQ - Marketing",             nombre: "Marketing",           grupo: "marca", activo: true },
-  { id: "HQ - Recursos Humanos",      nombre: "Recursos Humanos",    grupo: "marca", activo: true },
-  { id: "HQ - Sport",                 nombre: "Sport",               grupo: "marca", activo: true },
-  { id: "HQ - Tecnologia",            nombre: "Tecnología",          grupo: "marca", activo: true },
-  { id: "HQ - Ventas y Operaciones",  nombre: "Ventas y Operaciones",grupo: "marca", activo: true },
+  { id: "10 - HQ",                    nombre: "HQ General",          grupo: "HQ", activo: true },
+  { id: "HQ - Administracion",        nombre: "Administración",      grupo: "HQ", activo: true },
+  { id: "HQ - BI",                    nombre: "BI & Analytics",      grupo: "HQ", activo: true },
+  { id: "HQ - Design",                nombre: "Design",              grupo: "HQ", activo: true },
+  { id: "HQ - Gerencia General",      nombre: "Gerencia General",    grupo: "HQ", activo: true },
+  { id: "HQ - Impuestos",             nombre: "Impuestos",           grupo: "HQ", activo: true },
+  { id: "HQ - Infraestructura IT",    nombre: "Infraestructura IT",  grupo: "HQ", activo: true },
+  { id: "HQ - Marketing",             nombre: "Marketing",           grupo: "HQ", activo: true },
+  { id: "HQ - Recursos Humanos",      nombre: "Recursos Humanos",    grupo: "HQ", activo: true },
+  { id: "HQ - Sport",                 nombre: "Sport",               grupo: "HQ", activo: true },
+  { id: "HQ - Tecnologia",            nombre: "Tecnología",          grupo: "HQ", activo: true },
+  { id: "HQ - Ventas y Operaciones",  nombre: "Ventas y Operaciones",grupo: "HQ", activo: true },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CUENTAS
 // tipo: "gasto" | "ingreso" | "financiero"
-// centrosCostoPermitidos: null = cualquier CC; array = solo esos
+// cuenta_pasivo: bucket de balance al que apunta cuando queda impago
+//   "proveedores" | "sueldos" | "impuestos" | "financiero" | null (ingresos)
 // ─────────────────────────────────────────────────────────────────────────────
 export const CUENTAS = [
 
   // ── GASTOS OPERATIVOS DE SEDE ──
-  {
-    id: "alquiler", nombre: "Alquiler", tipo: "gasto",
-    centrosCostoPermitidos: ["01 - Recoleta","02 - Palermo Chico","03 - Belgrano","04 - Plaza Libertad","05 - Barrio Norte"],
-  },
-  {
-    id: "expensas_abl", nombre: "Expensas y ABL", tipo: "gasto",
-    centrosCostoPermitidos: ["01 - Recoleta","02 - Palermo Chico","03 - Belgrano","04 - Plaza Libertad","05 - Barrio Norte"],
-  },
-  {
-    id: "limpieza", nombre: "Limpieza", tipo: "gasto",
-    centrosCostoPermitidos: ["01 - Recoleta","02 - Palermo Chico","03 - Belgrano","04 - Plaza Libertad","05 - Barrio Norte"],
-  },
-  {
-    id: "servicios", nombre: "Servicios", tipo: "gasto",
-    centrosCostoPermitidos: ["01 - Recoleta","02 - Palermo Chico","03 - Belgrano","04 - Plaza Libertad","05 - Barrio Norte","HQ - Administracion","HQ - Gerencia General"],
-  },
-  {
-    id: "equipamiento_mantenimiento", nombre: "Equipamiento y Mantenimiento", tipo: "gasto",
-    centrosCostoPermitidos: ["01 - Recoleta","02 - Palermo Chico","03 - Belgrano","04 - Plaza Libertad","HQ - Gerencia General"],
-  },
-  {
-    id: "interusos", nombre: "Interusos", tipo: "gasto",
-    centrosCostoPermitidos: ["01 - Recoleta","02 - Palermo Chico","03 - Belgrano","04 - Plaza Libertad","05 - Barrio Norte"],
-  },
-  {
-    id: "comisiones", nombre: "Comisiones", tipo: "gasto",
-    centrosCostoPermitidos: ["01 - Recoleta","02 - Palermo Chico","03 - Belgrano","04 - Plaza Libertad","05 - Barrio Norte"],
-  },
-  {
-    id: "comision_resultado", nombre: "Comisión s/ Resultado", tipo: "gasto",
-    centrosCostoPermitidos: ["01 - Recoleta","02 - Palermo Chico","04 - Plaza Libertad","05 - Barrio Norte"],
-  },
-  {
-    id: "honorarios", nombre: "Honorarios Profesionales", tipo: "gasto",
-    centrosCostoPermitidos: ["01 - Recoleta","02 - Palermo Chico","03 - Belgrano","04 - Plaza Libertad","05 - Barrio Norte","HQ - Administracion"],
-  },
-  {
-    id: "otros_gastos_centro", nombre: "Otros Gastos del Centro", tipo: "gasto",
-    centrosCostoPermitidos: ["01 - Recoleta","02 - Palermo Chico","03 - Belgrano","04 - Plaza Libertad","05 - Barrio Norte","HQ - Administracion"],
-  },
-  {
-    id: "inversiones_no_operativas", nombre: "Inversiones / Gastos no Operativos", tipo: "gasto",
-    centrosCostoPermitidos: ["01 - Recoleta","02 - Palermo Chico","03 - Belgrano","04 - Plaza Libertad"],
-  },
-  {
-    id: "inversores", nombre: "Inversores", tipo: "gasto",
-    centrosCostoPermitidos: ["05 - Barrio Norte"],
-  },
+  { id: "alquiler",                nombre: "Alquiler",                              tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "expensas_abl",            nombre: "Expensas y ABL",                        tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "limpieza",                nombre: "Limpieza",                              tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "servicios",               nombre: "Servicios",                             tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "equipamiento_mantenimiento", nombre: "Equipamiento y Mantenimiento",       tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "interusos",               nombre: "Interusos",                             tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "comisiones",              nombre: "Comisiones",                            tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "comision_resultado",      nombre: "Comisión s/ Resultado",                 tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "honorarios",              nombre: "Honorarios Profesionales",              tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "otros_gastos_centro",     nombre: "Otros Gastos del Centro",               tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "inversiones_no_operativas", nombre: "Inversiones / Gastos no Operativos", tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "inversores",              nombre: "Inversores",                            tipo: "gasto",      cuenta_pasivo: "proveedores" },
 
   // ── GASTOS DE PERSONAL ──
-  {
-    id: "sueldos", nombre: "Sueldos", tipo: "gasto",
-    centrosCostoPermitidos: ["01 - Recoleta","02 - Palermo Chico","03 - Belgrano","04 - Plaza Libertad","05 - Barrio Norte","11 - Wellness","12 - Tigre Loco","17 - Huergo","HQ - Administracion","HQ - BI","HQ - Design","HQ - Gerencia General","HQ - Marketing","HQ - Sport","HQ - Tecnologia","HQ - Ventas y Operaciones"],
-  },
-  {
-    id: "costos_salariales", nombre: "Costos Salariales", tipo: "gasto",
-    centrosCostoPermitidos: ["01 - Recoleta","02 - Palermo Chico","03 - Belgrano","04 - Plaza Libertad","05 - Barrio Norte","12 - Tigre Loco","HQ - Administracion","HQ - BI","HQ - Design","HQ - Gerencia General","HQ - Marketing","HQ - Sport","HQ - Tecnologia","HQ - Ventas y Operaciones"],
-  },
-  {
-    id: "obra_social", nombre: "Obra Social", tipo: "gasto",
-    centrosCostoPermitidos: ["HQ - Marketing","HQ - Recursos Humanos","HQ - Sport","HQ - Ventas y Operaciones"],
-  },
-  {
-    id: "autonomos", nombre: "Autónomos", tipo: "gasto",
-    centrosCostoPermitidos: ["HQ - Gerencia General"],
-  },
-  {
-    id: "capacitaciones", nombre: "Capacitaciones", tipo: "gasto",
-    centrosCostoPermitidos: ["HQ - Sport"],
-  },
-  {
-    id: "reunion_equipo", nombre: "Reunión de Equipo", tipo: "gasto",
-    centrosCostoPermitidos: ["HQ - Recursos Humanos"],
-  },
-  {
-    id: "viaticos", nombre: "Viáticos", tipo: "gasto",
-    centrosCostoPermitidos: ["12 - Tigre Loco","HQ - Design","HQ - Gerencia General","HQ - Marketing","HQ - Ventas y Operaciones"],
-  },
-  {
-    id: "representacion", nombre: "Representación", tipo: "gasto",
-    centrosCostoPermitidos: ["11 - Wellness","12 - Tigre Loco","HQ - Gerencia General","HQ - Marketing","HQ - Ventas y Operaciones"],
-  },
+  { id: "sueldos",                 nombre: "Sueldos",                               tipo: "gasto",      cuenta_pasivo: "sueldos"     },
+  { id: "costos_salariales",       nombre: "Costos Salariales",                     tipo: "gasto",      cuenta_pasivo: "sueldos"     },
+  { id: "obra_social",             nombre: "Obra Social",                           tipo: "gasto",      cuenta_pasivo: "sueldos"     },
+  { id: "autonomos",               nombre: "Autónomos",                             tipo: "gasto",      cuenta_pasivo: "sueldos"     },
+  { id: "capacitaciones",          nombre: "Capacitaciones",                        tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "reunion_equipo",          nombre: "Reunión de Equipo",                     tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "viaticos",                nombre: "Viáticos",                              tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "representacion",          nombre: "Representación",                        tipo: "gasto",      cuenta_pasivo: "proveedores" },
 
   // ── GASTOS DE HQ / TECNOLOGÍA ──
-  {
-    id: "licencias_software", nombre: "Licencias de Software y Sistemas", tipo: "gasto",
-    centrosCostoPermitidos: ["11 - Wellness","HQ - Administracion","HQ - BI","HQ - Gerencia General","HQ - Infraestructura IT","HQ - Ventas y Operaciones"],
-  },
-  {
-    id: "servidores", nombre: "Servidores y Alojamiento Web", tipo: "gasto",
-    centrosCostoPermitidos: ["HQ - Infraestructura IT"],
-  },
-  {
-    id: "otros_servicios_sistemas", nombre: "Otros Servicios de Sistemas", tipo: "gasto",
-    centrosCostoPermitidos: ["HQ - Design"],
-  },
-  {
-    id: "version_dos", nombre: "Version Dos", tipo: "gasto",
-    centrosCostoPermitidos: ["HQ - Tecnologia"],
-  },
-  {
-    id: "consultoria", nombre: "Consultoría y Asesoramiento Estratégico", tipo: "gasto",
-    centrosCostoPermitidos: ["HQ - BI"],
-  },
-  {
-    id: "material_oficina", nombre: "Material de Oficina y Suministros", tipo: "gasto",
-    centrosCostoPermitidos: ["HQ - Administracion"],
-  },
-  {
-    id: "registro_marca", nombre: "Registro de Marca y Prop. Intelectual", tipo: "gasto",
-    centrosCostoPermitidos: ["HQ - Gerencia General"],
-  },
-  {
-    id: "otros_gastos_generales", nombre: "Otros Gastos Generales", tipo: "gasto",
-    centrosCostoPermitidos: ["HQ - Administracion","HQ - Gerencia General"],
-  },
+  { id: "licencias_software",      nombre: "Licencias de Software y Sistemas",      tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "servidores",              nombre: "Servidores y Alojamiento Web",           tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "otros_servicios_sistemas",nombre: "Otros Servicios de Sistemas",            tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "version_dos",             nombre: "Version Dos",                            tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "consultoria",             nombre: "Consultoría y Asesoramiento Estratégico",tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "material_oficina",        nombre: "Material de Oficina y Suministros",      tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "registro_marca",          nombre: "Registro de Marca y Prop. Intelectual",  tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "otros_gastos_generales",  nombre: "Otros Gastos Generales",                 tipo: "gasto",      cuenta_pasivo: "proveedores" },
 
   // ── MARKETING ──
-  {
-    id: "acciones_mkt", nombre: "Acciones de Marketing", tipo: "gasto",
-    centrosCostoPermitidos: ["01 - Recoleta","02 - Palermo Chico","03 - Belgrano","04 - Plaza Libertad","05 - Barrio Norte","10 - HQ","11 - Wellness","12 - Tigre Loco","HQ - Marketing"],
-  },
+  { id: "acciones_mkt",            nombre: "Acciones de Marketing",                  tipo: "gasto",      cuenta_pasivo: "proveedores" },
 
   // ── GASTOS FINANCIEROS / IMPOSITIVOS ──
-  {
-    id: "gastos_bancarios", nombre: "Gastos Bancarios", tipo: "financiero",
-    centrosCostoPermitidos: ["HQ - Administracion"],
-  },
-  {
-    id: "perdidas_financieras", nombre: "Pérdidas Financieras", tipo: "financiero",
-    centrosCostoPermitidos: ["10 - HQ","HQ - Administracion"],
-  },
-  {
-    id: "aranceles_financieros", nombre: "Aranceles y Otros Financieros", tipo: "financiero",
-    centrosCostoPermitidos: ["01 - Recoleta","02 - Palermo Chico","03 - Belgrano","04 - Plaza Libertad","05 - Barrio Norte","HQ - Administracion","HQ - Impuestos"],
-  },
-  {
-    id: "iva_compra", nombre: "IVA Compra", tipo: "financiero",
-    centrosCostoPermitidos: ["HQ - Impuestos"],
-  },
-  {
-    id: "iva_gasto", nombre: "IVA (gasto)", tipo: "financiero",
-    centrosCostoPermitidos: ["HQ - Impuestos"],
-  },
-  {
-    id: "iibb", nombre: "IIBB", tipo: "financiero",
-    centrosCostoPermitidos: ["HQ - Impuestos"],
-  },
-  {
-    id: "ganancias", nombre: "Ganancias", tipo: "financiero",
-    centrosCostoPermitidos: ["HQ - Impuestos"],
-  },
-  {
-    id: "imp_cred_deb", nombre: "Imp. Créditos y Débitos", tipo: "financiero",
-    centrosCostoPermitidos: ["HQ - Impuestos"],
-  },
-  {
-    id: "plan_facilidades", nombre: "Plan Facilidades AFIP", tipo: "financiero",
-    centrosCostoPermitidos: ["HQ - Impuestos"],
-  },
-  {
-    id: "otros_egresos", nombre: "Otros Egresos", tipo: "gasto",
-    centrosCostoPermitidos: ["10 - HQ","HQ - Sport"],
-  },
+  { id: "gastos_bancarios",        nombre: "Gastos Bancarios",                       tipo: "financiero", cuenta_pasivo: "financiero"  },
+  { id: "perdidas_financieras",    nombre: "Pérdidas Financieras",                   tipo: "financiero", cuenta_pasivo: "financiero"  },
+  { id: "aranceles_financieros",   nombre: "Aranceles y Otros Financieros",          tipo: "financiero", cuenta_pasivo: "financiero"  },
+  { id: "iva_compra",              nombre: "IVA Compra",                             tipo: "financiero", cuenta_pasivo: "impuestos"   },
+  { id: "iva_gasto",               nombre: "IVA (gasto)",                            tipo: "financiero", cuenta_pasivo: "impuestos"   },
+  { id: "iibb",                    nombre: "IIBB",                                   tipo: "financiero", cuenta_pasivo: "impuestos"   },
+  { id: "ganancias",               nombre: "Ganancias",                              tipo: "financiero", cuenta_pasivo: "impuestos"   },
+  { id: "imp_cred_deb",            nombre: "Imp. Créditos y Débitos",                tipo: "financiero", cuenta_pasivo: "impuestos"   },
+  { id: "plan_facilidades",        nombre: "Plan Facilidades AFIP",                  tipo: "financiero", cuenta_pasivo: "impuestos"   },
+  { id: "otros_egresos",           nombre: "Otros Egresos",                          tipo: "gasto",      cuenta_pasivo: "proveedores" },
 
   // ── INGRESOS ──
-  {
-    id: "fee_gestion", nombre: "Fee de Gestión y Adm.", tipo: "ingreso",
-    centrosCostoPermitidos: ["10 - HQ"],
-  },
-  {
-    id: "fee_gestion_huergo", nombre: "Fee de Gestión y Adm. (Huergo)", tipo: "ingreso",
-    centrosCostoPermitidos: ["10 - HQ"],
-  },
-  {
-    id: "ingresos_a", nombre: "Ingresos A", tipo: "ingreso",
-    centrosCostoPermitidos: ["01 - Recoleta","02 - Palermo Chico","03 - Belgrano","04 - Plaza Libertad","05 - Barrio Norte"],
-  },
-  {
-    id: "ingresos_b", nombre: "Ingresos B", tipo: "ingreso",
-    centrosCostoPermitidos: ["01 - Recoleta","02 - Palermo Chico","03 - Belgrano","04 - Plaza Libertad","05 - Barrio Norte"],
-  },
-  {
-    id: "corporativos_gympass", nombre: "Corporativos (Gympass)", tipo: "ingreso",
-    centrosCostoPermitidos: ["01 - Recoleta","02 - Palermo Chico","03 - Belgrano","04 - Plaza Libertad","05 - Barrio Norte","10 - HQ"],
-  },
-  {
-    id: "app_gympass", nombre: "APP (Gympass)", tipo: "ingreso",
-    centrosCostoPermitidos: ["10 - HQ"],
-  },
-  {
-    id: "regalias", nombre: "Regalías s/ Ventas", tipo: "ingreso",
-    centrosCostoPermitidos: ["10 - HQ"],
-  },
-  {
-    id: "sponsor", nombre: "Sponsor", tipo: "ingreso",
-    centrosCostoPermitidos: ["10 - HQ"],
-  },
-  {
-    id: "otros_ingresos", nombre: "Otros Ingresos", tipo: "ingreso",
-    centrosCostoPermitidos: ["10 - HQ","HQ - Administracion"],
-  },
-  {
-    id: "ingreso_pesos", nombre: "Ingreso Pesos", tipo: "ingreso",
-    centrosCostoPermitidos: ["10 - HQ"],
-  },
-  {
-    id: "intereses_ganados", nombre: "Intereses Ganados", tipo: "financiero",
-    centrosCostoPermitidos: ["10 - HQ"],
-  },
-  {
-    id: "acciones_mkt_ing", nombre: "Acciones de Marketing (ingreso)", tipo: "ingreso",
-    centrosCostoPermitidos: ["10 - HQ"],
-  },
+  { id: "fee_gestion",             nombre: "Fee de Gestión y Adm.",                  tipo: "ingreso",    cuenta_pasivo: null },
+  { id: "fee_gestion_huergo",      nombre: "Fee de Gestión y Adm. (Huergo)",         tipo: "ingreso",    cuenta_pasivo: null },
+  { id: "ingresos_a",              nombre: "Ingresos A",                             tipo: "ingreso",    cuenta_pasivo: null },
+  { id: "ingresos_b",              nombre: "Ingresos B",                             tipo: "ingreso",    cuenta_pasivo: null },
+  { id: "corporativos_gympass",    nombre: "Corporativos (Gympass)",                 tipo: "ingreso",    cuenta_pasivo: null },
+  { id: "app_gympass",             nombre: "APP (Gympass)",                          tipo: "ingreso",    cuenta_pasivo: null },
+  { id: "regalias",                nombre: "Regalías s/ Ventas",                     tipo: "ingreso",    cuenta_pasivo: null },
+  { id: "sponsor",                 nombre: "Sponsor",                                tipo: "ingreso",    cuenta_pasivo: null },
+  { id: "otros_ingresos",          nombre: "Otros Ingresos",                         tipo: "ingreso",    cuenta_pasivo: null },
+  { id: "ingreso_pesos",           nombre: "Ingreso Pesos",                          tipo: "ingreso",    cuenta_pasivo: null },
+  { id: "intereses_ganados",       nombre: "Intereses Ganados",                      tipo: "financiero", cuenta_pasivo: null },
+  { id: "acciones_mkt_ing",        nombre: "Acciones de Marketing (ingreso)",        tipo: "ingreso",    cuenta_pasivo: null },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -504,26 +352,26 @@ export const TIPOS_OPERACION = [
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Obtener CCs permitidos para una cuenta de resultado
-export function getCCsPermitidos(cuentaId) {
-  const cuenta = CUENTAS.find(c => c.id === cuentaId);
-  return cuenta?.centrosCostoPermitidos ?? null;
-}
-
-// Validar combinación cuenta + centro de costo
-// Retorna: "ok" | "advertencia"
-export function validarCuentaCC(cuentaId, ccId) {
-  const permitidos = getCCsPermitidos(cuentaId);
-  if (!permitidos) return "ok";
-  return permitidos.includes(ccId) ? "ok" : "advertencia";
-}
-
-// Obtener cuentas de resultado filtradas por tipo
 export function getCuentasByTipo(tipo) {
   return CUENTAS.filter(c => c.tipo === tipo);
 }
 
-// Obtener el tipo de operación por id
 export function getTipoOperacion(id) {
   return TIPOS_OPERACION.find(t => t.id === id) ?? null;
 }
+
+// ─── Utilidades de fecha / número compartidas por modales ────────────────────
+export const IVA_OPTS = [
+  { value: 0,    label: "0%"    },
+  { value: 10.5, label: "10.5%" },
+  { value: 21,   label: "21%"   },
+  { value: 27,   label: "27%"   },
+];
+
+export const todayISO = () => new Date().toISOString().slice(0, 10);
+
+export const addDays = (iso, n) => {
+  const d = new Date(iso); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10);
+};
+
+export const fmtNum = n => Number(n || 0).toLocaleString("es-AR", { minimumFractionDigits: 2 });

@@ -20,8 +20,9 @@ function readEnvLocal() {
   return vars;
 }
 
-const localEnv  = readEnvLocal();
-const sheetsUrl = localEnv['VITE_SHEETS_API_URL'];
+const localEnv   = readEnvLocal();
+const sheetsUrl  = localEnv['VITE_SHEETS_API_URL'];
+const numbersUrl = localEnv['VITE_NUMBERS_API_URL'];
 
 // Inyectar todas las vars de .env.local en process.env para que los handlers
 // de /api/* (que corren en Node dentro de Vite) puedan leerlas con process.env
@@ -49,7 +50,7 @@ function proxyToSheets(targetUrl, method, body, res) {
   };
 
   const req = httpsRequest(options, (upstream) => {
-    // Seguir redirect (302) server-side — evita el problema de CORS en Workspace
+    // Seguir redirect (302) server-side — Google Apps Script requiere GET en el redirect
     if (upstream.statusCode >= 300 && upstream.statusCode < 400 && upstream.headers.location) {
       proxyToSheets(upstream.headers.location, 'GET', null, res);
       return;
@@ -81,6 +82,23 @@ export default defineConfig({
         console.log('[sheets-proxy] Proxy activo →', sheetsUrl);
 
         // Sin path en use() para evitar problemas de matching en connect/Vite 7
+        // ── Proxy /api/numbers → Apps Script BIGG Numbers ────────────────
+        if (numbersUrl) {
+          console.log('[numbers-proxy] Proxy activo →', numbersUrl);
+          server.middlewares.use((req, res, next) => {
+            if (!req.url || !req.url.startsWith('/api/numbers')) { next(); return; }
+            const qs     = req.url.replace('/api/numbers', '');
+            const target = numbersUrl + qs;
+            if (req.method === 'POST') {
+              let body = '';
+              req.on('data', chunk => { body += chunk; });
+              req.on('end',  () => { proxyToSheets(target, 'POST', body, res); });
+            } else {
+              proxyToSheets(target, 'GET', null, res);
+            }
+          });
+        }
+
         server.middlewares.use((req, res, next) => {
           // ── Proxy /api/facturante → serverless handler local ──────────────
           if (req.url && req.url.startsWith('/api/facturante')) {
