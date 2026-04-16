@@ -1221,27 +1221,55 @@ export default function PantallaMaestros() {
   };
 
   return (
-    <div style={{ padding:"28px 32px", maxWidth:1200 }} className="fade">
+    <div style={{ padding:"28px 32px", maxWidth:1200 }} className="fade maestros-screen">
+      <style>{`
+        .maestros-screen button:focus-visible {
+          outline: 2px solid ${T.accent};
+          outline-offset: 2px;
+        }
+      `}</style>
       <PageHeader
         title="Maestros"
         subtitle="Plan de Cuentas · Centros de Costo · Proveedores · Clientes"
       />
 
-      <div style={{ display:"flex", gap:2, marginBottom:24, borderBottom:`2px solid ${T.cardBorder}` }}>
-        {TABS.map(tab => (
-          <button key={tab.id} onClick={()=>setActiveTab(tab.id)} style={{
-            background:"transparent", border:"none",
-            borderBottom:`3px solid ${activeTab===tab.id ? T.accentDark : "transparent"}`,
-            padding:"10px 18px", fontSize:13, fontWeight: activeTab===tab.id ? 700 : 400,
-            color: activeTab===tab.id ? T.text : T.muted,
-            cursor:"pointer", fontFamily:T.font,
-            display:"flex", alignItems:"center", gap:7,
-            marginBottom:-2, transition:"all .12s",
-          }}>
-            <span>{tab.icon}</span>
-            {tab.label}
-          </button>
-        ))}
+      <div
+        role="tablist"
+        aria-label="Secciones de maestros"
+        style={{
+          display: "inline-flex", flexWrap: "wrap", gap: 2, marginBottom: 20,
+          background: "#f3f4f6", borderRadius: 10, padding: 3,
+        }}
+      >
+        {TABS.map(tab => {
+          const active = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => setActiveTab(tab.id)}
+              style={{
+                background: active ? T.accentDark : "transparent",
+                border: "none", borderRadius: 8,
+                color: active ? T.accent : T.muted,
+                fontFamily: T.font, fontSize: 13,
+                fontWeight: active ? 800 : 500,
+                padding: "7px 16px", cursor: "pointer",
+                display: "inline-flex", alignItems: "center", gap: 8,
+                transition: "all .15s ease",
+                outline: "none",
+                boxShadow: active ? T.shadow : "none",
+              }}
+              onMouseEnter={e => { if (!active) e.currentTarget.style.background = "#e5e7eb"; }}
+              onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}
+            >
+              <span style={{ fontSize: 15, lineHeight: 1 }} aria-hidden>{tab.icon}</span>
+              {tab.label}
+            </button>
+          );
+        })}
       </div>
 
       {tabContent[activeTab]}

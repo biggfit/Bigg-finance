@@ -20,13 +20,6 @@ export const CUENTA_LABEL = {
   SPONSORS:  "Sponsors",
   OTROS:     "Otros",
 };
-// Movimientos financieros (no tienen cuenta)
-export const MOV_TYPES = {
-  PAGO:         { label: "Pago Recibido",       sign: -1, color: "var(--green)" },
-  PAGO_PAUTA:   { label: "Pagos a Cuenta",      sign: -1, color: "var(--cyan)"  },
-  PAGO_ENVIADO: { label: "Transferencia Enviada", sign: +1, color: "var(--orange)" },
-};
-
 // COMP_TYPES — compatibilidad con código existente que usa c.type como key
 // Para comprobantes: type = "FACTURA|FEE", "NC|FEE", etc.
 // Para movimientos:  type = "PAGO", "PAGO_PAUTA", "PAGO_ENVIADO"
@@ -71,8 +64,6 @@ export const TIPOS_MOVIMIENTO  = ["PAGO","PAGO_PAUTA","PAGO_ENVIADO"];
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 /** Format absolute value with currency symbol */
 export const fmt  = (v, c) => `${SYM[c] || "$"}\u202f${Math.abs(v).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-/** Format without decimals */
-export const fmt0 = (v, c) => `${SYM[c] || "$"}\u202f${Math.abs(v).toLocaleString("es-AR", { maximumFractionDigits: 0 })}`;
 /** Format with sign prefix */
 export const fmtS = (v, c) => `${v < 0 ? "-" : v > 0 ? "+" : ""}${fmt(v, c)}`;
 /** Stable unique ID for new comprobantes */

@@ -2,6 +2,9 @@
 export const T = {
   sidebar:       "#16181a",
   sidebarBorder: "rgba(173,255,25,.35)",
+  sidebarMuted:  "rgba(255,255,255,.4)",
+  sidebarHover:  "rgba(255,255,255,.06)",
+  sidebarActive: "rgba(173,255,25,.12)",
   bg:            "#f0f2f5",
   card:          "#ffffff",
   cardBorder:    "#e4e7ec",
@@ -61,23 +64,6 @@ export function Badge({ estado, cfg }) {
       letterSpacing:".04em", whiteSpace:"nowrap" }}>
       {c.label}
     </span>
-  );
-}
-
-export function SummaryCard({ label, value, color, sub, icon }) {
-  return (
-    <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:T.radius,
-      padding:"16px 20px", boxShadow:T.shadow, flex:1, minWidth:140 }}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
-        <div style={{ fontSize:11, color:T.muted, fontWeight:600, letterSpacing:".06em",
-          textTransform:"uppercase", marginBottom:6 }}>{label}</div>
-        {icon && <span style={{ fontSize:16, opacity:.5 }}>{icon}</span>}
-      </div>
-      <div style={{ fontSize:20, fontWeight:800, color: color ?? T.text, fontFamily:T.mono }}>
-        {value}
-      </div>
-      {sub && <div style={{ fontSize:11, color:T.dim, marginTop:4 }}>{sub}</div>}
-    </div>
   );
 }
 

@@ -63,33 +63,6 @@ export const CUENTAS_BANCARIAS = [
   { id:"b-usd",              sociedad:"b",       nombre:"Efectivo USD",        banco:null,             tipo:"caja",     moneda:"USD", saldo:0 },
 ];
 
-// ─── A Cobrar (Activo — no físico) ───────────────────────────────────────────
-export const A_COBRAR_ITEMS = [
-  { id:"cxc-clientes-ars", label:"Cta Cte Clientes (Franquicias ARS)", moneda:"ARS", saldo:0 },
-  { id:"cxc-clientes-usd", label:"Cta Cte Clientes (Franquicias USD)", moneda:"USD", saldo:0 },
-  { id:"cxc-clientes-eur", label:"Cta Cte Clientes (Franquicias EUR)", moneda:"EUR", saldo:0 },
-  { id:"cxc-franq-ventas", label:"Venta de Franquicias (USD)",         moneda:"USD", saldo:0 },
-  { id:"cxc-wellhub-usd",  label:"Wellhub APP (USD)",                  moneda:"USD", saldo:0 },
-  { id:"cxc-rosedal",      label:"Cta Rosedal",                        moneda:"ARS", saldo:0 },
-  { id:"cxc-cheques",      label:"Cheque de Terceros",                 moneda:"ARS", saldo:0 },
-];
-
-// ─── A Pagar (Pasivo — no físico) ────────────────────────────────────────────
-export const A_PAGAR_ITEMS = [
-  { id:"cxp-proveedores-ars", label:"Saldo Cta Cte Proveedores ARS",  moneda:"ARS", saldo:0 },
-  { id:"cxp-proveedores-usd", label:"Saldo Cta Cte Proveedores USD",  moneda:"USD", saldo:0 },
-  { id:"cxp-visa",            label:"VISA Business",                   moneda:"ARS", saldo:0 },
-  { id:"cxp-amex",            label:"American Express Corp",           moneda:"USD", saldo:0 },
-  { id:"cxp-deuda-imp",       label:"Deuda Impositiva",               moneda:"ARS", saldo:0 },
-  { id:"cxp-prestamos-ars",   label:"Préstamos ARS",                  moneda:"ARS", saldo:0 },
-  { id:"cxp-prestamos-usd",   label:"Préstamos USD",                  moneda:"USD", saldo:0 },
-  { id:"cxp-wellhub-ars",     label:"Wellhub ARS",                    moneda:"ARS", saldo:0 },
-  { id:"cxp-wellhub-chile",   label:"Wellhub Chile (USD)",            moneda:"USD", saldo:0 },
-  { id:"cxp-wellhub-espana",  label:"Wellhub España (USD)",           moneda:"USD", saldo:0 },
-  { id:"cxp-pase-libre",      label:"Pase Libre (USD)",               moneda:"USD", saldo:0 },
-  { id:"cxp-dividendos",      label:"Dividendos Socios",              moneda:"USD", saldo:0 },
-];
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 export const TIPO_CUENTA = {
   banco:     { label:"Banco",    icon:"🏦", color:"#2563eb" },

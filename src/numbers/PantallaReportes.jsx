@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { T, PageHeader } from "./theme";
 import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas } from "../lib/numbersApi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
@@ -7,7 +7,6 @@ const MESES    = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","N
 const CUR_YEAR = new Date().getFullYear();
 const YEARS    = [CUR_YEAR - 2, CUR_YEAR - 1, CUR_YEAR];
 
-// Normaliza categoria_pnl — acepta claves técnicas o labels escritas a mano en el sheet
 function normCat(raw) {
   const s = (raw ?? "").trim().toLowerCase().replace(/\s+/g, "_");
   if (s === "ventas")                                          return "ventas";
@@ -18,16 +17,13 @@ function normCat(raw) {
   if (s === "gastos_financieros" || s === "gasto_financiero"
    || s === "financiero"   || s === "financieros")            return "gastos_financieros";
   if (s === "impuestos"    || s === "impuesto")               return "impuestos";
-  // HQ sub-cats
   if (s === "r_y_d"  || s === "r&d"  || s === "ryd")         return "r_y_d";
   if (s === "sales_marketing" || s.includes("sales"))         return "sales_marketing";
   if (s === "g_and_a" || s === "g&a" || s === "gna")         return "g_and_a";
-  return s; // desconocida → cae en sin_categoria
+  return s;
 }
 
 // ─── Pivot P&L estructurado ───────────────────────────────────────────────────
-// Agrupa líneas por categoria_pnl (del maestro de cuentas) × mes.
-// inRows = fetchLineasEnriquecidas INGRESO, egRows = EGRESO
 function buildPnL(inRows, egRows, cuentaMap, ccFilter, year, moneda) {
   const cats = { ventas:{}, costo_venta:{}, gastos_operativos:{}, gastos_financieros:{}, impuestos:{}, sin_categoria:{} };
   const add = (rows) => {
@@ -49,7 +45,6 @@ function buildPnL(inRows, egRows, cuentaMap, ccFilter, year, moneda) {
   };
   add(inRows);
   add(egRows);
-  // Cuentas categorizadas: agregar fila de ceros para "de punta a punta"
   for (const [nombre, cuenta] of cuentaMap) {
     const cat = normCat(cuenta.categoria_pnl);
     if (!cat) continue;
@@ -72,12 +67,10 @@ function computeSubtotals(pnl) {
   const resOp       = MESES.map((_,m) => margenBruto[m] - opexTot[m]);
   const resAntesImp = MESES.map((_,m) => resOp[m]       - finTot[m]);
   const resNeto     = MESES.map((_,m) => resAntesImp[m] - impTot[m]);
-  // Meses con datos reales (para saber cuántas columnas mostrar)
   const months = new Set();
   Object.values(pnl).forEach(cat =>
     Object.values(cat).forEach(arr => arr.forEach((v,i) => { if (v) months.add(i); }))
   );
-  // Siempre mostrar al menos hasta el mes actual del año
   const curMonth = new Date().getMonth();
   for (let i = 0; i <= curMonth; i++) months.add(i);
   return { ventasTot, costoTot, opexTot, finTot, impTot,
@@ -89,17 +82,41 @@ const rowSum = arr => arr.reduce((s, v) => s + v, 0);
 const fmtN   = n => !n ? "—" : Math.round(Math.abs(n)).toLocaleString("es-AR");
 
 // ─── Estilos base ─────────────────────────────────────────────────────────────
+const CTRL_H = 36;
+
 const selStyle = {
   background: "#f9fafb", border: `1px solid ${T.cardBorder}`,
-  borderRadius: 8, padding: "7px 12px", fontSize: 13, color: T.text,
-  fontFamily: T.font, outline: "none", cursor: "pointer",
+  borderRadius: 8, padding: "0 12px", fontSize: 13, color: T.text,
+  fontFamily: T.font, outline: "none", cursor: "pointer", height: CTRL_H,
+  lineHeight: `${CTRL_H}px`,
 };
 
 const thStyle = {
   padding: "9px 12px", fontSize: 10, fontWeight: 800, color: T.tableHeadText,
   textTransform: "uppercase", letterSpacing: ".08em", textAlign: "right",
-  whiteSpace: "nowrap", background: T.tableHead,
+  whiteSpace: "nowrap", background: T.tableHead, position: "sticky", top: 0, zIndex: 3,
 };
+
+const stickyCol = {
+  position: "sticky", left: 0, zIndex: 2, background: "inherit",
+  boxShadow: "2px 0 4px rgba(0,0,0,.04)",
+};
+
+// ─── Spinner ──────────────────────────────────────────────────────────────────
+const spinnerKeyframes = `@keyframes rpt-spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}`;
+
+function Spinner({ size = 32, color = T.accentDark }) {
+  return (
+    <>
+      <style>{spinnerKeyframes}</style>
+      <div style={{
+        width: size, height: size, border: `3px solid ${T.cardBorder}`,
+        borderTopColor: color, borderRadius: "50%",
+        animation: "rpt-spin .7s linear infinite",
+      }} />
+    </>
+  );
+}
 
 // ─── Row components ───────────────────────────────────────────────────────────
 function SectionRow({ label, span, values, activeMonths, expanded, onToggle }) {
@@ -108,7 +125,8 @@ function SectionRow({ label, span, values, activeMonths, expanded, onToggle }) {
     <tr style={{ background: T.accentDark, cursor: clickable ? "pointer" : "default" }}
       onClick={onToggle}>
       <td style={{ padding: "8px 16px", fontSize: 11, fontWeight: 800,
-        color: T.accent, letterSpacing: ".1em", textTransform: "uppercase", userSelect: "none" }}>
+        color: T.accent, letterSpacing: ".1em", textTransform: "uppercase", userSelect: "none",
+        ...stickyCol, background: T.accentDark }}>
         {clickable && <span style={{ marginRight: 6, fontSize: 9, opacity: .6 }}>{expanded ? "▼" : "▶"}</span>}
         {label}
       </td>
@@ -133,11 +151,12 @@ function SectionRow({ label, span, values, activeMonths, expanded, onToggle }) {
 function DataRow({ label, values, activeMonths, color }) {
   const total = rowSum(values);
   return (
-    <tr style={{ borderBottom: `1px solid ${T.cardBorder}` }}
-      onMouseEnter={e => e.currentTarget.style.background = "#f0f9ff"}
-      onMouseLeave={e => e.currentTarget.style.background = ""}>
+    <tr style={{ borderBottom: `1px solid ${T.cardBorder}`, background: T.card }}
+      onMouseEnter={e => { e.currentTarget.style.background = "#f0f9ff"; }}
+      onMouseLeave={e => { e.currentTarget.style.background = T.card; }}>
       <td style={{ padding: "7px 28px", fontSize: 13, color: T.text, whiteSpace: "nowrap",
-        maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis" }}>{label}</td>
+        maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis",
+        ...stickyCol, background: "inherit" }}>{label}</td>
       {activeMonths.map(m => (
         <td key={m} style={{ padding: "7px 12px", fontSize: 13, textAlign: "right",
           fontFamily: "var(--mono)", color: values[m] ? (color ?? T.text) : T.dim,
@@ -156,10 +175,12 @@ function DataRow({ label, values, activeMonths, color }) {
 
 function SubtotalRow({ label, values, activeMonths, color }) {
   const total = rowSum(values);
+  const bg = "#f3f4f6";
   return (
-    <tr style={{ background: "#f3f4f6", borderTop: `2px solid ${color ?? T.cardBorder}`, borderBottom: `2px solid ${T.cardBorder}` }}>
+    <tr style={{ background: bg, borderTop: `2px solid ${color ?? T.cardBorder}`, borderBottom: `2px solid ${T.cardBorder}` }}>
       <td style={{ padding: "12px 16px", fontSize: 14, fontWeight: 900,
-        color: color ?? T.text, letterSpacing: ".02em" }}>{label}</td>
+        color: color ?? T.text, letterSpacing: ".02em",
+        ...stickyCol, background: bg }}>{label}</td>
       {activeMonths.map(m => (
         <td key={m} style={{ padding: "12px 12px", fontSize: 14, textAlign: "right",
           fontFamily: "var(--mono)", fontWeight: 900, color: color ?? T.text,
@@ -179,11 +200,13 @@ function SubtotalRow({ label, values, activeMonths, color }) {
 function ResultadoRow({ label, values, activeMonths }) {
   const total = rowSum(values);
   const color = total >= 0 ? T.green : T.red;
+  const bg = total >= 0 ? "#f0fdf4" : "#fff1f2";
   return (
-    <tr style={{ background: total >= 0 ? "#f0fdf4" : "#fff1f2",
+    <tr style={{ background: bg,
       borderTop: `2px solid ${total >= 0 ? T.green : T.red}` }}>
       <td style={{ padding: "12px 16px", fontSize: 14, fontWeight: 900,
-        color, letterSpacing: ".02em" }}>{label}</td>
+        color, letterSpacing: ".02em",
+        ...stickyCol, background: bg }}>{label}</td>
       {activeMonths.map(m => (
         <td key={m} style={{ padding: "12px 12px", fontSize: 14, textAlign: "right",
           fontFamily: "var(--mono)", fontWeight: 900,
@@ -210,7 +233,9 @@ function PnLTable({ pnl, sub, year, moneda, label }) {
   if (activeMonths.length === 0) return (
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
       padding: "60px 24px", textAlign: "center", boxShadow: T.shadow }}>
-      <div style={{ fontSize: 28, marginBottom: 10 }}>📊</div>
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke={T.dim} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginBottom: 10 }}>
+        <path d="M3 3v18h18"/><path d="M7 16l4-8 4 4 5-6"/>
+      </svg>
       <div style={{ fontSize: 14, color: T.muted }}>
         Sin datos para {year} en {moneda}{label ? ` · ${label}` : ""}.
       </div>
@@ -223,11 +248,12 @@ function PnLTable({ pnl, sub, year, moneda, label }) {
   return (
     <>
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
-      boxShadow: T.shadow, overflowX: "auto" }}>
+      boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
       <table style={{ width: "100%", minWidth: 280 + activeMonths.length * 110, borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            <th style={{ ...thStyle, textAlign: "left", minWidth: 240 }}>Cuenta</th>
+            <th style={{ ...thStyle, textAlign: "left", minWidth: 240,
+              ...stickyCol, background: T.tableHead, zIndex: 4 }}>Cuenta</th>
             {activeMonths.map(m => <th key={m} style={thStyle}>{MESES[m]}</th>)}
             <th style={{ ...thStyle, borderLeft: "1px solid rgba(255,255,255,.12)" }}>TOTAL</th>
           </tr>
@@ -296,13 +322,14 @@ function PnlSection({ label, accounts, activeMonths, color, ncols, sub }) {
 
 function SubSectionRow({ label, values, activeMonths, color, expanded, onToggle }) {
   const total = rowSum(values);
+  const bg = "#f1f5f9";
   return (
-    <tr style={{ background: "#f1f5f9", borderTop: `2px solid ${color ?? T.cardBorder}`,
+    <tr style={{ background: bg, borderTop: `2px solid ${color ?? T.cardBorder}`,
       borderBottom: `1px solid ${T.cardBorder}`, cursor: "pointer" }}
       onClick={onToggle}>
       <td style={{ padding: "7px 16px", fontSize: 12, fontWeight: 800,
         color: color ?? T.muted, letterSpacing: ".06em", textTransform: "uppercase",
-        userSelect: "none" }}>
+        userSelect: "none", ...stickyCol, background: bg }}>
         <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{expanded ? "▼" : "▶"}</span>
         {label}
       </td>
@@ -340,7 +367,6 @@ function buildPnLHQ(rawIn, rawEg, ccMap, year, moneda) {
     }
   };
   add(rawIn); add(rawEg);
-  // CCs de HQ categorizados: agregar fila de ceros; los sin categoría se omiten
   for (const cc of ccMap.values()) {
     if ((cc.grupo ?? "").toLowerCase() !== "hq") continue;
     const cat = normCat(cc.categoria_pnl);
@@ -383,11 +409,12 @@ function PnLTableHQ({ pnl, sub, year, moneda }) {
   return (
     <>
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
-      boxShadow: T.shadow, overflowX: "auto" }}>
+      boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
       <table style={{ width: "100%", minWidth: 280 + activeMonths.length * 110, borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            <th style={{ ...thStyle, textAlign: "left", minWidth: 240 }}>Centro de Costo</th>
+            <th style={{ ...thStyle, textAlign: "left", minWidth: 240,
+              ...stickyCol, background: T.tableHead, zIndex: 4 }}>Centro de Costo</th>
             {activeMonths.map(m => <th key={m} style={thStyle}>{MESES[m]}</th>)}
             <th style={{ ...thStyle, borderLeft: "1px solid rgba(255,255,255,.12)" }}>TOTAL</th>
           </tr>
@@ -560,7 +587,6 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad }) {
   const [cxcOpen,     setCxcOpen]     = useState(true);
   const [cxpOpen,     setCxpOpen]     = useState(true);
 
-  // Saldo acumulado por cuenta bancaria desde nb_movimientos
   const saldos = useMemo(() => {
     const map = {};
     for (const m of rawMovs) {
@@ -587,11 +613,9 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad }) {
   const cajaTot  = useMemo(() => sumGrp(cajas),  [cajas, saldos]);
   const bancoTot = useMemo(() => sumGrp(bancos), [bancos, saldos]);
 
-  // CxC — ingresos FC pendientes de cobro
   const cxcRows = useMemo(() =>
     rawIn.filter(r => (r.subtipo ?? "").toUpperCase() === "INGRESO" && r.estado !== "cobrado"),
     [rawIn]);
-  // CxP — egresos FC pendientes de pago
   const cxpRows = useMemo(() =>
     rawEg.filter(r => (r.subtipo ?? "").toUpperCase() === "EGRESO" && r.estado !== "pagado"),
     [rawEg]);
@@ -614,7 +638,6 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad }) {
           </tr>
         </thead>
         <tbody>
-          {/* ── ACTIVO ── */}
           <BSecRow label="Activo" expanded={activoOpen} onToggle={() => setActivoOpen(o => !o)} />
           {activoOpen && <>
             <BGrpRow label="Caja / Efectivo" expanded={cajaOpen} onToggle={() => setCajaOpen(o => !o)} />
@@ -633,7 +656,6 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad }) {
           </>}
           <BResRow label="TOTAL ACTIVO" vals={activoTot} />
 
-          {/* ── PASIVO ── */}
           <BSecRow label="Pasivo" expanded={pasivoOpen} onToggle={() => setPasivoOpen(o => !o)} />
           {pasivoOpen && <>
             <BGrpRow label="Cuentas a Pagar" expanded={cxpOpen} onToggle={() => setCxpOpen(o => !o)} />
@@ -642,7 +664,6 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad }) {
           </>}
           <BResRow label="TOTAL PASIVO" vals={pasivoTot} />
 
-          {/* ── PATRIMONIO NETO ── */}
           <BResRow label="PATRIMONIO NETO = Activo − Pasivo" vals={pnTot} />
         </tbody>
       </table>
@@ -663,7 +684,6 @@ function TabCashFlow({ rawMovs, year, moneda }) {
   const movsOp    = useMemo(() => movsFilt.filter(m => m.tipo !== "TRANSFERENCIA"), [movsFilt]);
   const movsTrans = useMemo(() => movsFilt.filter(m => m.tipo === "TRANSFERENCIA"), [movsFilt]);
 
-  // Pivot por cuenta_contable — positivos = entradas, negativos = salidas
   const { entradas, salidas } = useMemo(() => {
     const e = {}, s = {};
     for (const m of movsOp) {
@@ -706,7 +726,9 @@ function TabCashFlow({ rawMovs, year, moneda }) {
   if (activeMonths.length === 0) return (
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
       padding: "60px 24px", textAlign: "center", boxShadow: T.shadow }}>
-      <div style={{ fontSize: 28, marginBottom: 10 }}>💸</div>
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke={T.dim} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginBottom: 10 }}>
+        <path d="M12 2v20M17 5H9.5a3.5 3.5 0 100 7h5a3.5 3.5 0 110 7H6"/>
+      </svg>
       <div style={{ fontSize: 14, color: T.muted }}>Sin movimientos para {year} en {moneda}.</div>
     </div>
   );
@@ -714,11 +736,12 @@ function TabCashFlow({ rawMovs, year, moneda }) {
   return (
     <>
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
-      boxShadow: T.shadow, overflowX: "auto" }}>
+      boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
       <table style={{ width: "100%", minWidth: 280 + activeMonths.length * 110, borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            <th style={{ ...thStyle, textAlign: "left", minWidth: 240 }}>Concepto</th>
+            <th style={{ ...thStyle, textAlign: "left", minWidth: 240,
+              ...stickyCol, background: T.tableHead, zIndex: 4 }}>Concepto</th>
             {activeMonths.map(m => <th key={m} style={thStyle}>{MESES[m]}</th>)}
             <th style={{ ...thStyle, borderLeft: "1px solid rgba(255,255,255,.12)" }}>TOTAL</th>
           </tr>
@@ -736,10 +759,10 @@ function TabCashFlow({ rawMovs, year, moneda }) {
 
           <ResultadoRow label="Flujo Neto del Período" values={flujoNeto} activeMonths={activeMonths} />
 
-          {/* Saldo acumulado */}
           <tr style={{ background: "#f8fafc", borderTop: `1px solid ${T.cardBorder}` }}>
             <td style={{ padding: "10px 16px", fontSize: 12, fontWeight: 800,
-              color: T.muted, letterSpacing: ".04em" }}>Saldo Acumulado (base período)</td>
+              color: T.muted, letterSpacing: ".04em",
+              ...stickyCol, background: "#f8fafc" }}>Saldo Acumulado (base período)</td>
             {activeMonths.map(m => {
               const v = saldoAcumulado[m];
               return (
@@ -763,9 +786,11 @@ function TabCashFlow({ rawMovs, year, moneda }) {
 
     {movsTrans.length > 0 && (
       <div style={{ marginTop: 16, background: "#eff6ff", border: "1px solid #bfdbfe",
-        borderRadius: T.radius, padding: "10px 16px", fontSize: 12, color: "#1d4ed8" }}>
-        <strong>ℹ️ Transferencias internas:</strong> {movsTrans.length} movimiento{movsTrans.length !== 1 ? "s" : ""} entre
-        cuentas propias no se incluyen en el flujo neto.
+        borderRadius: T.radius, padding: "10px 16px", fontSize: 12, color: "#1d4ed8",
+        display: "flex", alignItems: "center", gap: 8 }}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+        <span><strong>Transferencias internas:</strong> {movsTrans.length} movimiento{movsTrans.length !== 1 ? "s" : ""} entre
+        cuentas propias no se incluyen en el flujo neto.</span>
       </div>
     )}
     </>
@@ -773,22 +798,16 @@ function TabCashFlow({ rawMovs, year, moneda }) {
 }
 
 // ─── Tab Evolución Patrimonio Neto ────────────────────────────────────────────
-// Muestra mes a mes: Activo (Caja+Bancos+CxC) — Pasivo (CxP) = PN
-// Columnas: concepto | Ene | Feb | … | Total/Promedio
 function TabEvolucionPN({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, year }) {
   const [activoOpen, setActivoOpen] = useState({ ARS: true, USD: true, EUR: true });
   const [pasivoOpen, setPasivoOpen] = useState({ ARS: true, USD: true, EUR: true });
   const toggleActivo = (mon) => setActivoOpen(o => ({ ...o, [mon]: !o[mon] }));
   const togglePasivo = (mon) => setPasivoOpen(o => ({ ...o, [mon]: !o[mon] }));
 
-  // Acumula movimientos hasta fin de cada mes para obtener saldo de caja/bancos
   const saldosMensuales = useMemo(() => {
-    // Para cada cuenta bancaria, saldo acumulado al cierre de cada mes del año
-    const map = {}; // { cuentaId: [s0..s11] }
-    // Ordenar movimientos por fecha
+    const map = {};
     const movs = [...rawMovs].sort((a, b) => (a.fecha ?? "").localeCompare(b.fecha ?? ""));
-    const running = {}; // { cuentaId_moneda: running total }
-    // Recorremos todos los movimientos hasta el año+1
+    const running = {};
     for (const m of movs) {
       if (!m.fecha) continue;
       const mes = parseInt(m.fecha.slice(5, 7), 10) - 1;
@@ -799,13 +818,11 @@ function TabEvolucionPN({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, yea
       if (!cb) continue;
       const key = `${cb}__${mon}`;
       running[key] = (running[key] ?? 0) + (Number(m.monto) || 0);
-      // Al final de cada mes del año objetivo, snapshot
       if (yr === year) {
         if (!map[cb]) map[cb] = Array.from({ length: 12 }, () => ({ ARS: 0, USD: 0, EUR: 0 }));
         map[cb][mes][mon] = running[key];
       }
     }
-    // Forward-fill: si no hay movimiento en un mes, conservar saldo anterior
     for (const cid of Object.keys(map)) {
       for (let m = 1; m < 12; m++) {
         for (const mon of ["ARS", "USD", "EUR"]) {
@@ -826,11 +843,9 @@ function TabEvolucionPN({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, yea
   const cajas  = useMemo(() => cuentasSoc.filter(c => (c.tipo ?? "").toLowerCase() === "caja"),  [cuentasSoc]);
   const bancos = useMemo(() => cuentasSoc.filter(c => (c.tipo ?? "").toLowerCase() !== "caja"), [cuentasSoc]);
 
-  // Saldo mensual de un grupo de cuentas en una moneda
   const grpMes = (grp, mon) =>
     MESES.map((_, m) => grp.reduce((s, c) => s + ((saldosMensuales[c.id]?.[m]?.[mon]) ?? 0), 0));
 
-  // CxC por mes (ingresos pendientes al mes de la factura)
   const cxcMes = useMemo(() => {
     const t = { ARS: new Array(12).fill(0), USD: new Array(12).fill(0), EUR: new Array(12).fill(0) };
     for (const r of rawIn) {
@@ -844,7 +859,6 @@ function TabEvolucionPN({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, yea
     return t;
   }, [rawIn, year]);
 
-  // CxP por mes
   const cxpMes = useMemo(() => {
     const t = { ARS: new Array(12).fill(0), USD: new Array(12).fill(0), EUR: new Array(12).fill(0) };
     for (const r of rawEg) {
@@ -925,11 +939,20 @@ function TabEvolucionPN({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, yea
   );
 }
 
+// ─── Tab config ───────────────────────────────────────────────────────────────
+const TABS = [
+  { id: "pl_sede", label: "P&L Sedes" },
+  { id: "pl_bigg", label: "P&L BIGG" },
+  { id: "cf",      label: "Cash Flow" },
+  { id: "balance", label: "Patrimonio Neto" },
+  { id: "evpn",    label: "Evolución PN" },
+];
+
 // ─── Pantalla principal ───────────────────────────────────────────────────────
 export default function PantallaReportes({ sociedad = "nako" }) {
   const [activeTab,      setActiveTab]      = useState("pl_sede");
   const [year,           setYear]           = useState(CUR_YEAR);
-  const [selectedSedeCCs, setSelectedSedeCCs] = useState([]);  // [] = todos Sede
+  const [selectedSedeCCs, setSelectedSedeCCs] = useState([]);
   const [sedeOpen,        setSedeOpen]        = useState(false);
   const [monedaPL,       setMonedaPL]       = useState("ARS");
   const [monedaCF,       setMonedaCF]       = useState("ARS");
@@ -941,10 +964,24 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const [ccs,       setCcs]       = useState([]);
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState(null);
+  const [loadKey,   setLoadKey]   = useState(0);
+
+  const sedeRef = useRef(null);
+  const tabsRef = useRef(null);
+
+  // Click-outside to close sede dropdown
+  useEffect(() => {
+    if (!sedeOpen) return;
+    const handler = (e) => {
+      if (sedeRef.current && !sedeRef.current.contains(e.target)) setSedeOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [sedeOpen]);
 
   useEffect(() => {
     let cancelled = false;
-    const load = async () => {
+    const run = async () => {
       setLoading(true); setError(null);
       try {
         const [eg, ing, movs, cbs, ccList, ctaList] = await Promise.all([
@@ -968,9 +1005,32 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         if (!cancelled) setLoading(false);
       }
     };
-    load();
+    run();
     return () => { cancelled = true; };
-  }, [sociedad]);
+  }, [sociedad, loadKey]);
+
+  // Keyboard navigation for tabs
+  const handleTabKeyDown = (e) => {
+    const idx = TABS.findIndex(t => t.id === activeTab);
+    let next = idx;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+      e.preventDefault();
+      next = (idx + 1) % TABS.length;
+    } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+      e.preventDefault();
+      next = (idx - 1 + TABS.length) % TABS.length;
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      next = 0;
+    } else if (e.key === "End") {
+      e.preventDefault();
+      next = TABS.length - 1;
+    } else {
+      return;
+    }
+    setActiveTab(TABS[next].id);
+    tabsRef.current?.querySelectorAll('[role="tab"]')[next]?.focus();
+  };
 
   const cuentaMap = useMemo(
     () => new Map((cuentas ?? []).map(c => [c.nombre, c])),
@@ -1011,108 +1071,198 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     });
   };
 
+  // ── Loading state ──
   if (loading) return (
-    <div style={{ padding: "60px 32px", textAlign: "center", color: T.muted, fontSize: 14 }}>
-      Cargando reportes…
-    </div>
-  );
-
-  if (error) return (
-    <div style={{ padding: "40px 32px" }}>
-      <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8,
-        padding: "16px 20px", color: "#dc2626", fontSize: 13 }}>
-        <strong>Error:</strong> {error}
+    <div style={{ padding: "28px 32px", maxWidth: 1400 }} className="fade">
+      <PageHeader title="Reportes" subtitle="Estados financieros y evolución patrimonial" />
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center",
+        justifyContent: "center", padding: "80px 32px", gap: 16 }}>
+        <Spinner size={36} />
+        <div style={{ fontSize: 14, color: T.muted, fontWeight: 500 }}>Cargando reportes…</div>
       </div>
     </div>
   );
+
+  // ── Error state ──
+  if (error) return (
+    <div style={{ padding: "28px 32px", maxWidth: 1400 }} className="fade">
+      <PageHeader title="Reportes" subtitle="Estados financieros y evolución patrimonial" />
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center",
+        justifyContent: "center", padding: "60px 32px", gap: 16 }}>
+        <div style={{ width: 48, height: 48, borderRadius: 12, background: T.redBg,
+          display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={T.red} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>
+          </svg>
+        </div>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: T.text, marginBottom: 4 }}>Error al cargar reportes</div>
+          <div style={{ fontSize: 13, color: T.muted, maxWidth: 400 }}>{error}</div>
+        </div>
+        <button onClick={() => setLoadKey(k => k + 1)} style={{
+          background: T.accentDark, color: T.accent, border: "none", borderRadius: 999,
+          padding: "8px 20px", fontSize: 13, fontWeight: 700, cursor: "pointer",
+          fontFamily: T.font, letterSpacing: ".03em", marginTop: 4,
+          display: "flex", alignItems: "center", gap: 6,
+        }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 105.64-11.36L1 10"/>
+          </svg>
+          Reintentar
+        </button>
+      </div>
+    </div>
+  );
+
+  const showMonedaPL = activeTab === "pl_sede" || activeTab === "pl_bigg";
+  const showMonedaCF = activeTab === "cf";
+  const showSedes    = activeTab === "pl_sede" && sedeCCs.length > 0;
 
   return (
     <div style={{ padding: "28px 32px", maxWidth: 1400 }} className="fade">
-      <PageHeader title="Reportes" />
 
-      {/* ── Tab selector ── */}
-      <div style={{ display: "flex", gap: 2, marginBottom: 24,
-        borderBottom: `2px solid ${T.cardBorder}` }}>
-        {[
-          { id: "pl_sede", label: "P&L Sedes" },
-          { id: "pl_bigg", label: "P&L BIGG" },
-          { id: "cf",      label: "Cash Flow" },
-          { id: "balance", label: "Patrimonio Neto" },
-          { id: "evpn",    label: "Evolución PN" },
-        ].map(tab => (
-          <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
-            background: "transparent", border: "none",
-            borderBottom: `3px solid ${activeTab === tab.id ? T.accentDark : "transparent"}`,
-            color: activeTab === tab.id ? T.accentDark : T.muted,
-            fontFamily: T.font, fontSize: 13, fontWeight: activeTab === tab.id ? 800 : 500,
-            padding: "8px 18px 10px", cursor: "pointer", marginBottom: -2,
-            transition: "all .12s",
-          }}>
-            {tab.label}
-          </button>
-        ))}
+      {/* ── Header ── */}
+      <PageHeader
+        title="Reportes"
+        subtitle="Estados financieros y evolución patrimonial"
+      />
+      <div style={{ fontSize: 12, color: T.dim, marginTop: -18, marginBottom: 20,
+        display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ background: "#f3f4f6", padding: "2px 10px", borderRadius: 6,
+          fontWeight: 600, color: T.muted, fontSize: 11, textTransform: "capitalize" }}>
+          {sociedad}
+        </span>
+        <span style={{ color: T.dim }}>·</span>
+        <span style={{ fontWeight: 600, color: T.muted, fontSize: 11 }}>{year}</span>
       </div>
 
-      {/* ── Filtros ── */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
-        <select value={year} onChange={e => setYear(Number(e.target.value))} style={selStyle}>
-          {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
-        </select>
+      {/* ── Pill tabs ── */}
+      <div
+        ref={tabsRef}
+        role="tablist"
+        aria-label="Reportes financieros"
+        onKeyDown={handleTabKeyDown}
+        style={{
+          display: "inline-flex", gap: 2, marginBottom: 20,
+          background: "#f3f4f6", borderRadius: 10, padding: 3,
+        }}
+      >
+        {TABS.map(tab => {
+          const active = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              role="tab"
+              aria-selected={active}
+              tabIndex={active ? 0 : -1}
+              onClick={() => setActiveTab(tab.id)}
+              style={{
+                background: active ? T.accentDark : "transparent",
+                border: "none", borderRadius: 8,
+                color: active ? T.accent : T.muted,
+                fontFamily: T.font, fontSize: 13,
+                fontWeight: active ? 800 : 500,
+                padding: "7px 18px", cursor: "pointer",
+                transition: "all .15s ease",
+                outline: "none",
+                boxShadow: active ? T.shadow : "none",
+              }}
+              onFocus={e => { e.currentTarget.style.outline = `2px solid ${T.accent}`; e.currentTarget.style.outlineOffset = "-2px"; }}
+              onBlur={e => { e.currentTarget.style.outline = "none"; }}
+              onMouseEnter={e => { if (!active) e.currentTarget.style.background = "#e5e7eb"; }}
+              onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
 
-        {(activeTab === "pl_sede" || activeTab === "pl_bigg") && (
-          <select value={monedaPL} onChange={e => setMonedaPL(e.target.value)} style={selStyle}>
-            {Object.entries(MONEDA_SYM).map(([k, v]) => (
-              <option key={k} value={k}>{v} {k}</option>
-            ))}
+      {/* ── Toolbar / Filters ── */}
+      <div style={{
+        display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap", alignItems: "flex-end",
+        background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
+        padding: "12px 16px", boxShadow: "0 1px 3px rgba(0,0,0,.04)",
+      }}>
+        {/* Año */}
+        <div>
+          <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
+            textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Año</label>
+          <select value={year} onChange={e => setYear(Number(e.target.value))} style={selStyle}>
+            {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
           </select>
+        </div>
+
+        {/* Moneda — P&L */}
+        {showMonedaPL && (
+          <div>
+            <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
+              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Moneda</label>
+            <select value={monedaPL} onChange={e => setMonedaPL(e.target.value)} style={selStyle}>
+              {Object.entries(MONEDA_SYM).map(([k, v]) => (
+                <option key={k} value={k}>{v} {k}</option>
+              ))}
+            </select>
+          </div>
         )}
 
-
-        {activeTab === "cf" && (
-          <select value={monedaCF} onChange={e => setMonedaCF(e.target.value)} style={selStyle}>
-            {Object.entries(MONEDA_SYM).map(([k, v]) => (
-              <option key={k} value={k}>{v} {k}</option>
-            ))}
-          </select>
+        {/* Moneda — CF */}
+        {showMonedaCF && (
+          <div>
+            <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
+              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Moneda</label>
+            <select value={monedaCF} onChange={e => setMonedaCF(e.target.value)} style={selStyle}>
+              {Object.entries(MONEDA_SYM).map(([k, v]) => (
+                <option key={k} value={k}>{v} {k}</option>
+              ))}
+            </select>
+          </div>
         )}
 
-        {/* Sedes: dropdown con checkboxes */}
-        {activeTab === "pl_sede" && sedeCCs.length > 0 && (
-          <div style={{ position: "relative", display: "inline-block" }}>
+        {/* Sedes dropdown */}
+        {showSedes && (
+          <div ref={sedeRef} style={{ position: "relative" }}>
+            <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
+              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Sedes</label>
             <button onClick={() => setSedeOpen(o => !o)} style={{
-              ...selStyle, display: "flex", alignItems: "center", gap: 8, cursor: "pointer",
-              minWidth: 180,
+              ...selStyle, display: "flex", alignItems: "center", gap: 8, minWidth: 190,
+              background: sedeOpen ? "#f0f2f5" : "#f9fafb",
             }}>
               <span style={{ flex: 1, textAlign: "left" }}>
-                {selectedSedeCCs.length === 0 ? "Todas las Sedes" : `${selectedSedeCCs.length} seleccionada${selectedSedeCCs.length > 1 ? "s" : ""}`}
+                {selectedSedeCCs.length === 0 ? "Todas las Sedes" : `${selectedSedeCCs.length} sede${selectedSedeCCs.length > 1 ? "s" : ""}`}
               </span>
-              <span style={{ fontSize: 10 }}>{sedeOpen ? "▲" : "▼"}</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={T.muted} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transition: "transform .15s", transform: sedeOpen ? "rotate(180deg)" : "rotate(0)" }}>
+                <path d="M6 9l6 6 6-6"/>
+              </svg>
             </button>
             {sedeOpen && (
               <div style={{
                 position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 100,
-                border: `1px solid ${T.cardBorder}`, borderRadius: 4, background: T.card,
-                boxShadow: "0 4px 12px rgba(0,0,0,.12)", minWidth: 200, fontSize: 13,
-                color: T.text,
+                border: `1px solid ${T.cardBorder}`, borderRadius: 10, background: T.card,
+                boxShadow: T.shadowMd, minWidth: 220, fontSize: 13,
+                color: T.text, padding: "4px 0", maxHeight: 280, overflowY: "auto",
               }}>
                 <label style={{
-                  display: "flex", alignItems: "center", gap: 7, padding: "6px 10px",
+                  display: "flex", alignItems: "center", gap: 8, padding: "8px 14px",
                   borderBottom: `1px solid ${T.cardBorder}`, cursor: "pointer",
                   userSelect: "none", fontWeight: 600, color: T.text,
                 }}>
                   <input type="checkbox" checked={selectedSedeCCs.length === 0}
-                    onChange={() => setSelectedSedeCCs([])} style={{ cursor: "pointer" }} />
-                  (Todos)
+                    onChange={() => setSelectedSedeCCs([])} style={{ cursor: "pointer", accentColor: T.accentDark }} />
+                  Todas
                 </label>
                 {sedeCCs.map(cc => {
                   const checked = selectedSedeCCs.length === 0 || selectedSedeCCs.includes(cc.id);
                   return (
                     <label key={cc.id} style={{
-                      display: "flex", alignItems: "center", gap: 7, padding: "5px 10px",
+                      display: "flex", alignItems: "center", gap: 8, padding: "7px 14px",
                       cursor: "pointer", userSelect: "none", color: T.text,
-                    }}>
+                      transition: "background .1s",
+                    }}
+                      onMouseEnter={e => e.currentTarget.style.background = "#f9fafb"}
+                      onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
                       <input type="checkbox" checked={checked}
-                        onChange={() => toggleSedeCC(cc.id)} style={{ cursor: "pointer" }} />
+                        onChange={() => toggleSedeCC(cc.id)} style={{ cursor: "pointer", accentColor: T.accentDark }} />
                       {cc.nombre}
                     </label>
                   );
@@ -1121,7 +1271,6 @@ export default function PantallaReportes({ sociedad = "nako" }) {
             )}
           </div>
         )}
-
       </div>
 
       {/* ── P&L Sedes ── */}

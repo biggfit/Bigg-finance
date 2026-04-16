@@ -74,7 +74,7 @@ async function post(body) {
 
 const pad  = (n, l = 5) => String(n).padStart(l, "0");
 
-export function newId(prefix) {
+function newId(prefix) {
   return `${prefix}-${pad(Date.now() % 100000)}`;
 }
 
@@ -150,11 +150,6 @@ export async function appendEgreso(egreso) {
   return { ok: true, id_comp };
 }
 
-/** Cambia campos de una línea de egreso (por id — clave única de fila). */
-export async function updateEgreso(id, patch) {
-  return post({ action: "edit", sheet: "nb_comprobantes", id, patch });
-}
-
 /** Elimina todas las líneas de un egreso (por id_comp). */
 export async function deleteEgreso(id_comp) {
   return post({ action: "del_comp", sheet: "nb_comprobantes", id_comp });
@@ -204,10 +199,6 @@ export async function appendIngreso(ingreso) {
     });
   }
   return { ok: true, id_comp };
-}
-
-export async function updateIngreso(id, patch) {
-  return post({ action: "edit", sheet: "nb_comprobantes", id, patch });
 }
 
 export async function deleteIngreso(id_comp) {
@@ -314,11 +305,6 @@ export function calcEstadoIngreso(saldo, totalDoc, vtoStr) {
   return "a_cobrar";
 }
 
-/** @deprecated usar calcEstadoEgreso / calcEstadoIngreso */
-export function calcEstado(saldoPendiente, vencimientoISO) {
-  return calcEstadoEgreso(saldoPendiente, Infinity, vencimientoISO);
-}
-
 // ─── MOVIMIENTOS DE TESORERÍA ─────────────────────────────────────────────────
 
 export async function fetchMovTesoreria(sociedad) {
@@ -351,15 +337,6 @@ export async function deleteMovTesoreria(id) {
 
 export async function updateMovTesoreria(id, patch) {
   return post({ action: "edit", sheet: "nb_movimientos", id, patch });
-}
-
-// updatePagoCobro / deletePagoCobro ahora apuntan a nb_movimientos
-export async function updatePagoCobro(id, patch) {
-  return post({ action: "edit", sheet: "nb_movimientos", id, patch });
-}
-
-export async function deletePagoCobro(id) {
-  return post({ action: "del", sheet: "nb_movimientos", id });
 }
 
 // ─── PROVEEDORES ─────────────────────────────────────────────────────────────
@@ -438,18 +415,6 @@ export async function deleteCliente(id) {
 
 export async function fetchSociedades() {
   return get("nb_sociedades");
-}
-
-export async function appendSociedad(s) {
-  return post({ action: "add", sheet: "nb_sociedades", row: { ...s, activo: true, created_at: new Date().toISOString() } });
-}
-
-export async function updateSociedad(id, patch) {
-  return post({ action: "edit", sheet: "nb_sociedades", id, patch });
-}
-
-export async function deleteSociedad(id) {
-  return post({ action: "del", sheet: "nb_sociedades", id });
 }
 
 // ─── CENTROS DE COSTO ────────────────────────────────────────────────────────

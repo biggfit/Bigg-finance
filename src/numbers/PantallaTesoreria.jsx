@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { T, Btn, Input, Select, PageHeader, fmtDate } from "./theme";
 import {
-  TIPO_CUENTA, MONEDA_SYM, fmtSaldo, SOCIEDADES,
+  TIPO_CUENTA, MONEDA_SYM, fmtSaldo,
 } from "../data/tesoreriaData";
 import { CENTROS_COSTO } from "../data/numbersData";
 import {
@@ -17,6 +17,34 @@ const TIPO_CFG = {
   COBRO_FC:      { bg:"#f0f9ff", color:"#0ea5e9", label:"Cobro FC"    },
   EGRESO_GASTO:  { bg:"#fef9c3", color:"#ca8a04", label:"Gasto"       },
   TRANSFERENCIA: { bg:"#dbeafe", color:"#2563eb", label:"Transferencia"},
+};
+
+/** Botones de barra — misma geometría; variante por intención */
+const tesoreriaActionBtn = {
+  base: {
+    borderRadius: 8,
+    padding: "9px 18px",
+    fontSize: 13,
+    fontWeight: 700,
+    cursor: "pointer",
+    fontFamily: T.font,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 8,
+    transition: "box-shadow .15s, background .15s, border-color .15s",
+  },
+  gasto: {
+    background: "#9a3412",
+    color: "#fff",
+    border: "1px solid #7c2d12",
+    boxShadow: "0 1px 3px rgba(0,0,0,.08)",
+  },
+  transfer: {
+    background: T.card,
+    color: "#0f766e",
+    border: `1px solid #0d9488`,
+    boxShadow: "0 1px 2px rgba(0,0,0,.05)",
+  },
 };
 
 // ─── Modal: Movimiento entre cuentas ─────────────────────────────────────────
@@ -1077,97 +1105,191 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
     );
   }
 
-  const socNombre = SOCIEDADES.find(s => s.id === (sociedad ?? "").toLowerCase())?.nombre ?? sociedad;
+  const yearTag = new Date().getFullYear();
+  const TESORERIA_TABS = [
+    { id: "saldos", label: "Saldos" },
+    { id: "movimientos", label: `Movimientos${movimientos.length ? ` (${movimientos.length})` : ""}` },
+  ];
 
   return (
-    <div style={{ padding:"28px 32px", maxWidth:1300 }} className="fade">
-      {/* Header: título + sociedad + botón movimiento */}
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between",
-        flexWrap:"wrap", gap:10, marginBottom:20 }}>
-        <h1 style={{ fontSize:24, fontWeight:900, color:T.text, margin:0, letterSpacing:"-.02em" }}>
-          Tesorería
-          <span style={{ fontWeight:400, color:T.muted, fontSize:18, marginLeft:10 }}>
-            — {socNombre}
-          </span>
-        </h1>
-        <div style={{ display:"flex", gap:8 }}>
-          <button onClick={() => setShowNuevoMov(true)} style={{
-            background:"#ca8a04", border:"none", borderRadius:8, padding:"7px 16px",
-            fontSize:13, fontWeight:700, color:"#fff", cursor:"pointer",
-            display:"flex", alignItems:"center", gap:6, fontFamily:T.font,
-          }}>+ Gasto Directo</button>
-          <button onClick={() => setShowMovModal(true)} style={{
-            background:"#0e7490", border:"none", borderRadius:8, padding:"7px 16px",
-            fontSize:13, fontWeight:700, color:"#fff", cursor:"pointer",
-            display:"flex", alignItems:"center", gap:6, fontFamily:T.font,
-          }}>Movimiento entre Cuentas +</button>
-        </div>
+    <div style={{ padding: "28px 32px", maxWidth: 1300 }} className="fade tesoreria-screen">
+      <style>{`
+        .tesoreria-screen button:focus-visible {
+          outline: 2px solid ${T.accent};
+          outline-offset: 2px;
+        }
+      `}</style>
+
+      <PageHeader
+        title="Tesorería"
+        subtitle="Saldos, caja y movimientos bancarios"
+        action={(
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "flex-end" }}>
+            <button type="button" onClick={() => setShowNuevoMov(true)} style={{
+              ...tesoreriaActionBtn.base, ...tesoreriaActionBtn.gasto,
+            }}>
+              + Gasto directo
+            </button>
+            <button type="button" onClick={() => setShowMovModal(true)} style={{
+              ...tesoreriaActionBtn.base, ...tesoreriaActionBtn.transfer,
+            }}>
+              + Movimiento entre cuentas
+            </button>
+          </div>
+        )}
+      />
+
+      {/* Contexto — mismo patrón que Reportes */}
+      <div style={{
+        fontSize: 12, color: T.dim, marginTop: -18, marginBottom: 20,
+        display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap",
+      }}>
+        <span style={{
+          background: "#f3f4f6", padding: "2px 10px", borderRadius: 6,
+          fontWeight: 600, color: T.muted, fontSize: 11, textTransform: "capitalize",
+        }}>
+          {sociedad}
+        </span>
+        <span style={{ color: T.dim }}>·</span>
+        <span style={{ fontWeight: 600, color: T.muted, fontSize: 11 }}>{yearTag}</span>
+        {!loading && !error && subtitle && (
+          <>
+            <span style={{ color: T.dim }}>·</span>
+            <span style={{ fontSize: 11, color: T.dim }}>{subtitle}</span>
+          </>
+        )}
       </div>
 
-      {/* Tabs + filtros moneda + fecha de corte */}
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between",
-        marginBottom:24, borderBottom:`2px solid ${T.cardBorder}` }}>
-        <div style={{ display:"flex", gap:2 }}>
-          {[{ id:"saldos", label:"Saldos" }, { id:"movimientos", label:`Movimientos${movimientos.length ? ` (${movimientos.length})` : ""}` }].map(tab => (
-            <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
-              background:"transparent", border:"none",
-              borderBottom:`3px solid ${activeTab === tab.id ? T.accentDark : "transparent"}`,
-              padding:"10px 20px", fontSize:13, fontWeight: activeTab === tab.id ? 700 : 400,
-              color: activeTab === tab.id ? T.text : T.muted,
-              cursor:"pointer", fontFamily:T.font, marginBottom:-2, transition:"all .12s",
-            }}>{tab.label}</button>
-          ))}
-        </div>
-        <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:4 }}>
-          {/* Filtro moneda */}
-          <div style={{ display:"flex", gap:6 }}>
-            {["ALL", ...monedas].map(m => (
-              <button key={m} onClick={() => setFiltroMoneda(m)} style={{
-                background: filtroMoneda === m ? T.accent : T.card,
-                color:      filtroMoneda === m ? "#000"   : T.muted,
-                border:`1px solid ${filtroMoneda === m ? T.accent : T.cardBorder}`,
-                borderRadius:20, padding:"4px 14px", fontSize:12, fontWeight:700,
-                cursor:"pointer", fontFamily:T.font,
-              }}>{m === "ALL" ? "Todas" : m}</button>
-            ))}
-          </div>
-
-          {/* Separador */}
-          <div style={{ width:1, height:20, background:T.cardBorder, margin:"0 8px" }} />
-
-          {/* Filtro fecha de corte */}
-          <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-            <span style={{ fontSize:11, color:T.muted, fontWeight:700, textTransform:"uppercase",
-              letterSpacing:".06em", whiteSpace:"nowrap" }}>Al día</span>
-            <button onClick={() => { datePickerRef.current?.showPicker?.(); datePickerRef.current?.click(); }}
-              style={{ border:`1px solid ${T.cardBorder}`, borderRadius:8, padding:"4px 10px",
-                fontSize:12, fontFamily:T.font, background:T.card,
-                color: fechaCorte ? T.text : T.dim, cursor:"pointer", whiteSpace:"nowrap",
-                display:"flex", alignItems:"center", gap:5, width:118, justifyContent:"center" }}>
-              📅 {fechaCorte ? fmtDate(fechaCorte) : "Fecha"}
+      {/* Pestañas píldora — igual que Reportes */}
+      <div
+        role="tablist"
+        aria-label="Vista de tesorería"
+        style={{
+          display: "inline-flex", gap: 2, marginBottom: 20,
+          background: "#f3f4f6", borderRadius: 10, padding: 3,
+        }}
+      >
+        {TESORERIA_TABS.map(tab => {
+          const active = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => setActiveTab(tab.id)}
+              style={{
+                background: active ? T.accentDark : "transparent",
+                border: "none", borderRadius: 8,
+                color: active ? T.accent : T.muted,
+                fontFamily: T.font, fontSize: 13,
+                fontWeight: active ? 800 : 500,
+                padding: "7px 18px", cursor: "pointer",
+                transition: "all .15s ease",
+                outline: "none",
+                boxShadow: active ? T.shadow : "none",
+              }}
+              onMouseEnter={e => { if (!active) e.currentTarget.style.background = "#e5e7eb"; }}
+              onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}
+            >
+              {tab.label}
             </button>
-            <input ref={datePickerRef} type="date" value={fechaCorte}
-              onChange={e => setFechaCorte(e.target.value)}
-              style={{ position:"absolute", opacity:0, pointerEvents:"none", width:0, height:0 }} />
-            {fechaCorte && (
-              <button onClick={() => setFechaCorte("")} style={{ background:"transparent",
-                border:"none", color:T.muted, fontSize:14, cursor:"pointer", lineHeight:1,
-                padding:0 }}>✕</button>
-            )}
-          </div>
+          );
+        })}
+      </div>
+
+      {/* Barra de filtros — tarjeta como toolbar de Reportes */}
+      <div style={{
+        display: "flex", gap: 16, marginBottom: 22, flexWrap: "wrap", alignItems: "center",
+        background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
+        padding: "12px 16px", boxShadow: "0 1px 3px rgba(0,0,0,.04)",
+      }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+          <span style={{
+            fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase",
+            letterSpacing: ".08em", marginRight: 4,
+          }}>Moneda</span>
+          {["ALL", ...monedas].map(m => {
+            const on = filtroMoneda === m;
+            return (
+              <button key={m} type="button" onClick={() => setFiltroMoneda(m)} style={{
+                background: on ? T.accentDark : "#f9fafb",
+                color: on ? T.accent : T.muted,
+                border: `1px solid ${on ? T.accentDark : T.cardBorder}`,
+                borderRadius: 999,
+                padding: "5px 14px",
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: "pointer",
+                fontFamily: T.font,
+                transition: "background .12s, color .12s",
+              }}>{m === "ALL" ? "Todas" : m}</button>
+            );
+          })}
+        </div>
+
+        <div style={{ width: 1, height: 24, background: T.cardBorder, flexShrink: 0 }} />
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase",
+            letterSpacing: ".08em" }}>Al día</span>
+          <button type="button" onClick={() => { datePickerRef.current?.showPicker?.(); datePickerRef.current?.click(); }}
+            style={{
+              border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "6px 12px",
+              fontSize: 12, fontFamily: T.font, background: "#f9fafb",
+              color: fechaCorte ? T.text : T.dim, cursor: "pointer", whiteSpace: "nowrap",
+              display: "inline-flex", alignItems: "center", gap: 6,
+              minWidth: 124, justifyContent: "center", fontWeight: 600,
+            }}>
+            <span style={{ opacity: 0.75 }} aria-hidden>📅</span>
+            {fechaCorte ? fmtDate(fechaCorte) : "Elegir fecha"}
+          </button>
+          <input ref={datePickerRef} type="date" value={fechaCorte}
+            onChange={e => setFechaCorte(e.target.value)}
+            style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 0, height: 0 }} />
+          {fechaCorte && (
+            <button type="button" onClick={() => setFechaCorte("")} title="Quitar fecha"
+              style={{
+                background: "transparent", border: "none", color: T.muted,
+                fontSize: 16, cursor: "pointer", lineHeight: 1, padding: 4,
+              }}>✕</button>
+          )}
         </div>
       </div>
 
       {loading && (
-        <div style={{ padding:"60px 32px", textAlign:"center", color:T.muted, fontSize:14 }}>
+        <div style={{ padding: "60px 32px", textAlign: "center", color: T.muted, fontSize: 14 }}>
           Cargando tesorería…
         </div>
       )}
 
       {error && !loading && (
-        <div style={{ background:"#fef2f2", border:"1px solid #fecaca", borderRadius:8,
-          padding:"16px 20px", color:"#dc2626", fontSize:13, marginBottom:20 }}>
-          <strong>Error al conectar con Google Sheets:</strong> {error}
+        <div role="alert" style={{
+          background: T.redBg, border: `1px solid ${T.red}`, borderRadius: T.radius,
+          padding: "18px 22px", marginBottom: 22,
+          display: "flex", gap: 14, alignItems: "flex-start",
+        }}>
+          <span style={{ fontSize: 22, lineHeight: 1 }} aria-hidden>⚠</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 800, color: T.red, fontSize: 15, marginBottom: 6 }}>
+              No se pudo cargar la tesorería
+            </div>
+            <div style={{ color: "#991b1b", fontSize: 13, lineHeight: 1.5 }}>
+              {error}
+            </div>
+            {String(error).includes("VITE_NUMBERS_API_URL") && (
+              <div style={{
+                marginTop: 14, paddingTop: 14,
+                borderTop: `1px solid rgba(220,38,38,.2)`,
+                fontSize: 12, color: T.muted, lineHeight: 1.5,
+              }}>
+                Revisá <code style={{ background: "#fff", padding: "2px 6px", borderRadius: 4, fontSize: 11 }}>.env.local</code>
+                {" "}y definí{" "}
+                <code style={{ background: "#fff", padding: "2px 6px", borderRadius: 4, fontSize: 11 }}>VITE_NUMBERS_API_URL</code>
+                {" "}con la URL del script de Google Apps Script.
+              </div>
+            )}
+          </div>
         </div>
       )}
 

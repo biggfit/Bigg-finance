@@ -95,64 +95,69 @@ export default function NumbersApp({ onGoToFranquicias }) {
     <div style={{ display:"flex", height:"100vh", overflow:"hidden", background:T.bg, fontFamily:T.font }}>
 
       {/* ── SIDEBAR ── */}
-      <div style={{ width:210, flexShrink:0, background:T.sidebar,
+      <div className="numbers-sidebar" style={{ width:210, flexShrink:0, background:T.sidebar,
         borderRight:`2px solid ${T.sidebarBorder}`,
         display:"flex", flexDirection:"column", overflow:"hidden" }}>
+        <style>{`.numbers-sidebar button:focus-visible{outline:2px solid ${T.accent};outline-offset:-2px;border-radius:8px}.numbers-sidebar button:focus:not(:focus-visible){outline:none}`}</style>
 
         {/* ── Logo + selector de sociedad ── */}
         <div style={{ padding:"14px 12px 10px", borderBottom:"1px solid rgba(255,255,255,.07)" }}>
           <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
             <img src={LOGO_SRC} alt="BIGG" style={{ height:32, width:"auto", objectFit:"contain", flexShrink:0, filter:"invert(1) sepia(1) saturate(10) hue-rotate(52deg)" }} />
-            <span style={{ fontSize:11, color:"rgba(255,255,255,.45)", fontWeight:700, letterSpacing:".08em", marginLeft:8 }}>NUMBERS</span>
+            <span style={{ fontSize:11, color:T.sidebarMuted, fontWeight:700, letterSpacing:".08em", marginLeft:8 }}>NUMBERS</span>
           </div>
           {/* Dropdown selector de sociedad */}
           <div ref={socDropRef} style={{ position:"relative" }}>
             <button
               onClick={() => setShowSocDrop(v => !v)}
+              aria-haspopup="listbox"
+              aria-expanded={showSocDrop}
               title="Seleccionar sociedad"
               style={{
-                padding:"6px 10px", fontSize:11,
-                background: showSocDrop ? "rgba(173,255,25,.12)" : "rgba(255,255,255,.07)",
-                border:`1px solid ${showSocDrop ? "rgba(173,255,25,.4)" : "rgba(255,255,255,.15)"}`,
+                padding:"7px 10px", fontSize:11,
+                background: showSocDrop ? T.sidebarActive : T.sidebarHover,
+                border:`1px solid ${showSocDrop ? "rgba(173,255,25,.35)" : "rgba(255,255,255,.12)"}`,
                 color:"rgba(255,255,255,.9)",
-                borderRadius:6, fontFamily:T.font, cursor:"pointer",
+                borderRadius:8, fontFamily:T.font, cursor:"pointer",
                 fontWeight:700, width:"100%", textAlign:"left",
                 overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
                 display:"flex", alignItems:"center", gap:6,
+                transition:"background .15s, border-color .15s",
               }}
             >
               <span style={{ fontSize:14 }}>{activeSoc.bandera}</span>
               <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis" }}>{activeSoc.nombre.toUpperCase()}</span>
-              <span style={{ fontSize:9, color:"rgba(255,255,255,.35)", flexShrink:0 }}>
-                {showSocDrop ? "▴" : "▾"}
-              </span>
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{ flexShrink:0, transform: showSocDrop ? "rotate(180deg)" : "rotate(0deg)", transition:"transform .2s" }}>
+                <path d="M2 3.5L5 6.5L8 3.5" stroke="rgba(255,255,255,.4)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
             </button>
             {showSocDrop && (
-              <div style={{
+              <div role="listbox" aria-label="Sociedades" style={{
                 position:"absolute", top:"calc(100% + 4px)", left:0, right:0, zIndex:999,
-                background:"#1a2035", border:"1px solid rgba(255,255,255,.15)",
-                borderRadius:7, overflow:"hidden",
-                boxShadow:"0 8px 24px rgba(0,0,0,.4)",
+                background:"#1a1d20", border:"1px solid rgba(255,255,255,.12)",
+                borderRadius:8, overflow:"hidden", padding:"4px",
+                boxShadow:"0 8px 24px rgba(0,0,0,.5)",
               }}>
                 {sociedades.map((s, i) => (
-                  <button key={s.id} onClick={() => { setSocIdx(i); setShowSocDrop(false); }}
+                  <button key={s.id} role="option" aria-selected={i === socIdx}
+                    onClick={() => { setSocIdx(i); setShowSocDrop(false); }}
                     style={{
                       display:"flex", alignItems:"center", gap:8,
-                      width:"100%", padding:"8px 12px",
-                      background: i === socIdx ? "rgba(173,255,25,.12)" : "transparent",
-                      border:"none", borderLeft:`3px solid ${i === socIdx ? T.accent : "transparent"}`,
-                      color: i === socIdx ? T.accent : "rgba(255,255,255,.75)",
+                      width:"100%", padding:"7px 10px", borderRadius:6,
+                      background: i === socIdx ? T.sidebarActive : "transparent",
+                      border:"none",
+                      color: i === socIdx ? T.accent : "rgba(255,255,255,.7)",
                       fontFamily:T.font, fontSize:12, fontWeight: i === socIdx ? 700 : 500,
-                      cursor:"pointer", textAlign:"left",
+                      cursor:"pointer", textAlign:"left", transition:"background .12s",
                     }}
-                    onMouseEnter={e => { if (i !== socIdx) e.currentTarget.style.background = "rgba(255,255,255,.06)"; }}
+                    onMouseEnter={e => { if (i !== socIdx) e.currentTarget.style.background = T.sidebarHover; }}
                     onMouseLeave={e => { if (i !== socIdx) e.currentTarget.style.background = "transparent"; }}
                   >
                     <span style={{ fontSize:13 }}>{s.bandera ?? ""}</span>
                     <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
                       {s.nombre}
                     </span>
-                    {i === socIdx && <span style={{ fontSize:10 }}>✓</span>}
+                    {i === socIdx && <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 7L6 10L11 4" stroke={T.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
                   </button>
                 ))}
               </div>
@@ -161,7 +166,8 @@ export default function NumbersApp({ onGoToFranquicias }) {
         </div>
 
         {/* ── Nav items ── */}
-        <nav style={{ flex:1, display:"flex", flexDirection:"column", gap:1, padding:"8px 0", overflowY:"auto" }}>
+        <nav aria-label="Navegación principal" style={{ flex:1, display:"flex", flexDirection:"column", gap:1, padding:"8px 0", overflowY:"auto" }}>
+          <div style={{ padding:"4px 16px 6px", fontSize:10, fontWeight:700, letterSpacing:".1em", color:T.sidebarMuted, textTransform:"uppercase" }}>Navegación</div>
           {SECTIONS.map(s => {
             const active = activeId === s.id && !showMaestros;
 
@@ -169,45 +175,50 @@ export default function NumbersApp({ onGoToFranquicias }) {
             if (s.id === "egresos") {
               return (
                 <div key={s.id}>
-                  {/* Ítem padre */}
                   <button onClick={() => {
                     if (active) { setEgresoOpen(o => !o); }
                     else { setActiveId("egresos"); setEgresoSubView(null); setEgresoOpen(true); setShowMaestros(false); }
-                  }} style={{
-                    width:"100%",
-                    background: active ? "rgba(173,255,25,.10)" : "transparent",
-                    border:"none", borderLeft:`3px solid ${active ? T.accent : "transparent"}`,
-                    color: active ? T.accent : "rgba(255,255,255,.5)",
-                    textAlign:"left", padding:"10px 16px",
+                  }}
+                  aria-expanded={active ? egresoOpen : undefined}
+                  aria-current={active && !egresoSubView ? "page" : undefined}
+                  style={{
+                    width:"calc(100% - 12px)", margin:"0 6px",
+                    background: active ? T.sidebarActive : "transparent",
+                    border:"none", borderRadius:8,
+                    color: active ? T.accent : "rgba(255,255,255,.55)",
+                    textAlign:"left", padding:"9px 10px",
                     fontSize:13, fontFamily:T.font, cursor:"pointer",
                     display:"flex", alignItems:"center", gap:10,
-                    transition:"all .12s", fontWeight: active ? 700 : 500,
+                    transition:"background .15s, color .15s", fontWeight: active ? 700 : 500,
                   }}
-                  onMouseEnter={e=>{ if(!active) e.currentTarget.style.background="rgba(255,255,255,.04)"; }}
+                  onMouseEnter={e=>{ if(!active) e.currentTarget.style.background=T.sidebarHover; }}
                   onMouseLeave={e=>{ if(!active) e.currentTarget.style.background="transparent"; }}>
                     <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>{s.icon}</span>
-                    {s.label}
+                    <span style={{ flex:1 }}>{s.label}</span>
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink:0, transform: active && egresoOpen ? "rotate(180deg)" : "rotate(0deg)", transition:"transform .2s", opacity:.5 }}>
+                      <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
                   </button>
 
-                  {/* Sub-items: visibles cuando Egresos está activo y expandido */}
                   {active && egresoOpen && [
-                    { id:"new-compra", label:"Compras" },
-                    { id:"new-gasto",  label:"Gastos"  },
+                    { id:"new-compra", label:"Compras", ariaAdd:"Agregar compra" },
+                    { id:"new-gasto",  label:"Gastos",  ariaAdd:"Agregar gasto"  },
                   ].map(sub => {
                     const subActive = egresoSubView === sub.id;
                     return (
                       <div key={sub.id} style={{ display:"flex", alignItems:"center",
-                        borderLeft:`3px solid ${subActive ? T.accent : "transparent"}`,
-                        background: subActive ? "rgba(173,255,25,.07)" : "rgba(0,0,0,.18)",
+                        margin:"1px 6px", borderRadius:8,
+                        background: subActive ? "rgba(173,255,25,.08)" : "rgba(0,0,0,.15)",
                         transition:"background .12s" }}
-                        onMouseEnter={e=>{ if(!subActive) e.currentTarget.style.background="rgba(0,0,0,.28)"; }}
-                        onMouseLeave={e=>{ if(!subActive) e.currentTarget.style.background="rgba(0,0,0,.18)"; }}>
+                        onMouseEnter={e=>{ if(!subActive) e.currentTarget.style.background="rgba(0,0,0,.25)"; }}
+                        onMouseLeave={e=>{ if(!subActive) e.currentTarget.style.background=subActive?"rgba(173,255,25,.08)":"rgba(0,0,0,.15)"; }}>
                         <button
                           onClick={() => { setActiveId("egresos"); setEgresoSubView(sub.id); setEgresoOpen(true); setShowMaestros(false); }}
+                          aria-current={subActive ? "page" : undefined}
                           style={{
-                            flex:1, background:"transparent", border:"none",
+                            flex:1, background:"transparent", border:"none", borderRadius:8,
                             color: subActive ? T.accent : "rgba(255,255,255,.45)",
-                            textAlign:"left", padding:"8px 8px 8px 32px",
+                            textAlign:"left", padding:"7px 8px 7px 38px",
                             fontSize:12, fontFamily:T.font, cursor:"pointer",
                             fontWeight: subActive ? 700 : 400,
                           }}>
@@ -215,11 +226,16 @@ export default function NumbersApp({ onGoToFranquicias }) {
                         </button>
                         <button
                           onClick={() => { setActiveId("egresos"); setEgresoSubView(sub.id); setEgresoOpen(true); setShowMaestros(false); }}
+                          aria-label={sub.ariaAdd}
+                          title={sub.ariaAdd}
                           style={{
-                            background:"transparent", border:"none", outline:"none", flexShrink:0,
-                            color:T.accent, fontSize:18, lineHeight:1, padding:"0 12px 0 0",
-                            cursor:"pointer", fontFamily:T.font,
-                          }}>
+                            background:"transparent", border:"none", borderRadius:6, flexShrink:0,
+                            color:T.accent, fontSize:16, lineHeight:1,
+                            minWidth:32, minHeight:32, display:"flex", alignItems:"center", justifyContent:"center",
+                            cursor:"pointer", fontFamily:T.font, transition:"background .12s",
+                          }}
+                          onMouseEnter={e=>e.currentTarget.style.background="rgba(173,255,25,.12)"}
+                          onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                           +
                         </button>
                       </div>
@@ -229,41 +245,48 @@ export default function NumbersApp({ onGoToFranquicias }) {
               );
             }
 
-            // ── Ingresos: ítem simple (sin sub-items, el + está en el sub-item) ─
+            // ── Ingresos: tiene sub-items ───────────────────────────────────
             if (s.id === "ingresos") {
               return (
                 <div key={s.id}>
                   <button onClick={() => {
                     if (active) { setIngresoOpen(o => !o); }
                     else { setActiveId("ingresos"); setIngresoSubView(null); setIngresoOpen(true); setShowMaestros(false); }
-                  }} style={{
-                    width:"100%",
-                    background: active ? "rgba(173,255,25,.10)" : "transparent",
-                    border:"none", borderLeft:`3px solid ${active ? T.accent : "transparent"}`,
-                    color: active ? T.accent : "rgba(255,255,255,.5)",
-                    textAlign:"left", padding:"10px 16px",
+                  }}
+                  aria-expanded={active ? ingresoOpen : undefined}
+                  aria-current={active && !ingresoSubView ? "page" : undefined}
+                  style={{
+                    width:"calc(100% - 12px)", margin:"0 6px",
+                    background: active ? T.sidebarActive : "transparent",
+                    border:"none", borderRadius:8,
+                    color: active ? T.accent : "rgba(255,255,255,.55)",
+                    textAlign:"left", padding:"9px 10px",
                     fontSize:13, fontFamily:T.font, cursor:"pointer",
                     display:"flex", alignItems:"center", gap:10,
-                    transition:"all .12s", fontWeight: active ? 700 : 500,
+                    transition:"background .15s, color .15s", fontWeight: active ? 700 : 500,
                   }}
-                  onMouseEnter={e=>{ if(!active) e.currentTarget.style.background="rgba(255,255,255,.04)"; }}
+                  onMouseEnter={e=>{ if(!active) e.currentTarget.style.background=T.sidebarHover; }}
                   onMouseLeave={e=>{ if(!active) e.currentTarget.style.background="transparent"; }}>
                     <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>{s.icon}</span>
-                    {s.label}
+                    <span style={{ flex:1 }}>{s.label}</span>
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink:0, transform: active && ingresoOpen ? "rotate(180deg)" : "rotate(0deg)", transition:"transform .2s", opacity:.5 }}>
+                      <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
                   </button>
                   {active && ingresoOpen && (
                     <div style={{ display:"flex", alignItems:"center",
-                      borderLeft:`3px solid ${ingresoSubView === "new-venta" ? T.accent : "transparent"}`,
-                      background: ingresoSubView === "new-venta" ? "rgba(173,255,25,.07)" : "rgba(0,0,0,.18)",
+                      margin:"1px 6px", borderRadius:8,
+                      background: ingresoSubView === "new-venta" ? "rgba(173,255,25,.08)" : "rgba(0,0,0,.15)",
                       transition:"background .12s" }}
-                      onMouseEnter={e=>{ if(ingresoSubView !== "new-venta") e.currentTarget.style.background="rgba(0,0,0,.28)"; }}
-                      onMouseLeave={e=>{ if(ingresoSubView !== "new-venta") e.currentTarget.style.background="rgba(0,0,0,.18)"; }}>
+                      onMouseEnter={e=>{ if(ingresoSubView !== "new-venta") e.currentTarget.style.background="rgba(0,0,0,.25)"; }}
+                      onMouseLeave={e=>{ if(ingresoSubView !== "new-venta") e.currentTarget.style.background=ingresoSubView==="new-venta"?"rgba(173,255,25,.08)":"rgba(0,0,0,.15)"; }}>
                       <button
                         onClick={() => { setActiveId("ingresos"); setIngresoSubView("new-venta"); setIngresoOpen(true); setShowMaestros(false); }}
+                        aria-current={ingresoSubView === "new-venta" ? "page" : undefined}
                         style={{
-                          flex:1, background:"transparent", border:"none",
+                          flex:1, background:"transparent", border:"none", borderRadius:8,
                           color: ingresoSubView === "new-venta" ? T.accent : "rgba(255,255,255,.45)",
-                          textAlign:"left", padding:"8px 8px 8px 32px",
+                          textAlign:"left", padding:"7px 8px 7px 38px",
                           fontSize:12, fontFamily:T.font, cursor:"pointer",
                           fontWeight: ingresoSubView === "new-venta" ? 700 : 400,
                         }}>
@@ -271,11 +294,16 @@ export default function NumbersApp({ onGoToFranquicias }) {
                       </button>
                       <button
                         onClick={() => { setActiveId("ingresos"); setIngresoSubView("new-venta"); setIngresoOpen(true); setShowMaestros(false); }}
+                        aria-label="Agregar venta"
+                        title="Agregar venta"
                         style={{
-                          background:"transparent", border:"none", flexShrink:0,
-                          color:T.accent, fontSize:18, lineHeight:1, padding:"0 12px 0 0",
-                          cursor:"pointer", fontFamily:T.font,
-                        }}>
+                          background:"transparent", border:"none", borderRadius:6, flexShrink:0,
+                          color:T.accent, fontSize:16, lineHeight:1,
+                          minWidth:32, minHeight:32, display:"flex", alignItems:"center", justifyContent:"center",
+                          cursor:"pointer", fontFamily:T.font, transition:"background .12s",
+                        }}
+                        onMouseEnter={e=>e.currentTarget.style.background="rgba(173,255,25,.12)"}
+                        onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                         +
                       </button>
                     </div>
@@ -286,17 +314,20 @@ export default function NumbersApp({ onGoToFranquicias }) {
 
             // ── Resto de secciones (sin sub-items) ────────────────────────────
             return (
-              <button key={s.id} onClick={() => { setActiveId(s.id); setEgresoSubView(null); setIngresoSubView(null); setShowMaestros(false); }} style={{
-                background: active ? "rgba(173,255,25,.10)" : "transparent",
-                border:"none", borderLeft:`3px solid ${active ? T.accent : "transparent"}`,
-                color: active ? T.accent : "rgba(255,255,255,.5)",
-                textAlign:"left", padding:"10px 16px",
-                fontSize:13, fontFamily:T.font, cursor:"pointer",
-                display:"flex", alignItems:"center", gap:10,
-                transition:"all .12s", fontWeight: active ? 700 : 500,
-              }}
-              onMouseEnter={e=>{ if(!active) e.currentTarget.style.background="rgba(255,255,255,.04)"; }}
-              onMouseLeave={e=>{ if(!active) e.currentTarget.style.background="transparent"; }}>
+              <button key={s.id} onClick={() => { setActiveId(s.id); setEgresoSubView(null); setIngresoSubView(null); setShowMaestros(false); }}
+                aria-current={active ? "page" : undefined}
+                style={{
+                  width:"calc(100% - 12px)", margin:"0 6px",
+                  background: active ? T.sidebarActive : "transparent",
+                  border:"none", borderRadius:8,
+                  color: active ? T.accent : "rgba(255,255,255,.55)",
+                  textAlign:"left", padding:"9px 10px",
+                  fontSize:13, fontFamily:T.font, cursor:"pointer",
+                  display:"flex", alignItems:"center", gap:10,
+                  transition:"background .15s, color .15s", fontWeight: active ? 700 : 500,
+                }}
+                onMouseEnter={e=>{ if(!active) e.currentTarget.style.background=T.sidebarHover; }}
+                onMouseLeave={e=>{ if(!active) e.currentTarget.style.background="transparent"; }}>
                 <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>{s.icon}</span>
                 {s.label}
               </button>
@@ -306,33 +337,34 @@ export default function NumbersApp({ onGoToFranquicias }) {
 
         {/* ── Pie: Maestros + Franquicias ── */}
         <div style={{ borderTop:"1px solid rgba(255,255,255,.07)", padding:"6px 0", display:"flex", flexDirection:"column", gap:2 }}>
-          {/* Maestros — al pie igual que en Franquicias */}
-          <button onClick={() => setShowMaestros(true)} style={{
-            display:"flex", alignItems:"center", gap:10,
-            padding:"10px 16px",
-            background: showMaestros ? "rgba(173,255,25,.10)" : "transparent",
-            border:"none", borderLeft:`3px solid ${showMaestros ? T.accent : "transparent"}`,
-            color: showMaestros ? T.accent : "rgba(255,255,255,.5)",
-            fontFamily:T.font, fontSize:13, fontWeight: showMaestros ? 700 : 500,
-            cursor:"pointer", textAlign:"left", width:"100%", transition:"all .12s",
-          }}
-          onMouseEnter={e=>{ if(!showMaestros) e.currentTarget.style.background="rgba(255,255,255,.04)"; }}
-          onMouseLeave={e=>{ if(!showMaestros) e.currentTarget.style.background="transparent"; }}>
+          <button onClick={() => setShowMaestros(true)}
+            aria-current={showMaestros ? "page" : undefined}
+            style={{
+              display:"flex", alignItems:"center", gap:10,
+              width:"calc(100% - 12px)", margin:"0 6px",
+              padding:"9px 10px", borderRadius:8,
+              background: showMaestros ? T.sidebarActive : "transparent",
+              border:"none",
+              color: showMaestros ? T.accent : "rgba(255,255,255,.55)",
+              fontFamily:T.font, fontSize:13, fontWeight: showMaestros ? 700 : 500,
+              cursor:"pointer", textAlign:"left", transition:"background .15s, color .15s",
+            }}
+            onMouseEnter={e=>{ if(!showMaestros) e.currentTarget.style.background=T.sidebarHover; }}
+            onMouseLeave={e=>{ if(!showMaestros) e.currentTarget.style.background="transparent"; }}>
             <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>⚙</span>
             Maestros
           </button>
 
-          {/* → Bigg Franquicias */}
           <button onClick={onGoToFranquicias} style={{
             display:"flex", alignItems:"center", gap:10,
-            padding:"10px 16px",
+            width:"calc(100% - 12px)", margin:"0 6px",
+            padding:"9px 10px", borderRadius:8,
             background:"transparent", border:"none",
-            borderLeft:"3px solid transparent",
-            color:"rgba(255,255,255,.3)",
+            color:"rgba(255,255,255,.35)",
             fontFamily:T.font, fontSize:13, fontWeight:500,
-            cursor:"pointer", textAlign:"left", width:"100%", transition:"all .12s",
+            cursor:"pointer", textAlign:"left", transition:"background .15s",
           }}
-          onMouseEnter={e=>e.currentTarget.style.background="rgba(255,255,255,.04)"}
+          onMouseEnter={e=>e.currentTarget.style.background=T.sidebarHover}
           onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
             <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>→</span>
             Bigg Franquicias
