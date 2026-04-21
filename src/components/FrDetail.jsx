@@ -46,13 +46,11 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
     // Mostrar solo el mes seleccionado: 01/MM/YYYY → último día del mes (o hoy si es mes actual)
     const from = `01/${String(localMonth + 1).padStart(2,"0")}/${localYear}`;
     const lastDay = new Date(localYear, localMonth + 1, 0).getDate();
-    const to   = isCurrentMonth
-      ? todayDmy()
-      : `${String(lastDay).padStart(2,"0")}/${String(localMonth + 1).padStart(2,"0")}/${localYear}`;
+    const to   = `${String(lastDay).padStart(2,"0")}/${String(localMonth + 1).padStart(2,"0")}/${localYear}`;
     return base
       .filter(c => c.date && cmpDate(c.date, from) >= 0 && cmpDate(c.date, to) <= 0)
       .sort((a, b) => cmpDate(a.date, b.date));
-  }, [comps, key, localMonth, localYear, activeCompany, isCurrentMonth]);
+  }, [comps, key, localMonth, localYear, activeCompany]);
 
   // sp: saldo acumulado hasta fin del mes anterior al seleccionado
   const sp = useMemo(() => computeSaldoPrevMes(franchise.id, localYear, localMonth, comps, saldoInicial, null, null, activeCompany), [franchise.id, localYear, localMonth, comps, saldoInicial, activeCompany]);
