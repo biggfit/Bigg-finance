@@ -799,7 +799,7 @@ function getCountryCur(country) {
   return COUNTRY_CURRENCY[country] ?? { code: "USD", label: "USD", sym: "U$D", defaultTc: "1" };
 }
 
-function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchisor }) {
+function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchisor, setBatchProg = () => {} }) {
   const { franchises, activeCompany } = useStore();
   const activeFr = useMemo(() => franchises.filter(f => f.activa !== false).sort((a,b) => a.name.localeCompare(b.name, "es")), [franchises]);
   const activeCurrency    = COMPANIES[activeCompany]?.currency ?? "ARS";
@@ -815,7 +815,6 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
   const [showTcPanel, setShowTcPanel] = useState(false);
   const [stage,      setStage]      = useState("edit");
   const [processed,  setProcessed]  = useState([]);
-  const [batchProg,  setBatchProg]  = useState(null); // { current, total, name }
   const [crmLoading, setCrmLoading] = useState(false);
   const [crmLoaded,  setCrmLoaded]  = useState(false);
 
@@ -1362,31 +1361,6 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
       </div>
     </div>
 
-    {/* Toast de progreso — flotante */}
-    {batchProg && (
-      <div style={{
-        position: "fixed", bottom: 24, right: 24, zIndex: 600,
-        background: "var(--bg2)", border: "1px solid var(--border2)",
-        borderRadius: 12, padding: "14px 20px", minWidth: 280, boxShadow: "0 8px 32px rgba(0,0,0,.5)",
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-          <div style={{ width: 14, height: 14, border: "2px solid var(--border2)", borderTopColor: "var(--accent)", borderRadius: "50%", animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
-          <span style={{ fontSize: 12, fontWeight: 700 }}>
-            Procesando {batchProg.current}/{batchProg.total}
-          </span>
-        </div>
-        <div style={{ height: 4, borderRadius: 2, background: "var(--border2)", marginBottom: 8, overflow: "hidden" }}>
-          <div style={{
-            height: "100%", borderRadius: 2, background: "var(--accent)",
-            width: `${(batchProg.current / batchProg.total) * 100}%`,
-            transition: "width .3s ease",
-          }} />
-        </div>
-        <div style={{ fontSize: 11, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {batchProg.name}
-        </div>
-      </div>
-    )}
     </>
   );
 }
@@ -1977,6 +1951,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
   );
   const emitLockRef = useRef(new Set());
   const [mode, setMode] = useState(EMIT_MODE.SELECT);
+  const [batchProg, setBatchProg] = useState(null); // { current, total, name }
   const [prefillFr,   setPrefillFr]   = useState(null);
   const [prefillComp, setPrefillComp] = useState(null);
 
@@ -2084,6 +2059,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
   };
 
   return (
+    <>
     <div className="fade">
       {/* Pendientes */}
       <PendientesPanel onEmitir={handleEmitirDesde} onEmitirAfip={handleEmitirAfip} onEmitirPago={handleEmitirPago} onFetchAfipNumero={handleFetchAfipNumero} franchisor={franchisor} />
@@ -2164,7 +2140,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
               franchisor={franchisor} prefillFr={prefillFr} prefillComp={prefillComp} />
           )}
           {mode === EMIT_MODE.CRM && (
-            <ModoCRM month={month} year={year} onAddComp={addCompWithEmpresa} onDone={reset} franchisor={franchisor} />
+            <ModoCRM month={month} year={year} onAddComp={addCompWithEmpresa} onDone={reset} franchisor={franchisor} setBatchProg={setBatchProg} />
           )}
           {mode === EMIT_MODE.EXCEL && (
             <ModoExcel month={month} year={year} onAddComp={addCompWithEmpresa} onDone={reset} franchisor={franchisor} />
@@ -2172,6 +2148,33 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
         </div>
       )}
     </div>
+
+    {/* Toast de progreso CRM — persiste aunque el usuario navegue */}
+    {batchProg && (
+      <div style={{
+        position: "fixed", bottom: 24, right: 24, zIndex: 600,
+        background: "var(--bg2)", border: "1px solid var(--border2)",
+        borderRadius: 12, padding: "14px 20px", minWidth: 280, boxShadow: "0 8px 32px rgba(0,0,0,.5)",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+          <div style={{ width: 14, height: 14, border: "2px solid var(--border2)", borderTopColor: "var(--accent)", borderRadius: "50%", animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
+          <span style={{ fontSize: 12, fontWeight: 700 }}>
+            Procesando {batchProg.current}/{batchProg.total}
+          </span>
+        </div>
+        <div style={{ height: 4, borderRadius: 2, background: "var(--border2)", marginBottom: 8, overflow: "hidden" }}>
+          <div style={{
+            height: "100%", borderRadius: 2, background: "var(--accent)",
+            width: `${(batchProg.current / batchProg.total) * 100}%`,
+            transition: "width .3s ease",
+          }} />
+        </div>
+        <div style={{ fontSize: 11, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {batchProg.name}
+        </div>
+      </div>
+    )}
+    </>
   );
 });
 
