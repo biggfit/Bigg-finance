@@ -38,29 +38,24 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
 
   const key = String(franchise.id);
 
-  // Mes calendario actual → mostrar mes anterior + mes actual (rango 01/prevMes → hoy)
   const _now           = new Date();
   const isCurrentMonth = localMonth === _now.getMonth() && localYear === _now.getFullYear();
-  const prevMonth      = localMonth === 0 ? 11 : localMonth - 1;
-  const prevYear       = localMonth === 0 ? localYear - 1 : localYear;
-  // Inicio del rango: mes anterior si es mes actual, el propio mes si es pasado
-  const rangeStartMonth = isCurrentMonth ? prevMonth : localMonth;
-  const rangeStartYear  = isCurrentMonth ? prevYear  : localYear;
 
   const frComps = useMemo(() => {
     const base = (comps[key] ?? []).filter(c => compEmpresa(c) === activeCompany);
-    // Rango: desde el 1ro de rangeStartMonth hasta el último día del mes (o hoy si es mes actual)
-    const from = `01/${String(rangeStartMonth + 1).padStart(2,"0")}/${rangeStartYear}`;
+    // Mostrar solo el mes seleccionado: 01/MM/YYYY → último día del mes (o hoy si es mes actual)
+    const from = `01/${String(localMonth + 1).padStart(2,"0")}/${localYear}`;
+    const lastDay = new Date(localYear, localMonth + 1, 0).getDate();
     const to   = isCurrentMonth
       ? todayDmy()
-      : `${String(new Date(localYear, localMonth + 1, 0).getDate()).padStart(2,"0")}/${String(localMonth + 1).padStart(2,"0")}/${localYear}`;
+      : `${String(lastDay).padStart(2,"0")}/${String(localMonth + 1).padStart(2,"0")}/${localYear}`;
     return base
       .filter(c => c.date && cmpDate(c.date, from) >= 0 && cmpDate(c.date, to) <= 0)
       .sort((a, b) => cmpDate(a.date, b.date));
-  }, [comps, key, localMonth, localYear, activeCompany, isCurrentMonth, rangeStartMonth, rangeStartYear]);
+  }, [comps, key, localMonth, localYear, activeCompany, isCurrentMonth]);
 
-  // sp: saldo acumulado hasta el inicio del rango (fin del mes previo al rango)
-  const sp = useMemo(() => computeSaldoPrevMes(franchise.id, rangeStartYear, rangeStartMonth, comps, saldoInicial, null, null, activeCompany), [franchise.id, rangeStartYear, rangeStartMonth, comps, saldoInicial, activeCompany]);
+  // sp: saldo acumulado hasta fin del mes anterior al seleccionado
+  const sp = useMemo(() => computeSaldoPrevMes(franchise.id, localYear, localMonth, comps, saldoInicial, null, null, activeCompany), [franchise.id, localYear, localMonth, comps, saldoInicial, activeCompany]);
   const sa = useMemo(() => computeSaldo(franchise.id, localYear, localMonth, comps, saldoInicial, null, null, activeCompany), [franchise.id, localYear, localMonth, comps, saldoInicial, activeCompany]);
   const pautaPend = useMemo(() => computePautaPendiente(franchise.id, comps, localYear, localMonth, null, null, activeCompany), [franchise.id, comps, localYear, localMonth, activeCompany]);
   const handleAdd = useCallback((frId, comp) => onAddComp(frId, comp), [onAddComp]);
@@ -81,11 +76,11 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
     });
   }, [frComps, sp]);
 
-  // Fecha de apertura = último día del mes previo al inicio del rango
+  // Fecha de apertura = último día del mes anterior al seleccionado
   const MONTH_NAMES    = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
-  const apertMonth     = rangeStartMonth === 0 ? 11 : rangeStartMonth - 1;
-  const apertYear      = rangeStartMonth === 0 ? rangeStartYear - 1 : rangeStartYear;
-  const apertLastDay   = new Date(apertYear, apertMonth + 1, 0).getDate(); // soporta años bisiestos
+  const apertMonth     = localMonth === 0 ? 11 : localMonth - 1;
+  const apertYear      = localMonth === 0 ? localYear - 1 : localYear;
+  const apertLastDay   = new Date(apertYear, apertMonth + 1, 0).getDate();
   const aperturaDate   = `${String(apertLastDay).padStart(2,"0")}/${String(apertMonth + 1).padStart(2,"0")}/${apertYear}`;
   const periodCutoff = useMemo(() => {
     const last = new Date(localYear, localMonth + 1, 0);
@@ -108,9 +103,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
     setMailStatus("sending");
     setMailError("");
     try {
-      const mesLabel = isCurrentMonth
-        ? `${MONTH_NAMES[rangeStartMonth]} - ${MONTH_NAMES[localMonth]} ${localYear}`
-        : `${MONTH_NAMES[localMonth]} ${localYear}`;
+      const mesLabel = `${MONTH_NAMES[localMonth]} ${localYear}`;
       const frSlug   = franchise.name.replace(/ /g, "_");
 
       // CC del mes: línea de apertura + movimientos del período (misma estructura que buildCCHtml espera)
