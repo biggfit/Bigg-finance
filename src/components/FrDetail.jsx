@@ -118,7 +118,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
       ];
       const logoUrl     = franchisor?.usa?.logoUrl || franchisor?.es?.logoUrl || "/Logo.jpg";
       const logoDataUrl = await fetchLogoDataUrl(logoUrl);
-      const ccHtml      = buildCCHtml(franchise.name, franchise.razonSocial ?? null, ccLines, displayCurrency, rangeStartMonth, rangeStartYear, logoDataUrl, activeCompany);
+      const ccHtml      = buildCCHtml(franchise.name, franchise.razonSocial ?? null, ccLines, displayCurrency, localMonth, localYear, logoDataUrl, activeCompany);
 
       // Comprobantes del mes con número emitido (Facturas, NC, FC_RECIBIDA)
       const isAR        = franchise.country === "Argentina";
@@ -168,7 +168,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
       setMailError(msg); setMailStatus("error");
       addRecordatorioEntry(franchise.id, { frName: franchise.name, tipo: "cc", fecha: todayDmy(), ccMes: localMonth + 1, ccAnio: localYear, to, status: "error", error: msg });
     }
-  }, [franchise, franchisor, localMonth, localYear, rangeStartMonth, rangeStartYear, sp, compsWithSaldo, aperturaDate, displayCurrency, activeCompany, addRecordatorioEntry]);
+  }, [franchise, franchisor, localMonth, localYear, sp, compsWithSaldo, aperturaDate, displayCurrency, activeCompany, addRecordatorioEntry]);
 
   return (
     <>
