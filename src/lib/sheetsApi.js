@@ -82,7 +82,7 @@ function parseFranchise(f) {
     activa:      f.activa === true || f.activa === "TRUE" || f.activa === "true",
     applyIVA:    f.applyIVA === true || f.applyIVA === "TRUE" || f.applyIVA === "true",
     taxExempt:   f.taxExempt === true || f.taxExempt === "TRUE" || f.taxExempt === "true",
-    biggEyeId:   f.biggEyeId !== "" && f.biggEyeId != null ? Number(f.biggEyeId) : null,
+    biggEyeId:   f.biggEyeId != null && String(f.biggEyeId).trim() !== "" && Number(f.biggEyeId) > 0 ? Number(f.biggEyeId) : null,
     currencies:  deriveCurrencies(f),
   };
 }
