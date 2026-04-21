@@ -364,7 +364,9 @@ export async function fetchCuentasBancarias() {
 }
 
 export async function appendCuentaBancaria(cuenta) {
-  return post({ action: "add", sheet: "nb_cuentas_bancarias", row: { id: newId("CB"), ...cuenta, activo: true, created_at: new Date().toISOString() } });
+  const id = newId("CB");
+  await post({ action: "add", sheet: "nb_cuentas_bancarias", row: { id, ...cuenta, activo: true, created_at: new Date().toISOString() } });
+  return { id };
 }
 
 export async function updateCuentaBancaria(id, patch) {
@@ -373,6 +375,39 @@ export async function updateCuentaBancaria(id, patch) {
 
 export async function deleteCuentaBancaria(id) {
   return post({ action: "del", sheet: "nb_cuentas_bancarias", id });
+}
+
+export async function fetchAllSaldosIniciales() {
+  const movs = await get("nb_movimientos", {});
+  return (movs ?? []).filter(m => m.tipo === "SALDO_INICIAL");
+}
+
+export async function fetchSaldoInicialMovimiento(cuentaId) {
+  const movs = await get("nb_movimientos", {});
+  return (movs ?? []).find(m => m.tipo === "SALDO_INICIAL" && m.cuenta_bancaria === cuentaId) ?? null;
+}
+
+export async function updateSaldoInicial(rowId, monto, fecha) {
+  const patch = fecha ? { monto, fecha } : { monto };
+  return post({ action: "edit", sheet: "nb_movimientos", id: rowId, patch });
+}
+
+export async function deleteSaldoInicial(rowId) {
+  return post({ action: "del", sheet: "nb_movimientos", id: rowId });
+}
+
+export async function appendSaldoInicial({ sociedad, cuentaId, moneda, monto, fecha }) {
+  const id  = newId("SI");
+  const fechaFinal = fecha || new Date().toISOString().slice(0, 10);
+  return post({ action: "add", sheet: "nb_movimientos", row: {
+    id, sociedad, fecha: fechaFinal, tipo: "SALDO_INICIAL",
+    cuenta_bancaria: cuentaId, cuenta_destino: "",
+    cuenta_contable: "", centro_costo: "",
+    moneda, monto,
+    documento_id: id, concepto: "Saldo inicial",
+    referencia: "", origen: "maestros",
+    created_at: new Date().toISOString(),
+  }});
 }
 
 // ─── CUENTAS (Plan de Cuentas) ────────────────────────────────────────────────
@@ -415,6 +450,19 @@ export async function deleteCliente(id) {
 
 export async function fetchSociedades() {
   return get("nb_sociedades");
+}
+
+export async function appendSociedad(soc) {
+  const id = soc.id?.trim() || newId("SOC");
+  return post({ action:"add", sheet:"nb_sociedades", row:{ ...soc, id, activo:true, created_at:new Date().toISOString() } });
+}
+
+export async function updateSociedad(id, patch) {
+  return post({ action:"edit", sheet:"nb_sociedades", id, patch });
+}
+
+export async function deleteSociedad(id) {
+  return post({ action:"del", sheet:"nb_sociedades", id });
 }
 
 // ─── CENTROS DE COSTO ────────────────────────────────────────────────────────
@@ -554,3 +602,128 @@ function _agruparPorComp(rows, subtipo) {
   }
   return Array.from(map.values());
 }
+
+// ── Helpers para movimientos en par (CAMBIO / INTERCOMPANIA) ─────────────────
+
+// Agrupa movimientos por documento_id, identifica la salida (monto<0) y entrada (monto>0)
+// y ordena por fecha desc. Usado por fetchCambios y fetchIntercompania.
+function _pairMovs(movs, tipo) {
+  const filtered = movs.filter(m => m.tipo === tipo);
+  const groups   = new Map();
+  for (const m of filtered) {
+    const key = m.documento_id || m.id;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(m);
+  }
+  return Array.from(groups.values())
+    .map(pair => ({
+      salida:  pair.find(m => Number(m.monto) < 0) ?? pair[0],
+      entrada: pair.find(m => Number(m.monto) > 0) ?? pair[1],
+      _ids:    pair.map(m => m.id),
+    }))
+    .sort((a, b) => ((b.salida?.fecha ?? "") > (a.salida?.fecha ?? "") ? 1 : -1));
+}
+
+async function _deleteMovRows(rowIds) {
+  await Promise.all((rowIds ?? []).map(id => post({ action:"del", sheet:"nb_movimientos", id })));
+}
+
+// ── Cambio de moneda ─────────────────────────────────────────────────────────
+
+export async function fetchCambios(sociedad) {
+  const params = sociedad ? { sociedad } : {};
+  const movs = await get("nb_movimientos", params);
+  return _pairMovs(movs, "CAMBIO").map(({ salida, entrada, _ids }) => ({
+    id:            salida?.documento_id ?? salida?.id,
+    sociedad:      salida?.sociedad ?? "",
+    fecha:         salida?.fecha ?? "",
+    cuentaOrigen:  salida?.cuenta_bancaria ?? "",
+    monedaOrigen:  salida?.moneda ?? "",
+    montoOrigen:   Math.abs(Number(salida?.monto) || 0),
+    cuentaDestino: entrada?.cuenta_bancaria ?? "",
+    monedaDestino: entrada?.moneda ?? "",
+    montoDestino:  Number(entrada?.monto) || 0,
+    tc:            salida?.referencia ?? "",
+    nota:          salida?.concepto ?? "",
+    _ids,
+  }));
+}
+
+export async function appendCambio({ sociedad, fecha, cuentaOrigen, monedaOrigen, montoOrigen, cuentaDestino, monedaDestino, montoDestino, nota = "" }) {
+  const id = newId("CAM");
+  // TC = cuántas unidades de la moneda LOCAL (ARS) vale 1 unidad de la moneda EXTRANJERA
+  // Si el origen ya es la extranjera (USD→ARS): 1 USD = montoDestino/montoOrigen ARS
+  // Si el destino es la extranjera  (ARS→USD): 1 USD = montoOrigen/montoDestino ARS
+  const tc = monedaOrigen !== "ARS"
+    ? (montoOrigen  > 0 ? (montoDestino / montoOrigen).toFixed(2) : "0")
+    : (montoDestino > 0 ? (montoOrigen  / montoDestino).toFixed(2) : "0");
+  const concepto   = `Cambio ${monedaOrigen}→${monedaDestino}${nota ? " · " + nota : ""}`;
+  const created_at = new Date().toISOString();
+  await post({ action:"add", sheet:"nb_movimientos", row: {
+    id:`${id}-S`, sociedad, fecha, tipo:"CAMBIO",
+    cuenta_bancaria:cuentaOrigen, cuenta_destino:cuentaDestino,
+    cuenta_contable:"", centro_costo:"",
+    moneda:monedaOrigen, monto:-Math.abs(montoOrigen),
+    documento_id:id, concepto, referencia:tc, origen:"cambio", created_at,
+  }});
+  await post({ action:"add", sheet:"nb_movimientos", row: {
+    id:`${id}-E`, sociedad, fecha, tipo:"CAMBIO",
+    cuenta_bancaria:cuentaDestino, cuenta_destino:cuentaOrigen,
+    cuenta_contable:"", centro_costo:"",
+    moneda:monedaDestino, monto:Math.abs(montoDestino),
+    documento_id:id, concepto, referencia:tc, origen:"cambio", created_at,
+  }});
+  return { ok:true, id };
+}
+
+export const deleteCambio = _deleteMovRows;
+
+// ── Intercompañía ─────────────────────────────────────────────────────────────
+
+export async function fetchIntercompania() {
+  const movs = await get("nb_movimientos", {});
+  return _pairMovs(movs, "INTERCOMPANIA").map(({ salida, entrada, _ids }) => {
+    const notaRaw = salida?.concepto ?? "";
+    return {
+      id:            salida?.documento_id ?? salida?.id,
+      fecha:         salida?.fecha ?? "",
+      socOrigen:     salida?.sociedad ?? "",
+      ctaOrigen:     salida?.cuenta_bancaria ?? "",
+      monedaOrigen:  salida?.moneda ?? "",
+      montoOrigen:   Math.abs(Number(salida?.monto) || 0),
+      socDestino:    entrada?.sociedad ?? "",
+      ctaDestino:    entrada?.cuenta_bancaria ?? "",
+      monedaDestino: entrada?.moneda ?? "",
+      montoDestino:  Number(entrada?.monto) || 0,
+      tc:            salida?.referencia ?? "",
+      tipo_op:       notaRaw.startsWith("Fondeo:") ? "fondeo" : "prestamo",
+      nota:          notaRaw.replace(/^(Préstamo|Fondeo):[^·]+(·\s*)?/, ""),
+      _ids,
+    };
+  });
+}
+
+export async function appendIntercompania({ fecha, tipoOp = "prestamo", socOrigen, ctaOrigen, monedaOrigen, montoOrigen, socDestino, ctaDestino, monedaDestino, montoDestino, nota = "" }) {
+  const id         = newId("INTERCOMPANY");
+  const tc         = montoOrigen > 0 ? (montoDestino / montoOrigen).toFixed(6) : "1";
+  const tipoLabel  = tipoOp === "fondeo" ? "Fondeo" : "Préstamo";
+  const concepto   = `${tipoLabel}: ${socOrigen} → ${socDestino}${nota ? " · " + nota : ""}`;
+  const created_at = new Date().toISOString();
+  await post({ action:"add", sheet:"nb_movimientos", row: {
+    id:`${id}-S`, sociedad:socOrigen, fecha, tipo:"INTERCOMPANIA",
+    cuenta_bancaria:ctaOrigen, cuenta_destino:ctaDestino,
+    cuenta_contable:"", centro_costo:"",
+    moneda:monedaOrigen, monto:-Math.abs(montoOrigen),
+    documento_id:id, concepto, referencia:tc, origen:"intercompania", created_at,
+  }});
+  await post({ action:"add", sheet:"nb_movimientos", row: {
+    id:`${id}-E`, sociedad:socDestino, fecha, tipo:"INTERCOMPANIA",
+    cuenta_bancaria:ctaDestino, cuenta_destino:ctaOrigen,
+    cuenta_contable:"", centro_costo:"",
+    moneda:monedaDestino, monto:Math.abs(montoDestino),
+    documento_id:id, concepto, referencia:tc, origen:"intercompania", created_at,
+  }});
+  return { ok:true, id };
+}
+
+export const deleteIntercompania = _deleteMovRows;

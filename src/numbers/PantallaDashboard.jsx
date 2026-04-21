@@ -3,245 +3,355 @@ import { T, fmtMoney, fmtDate } from "./theme";
 import {
   fetchEgresos, fetchIngresos, fetchPagosCobros,
   calcSaldoPendiente, calcEstadoEgreso, calcEstadoIngreso,
+  fetchMovTesoreria, fetchCuentasBancarias,
 } from "../lib/numbersApi";
+import { TIPO_CUENTA } from "../data/tesoreriaData";
 
-const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
-               "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-
-// ─── Parsea "DD/MM/YYYY" o "YYYY-MM-DD" → { year, month (1-12) } ─────────────
-function parseYM(fechaStr) {
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function diasHasta(fechaStr) {
   if (!fechaStr) return null;
-  if (/^\d{4}-\d{2}/.test(fechaStr)) {
-    return { year: +fechaStr.slice(0,4), month: +fechaStr.slice(5,7) };
-  }
-  if (/^\d{2}\/\d{2}\/\d{4}$/.test(fechaStr)) {
-    const [, m, y] = fechaStr.split("/");
-    return { year: +y, month: +m };
-  }
-  return null;
+  const d = new Date(fechaStr + "T00:00:00");
+  return Math.ceil((d - new Date()) / 86400000);
 }
 
-function KpiCard({ label, value, color, sub, icon, trend }) {
+// ─── Componentes ──────────────────────────────────────────────────────────────
+function SectionLabel({ children }) {
   return (
-    <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:T.radius,
-      padding:"20px 22px", boxShadow:T.shadow }}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:12 }}>
-        <span style={{ fontSize:11, color:T.muted, fontWeight:600,
-          letterSpacing:".07em", textTransform:"uppercase" }}>{label}</span>
-        <span style={{ fontSize:20 }}>{icon}</span>
-      </div>
-      <div style={{ fontSize:22, fontWeight:900, color: color ?? T.text, fontFamily:T.mono, marginBottom:4 }}>
-        {value}
-      </div>
-      {sub && <div style={{ fontSize:12, color:T.dim }}>{sub}</div>}
-      {trend !== undefined && trend !== null && (
-        <div style={{ fontSize:11, color: trend >= 0 ? T.green : T.red, marginTop:6, fontWeight:700 }}>
-          {trend >= 0 ? "↑" : "↓"} {Math.abs(trend)}% vs mes anterior
+    <div style={{ fontSize:11, fontWeight:700, letterSpacing:".08em",
+      textTransform:"uppercase", color:T.muted, marginBottom:14 }}>
+      {children}
+    </div>
+  );
+}
+
+function Card({ children, style }) {
+  return (
+    <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`,
+      borderRadius:T.radius, boxShadow:T.shadow, ...style }}>
+      {children}
+    </div>
+  );
+}
+
+function MpField({ sociedad }) {
+  const storageKey = `mp_acred_${sociedad}`;
+  const [monto, setMonto]   = useState(() => Number(localStorage.getItem(storageKey)) || 0);
+  const [editing, setEditing] = useState(false);
+  const [input, setInput]   = useState("");
+
+  useEffect(() => {
+    setMonto(Number(localStorage.getItem(`mp_acred_${sociedad}`)) || 0);
+  }, [sociedad]);
+
+  const save = () => {
+    const v = Number(input) || 0;
+    setMonto(v);
+    localStorage.setItem(storageKey, String(v));
+    setEditing(false);
+  };
+
+  return (
+    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
+      padding:"10px 14px", background:"#f0fdf4", borderRadius:8,
+      borderLeft:`3px solid #22c55e` }}>
+      <span style={{ fontSize:12, color:"#16a34a", fontWeight:700 }}>🏦 Mercado Pago</span>
+      {editing ? (
+        <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+          <input autoFocus type="number" value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }}
+            style={{ width:110, padding:"4px 8px", fontSize:12, fontFamily:T.mono,
+              border:`1px solid #22c55e`, borderRadius:6, outline:"none" }} />
+          <button onClick={save} style={{ background:"#16a34a", color:"#fff", border:"none",
+            borderRadius:5, padding:"4px 10px", fontSize:11, cursor:"pointer", fontFamily:T.font }}>
+            OK
+          </button>
+        </div>
+      ) : (
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <span style={{ fontSize:13, fontFamily:T.mono, color:"#16a34a", fontWeight:700 }}>
+            {monto > 0 ? fmtMoney(monto) : <span style={{ color:T.dim, fontStyle:"italic", fontSize:11 }}>sin dato</span>}
+          </span>
+          <button onClick={() => { setInput(monto ? String(monto) : ""); setEditing(true); }}
+            title="Editar acreditación esperada"
+            style={{ background:"none", border:"none", cursor:"pointer", color:T.dim,
+              fontSize:13, lineHeight:1, padding:"2px 4px" }}>✏</button>
         </div>
       )}
     </div>
   );
 }
 
-function AlertItem({ tipo, texto, detalle }) {
-  const cfg = {
-    vencido:  { color:T.red,    bg:"#fff5f5", icon:"🔴" },
-    proximo:  { color:T.orange, bg:"#fffbeb", icon:"🟡" },
-    info:     { color:T.blue,   bg:"#eff6ff", icon:"🔵" },
-  }[tipo] ?? { color:T.muted, bg:"#f9fafb", icon:"⚪" };
-
-  return (
-    <div style={{ display:"flex", alignItems:"flex-start", gap:10,
-      padding:"10px 14px", background:cfg.bg, borderRadius:8, borderLeft:`3px solid ${cfg.color}` }}>
-      <span>{cfg.icon}</span>
-      <div>
-        <div style={{ fontSize:13, color:T.text, fontWeight:600 }}>{texto}</div>
-        <div style={{ fontSize:11, color:T.muted, marginTop:2 }}>{detalle}</div>
-      </div>
-    </div>
-  );
-}
-
-function MiniTable({ title, rows, color }) {
-  if (rows.length === 0) return null;
-  return (
-    <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:T.radius,
-      boxShadow:T.shadow, overflow:"hidden" }}>
-      <div style={{ padding:"14px 18px", borderBottom:`1px solid ${T.cardBorder}`,
-        fontSize:13, fontWeight:800, color:T.text }}>{title}</div>
-      <table style={{ width:"100%", borderCollapse:"collapse" }}>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={i} style={{ borderBottom: i<rows.length-1 ? `1px solid ${T.cardBorder}` : "none" }}>
-              <td style={{ padding:"9px 16px", fontSize:12, color:T.text, fontWeight:600 }}>{r.label}</td>
-              <td style={{ padding:"9px 16px", fontSize:12, color:T.muted }}>{r.sub}</td>
-              <td style={{ padding:"9px 16px", fontSize:12, fontFamily:T.mono,
-                fontWeight:700, color: color ?? T.text, textAlign:"right" }}>
-                {r.value}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
+// ─── Dashboard ────────────────────────────────────────────────────────────────
 export default function PantallaDashboard({ sociedad = "nako" }) {
-  const [egresos,     setEgresos]     = useState([]);
-  const [ingresos,    setIngresos]    = useState([]);
-  const [loading,     setLoading]     = useState(true);
-  const [error,       setError]       = useState(null);
-
-  const now   = new Date();
-  const year  = now.getFullYear();
-  const month = now.getMonth() + 1; // 1-12
+  const [movs,     setMovs]     = useState([]);
+  const [cuentas,  setCuentas]  = useState([]);
+  const [egresos,  setEgresos]  = useState([]);
+  const [ingresos, setIngresos] = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [cajaOpen, setCajaOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    const load = async () => {
-      setLoading(true); setError(null);
+    (async () => {
+      setLoading(true);
       try {
-        const [egs, ings, pcs] = await Promise.all([
+        const [egs, ings, pcs, movimientos, cbs] = await Promise.all([
           fetchEgresos(sociedad),
           fetchIngresos(sociedad),
           fetchPagosCobros(sociedad).catch(() => []),
+          fetchMovTesoreria(sociedad),
+          fetchCuentasBancarias(),
         ]);
         if (cancelled) return;
 
-        const pagos  = Array.isArray(pcs) ? pcs.filter(p => p.tipo === "PAGO_FC" || p.tipo === "EGRESO_GASTO") : [];
-        const cobros = Array.isArray(pcs) ? pcs.filter(p => p.tipo === "COBRO_FC") : [];
+        const pagos  = (pcs ?? []).filter(p => p.tipo === "PAGO_FC" || p.tipo === "EGRESO_GASTO");
+        const cobros = (pcs ?? []).filter(p => p.tipo === "COBRO_FC");
 
-        const enrichEg = (Array.isArray(egs) ? egs : []).map(doc => {
+        setEgresos((egs ?? []).map(doc => {
           const docPagos = pagos.filter(p => p.documento_id === doc.id);
-          const saldo    = calcSaldoPendiente(doc.total, docPagos);
+          const saldo = calcSaldoPendiente(doc.total, docPagos);
           return { ...doc, importe: Number(doc.total) || 0, saldoPendiente: saldo,
-                   pagosVinculados: docPagos, estado: calcEstadoEgreso(saldo, doc.total, doc.vto) };
-        });
-
-        const enrichIn = (Array.isArray(ings) ? ings : []).map(doc => {
+                   estado: calcEstadoEgreso(saldo, doc.total, doc.vto) };
+        }));
+        setIngresos((ings ?? []).map(doc => {
           const docCobros = cobros.filter(c => c.documento_id === doc.id);
-          const saldo     = calcSaldoPendiente(doc.total, docCobros);
+          const saldo = calcSaldoPendiente(doc.total, docCobros);
           return { ...doc, importe: Number(doc.total) || 0, saldoPendiente: saldo,
-                   pagosVinculados: docCobros, estado: calcEstadoIngreso(saldo, doc.total, doc.vto) };
-        });
-
-        setEgresos(enrichEg);
-        setIngresos(enrichIn);
-      } catch (e) {
-        if (!cancelled) setError(e.message);
+                   estado: calcEstadoIngreso(saldo, doc.total, doc.vto) };
+        }));
+        setMovs(movimientos ?? []);
+        setCuentas((cbs ?? []).filter(c =>
+          (c.sociedad ?? "").toLowerCase() === (sociedad ?? "").toLowerCase()
+        ));
       } finally {
         if (!cancelled) setLoading(false);
       }
-    };
-    load();
+    })();
     return () => { cancelled = true; };
   }, [sociedad]);
 
-  // ── Filtrar por mes actual ──────────────────────────────────────────────────
-  const egMes = useMemo(() => egresos.filter(e => {
-    const ym = parseYM(e.fecha);
-    return ym && ym.year === year && ym.month === month;
-  }), [egresos, year, month]);
+  // ── Saldos por cuenta ──────────────────────────────────────────────────────
+  const saldosCuenta = useMemo(() =>
+    cuentas.map(c => ({
+      ...c,
+      saldo: movs.filter(m => m.cuenta_bancaria === c.id)
+                 .reduce((s, m) => s + (Number(m.monto) || 0), 0),
+    })),
+    [cuentas, movs]
+  );
 
-  const inMes = useMemo(() => ingresos.filter(e => {
-    const ym = parseYM(e.fecha);
-    return ym && ym.year === year && ym.month === month;
-  }), [ingresos, year, month]);
+  const totalARS = useMemo(() =>
+    saldosCuenta.filter(c => c.moneda === "ARS").reduce((s, c) => s + c.saldo, 0),
+    [saldosCuenta]
+  );
+  const totalUSD = useMemo(() =>
+    saldosCuenta.filter(c => c.moneda === "USD").reduce((s, c) => s + c.saldo, 0),
+    [saldosCuenta]
+  );
 
-  // ── KPIs del mes (ARS) ─────────────────────────────────────────────────────
-  const totalEgARS = useMemo(() => egMes.filter(e=>e.moneda==="ARS").reduce((s,e)=>s+e.importe,0), [egMes]);
-  const totalInARS = useMemo(() => inMes.filter(e=>e.moneda==="ARS").reduce((s,e)=>s+e.importe,0), [inMes]);
-  const resultado  = totalInARS - totalEgARS;
-  const margen     = totalInARS > 0 ? ((resultado / totalInARS) * 100).toFixed(1) : null;
+  // ── Pendientes ─────────────────────────────────────────────────────────────
+  const porPagar  = useMemo(() => egresos.filter(e  => e.estado === "a_pagar"  || e.estado === "vencido"), [egresos]);
+  const porCobrar = useMemo(() => ingresos.filter(i => i.estado === "a_cobrar" || i.estado === "vencido"), [ingresos]);
 
-  // ── Pendientes (todos los meses, no solo el actual) ─────────────────────────
-  const aPagar  = useMemo(() => egresos.filter(e=>e.moneda==="ARS"&&(e.estado==="a_pagar"||e.estado==="vencido")).reduce((s,e)=>s+(e.saldoPendiente??e.importe),0), [egresos]);
-  const aCobrar = useMemo(() => ingresos.filter(e=>e.moneda==="ARS"&&(e.estado==="a_cobrar"||e.estado==="vencido")).reduce((s,e)=>s+(e.saldoPendiente??e.importe),0), [ingresos]);
+  const totalPorPagar  = porPagar.reduce((s, e)  => s + (e.saldoPendiente  ?? e.importe), 0);
+  const totalPorCobrar = porCobrar.reduce((s, i) => s + (i.saldoPendiente ?? i.importe), 0);
 
-  const vencidosEg = useMemo(() => egresos.filter(e=>e.estado==="vencido"), [egresos]);
-  const vencidosIn = useMemo(() => ingresos.filter(e=>e.estado==="vencido"), [ingresos]);
+  const vencidosEg = porPagar.filter(e => e.estado === "vencido");
+  const vencidosIn = porCobrar.filter(i => i.estado === "vencido");
 
-  // ── Top egresos/ingresos del mes (ARS) ────────────────────────────────────
-  const topEgresos  = useMemo(() => [...egMes].filter(e=>e.moneda==="ARS").sort((a,b)=>b.importe-a.importe).slice(0,4), [egMes]);
-  const topIngresos = useMemo(() => [...inMes].filter(e=>e.moneda==="ARS").sort((a,b)=>b.importe-a.importe).slice(0,4), [inMes]);
-
-  const mesLabel = `${MESES[month-1]} ${year}`;
+  const proxVencimientos = useMemo(() =>
+    [...porPagar]
+      .filter(e => e.vto)
+      .sort((a, b) => a.vto > b.vto ? 1 : -1)
+      .slice(0, 8),
+    [porPagar]
+  );
 
   if (loading) return (
     <div style={{ padding:"60px 32px", textAlign:"center", color:T.muted, fontSize:14 }}>
-      Cargando dashboard…
-    </div>
-  );
-
-  if (error) return (
-    <div style={{ padding:"40px 32px" }}>
-      <div style={{ background:"#fef2f2", border:"1px solid #fecaca", borderRadius:8,
-        padding:"16px 20px", color:"#dc2626", fontSize:13 }}>
-        <strong>Error:</strong> {error}
-      </div>
+      Cargando…
     </div>
   );
 
   return (
-    <div style={{ padding:"28px 32px" }} className="fade">
-      <div style={{ marginBottom:24 }}>
-        <h1 style={{ fontSize:24, fontWeight:900, color:T.text, margin:0, letterSpacing:"-.02em" }}>Dashboard</h1>
-        <p style={{ fontSize:13, color:T.muted, margin:"4px 0 0" }}>{mesLabel}</p>
-      </div>
+    <div style={{ padding:"28px 32px", maxWidth:900 }} className="fade">
+      <h1 style={{ fontSize:24, fontWeight:900, color:T.text, margin:"0 0 28px", letterSpacing:"-.02em" }}>
+        Dashboard
+      </h1>
 
-      {/* KPIs principales */}
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:14, marginBottom:24 }}>
-        <KpiCard label="Ingresos ARS"   value={fmtMoney(totalInARS)} color={T.green} icon="↑" />
-        <KpiCard label="Egresos ARS"    value={fmtMoney(totalEgARS)} color={T.red}   icon="↓" />
-        <KpiCard label="Resultado Neto" value={fmtMoney(resultado)}  color={resultado>=0?T.green:T.red} icon="=" />
-        <KpiCard label="Margen" value={margen !== null ? `${margen}%` : "—"}
-          color={resultado>=0?T.green:T.red} icon="%" sub="sobre ingresos" />
-      </div>
+      {/* ── Bloque 1: Caja ─────────────────────────────────────────────────── */}
+      <SectionLabel>Disponible en caja</SectionLabel>
+      <Card style={{ marginBottom:24 }}>
+        <div style={{ padding:"24px 28px" }}>
+          <div style={{ display:"flex", gap:52, alignItems:"flex-end", flexWrap:"wrap" }}>
 
-      {/* KPIs secundarios */}
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(3, 1fr)", gap:14, marginBottom:28 }}>
-        <KpiCard label="Deudas a pagar"   value={fmtMoney(aPagar)}  color={T.orange} icon="⏳"
-          sub={`${egresos.filter(e=>e.estado==="a_pagar"||e.estado==="vencido").length} comprobantes`} />
-        <KpiCard label="Cobros pendientes" value={fmtMoney(aCobrar)} color={T.blue}   icon="📥"
-          sub={`${ingresos.filter(e=>e.estado==="a_cobrar"||e.estado==="vencido").length} comprobantes`} />
-        <KpiCard label="Vencidos" value={vencidosEg.length + vencidosIn.length}
-          color={T.red} icon="⚠" sub="comprobantes vencidos" />
-      </div>
+            <div>
+              <div style={{ fontSize:11, color:T.dim, marginBottom:6, fontWeight:600 }}>Pesos (ARS)</div>
+              <div style={{ fontSize:34, fontWeight:900, color: totalARS < 0 ? T.red : T.text, fontFamily:T.mono }}>
+                {fmtMoney(totalARS, "ARS")}
+              </div>
+            </div>
 
-      {/* Alertas + Top egresos */}
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:20, marginBottom:24 }}>
-        <div>
-          <div style={{ fontSize:13, fontWeight:800, color:T.text, marginBottom:12 }}>Alertas del período</div>
-          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-            {vencidosEg.length === 0 && vencidosIn.length === 0 && (
-              <AlertItem tipo="info" texto="Sin vencidos" detalle="Todo al día" />
+            {totalUSD !== 0 && (
+              <div>
+                <div style={{ fontSize:11, color:T.dim, marginBottom:6, fontWeight:600 }}>Dólares (USD)</div>
+                <div style={{ fontSize:34, fontWeight:900, color: totalUSD < 0 ? T.red : T.text, fontFamily:T.mono }}>
+                  {fmtMoney(totalUSD, "USD")}
+                </div>
+              </div>
             )}
-            {vencidosEg.map(e=>(
-              <AlertItem key={e.id} tipo="vencido"
-                texto={`Pago vencido — ${e.proveedor}`}
-                detalle={`${fmtMoney(e.saldoPendiente??e.importe, e.moneda)} · vto. ${fmtDate(e.vto)}`} />
-            ))}
-            {vencidosIn.map(e=>(
-              <AlertItem key={e.id} tipo="vencido"
-                texto={`Cobro vencido — ${e.cliente}`}
-                detalle={`${fmtMoney(e.saldoPendiente??e.importe, e.moneda)} · vto. ${fmtDate(e.vto)}`} />
-            ))}
+
+            <button onClick={() => setCajaOpen(v => !v)} style={{
+              marginLeft:"auto", background:"none", border:`1px solid ${T.cardBorder}`,
+              borderRadius:8, padding:"7px 16px", fontSize:12, color:T.muted,
+              cursor:"pointer", fontFamily:T.font, display:"flex", alignItems:"center", gap:6,
+              alignSelf:"center",
+            }}>
+              {cajaOpen ? "Ocultar" : "Ver cuentas"}
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none"
+                style={{ transform: cajaOpen ? "rotate(180deg)" : "none", transition:"transform .2s" }}>
+                <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5"
+                  strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
           </div>
         </div>
-        <MiniTable
-          title={`Mayores egresos del mes (ARS)`}
-          color={T.red}
-          rows={topEgresos.map(e=>({ label: e.proveedor ?? "—", sub: e.cuenta ?? "—", value: fmtMoney(e.importe) }))}
-        />
+
+        {cajaOpen && saldosCuenta.length > 0 && (
+          <div style={{ borderTop:`1px solid ${T.cardBorder}`, padding:"16px 28px 20px",
+            display:"flex", flexWrap:"wrap", gap:12 }}>
+            {saldosCuenta.map(c => {
+              const icon = TIPO_CUENTA[(c.tipo ?? "").toLowerCase()]?.icon ?? "💳";
+              return (
+                <div key={c.id} style={{ background:"#f9fafb", borderRadius:8,
+                  padding:"10px 16px", border:`1px solid ${T.cardBorder}`, minWidth:150 }}>
+                  <div style={{ fontSize:11, color:T.muted, marginBottom:5 }}>{icon} {c.nombre}</div>
+                  <div style={{ fontSize:16, fontWeight:800, fontFamily:T.mono,
+                    color: c.saldo < 0 ? T.red : T.text }}>
+                    {fmtMoney(c.saldo, c.moneda)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      {/* ── Bloque 2: Por pagar / Por cobrar ───────────────────────────────── */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:24 }}>
+
+        {/* Por pagar */}
+        <div>
+          <SectionLabel>Por pagar</SectionLabel>
+          <Card style={{ padding:"24px 28px" }}>
+            <div style={{ fontSize:32, fontWeight:900, fontFamily:T.mono,
+              color: totalPorPagar > 0 ? T.red : T.text, marginBottom:16 }}>
+              {fmtMoney(totalPorPagar)}
+            </div>
+            <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+              {vencidosEg.length > 0 && (
+                <div style={{ display:"flex", justifyContent:"space-between", padding:"8px 12px",
+                  background:"#fff5f5", borderRadius:8, borderLeft:`3px solid ${T.red}` }}>
+                  <span style={{ fontSize:12, color:T.red, fontWeight:700 }}>
+                    ⚠ Vencido ({vencidosEg.length})
+                  </span>
+                  <span style={{ fontSize:12, fontFamily:T.mono, color:T.red, fontWeight:700 }}>
+                    {fmtMoney(vencidosEg.reduce((s, e) => s + (e.saldoPendiente ?? e.importe), 0))}
+                  </span>
+                </div>
+              )}
+              <div style={{ display:"flex", justifyContent:"space-between",
+                padding:"6px 0", borderBottom:`1px solid ${T.cardBorder}` }}>
+                <span style={{ fontSize:12, color:T.muted }}>Comprobantes pendientes</span>
+                <span style={{ fontSize:13, fontWeight:700 }}>{porPagar.length}</span>
+              </div>
+              <div style={{ display:"flex", justifyContent:"space-between", padding:"6px 0" }}>
+                <span style={{ fontSize:12, color:T.muted }}>Al día</span>
+                <span style={{ fontSize:13, fontWeight:700 }}>{porPagar.length - vencidosEg.length}</span>
+              </div>
+            </div>
+          </Card>
+        </div>
+
+        {/* Por cobrar */}
+        <div>
+          <SectionLabel>Por cobrar</SectionLabel>
+          <Card style={{ padding:"24px 28px" }}>
+            <div style={{ fontSize:32, fontWeight:900, fontFamily:T.mono,
+              color: totalPorCobrar > 0 ? T.green : T.text, marginBottom:16 }}>
+              {fmtMoney(totalPorCobrar)}
+            </div>
+            <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+              {vencidosIn.length > 0 && (
+                <div style={{ display:"flex", justifyContent:"space-between", padding:"8px 12px",
+                  background:"#fff5f5", borderRadius:8, borderLeft:`3px solid ${T.red}` }}>
+                  <span style={{ fontSize:12, color:T.red, fontWeight:700 }}>
+                    ⚠ Vencido ({vencidosIn.length})
+                  </span>
+                  <span style={{ fontSize:12, fontFamily:T.mono, color:T.red, fontWeight:700 }}>
+                    {fmtMoney(vencidosIn.reduce((s, i) => s + (i.saldoPendiente ?? i.importe), 0))}
+                  </span>
+                </div>
+              )}
+              <MpField sociedad={sociedad} />
+              <div style={{ display:"flex", justifyContent:"space-between", padding:"6px 0" }}>
+                <span style={{ fontSize:12, color:T.muted }}>Comprobantes pendientes</span>
+                <span style={{ fontSize:13, fontWeight:700 }}>{porCobrar.length}</span>
+              </div>
+            </div>
+          </Card>
+        </div>
       </div>
 
-      {/* Top ingresos */}
-      <MiniTable
-        title={`Mayores ingresos del mes (ARS)`}
-        color={T.green}
-        rows={topIngresos.map(e=>({ label: e.cliente ?? "—", sub: e.cuenta ?? "—", value: fmtMoney(e.importe) }))}
-      />
+      {/* ── Bloque 3: Próximos vencimientos ────────────────────────────────── */}
+      {proxVencimientos.length > 0 && (
+        <>
+          <SectionLabel>Próximos vencimientos</SectionLabel>
+          <Card style={{ overflow:"hidden" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse" }}>
+              <tbody>
+                {proxVencimientos.map((e, i) => {
+                  const dias = diasHasta(e.vto);
+                  const vencido = dias !== null && dias <= 0;
+                  const urgente = dias !== null && dias > 0 && dias <= 7;
+                  return (
+                    <tr key={e.id}
+                      style={{ borderBottom: i < proxVencimientos.length - 1 ? `1px solid ${T.cardBorder}` : "none" }}>
+                      <td style={{ padding:"11px 24px", width:100 }}>
+                        <div style={{ fontSize:12, fontWeight:700,
+                          color: vencido ? T.red : urgente ? T.orange : T.muted }}>
+                          {fmtDate(e.vto)}
+                        </div>
+                      </td>
+                      <td style={{ padding:"11px 8px", fontSize:13, color:T.text, fontWeight:600 }}>
+                        {e.proveedor ?? "—"}
+                      </td>
+                      <td style={{ padding:"11px 8px", fontSize:12, color:T.muted }}>
+                        {e.concepto ?? ""}
+                      </td>
+                      <td style={{ padding:"11px 24px", textAlign:"right" }}>
+                        <span style={{ fontSize:13, fontFamily:T.mono, fontWeight:700, color:T.red }}>
+                          {fmtMoney(e.saldoPendiente ?? e.importe, e.moneda)}
+                        </span>
+                      </td>
+                      <td style={{ padding:"11px 20px 11px 0", textAlign:"right", width:70 }}>
+                        {dias !== null && (
+                          <span style={{ fontSize:10, fontWeight:700, borderRadius:4, padding:"3px 7px",
+                            background: vencido ? "#fee2e2" : urgente ? "#fef3c7" : "#f3f4f6",
+                            color: vencido ? T.red : urgente ? T.orange : T.muted }}>
+                            {vencido ? `−${Math.abs(dias)}d` : dias === 0 ? "Hoy" : `en ${dias}d`}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </Card>
+        </>
+      )}
     </div>
   );
 }

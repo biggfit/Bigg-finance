@@ -1124,17 +1124,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       {/* ── Header ── */}
       <PageHeader
         title="Reportes"
-        subtitle="Estados financieros y evolución patrimonial"
-      />
-      <div style={{ fontSize: 12, color: T.dim, marginTop: -18, marginBottom: 20,
-        display: "flex", alignItems: "center", gap: 6 }}>
-        <span style={{ background: "#f3f4f6", padding: "2px 10px", borderRadius: 6,
-          fontWeight: 600, color: T.muted, fontSize: 11, textTransform: "capitalize" }}>
-          {sociedad}
-        </span>
-        <span style={{ color: T.dim }}>·</span>
-        <span style={{ fontWeight: 600, color: T.muted, fontSize: 11 }}>{year}</span>
-      </div>
+              />
 
       {/* ── Pill tabs ── */}
       <div

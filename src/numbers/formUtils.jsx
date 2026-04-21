@@ -92,7 +92,24 @@ export function useDeferredEntityLookup({ initialData, currentId, setId, list, i
   }, [initialData, currentId, list, idKey, nameKey, setId]);
 }
 
-export function makeFacturaPartyChangeHandler({ setPartyId, list, setCuentaId, setMoneda, setLineas }) {
+function calcVtoFromProveedor(proveedor, fechaFactura) {
+  const forma = proveedor.formaPago;
+  const dias  = Number(proveedor.diasPago) || 0;
+  if (!forma || forma === "libre" || dias === 0) return null;
+  const base = fechaFactura ? new Date(fechaFactura + "T00:00:00") : new Date();
+  if (forma === "transferencia") {
+    const d = new Date(base);
+    d.setDate(d.getDate() + dias);
+    return d.toISOString().slice(0, 10);
+  }
+  // debito_automatico | contrato | impuesto → día fijo del mes
+  const d = new Date(base);
+  d.setDate(dias);
+  if (d <= base) d.setMonth(d.getMonth() + 1); // siguiente mes si ya pasó
+  return d.toISOString().slice(0, 10);
+}
+
+export function makeFacturaPartyChangeHandler({ setPartyId, list, setCuentaId, setMoneda, setLineas, setVto, getFecha }) {
   return (id) => {
     setPartyId(id);
     const row = list.find(x => x.id === id);
@@ -100,6 +117,10 @@ export function makeFacturaPartyChangeHandler({ setPartyId, list, setCuentaId, s
     if (row.cuentaDefault) setCuentaId(row.cuentaDefault);
     if (row.monedaDefault) setMoneda(row.monedaDefault);
     setLineas([newLinea(row.ccDefault ?? "")]);
+    if (setVto) {
+      const vto = calcVtoFromProveedor(row, getFecha?.());
+      if (vto) setVto(vto);
+    }
   };
 }
 

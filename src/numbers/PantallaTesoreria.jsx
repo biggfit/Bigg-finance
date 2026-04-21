@@ -967,11 +967,14 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
     return cuentasBancarias
       .filter(c => (c.sociedad ?? "").toLowerCase() === (sociedad ?? "").toLowerCase())
       .map(cuenta => {
-        const movsCuenta = movimientos.filter(m => m.cuenta_bancaria === cuenta.id);
-        const saldo      = movsCuenta.reduce((s, m) => s + (Number(m.monto) || 0), 0);
+        const movsCuenta = movimientos.filter(m =>
+          m.cuenta_bancaria === cuenta.id &&
+          (!fechaCorte || (m.fecha ?? "") <= fechaCorte)
+        );
+        const saldo = movsCuenta.reduce((s, m) => s + (Number(m.monto) || 0), 0);
         return { ...cuenta, tipo: (cuenta.tipo ?? "").toLowerCase(), saldo };
       });
-  }, [sociedad, movimientos, cuentasBancarias]);
+  }, [sociedad, movimientos, cuentasBancarias, fechaCorte]);
 
   const monedas = useMemo(() => [...new Set(cuentas.map(c => c.moneda))], [cuentas]);
   const subtitle = `${cuentas.length} cuenta${cuentas.length !== 1 ? "s" : ""}`
@@ -1122,7 +1125,6 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
 
       <PageHeader
         title="Tesorería"
-        subtitle="Saldos, caja y movimientos bancarios"
         action={(
           <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "flex-end" }}>
             <button type="button" onClick={() => setShowNuevoMov(true)} style={{
@@ -1139,26 +1141,6 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
         )}
       />
 
-      {/* Contexto — mismo patrón que Reportes */}
-      <div style={{
-        fontSize: 12, color: T.dim, marginTop: -18, marginBottom: 20,
-        display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap",
-      }}>
-        <span style={{
-          background: "#f3f4f6", padding: "2px 10px", borderRadius: 6,
-          fontWeight: 600, color: T.muted, fontSize: 11, textTransform: "capitalize",
-        }}>
-          {sociedad}
-        </span>
-        <span style={{ color: T.dim }}>·</span>
-        <span style={{ fontWeight: 600, color: T.muted, fontSize: 11 }}>{yearTag}</span>
-        {!loading && !error && subtitle && (
-          <>
-            <span style={{ color: T.dim }}>·</span>
-            <span style={{ fontSize: 11, color: T.dim }}>{subtitle}</span>
-          </>
-        )}
-      </div>
 
       {/* Pestañas píldora — igual que Reportes */}
       <div

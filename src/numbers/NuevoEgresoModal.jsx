@@ -57,7 +57,9 @@ export default function NuevoEgresoModal({ onClose, onSave, proveedores = [], cu
     setCuentaId,
     setMoneda,
     setLineas,
-  }), [proveedores, setLineas]);
+    setVto,
+    getFecha: () => fecha,
+  }), [proveedores, setLineas, fecha]);
 
   const { totalSub, totalIva, totalFinal } = useMemo(() => calcLineasTotals(lineas), [lineas]);
   const canSave = facturaCanSave({ partyId: provId, cuentaId, fecha, lineas });
