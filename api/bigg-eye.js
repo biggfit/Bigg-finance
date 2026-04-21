@@ -29,6 +29,28 @@ async function fetchJson(url) {
   return res.json();
 }
 
+/**
+ * Descarga todas las páginas de un endpoint paginado de Bigg Eye.
+ * Asume que la respuesta tiene { data: [], next_page_url: string|null }
+ * o bien devuelve un array directamente (no paginado).
+ */
+async function fetchAllPages(baseUrl) {
+  const first = await fetchJson(baseUrl);
+
+  // Si la respuesta es un array plano → no pagina
+  if (Array.isArray(first)) return first;
+
+  // Formato paginado Laravel: { data, next_page_url, ... }
+  const rows = [...(first.data ?? [])];
+  let nextUrl = first.next_page_url ?? null;
+  while (nextUrl) {
+    const page = await fetchJson(nextUrl);
+    rows.push(...(page.data ?? []));
+    nextUrl = page.next_page_url ?? null;
+  }
+  return rows;
+}
+
 export default async function handler(req, res) {
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -65,16 +87,13 @@ export default async function handler(req, res) {
   const qs      = `start=${start}&end=${end}&location_id=${locId}`;
 
   try {
-    // Llamadas en paralelo: ventas y credit notes
-    const [salesData, creditsData] = await Promise.all([
-      fetchJson(`${BIGG_EYE_API}/sales?${qs}`),
-      fetchJson(`${BIGG_EYE_API}/credit_notes?${qs}`),
+    // Llamadas en paralelo: ventas y credit notes (con soporte de paginación)
+    const [salesRows, creditsRows] = await Promise.all([
+      fetchAllPages(`${BIGG_EYE_API}/sales?${qs}`),
+      fetchAllPages(`${BIGG_EYE_API}/credit_notes?${qs}`),
     ]);
 
-    const salesRows   = Array.isArray(salesData)   ? salesData   : [];
-    const creditsRows = Array.isArray(creditsData)  ? creditsData : [];
-
-    // /sales → sumar campo `total` (todos los registros, sin filtrar is_debit)
+    // /sales → sumar campo `total` (precio final después de descuentos)
     const salesTotal = salesRows.reduce((s, r) => s + (parseFloat(r.total) || 0), 0);
 
     // /credit_notes → restar campo `amount`
@@ -101,7 +120,7 @@ export default async function handler(req, res) {
       ventas:        Math.round(ventas),
       sales_total:   Math.round(salesTotal),
       credits_total: Math.round(creditsTotal),
-      count:         items.length,
+      count:         salesRows.length,
       items,
     }));
   } catch (err) {
