@@ -815,6 +815,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
   const [showTcPanel, setShowTcPanel] = useState(false);
   const [stage,      setStage]      = useState("edit");
   const [processed,  setProcessed]  = useState([]);
+  const [batchProg,  setBatchProg]  = useState(null); // { current, total, name }
   const [crmLoading, setCrmLoading] = useState(false);
   const [crmLoaded,  setCrmLoaded]  = useState(false);
 
@@ -964,16 +965,17 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
   );
 
   const handleConfirm = async (skipFacturante = false) => {
-    setStage("done");
     const log = [];
-    const invoiceBatchItems = []; // colectar invoices no-AR para descargar en un PDF al final
-    for (const r of toProcess) {
+    const total = toProcess.length;
+    setBatchProg({ current: 0, total, name: "" });
+    for (let idx = 0; idx < toProcess.length; idx++) {
+      const r  = toProcess[idx];
       const fr = activeFr.find(f => f.id === r.frId);
       if (!fr) continue;
+      setBatchProg({ current: idx + 1, total, name: r.frName });
       const fee = rowFee(r);
       const dto = dtoDisplay(r);
       const isAR = fr.country === "Argentina";
-      // Moneda de facturación por sede: ARS para AR, EUR para Europa, USD para el resto LATAM
       const billingCur = isAR ? "ARS"
         : getCountryCur(r.country).code === "EUR" ? "EUR"
         : "USD";
@@ -988,7 +990,6 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
       };
       let facturanteStatus = "omitido";
       if (!skipFacturante && isAR && activeCompany === "ÑAKO SRL") {
-        // ── Emisión ARCA ──────────────────────────────────────────────────
         try {
           const result = await emitirComprobante({
             franchisor: franchisor?.ar ?? franchisor,
@@ -1002,7 +1003,6 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
           console.error("[CRM Facturante]", fr.name, err.message);
         }
       } else if (!skipFacturante && !isAR) {
-        // ── Invoice USA: asignar correlativo secuencial ───────────────────
         try {
           const invoicePrefix = COMPANIES[activeCompany]?.side === "es" ? "ESP" : "USA";
           const res = await getNextInvoiceNum(r.frId, invoicePrefix);
@@ -1017,23 +1017,11 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
       } catch {
         if (comp.facturanteId) facturanteStatus = `GUARDADO_FALLIDO (AFIP OK, ID=${comp.facturanteId})`;
       }
-      if (!isAR && comp.invoice && !skipFacturante) {
-        // Acumular para generar PDF combinado al final
-        invoiceBatchItems.push({ fr, comp });
-      } else if (isAR) {
-        downloadTextAsPDF(
-          buildFacturaPDF(fr, franchisor, comp),
-          `Factura_${fr.name}_${MONTHS[crmMonth]}_${crmYear}.html`
-        );
-      }
-      // non-AR sin número (skipFacturante o error en getNextInvoiceNum): guarda silenciosamente
       log.push({ frName: r.frName, fee, country: r.country, dto, facturanteStatus, invoice: comp.invoice ?? null });
     }
-    // Descargar PDF con todos los invoices no-AR (una página por invoice)
-    if (invoiceBatchItems.length > 0) {
-      downloadBatchInvoicePdf(invoiceBatchItems, franchisor).catch(console.error);
-    }
+    setBatchProg(null);
     setProcessed(log);
+    setStage("done");
   };
 
   if (stage === "done") return (
@@ -1103,6 +1091,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
   };
 
   return (
+    <>
     <div className="fade" onClick={() => { setShowTcPanel(false); setOpenFilter(null); }}>
 
       {/* Header */}
@@ -1367,6 +1356,33 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
         </button>
       </div>
     </div>
+
+    {/* Toast de progreso — flotante */}
+    {batchProg && (
+      <div style={{
+        position: "fixed", bottom: 24, right: 24, zIndex: 600,
+        background: "var(--bg2)", border: "1px solid var(--border2)",
+        borderRadius: 12, padding: "14px 20px", minWidth: 280, boxShadow: "0 8px 32px rgba(0,0,0,.5)",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+          <div style={{ width: 14, height: 14, border: "2px solid var(--border2)", borderTopColor: "var(--accent)", borderRadius: "50%", animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
+          <span style={{ fontSize: 12, fontWeight: 700 }}>
+            Procesando {batchProg.current}/{batchProg.total}
+          </span>
+        </div>
+        <div style={{ height: 4, borderRadius: 2, background: "var(--border2)", marginBottom: 8, overflow: "hidden" }}>
+          <div style={{
+            height: "100%", borderRadius: 2, background: "var(--accent)",
+            width: `${(batchProg.current / batchProg.total) * 100}%`,
+            transition: "width .3s ease",
+          }} />
+        </div>
+        <div style={{ fontSize: 11, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {batchProg.name}
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 
