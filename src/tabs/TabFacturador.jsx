@@ -1285,7 +1285,10 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
                               setSelected(prev => { const n = new Set(prev); e.target.checked ? n.add(i) : n.delete(i); return n; });
                             }} />
                         </td>
-                        <td style={{ fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.frName}>{r.frName}</td>
+                        <td style={{ fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.frName}>
+                          {r.frName}
+                          {r.biggEyeId == null && <span title="Sin Bigg Eye ID — ingresar ventas manualmente" style={{ color: "var(--gold)", marginLeft: 4, fontWeight: 700 }}>*</span>}
+                        </td>
                         <td style={{ fontSize: 11, color: "var(--muted)" }}>
                           {r.country ?? "—"}
                           {!isAR && <span style={{ fontSize: 9, color: "var(--dim)", marginLeft: 4 }}>· {cc.code}</span>}
