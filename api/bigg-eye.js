@@ -84,7 +84,7 @@ export default async function handler(req, res) {
   const start   = `${yr}-${pad(mo)}-01`;
   const lastDay = new Date(yr, mo, 0).getDate();
   const end     = `${yr}-${pad(mo)}-${pad(lastDay)}`;
-  const qs      = `start=${start}&end=${end}&location_id=${locId}`;
+  const qs      = `start=${start}&end=${end}&location_id=${locId}&per_page=9999`;
 
   try {
     // Llamadas en paralelo: ventas y credit notes (con soporte de paginación)
