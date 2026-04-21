@@ -130,7 +130,17 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
       // Comprobantes del mes con número emitido (Facturas, NC, FC_RECIBIDA)
       const isAR        = franchise.country === "Argentina";
       const docTypes    = ["FACTURA", "NC", "FC_RECIBIDA"];
-      const factsDelMes = compsWithSaldo.filter(c => c.invoice && docTypes.some(d => c.type?.startsWith(d)));
+      // Todos los comprobantes del mes, no solo los del rango recortado (ej: facturas futuras del mismo mes)
+      const allMonthComps = (comps[key] ?? [])
+        .filter(c => compEmpresa(c) === activeCompany)
+        .filter(c => {
+          if (!c.date) return false;
+          const from = `01/${String(localMonth + 1).padStart(2,"0")}/${localYear}`;
+          const last = new Date(localYear, localMonth + 1, 0).getDate();
+          const to   = `${String(last).padStart(2,"0")}/${String(localMonth + 1).padStart(2,"0")}/${localYear}`;
+          return cmpDate(c.date, from) >= 0 && cmpDate(c.date, to) <= 0;
+        });
+      const factsDelMes = allMonthComps.filter(c => (c.invoice || c.facturanteId) && docTypes.some(d => c.type?.startsWith(d)));
       const factAdjs    = await Promise.all(factsDelMes.map(async (c) => {
         const label = (c.invoice ?? c.id).replace(/\//g, "-");
         if (isAR) {
