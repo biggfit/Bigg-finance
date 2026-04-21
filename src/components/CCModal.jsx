@@ -52,7 +52,7 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
         const isAR     = franchise.country === "Argentina";
         const frSlug   = franchise.name.replace(/ /g, "_");
         const docTypes = ["FACTURA", "NC", "FC_RECIBIDA"];
-        const factsConInvoice = lines.filter(c => c.invoice && docTypes.some(d => c.type?.startsWith(d)));
+        const factsConInvoice = lines.filter(c => (c.invoice || c.facturanteId) && docTypes.some(d => c.type?.startsWith(d)));
         factAdjs = (await Promise.all(factsConInvoice.map(async (c) => {
           const label = (c.invoice ?? c.id).replace(/\//g, "-");
           if (isAR) {
