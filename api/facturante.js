@@ -115,45 +115,17 @@ function buildEncabezadoSinIVAXml(tipoStr, franchisor, comp, contado, fechaVtoPa
 // NCA referencia FA, NCB referencia FB
 const NC_TIPO_REFERENCIA = { 'NCA': 'FA', 'NCB': 'FB' };
 
-/** Encabezado para FA — usa ComprobanteEncabezado (CrearComprobante) */
-function buildEncabezadoConIVAXml(tipoStr, franchisor, comp, contado, fechaVtoPago) {
-  const fecha      = isoDateTime(comp.date);
-  const prefijo    = String(franchisor.puntoVenta ?? '1');
-  const condVenta  = contado ? 1 : 2;
-  const periodo    = calcPeriodoServicio(comp);
-  const neto       = Number(comp.amountNeto ?? comp.amount ?? 0);
-  const total      = Number(comp.amount ?? (neto * 1.21));
-  const vtoPagoVal = fechaVtoPago ?? fecha;
-
-  return `<a:Encabezado>
-        <b:Bienes>2</b:Bienes>
-        <b:CondicionVenta>${condVenta}</b:CondicionVenta>
-        <b:EnviarComprobante>true</b:EnviarComprobante>
-        <b:FechaHora>${fecha}</b:FechaHora>
-        <b:FechaServDesde>${periodo.desde}</b:FechaServDesde>
-        <b:FechaServHasta>${periodo.hasta}</b:FechaServHasta>
-        <b:FechaVtoPago>${vtoPagoVal}</b:FechaVtoPago>
-        <b:Moneda>2</b:Moneda>
-        <b:Observaciones>${escXml(comp.ref ?? '')}</b:Observaciones>
-        <b:Prefijo>${escXml(prefijo)}</b:Prefijo>
-        <b:TipoComprobante>${escXml(tipoStr)}</b:TipoComprobante>
-        <b:TipoDeCambio>1</b:TipoDeCambio>
-      </a:Encabezado>`;
-}
-
 /**
- * Encabezado para NC — usa ComprobanteEncabezadoFull (CrearComprobanteFull)
- * que SÍ tiene el campo Asociados para CbteAsoc.
- * @param {{ numero, prefijo }} refAfip  - datos AFIP de la FA referenciada
- * @param {string} refDate               - fecha de la FA referenciada (dd/mm/yyyy)
+ * Encabezado para CrearComprobanteFull (FA, FB, NCA, NCB).
+ * Para FA/FB: refAfip = null → Asociados nil. Para NC: refAfip con numero/prefijo de la FA referenciada.
+ * @param {{ numero, prefijo }} refAfip  - datos AFIP de la FA referenciada (solo NC)
+ * @param {string} refDate               - fecha de la FA referenciada (dd/mm/yyyy, solo NC)
  */
 function buildEncabezadoConIVAFullXml(tipoStr, franchisor, comp, refAfip, refDate, contado, fechaVtoPago) {
   const fecha      = isoDateTime(comp.date);
   const prefijo    = String(franchisor.puntoVenta ?? '1');
   const condVenta  = contado ? 1 : 2;
   const periodo    = calcPeriodoServicio(comp);
-  const neto       = Number(comp.amountNeto ?? comp.amount ?? 0);
-  const total      = Number(comp.amount ?? (neto * 1.21));
   const vtoPagoVal = fechaVtoPago ?? fecha;
 
   // Bloque Asociados con campos WSDL correctos: FechaEmision, Numero, PuntoVenta, Tipo
@@ -172,6 +144,7 @@ function buildEncabezadoConIVAFullXml(tipoStr, franchisor, comp, refAfip, refDat
         </b:Asociados>`;
   }
 
+  const idExterno = String(comp.id ?? '').slice(0, 100);
   return `<a:Encabezado>
         ${asociado}
         <b:Bienes>2</b:Bienes>
@@ -181,6 +154,7 @@ function buildEncabezadoConIVAFullXml(tipoStr, franchisor, comp, refAfip, refDat
         <b:FechaServDesde>${periodo.desde}</b:FechaServDesde>
         <b:FechaServHasta>${periodo.hasta}</b:FechaServHasta>
         <b:FechaVtoPago>${vtoPagoVal}</b:FechaVtoPago>
+        ${idExterno ? `<b:IdExterno>${escXml(idExterno)}</b:IdExterno>` : ''}
         <b:Moneda>2</b:Moneda>
         <b:Observaciones>${escXml(comp.ref ?? '')}</b:Observaciones>
         <b:Prefijo>${escXml(prefijo)}</b:Prefijo>
@@ -211,21 +185,6 @@ function buildItemsSinIVAXml(comp) {
           <b:Detalle>${escXml(comp.ref ?? 'Servicio')}</b:Detalle>
           <b:PrecioUnitario>${total.toFixed(2)}</b:PrecioUnitario>
         </b:ComprobanteItemSinImpuestos>
-      </a:Items>`;
-}
-
-function buildItemsConIVAXml(comp) {
-  const neto  = Number(comp.amountNeto ?? comp.amount ?? 0);
-  const total = Math.round(neto * 1.21 * 100) / 100;
-  return `<a:Items>
-        <b:ComprobanteItem>
-          <b:Cantidad>1</b:Cantidad>
-          <b:Detalle>${escXml(comp.ref ?? 'Servicio')}</b:Detalle>
-          <b:Gravado>true</b:Gravado>
-          <b:IVA>21.000</b:IVA>
-          <b:PrecioUnitario>${neto.toFixed(2)}</b:PrecioUnitario>
-          <b:Total>${total.toFixed(2)}</b:Total>
-        </b:ComprobanteItem>
       </a:Items>`;
 }
 
@@ -321,6 +280,7 @@ async function getDetalleComprobante(idComprobante) {
       urlPdf:  extractTag(body, 'URLPDF') || null,
       numero:  numeroRaw ? (parseInt(numeroRaw, 10) || null) : null,
       prefijo: extractTag(bodyClean, 'Prefijo') || null,
+      estado:  extractTag(bodyClean, 'EstadoComprobante') || null,
     };
   } catch {
     return {};
@@ -332,15 +292,22 @@ async function getUrlPdf(idComprobante) {
   return det.urlPdf ?? null;
 }
 
+// Estados con CAE válido emitido por AFIP (procesamiento terminado).
+// PROCESADO = CAE obtenido y mail entregado. SIN ENVIO = CAE obtenido pero mail rebotó (fiscalmente válido).
+const ESTADO_FINAL = new Set(['PROCESADO', 'SIN ENVIO', 'SIN ENVÍO']);
+
 /**
  * Espera hasta que AFIP asigne el número secuencial al comprobante (polling).
+ * Solo retorna cuando el estado es final (CAE obtenido), no en estados transitorios.
  * Retorna { numero, prefijo } o null si no se obtuvo en los reintentos.
  */
 async function pollAfipNumero(idComprobante, maxAttempts = 8, delayMs = 2500) {
   for (let i = 0; i < maxAttempts; i++) {
     if (i > 0) await new Promise(r => setTimeout(r, delayMs));
     const det = await getDetalleComprobante(idComprobante);
-    if (det.numero > 0) return { numero: det.numero, prefijo: det.prefijo };
+    if (det.numero > 0 && ESTADO_FINAL.has((det.estado ?? '').toUpperCase().trim())) {
+      return { numero: det.numero, prefijo: det.prefijo };
+    }
   }
   return null;
 }
@@ -560,8 +527,8 @@ export default async function handler(req, res) {
   let operacion, requestBody, tipoComprobante;
 
   if (usaIVA) {
-    // CrearComprobante — con IVA, tipos enteros
-    operacion = 'CrearComprobante';
+    // CrearComprobanteFull — con IVA (FA, FB, NCA, NCB). Soporta IdExterno y Asociados (CbteAsoc para NC).
+    operacion = 'CrearComprobanteFull';
     const cat = franchise.condIVA === 'Responsable Inscripto' ? 'RI' : 'EX';
     tipoComprobante = TIPO_COMPROBANTE_CON_IVA[`${doc}|${cat}`];
 
@@ -570,21 +537,11 @@ export default async function handler(req, res) {
       return res.end(JSON.stringify({ error: `Tipo no soportado: ${doc} / ${franchise.condIVA}` }));
     }
 
-    if (doc === 'NC') {
-      // NC: usa CrearComprobanteFull que sí tiene campo Asociados en ComprobanteEncabezadoFull
-      operacion = 'CrearComprobanteFull';
-      requestBody = `
-        ${buildAuthXml()}
-        ${buildClienteConIVAXml(franchise, condPago)}
-        ${buildEncabezadoConIVAFullXml(tipoComprobante, franchisor, comp, refAfip, referenciaDate, contado, fechaVtoPago)}
-        ${buildItemsConIVAFullXml(comp)}`;
-    } else {
-      requestBody = `
-        ${buildAuthXml()}
-        ${buildClienteConIVAXml(franchise, condPago)}
-        ${buildEncabezadoConIVAXml(tipoComprobante, franchisor, comp, contado, fechaVtoPago)}
-        ${buildItemsConIVAXml(comp)}`;
-    }
+    requestBody = `
+      ${buildAuthXml()}
+      ${buildClienteConIVAXml(franchise, condPago)}
+      ${buildEncabezadoConIVAFullXml(tipoComprobante, franchisor, comp, refAfip, referenciaDate, contado, fechaVtoPago)}
+      ${buildItemsConIVAFullXml(comp)}`;
   } else {
     // CrearComprobanteSinImpuestos — sin IVA, tipos string
     operacion = 'CrearComprobanteSinImpuestos';
