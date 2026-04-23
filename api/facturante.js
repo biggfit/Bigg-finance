@@ -277,10 +277,10 @@ async function getDetalleComprobante(idComprobante) {
     const bodyClean = body.replace(/<[^:>/]*:?Asociados[\s\S]*?<\/[^:>/]*:?Asociados>/g, '');
     const numeroRaw = extractTag(bodyClean, 'Numero');
     return {
-      urlPdf:  extractTag(body, 'URLPDF') || null,
+      urlPdf:  extractTag(bodyClean, 'URLPDF') || null,
       numero:  numeroRaw ? (parseInt(numeroRaw, 10) || null) : null,
       prefijo: extractTag(bodyClean, 'Prefijo') || null,
-      estado:  extractTag(bodyClean, 'EstadoComprobante') || null,
+      estado:  (extractTag(bodyClean, 'EstadoComprobante') ?? '').toUpperCase().trim() || null,
     };
   } catch {
     return {};
@@ -305,7 +305,7 @@ async function pollAfipNumero(idComprobante, maxAttempts = 8, delayMs = 2500) {
   for (let i = 0; i < maxAttempts; i++) {
     if (i > 0) await new Promise(r => setTimeout(r, delayMs));
     const det = await getDetalleComprobante(idComprobante);
-    if (det.numero > 0 && ESTADO_FINAL.has((det.estado ?? '').toUpperCase().trim())) {
+    if (det.numero > 0 && ESTADO_FINAL.has(det.estado ?? '')) {
       return { numero: det.numero, prefijo: det.prefijo };
     }
   }
