@@ -489,7 +489,7 @@ export async function deleteCentroCosto(id) {
 //   1. Una fila en nb_comprobantes  (subtipo=GASTO)  → aparece en P&L
 //   2. Una fila en nb_movimientos   (tipo=EGRESO_GASTO) → aparece en Cash Flow
 
-export async function appendGastoDirecto({ sociedad, fecha, cuenta_contable, cuenta_contable_id = "", cc = "", moneda = "ARS", subtotal, ivaRate = 0, nota = "", cuenta_bancaria, referencia = "" }) {
+export async function appendGastoDirecto({ sociedad, fecha, cuenta_contable, cuenta_contable_id = "", cc = "", moneda = "ARS", subtotal, ivaRate = 0, nota = "", cuenta_bancaria, referencia = "", proveedor_id = "", proveedor_nombre = "" }) {
   const id_comp    = newId("GD");
   const created_at = new Date().toISOString();
   const sub = Number(subtotal) || 0;
@@ -505,8 +505,8 @@ export async function appendGastoDirecto({ sociedad, fecha, cuenta_contable, cue
       sociedad, fecha,
       vto:                 fecha,
       subtipo:             "GASTO",
-      contraparte_id:      "",
-      contraparte_nombre:  "",
+      contraparte_id:      proveedor_id,
+      contraparte_nombre:  proveedor_nombre,
       cuenta_contable,
       cuenta_contable_id,
       moneda,
@@ -572,6 +572,7 @@ export async function fetchGastos(sociedad) {
       subtotal:        Number(r.subtotal) || 0,
       ivaRate:         Number(r.iva_rate) || 0,
       total:           Number(r.total) || 0,
+      proveedor:       r.contraparte_nombre ?? "",
       nota:            r.nota ?? "",
       cuentaBancaria:  mov?.cuenta_bancaria ?? "",
       _movId:          mov?.id ?? null,
