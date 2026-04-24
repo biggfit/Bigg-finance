@@ -1,5 +1,5 @@
 import { memo, useMemo } from "react";
-import { fmt, computeSaldo, computeSaldoPrevMes, computePautaPendiente, makeType, SYM, compEmpresa, compCurrency, COMP_TYPES } from "../lib/helpers";
+import { fmt, computeSaldoReal, computePautaPendiente, makeType, SYM, compEmpresa, compCurrency, COMP_TYPES } from "../lib/helpers";
 import { SaldoBadge } from "../components/atoms";
 import { useStore } from "../lib/context";
 import { inPeriod } from "../data/franchisor";
@@ -23,8 +23,10 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
           (!activeCompany || compEmpresa(c) === activeCompany)
         );
 
-        const sp = computeSaldoPrevMes(fr.id, year, month, comps, saldoInicial, null, cur, activeCompany);
-        const sa = computeSaldo(fr.id, year, month, comps, saldoInicial, null, cur, activeCompany);
+        const prevM = month === 0 ? 11 : month - 1;
+        const prevY = month === 0 ? year - 1 : year;
+        const sp = computeSaldoReal(fr.id, prevY, prevM, comps, saldoInicial, null, cur, activeCompany);
+        const sa = computeSaldoReal(fr.id, year,  month,  comps, saldoInicial, null, cur, activeCompany);
 
         const netoCuenta = (cuenta) => {
           // Incluye todos los tipos para esa cuenta (FACTURA, NC, FC_RECIBIDA, etc.)

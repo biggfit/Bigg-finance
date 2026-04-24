@@ -179,6 +179,47 @@ export function computeSaldoPrevMes(frId, y, m, comps, saldoInicial, frCurrency 
   return computeSaldo(frId, py, pm, comps, saldoInicial, frCurrency, filterCurrency, empresa);
 }
 
+/**
+ * Calcula el saldo al cierre del mes m/y usando la misma lógica que TabDeudores:
+ * - PAGO_PAUTA del mes solo se resta en la medida que tenga FACTURA|PAUTA en el mismo mes
+ *   (ppMesFacturado = min(ppMes, fPautaMes)). El resto es prepago a cuenta.
+ * - Meses anteriores se acumulan completos (incluye todo ppAnt).
+ * Esto evita que un adelanto de pauta sin FC aún distorsione el saldo corriente.
+ */
+export function computeSaldoReal(frId, y, m, comps, saldoInicial, frCurrency = null, filterCurrency = null, empresa = null) {
+  const key      = String(frId);
+  const si       = getSaldoInicial(saldoInicial, key, empresa, frCurrency, filterCurrency);
+  const mm       = String(m + 1).padStart(2, "0");
+  const mesInicio = `01/${mm}/${y}`;
+  const lastDay   = new Date(y, m + 1, 0).getDate();
+  const mesFin    = `${String(lastDay).padStart(2, "0")}/${mm}/${y}`;
+
+  let fAnt = 0, ncAnt = 0, pAnt = 0, ppAnt = 0, eAnt = 0;
+  let fMes = 0, ncMes = 0, pMes = 0, ppMes = 0, eMes = 0;
+  let fPautaMes = 0;
+
+  for (const c of (comps[key] ?? [])) {
+    if (empresa !== null && compEmpresa(c) !== empresa) continue;
+    if (filterCurrency !== null && compCurrency(c) !== filterCurrency) continue;
+    if (SKIP_CC_TYPES.has(c.type)) continue;
+    const amt        = c.amount ?? 0;
+    const t          = c.type ?? "";
+    const beforeMes  = cmpDate(c.date, mesInicio) < 0;
+    const enMes      = !beforeMes && cmpDate(c.date, mesFin) <= 0;
+    if (!beforeMes && !enMes) continue; // después del mes → ignorar
+
+    if      (t.startsWith("FACTURA|"))                      { if (enMes) { fMes += amt; if (t === "FACTURA|PAUTA") fPautaMes += amt; } else fAnt += amt; }
+    else if (t.startsWith("NC|") || t.startsWith("FC_RECIBIDA|")) { if (enMes) ncMes += amt; else ncAnt += amt; }
+    else if (t === "PAGO")                                  { if (enMes) pMes  += amt; else pAnt  += amt; }
+    else if (t === "PAGO_PAUTA")                            { if (enMes) ppMes += amt; else ppAnt += amt; }
+    else if (t === "PAGO_ENVIADO")                          { if (enMes) eMes  += amt; else eAnt  += amt; }
+  }
+
+  const saldoAnt       = si + fAnt - ncAnt - pAnt - ppAnt + eAnt;
+  const ppMesFacturado = Math.min(ppMes, fPautaMes);
+  return saldoAnt + fMes - ncMes - pMes - ppMesFacturado + eMes;
+}
+
 export function buildCuentaCorriente(frId, comps, saldoInicial, frCurrency = null, filterCurrency = null, empresa = null) {
   const key = String(frId);
   let saldo = getSaldoInicial(saldoInicial, key, empresa, frCurrency, filterCurrency);
