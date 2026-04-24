@@ -22,7 +22,7 @@ const OPCIONES = [
 ];
 
 // ─── Hook ───────────────────────────────────────────────────────────────────
-export function useFiltroFecha(defaultOpcion = "mes_actual") {
+export function useFiltroFecha(defaultOpcion = "todos") {
   const [opcion, setOpcion] = useState(defaultOpcion);
   const [desde, setDesde]   = useState("");
   const [hasta, setHasta]   = useState("");
