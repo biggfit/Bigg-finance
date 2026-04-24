@@ -30,7 +30,7 @@ function lastBillingPeriod() {
 }
 
 // ─── ROOT APP ─────────────────────────────────────────────────────────────────
-export default function App() {
+export default function App({ onVolverNumbers } = {}) {
   const [user,       setUser]      = useState({ name: "Admin" }); // login deshabilitado para testing
   const [showMaestros,  setShowMaestros]  = useState(false);
   const [showImport,    setShowImport]    = useState(false);
@@ -424,6 +424,7 @@ export default function App() {
                   {navBtn(() => setTab("contabilidad"), "☰", "Movimientos",   tab === "contabilidad")}
                 </div>
                 <div style={{ borderTop: "1px solid var(--border)", padding: "6px 0", display: "flex", flexDirection: "column", gap: 2 }}>
+                  {onVolverNumbers && navBtn(onVolverNumbers, "←", "BIGG Numbers")}
                   {navBtn(() => setShowMaestros(true), "⚙", "Maestros")}
                   {navBtn(() => setUser(null),         "→", "Salir", false, true)}
                 </div>
