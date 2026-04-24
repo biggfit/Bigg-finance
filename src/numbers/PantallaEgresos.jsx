@@ -5,6 +5,7 @@ import { fetchEgresos, appendEgreso, deleteEgreso, appendPago, fetchPagosCobros,
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 import { makeResolveCC, makeResolveCB, inputStyle, CCSelectOptions } from "./formUtils";
 import NuevoEgresoModal from "./NuevoEgresoModal";
+import FiltroFecha, { useFiltroFecha } from "./FiltroFecha";
 
 function CCDisplay({ lineas, resolveCC }) {
   const ids = [...new Set((lineas ?? []).map(l => l.cc).filter(Boolean))];
@@ -695,6 +696,7 @@ function RowMenu({ egreso, onPago, onDetalle, onEditar, onCtaCte, onEliminar }) 
 export default function PantallaEgresos({ sociedad = "nako", subView = null, onSubViewChange }) {
   const [busqueda, setBusqueda]         = useState("");
   const [filtroEstado, setFiltroEstado] = useState("todos");
+  const filtroFecha = useFiltroFecha();
   const [egresos, setEgresos]           = useState([]);
   const [loading, setLoading]           = useState(true);
   const [error, setError]               = useState(null);
@@ -756,13 +758,14 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
     const matchEstado = filtroEstado === "todos" || e.estado === filtroEstado;
     const q = busqueda.toLowerCase();
     const matchQ = !q || (e.proveedor ?? "").toLowerCase().includes(q) || (e.cuenta ?? "").toLowerCase().includes(q) || (e.cc ?? "").toLowerCase().includes(q);
-    return matchEstado && matchQ;
-  }), [busqueda, filtroEstado, egresos]);
+    return matchEstado && matchQ && filtroFecha.inRange(e.fecha);
+  }), [busqueda, filtroEstado, egresos, filtroFecha.inRange]);
 
   const totalesPorMoneda = useMemo(() => {
-    const monedas = [...new Set(egresos.map(e => e.moneda))].filter(Boolean).sort();
+    const enPeriodo = egresos.filter(e => filtroFecha.inRange(e.fecha));
+    const monedas = [...new Set(enPeriodo.map(e => e.moneda))].filter(Boolean).sort();
     return monedas.map(moneda => {
-      const docs = egresos.filter(e => e.moneda === moneda);
+      const docs = enPeriodo.filter(e => e.moneda === moneda);
       return {
         moneda,
         cantidad: docs.length,
@@ -772,7 +775,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
         vencido: docs.filter(e => e.estado === "vencido").reduce((s,e) => s + (e.saldoPendiente ?? e.importe), 0),
       };
     });
-  }, [egresos]);
+  }, [egresos, filtroFecha.inRange]);
 
   // Cuando egresos se recarga, sincronizar showDetalle con datos frescos
   useEffect(() => {
@@ -931,6 +934,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
           placeholder="Buscar proveedor, cuenta, CC..."
           style={{ flex:1, minWidth:200, background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
             borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text, outline:"none", fontFamily:T.font }} />
+        <FiltroFecha {...filtroFecha} />
         {["todos","pagado","a_pagar","vencido"].map(e => (
           <button key={e} onClick={() => setFiltroEstado(e)} style={{
             background: filtroEstado===e ? T.accentDark : "#f3f4f6",

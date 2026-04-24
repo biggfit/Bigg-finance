@@ -7,6 +7,7 @@ import {
 } from "../lib/numbersApi";
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 import { makeResolveCC, makeResolveCB } from "./formUtils.jsx";
+import FiltroFecha, { useFiltroFecha } from "./FiltroFecha";
 
 // ─── Formulario: Nuevo Gasto Directo ─────────────────────────────────────────
 function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, onClose, onSaved }) {
@@ -237,6 +238,7 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
   const [gastos, setGastos]                     = useState([]);
   const [loading, setLoading]                   = useState(true);
   const [error, setError]                       = useState(null);
+  const filtroFecha = useFiltroFecha();
   const [cuentasBancarias, setCuentasBancarias] = useState([]);
   const [cuentas, setCuentas]                   = useState([]);
   const [centrosCosto, setCentrosCosto]         = useState(CENTROS_COSTO_STATIC);
@@ -267,23 +269,25 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
   // ── Derivados (siempre antes de cualquier early return — Rules of Hooks) ──────
   const rows = useMemo(() => {
     const q = busqueda.toLowerCase();
-    if (!q) return gastos;
-    return gastos.filter(g =>
-      (g.cuenta_contable ?? "").toLowerCase().includes(q) ||
-      (g.nota ?? "").toLowerCase().includes(q) ||
-      resolveCC(g.cc).toLowerCase().includes(q) ||
-      resolveCB(g.cuentaBancaria).toLowerCase().includes(q)
-    );
-  }, [gastos, busqueda, resolveCC, resolveCB]);
+    return gastos.filter(g => {
+      const matchQ = !q ||
+        (g.cuenta_contable ?? "").toLowerCase().includes(q) ||
+        (g.nota ?? "").toLowerCase().includes(q) ||
+        resolveCC(g.cc).toLowerCase().includes(q) ||
+        resolveCB(g.cuentaBancaria).toLowerCase().includes(q);
+      return matchQ && filtroFecha.inRange(g.fecha);
+    });
+  }, [gastos, busqueda, resolveCC, resolveCB, filtroFecha.inRange]);
 
   const totales = useMemo(() => {
     const map = new Map();
     for (const g of gastos) {
+      if (!filtroFecha.inRange(g.fecha)) continue;
       const m = g.moneda ?? "ARS";
       map.set(m, (map.get(m) ?? 0) + g.total);
     }
     return [...map.entries()].sort((a,b) => a[0].localeCompare(b[0]));
-  }, [gastos]);
+  }, [gastos, filtroFecha.inRange]);
 
   const handleEliminar = async (gasto) => {
     if (!confirm("¿Eliminar este gasto?")) return;
@@ -351,15 +355,17 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
 
       {/* Buscador */}
       <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:T.radius,
-        padding:"10px 14px", marginBottom:14, boxShadow:T.shadow }}>
+        padding:"10px 14px", marginBottom:14, boxShadow:T.shadow,
+        display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
         <input
           value={busqueda}
           onChange={e => setBusqueda(e.target.value)}
           placeholder="Buscar por cuenta contable, CC, forma de pago, nota…"
-          style={{ width:"100%", background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+          style={{ flex:1, minWidth:200, background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
             borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text,
-            outline:"none", fontFamily:T.font, boxSizing:"border-box" }}
+            outline:"none", fontFamily:T.font }}
         />
+        <FiltroFecha {...filtroFecha} />
       </div>
 
       {/* Tabla */}
