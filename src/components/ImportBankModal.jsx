@@ -12,11 +12,6 @@ const DISCARD_GRUPOS = new Set([
   "000908 - Haberes",
   "000916 - Inversiones",
 ]);
-const INCLUDE_GRUPOS = new Set([
-  "000907 - Transferencias",
-  "000909 - Pago Proveedores",
-  "000903 - Créditos Varios",
-]);
 const DISCARD_CONC_PARTIALS = ["TRANSF. CTAS PROPIAS", "TRANSF. AFIP"];
 const DISCARD_CUITS = new Set(["30717028305", "30715754262"]); // NAKO NAKO, Sympass SAS
 
@@ -123,7 +118,7 @@ function parseExtracto(wb, targetMonth, targetYear, franchises, comps, saldoInic
     const credAmt = parseMoney(row[col.cred]);
 
     if (debAmt === 0 && credAmt === 0) continue;
-    if (!INCLUDE_GRUPOS.has(grupo)) continue;
+    if (DISCARD_GRUPOS.has(grupo)) continue;
     if (DISCARD_CONC_PARTIALS.some((p) => conc.includes(p))) continue;
 
     const cuitNorm = normCuit(ley2);

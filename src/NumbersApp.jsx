@@ -10,6 +10,7 @@ import PantallaTesoreria from "./numbers/PantallaTesoreria";
 import PantallaReportes      from "./numbers/PantallaReportes";
 import PantallaCambioMoneda   from "./numbers/PantallaCambioMoneda";
 import PantallaIntercompania  from "./numbers/PantallaIntercompania";
+import PantallaGastos         from "./numbers/PantallaGastos";
 import { SOCIEDADES as SOC_FALLBACK } from "./data/tesoreriaData";
 import { fetchSociedades } from "./lib/numbersApi";
 
@@ -247,34 +248,32 @@ export default function NumbersApp({ onGoToFranquicias }) {
               if (s.id === "egresos") {
                 return (
                   <div key={s.id}>
-                    <button onClick={() => {
-                      if (active) { setEgresoOpen(o => !o); }
-                      else { setActiveId("egresos"); setEgresoSubView(null); setEgresoOpen(true); setActiveMaestrosTab(null); setActiveSpecial(null); }
-                    }}
-                    aria-expanded={active ? egresoOpen : undefined}
-                    aria-current={active && !egresoSubView ? "page" : undefined}
+                    <button onClick={() => { setEgresoOpen(o => !o); setIngresoOpen(false); }}
+                    aria-expanded={egresoOpen}
                     style={navBtnStyle(active)} {...navBtnHover(active)}>
                       <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>{s.icon}</span>
                       <span style={{ flex:1 }}>{s.label}</span>
-                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink:0, transform: active && egresoOpen ? "rotate(180deg)" : "rotate(0deg)", transition:"transform .2s", opacity:.5 }}>
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink:0, transform: egresoOpen ? "rotate(180deg)" : "rotate(0deg)", transition:"transform .2s", opacity:.5 }}>
                         <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                       </svg>
                     </button>
 
-                    {active && egresoOpen && [
-                      { id:"new-compra", label:"Compras", ariaAdd:"Agregar compra" },
-                      { id:"new-gasto",  label:"Gastos",  ariaAdd:"Agregar gasto"  },
+                    {egresoOpen && [
+                      { id:"new-compra", label:"Compras", listId:null,      ariaAdd:"Agregar compra" },
+                      { id:"new-gasto",  label:"Gastos",  listId:"gastos",  ariaAdd:"Agregar gasto"  },
                     ].map(sub => {
-                      const subActive = egresoSubView === sub.id;
+                      const subActive = sub.listId === null
+                        ? (egresoSubView === null || egresoSubView === "new-compra")
+                        : (egresoSubView === sub.listId || egresoSubView === sub.id);
                       return (
                         <div key={sub.id} style={{ display:"flex", alignItems:"center",
                           margin:"1px 6px", borderRadius:8,
-                          background: subActive ? "rgba(173,255,25,.08)" : "rgba(0,0,0,.15)",
+                          background: subActive ? "rgba(173,255,25,.08)" : "rgba(0,0,0,.35)",
                           transition:"background .12s" }}
-                          onMouseEnter={e=>{ if(!subActive) e.currentTarget.style.background="rgba(0,0,0,.25)"; }}
-                          onMouseLeave={e=>{ if(!subActive) e.currentTarget.style.background=subActive?"rgba(173,255,25,.08)":"rgba(0,0,0,.15)"; }}>
+                          onMouseEnter={e=>{ if(!subActive) e.currentTarget.style.background="rgba(0,0,0,.5)"; }}
+                          onMouseLeave={e=>{ if(!subActive) e.currentTarget.style.background=subActive?"rgba(173,255,25,.08)":"rgba(0,0,0,.35)"; }}>
                           <button
-                            onClick={() => { setActiveId("egresos"); setEgresoSubView(sub.id); setEgresoOpen(true); setActiveMaestrosTab(null); }}
+                            onClick={() => { setActiveId("egresos"); setEgresoSubView(sub.listId); setEgresoOpen(true); setActiveMaestrosTab(null); setActiveSpecial(null); }}
                             aria-current={subActive ? "page" : undefined}
                             style={{
                               flex:1, background:"transparent", border:"none", borderRadius:8,
@@ -310,28 +309,24 @@ export default function NumbersApp({ onGoToFranquicias }) {
               if (s.id === "ingresos") {
                 return (
                   <div key={s.id}>
-                    <button onClick={() => {
-                      if (active) { setIngresoOpen(o => !o); }
-                      else { setActiveId("ingresos"); setIngresoSubView(null); setIngresoOpen(true); setActiveMaestrosTab(null); setActiveSpecial(null); }
-                    }}
-                    aria-expanded={active ? ingresoOpen : undefined}
-                    aria-current={active && !ingresoSubView ? "page" : undefined}
+                    <button onClick={() => { setIngresoOpen(o => !o); setEgresoOpen(false); }}
+                    aria-expanded={ingresoOpen}
                     style={navBtnStyle(active)} {...navBtnHover(active)}>
                       <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>{s.icon}</span>
                       <span style={{ flex:1 }}>{s.label}</span>
-                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink:0, transform: active && ingresoOpen ? "rotate(180deg)" : "rotate(0deg)", transition:"transform .2s", opacity:.5 }}>
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink:0, transform: ingresoOpen ? "rotate(180deg)" : "rotate(0deg)", transition:"transform .2s", opacity:.5 }}>
                         <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                       </svg>
                     </button>
-                    {active && ingresoOpen && (
+                    {ingresoOpen && (
                       <div style={{ display:"flex", alignItems:"center",
                         margin:"1px 6px", borderRadius:8,
-                        background: ingresoSubView === "new-venta" ? "rgba(173,255,25,.08)" : "rgba(0,0,0,.15)",
+                        background: ingresoSubView === "new-venta" ? "rgba(173,255,25,.08)" : "rgba(0,0,0,.35)",
                         transition:"background .12s" }}
-                        onMouseEnter={e=>{ if(ingresoSubView !== "new-venta") e.currentTarget.style.background="rgba(0,0,0,.25)"; }}
-                        onMouseLeave={e=>{ if(ingresoSubView !== "new-venta") e.currentTarget.style.background=ingresoSubView==="new-venta"?"rgba(173,255,25,.08)":"rgba(0,0,0,.15)"; }}>
+                        onMouseEnter={e=>{ if(ingresoSubView !== "new-venta") e.currentTarget.style.background="rgba(0,0,0,.5)"; }}
+                        onMouseLeave={e=>{ if(ingresoSubView !== "new-venta") e.currentTarget.style.background=ingresoSubView==="new-venta"?"rgba(173,255,25,.08)":"rgba(0,0,0,.35)"; }}>
                         <button
-                          onClick={() => { setActiveId("ingresos"); setIngresoSubView("new-venta"); setIngresoOpen(true); setActiveMaestrosTab(null); }}
+                          onClick={() => { setActiveId("ingresos"); setIngresoSubView(null); setIngresoOpen(true); setActiveMaestrosTab(null); setActiveSpecial(null); }}
                           aria-current={ingresoSubView === "new-venta" ? "page" : undefined}
                           style={{
                             flex:1, background:"transparent", border:"none", borderRadius:8,
@@ -438,7 +433,8 @@ export default function NumbersApp({ onGoToFranquicias }) {
               : activeSpecial === "intercompania" ? "Intercompañía"
               : activeSpecial === "cambio" ? "Cambio de moneda"
               : egresoSubView  === "new-compra" ? "Egresos › Nueva Compra"
-              : egresoSubView  === "new-gasto"  ? "Egresos › Nuevo Gasto"
+              : egresoSubView  === "new-gasto"  ? "Gastos › Nuevo Gasto"
+              : egresoSubView  === "gastos"     ? "Gastos"
               : ingresoSubView === "new-venta"  ? "Ingresos › Nueva Venta"
               : section?.label}
           </span>
@@ -462,7 +458,9 @@ export default function NumbersApp({ onGoToFranquicias }) {
             : activeSpecial === "cambio"
             ? <PantallaCambioMoneda sociedad={activeSoc.id} />
             : section?.component
-            ? section.id === "egresos"
+            ? section.id === "egresos" && (egresoSubView === "gastos" || egresoSubView === "new-gasto")
+              ? <PantallaGastos   sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView}  />
+              : section.id === "egresos"
               ? <PantallaEgresos  sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView}  />
               : section.id === "ingresos"
               ? <PantallaIngresos sociedad={activeSoc.id} subView={ingresoSubView} onSubViewChange={setIngresoSubView} />

@@ -104,7 +104,7 @@ export function shortId(id) {
  */
 export async function fetchEgresos(sociedad) {
   const rows = await get("nb_comprobantes", { sociedad });
-  const egRows = rows.filter(r => { const s = (r.subtipo ?? "").toUpperCase(); return s === "EGRESO" || s === "GASTO"; });
+  const egRows = rows.filter(r => (r.subtipo ?? "").toUpperCase() === "EGRESO");
   return _agruparPorComp(egRows, "EGRESO");
 }
 
@@ -543,6 +543,47 @@ export async function appendGastoDirecto({ sociedad, fecha, cuenta_contable, cue
   });
 
   return { ok: true, id_comp };
+}
+
+/**
+ * Trae todos los gastos directos de una sociedad (subtipo=GASTO).
+ * Cada gasto genera 1 fila en nb_comprobantes y 1 en nb_movimientos.
+ * Devuelve filas planas enriquecidas con la cuenta bancaria usada.
+ */
+export async function fetchGastos(sociedad) {
+  const [compRows, movRows] = await Promise.all([
+    get("nb_comprobantes", { sociedad }),
+    get("nb_movimientos",  { sociedad }),
+  ]);
+  const gastos = compRows.filter(r => (r.subtipo ?? "").toUpperCase() === "GASTO");
+  const movMap = new Map();
+  for (const m of movRows) {
+    if (m.tipo === "EGRESO_GASTO") movMap.set(m.documento_id, m);
+  }
+  return gastos.map(r => {
+    const mov = movMap.get(r.id_comp);
+    return {
+      id:              r.id_comp,
+      rowId:           r.id,
+      fecha:           r.fecha ?? "",
+      cuenta_contable: r.cuenta_contable ?? "",
+      cc:              r.centro_costo ?? "",
+      moneda:          r.moneda ?? "ARS",
+      subtotal:        Number(r.subtotal) || 0,
+      ivaRate:         Number(r.iva_rate) || 0,
+      total:           Number(r.total) || 0,
+      nota:            r.nota ?? "",
+      cuentaBancaria:  mov?.cuenta_bancaria ?? "",
+      _movId:          mov?.id ?? null,
+    };
+  }).sort((a, b) => (b.fecha > a.fecha ? 1 : -1));
+}
+
+/** Elimina un gasto directo (comprobante + movimiento de tesorería). */
+export async function deleteGasto(rowId, movId) {
+  const ops = [post({ action: "del", sheet: "nb_comprobantes", id: rowId })];
+  if (movId) ops.push(post({ action: "del", sheet: "nb_movimientos", id: movId }));
+  await Promise.all(ops);
 }
 
 // ─── P&L — Líneas enriquecidas ────────────────────────────────────────────────
