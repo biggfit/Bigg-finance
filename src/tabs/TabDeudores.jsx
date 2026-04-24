@@ -343,7 +343,6 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
         // Mes = movimientos del mes seleccionado hasta cutoff
         let fAnt = 0, ncAnt = 0, pAnt = 0, ppAnt = 0, eAnt = 0;
         let fMes = 0, ncMes = 0, pMes = 0, ppMes = 0, eMes = 0;
-        let fPautaMes = 0; // FACTURA|PAUTA del mes (para validar ppMes facturado)
 
         for (const c of (comps[key] ?? [])) {
           if (cmpDate(c.date, cutoff) > 0) continue;
@@ -357,7 +356,7 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
           // from both buckets so saldoReal = end-of-month balance = saldoAnt of next month
           if (!beforeMes && !enMes) continue;
 
-          if      (t.startsWith("FACTURA|"))      { if (enMes) { fMes += amt; if (t === "FACTURA|PAUTA") fPautaMes += amt; } else fAnt += amt; }
+          if      (t.startsWith("FACTURA|"))      { if (enMes) fMes += amt; else fAnt += amt; }
           else if (t.startsWith("NC|") || t.startsWith("FC_RECIBIDA|")) { if (enMes) ncMes += amt; else ncAnt += amt; }
           else if (t === "PAGO")                { if (enMes) pMes  += amt; else pAnt  += amt; }
           else if (t === "PAGO_PAUTA")          { if (enMes) ppMes += amt; else ppAnt += amt; }
@@ -368,10 +367,8 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
         const saldoAnt  = si + fAnt - ncAnt - pAnt - ppAnt + eAnt;
         // Columna pagos/envíos: solo PAGO real del mes (sin PAGO_PAUTA)
         const pagosNet  = pMes - eMes;
-        // PAGO_PAUTA facturado = el que tiene su FACTURA|PAUTA en el mismo mes (hasta ppMes)
-        // El resto (sin FC aún) se excluye del saldoReal — es un adelanto pendiente
-        const ppMesFacturado = Math.min(ppMes, fPautaMes);
-        const saldoReal = saldoAnt + fMes - ncMes - pMes - ppMesFacturado + eMes;
+        // Usar ppMes completo (igual que computeSaldo en helpers.js) para consistencia con ResumenMes.
+        const saldoReal = saldoAnt + fMes - ncMes - pMes - ppMes + eMes;
 
         const hasActivity = si !== 0 || Math.abs(saldoAnt) > 0.01 || Math.abs(pagosNet) > 0.01 || ppMes > 0.01;
         if (!hasActivity) return null;
