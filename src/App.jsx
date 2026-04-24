@@ -128,8 +128,13 @@ export default function App() {
     if (moneda) setFilterCur(moneda);
     if (filter === "deben")   { setShowDeben(true);  setShowOtros(false); }
     if (filter === "debemos") { setShowDeben(false); setShowOtros(true);  }
+    // Sincronizar período de Saldos por Sede con el período activo del Resumen
+    if (tab === "saldos") {
+      setPeriodMonth(month);
+      setPeriodYear(year);
+    }
     setNavCount(n => n + 1);
-  }, []);
+  }, [month, year]);
 
   // O(1) franchise lookup — recomputed only when franchises list changes
   const franchiseMap = useMemo(
