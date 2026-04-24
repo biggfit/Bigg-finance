@@ -1,26 +1,13 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { useStore } from "../lib/context";
-import { compEmpresa, compCurrency, cmpDate, MONTHS, COMP_TYPES, computeSaldoPrevMes, getSaldoInicial, fmt } from "../lib/helpers";
+import { compEmpresa, compCurrency, cmpDate, MONTHS, COMP_TYPES, computeSaldoPrevMes, getSaldoInicial, fmt, monthRange } from "../lib/helpers";
 import { COMPANIES, todayDmy, dmyToIso, isoToDmy } from "../data/franchisor";
 import { RecordatorioDots } from "./TabSaldos";
 import { buildCCHtml, fetchLogoDataUrl, blobToBase64, htmlToBase64, buildFacturaHtmlForMail } from "../lib/pdf";
 import { generateInvoicePdfBlob } from "../lib/invoicePdf";
 import { downloadFacturantePdfBlob } from "../lib/facturanteApi";
 import { sendMailFr } from "../lib/sheetsApi";
-
-// Último día del mes anterior al cutoff (DD/MM/YYYY → DD/MM/YYYY)
-function prevMonthEnd(dmy) {
-  const [, mm, yyyy] = dmy.split("/");
-  const d = new Date(parseInt(yyyy), parseInt(mm) - 1, 0); // día 0 = último día del mes anterior
-  return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
-}
-
-// Primer día del mes del cutoff (DD/MM/YYYY → DD/MM/YYYY)
-function monthStart(dmy) {
-  const [, mm, yyyy] = dmy.split("/");
-  return `01/${mm}/${yyyy}`;
-}
 
 // Columnas ordenables
 const COLS = [
@@ -312,11 +299,7 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
     setMailResult({ ok, err });
   }, [confirmRows, comps, saldoInicial, activeCompany, cutoff, filterCurrency, cur, periodMonth, periodYear, franchisor, addRecordatorioEntry]);
 
-  const mesInicio = useMemo(() => `01/${String(periodMonth + 1).padStart(2, "0")}/${periodYear}`, [periodMonth, periodYear]);
-  const mesFin    = useMemo(() => {
-    const last = new Date(periodYear, periodMonth + 1, 0);
-    return `${String(last.getDate()).padStart(2,"0")}/${String(last.getMonth()+1).padStart(2,"0")}/${last.getFullYear()}`;
-  }, [periodMonth, periodYear]);
+  const { mesInicio, mesFin } = useMemo(() => monthRange(periodMonth, periodYear), [periodMonth, periodYear]);
 
   // Países disponibles (de las franquicias activas, ordenados)
   const countries = useMemo(() => {

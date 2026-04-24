@@ -1,7 +1,7 @@
 import { memo, useState, useMemo, useCallback, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
 import { useStore } from "../lib/context";
-import { makeType, MONTHS, AVAILABLE_YEARS, DOCS, CUENTAS, CUENTA_LABEL, COMP_TYPES, SYM, uid, CURRENCIES, COMPANIES } from "../lib/helpers";
+import { makeType, MONTHS, AVAILABLE_YEARS, DOCS, CUENTAS, CUENTA_LABEL, COMP_TYPES, SYM, uid, CURRENCIES, COMPANIES, monthRange } from "../lib/helpers";
 import { todayDmy, getCompanyCurrencies, getFranchiseCurrencies } from "../data/franchisor";
 import { TypePill } from "../components/atoms";
 import PendientesPanel from "../components/PendientesPanel";
@@ -818,9 +818,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
   const [crmLoading, setCrmLoading] = useState(false);
   const [crmLoaded,  setCrmLoaded]  = useState(false);
 
-  // Fecha de emisión para los comprobantes — default último día del mes seleccionado
-  const lastDay = (m, y) => { const d = new Date(y, m + 1, 0); return `${String(d.getDate()).padStart(2,"0")}/${String(m+1).padStart(2,"0")}/${y}`; };
-  const [crmDate, setCrmDate] = useState(() => lastDay(monthProp, yearProp));
+  const [crmDate, setCrmDate] = useState(() => monthRange(monthProp, yearProp).mesFin);
 
   const [tcMap, setTcMap] = useState(() => {
     const map = {};
@@ -1129,10 +1127,10 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
         <div style={{ display: "flex", alignItems: "center", gap: 8 }} onClick={e => e.stopPropagation()}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: 8, padding: "5px 10px" }}>
             <span style={{ fontSize: 9, fontWeight: 700, color: "var(--muted)", letterSpacing: ".08em" }}>PERÍODO</span>
-            <select value={crmMonth} onChange={e => { const m = parseInt(e.target.value); setCrmMonth(m); setCrmDate(lastDay(m, crmYear)); }} style={selS}>
+            <select value={crmMonth} onChange={e => { const m = parseInt(e.target.value); setCrmMonth(m); setCrmDate(monthRange(m, crmYear).mesFin); }} style={selS}>
               {MONTHS.map((m, i) => <option key={i} value={i}>{m}</option>)}
             </select>
-            <select value={crmYear} onChange={e => { const y = parseInt(e.target.value); setCrmYear(y); setCrmDate(lastDay(crmMonth, y)); }} style={{ ...selS, width: 78 }}>
+            <select value={crmYear} onChange={e => { const y = parseInt(e.target.value); setCrmYear(y); setCrmDate(monthRange(crmMonth, y).mesFin); }} style={{ ...selS, width: 78 }}>
               {AVAILABLE_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
             </select>
           </div>

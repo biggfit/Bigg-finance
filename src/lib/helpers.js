@@ -61,6 +61,14 @@ export const AVAILABLE_YEARS = [2024, 2025, 2026, 2027];
 // Tipos que son movimientos financieros (solo afectan CC, sin documento)
 export const TIPOS_MOVIMIENTO  = ["PAGO","PAGO_PAUTA","PAGO_ENVIADO"];
 
+// ─── DATE HELPERS ────────────────────────────────────────────────────────────
+/** Returns { mesInicio: "01/MM/YYYY", mesFin: "DD/MM/YYYY" } for month m (0-based) of year y. */
+export function monthRange(m, y) {
+  const mm      = String(m + 1).padStart(2, "0");
+  const lastDay = String(new Date(y, m + 1, 0).getDate()).padStart(2, "0");
+  return { mesInicio: `01/${mm}/${y}`, mesFin: `${lastDay}/${mm}/${y}` };
+}
+
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 /** Format absolute value with currency symbol */
 export const fmt  = (v, c) => `${SYM[c] || "$"}\u202f${Math.abs(v).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -186,38 +194,46 @@ export function computeSaldoPrevMes(frId, y, m, comps, saldoInicial, frCurrency 
  * - Meses anteriores se acumulan completos (incluye todo ppAnt).
  * Esto evita que un adelanto de pauta sin FC aún distorsione el saldo corriente.
  */
-export function computeSaldoReal(frId, y, m, comps, saldoInicial, frCurrency = null, filterCurrency = null, empresa = null) {
-  const key      = String(frId);
-  const si       = getSaldoInicial(saldoInicial, key, empresa, frCurrency, filterCurrency);
-  const mm       = String(m + 1).padStart(2, "0");
-  const mesInicio = `01/${mm}/${y}`;
-  const lastDay   = new Date(y, m + 1, 0).getDate();
-  const mesFin    = `${String(lastDay).padStart(2, "0")}/${mm}/${y}`;
+/**
+ * cutoff (DD/MM/YYYY): si se pasa, excluye comprobantes con fecha posterior.
+ *   TabDeudores lo usa para mostrar el estado "a hoy". TabResumenMes no lo usa
+ *   (proyecta el mes completo hasta su último día).
+ */
+export function computeSaldoReal(frId, y, m, comps, saldoInicial, frCurrency = null, filterCurrency = null, empresa = null, cutoff = null) {
+  const key = String(frId);
+  const si  = getSaldoInicial(saldoInicial, key, empresa, frCurrency, filterCurrency);
+  const { mesInicio, mesFin } = monthRange(m, y);
 
   let fAnt = 0, ncAnt = 0, pAnt = 0, ppAnt = 0, eAnt = 0;
   let fMes = 0, ncMes = 0, pMes = 0, ppMes = 0, eMes = 0;
   let fPautaMes = 0;
 
   for (const c of (comps[key] ?? [])) {
+    if (cutoff !== null && cmpDate(c.date, cutoff) > 0) continue;
     if (empresa !== null && compEmpresa(c) !== empresa) continue;
     if (filterCurrency !== null && compCurrency(c) !== filterCurrency) continue;
     if (SKIP_CC_TYPES.has(c.type)) continue;
-    const amt        = c.amount ?? 0;
-    const t          = c.type ?? "";
-    const beforeMes  = cmpDate(c.date, mesInicio) < 0;
-    const enMes      = !beforeMes && cmpDate(c.date, mesFin) <= 0;
-    if (!beforeMes && !enMes) continue; // después del mes → ignorar
+    const amt       = c.amount ?? 0;
+    const t         = c.type ?? "";
+    const beforeMes = cmpDate(c.date, mesInicio) < 0;
+    const enMes     = !beforeMes && cmpDate(c.date, mesFin) <= 0;
+    if (!beforeMes && !enMes) continue;
 
-    if      (t.startsWith("FACTURA|"))                      { if (enMes) { fMes += amt; if (t === "FACTURA|PAUTA") fPautaMes += amt; } else fAnt += amt; }
+    if      (t.startsWith("FACTURA|"))                           { if (enMes) { fMes += amt; if (t === "FACTURA|PAUTA") fPautaMes += amt; } else fAnt += amt; }
     else if (t.startsWith("NC|") || t.startsWith("FC_RECIBIDA|")) { if (enMes) ncMes += amt; else ncAnt += amt; }
-    else if (t === "PAGO")                                  { if (enMes) pMes  += amt; else pAnt  += amt; }
-    else if (t === "PAGO_PAUTA")                            { if (enMes) ppMes += amt; else ppAnt += amt; }
-    else if (t === "PAGO_ENVIADO")                          { if (enMes) eMes  += amt; else eAnt  += amt; }
+    else if (t === "PAGO")                                        { if (enMes) pMes  += amt; else pAnt  += amt; }
+    else if (t === "PAGO_PAUTA")                                  { if (enMes) ppMes += amt; else ppAnt += amt; }
+    else if (t === "PAGO_ENVIADO")                                { if (enMes) eMes  += amt; else eAnt  += amt; }
   }
 
-  const saldoAnt       = si + fAnt - ncAnt - pAnt - ppAnt + eAnt;
-  const ppMesFacturado = Math.min(ppMes, fPautaMes);
-  return saldoAnt + fMes - ncMes - pMes - ppMesFacturado + eMes;
+  const saldoAnt = si + fAnt - ncAnt - pAnt - ppAnt + eAnt;
+  return saldoAnt + fMes - ncMes - pMes - Math.min(ppMes, fPautaMes) + eMes;
+}
+
+export function computeSaldoRealPrevMes(frId, y, m, comps, saldoInicial, frCurrency = null, filterCurrency = null, empresa = null) {
+  const pm = m === 0 ? 11 : m - 1;
+  const py = m === 0 ? y - 1 : y;
+  return computeSaldoReal(frId, py, pm, comps, saldoInicial, frCurrency, filterCurrency, empresa);
 }
 
 export function buildCuentaCorriente(frId, comps, saldoInicial, frCurrency = null, filterCurrency = null, empresa = null) {
