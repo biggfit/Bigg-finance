@@ -149,6 +149,10 @@ export default function PantallaDashboard({ sociedad = "nako" }) {
     saldosCuenta.filter(c => c.moneda === "USD").reduce((s, c) => s + c.saldo, 0),
     [saldosCuenta]
   );
+  const totalEUR = useMemo(() =>
+    saldosCuenta.filter(c => c.moneda === "EUR").reduce((s, c) => s + c.saldo, 0),
+    [saldosCuenta]
+  );
 
   // ── Pendientes ─────────────────────────────────────────────────────────────
   const porPagar  = useMemo(() => egresos.filter(e  => e.estado === "a_pagar"  || e.estado === "vencido"), [egresos]);
@@ -156,6 +160,13 @@ export default function PantallaDashboard({ sociedad = "nako" }) {
 
   const totalPorPagar  = porPagar.reduce((s, e)  => s + (e.saldoPendiente  ?? e.importe), 0);
   const totalPorCobrar = porCobrar.reduce((s, i) => s + (i.saldoPendiente ?? i.importe), 0);
+
+  const totalPorPagarARS  = porPagar.filter(e => (e.moneda ?? "ARS") === "ARS").reduce((s, e) => s + (e.saldoPendiente ?? e.importe), 0);
+  const totalPorPagarUSD  = porPagar.filter(e => (e.moneda ?? "") === "USD").reduce((s, e) => s + (e.saldoPendiente ?? e.importe), 0);
+  const totalPorPagarEUR  = porPagar.filter(e => (e.moneda ?? "") === "EUR").reduce((s, e) => s + (e.saldoPendiente ?? e.importe), 0);
+  const totalPorCobrarARS = porCobrar.filter(i => (i.moneda ?? "ARS") === "ARS").reduce((s, i) => s + (i.saldoPendiente ?? i.importe), 0);
+  const totalPorCobrarUSD = porCobrar.filter(i => (i.moneda ?? "") === "USD").reduce((s, i) => s + (i.saldoPendiente ?? i.importe), 0);
+  const totalPorCobrarEUR = porCobrar.filter(i => (i.moneda ?? "") === "EUR").reduce((s, i) => s + (i.saldoPendiente ?? i.importe), 0);
 
   const vencidosEg = porPagar.filter(e => e.estado === "vencido");
   const vencidosIn = porCobrar.filter(i => i.estado === "vencido");
@@ -183,30 +194,32 @@ export default function PantallaDashboard({ sociedad = "nako" }) {
       {/* ── Bloque 1: Caja ─────────────────────────────────────────────────── */}
       <SectionLabel>Disponible en caja</SectionLabel>
       <Card style={{ marginBottom:24 }}>
-        <div style={{ padding:"24px 28px" }}>
-          <div style={{ display:"flex", gap:52, alignItems:"flex-end", flexWrap:"wrap" }}>
-
-            <div>
-              <div style={{ fontSize:11, color:T.dim, marginBottom:6, fontWeight:600 }}>Pesos (ARS)</div>
-              <div style={{ fontSize:34, fontWeight:900, color: totalARS < 0 ? T.red : T.text, fontFamily:T.mono }}>
-                {fmtMoney(totalARS, "ARS")}
-              </div>
-            </div>
-
-            {totalUSD !== 0 && (
-              <div>
-                <div style={{ fontSize:11, color:T.dim, marginBottom:6, fontWeight:600 }}>Dólares (USD)</div>
-                <div style={{ fontSize:34, fontWeight:900, color: totalUSD < 0 ? T.red : T.text, fontFamily:T.mono }}>
-                  {fmtMoney(totalUSD, "USD")}
+        <div style={{ padding:"16px 24px" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:16 }}>
+            <div style={{ flex:1 }}>
+              {[
+                { label:"ARS", total:totalARS },
+                totalUSD !== 0 && { label:"USD", total:totalUSD },
+                totalEUR !== 0 && { label:"EUR", total:totalEUR },
+              ].filter(Boolean).map(({ label, total }, i, arr) => (
+                <div key={label} style={{ display:"flex", justifyContent:"space-between",
+                  alignItems:"center", padding:"10px 0",
+                  borderBottom: i < arr.length - 1 ? `1px solid ${T.cardBorder}` : "none" }}>
+                  <span style={{ fontSize:11, fontWeight:700, color:T.muted,
+                    background:"#f3f4f6", borderRadius:4, padding:"2px 7px", letterSpacing:".05em" }}>
+                    {label}
+                  </span>
+                  <span style={{ fontSize:18, fontWeight:900, fontFamily:T.mono,
+                    color: total < 0 ? T.red : T.text }}>
+                    {fmtMoney(total, label)}
+                  </span>
                 </div>
-              </div>
-            )}
-
+              ))}
+            </div>
             <button onClick={() => setCajaOpen(v => !v)} style={{
-              marginLeft:"auto", background:"none", border:`1px solid ${T.cardBorder}`,
+              flexShrink:0, background:"none", border:`1px solid ${T.cardBorder}`,
               borderRadius:8, padding:"7px 16px", fontSize:12, color:T.muted,
               cursor:"pointer", fontFamily:T.font, display:"flex", alignItems:"center", gap:6,
-              alignSelf:"center",
             }}>
               {cajaOpen ? "Ocultar" : "Ver cuentas"}
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none"
@@ -244,10 +257,26 @@ export default function PantallaDashboard({ sociedad = "nako" }) {
         {/* Por pagar */}
         <div>
           <SectionLabel>Por pagar</SectionLabel>
-          <Card style={{ padding:"24px 28px" }}>
-            <div style={{ fontSize:32, fontWeight:900, fontFamily:T.mono,
-              color: totalPorPagar > 0 ? T.red : T.text, marginBottom:16 }}>
-              {fmtMoney(totalPorPagar)}
+          <Card style={{ padding:"20px 24px" }}>
+            <div style={{ display:"flex", flexDirection:"column", gap:0, marginBottom:14 }}>
+              {[
+                { label:"ARS", total:totalPorPagarARS },
+                totalPorPagarUSD > 0 && { label:"USD", total:totalPorPagarUSD },
+                totalPorPagarEUR > 0 && { label:"EUR", total:totalPorPagarEUR },
+              ].filter(Boolean).map(({ label, total }, i, arr) => (
+                <div key={label} style={{ display:"flex", justifyContent:"space-between",
+                  alignItems:"center", padding:"10px 0",
+                  borderBottom: i < arr.length - 1 ? `1px solid ${T.cardBorder}` : "none" }}>
+                  <span style={{ fontSize:11, fontWeight:700, color:T.muted,
+                    background:"#f3f4f6", borderRadius:4, padding:"2px 7px", letterSpacing:".05em" }}>
+                    {label}
+                  </span>
+                  <span style={{ fontSize:18, fontWeight:900, fontFamily:T.mono,
+                    color: total > 0 ? T.red : T.text }}>
+                    {fmtMoney(total, label)}
+                  </span>
+                </div>
+              ))}
             </div>
             <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
               {vencidosEg.length > 0 && (
@@ -277,10 +306,26 @@ export default function PantallaDashboard({ sociedad = "nako" }) {
         {/* Por cobrar */}
         <div>
           <SectionLabel>Por cobrar</SectionLabel>
-          <Card style={{ padding:"24px 28px" }}>
-            <div style={{ fontSize:32, fontWeight:900, fontFamily:T.mono,
-              color: totalPorCobrar > 0 ? T.green : T.text, marginBottom:16 }}>
-              {fmtMoney(totalPorCobrar)}
+          <Card style={{ padding:"20px 24px" }}>
+            <div style={{ display:"flex", flexDirection:"column", gap:0, marginBottom:14 }}>
+              {[
+                { label:"ARS", total:totalPorCobrarARS },
+                totalPorCobrarUSD > 0 && { label:"USD", total:totalPorCobrarUSD },
+                totalPorCobrarEUR > 0 && { label:"EUR", total:totalPorCobrarEUR },
+              ].filter(Boolean).map(({ label, total }, i, arr) => (
+                <div key={label} style={{ display:"flex", justifyContent:"space-between",
+                  alignItems:"center", padding:"10px 0",
+                  borderBottom: i < arr.length - 1 ? `1px solid ${T.cardBorder}` : "none" }}>
+                  <span style={{ fontSize:11, fontWeight:700, color:T.muted,
+                    background:"#f3f4f6", borderRadius:4, padding:"2px 7px", letterSpacing:".05em" }}>
+                    {label}
+                  </span>
+                  <span style={{ fontSize:18, fontWeight:900, fontFamily:T.mono,
+                    color: total > 0 ? T.green : T.text }}>
+                    {fmtMoney(total, label)}
+                  </span>
+                </div>
+              ))}
             </div>
             <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
               {vencidosIn.length > 0 && (
