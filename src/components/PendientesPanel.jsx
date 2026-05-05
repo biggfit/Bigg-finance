@@ -362,6 +362,17 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
 
   const handleBatch = async () => {
     if (batchRunning || toEmit.length === 0) return;
+
+    // NCA sin refInvoice: AFIP rechaza. Bloquear antes de empezar.
+    const ncSinRef = toEmit.filter(({ fr, comp }) =>
+      String(comp.type ?? '').startsWith('NC') && fr.applyIVA === true && !comp.refInvoice
+    );
+    if (ncSinRef.length > 0) {
+      const nombres = ncSinRef.map(({ fr }) => fr.name).join(', ');
+      alert(`No se puede emitir: ${ncSinRef.length} Nota${ncSinRef.length > 1 ? 's' : ''} de Crédito sin FA asociada.\nCompletá el campo "FA referenciada" en: ${nombres}`);
+      return;
+    }
+
     setBatchRunning(true);
     setBatchDatePending(false);
     setErrors({});

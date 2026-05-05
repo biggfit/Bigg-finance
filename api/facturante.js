@@ -511,6 +511,15 @@ export default async function handler(req, res) {
   const fechaVtoPago  = contado ? null : calcFechaVtoPago(comp.date);
   const condPago      = contado ? 1 : 30; // 1=contado, 30=cuenta corriente (ARCA solo acepta valores estándar)
 
+  // Para NC con IVA (NCA/NCB): la FA asociada es OBLIGATORIA — AFIP rechaza sin CbteAsoc.
+  if (doc === 'NC' && usaIVA && !referenciaInvoice) {
+    res.statusCode = 400;
+    return res.end(JSON.stringify({
+      ok:    false,
+      error: 'Nota de Crédito tipo A requiere la factura asociada (referenciaInvoice). Completá el campo "FA referenciada" antes de emitir.',
+    }));
+  }
+
   // Para NC: parsear invoice label de la FA referenciada (ej "FA 0100-00000014")
   let refAfip = null;
   if (doc === 'NC' && referenciaInvoice) {
