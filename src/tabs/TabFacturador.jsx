@@ -1560,7 +1560,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
 
   const handleConfirm = useCallback(async (skipFacturante = false) => {
     setStage(FACT_STAGE.PROCESSING);
-    const log = [];
+    setProcessLog([]);
     for (const r of activeRows) {
       const fr = franchises.find(f => f.id === r.franchiseId);
       const isAR = fr?.country === "Argentina";
@@ -1574,16 +1574,15 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
         currency: r.currency,
         empresa: activeCompany,
       };
-      // El importe importado desde Excel es el TOTAL (con IVA incluido).
-      // Calcular desglose neto/IVA para que el backend de Facturante use amountNeto en lugar
-      // de hacer fallback a amount (que trataría el total como neto y doblaría el IVA).
       const applyIVA = COMPANIES[activeCompany]?.applyIVA ?? false;
       if (applyIVA && esComp && (r.type?.startsWith("FACTURA|") || r.type?.startsWith("NC|"))) {
         const amountNeto = Math.round(r.amount / 1.21 * 100) / 100;
         comp = { ...comp, amountNeto, amountIVA: Math.round((r.amount - amountNeto) * 100) / 100 };
       }
-      let msg = `✓ CC actualizada — ${r.franchiseName}`;
-      // ARCA solo si la sociedad activa es ÑAKO SRL (nunca emitir ARCA desde BIGG FIT LLC o GDW)
+      let status = "sin_factura";
+      let invoice = null;
+      let msg = r.franchiseName;
+
       if (!skipFacturante && isAR && r.currency === "ARS" && esComp && fr && activeCompany === "ÑAKO SRL") {
         try {
           const result = await emitirComprobante({
@@ -1592,31 +1591,41 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
             comp:       { ...comp, applyIVA: !!(COMPANIES[activeCompany]?.applyIVA) },
           });
           comp = { ...comp, invoice: invoiceFromResult(result), facturanteId: String(result.idComprobante) };
-          msg = `✓ ${comp.invoice ?? "emitida (nro. AFIP pendiente)"} — ${r.franchiseName}`;
+          invoice = comp.invoice;
+          status = invoice ? "ok" : "sin_invoice";
+          msg = invoice ?? "AFIP pendiente";
         } catch (err) {
-          msg = `⚠ CC guardada sin ARCA (${err.message}) — ${r.franchiseName}`;
+          status = "error";
+          msg = err.message ?? "Error ARCA";
         }
       } else if (!skipFacturante && !isAR && esComp && fr) {
-        // Invoice correlativo para BIGG FIT LLC (USA-XX-NNNN) y GDW (ESP-XX-NNNN)
         try {
           const invoicePrefix = COMPANIES[activeCompany]?.side === "es" ? "ESP" : "USA";
           const res = await getNextInvoiceNum(r.franchiseId, invoicePrefix);
           comp = { ...comp, invoice: res.label };
-          msg = `✓ ${res.label} — ${r.franchiseName}`;
+          invoice = res.label;
+          status = "ok";
+          msg = res.label;
         } catch (err) {
-          msg = `⚠ CC guardada sin invoice (${err.message}) — ${r.franchiseName}`;
+          status = "error";
+          msg = err.message ?? "Error invoice";
         }
+      } else {
+        status = "ok";
+        msg = "guardado";
       }
+
       try {
         await onAddComp(r.franchiseId, comp);
       } catch {
+        status = "error";
         msg = comp.facturanteId
-          ? `⚠ AFIP OK (ID=${comp.facturanteId}) pero falló al guardar en Sheets — ${r.franchiseName}`
-          : `⚠ Falló al guardar en Sheets — ${r.franchiseName}`;
+          ? `AFIP OK (${comp.facturanteId}) — fallo Sheets`
+          : "Fallo Sheets";
       }
-      log.push({ status: comp.invoice ? "ok" : comp.facturanteId ? "sin_invoice" : "sin_factura", step: "CC", msg });
+
+      setProcessLog(prev => [...prev, { status, invoice, frName: r.franchiseName, msg }]);
     }
-    setProcessLog(log);
     setStage(FACT_STAGE.DONE);
   }, [activeRows, franchises, onAddComp, loteId, franchisor]);
 
@@ -1774,36 +1783,61 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
     </div>
   );
 
-  if (stage === FACT_STAGE.PROCESSING) return (
-    <div style={{ textAlign: "center", padding: 60 }}>
-      <div style={{ fontSize: 32, marginBottom: 12 }}>⚙️</div>
-      <div style={{ fontWeight: 800, fontSize: 18 }}>Procesando…</div>
-    </div>
-  );
-
-  if (stage === FACT_STAGE.DONE) return (
+  if (stage === FACT_STAGE.PROCESSING || stage === FACT_STAGE.DONE) {
+    const done     = processLog.length;
+    const total    = activeRows.length;
+    const ok       = processLog.filter(e => e.status === "ok").length;
+    const errors   = processLog.filter(e => e.status === "error").length;
+    const running  = stage === FACT_STAGE.PROCESSING;
+    const pending  = total - done;
+    return (
     <div className="fade">
-      <div style={{ background: "rgba(173,255,25,.06)", border: "1px solid rgba(173,255,25,.25)", borderRadius: 10, padding: "14px 22px", marginBottom: 16 }}>
-        <div style={{ fontWeight: 800, fontSize: 16, color: "var(--accent)", marginBottom: 4 }}>✓ Lote procesado</div>
-        <div style={{ fontSize: 12, color: "var(--muted)" }}>{loteId} · {activeRows.length} comprobante{activeRows.length !== 1 ? "s" : ""} registrado{activeRows.length !== 1 ? "s" : ""}</div>
+      {/* Header */}
+      <div style={{ background: running ? "rgba(255,255,255,.03)" : "rgba(173,255,25,.06)", border: `1px solid ${running ? "var(--border2)" : "rgba(173,255,25,.25)"}`, borderRadius: 10, padding: "14px 22px", marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 6 }}>
+          <span style={{ fontWeight: 800, fontSize: 15, color: running ? "var(--text)" : "var(--accent)" }}>
+            {running ? `⚙️ Procesando…` : "✓ Lote procesado"}
+          </span>
+          <span style={{ fontSize: 11, color: "var(--muted)" }}>{loteId}</span>
+          <div style={{ flex: 1 }} />
+          {ok > 0     && <span style={{ fontSize: 11, color: "var(--green)", fontWeight: 700 }}>✓ {ok} ok</span>}
+          {errors > 0 && <span style={{ fontSize: 11, color: "var(--red)",   fontWeight: 700 }}>✕ {errors} error{errors > 1 ? "es" : ""}</span>}
+          {running && pending > 0 && <span style={{ fontSize: 11, color: "var(--muted)" }}>⏳ {pending} restante{pending > 1 ? "s" : ""}</span>}
+        </div>
+        {/* Barra de progreso */}
+        <div style={{ height: 4, borderRadius: 2, background: "var(--border2)", overflow: "hidden" }}>
+          <div style={{ height: "100%", borderRadius: 2, background: errors > 0 ? "var(--gold)" : "var(--accent)", width: `${total > 0 ? (done / total) * 100 : 0}%`, transition: "width .3s" }} />
+        </div>
       </div>
-      <div className="card">
+
+      {/* Timeline */}
+      <div className="card" style={{ padding: 0 }}>
         {processLog.map((e, i) => (
-          <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", padding: "6px 16px", borderBottom: i < processLog.length - 1 ? "1px solid var(--border)" : "none" }}>
-            <span className="pill" style={{
-              color: e.status === "ok" ? "var(--green)" : e.status === "sin_invoice" ? "var(--gold)" : e.status === "sin_factura" ? "var(--muted)" : "var(--red)",
-              background: e.status === "ok" ? "rgba(126,217,160,.1)" : e.status === "sin_invoice" ? "rgba(222,251,151,.1)" : e.status === "sin_factura" ? "rgba(255,255,255,.05)" : "rgba(255,107,122,.1)",
-              minWidth: 70, textAlign: "center"
-            }}>{e.step}</span>
-            <span style={{ fontSize: 12, color: "var(--muted)" }}>{e.msg}</span>
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 16px", borderBottom: i < processLog.length - 1 || running ? "1px solid var(--border)" : "none" }}>
+            <span style={{ fontSize: 14, flexShrink: 0 }}>
+              {e.status === "ok" ? "✓" : e.status === "sin_invoice" ? "⏳" : e.status === "error" ? "✕" : "·"}
+            </span>
+            <span style={{ fontSize: 12, fontWeight: 600, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.frName}</span>
+            <span className="mono" style={{ fontSize: 11, color: e.status === "ok" ? "var(--accent)" : e.status === "error" ? "var(--red)" : "var(--muted)", whiteSpace: "nowrap" }}>
+              {e.msg}
+            </span>
           </div>
         ))}
+        {running && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 16px", opacity: 0.5 }}>
+            <span style={{ fontSize: 14 }}>⚙️</span>
+            <span style={{ fontSize: 12 }}>{activeRows[done]?.franchiseName ?? "…"}</span>
+          </div>
+        )}
       </div>
-      <div style={{ display: "flex", gap: 10, marginTop: 14, justifyContent: "flex-end" }}>
-        <button className="btn" onClick={onDone}>Nuevo lote</button>
-      </div>
+      {!running && (
+        <div style={{ display: "flex", gap: 10, marginTop: 14, justifyContent: "flex-end" }}>
+          <button className="btn" onClick={onDone}>Nuevo lote</button>
+        </div>
+      )}
     </div>
   );
+  } // end PROCESSING/DONE
 
   // PREVIEW
   return (
