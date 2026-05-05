@@ -59,6 +59,14 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
   // Modal de referencias NC (NCA sin refInvoice)
   const [ncRefModal, setNcRefModal] = useState(null); // null | [{ fr, comp, refInvoice }]
 
+  // Selección + batch para "NÚMERO AFIP PENDIENTE"
+  const [selectedNumeroIds,  setSelectedNumeroIds]  = useState(new Set());
+  const [numeroBatchRunning, setNumeroBatchRunning] = useState(false);
+  const [numeroBatchProg,    setNumeroBatchProg]    = useState(null); // { done, total, ok, errors }
+  const toggleNumeroSelect = (id) => setSelectedNumeroIds(prev => {
+    const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next;
+  });
+
   // Emisión masiva (pagos a cuenta)
   const [pagoBatchRunning, setPagoBatchRunning]   = useState(false);
   const [pagoBatchProgress, setPagoBatchProgress] = useState(null);
@@ -178,6 +186,32 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
     } finally {
       setFetchingNumero(p => { const n = { ...p }; delete n[comp.id]; return n; });
     }
+  };
+
+  const handleBatchFetchNumero = async () => {
+    if (numeroBatchRunning) return;
+    const queue = sinNumeroAfip.filter(({ comp }) =>
+      selectedNumeroIds.size === 0 || selectedNumeroIds.has(comp.id)
+    );
+    if (queue.length === 0) return;
+    setNumeroBatchRunning(true);
+    setNumeroBatchProg({ done: 0, total: queue.length, ok: 0, errors: [] });
+    let done = 0, ok = 0;
+    const errors = [];
+    for (const { fr, comp } of queue) {
+      try {
+        await onFetchAfipNumero(fr, comp);
+        ok++;
+      } catch (err) {
+        errors.push({ fr, comp, msg: err.message ?? "Error" });
+        setFetchNumeroErr(p => ({ ...p, [comp.id]: err.message ?? "Error" }));
+      }
+      done++;
+      setNumeroBatchProg({ done, total: queue.length, ok, errors: [...errors] });
+      if (done < queue.length) await new Promise(r => setTimeout(r, 600));
+    }
+    setNumeroBatchRunning(false);
+    setSelectedNumeroIds(new Set());
   };
 
   // Descarta el facturanteId → el comp vuelve a "SIN EMISIÓN AFIP" para poder re-emitir
@@ -811,27 +845,65 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
       {/* ── NÚMERO AFIP PENDIENTE ── */}
       {sinNumeroAfip.length > 0 && (
         <div style={{ background: "rgba(251,191,36,.04)", border: "1px solid rgba(251,191,36,.30)", borderRadius: 10, padding: "14px 18px" }}>
-          <div
-            style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: showSinNumero ? 10 : 0 }}
-            onClick={() => setShowSinNumero(v => !v)}
-          >
-            <span style={{ fontSize: 10, fontWeight: 800, color: "#fbbf24", letterSpacing: ".1em", flex: 1 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: showSinNumero ? 10 : 0 }}>
+            <input
+              type="checkbox"
+              style={{ accentColor: "#fbbf24", cursor: "pointer", flexShrink: 0 }}
+              checked={selectedNumeroIds.size === sinNumeroAfip.length && sinNumeroAfip.length > 0}
+              onChange={e => setSelectedNumeroIds(e.target.checked ? new Set(sinNumeroAfip.map(x => x.comp.id)) : new Set())}
+              onClick={e => e.stopPropagation()}
+            />
+            <span
+              style={{ fontSize: 10, fontWeight: 800, color: "#fbbf24", letterSpacing: ".1em", flex: 1, cursor: "pointer" }}
+              onClick={() => setShowSinNumero(v => !v)}
+            >
               ⏳ NÚMERO AFIP PENDIENTE — {sinNumeroAfip.length} comprobante{sinNumeroAfip.length !== 1 ? "s" : ""}
             </span>
-            <span style={{ fontSize: 11, color: "var(--muted)" }}>{showSinNumero ? "▲" : "▼"}</span>
+            {(selectedNumeroIds.size > 0 || sinNumeroAfip.length > 0) && !numeroBatchRunning && (
+              <button
+                className="ghost"
+                style={{ fontSize: 10, padding: "2px 10px", whiteSpace: "nowrap", color: "#fbbf24" }}
+                onClick={handleBatchFetchNumero}
+              >
+                ⚡ Obtener nros. AFIP ({selectedNumeroIds.size > 0 ? selectedNumeroIds.size : sinNumeroAfip.length})
+              </button>
+            )}
+            <span style={{ fontSize: 11, color: "var(--muted)", cursor: "pointer" }} onClick={() => setShowSinNumero(v => !v)}>{showSinNumero ? "▲" : "▼"}</span>
           </div>
+
+          {/* Barra de progreso batch fetch */}
+          {numeroBatchProg && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ height: 3, borderRadius: 2, background: "var(--border2)", marginBottom: 6, overflow: "hidden" }}>
+                <div style={{ height: "100%", borderRadius: 2, background: numeroBatchRunning ? "#fbbf24" : (numeroBatchProg.errors.length === 0 ? "var(--green)" : "var(--gold)"), width: `${(numeroBatchProg.done / numeroBatchProg.total) * 100}%`, transition: "width .3s" }} />
+              </div>
+              <div style={{ display: "flex", gap: 12, fontSize: 11, alignItems: "center" }}>
+                <span style={{ color: "var(--muted)" }}>{numeroBatchRunning ? `Consultando ${numeroBatchProg.done}/${numeroBatchProg.total}…` : `Completado ${numeroBatchProg.done}/${numeroBatchProg.total}`}</span>
+                {numeroBatchProg.ok > 0 && <span style={{ color: "var(--green)", fontWeight: 700 }}>✓ {numeroBatchProg.ok} ok</span>}
+                {numeroBatchProg.errors.length > 0 && <span style={{ color: "var(--red)", fontWeight: 700 }}>✕ {numeroBatchProg.errors.length} error{numeroBatchProg.errors.length !== 1 ? "es" : ""}</span>}
+                {!numeroBatchRunning && <button className="ghost" style={{ fontSize: 10, padding: "1px 8px" }} onClick={() => setNumeroBatchProg(null)}>✕</button>}
+              </div>
+            </div>
+          )}
+
           {showSinNumero && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {sinNumeroAfip.map(({ fr, comp }) => {
                 const doc    = String(comp.type ?? "").split("|")[0];
                 const cuenta = String(comp.type ?? "").split("|")[1] ?? "";
-                const busy        = !!fetchingNumero[comp.id];
+                const busy        = !!fetchingNumero[comp.id] || numeroBatchRunning;
                 const discarding  = !!discardingId[comp.id];
                 const err         = fetchNumeroErr[comp.id];
-                const hasFooter   = !!err;
+                const selected    = selectedNumeroIds.has(comp.id);
                 return (
                   <div key={comp.id}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--bg2)", borderRadius: hasFooter ? "7px 7px 0 0" : 7, padding: "8px 12px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, background: selected ? "rgba(251,191,36,.07)" : "var(--bg2)", borderRadius: err ? "7px 7px 0 0" : 7, padding: "8px 12px", outline: selected ? "1px solid rgba(251,191,36,.25)" : "none" }}>
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={() => toggleNumeroSelect(comp.id)}
+                        style={{ accentColor: "#fbbf24", cursor: "pointer", flexShrink: 0 }}
+                      />
                       <span style={{ fontSize: 12, fontWeight: 700, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fr.name}</span>
                       <span style={{ fontSize: 10, color: "var(--muted)", whiteSpace: "nowrap" }}>{comp.date}</span>
                       <span className="mono" style={{ fontSize: 12, color: "var(--green)", fontWeight: 700, whiteSpace: "nowrap" }}>{fmt(comp.amount, "ARS")}</span>
