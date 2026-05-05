@@ -2097,9 +2097,13 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
         });
         factComp.invoice      = invoiceFromResult(result);
         factComp.facturanteId = String(result.idComprobante);
+      } else if (fr.country !== "Argentina") {
+        const invoicePrefix = COMPANIES[activeCompany]?.side === "es" ? "ESP" : "USA";
+        const res = await getNextInvoiceNum(fr.id, invoicePrefix);
+        factComp.invoice = res.label;
       }
       try {
-        addCompWithEmpresa(fr.id, factComp);
+        await addCompWithEmpresa(fr.id, factComp);
       } catch {
         throw new Error(afipSaveFailedMsg(factComp.invoice, factComp.facturanteId));
       }
