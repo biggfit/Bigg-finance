@@ -1524,6 +1524,9 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
   const activeRows = useMemo(() => rows.filter(r => !r.excluded && r.errors.length === 0), [rows]);
   const errorRows  = useMemo(() => rows.filter(r => !r.excluded && r.errors.length > 0),  [rows]);
 
+  const deleteRow      = useCallback((i) => setRows(prev => prev.filter((_, ri) => ri !== i)), []);
+  const deleteExcluded = useCallback(() => setRows(prev => prev.filter(r => !r.excluded)), []);
+
   const handleFile = useCallback(async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1593,13 +1596,25 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
         } catch (err) {
           msg = `⚠ CC guardada sin ARCA (${err.message}) — ${r.franchiseName}`;
         }
+      } else if (!skipFacturante && !isAR && esComp && fr) {
+        // Invoice correlativo para BIGG FIT LLC (USA-XX-NNNN) y GDW (ESP-XX-NNNN)
+        try {
+          const invoicePrefix = COMPANIES[activeCompany]?.side === "es" ? "ESP" : "USA";
+          const res = await getNextInvoiceNum(r.franchiseId, invoicePrefix);
+          comp = { ...comp, invoice: res.label };
+          msg = `✓ ${res.label} — ${r.franchiseName}`;
+        } catch (err) {
+          msg = `⚠ CC guardada sin invoice (${err.message}) — ${r.franchiseName}`;
+        }
       }
       try {
-        onAddComp(r.franchiseId, comp);
+        await onAddComp(r.franchiseId, comp);
       } catch {
-        if (comp.facturanteId) msg = `⚠ AFIP OK (ID=${comp.facturanteId}) pero falló al guardar — ${r.franchiseName}`;
+        msg = comp.facturanteId
+          ? `⚠ AFIP OK (ID=${comp.facturanteId}) pero falló al guardar en Sheets — ${r.franchiseName}`
+          : `⚠ Falló al guardar en Sheets — ${r.franchiseName}`;
       }
-      log.push({ status: comp.invoice ? "ok" : "sin_factura", step: "CC", msg });
+      log.push({ status: comp.invoice ? "ok" : comp.facturanteId ? "sin_invoice" : "sin_factura", step: "CC", msg });
     }
     setProcessLog(log);
     setStage(FACT_STAGE.DONE);
@@ -1775,7 +1790,11 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
       <div className="card">
         {processLog.map((e, i) => (
           <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", padding: "6px 16px", borderBottom: i < processLog.length - 1 ? "1px solid var(--border)" : "none" }}>
-            <span className="pill" style={{ color: e.status === "ok" ? "var(--green)" : "var(--gold)", background: e.status === "ok" ? "rgba(126,217,160,.1)" : "rgba(222,251,151,.1)", minWidth: 70, textAlign: "center" }}>{e.step}</span>
+            <span className="pill" style={{
+              color: e.status === "ok" ? "var(--green)" : e.status === "sin_invoice" ? "var(--gold)" : e.status === "sin_factura" ? "var(--muted)" : "var(--red)",
+              background: e.status === "ok" ? "rgba(126,217,160,.1)" : e.status === "sin_invoice" ? "rgba(222,251,151,.1)" : e.status === "sin_factura" ? "rgba(255,255,255,.05)" : "rgba(255,107,122,.1)",
+              minWidth: 70, textAlign: "center"
+            }}>{e.step}</span>
             <span style={{ fontSize: 12, color: "var(--muted)" }}>{e.msg}</span>
           </div>
         ))}
@@ -1803,6 +1822,11 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
         )}
         <div style={{ flex: 1 }} />
         <button className="ghost" onClick={() => { setStage(FACT_STAGE.IDLE); setRows([]); }}>← Volver</button>
+        {rows.some(r => r.excluded) && (
+          <button className="ghost" style={{ color: "var(--red)" }} onClick={deleteExcluded}>
+            🗑 Borrar excluidas ({rows.filter(r => r.excluded).length})
+          </button>
+        )}
         <button className="ghost" disabled={activeRows.length === 0} style={{ opacity: activeRows.length === 0 ? 0.4 : 1 }} onClick={() => handleConfirm(true)}>
           Guardar sin emitir ({activeRows.length})
         </button>
@@ -1927,7 +1951,12 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
                               : null
                         }
                       </td>
-                      <td>{!r.excluded && <button className="ghost" style={{ fontSize: 10, padding: "2px 6px" }} onClick={() => { setEditIdx(i); setEditBuf({ ...r }); }}>✏</button>}</td>
+                      <td>
+                        <div style={{ display: "flex", gap: 3 }}>
+                          {!r.excluded && <button className="ghost" style={{ fontSize: 10, padding: "2px 6px" }} onClick={() => { setEditIdx(i); setEditBuf({ ...r }); }}>✏</button>}
+                          <button className="ghost" style={{ fontSize: 10, padding: "2px 6px", color: "var(--red)" }} onClick={() => deleteRow(i)}>🗑</button>
+                        </div>
+                      </td>
                     </>
                   )}
                 </tr>
