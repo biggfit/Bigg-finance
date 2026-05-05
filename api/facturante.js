@@ -5,7 +5,7 @@
 //
 // Variables de entorno requeridas (Vercel Dashboard → Settings → Environment Variables):
 //   FACTURANTE_EMPRESA   →  ID de empresa (integer)
-//   FACTURANTE_HASH      →  Hash de autenticación
+//   FACTURANTE_HASH      →  Contraseña de la cuenta Facturante (campo "Hash" en la API)
 //   FACTURANTE_USUARIO   →  Usuario
 //   FACTURANTE_ENDPOINT  →  URL del servicio (testing o producción)
 
