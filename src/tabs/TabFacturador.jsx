@@ -1455,7 +1455,7 @@ function parseExcelRows(data, franchises, allowedCompanyCurrencies) {
     const sedeName    = String(r.sede ?? r.franquicia ?? r.franchise ?? "").trim();
     const cuentaRaw   = String(r.cuenta ?? r.account ?? "").trim().toUpperCase();
     const tipoRaw     = String(r.tipo ?? r.type ?? r.doc ?? "").trim().toUpperCase();
-    const importeRaw  = parseFloat(String(r.importe ?? r.monto ?? r.amount ?? "0").replace(/[^0-9.,\-]/g,"").replace(",",".")) || 0;
+    const importeRaw  = Math.round((parseFloat(String(r.importe ?? r.monto ?? r.amount ?? "0").replace(/[^0-9.,\-]/g,"").replace(",",".")) || 0) * 100) / 100;
     const fechaRaw    = r.fecha ?? r.date ?? r.fecha_doc ?? "";
     const conceptoRaw = String(r.concepto ?? r.descripcion ?? r.ref ?? r.referencia ?? "").trim();
     const monedaRaw   = String(r.moneda ?? r.currency ?? r.currencies ?? "").trim().toUpperCase();
