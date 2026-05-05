@@ -116,14 +116,14 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
     return next;
   });
 
-  // Última FA emitida por sede (para sugerir en modal NC ref)
-  const lastFaPerFr = useMemo(() => {
+  // FAs emitidas por sede (para el selector en modal NC ref), ordenadas por fecha desc
+  const fasPerFr = useMemo(() => {
     const map = {};
     for (const [frId, frComps] of Object.entries(comps)) {
       const fas = (frComps ?? [])
         .filter(c => String(c.type ?? '').startsWith('FACTURA|') && c.invoice)
         .sort((a, b) => (b.date > a.date ? 1 : b.date < a.date ? -1 : 0));
-      if (fas.length > 0) map[frId] = fas[0];
+      if (fas.length > 0) map[frId] = fas;
     }
     return map;
   }, [comps]);
@@ -383,12 +383,10 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
       String(comp.type ?? '').startsWith('NC') && fr.applyIVA === true && !comp.refInvoice
     );
     if (ncSinRef.length > 0) {
-      setNcRefModal(ncSinRef.map(({ fr, comp }) => ({
-        fr,
-        comp,
-        refInvoice: lastFaPerFr[fr.id]?.invoice ?? '',
-        refDate:    lastFaPerFr[fr.id]?.date    ?? '',
-      })));
+      setNcRefModal(ncSinRef.map(({ fr, comp }) => {
+        const ultima = fasPerFr[fr.id]?.[0];
+        return { fr, comp, refInvoice: ultima?.invoice ?? '', refDate: ultima?.date ?? '' };
+      }));
       return;
     }
 
@@ -508,12 +506,27 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                       −{fmt(row.comp.amount, "ARS")}
                     </td>
                     <td style={{ padding: "8px 8px" }}>
-                      <input
+                      <select
                         value={row.refInvoice}
-                        onChange={e => setNcRefModal(prev => prev.map((r, ri) => ri === i ? { ...r, refInvoice: e.target.value } : r))}
-                        placeholder="FA 0004-00000001"
-                        style={{ width: "100%", padding: "4px 8px", borderRadius: 6, fontSize: 11, background: "var(--bg)", border: `1px solid ${row.refInvoice ? "var(--border2)" : "var(--red)"}`, color: "var(--text)", fontFamily: "var(--font)" }}
-                      />
+                        onChange={e => {
+                          const fa = (fasPerFr[row.fr.id] ?? []).find(f => f.invoice === e.target.value);
+                          setNcRefModal(prev => prev.map((r, ri) => ri === i
+                            ? { ...r, refInvoice: e.target.value, refDate: fa?.date ?? r.refDate }
+                            : r));
+                        }}
+                        style={{ width: "100%", padding: "4px 8px", borderRadius: 6, fontSize: 11, background: "var(--bg)", border: `1px solid ${row.refInvoice ? "var(--border2)" : "var(--red)"}`, color: "var(--text)", fontFamily: "var(--font)", cursor: "pointer" }}
+                      >
+                        <option value="">— Seleccionar FA —</option>
+                        {(fasPerFr[row.fr.id] ?? []).map(fa => {
+                          const cuenta = String(fa.type ?? '').split('|')[1] ?? '';
+                          const importe = fmt(fa.amount, 'ARS');
+                          return (
+                            <option key={fa.id} value={fa.invoice}>
+                              {fa.invoice} — {fa.date} — {cuenta} — {importe}
+                            </option>
+                          );
+                        })}
+                      </select>
                     </td>
                   </tr>
                 ))}
