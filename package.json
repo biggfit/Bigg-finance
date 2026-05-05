@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "sync": "git pull origin main && npm install && vite",
     "dev": "vite",
     "dev:accounting": "node ../bigg-accounting/node_modules/vite/bin/vite.js --root ../bigg-accounting --port 5174",
     "dev:all": "concurrently \"vite\" \"node ../bigg-accounting/node_modules/vite/bin/vite.js --root ../bigg-accounting --port 5174\"",
