@@ -118,11 +118,13 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
 
   // FAs emitidas por sede (para el selector en modal NC ref), ordenadas por fecha desc
   const fasPerFr = useMemo(() => {
+    // DD/MM/YYYY → YYYY-MM-DD para comparación correcta
+    const toISO = (d = '') => { const [dd, mm, yyyy] = d.split('/'); return `${yyyy}-${mm}-${dd}`; };
     const map = {};
     for (const [frId, frComps] of Object.entries(comps)) {
       const fas = (frComps ?? [])
         .filter(c => String(c.type ?? '').startsWith('FACTURA|') && c.invoice)
-        .sort((a, b) => (b.date > a.date ? 1 : b.date < a.date ? -1 : 0));
+        .sort((a, b) => toISO(b.date) > toISO(a.date) ? 1 : toISO(b.date) < toISO(a.date) ? -1 : 0);
       if (fas.length > 0) map[frId] = fas;
     }
     return map;
