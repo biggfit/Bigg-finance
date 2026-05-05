@@ -3,13 +3,14 @@ import { T, fmtMoney, fmtDate, PageHeader, Btn } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
 import {
   fetchGastos, deleteGasto, appendGastoDirecto,
-  fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto,
+  fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto, fetchProveedores,
 } from "../lib/numbersApi";
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 import { makeResolveCC, makeResolveCB } from "./formUtils.jsx";
+import FiltroFecha, { useFiltroFecha } from "./FiltroFecha";
 
 // ─── Formulario: Nuevo Gasto Directo ─────────────────────────────────────────
-function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, onClose, onSaved }) {
+function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, proveedores, onClose, onSaved }) {
   const cuentasSoc = cuentasBancarias.filter(
     c => (c.sociedad ?? "").toLowerCase() === (sociedad ?? "").toLowerCase()
   );
@@ -25,7 +26,7 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, onC
   const newRow = () => ({
     _id:             Date.now() + Math.random(),
     fecha:           new Date().toISOString().slice(0, 10),
-    proveedor:       "",
+    proveedorId:     "",
     cuenta_contable: "",
     cc:              "",
     subtotal:        "",
@@ -48,18 +49,23 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, onC
   const handleGuardar = async () => {
     setSaving(true);
     try {
-      await Promise.all(validRows.map(r => appendGastoDirecto({
-        sociedad,
-        fecha:              r.fecha,
-        cuenta_contable:    r.cuenta_contable,
-        cuenta_contable_id: cuentasGasto.find(c => c.nombre === r.cuenta_contable)?.id ?? "",
-        cc:                 r.cc,
-        moneda:             getMoneda(r.medioPago),
-        subtotal:           Number(r.subtotal) || 0,
-        ivaRate:            Number(r.ivaRate) || 0,
-        nota:               r.proveedor || [r.cuenta_contable, cuentasSoc.find(c => c.id === r.medioPago)?.nombre].filter(Boolean).join(" · "),
-        cuenta_bancaria:    r.medioPago,
-      })));
+      await Promise.all(validRows.map(r => {
+        const prov = proveedores.find(p => p.id === r.proveedorId);
+        return appendGastoDirecto({
+          sociedad,
+          fecha:              r.fecha,
+          cuenta_contable:    r.cuenta_contable,
+          cuenta_contable_id: cuentasGasto.find(c => c.nombre === r.cuenta_contable)?.id ?? "",
+          cc:                 r.cc,
+          moneda:             getMoneda(r.medioPago),
+          subtotal:           Number(r.subtotal) || 0,
+          ivaRate:            Number(r.ivaRate) || 0,
+          nota:               [r.cuenta_contable, cuentasSoc.find(c => c.id === r.medioPago)?.nombre].filter(Boolean).join(" · "),
+          cuenta_bancaria:    r.medioPago,
+          proveedor_id:       prov?.id ?? "",
+          proveedor_nombre:   prov?.nombre ?? "",
+        });
+      }));
       onSaved();
     } catch (e) {
       alert("Error al guardar: " + e.message);
@@ -128,8 +134,11 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, onC
                     </td>
 
                     <td style={{ padding:"6px 8px" }}>
-                      <input type="text" value={r.proveedor} placeholder="Proveedor o concepto…"
-                        onChange={e => upd(r._id, "proveedor", e.target.value)} style={ci} />
+                      <select value={r.proveedorId}
+                        onChange={e => upd(r._id, "proveedorId", e.target.value)} style={ci}>
+                        <option value="">— Sin proveedor —</option>
+                        {proveedores.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                      </select>
                     </td>
 
                     <td style={{ padding:"6px 8px" }}>
@@ -237,9 +246,11 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
   const [gastos, setGastos]                     = useState([]);
   const [loading, setLoading]                   = useState(true);
   const [error, setError]                       = useState(null);
+  const filtroFecha = useFiltroFecha();
   const [cuentasBancarias, setCuentasBancarias] = useState([]);
   const [cuentas, setCuentas]                   = useState([]);
   const [centrosCosto, setCentrosCosto]         = useState(CENTROS_COSTO_STATIC);
+  const [proveedores, setProveedores]           = useState([]);
   const [busqueda, setBusqueda]                 = useState("");
 
   const resolveCC = useMemo(() => makeResolveCC(centrosCosto), [centrosCosto]);
@@ -262,28 +273,22 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
     fetchCuentasBancarias().then(d => setCuentasBancarias(Array.isArray(d) ? d : [])).catch(()=>{});
     fetchCuentas().then(d => { if (Array.isArray(d) && d.length > 0) setCuentas(d); }).catch(()=>{});
     fetchCentrosCosto().then(d => { if (Array.isArray(d) && d.length > 0) setCentrosCosto(d); }).catch(()=>{});
+    fetchProveedores().then(d => { if (Array.isArray(d)) setProveedores(d); }).catch(()=>{});
   }, [sociedad]); // eslint-disable-line
 
   // ── Derivados (siempre antes de cualquier early return — Rules of Hooks) ──────
   const rows = useMemo(() => {
     const q = busqueda.toLowerCase();
-    if (!q) return gastos;
-    return gastos.filter(g =>
-      (g.cuenta_contable ?? "").toLowerCase().includes(q) ||
-      (g.nota ?? "").toLowerCase().includes(q) ||
-      resolveCC(g.cc).toLowerCase().includes(q) ||
-      resolveCB(g.cuentaBancaria).toLowerCase().includes(q)
-    );
-  }, [gastos, busqueda, resolveCC, resolveCB]);
-
-  const totales = useMemo(() => {
-    const map = new Map();
-    for (const g of gastos) {
-      const m = g.moneda ?? "ARS";
-      map.set(m, (map.get(m) ?? 0) + g.total);
-    }
-    return [...map.entries()].sort((a,b) => a[0].localeCompare(b[0]));
-  }, [gastos]);
+    return gastos.filter(g => {
+      const matchQ = !q ||
+        (g.proveedor ?? "").toLowerCase().includes(q) ||
+        (g.cuenta_contable ?? "").toLowerCase().includes(q) ||
+        (g.nota ?? "").toLowerCase().includes(q) ||
+        resolveCC(g.cc).toLowerCase().includes(q) ||
+        resolveCB(g.cuentaBancaria).toLowerCase().includes(q);
+      return matchQ && filtroFecha.inRange(g.fecha);
+    });
+  }, [gastos, busqueda, resolveCC, resolveCB, filtroFecha.inRange]);
 
   const handleEliminar = async (gasto) => {
     if (!confirm("¿Eliminar este gasto?")) return;
@@ -303,6 +308,7 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
         cuentasBancarias={cuentasBancarias}
         cuentas={cuentas}
         centrosCosto={centrosCosto}
+        proveedores={proveedores}
         onClose={() => onSubViewChange?.("gastos")}
         onSaved={async () => { onSubViewChange?.("gastos"); await cargar(); }}
       />
@@ -332,34 +338,19 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
         action={<Btn variant="accent" onClick={() => onSubViewChange?.("new-gasto")}>+ Nuevo Gasto</Btn>}
       />
 
-      {/* Resumen por moneda */}
-      {totales.length > 0 && (
-        <div style={{ display:"flex", gap:8, marginBottom:24, flexWrap:"wrap" }}>
-          {totales.map(([moneda, total]) => (
-            <div key={moneda} style={{ background:T.card, border:`1px solid ${T.cardBorder}`,
-              borderRadius:T.radius, padding:"10px 18px", boxShadow:T.shadow,
-              display:"flex", flexDirection:"column", gap:2 }}>
-              <div style={{ fontSize:10, fontWeight:700, color:T.muted, letterSpacing:".1em",
-                textTransform:"uppercase" }}>{moneda} · {gastos.filter(g => g.moneda === moneda).length} gastos</div>
-              <div style={{ fontSize:18, fontWeight:900, color:"#ca8a04", fontFamily:"var(--mono)" }}>
-                {fmtMoney(total, moneda)}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
       {/* Buscador */}
       <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:T.radius,
-        padding:"10px 14px", marginBottom:14, boxShadow:T.shadow }}>
+        padding:"10px 14px", marginBottom:14, boxShadow:T.shadow,
+        display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
         <input
           value={busqueda}
           onChange={e => setBusqueda(e.target.value)}
           placeholder="Buscar por cuenta contable, CC, forma de pago, nota…"
-          style={{ width:"100%", background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+          style={{ flex:1, minWidth:200, background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
             borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text,
-            outline:"none", fontFamily:T.font, boxSizing:"border-box" }}
+            outline:"none", fontFamily:T.font }}
         />
+        <FiltroFecha {...filtroFecha} />
       </div>
 
       {/* Tabla */}
@@ -368,7 +359,7 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
         <table style={{ width:"100%", borderCollapse:"collapse", minWidth:700 }}>
           <thead>
             <tr style={{ background:T.tableHead }}>
-              {["Fecha","Cuenta Contable","Centro de Costo","Monto","Forma de Pago","Nota",""].map(h => (
+              {["Fecha","Proveedor","Cuenta Contable","Centro de Costo","Monto","Forma de Pago",""].map(h => (
                 <th key={h} style={{ padding:"10px 14px", fontSize:11, fontWeight:700,
                   letterSpacing:".08em", textTransform:"uppercase", color:T.tableHeadText,
                   textAlign: h === "Monto" ? "right" : "left", whiteSpace:"nowrap" }}>{h}</th>
@@ -388,6 +379,11 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
 
                   <td style={{ padding:"9px 14px", fontSize:12, color:T.muted, whiteSpace:"nowrap" }}>
                     {fmtDate(g.fecha)}
+                  </td>
+
+                  <td style={{ padding:"9px 14px", fontSize:12, color:T.text, fontWeight:500,
+                    maxWidth:160, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                    {g.proveedor || g.nota || <span style={{ color:T.dim }}>—</span>}
                   </td>
 
                   <td style={{ padding:"9px 14px", fontSize:12, color:T.text, fontWeight:500 }}>
@@ -416,11 +412,6 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
                           return `${icon} ${cb?.nombre ?? g.cuentaBancaria}`;
                         })()
                       : <span style={{ color:T.dim }}>—</span>}
-                  </td>
-
-                  <td style={{ padding:"9px 14px", fontSize:12, color:T.muted, maxWidth:220,
-                    overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                    {g.nota || <span style={{ color:T.dim }}>—</span>}
                   </td>
 
                   <td style={{ padding:"9px 10px", textAlign:"center" }}>

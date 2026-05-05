@@ -5,6 +5,7 @@ import { fetchIngresos, appendIngreso, deleteIngreso, appendCobro, fetchPagosCob
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 import { makeResolveCC, makeResolveCB } from "./formUtils";
 import NuevoIngresoModal from "./NuevoIngresoModal";
+import FiltroFecha, { useFiltroFecha } from "./FiltroFecha";
 
 function CCDisplay({ lineas, resolveCC }) {
   const ids = [...new Set((lineas ?? []).map(l => l.cc).filter(Boolean))];
@@ -679,6 +680,7 @@ function RowMenu({ ingreso, onCobro, onDetalle, onEditar, onCtaCte, onEliminar }
 export default function PantallaIngresos({ sociedad = "nako", subView = null, onSubViewChange }) {
   const [busqueda, setBusqueda]         = useState("");
   const [filtroEstado, setFiltroEstado] = useState("todos");
+  const filtroFecha = useFiltroFecha();
   const [ingresos, setIngresos]         = useState([]);
   const [loading, setLoading]           = useState(true);
   const [error, setError]               = useState(null);
@@ -811,13 +813,14 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
     const matchEstado = filtroEstado === "todos" || e.estado === filtroEstado;
     const q = busqueda.toLowerCase();
     const matchQ = !q || (e.cliente ?? "").toLowerCase().includes(q) || (e.cuenta ?? "").toLowerCase().includes(q) || (e.cc ?? "").toLowerCase().includes(q);
-    return matchEstado && matchQ;
-  }), [busqueda, filtroEstado, ingresos]);
+    return matchEstado && matchQ && filtroFecha.inRange(e.fecha);
+  }), [busqueda, filtroEstado, ingresos, filtroFecha.inRange]);
 
   const totalesPorMoneda = useMemo(() => {
-    const monedas = [...new Set(ingresos.map(e => e.moneda))].filter(Boolean).sort();
+    const enPeriodo = ingresos.filter(e => filtroFecha.inRange(e.fecha));
+    const monedas = [...new Set(enPeriodo.map(e => e.moneda))].filter(Boolean).sort();
     return monedas.map(moneda => {
-      const docs = ingresos.filter(e => e.moneda === moneda);
+      const docs = enPeriodo.filter(e => e.moneda === moneda);
       return {
         moneda,
         cantidad: docs.length,
@@ -827,7 +830,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
         vencido: docs.filter(e => e.estado === "vencido").reduce((s,e) => s + (e.saldoPendiente ?? e.importe), 0),
       };
     });
-  }, [ingresos]);
+  }, [ingresos, filtroFecha.inRange]);
 
   // ── Detalle como página ──────────────────────────────────────────────────────
   if (showDetalle) {
@@ -911,6 +914,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
           placeholder="Buscar cliente, cuenta, CC..."
           style={{ flex:1, minWidth:200, background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
             borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text, outline:"none", fontFamily:T.font }} />
+        <FiltroFecha {...filtroFecha} />
         {["todos","cobrado","a_cobrar","vencido"].map(e => (
           <button key={e} onClick={() => setFiltroEstado(e)} style={{
             background: filtroEstado===e ? T.accentDark : "#f3f4f6",

@@ -6,7 +6,7 @@ import NumbersApp from "./NumbersApp";
 // App.jsx (Franquicias) no se toca internamente — zero cambios.
 // El botón "← BIGG Numbers" se superpone como overlay fijo.
 export default function Root() {
-  const [activeApp, setActiveApp] = useState("numbers");
+  const [activeApp, setActiveApp] = useState("franquicias");
 
   if (activeApp === "franquicias") {
     return <App onVolverNumbers={() => setActiveApp("numbers")} />;

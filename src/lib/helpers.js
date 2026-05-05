@@ -1,4 +1,4 @@
-import { upToPeriod, COMPANIES, cmpDate } from "../data/franchisor";
+import { upToPeriod, COMPANIES, cmpDate, dateYear, dateMonth } from "../data/franchisor";
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 export const CURRENCIES = ["ARS", "USD", "EUR"];
