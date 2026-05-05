@@ -78,6 +78,20 @@ function newId(prefix) {
   return `${prefix}-${pad(Date.now() % 100000)}`;
 }
 
+/**
+ * Convierte un valor numérico que puede venir de Sheets como string con coma decimal
+ * (ej: "362591,17" → 362591.17, "1.234,56" → 1234.56).
+ * Si no contiene coma, lo trata como formato estándar (punto decimal o entero).
+ */
+function toNum(v) {
+  if (typeof v === "number") return v;
+  if (v === null || v === undefined || v === "") return 0;
+  const s = String(v).trim();
+  // Formato argentino: coma como separador decimal → strip puntos de miles, reemplazar coma
+  if (s.includes(",")) return Number(s.replace(/\./g, "").replace(",", ".")) || 0;
+  return Number(s) || 0;
+}
+
 /** Formatea un ID largo para mostrar en tabla (últimos 5 dígitos del número) */
 export function shortId(id) {
   if (!id) return "—";
@@ -569,9 +583,9 @@ export async function fetchGastos(sociedad) {
       cuenta_contable: r.cuenta_contable ?? "",
       cc:              r.centro_costo ?? "",
       moneda:          r.moneda ?? "ARS",
-      subtotal:        Number(r.subtotal) || 0,
-      ivaRate:         Number(r.iva_rate) || 0,
-      total:           Number(r.total) || 0,
+      subtotal:        toNum(r.subtotal),
+      ivaRate:         toNum(r.iva_rate),
+      total:           toNum(r.total),
       proveedor:       r.contraparte_nombre ?? "",
       nota:            r.nota ?? "",
       cuentaBancaria:  mov?.cuenta_bancaria ?? "",
@@ -596,9 +610,11 @@ export async function deleteGasto(rowId, movId) {
 // Para P&L de egresos pasar ["EGRESO_FC","GASTO"] para incluir gastos directos.
 export async function fetchLineasEnriquecidas(sociedad, subtipo) {
   const rows = await get("nb_comprobantes", { sociedad });
-  if (!subtipo) return rows;
+  // Normalizar campos numéricos: Sheets puede devolver "362591,17" (coma decimal) → toNum → 362591.17
+  const normalize = r => ({ ...r, total: toNum(r.total), subtotal: toNum(r.subtotal), iva_monto: toNum(r.iva_monto) });
+  if (!subtipo) return rows.map(normalize);
   const subs = Array.isArray(subtipo) ? subtipo.map(s => s.toUpperCase()) : [subtipo.toUpperCase()];
-  return rows.filter(r => subs.includes((r.subtipo ?? "").toUpperCase()));
+  return rows.filter(r => subs.includes((r.subtipo ?? "").toUpperCase())).map(normalize);
 }
 
 // ─── Helpers de transformación ────────────────────────────────────────────────
@@ -634,12 +650,12 @@ function _agruparPorComp(rows, subtipo) {
     comp.lineas.push({
       id:          row.id,           // clave única de fila (para edit/del)
       cc:          row.centro_costo ?? "",
-      subtotal:    Number(row.subtotal)  || 0,
-      ivaRate:     Number(row.iva_rate)  || 0,
-      iva_monto:   Number(row.iva_monto) || 0,
-      total_linea: Number(row.total)     || 0,
+      subtotal:    toNum(row.subtotal),
+      ivaRate:     toNum(row.iva_rate),
+      iva_monto:   toNum(row.iva_monto),
+      total_linea: toNum(row.total),
     });
-    comp.total += Number(row.total) || 0;
+    comp.total += toNum(row.total);
     comp.importe = comp.total;
   }
   return Array.from(map.values());

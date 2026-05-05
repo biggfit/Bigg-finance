@@ -562,8 +562,8 @@ export default async function handler(req, res) {
 
   const envelope = buildEnvelope(operacion, requestBody);
 
-  // Debug NC (descomentar para troubleshooting):
-  // if (doc === 'NC') console.log('[facturante] NC envelope:\n', envelope);
+  // Debug (descomentar para troubleshooting):
+  // console.log('[facturante] DEBUG envelope:\n', envelope);
 
   try {
     const { status, body } = await soapCall(ENDPOINT, operacion, envelope);
