@@ -126,17 +126,20 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
 
   // FAs emitidas por sede (para el selector en modal NC ref), ordenadas por fecha desc
   const fasPerFr = useMemo(() => {
-    // DD/MM/YYYY → YYYY-MM-DD para comparación correcta
     const toISO = (d = '') => { const [dd, mm, yyyy] = d.split('/'); return `${yyyy}-${mm}-${dd}`; };
     const map = {};
     for (const [frId, frComps] of Object.entries(comps)) {
       const fas = (frComps ?? [])
         .filter(c => String(c.type ?? '').startsWith('FACTURA|') && c.invoice)
-        .sort((a, b) => toISO(b.date) > toISO(a.date) ? 1 : toISO(b.date) < toISO(a.date) ? -1 : 0);
+        .map(c => ({ ...c, _iso: toISO(c.date) }))
+        .sort((a, b) => b._iso > a._iso ? 1 : b._iso < a._iso ? -1 : 0)
+        .map(({ _iso: _, ...c }) => c);
       if (fas.length > 0) map[frId] = fas;
     }
     return map;
   }, [comps]);
+
+  const ncIncomplete = ncRefModal?.some(r => !r.refInvoice.trim()) ?? false;
 
   // 1. Comprobantes AR+ARS sin facturanteId ni invoice
   const sinAfipAll = useMemo(() => {
@@ -207,7 +210,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
         setFetchNumeroErr(p => ({ ...p, [comp.id]: err.message ?? "Error" }));
       }
       done++;
-      setNumeroBatchProg({ done, total: queue.length, ok, errors: [...errors] });
+      setNumeroBatchProg({ done, total: queue.length, ok, errors });
       if (done < queue.length) await new Promise(r => setTimeout(r, 600));
     }
     setNumeroBatchRunning(false);
@@ -572,8 +575,8 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
               <button className="ghost" onClick={() => setNcRefModal(null)}>Cancelar</button>
               <button
                 className="btn"
-                disabled={ncRefModal.some(r => !r.refInvoice.trim())}
-                style={{ opacity: ncRefModal.some(r => !r.refInvoice.trim()) ? 0.4 : 1 }}
+                disabled={ncIncomplete}
+                style={{ opacity: ncIncomplete ? 0.4 : 1 }}
                 onClick={handleConfirmNcRefs}
               >
                 ⚡ Confirmar y emitir {toEmit.length} documento{toEmit.length !== 1 ? "s" : ""}

@@ -44,6 +44,9 @@ function inputDateToDmy(iso) {
 // Tipos que son movimientos financieros (solo afectan CC, sin documento)
 const TIPOS_MOVIMIENTO  = ["PAGO","PAGO_PAUTA","PAGO_ENVIADO"];
 
+const getInvoicePrefix = (activeCompany) =>
+  COMPANIES[activeCompany]?.side === "es" ? "ESP" : "USA";
+
 // ── Modo Manual ─────────────────────────────────────────────────────────────
 // ── Wizard emisión manual ────────────────────────────────────────────────────
 // Pasos: 1-tipo  2-sede  3-formulario
@@ -319,7 +322,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
         setEmitState("emitting");
         setEmitError(null);
         try {
-          const invoicePrefix = COMPANIES[activeCompany]?.side === "es" ? "ESP" : "USA";
+          const invoicePrefix = getInvoicePrefix(activeCompany);
           const res = await getNextInvoiceNum(fr.id, invoicePrefix);
           enriched = { ...enriched, invoice: res.label };
           setEmitState("idle");
@@ -1007,7 +1010,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
         }
       } else if (!skipFacturante && !isAR) {
         try {
-          const invoicePrefix = COMPANIES[activeCompany]?.side === "es" ? "ESP" : "USA";
+          const invoicePrefix = getInvoicePrefix(activeCompany);
           const res = await getNextInvoiceNum(r.frId, invoicePrefix);
           comp = { ...comp, invoice: res.label };
           facturanteStatus = "invoice_ok";
@@ -1600,7 +1603,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
         }
       } else if (!skipFacturante && !isAR && esComp && fr) {
         try {
-          const invoicePrefix = COMPANIES[activeCompany]?.side === "es" ? "ESP" : "USA";
+          const invoicePrefix = getInvoicePrefix(activeCompany);
           const res = await getNextInvoiceNum(r.franchiseId, invoicePrefix);
           comp = { ...comp, invoice: res.label };
           invoice = res.label;
@@ -2098,7 +2101,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
         factComp.invoice      = invoiceFromResult(result);
         factComp.facturanteId = String(result.idComprobante);
       } else if (fr.country !== "Argentina") {
-        const invoicePrefix = COMPANIES[activeCompany]?.side === "es" ? "ESP" : "USA";
+        const invoicePrefix = getInvoicePrefix(activeCompany);
         const res = await getNextInvoiceNum(fr.id, invoicePrefix);
         factComp.invoice = res.label;
       }
