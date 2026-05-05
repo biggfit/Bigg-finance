@@ -56,6 +56,9 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
   const [batchDatePending, setBatchDatePending] = useState(false); // true = mostrando input de fecha
   const [batchDate, setBatchDate]         = useState(""); // yyyy-mm-dd (para input type=date)
 
+  // Modal de referencias NC (NCA sin refInvoice)
+  const [ncRefModal, setNcRefModal] = useState(null); // null | [{ fr, comp, refInvoice }]
+
   // Emisión masiva (pagos a cuenta)
   const [pagoBatchRunning, setPagoBatchRunning]   = useState(false);
   const [pagoBatchProgress, setPagoBatchProgress] = useState(null);
@@ -112,6 +115,18 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
     next.has(id) ? next.delete(id) : next.add(id);
     return next;
   });
+
+  // Última FA emitida por sede (para sugerir en modal NC ref)
+  const lastFaPerFr = useMemo(() => {
+    const map = {};
+    for (const [frId, frComps] of Object.entries(comps)) {
+      const fas = (frComps ?? [])
+        .filter(c => String(c.type ?? '').startsWith('FACTURA|') && c.invoice)
+        .sort((a, b) => (b.date > a.date ? 1 : b.date < a.date ? -1 : 0));
+      if (fas.length > 0) map[frId] = fas[0];
+    }
+    return map;
+  }, [comps]);
 
   // 1. Comprobantes AR+ARS sin facturanteId ni invoice
   const sinAfipAll = useMemo(() => {
@@ -363,26 +378,47 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
   const handleBatch = async () => {
     if (batchRunning || toEmit.length === 0) return;
 
-    // NCA sin refInvoice: AFIP rechaza. Bloquear antes de empezar.
+    // NCA sin refInvoice: AFIP rechaza — abrir modal para completar referencias
     const ncSinRef = toEmit.filter(({ fr, comp }) =>
       String(comp.type ?? '').startsWith('NC') && fr.applyIVA === true && !comp.refInvoice
     );
     if (ncSinRef.length > 0) {
-      const nombres = ncSinRef.map(({ fr }) => fr.name).join(', ');
-      alert(`No se puede emitir: ${ncSinRef.length} Nota${ncSinRef.length > 1 ? 's' : ''} de Crédito sin FA asociada.\nCompletá el campo "FA referenciada" en: ${nombres}`);
+      setNcRefModal(ncSinRef.map(({ fr, comp }) => ({
+        fr,
+        comp,
+        refInvoice: lastFaPerFr[fr.id]?.invoice ?? '',
+        refDate:    lastFaPerFr[fr.id]?.date    ?? '',
+      })));
       return;
     }
 
+    await runBatch(toEmit);
+  };
+
+  const handleConfirmNcRefs = async () => {
+    if (!ncRefModal) return;
+    // Guardar refInvoice en Sheets para cada NC y actualizar el comp local
+    const updatedToEmit = toEmit.map(({ fr, comp }) => {
+      const row = ncRefModal.find(r => r.comp.id === comp.id);
+      if (!row) return { fr, comp };
+      editComp(fr.id, comp.id, { refInvoice: row.refInvoice, refDate: row.refDate });
+      return { fr, comp: { ...comp, refInvoice: row.refInvoice, refDate: row.refDate } };
+    });
+    setNcRefModal(null);
+    await runBatch(updatedToEmit);
+  };
+
+  const runBatch = async (queue) => {
     setBatchRunning(true);
     setBatchDatePending(false);
     setErrors({});
     const dateOverride = batchDate ? toAR(batchDate) : null;
-    const total = toEmit.length;
+    const total = queue.length;
     let done = 0, ok = 0;
     const batchErrors = [];
     setBatchProgress({ done: 0, total, ok: 0, errors: [] });
 
-    for (const { fr, comp } of toEmit) {
+    for (const { fr, comp } of queue) {
       try {
         await onEmitirAfip(fr, comp, dateOverride);
         ok++;
@@ -447,6 +483,56 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
+
+      {/* ── Modal: referencias NC ── */}
+      {ncRefModal && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: 12, padding: "24px 28px", minWidth: 520, maxWidth: 680, maxHeight: "80vh", overflowY: "auto", boxShadow: "0 16px 48px rgba(0,0,0,.5)" }}>
+            <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>Notas de Crédito — FA asociada</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 18 }}>
+              AFIP requiere referenciar la factura original de cada NC. Se sugiere la última FA emitida por sede.
+            </div>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left", padding: "5px 8px", fontSize: 10, fontWeight: 700, color: "var(--muted)", borderBottom: "1px solid var(--border)" }}>Sede</th>
+                  <th style={{ textAlign: "left", padding: "5px 8px", fontSize: 10, fontWeight: 700, color: "var(--muted)", borderBottom: "1px solid var(--border)" }}>NC</th>
+                  <th style={{ textAlign: "left", padding: "5px 8px", fontSize: 10, fontWeight: 700, color: "var(--muted)", borderBottom: "1px solid var(--border)" }}>FA referenciada</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ncRefModal.map((row, i) => (
+                  <tr key={row.comp.id} style={{ borderBottom: "1px solid rgba(255,255,255,.04)" }}>
+                    <td style={{ padding: "8px 8px", fontWeight: 600, whiteSpace: "nowrap" }}>{row.fr.name}</td>
+                    <td style={{ padding: "8px 8px", color: "var(--red)", fontWeight: 700, whiteSpace: "nowrap" }} className="mono">
+                      −{fmt(row.comp.amount, "ARS")}
+                    </td>
+                    <td style={{ padding: "8px 8px" }}>
+                      <input
+                        value={row.refInvoice}
+                        onChange={e => setNcRefModal(prev => prev.map((r, ri) => ri === i ? { ...r, refInvoice: e.target.value } : r))}
+                        placeholder="FA 0004-00000001"
+                        style={{ width: "100%", padding: "4px 8px", borderRadius: 6, fontSize: 11, background: "var(--bg)", border: `1px solid ${row.refInvoice ? "var(--border2)" : "var(--red)"}`, color: "var(--text)", fontFamily: "var(--font)" }}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ display: "flex", gap: 10, marginTop: 20, justifyContent: "flex-end" }}>
+              <button className="ghost" onClick={() => setNcRefModal(null)}>Cancelar</button>
+              <button
+                className="btn"
+                disabled={ncRefModal.some(r => !r.refInvoice.trim())}
+                style={{ opacity: ncRefModal.some(r => !r.refInvoice.trim()) ? 0.4 : 1 }}
+                onClick={handleConfirmNcRefs}
+              >
+                ⚡ Confirmar y emitir {toEmit.length} documento{toEmit.length !== 1 ? "s" : ""}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── SIN EMISIÓN AFIP ── */}
       {sinAfipAll.length > 0 && (
