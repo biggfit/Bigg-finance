@@ -221,7 +221,7 @@ function doGet(e) {
         } else {
           fStr = String(rawF || "");
         }
-        recordatorios[rKey].push({ fecha: fStr, ccMes: Number(rObj.ccMes || 0), ccAnio: Number(rObj.ccAnio || 0), to: rObj.to || "", frName: rObj.frName || "", tipo: rObj.tipo || "cc", empresa: rObj.empresa || "" });
+        recordatorios[rKey].push({ fecha: fStr, ccMes: Number(rObj.ccMes || 0), ccAnio: Number(rObj.ccAnio || 0), to: rObj.to || "", frName: rObj.frName || "", tipo: rObj.tipo || "cc", empresa: rObj.empresa || "", currency: rObj.currency || "" });
       }
     }
 
@@ -386,15 +386,16 @@ function doPost(e) {
     } else {
       // Migración: agregar columnas nuevas si aún no existen
       var hRow = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
-      if (hRow.indexOf("frName") === -1) sh.getRange(1, hRow.length + 1).setValue("frName");
-      if (hRow.indexOf("tipo")   === -1) sh.getRange(1, sh.getLastColumn()).setValue("tipo");
-      if (hRow.indexOf("empresa") === -1) sh.getRange(1, sh.getLastColumn() + 1).setValue("empresa");
+      if (hRow.indexOf("frName")   === -1) sh.getRange(1, hRow.length + 1).setValue("frName");
+      if (hRow.indexOf("tipo")     === -1) sh.getRange(1, sh.getLastColumn()).setValue("tipo");
+      if (hRow.indexOf("empresa")  === -1) sh.getRange(1, sh.getLastColumn() + 1).setValue("empresa");
+      if (hRow.indexOf("currency") === -1) sh.getRange(1, sh.getLastColumn() + 1).setValue("currency");
     }
     sh.appendRow([
       body.frId, body.fecha,
-      body.ccMes   || "", body.ccAnio  || "",
-      body.to      || "", body.frName  || "",
-      body.tipo    || "cc", body.empresa || ""
+      body.ccMes   || "", body.ccAnio   || "",
+      body.to      || "", body.frName   || "",
+      body.tipo    || "cc", body.empresa || "", body.currency || ""
     ]);
     return json({ ok: true });
   }

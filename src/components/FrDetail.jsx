@@ -96,7 +96,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
   const saldoColor = (s) => s > 0.01 ? "var(--red)" : s < -0.01 ? "var(--green)" : "var(--muted)";
 
   const handleEmailCC = useCallback(async () => {
-    const to = franchise.emailFactura ?? franchise.emailComercial ?? "";
+    const to = [...new Set((franchise.emailFactura ?? franchise.emailComercial ?? "").split(",").map(s => s.trim()).filter(Boolean))].join(",");
     if (!to) { setMailError("Sin email configurado"); setMailStatus("error"); return; }
     setMailStatus("sending");
     setMailError("");
@@ -159,12 +159,12 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
         attachments: factAdjs,
       });
       const hoy = todayDmy();
-      addRecordatorioEntry(franchise.id, { frName: franchise.name, tipo: "cc", fecha: hoy, ccMes: localMonth + 1, ccAnio: localYear, to, status: "ok", empresa: activeCompany });
+      addRecordatorioEntry(franchise.id, { frName: franchise.name, tipo: "cc", fecha: hoy, ccMes: localMonth + 1, ccAnio: localYear, to, status: "ok", empresa: activeCompany, currency: displayCurrency });
       setMailStatus("ok");
     } catch (err) {
       const msg = err.message ?? "Error";
       setMailError(msg); setMailStatus("error");
-      addRecordatorioEntry(franchise.id, { frName: franchise.name, tipo: "cc", fecha: todayDmy(), ccMes: localMonth + 1, ccAnio: localYear, to, status: "error", error: msg, empresa: activeCompany });
+      addRecordatorioEntry(franchise.id, { frName: franchise.name, tipo: "cc", fecha: todayDmy(), ccMes: localMonth + 1, ccAnio: localYear, to, status: "error", error: msg, empresa: activeCompany, currency: displayCurrency });
     }
   }, [franchise, franchisor, localMonth, localYear, sp, compsWithSaldo, aperturaDate, displayCurrency, activeCompany, addRecordatorioEntry]);
 

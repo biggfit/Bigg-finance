@@ -206,7 +206,7 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
     for (let i = 0; i < rows.length; i++) {
       const d = rows[i];
       setSendProgress({ current: i + 1, total: rows.length, name: d.fr.name });
-      const to = [d.fr.emailFactura, d.fr.emailComercial].filter(Boolean).join(",");
+      const to = [...new Set([d.fr.emailFactura, d.fr.emailComercial].filter(Boolean).flatMap(e => e.split(",").map(s => s.trim())).filter(Boolean))].join(",");
       if (!to) { err.push(`${d.fr.name} (sin email)`); continue; }
       try {
         // Detectar si estamos en el mes calendario actual → rango extendido (mes anterior + mes actual)
@@ -284,13 +284,13 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
           htmlBody: ccHtml,
           attachments: factAdjs,
         });
-        addRecordatorioEntry(d.fr.id, { frName: d.fr.name, tipo: "cc", fecha: todayDmy(), ccMes: periodMonth + 1, ccAnio: periodYear, to, status: "ok", empresa: activeCompany });
+        addRecordatorioEntry(d.fr.id, { frName: d.fr.name, tipo: "cc", fecha: todayDmy(), ccMes: periodMonth + 1, ccAnio: periodYear, to, status: "ok", empresa: activeCompany, currency: cur });
         ok.push(d.fr.name);
       } catch (e) {
         const msg = e.message ?? "Error desconocido";
         err.push(`${d.fr.name} (${msg})`);
         // Guardar el fallo como punto rojo para no perder registro del intento
-        addRecordatorioEntry(d.fr.id, { frName: d.fr.name, tipo: "cc", fecha: todayDmy(), ccMes: periodMonth + 1, ccAnio: periodYear, to, status: "error", error: msg, empresa: activeCompany });
+        addRecordatorioEntry(d.fr.id, { frName: d.fr.name, tipo: "cc", fecha: todayDmy(), ccMes: periodMonth + 1, ccAnio: periodYear, to, status: "error", error: msg, empresa: activeCompany, currency: cur });
       }
     }
     setSendingMail(false);

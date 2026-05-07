@@ -255,8 +255,8 @@ export async function fetchRecordatorios() {
 /**
  * Guarda un recordatorio enviado en Sheets.
  */
-export async function saveRecordatorio({ frId, fecha, ccMes, ccAnio, to, frName, tipo, empresa }) {
-  return post({ action: "addRecordatorio", frId, fecha, ccMes: ccMes ?? "", ccAnio: ccAnio ?? "", to, frName: frName ?? "", tipo: tipo ?? "cc", empresa: empresa ?? "" });
+export async function saveRecordatorio({ frId, fecha, ccMes, ccAnio, to, frName, tipo, empresa, currency }) {
+  return post({ action: "addRecordatorio", frId, fecha, ccMes: ccMes ?? "", ccAnio: ccAnio ?? "", to, frName: frName ?? "", tipo: tipo ?? "cc", empresa: empresa ?? "", currency: currency ?? "" });
 }
 
 // ─── Mail ─────────────────────────────────────────────────────────────────────

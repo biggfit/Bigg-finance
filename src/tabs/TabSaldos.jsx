@@ -98,7 +98,7 @@ function SaldosTable({ title, data, accentColor, bgColor, borderColor, onOpenFr,
     const logoUrl     = franchisor?.usa?.logoUrl || franchisor?.es?.logoUrl || "/Logo.jpg";
     const logoDataUrl = await fetchLogoDataUrl(logoUrl);
     for (const d of confirmRows) {
-      const to = [d.fr.emailFactura, d.fr.emailComercial].filter(Boolean).join(",");
+      const to = [...new Set([d.fr.emailFactura, d.fr.emailComercial].filter(Boolean).flatMap(e => e.split(",").map(s => s.trim())).filter(Boolean))].join(",");
       if (!to) { err.push(`${d.fr.name} (sin email)`); continue; }
       try {
         // Construir líneas CC del período
@@ -150,7 +150,7 @@ function SaldosTable({ title, data, accentColor, bgColor, borderColor, onOpenFr,
           attachments: factAdjs,
         });
         const hoy = todayDmy();
-        addRecordatorioEntry(d.fr.id, { frName: d.fr.name, tipo: "cc", fecha: hoy, ccMes: month + 1, ccAnio: year, to, empresa: activeCompany });
+        addRecordatorioEntry(d.fr.id, { frName: d.fr.name, tipo: "cc", fecha: hoy, ccMes: month + 1, ccAnio: year, to, empresa: activeCompany, currency: curLabel });
         ok.push(d.fr.name);
       } catch (e) { err.push(`${d.fr.name} (${e.message})`); }
     }
