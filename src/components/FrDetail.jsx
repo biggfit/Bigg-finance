@@ -159,12 +159,12 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
         attachments: factAdjs,
       });
       const hoy = todayDmy();
-      addRecordatorioEntry(franchise.id, { frName: franchise.name, tipo: "cc", fecha: hoy, ccMes: localMonth + 1, ccAnio: localYear, to, status: "ok" });
+      addRecordatorioEntry(franchise.id, { frName: franchise.name, tipo: "cc", fecha: hoy, ccMes: localMonth + 1, ccAnio: localYear, to, status: "ok", empresa: activeCompany });
       setMailStatus("ok");
     } catch (err) {
       const msg = err.message ?? "Error";
       setMailError(msg); setMailStatus("error");
-      addRecordatorioEntry(franchise.id, { frName: franchise.name, tipo: "cc", fecha: todayDmy(), ccMes: localMonth + 1, ccAnio: localYear, to, status: "error", error: msg });
+      addRecordatorioEntry(franchise.id, { frName: franchise.name, tipo: "cc", fecha: todayDmy(), ccMes: localMonth + 1, ccAnio: localYear, to, status: "error", error: msg, empresa: activeCompany });
     }
   }, [franchise, franchisor, localMonth, localYear, sp, compsWithSaldo, aperturaDate, displayCurrency, activeCompany, addRecordatorioEntry]);
 
@@ -322,6 +322,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
               <RecordatorioDots dots={
                 (recordatorios?.[String(franchise.id)] ?? []).filter(r =>
                   Number(r.ccMes) - 1 === localMonth && Number(r.ccAnio) === localYear
+                  && (!r.empresa || r.empresa === activeCompany)
                 )
               } />
             </div>

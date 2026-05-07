@@ -292,6 +292,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
           fecha: todayDmy(),
           to,
           status: "ok",
+          empresa: activeCompany,
           compIds: frComps.map(c => c.id),
         });
         ok.push(fr.name);
@@ -304,6 +305,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
           to,
           status: "error",
           error: msg,
+          empresa: activeCompany,
           compIds: frComps.map(c => c.id),
         });
         err.push(`${fr.name} (${msg})`);

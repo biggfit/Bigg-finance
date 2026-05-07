@@ -182,6 +182,7 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
   const dotsForFr = useCallback((frId) =>
     (recordatorios?.[String(frId)] ?? []).filter(r =>
       Number(r.ccMes) - 1 === periodMonth && Number(r.ccAnio) === periodYear
+      && (!r.empresa || r.empresa === activeCompany)
     )
   , [recordatorios, periodMonth, periodYear]);
 
@@ -283,13 +284,13 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
           htmlBody: ccHtml,
           attachments: factAdjs,
         });
-        addRecordatorioEntry(d.fr.id, { frName: d.fr.name, tipo: "cc", fecha: todayDmy(), ccMes: periodMonth + 1, ccAnio: periodYear, to, status: "ok" });
+        addRecordatorioEntry(d.fr.id, { frName: d.fr.name, tipo: "cc", fecha: todayDmy(), ccMes: periodMonth + 1, ccAnio: periodYear, to, status: "ok", empresa: activeCompany });
         ok.push(d.fr.name);
       } catch (e) {
         const msg = e.message ?? "Error desconocido";
         err.push(`${d.fr.name} (${msg})`);
         // Guardar el fallo como punto rojo para no perder registro del intento
-        addRecordatorioEntry(d.fr.id, { frName: d.fr.name, tipo: "cc", fecha: todayDmy(), ccMes: periodMonth + 1, ccAnio: periodYear, to, status: "error", error: msg });
+        addRecordatorioEntry(d.fr.id, { frName: d.fr.name, tipo: "cc", fecha: todayDmy(), ccMes: periodMonth + 1, ccAnio: periodYear, to, status: "error", error: msg, empresa: activeCompany });
       }
     }
     setSendingMail(false);

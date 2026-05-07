@@ -80,7 +80,8 @@ function SaldosTable({ title, data, accentColor, bgColor, borderColor, onOpenFr,
 
   // Dots: muestra envíos cuyo período (ccMes/ccAnio) coincide con el mes visualizado
   const dotsForFr = (frId) => (recordatorios?.[String(frId)] ?? [])
-    .filter(r => Number(r.ccMes) - 1 === month && Number(r.ccAnio) === year);
+    .filter(r => Number(r.ccMes) - 1 === month && Number(r.ccAnio) === year
+              && (!r.empresa || r.empresa === activeCompany));
 
   const toggleOne = (id) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleAll = () => setSelected(prev => prev.size === data.length ? new Set() : new Set(data.map(d => d.fr.id)));
@@ -149,7 +150,7 @@ function SaldosTable({ title, data, accentColor, bgColor, borderColor, onOpenFr,
           attachments: factAdjs,
         });
         const hoy = todayDmy();
-        addRecordatorioEntry(d.fr.id, { frName: d.fr.name, tipo: "cc", fecha: hoy, ccMes: month + 1, ccAnio: year, to });
+        addRecordatorioEntry(d.fr.id, { frName: d.fr.name, tipo: "cc", fecha: hoy, ccMes: month + 1, ccAnio: year, to, empresa: activeCompany });
         ok.push(d.fr.name);
       } catch (e) { err.push(`${d.fr.name} (${e.message})`); }
     }
