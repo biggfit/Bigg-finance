@@ -219,6 +219,11 @@ export async function getNextInvoiceNum(frId, prefix = "USA") {
   return post({ action: "nextInvoiceNum", frId: Number(frId), prefix });
 }
 
+/** Decrementa invoiceSeq solo si el número borrado es el último emitido. */
+export async function tryDecrementInvoiceSeq(frId, num) {
+  return post({ action: "tryDecrementInvoiceSeq", frId: Number(frId), num: Number(num) });
+}
+
 // ─── Franquiciante ────────────────────────────────────────────────────────────
 
 /**

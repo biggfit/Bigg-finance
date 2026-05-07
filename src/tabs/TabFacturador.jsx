@@ -1569,6 +1569,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
       const isAR = fr?.country === "Argentina";
       const doc  = String(r.type ?? "").split("|")[0];
       const esComp = doc === "FACTURA" || doc === "NC";
+      const applyIVA = !!(COMPANIES[activeCompany]?.applyIVA);
       let comp = {
         id: uid(), type: r.type, date: r.date,
         amount: r.amount, ref: r.ref || `${loteId} — importado`,
@@ -1576,8 +1577,8 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
         month: r.month, year: r.year, loteId,
         currency: r.currency,
         empresa: activeCompany,
+        applyIVA,
       };
-      const applyIVA = COMPANIES[activeCompany]?.applyIVA ?? false;
       if (applyIVA && esComp && (r.type?.startsWith("FACTURA|") || r.type?.startsWith("NC|"))) {
         const amountNeto = Math.round(r.amount / 1.21 * 100) / 100;
         comp = { ...comp, amountNeto, amountIVA: Math.round((r.amount - amountNeto) * 100) / 100 };

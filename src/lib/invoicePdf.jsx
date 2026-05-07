@@ -124,12 +124,19 @@ function InvoicePage({ fr, issuer, comp, isES }) {
   const currency = comp.currency ?? (isES ? "EUR" : "USD");
 
   // ── Montos ──────────────────────────────────────────────────────────────────
-  const neto        = comp.amount ?? 0;
+  // Para ES, IVA aplica salvo que el comp lo deshabilite explícitamente (applyIVA === false).
+  // comp.amount es siempre el TOTAL (con IVA cuando aplica).
+  const applyIVA    = isES ? comp.applyIVA !== false : false;
+  const neto        = applyIVA
+    ? (comp.amountNeto != null ? comp.amountNeto : Math.round((comp.amount ?? 0) / 1.21 * 100) / 100)
+    : (comp.amount ?? 0);
   const discount    = comp.discount ?? 0;                          // descuento comercial (sobre neto)
   const base        = Math.round((neto - discount) * 100) / 100;  // base imponible después de descuento
-  const ivaRate     = isES ? (comp.applyIVA !== false ? 0.21 : 0) : 0;
+  const ivaRate     = applyIVA ? 0.21 : 0;
   const retRate     = isES && comp.retencionPct ? comp.retencionPct / 100 : 0;
-  const ivaAmt      = Math.round(base * ivaRate * 100) / 100;
+  const ivaAmt      = applyIVA && comp.amountIVA != null
+                      ? comp.amountIVA
+                      : Math.round(base * ivaRate * 100) / 100;
   const retAmt      = Math.round(base * retRate * 100) / 100;
   const total       = Math.round((base + ivaAmt - retAmt) * 100) / 100;
 
@@ -144,7 +151,7 @@ function InvoicePage({ fr, issuer, comp, isES }) {
   const issuerTaxId   = isES ? issuer.nif : issuer.ein;
   const issuerAddress = [issuer.address, issuer.suite].filter(Boolean).join(", ");
   const issuerCity    = isES
-    ? [issuer.city, issuer.cp ? `(${issuer.cp})` : "", issuer.country].filter(Boolean).join(", ")
+    ? [[issuer.city, issuer.cp ? `(${issuer.cp})` : ""].filter(Boolean).join(" "), issuer.country].filter(Boolean).join(", ")
     : [issuer.city, issuer.state, issuer.zip].filter(Boolean).join(", ") + (issuer.country ? `, ${issuer.country}` : "");
   const issuerLines   = [issuerTaxId, issuerAddress, issuerCity, issuer.email, issuer.phone].filter(Boolean);
 

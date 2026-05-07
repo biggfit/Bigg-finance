@@ -350,6 +350,33 @@ function doPost(e) {
     }
   }
 
+  // ── Invoice correlativo — decremento al borrar ────────────────────────────
+  if (body.action === "tryDecrementInvoiceSeq") {
+    var lock = LockService.getScriptLock();
+    lock.waitLock(10000);
+    try {
+      var fsh    = ss.getSheetByName("franchises");
+      var fdata  = fsh.getDataRange().getValues();
+      var fheads = fdata[0];
+      var idCol  = fheads.indexOf("id");
+      var seqCol = fheads.indexOf("invoiceSeq");
+      if (seqCol < 0) return json({ ok: false, reason: "no invoiceSeq col" });
+      for (var ri = 1; ri < fdata.length; ri++) {
+        if (String(fdata[ri][idCol]) === String(body.frId)) {
+          var curr = Number(fdata[ri][seqCol]) || 0;
+          if (curr === Number(body.num) && curr > 0) {
+            fsh.getRange(ri + 1, seqCol + 1).setValue(curr - 1);
+            return json({ ok: true, decremented: true, newSeq: curr - 1 });
+          }
+          return json({ ok: true, decremented: false, curr: curr });
+        }
+      }
+      return err("frId not found: " + body.frId);
+    } finally {
+      lock.releaseLock();
+    }
+  }
+
   // ── Recordatorio ──────────────────────────────────────────────────────────
   if (body.action === "addRecordatorio") {
     var sh = ss.getSheetByName("recordatorios");

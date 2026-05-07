@@ -4,7 +4,8 @@ import { StoreCtx } from "./lib/context";
 import { fetchComps, fetchSaldos, appendComp, updateComp, removeComp,
          fetchFranchises, fetchFranchisor,
          sheetsSaveFr, sheetsAddFr, sheetsDeleteFr, sheetsSaveFranchisor,
-         fetchRecordatorios, saveRecordatorio } from "./lib/sheetsApi";
+         fetchRecordatorios, saveRecordatorio,
+         tryDecrementInvoiceSeq } from "./lib/sheetsApi";
 import { CURRENCIES, MONTHS, AVAILABLE_YEARS, computeSaldo, computeSaldoPrevMes, downloadCSV } from "./lib/helpers";
 import "./lib/styles";
 import FrDetail from "./components/FrDetail";
@@ -180,8 +181,14 @@ export default function App({ onVolverNumbers } = {}) {
 
   const delComp = useCallback((frId, compId) => {
     const key = String(frId);
+    const comp = (compsRef.current[key] ?? []).find(c => c.id === String(compId));
     setComps(prev => ({ ...prev, [key]: (prev[key] ?? []).filter(c => c.id !== String(compId)) }));
     removeComp(frId, compId).catch(err => console.error('Sheets removeComp:', err));
+    // Si era una invoice USA/ESP, decrementar el correlativo solo si era la última emitida
+    const seqNum = comp?.invoice ? Number(comp.invoice.split('-').pop()) : NaN;
+    if (!isNaN(seqNum) && /^(USA|ESP)-/.test(comp.invoice)) {
+      tryDecrementInvoiceSeq(frId, seqNum).catch(console.error);
+    }
   }, []);
 
   const editComp = useCallback((frId, compId, patch) => {
@@ -274,8 +281,18 @@ export default function App({ onVolverNumbers } = {}) {
         if (frRes.status === 'fulfilled') setFranchises(frRes.value);
         else { console.error('Sheets franchises:', frRes.reason); }
 
-        if (franchisorRes.status === 'fulfilled') setFranchisor(franchisorRes.value);
-        else { console.warn('Sheets franchisor (fallback estático):', franchisorRes.reason); setFranchisor(DEFAULT_FRANCHISOR); }
+        if (franchisorRes.status === 'fulfilled') {
+          // Merge con DEFAULT_FRANCHISOR para que los campos vacíos en Sheets no pisen los defaults
+          const raw = franchisorRes.value ?? {};
+          const merged = {};
+          for (const side of ["ar", "usa", "es"]) {
+            merged[side] = { ...DEFAULT_FRANCHISOR[side] };
+            for (const [k, v] of Object.entries(raw[side] ?? {})) {
+              if (v !== "" && v != null) merged[side][k] = v;
+            }
+          }
+          setFranchisor(merged);
+        } else { console.warn('Sheets franchisor (fallback estático):', franchisorRes.reason); setFranchisor(DEFAULT_FRANCHISOR); }
 
         if (recRes.status === 'fulfilled' && recRes.value !== null) {
           setRecordatorios(recRes.value ?? {});
