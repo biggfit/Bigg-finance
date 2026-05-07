@@ -61,7 +61,7 @@ export const DEFAULT_FRANCHISOR = {
     bankName:       "CaixaBank",
     iban:           "ES41 2100 9055 1902 0032 0056",
     swift:          "",
-    paymentTerms:   "",
+    paymentTerms:   "Transferencia Bancaria",
     notaPie:        "",
   },
 };
