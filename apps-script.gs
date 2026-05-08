@@ -121,18 +121,7 @@ function doGet(e) {
       headers.forEach(function(h, j) { obj[h] = rows[i][j]; });
       var key = String(obj.frId);
       if (!result[key]) result[key] = [];
-      // Sheets devuelve celdas de fecha como objetos Date → normalizar a DD/MM/YYYY
-      var rawFecha = obj.fecha;
-      var fechaStr;
-      if (rawFecha && typeof rawFecha.getTime === "function") {
-        var dd2   = String(rawFecha.getDate()).padStart(2, "0");
-        var mm2   = String(rawFecha.getMonth() + 1).padStart(2, "0");
-        var yyyy2 = rawFecha.getFullYear();
-        fechaStr  = dd2 + "/" + mm2 + "/" + yyyy2;
-      } else {
-        fechaStr = String(rawFecha ?? "");
-      }
-      result[key].push({ fecha: fechaStr, ccMes: Number(obj.ccMes || 0), ccAnio: Number(obj.ccAnio || 0), to: obj.to || "", frName: obj.frName || "", tipo: obj.tipo || "cc" });
+      result[key].push(serializeRecordatorio(obj));
     }
     return json(result);
   }
@@ -214,14 +203,7 @@ function doGet(e) {
         recH.forEach(function(h, j) { rObj[h] = recRows[ri][j]; });
         var rKey = String(rObj.frId);
         if (!recordatorios[rKey]) recordatorios[rKey] = [];
-        var rawF = rObj.fecha;
-        var fStr;
-        if (rawF && typeof rawF.getTime === "function") {
-          fStr = String(rawF.getDate()).padStart(2,"0") + "/" + String(rawF.getMonth()+1).padStart(2,"0") + "/" + rawF.getFullYear();
-        } else {
-          fStr = String(rawF || "");
-        }
-        recordatorios[rKey].push({ fecha: fStr, ccMes: Number(rObj.ccMes || 0), ccAnio: Number(rObj.ccAnio || 0), to: rObj.to || "", frName: rObj.frName || "", tipo: rObj.tipo || "cc", empresa: rObj.empresa || "", currency: rObj.currency || "" });
+        recordatorios[rKey].push(serializeRecordatorio(rObj));
       }
     }
 
@@ -435,6 +417,17 @@ function handleSendMail(data) {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function serializeRecordatorio(obj) {
+  var rawFecha = obj.fecha;
+  var fechaStr;
+  if (rawFecha && typeof rawFecha.getTime === "function") {
+    fechaStr = String(rawFecha.getDate()).padStart(2,"0") + "/" + String(rawFecha.getMonth()+1).padStart(2,"0") + "/" + rawFecha.getFullYear();
+  } else {
+    fechaStr = String(rawFecha || "");
+  }
+  return { fecha: fechaStr, ccMes: Number(obj.ccMes || 0), ccAnio: Number(obj.ccAnio || 0), to: obj.to || "", frName: obj.frName || "", tipo: obj.tipo || "cc", empresa: obj.empresa || "", currency: obj.currency || "" };
+}
 
 const json = d => ContentService
   .createTextOutput(JSON.stringify(d))

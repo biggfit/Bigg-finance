@@ -184,7 +184,7 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
       Number(r.ccMes) - 1 === periodMonth && Number(r.ccAnio) === periodYear
       && (!r.empresa || r.empresa === activeCompany)
     )
-  , [recordatorios, periodMonth, periodYear]);
+  , [recordatorios, periodMonth, periodYear, activeCompany]);
 
   const handleMail = useCallback((rows) => setConfirmRows(rows), []);
 

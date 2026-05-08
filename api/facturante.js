@@ -41,11 +41,12 @@ const TIPO_COMPROBANTE_SIN_IVA = {
 };
 
 // TratamientoImpositivo del cliente receptor (for CrearComprobante)
+// Fuente: facturante.com/Developers/CrearComprobante
 const TRAT_IMPOSITIVO = {
-  'Responsable Inscripto': 1,
-  'Exento':                4,
-  'Consumidor Final':      5,
-  'Monotributista':        6,
+  'Monotributo':           1,  // 1 = MONOTRIBUTISTA
+  'Responsable Inscripto': 2,  // 2 = RESPONSABLE INSCRIPTO
+  'Consumidor Final':      3,  // 3 = CONSUMIDOR FINAL
+  'Exento':                4,  // 4 = IVA EXENTO
 };
 
 // ─── SOAP BUILDERS (WCF DataContract format) ─────────────────────────────────
