@@ -96,8 +96,8 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
   const saldoColor = (s) => s > 0.01 ? "var(--red)" : s < -0.01 ? "var(--green)" : "var(--muted)";
 
   const handleEmailCC = useCallback(async () => {
-    const to = [...new Set((franchise.emailFactura ?? franchise.emailComercial ?? "").split(",").map(s => s.trim()).filter(Boolean))].join(",");
-    if (!to) { setMailError("Sin email configurado"); setMailStatus("error"); return; }
+    const to = (franchise.emailFactura ?? "").split(",").map(s => s.trim()).filter(Boolean).join(",");
+    if (!to) { setMailError("Sin email de facturación configurado"); setMailStatus("error"); return; }
     setMailStatus("sending");
     setMailError("");
     try {
@@ -310,10 +310,10 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <button
                 className="ghost"
-                title={`Enviar estado de cuenta + facturas de ${MONTH_NAMES[localMonth]} ${localYear} a ${franchise.emailFactura ?? franchise.emailComercial ?? "—"}`}
+                title={`Enviar estado de cuenta + facturas de ${MONTH_NAMES[localMonth]} ${localYear} a ${franchise.emailFactura ?? "—"}`}
                 onClick={handleEmailCC}
                 disabled={mailStatus === "sending"}
-                style={{ fontSize: 16, opacity: (!franchise.emailFactura && !franchise.emailComercial) ? .3 : .8, padding: "4px 8px" }}
+                style={{ fontSize: 16, opacity: franchise.emailFactura ? .8 : .3, padding: "4px 8px" }}
               >
                 {mailStatus === "sending" ? "…" : "✉"}
               </button>

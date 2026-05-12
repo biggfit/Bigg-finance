@@ -206,7 +206,7 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
     for (let i = 0; i < rows.length; i++) {
       const d = rows[i];
       setSendProgress({ current: i + 1, total: rows.length, name: d.fr.name });
-      const to = [...new Set([d.fr.emailFactura, d.fr.emailComercial].filter(Boolean).flatMap(e => e.split(",").map(s => s.trim())).filter(Boolean))].join(",");
+      const to = (d.fr.emailFactura ?? "").split(",").map(s => s.trim()).filter(Boolean).join(",");
       if (!to) { err.push(`${d.fr.name} (sin email)`); continue; }
       try {
         // Detectar si estamos en el mes calendario actual → rango extendido (mes anterior + mes actual)
