@@ -96,14 +96,18 @@ export function buildCCHtml(frName, frRazonSocial, lines, currency, ccMonth, ccY
   const apertura = lines.find(l => l.type === "apertura");
   const movs     = lines.filter(l => l.type !== "apertura");
   const saldoAnterior = apertura?.saldo ?? 0;
-  const { totalDebe, totalHaber, totalFacturado, totalNC, totalCobros } = movs.reduce((acc, l) => {
-    acc.totalDebe      += l.debit  ?? 0;
-    acc.totalHaber     += l.credit ?? 0;
-    if (l.type?.startsWith("FACTURA"))      acc.totalFacturado += l.debit  ?? 0;
-    if (l.type?.startsWith("NC"))           acc.totalNC        += l.credit ?? 0;
-    if (TIPOS_MOVIMIENTO.includes(l.type))  acc.totalCobros    += l.credit ?? 0;
+  const { totalDebe, totalHaber, totalFacturado, totalNC, totalCobros, totalTransfEnviadas } = movs.reduce((acc, l) => {
+    acc.totalDebe           += l.debit  ?? 0;
+    acc.totalHaber          += l.credit ?? 0;
+    if (l.type?.startsWith("FACTURA"))      acc.totalFacturado      += l.debit  ?? 0;
+    if (l.type?.startsWith("NC"))           acc.totalNC             += l.credit ?? 0;
+    if (TIPOS_MOVIMIENTO.includes(l.type)) {
+      acc.totalCobros         += l.credit ?? 0;  // PAGO, PAGO_PAUTA (sign=-1, credit=amount)
+      acc.totalTransfEnviadas += l.debit  ?? 0;  // PAGO_ENVIADO     (sign=+1, debit=amount)
+    }
     return acc;
-  }, { totalDebe: 0, totalHaber: 0, totalFacturado: 0, totalNC: 0, totalCobros: 0 });
+  }, { totalDebe: 0, totalHaber: 0, totalFacturado: 0, totalNC: 0, totalCobros: 0, totalTransfEnviadas: 0 });
+  const totalTransfNet = totalTransfEnviadas - totalCobros; // positivo = favorable para la sede
   const netComp  = totalFacturado - totalNC;
   const netColor = netComp > 0.01 ? "#dc2626" : netComp < -0.01 ? "#16a34a" : "#6b7280";
   const netoColor = (totalDebe - totalHaber) > 0.01 ? "#dc2626" : (totalDebe - totalHaber) < -0.01 ? "#16a34a" : "#6b7280";
@@ -183,7 +187,7 @@ export function buildCCHtml(frName, frRazonSocial, lines, currency, ccMonth, ccY
             ? `<span style="color:#9ca3af;font-size:13px;font-weight:400">sin movimientos</span>`
             : `<table style="width:100%;border-collapse:collapse;font-size:11px">
             ${facturaRow}
-            ${totalCobros > 0 ? `<tr><td style="color:#6b7280;padding:1px 4px;text-align:left">Transferencias</td><td style="font-family:monospace;font-weight:700;color:#16a34a;text-align:right;padding:1px 4px">${fmtSaldo(-totalCobros)}</td></tr>` : ""}
+            ${(totalCobros > 0 || totalTransfEnviadas > 0) ? `<tr><td style="color:#6b7280;padding:1px 4px;text-align:left">Transferencias</td><td style="font-family:monospace;font-weight:700;color:${totalTransfNet >= 0 ? "#16a34a" : "#dc2626"};text-align:right;padding:1px 4px">${fmtSaldo(totalTransfNet)}</td></tr>` : ""}
             <tr><td colspan="2" style="padding:3px 4px 1px"><div style="border-top:1px solid #e5e7eb"></div></td></tr>
             <tr><td style="color:#374151;font-weight:600;padding:1px 4px;text-align:left">Neto</td><td style="font-family:monospace;font-size:13px;font-weight:800;color:${netoColor};text-align:right;padding:1px 4px">${fmtSaldo(totalDebe-totalHaber)}</td></tr>
           </table>`}
