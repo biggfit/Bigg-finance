@@ -543,7 +543,7 @@ function BalanceBlock({ title, items, headerColor, onItemClick }) {
               padding:"1px 6px", fontWeight:600, marginLeft:8, flexShrink:0,
               width:36, textAlign:"center" }}>{item.moneda}</span>
             <span style={{ fontSize:13, fontFamily:"var(--mono)", fontWeight:700,
-              color: headerColor, flexShrink:0, width:110, textAlign:"right" }}>
+              color: headerColor, flexShrink:0, textAlign:"right", whiteSpace:"nowrap" }}>
               {fmtSaldo(item.saldo, item.moneda)}
             </span>
           </div>
@@ -556,7 +556,7 @@ function BalanceBlock({ title, items, headerColor, onItemClick }) {
         <div style={{ display:"flex", gap:10 }}>
           {Object.entries(totals).map(([mon, tot]) => (
             <span key={mon} style={{ fontSize:13, fontFamily:"var(--mono)", fontWeight:800,
-              color: headerColor }}>
+              color: headerColor, whiteSpace:"nowrap" }}>
               {fmtSaldo(tot, mon)}
             </span>
           ))}

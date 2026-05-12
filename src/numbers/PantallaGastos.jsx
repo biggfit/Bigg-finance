@@ -2,15 +2,15 @@ import { useState, useMemo, useEffect } from "react";
 import { T, fmtMoney, fmtDate, PageHeader, Btn } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
 import {
-  fetchGastos, deleteGasto, appendGastoDirecto,
+  fetchGastos, deleteGasto, appendGastoDirecto, updateGastoDirecto,
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto, fetchProveedores,
 } from "../lib/numbersApi";
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 import { makeResolveCC, makeResolveCB } from "./formUtils.jsx";
 import FiltroFecha, { useFiltroFecha } from "./FiltroFecha";
 
-// ─── Formulario: Nuevo Gasto Directo ─────────────────────────────────────────
-function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, proveedores, onClose, onSaved }) {
+// ─── Formulario: Nuevo / Editar Gasto Directo ────────────────────────────────
+function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, proveedores, onClose, onSaved, editGasto = null }) {
   const cuentasSoc = cuentasBancarias.filter(
     c => (c.sociedad ?? "").toLowerCase() === (sociedad ?? "").toLowerCase()
   );
@@ -34,7 +34,20 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
     medioPago:       "",
   });
 
-  const [rows, setRows]     = useState([newRow()]);
+  const [rows, setRows]     = useState(() => {
+    if (!editGasto) return [newRow()];
+    const prov = proveedores.find(p => p.nombre === editGasto.proveedor);
+    return [{
+      _id:             Date.now(),
+      fecha:           editGasto.fecha,
+      proveedorId:     prov?.id ?? "",
+      cuenta_contable: editGasto.cuenta_contable,
+      cc:              editGasto.cc,
+      subtotal:        String(editGasto.subtotal),
+      ivaRate:         String(editGasto.ivaRate),
+      medioPago:       editGasto.cuentaBancaria,
+    }];
+  });
   const [saving, setSaving] = useState(false);
 
   const upd = (id, k, v) => setRows(rs => rs.map(r => r._id === id ? { ...r, [k]: v } : r));
@@ -49,15 +62,15 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
   const handleGuardar = async () => {
     setSaving(true);
     try {
-      await Promise.all(validRows.map(r => {
+      if (editGasto) {
+        const r    = rows[0];
         const prov = proveedores.find(p => p.id === r.proveedorId);
-        return appendGastoDirecto({
-          sociedad,
+        await updateGastoDirecto(editGasto.rowId, editGasto._movId, {
           fecha:              r.fecha,
           cuenta_contable:    r.cuenta_contable,
           cuenta_contable_id: cuentasGasto.find(c => c.nombre === r.cuenta_contable)?.id ?? "",
           cc:                 r.cc,
-          moneda:             getMoneda(r.medioPago),
+          moneda:             getMoneda(r.medioPago) || editGasto.moneda,
           subtotal:           Number(r.subtotal) || 0,
           ivaRate:            Number(r.ivaRate) || 0,
           nota:               [r.cuenta_contable, cuentasSoc.find(c => c.id === r.medioPago)?.nombre].filter(Boolean).join(" · "),
@@ -65,7 +78,25 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
           proveedor_id:       prov?.id ?? "",
           proveedor_nombre:   prov?.nombre ?? "",
         });
-      }));
+      } else {
+        await Promise.all(validRows.map(r => {
+          const prov = proveedores.find(p => p.id === r.proveedorId);
+          return appendGastoDirecto({
+            sociedad,
+            fecha:              r.fecha,
+            cuenta_contable:    r.cuenta_contable,
+            cuenta_contable_id: cuentasGasto.find(c => c.nombre === r.cuenta_contable)?.id ?? "",
+            cc:                 r.cc,
+            moneda:             getMoneda(r.medioPago),
+            subtotal:           Number(r.subtotal) || 0,
+            ivaRate:            Number(r.ivaRate) || 0,
+            nota:               [r.cuenta_contable, cuentasSoc.find(c => c.id === r.medioPago)?.nombre].filter(Boolean).join(" · "),
+            cuenta_bancaria:    r.medioPago,
+            proveedor_id:       prov?.id ?? "",
+            proveedor_nombre:   prov?.nombre ?? "",
+          });
+        }));
+      }
       onSaved();
     } catch (e) {
       alert("Error al guardar: " + e.message);
@@ -85,7 +116,9 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
       <div style={{ background:"#78350f", borderRadius:T.radius, padding:"14px 24px",
         display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
         <div>
-          <div style={{ fontSize:16, fontWeight:900, color:"#fbbf24" }}>Gastos Directos</div>
+          <div style={{ fontSize:16, fontWeight:900, color:"#fbbf24" }}>
+            {editGasto ? "Editar Gasto" : "Gastos Directos"}
+          </div>
           <div style={{ fontSize:11, color:"rgba(251,191,36,.5)", marginTop:3 }}>
             Afectan P&amp;L y Tesorería · La moneda se toma de la caja/banco seleccionado
           </div>
@@ -201,16 +234,18 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
           </table>
         </div>
 
-        {/* Agregar fila */}
-        <div style={{ padding:"8px 12px", borderTop:`1px dashed ${T.cardBorder}` }}>
-          <button onClick={() => setRows(rs => [...rs, newRow()])}
-            style={{ background:"transparent", border:`1.5px dashed ${T.cardBorder}`,
-              borderRadius:6, padding:"5px 14px", fontSize:12, color:T.muted,
-              cursor:"pointer", fontFamily:T.font, fontWeight:600,
-              display:"flex", alignItems:"center", gap:6 }}>
-            + Agregar fila
-          </button>
-        </div>
+        {/* Agregar fila — solo en modo creación */}
+        {!editGasto && (
+          <div style={{ padding:"8px 12px", borderTop:`1px dashed ${T.cardBorder}` }}>
+            <button onClick={() => setRows(rs => [...rs, newRow()])}
+              style={{ background:"transparent", border:`1.5px dashed ${T.cardBorder}`,
+                borderRadius:6, padding:"5px 14px", fontSize:12, color:T.muted,
+                cursor:"pointer", fontFamily:T.font, fontWeight:600,
+                display:"flex", alignItems:"center", gap:6 }}>
+              + Agregar fila
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Footer */}
@@ -233,7 +268,9 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
             style={{ background: canSave && !saving ? "#ca8a04" : "#9ca3af", border:"none",
               borderRadius:8, padding:"9px 22px", fontSize:13, fontWeight:700, color:"#fff",
               cursor: canSave && !saving ? "pointer" : "default", fontFamily:T.font }}>
-            {saving ? "Guardando…" : `Registrar ${validRows.length > 0 ? validRows.length : ""} Gasto${validRows.length !== 1 ? "s" : ""} ✓`}
+            {saving ? "Guardando…" : editGasto
+              ? "Guardar cambios ✓"
+              : `Registrar ${validRows.length > 0 ? validRows.length : ""} Gasto${validRows.length !== 1 ? "s" : ""} ✓`}
           </button>
         </div>
       </div>
@@ -252,6 +289,7 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
   const [centrosCosto, setCentrosCosto]         = useState(CENTROS_COSTO_STATIC);
   const [proveedores, setProveedores]           = useState([]);
   const [busqueda, setBusqueda]                 = useState("");
+  const [editingGasto, setEditingGasto]         = useState(null);
 
   const resolveCC = useMemo(() => makeResolveCC(centrosCosto), [centrosCosto]);
   const resolveCB = useMemo(() => makeResolveCB(cuentasBancarias), [cuentasBancarias]);
@@ -300,8 +338,8 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
     }
   };
 
-  // ── Formulario nuevo gasto ───────────────────────────────────────────────────
-  if (subView === "new-gasto") {
+  // ── Formulario nuevo / editar gasto ─────────────────────────────────────────
+  if (subView === "new-gasto" || editingGasto) {
     return (
       <FormNuevoGasto
         sociedad={sociedad}
@@ -309,8 +347,9 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
         cuentas={cuentas}
         centrosCosto={centrosCosto}
         proveedores={proveedores}
-        onClose={() => onSubViewChange?.("gastos")}
-        onSaved={async () => { onSubViewChange?.("gastos"); await cargar(); }}
+        editGasto={editingGasto}
+        onClose={() => { setEditingGasto(null); onSubViewChange?.("gastos"); }}
+        onSaved={async () => { setEditingGasto(null); onSubViewChange?.("gastos"); await cargar(); }}
       />
     );
   }
@@ -414,7 +453,15 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
                       : <span style={{ color:T.dim }}>—</span>}
                   </td>
 
-                  <td style={{ padding:"9px 10px", textAlign:"center" }}>
+                  <td style={{ padding:"9px 10px", textAlign:"center", whiteSpace:"nowrap" }}>
+                    <button
+                      onClick={() => setEditingGasto(g)}
+                      title="Editar gasto"
+                      style={{ background:"transparent", border:`1px solid #93c5fd`,
+                        borderRadius:5, padding:"3px 8px", cursor:"pointer",
+                        fontSize:12, color:"#2563eb", lineHeight:1, fontFamily:T.font, marginRight:4 }}>
+                      ✏️
+                    </button>
                     <button
                       onClick={() => handleEliminar(g)}
                       title="Eliminar gasto"

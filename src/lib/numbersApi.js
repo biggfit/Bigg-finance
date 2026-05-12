@@ -601,6 +601,42 @@ export async function deleteGasto(rowId, movId) {
   await Promise.all(ops);
 }
 
+/** Actualiza un gasto directo existente (comprobante + movimiento de tesorería). */
+export async function updateGastoDirecto(rowId, movId, { fecha, cuenta_contable, cuenta_contable_id = "", cc = "", moneda = "ARS", subtotal, ivaRate = 0, nota = "", cuenta_bancaria, referencia = "", proveedor_id = "", proveedor_nombre = "" }) {
+  const sub   = Number(subtotal) || 0;
+  const iva   = sub * ((Number(ivaRate) || 0) / 100);
+  const total = sub + iva;
+  const ops = [
+    post({ action: "edit", sheet: "nb_comprobantes", id: rowId, patch: {
+      fecha, vto: fecha,
+      contraparte_id:     proveedor_id,
+      contraparte_nombre: proveedor_nombre,
+      cuenta_contable,
+      cuenta_contable_id,
+      moneda,
+      centro_costo:       cc,
+      subtotal:           sub,
+      iva_rate:           Number(ivaRate) || 0,
+      iva_monto:          iva,
+      total,
+      nota,
+    }}),
+  ];
+  if (movId) ops.push(
+    post({ action: "edit", sheet: "nb_movimientos", id: movId, patch: {
+      fecha,
+      cuenta_bancaria,
+      cuenta_contable,
+      centro_costo: cc,
+      moneda,
+      monto:        -total,
+      concepto:     nota || `Gasto directo: ${cuenta_contable}`,
+      referencia,
+    }}),
+  );
+  await Promise.all(ops);
+}
+
 // ─── P&L — Líneas enriquecidas ────────────────────────────────────────────────
 //
 // Lee nb_comprobantes (ya tiene header + CC en cada fila) y filtra por subtipo.

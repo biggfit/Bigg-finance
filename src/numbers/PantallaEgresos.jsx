@@ -956,8 +956,8 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
               <th style={{ width:36 }} />
               {["ID","Estado","Emisión","Vencimiento","Proveedor","N° FC","Cuenta","Centros de Costo","Importe","Pagado","Pendiente","Medio de Pago","Nota"].map(h => (
                 <th key={h} style={{ padding:"10px 14px", fontSize:11, fontWeight:700,
-                  letterSpacing:".08em", textTransform:"uppercase",
-                  color:T.tableHeadText, textAlign:"left", whiteSpace:"nowrap" }}>{h}</th>
+                  letterSpacing:".08em", textTransform:"uppercase", whiteSpace:"nowrap",
+                  color:T.tableHeadText, textAlign: ["Importe","Pagado","Pendiente"].includes(h) ? "right" : "left" }}>{h}</th>
               ))}
             </tr>
           </thead>
