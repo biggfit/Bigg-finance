@@ -278,9 +278,7 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
 
         await sendMailFr({
           to,
-          subject: isCurrentPeriod
-            ? `Estado de Cuenta ${d.fr.name} — ${MONTHS[rangeStartMonth]} - ${MONTHS[periodMonth]} ${periodYear}`
-            : `Estado de Cuenta ${d.fr.name} — ${MONTHS[periodMonth]} ${periodYear}`,
+          subject: `Estado de Cuenta ${d.fr.name} — ${MONTHS[rangeStartMonth]} ${rangeStartYear}`,
           htmlBody: ccHtml,
           attachments: factAdjs,
         });
