@@ -100,8 +100,8 @@ function parseExtracto(wb, targetMonth, targetYear, franchises, comps, saldoInic
     cred:  ci(/creditos/)               >= 0 ? ci(/creditos/)               : 3,
     grupo: ci(/grupo de concepto/)      >= 0 ? ci(/grupo de concepto/)      : 5,
     conc:  ci(/^concepto$/)             >= 0 ? ci(/^concepto$/)             : 6,
-    ley1:  ci(/leyendas adicionales 1/) >= 0 ? ci(/leyendas adicionales 1/) : 7,
-    ley2:  ci(/leyendas adicionales 2/) >= 0 ? ci(/leyendas adicionales 2/) : 8,
+    ley1:  ci(/leyendas adicionales\s*1/) >= 0 ? ci(/leyendas adicionales\s*1/) : 7,
+    ley2:  ci(/leyendas adicionales\s*2/) >= 0 ? ci(/leyendas adicionales\s*2/) : 8,
   };
 
   const cuitMap = buildCuitMap(franchises);
