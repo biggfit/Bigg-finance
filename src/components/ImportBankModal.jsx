@@ -71,8 +71,17 @@ function parseMoney(val) {
 
 // ─── PARSER ──────────────────────────────────────────────────────────────────
 function parseExtracto(wb, targetMonth, targetYear, franchises, comps, saldoInicial) {
-  const sheet = wb.Sheets["Movimientos"];
-  if (!sheet) throw new Error('El archivo no contiene la hoja "Movimientos"');
+  // Búsqueda case-insensitive del nombre de hoja
+  const sheetKey = wb.SheetNames.find(
+    (n) => n.trim().toLowerCase() === "movimientos"
+  );
+  const sheet = sheetKey ? wb.Sheets[sheetKey] : null;
+  if (!sheet) {
+    const available = wb.SheetNames.join(", ") || "(ninguna)";
+    throw new Error(
+      `El archivo no contiene la hoja "Movimientos". Hojas encontradas: ${available}`
+    );
+  }
 
   const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
   const headerIdx = rawRows.findIndex(
