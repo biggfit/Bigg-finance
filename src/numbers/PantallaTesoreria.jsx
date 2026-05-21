@@ -166,7 +166,10 @@ function GastoDirectoModal({ sociedad, cuentasBancarias, cuentasContables = [], 
     </label>
   );
 
+  const _savingRef = useRef(false);
   const handleGuardar = async () => {
+    if (_savingRef.current) return;
+    _savingRef.current = true;
     setSaving(true);
     try {
       await appendGastoDirecto({
@@ -184,6 +187,7 @@ function GastoDirectoModal({ sociedad, cuentasBancarias, cuentasContables = [], 
     } catch (e) {
       alert("Error al guardar: " + e.message);
     } finally {
+      _savingRef.current = false;
       setSaving(false);
     }
   };

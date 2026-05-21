@@ -138,14 +138,17 @@ function EditarCobroModal({ cobro, sociedad, cuentasSoc, onClose, onSaved }) {
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const canSave = form.fecha && form.monto && Number(form.monto) > 0;
 
+  const _savingRef = useRef(false);
   const handleGuardar = async () => {
+    if (_savingRef.current) return;
+    _savingRef.current = true;
     setSaving(true);
     try {
       const monto = Number(form.monto);
       await updateMovTesoreria(cobro.id, { fecha: form.fecha, monto, cuenta_bancaria: form.cuenta_bancaria, nota: form.nota });
       onSaved();
     } catch (e) { alert("Error: " + e.message); }
-    finally { setSaving(false); }
+    finally { _savingRef.current = false; setSaving(false); }
   };
 
   const handleBorrar = async () => {

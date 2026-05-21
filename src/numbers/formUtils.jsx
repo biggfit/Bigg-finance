@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useCallback } from "react";
 import { T } from "./theme";
 import { newLinea } from "./useLineas";
 
@@ -544,6 +544,16 @@ export function InvoiceFormFooter({
   showSecondary,
   secondaryAction,
 }) {
+  const savingRef = useRef(false);
+
+  const guard = useCallback((fn) => () => {
+    if (savingRef.current || !fn) return;
+    savingRef.current = true;
+    fn();
+    // Reset tras 3s por si el modal no cierra (ej: error de validación)
+    setTimeout(() => { savingRef.current = false; }, 3000);
+  }, []);
+
   return (
     <div className={FACTURA_FORM_CLASS} style={{
       display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 10,
@@ -559,7 +569,7 @@ export function InvoiceFormFooter({
         {asPage ? "← Cancelar" : "Cancelar"}
       </button>
       {showSecondary && secondaryAction && (
-        <button type="button" onClick={secondaryAction.onClick} disabled={!canSave} style={{
+        <button type="button" onClick={guard(secondaryAction.onClick)} disabled={!canSave} style={{
           background: canSave ? "#fff" : "#f3f4f6",
           border: `1px solid ${canSave ? secondaryAction.outlineColor : T.cardBorder}`,
           borderRadius: 8, padding: "10px 20px", fontSize: 13, fontWeight: 700,
@@ -570,7 +580,7 @@ export function InvoiceFormFooter({
           {secondaryAction.label}
         </button>
       )}
-      <button type="button" onClick={onSave} disabled={!canSave} style={{
+      <button type="button" onClick={guard(onSave)} disabled={!canSave} style={{
         background: canSave ? T.accentDark : "#e5e7eb",
         border: "none", borderRadius: 8, padding: "10px 22px", fontSize: 13, fontWeight: 800,
         color: canSave ? T.accent : T.dim,

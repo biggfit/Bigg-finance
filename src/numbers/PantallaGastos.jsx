@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { T, fmtMoney, fmtDate, PageHeader, Btn } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
 import {
@@ -34,6 +34,7 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
     medioPago:       "",
   });
 
+  const _savingRef = useRef(false);
   const [rows, setRows]     = useState(() => {
     if (!editGasto) return [newRow()];
     const prov = proveedores.find(p => p.nombre === editGasto.proveedor);
@@ -60,6 +61,8 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
   const canSave   = validRows.length > 0;
 
   const handleGuardar = async () => {
+    if (_savingRef.current) return;
+    _savingRef.current = true;
     setSaving(true);
     try {
       if (editGasto) {
@@ -100,6 +103,8 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
       onSaved();
     } catch (e) {
       alert("Error al guardar: " + e.message);
+    } finally {
+      _savingRef.current = false;
       setSaving(false);
     }
   };

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { T, Btn, PageHeader, fmtDate, fmtMoney } from "./theme";
 import { TIPO_CUENTA, SOCIEDADES } from "../data/tesoreriaData";
 import { fetchIntercompania, appendIntercompania, deleteIntercompania, fetchCuentasBancarias } from "../lib/numbersApi";
@@ -87,8 +87,10 @@ export default function PantallaIntercompania({ sociedad }) {
     montoOrigenN > 0 &&
     montoDestinoN > 0;
 
+  const _savingRef = useRef(false);
   async function handleGuardar() {
-    if (!canSave) return;
+    if (!canSave || _savingRef.current) return;
+    _savingRef.current = true;
     setSaving(true);
     try {
       await appendIntercompania({
@@ -108,6 +110,7 @@ export default function PantallaIntercompania({ sociedad }) {
       setShowForm(false);
       await cargar();
     } finally {
+      _savingRef.current = false;
       setSaving(false);
     }
   }
