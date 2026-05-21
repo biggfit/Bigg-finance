@@ -374,7 +374,7 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
   // Auto-precarga segun pais
   const handleCountryChange = country => {
     const latam = ["Uruguay","Chile","Colombia","Peru","Mexico","Bolivia","Paraguay","Ecuador"];
-    const europa = ["Espana","España","Francia","Italia","Alemania","Portugal","Reino Unido"];
+    const europa = ["España","Francia","Italia","Alemania","Portugal","Reino Unido"];
     let patch = { country };
     if (country === "Argentina") {
       patch.currency = "ARS"; patch.currencies = ["ARS"]; patch.condIVA = "Responsable Inscripto"; patch.applyIVA = true;
@@ -888,7 +888,7 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
                     <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
                       <label style={{ fontSize:10, color:"var(--muted)", fontWeight:700, letterSpacing:".07em" }}>Pais</label>
                       <CustomSelect value={buf.country} onChange={handleCountryChange}
-                        opts={["Argentina","Uruguay","Chile","Colombia","Peru","Mexico","Bolivia","Paraguay","Ecuador","USA","Espana","Francia","Italia","Alemania","Portugal","Reino Unido","Otro"]} />
+                        opts={["Argentina","Uruguay","Chile","Colombia","Peru","Mexico","Bolivia","Paraguay","Ecuador","USA","España","Francia","Italia","Alemania","Portugal","Reino Unido","Otro"]} />
                     </div>
                     <FieldInput label="Moneda principal" value={buf.currency} onChange={v => { setF("currency")(v); setBuf(b => ({ ...b, currencies: (b.currencies ?? [b.currency ?? "ARS"]).includes(v) ? b.currencies : [...(b.currencies ?? [b.currency ?? "ARS"]), v] })); }} half opts={["ARS","USD","EUR"]} />
                   </div>
