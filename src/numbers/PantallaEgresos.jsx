@@ -257,7 +257,7 @@ function EditarPagoModal({ pago, sociedad, cuentasSoc, onClose, onSaved }) {
 function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClose, onAgregarPago, onEditar, onEditarPago, asPage = false }) {
   const resolveCB = makeResolveCB(cuentasBancarias);
   const resolveCC = makeResolveCC(centrosCosto);
-  const pagado  = egreso.pagosVinculados?.reduce((s,p) => s + (Number(p.monto)||0), 0) ?? 0;
+  const pagado  = egreso.pagosVinculados?.reduce((s,p) => s + Math.abs(Number(p.monto)||0), 0) ?? 0;
   const aPagar  = egreso.importe - pagado;
   const lineas  = egreso.lineas ?? [];
 
@@ -365,7 +365,7 @@ function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClos
                         <td style={{ padding:"8px 14px", fontSize:13, color:"#333" }}>{resolveCB(p.cuenta_bancaria)}</td>
                         <td style={{ padding:"8px 14px", fontSize:13, fontFamily:"var(--mono)",
                           fontWeight:700, color:T.green, textAlign:"right" }}>
-                          {fmtMoney(Number(p.monto), egreso.moneda)}
+                          {fmtMoney(Math.abs(Number(p.monto)||0), egreso.moneda)}
                         </td>
                         <td style={{ padding:"8px 8px", textAlign:"center" }}>
                           <button onClick={() => onEditarPago?.(p)} title="Editar pago"
@@ -773,7 +773,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
         moneda,
         cantidad: docs.length,
         total:   docs.reduce((s,e) => s + (e.importe ?? 0), 0),
-        pagado:  docs.reduce((s,e) => s + (e.pagosVinculados?.reduce((ps,p) => ps + (Number(p.monto)||0), 0) ?? 0), 0),
+        pagado:  docs.reduce((s,e) => s + (e.pagosVinculados?.reduce((ps,p) => ps + Math.abs(Number(p.monto)||0), 0) ?? 0), 0),
         aPagar:  docs.filter(e => e.estado === "a_pagar").reduce((s,e) => s + (e.saldoPendiente ?? e.importe), 0),
         vencido: docs.filter(e => e.estado === "vencido").reduce((s,e) => s + (e.saldoPendiente ?? e.importe), 0),
       };
@@ -1002,7 +1002,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
                   </td>
                   <td style={{ padding:"10px 14px", fontSize:13, fontFamily:"var(--mono)",
                     fontWeight:700, color:T.green, textAlign:"right", whiteSpace:"nowrap" }}>
-                    {fmtMoney(e.pagosVinculados?.reduce((s,p)=>s+(Number(p.monto)||0),0)??0, e.moneda)}
+                    {fmtMoney(e.pagosVinculados?.reduce((s,p)=>s+Math.abs(Number(p.monto)||0),0)??0, e.moneda)}
                   </td>
                   <td style={{ padding:"10px 14px", fontSize:13, fontFamily:"var(--mono)",
                     fontWeight:700, color: (e.saldoPendiente??0)>0 ? T.orange : T.green, textAlign:"right", whiteSpace:"nowrap" }}>
