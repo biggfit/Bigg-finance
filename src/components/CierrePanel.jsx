@@ -1,205 +1,201 @@
-import { useMemo, useState, useEffect } from "react";
-import { useStore } from "../lib/context";
-import { compEmpresa, compCurrency, MONTHS } from "../lib/helpers";
+import { useState, useEffect } from "react";
+import { T } from "../numbers/theme";
 
-// ─── Panel de Cierre de Mes ───────────────────────────────────────────────────
-// TODO: desarrollar lógica completa
-export default function CierrePanel({ periodMonth, periodYear, onStartImport }) {
-  return null;
-  const { comps } = useStore();
-  const storageKey = `cierre_${periodMonth}_${periodYear}`;
+const MONTHS     = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+const CHECKLIST  = [
+  { id: "extracto", label: "Extracto bancario revisado" },
+  { id: "egresos",  label: "Egresos y pagos verificados" },
+  { id: "ingresos", label: "Ingresos y cobros verificados" },
+  { id: "numeros",  label: "Números OK" },
+];
 
-  const [manualDone, setManualDone] = useState(() => {
+export default function CierrePanel({ sociedad, isCerrado, cerrar, reabrir }) {
+  const now  = new Date();
+  const [año,    setAño]    = useState(now.getFullYear());
+  const [mes,    setMes]    = useState(now.getMonth() + 1);
+  const [open,   setOpen]   = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const storageKey = `nb_cierre_${sociedad}_${año}_${mes}`;
+
+  const [checks, setChecks] = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem(storageKey) ?? "[]")); }
     catch { return new Set(); }
   });
-  const [open, setOpen] = useState(false);
 
-  // Persist manual checkmarks
-  useEffect(() => {
-    localStorage.setItem(storageKey, JSON.stringify([...manualDone]));
-  }, [manualDone, storageKey]);
-
-  // Reset state when period changes
   useEffect(() => {
     try {
       const saved = localStorage.getItem(storageKey);
-      setManualDone(saved ? new Set(JSON.parse(saved)) : new Set());
-    } catch { setManualDone(new Set()); }
+      setChecks(saved ? new Set(JSON.parse(saved)) : new Set());
+    } catch { setChecks(new Set()); }
   }, [storageKey]);
 
-  const toggleManual = (id) =>
-    setManualDone(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleCheck = (id) => {
+    setChecks(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      localStorage.setItem(storageKey, JSON.stringify([...next]));
+      return next;
+    });
+  };
 
-  const steps = useMemo(() => {
-    const all = Object.values(comps).flat();
-    const inPer = c => c.month === periodMonth && c.year === periodYear;
+  const closed     = isCerrado?.(año, mes) ?? false;
+  const doneCount  = CHECKLIST.filter(c => checks.has(c.id)).length;
+  const allChecked = doneCount === CHECKLIST.length;
+  const progPct    = (doneCount / CHECKLIST.length) * 100;
 
-    // 1: algún PAGO o PAGO_PAUTA en el período
-    const s1 = all.some(c => inPer(c) && (c.type === "PAGO" || c.type === "PAGO_PAUTA"));
+  const handleCerrar = async () => {
+    setSaving(true);
+    try { await cerrar?.(año, mes); } finally { setSaving(false); }
+  };
 
-    // 2: todos los PAGO_PAUTA tienen su FACTURA|PAUTA
-    const ppCount = all.filter(c => inPer(c) && c.type === "PAGO_PAUTA").length;
-    const pfCount = all.filter(c => inPer(c) && c.type === "FACTURA|PAUTA").length;
-    const s2 = ppCount === 0 || pfCount >= ppCount;
-
-    // 3: FACTURA|FEE por empresa y moneda
-    const hasFee = (emp, cur) => all.some(c =>
-      inPer(c) && c.type?.startsWith("FACTURA|FEE") &&
-      compEmpresa(c) === emp && (!cur || compCurrency(c) === cur)
-    );
-    const s3sub = {
-      "ÑAKO":     hasFee("ÑAKO SRL", null),
-      "BIGG USD": hasFee("BIGG FIT LLC", "USD"),
-      "BIGG EUR": hasFee("BIGG FIT LLC", "EUR"),
-      "GDW":      hasFee("Gestión Deportiva y Wellness SL", null),
-    };
-    const s3 = Object.values(s3sub).every(Boolean);
-
-    // 4: algún interusos (facturado o recibido)
-    const s4 = all.some(c => inPer(c) && (
-      c.type?.startsWith("FACTURA|INTERUSOS") || c.type?.startsWith("FC_RECIBIDA|INTERUSOS")
-    ));
-
-    // 5: FACTURA|PAUTA en EUR
-    const s5 = all.some(c => inPer(c) && c.type === "FACTURA|PAUTA" && compCurrency(c) === "EUR");
-
-    // 6: manual
-    const s6 = manualDone.has(6);
-
-    return [
-      { id: 1, label: "Extracto bancario importado", done: s1,
-        action: onStartImport, actionLabel: "→ Importar" },
-      { id: 2, label: "Pauta Adelantada facturada",  done: s2,
-        hint: ppCount > 0 ? `${ppCount} adelanto${ppCount !== 1 ? "s" : ""}, ${pfCount} factura${pfCount !== 1 ? "s" : ""}` : null },
-      { id: 3, label: "Fee CRM facturado",           done: s3, sub: s3sub },
-      { id: 4, label: "Interusos importados",        done: s4 },
-      { id: 5, label: "Pauta Consumida GDW (EUR)",   done: s5 },
-      { id: 6, label: "Otros (Sponsors, Fotos, Pauta)", done: s6,
-        action: () => toggleManual(6),
-        actionLabel: s6 ? "✓ Listo" : "Marcar listo" },
-    ];
-  }, [comps, periodMonth, periodYear, manualDone, onStartImport]);
-
-  const doneCount = steps.filter(s => s.done).length;
-  const total     = steps.length;
-  const allDone   = doneCount === total;
-
-  // Abrir automáticamente si hay pendientes al cambiar de período
-  useEffect(() => { setOpen(!allDone); }, [periodMonth, periodYear]);
-
-  const progPct = (doneCount / total) * 100;
+  const handleReabrir = async () => {
+    setSaving(true);
+    try { await reabrir?.(año, mes); } finally { setSaving(false); }
+  };
 
   return (
     <div style={{
-      background: "var(--bg2)",
-      borderBottom: "1px solid var(--border)",
-      padding: open ? "10px 20px 14px" : "8px 20px",
+      background: T.card,
+      borderBottom: `1px solid ${T.cardBorder}`,
+      padding: open ? "10px 20px 14px" : "6px 20px",
+      flexShrink: 0,
     }}>
-      {/* Header */}
+      {/* ── Header (clickeable para expand/collapse) ── */}
       <div
         style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", userSelect: "none" }}
         onClick={() => setOpen(v => !v)}
       >
-        <span style={{ fontSize: 10, fontWeight: 800, color: "var(--muted)", letterSpacing: ".08em" }}>
+        <span style={{ fontSize: 10, fontWeight: 800, color: T.muted, letterSpacing: ".08em" }}>
           CIERRE
         </span>
-        <span style={{ fontSize: 12, fontWeight: 700, color: allDone ? "var(--accent)" : "var(--text)" }}>
-          {MONTHS[periodMonth]} {periodYear}
-        </span>
 
-        {/* Barra de progreso */}
-        <div style={{ flex: 1, height: 4, borderRadius: 2, background: "var(--border2)", overflow: "hidden", maxWidth: 120 }}>
-          <div style={{
-            height: "100%", borderRadius: 2,
-            width: `${progPct}%`,
-            background: allDone ? "var(--accent)" : progPct >= 66 ? "var(--green)" : progPct >= 33 ? "#f59e0b" : "var(--red)",
-            transition: "width .3s ease",
-          }} />
+        {/* Selector de período (no propaga el click al toggle) */}
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }} onClick={e => e.stopPropagation()}>
+          <select
+            value={mes}
+            onChange={e => setMes(Number(e.target.value))}
+            style={{
+              background: T.bg, border: `1px solid ${T.cardBorder}`, borderRadius: 5,
+              color: T.text, fontSize: 11, fontWeight: 700, padding: "1px 4px",
+              fontFamily: T.font, cursor: "pointer",
+            }}
+          >
+            {MONTHS.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+          </select>
+          <input
+            type="number"
+            value={año}
+            onChange={e => setAño(Number(e.target.value))}
+            style={{
+              background: T.bg, border: `1px solid ${T.cardBorder}`, borderRadius: 5,
+              color: T.text, fontSize: 11, fontWeight: 700, padding: "1px 6px",
+              width: 58, fontFamily: T.font,
+            }}
+          />
         </div>
 
-        <span style={{
-          fontSize: 11, fontWeight: 700,
-          color: allDone ? "var(--accent)" : "var(--muted)",
-        }}>
-          {doneCount}/{total}
-        </span>
+        {/* Barra de progreso (solo si abierto) */}
+        {!closed && (
+          <div style={{
+            flex: 1, height: 3, borderRadius: 2,
+            background: T.cardBorder, overflow: "hidden", maxWidth: 80,
+          }}>
+            <div style={{
+              height: "100%", borderRadius: 2,
+              width: `${progPct}%`,
+              background: progPct >= 100 ? T.accent : progPct >= 50 ? "#f59e0b" : T.dim,
+              transition: "width .3s ease",
+            }} />
+          </div>
+        )}
 
-        {allDone && <span style={{ fontSize: 10, color: "var(--accent)", fontWeight: 700 }}>✓ Mes cerrado</span>}
-        <span style={{ fontSize: 10, color: "var(--dim)", marginLeft: "auto" }}>{open ? "▲" : "▼"}</span>
+        {/* Badge estado */}
+        {closed ? (
+          <span style={{
+            fontSize: 10, fontWeight: 700, color: T.accent,
+            background: "rgba(173,255,25,.1)", border: "1px solid rgba(173,255,25,.25)",
+            borderRadius: 5, padding: "2px 8px", letterSpacing: ".04em",
+          }}>
+            CERRADO
+          </span>
+        ) : (
+          <span style={{ fontSize: 10, fontWeight: 600, color: T.dim }}>
+            {doneCount}/{CHECKLIST.length} tareas
+          </span>
+        )}
+
+        <span style={{ fontSize: 10, color: T.dim, marginLeft: "auto" }}>{open ? "▲" : "▼"}</span>
       </div>
 
-      {/* Steps */}
+      {/* ── Checklist + botón (expandido) ── */}
       {open && (
         <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
-          {steps.map((s, i) => (
-            <div key={s.id} style={{
-              display: "flex", alignItems: "center", gap: 8,
-              padding: "5px 10px", borderRadius: 7,
-              background: s.done ? "rgba(173,255,25,.04)" : i % 2 === 0 ? "rgba(255,255,255,.02)" : "transparent",
-            }}>
-              {/* Indicador */}
+          {CHECKLIST.map(item => (
+            <div
+              key={item.id}
+              style={{
+                display: "flex", alignItems: "center", gap: 8,
+                padding: "4px 8px", borderRadius: 6,
+                background: checks.has(item.id) ? "rgba(173,255,25,.04)" : "rgba(255,255,255,.02)",
+                opacity: closed ? .55 : 1,
+              }}
+            >
+              <button
+                onClick={() => !closed && toggleCheck(item.id)}
+                style={{
+                  background: "none", border: "none",
+                  cursor: closed ? "default" : "pointer",
+                  fontSize: 13, color: checks.has(item.id) ? T.accent : T.dim,
+                  padding: 0, lineHeight: 1, flexShrink: 0,
+                }}
+              >
+                {checks.has(item.id) ? "✓" : "○"}
+              </button>
               <span style={{
-                fontSize: 13, width: 18, textAlign: "center", flexShrink: 0,
-                color: s.done ? "var(--accent)" : "var(--dim)",
+                fontSize: 12, fontWeight: checks.has(item.id) ? 400 : 500,
+                color: checks.has(item.id) ? T.muted : T.text,
               }}>
-                {s.done ? "✓" : "○"}
+                {item.label}
               </span>
-
-              {/* Número */}
-              <span style={{ fontSize: 10, color: "var(--dim)", width: 14, flexShrink: 0 }}>{s.id}</span>
-
-              {/* Label */}
-              <span style={{
-                fontSize: 12, fontWeight: s.done ? 400 : 600,
-                color: s.done ? "var(--muted)" : "var(--text)",
-                textDecoration: s.done ? "none" : "none",
-              }}>
-                {s.label}
-              </span>
-
-              {/* Sub-chips paso 3 */}
-              {s.sub && (
-                <span style={{ display: "flex", gap: 4, marginLeft: 4 }}>
-                  {Object.entries(s.sub).map(([name, ok]) => (
-                    <span key={name} style={{
-                      fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: 4,
-                      background: ok ? "rgba(173,255,25,.14)" : "rgba(255,255,255,.05)",
-                      color: ok ? "var(--accent)" : "var(--dim)",
-                      border: `1px solid ${ok ? "rgba(173,255,25,.25)" : "rgba(255,255,255,.08)"}`,
-                    }}>
-                      {ok ? "✓ " : ""}{name}
-                    </span>
-                  ))}
-                </span>
-              )}
-
-              {/* Hint paso 2 */}
-              {s.hint && (
-                <span style={{ fontSize: 10, color: "var(--muted)", fontStyle: "italic" }}>({s.hint})</span>
-              )}
-
-              {/* Acción */}
-              {!s.done && s.action && (
-                <button
-                  className="ghost"
-                  style={{ marginLeft: "auto", fontSize: 10, padding: "2px 8px", flexShrink: 0 }}
-                  onClick={e => { e.stopPropagation(); s.action(); }}
-                >
-                  {s.actionLabel}
-                </button>
-              )}
-              {s.done && s.id === 6 && (
-                <button
-                  className="ghost"
-                  style={{ marginLeft: "auto", fontSize: 10, padding: "2px 8px", opacity: .5, flexShrink: 0 }}
-                  onClick={e => { e.stopPropagation(); toggleManual(6); }}
-                >
-                  ✕ Desmarcar
-                </button>
-              )}
             </div>
           ))}
+
+          {/* Botón cierre / reapertura */}
+          <div style={{ marginTop: 6 }}>
+            {closed ? (
+              <button
+                onClick={handleReabrir}
+                disabled={saving}
+                style={{
+                  fontSize: 11, padding: "5px 14px", borderRadius: 7,
+                  cursor: saving ? "default" : "pointer",
+                  background: "rgba(255,255,255,.06)", border: `1px solid ${T.cardBorder}`,
+                  color: T.muted, fontFamily: T.font, fontWeight: 600,
+                  opacity: saving ? .5 : 1,
+                }}
+              >
+                {saving ? "Reabriendo…" : "Reabrir período"}
+              </button>
+            ) : (
+              <button
+                onClick={handleCerrar}
+                disabled={saving || !allChecked}
+                title={!allChecked ? "Completá todas las tareas antes de cerrar" : ""}
+                style={{
+                  fontSize: 11, padding: "5px 14px", borderRadius: 7,
+                  cursor: (!allChecked || saving) ? "default" : "pointer",
+                  background: allChecked ? T.accent : "rgba(255,255,255,.06)",
+                  border: `1px solid ${allChecked ? T.accent : T.cardBorder}`,
+                  color: allChecked ? "#000" : T.dim,
+                  fontFamily: T.font, fontWeight: 700,
+                  transition: "all .15s", opacity: saving ? .5 : 1,
+                }}
+              >
+                {saving ? "Cerrando…" : "Cerrar período"}
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>

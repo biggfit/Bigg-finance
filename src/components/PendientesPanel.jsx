@@ -29,6 +29,10 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
   const [adjuntarVal, setAdjuntarVal] = useState({}); // { [compId]: string }
   const [adjuntarErr, setAdjuntarErr] = useState({}); // { [compId]: string }
 
+  // Edición inline de concepto antes de emitir
+  const [conceptoEditing, setConceptoEditing] = useState({}); // { [compId]: true }
+  const [conceptoVal,     setConceptoVal]     = useState({}); // { [compId]: string }
+
   const handleAbrirAdjuntar = (compId) => {
     setAdjuntando(p => ({ ...p, [compId]: true }));
     setAdjuntarVal(p => ({ ...p, [compId]: "" }));
@@ -398,8 +402,9 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
     setEmitting(p => ({ ...p, [comp.id]: true }));
     setErrors(p => { const n = { ...p }; delete n[comp.id]; return n; });
     try {
-      const dateOverride = batchDate ? toAR(batchDate) : null;
-      await onEmitirAfip(fr, comp, dateOverride);
+      const dateOverride    = batchDate ? toAR(batchDate) : null;
+      const conceptoOverride = (conceptoVal[comp.id] ?? "").trim() || undefined;
+      await onEmitirAfip(fr, comp, dateOverride, conceptoOverride);
     } catch (err) {
       setErrors(p => ({ ...p, [comp.id]: err.message ?? "Error AFIP" }));
     } finally {
@@ -755,18 +760,20 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                 </div>
               )}
               {sinAfip.map(({ fr, comp }) => {
-                const doc      = String(comp.type ?? "").split("|")[0];
-                const cuenta   = String(comp.type ?? "").split("|")[1] ?? "";
-                const isNC     = doc === "NC";
-                const busy     = !!emitting[comp.id];
-                const err      = errors[comp.id];
-                const openAdj  = !!adjuntando[comp.id];
-                const adjErr   = adjuntarErr[comp.id];
-                const hasErr   = err || adjErr;
-                const selected = selectedIds.has(comp.id);
+                const doc           = String(comp.type ?? "").split("|")[0];
+                const cuenta        = String(comp.type ?? "").split("|")[1] ?? "";
+                const isNC          = doc === "NC";
+                const busy          = !!emitting[comp.id];
+                const err           = errors[comp.id];
+                const openAdj       = !!adjuntando[comp.id];
+                const adjErr        = adjuntarErr[comp.id];
+                const hasErr        = err || adjErr;
+                const selected      = selectedIds.has(comp.id);
+                const editConcepto  = !!conceptoEditing[comp.id];
+                const hasBottomPanel = hasErr || openAdj || editConcepto;
                 return (
                   <div key={comp.id}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, background: selected ? "rgba(255,107,122,.08)" : "var(--bg2)", borderRadius: hasErr ? "7px 7px 0 0" : openAdj ? "7px 7px 0 0" : 7, padding: "8px 12px", flexWrap: "wrap", outline: selected ? "1px solid rgba(255,107,122,.25)" : "none" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, background: selected ? "rgba(255,107,122,.08)" : "var(--bg2)", borderRadius: hasBottomPanel ? "7px 7px 0 0" : 7, padding: "8px 12px", flexWrap: "wrap", outline: selected ? "1px solid rgba(255,107,122,.25)" : "none" }}>
                       <input
                         type="checkbox"
                         checked={selected}
@@ -800,7 +807,37 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                           {busy ? "⏳ Emitiendo…" : "Emitir →"}
                         </button>
                       )}
+                      <button
+                        className="ghost"
+                        title="Editar descripción"
+                        style={{ fontSize: 11, padding: "2px 6px", color: editConcepto ? "var(--cyan)" : "var(--muted)", opacity: busy ? 0.4 : 1 }}
+                        onClick={() => {
+                          if (!conceptoEditing[comp.id]) {
+                            setConceptoVal(p => ({ ...p, [comp.id]: p[comp.id] ?? (comp.ref ?? comp.nota ?? "") }));
+                          }
+                          setConceptoEditing(p => ({ ...p, [comp.id]: !p[comp.id] }));
+                        }}
+                      >✎</button>
                     </div>
+                    {/* Input concepto inline */}
+                    {editConcepto && (
+                      <div style={{ background: "rgba(99,102,241,.05)", border: "1px solid rgba(99,102,241,.2)", borderTop: "none", borderRadius: openAdj || hasErr ? 0 : "0 0 7px 7px", padding: "8px 12px", display: "flex", gap: 8, alignItems: "center" }}>
+                        <span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>Descripción:</span>
+                        <input
+                          autoFocus
+                          value={conceptoVal[comp.id] ?? ""}
+                          onChange={e => setConceptoVal(p => ({ ...p, [comp.id]: e.target.value }))}
+                          onKeyDown={e => { if (e.key === "Escape") setConceptoEditing(p => ({ ...p, [comp.id]: false })); }}
+                          placeholder={comp.ref ?? comp.nota ?? "Descripción del comprobante"}
+                          style={{ flex: 1, background: "var(--bg)", border: "1px solid var(--border2)", borderRadius: 5, padding: "4px 8px", fontSize: 12, color: "var(--text)", fontFamily: "var(--font)" }}
+                        />
+                        <button
+                          className="ghost"
+                          style={{ fontSize: 10, color: "var(--muted)" }}
+                          onClick={() => setConceptoEditing(p => ({ ...p, [comp.id]: false }))}
+                        >✕</button>
+                      </div>
+                    )}
                     {/* Input adjuntar inline */}
                     {openAdj && (
                       <div style={{ background: "rgba(34,211,238,.05)", border: "1px solid rgba(34,211,238,.2)", borderTop: "none", borderRadius: adjErr ? 0 : "0 0 7px 7px", padding: "8px 12px", display: "flex", gap: 8, alignItems: "center" }}>

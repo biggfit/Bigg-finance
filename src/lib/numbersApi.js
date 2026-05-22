@@ -821,3 +821,82 @@ export async function appendIntercompania({ fecha, tipoOp = "prestamo", socOrige
 }
 
 export const deleteIntercompania = _deleteMovRows;
+
+// ── Validación de duplicados ──────────────────────────────────────────────────
+
+/**
+ * Verifica si ya existe un comprobante con el mismo nro_comp + contraparteId + sociedad.
+ * Retorna el id_comp duplicado si existe, null si no hay duplicado.
+ * Solo aplica cuando nroComp es no-vacío.
+ *
+ * @param {string}      sociedad
+ * @param {"EGRESO"|"INGRESO"} subtipo
+ * @param {string}      nroComp
+ * @param {string}      contraparteId  — proveedorId o clienteId
+ * @param {string|null} excludeId      — id_comp a ignorar (para modo edición)
+ */
+export async function checkDuplicateComp(sociedad, subtipo, nroComp, contraparteId, excludeId = null) {
+  const nro = (nroComp ?? "").trim();
+  if (!nro) return null;
+  const rows = await get("nb_comprobantes", { sociedad });
+  const nroNorm = nro.toLowerCase();
+  const seen = new Set();
+  for (const r of rows) {
+    const key = r.id_comp;
+    if (seen.has(key)) continue;   // una fila por doc es suficiente
+    seen.add(key);
+    if (key === excludeId) continue;
+    if ((r.subtipo ?? "").toUpperCase() !== subtipo.toUpperCase()) continue;
+    if ((r.nro_comp ?? "").trim().toLowerCase() !== nroNorm) continue;
+    if ((r.contraparte_id ?? "") !== (contraparteId ?? "")) continue;
+    return key;                    // duplicado encontrado → retorna id_comp
+  }
+  return null;
+}
+
+// ── Reconciliación bancaria ───────────────────────────────────────────────────
+
+/** Marca un movimiento como conciliado con una referencia del extracto bancario */
+export async function marcarConciliado(id, extractoRef = "") {
+  return post({ action: "edit", sheet: "nb_movimientos", id, patch: { conciliado: "true", extracto_ref: extractoRef } });
+}
+
+/** Desmarca un movimiento como conciliado */
+export async function desmarcarConciliado(id) {
+  return post({ action: "edit", sheet: "nb_movimientos", id, patch: { conciliado: "", extracto_ref: "" } });
+}
+
+// ── Cierres de período ────────────────────────────────────────────────────────
+//
+// Schema nb_cierres:
+//   id | sociedad | año | mes | estado (cerrado|abierto) | cerrado_at | reabierto_at
+
+export async function fetchCierres(sociedad) {
+  return get("nb_cierres", { sociedad });
+}
+
+export async function cerrarPeriodo({ sociedad, año, mes }) {
+  const id = newId("CIERRE");
+  return post({
+    action: "add",
+    sheet:  "nb_cierres",
+    row: {
+      id,
+      sociedad,
+      año:        Number(año),
+      mes:        Number(mes),
+      estado:     "cerrado",
+      cerrado_at: new Date().toISOString(),
+      reabierto_at: "",
+    },
+  });
+}
+
+export async function reabrirPeriodo(id) {
+  return post({
+    action: "update",
+    sheet:  "nb_cierres",
+    id,
+    fields: { estado: "abierto", reabierto_at: new Date().toISOString() },
+  });
+}

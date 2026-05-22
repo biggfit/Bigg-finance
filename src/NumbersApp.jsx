@@ -8,11 +8,14 @@ import PantallaIngresos  from "./numbers/PantallaIngresos";
 import PantallaMaestros  from "./numbers/PantallaMaestros";
 import PantallaTesoreria from "./numbers/PantallaTesoreria";
 import PantallaReportes      from "./numbers/PantallaReportes";
-import PantallaCambioMoneda   from "./numbers/PantallaCambioMoneda";
-import PantallaIntercompania  from "./numbers/PantallaIntercompania";
-import PantallaGastos         from "./numbers/PantallaGastos";
+import PantallaCambioMoneda     from "./numbers/PantallaCambioMoneda";
+import PantallaIntercompania    from "./numbers/PantallaIntercompania";
+import PantallaGastos           from "./numbers/PantallaGastos";
+import PantallaReconciliacion   from "./numbers/PantallaReconciliacion";
+import CierrePanel            from "./components/CierrePanel";
 import { SOCIEDADES as SOC_FALLBACK } from "./data/tesoreriaData";
 import { fetchSociedades } from "./lib/numbersApi";
+import { useCierres } from "./numbers/useCierres";
 
 // ─── Nav button style helpers ─────────────────────────────────────────────────
 const navBtnStyle = (active) => ({
@@ -90,6 +93,7 @@ export default function NumbersApp({ onGoToFranquicias }) {
   const showMaestros = activeMaestrosTab !== null;
   const socDropRef = useRef(null);
   const activeSoc = sociedades[socIdx] ?? sociedades[0];
+  const { isCerrado, cerrar, reabrir } = useCierres(activeSoc?.id);
 
   // Cerrar dropdown al hacer click afuera
   useEffect(() => {
@@ -373,8 +377,9 @@ export default function NumbersApp({ onGoToFranquicias }) {
           <div style={{ borderTop:"1px solid rgba(255,255,255,.07)", padding:"8px 0 4px" }}>
             <div style={{ padding:"4px 16px 6px", fontSize:10, fontWeight:700, letterSpacing:".1em", color:T.sidebarMuted, textTransform:"uppercase" }}>Especiales</div>
             {[
-              { id:"intercompania", icon:"⇄", label:"Intercompañía",   soon:false, onClick: () => { setActiveSpecial("intercompania"); } },
-              { id:"cambio",        icon:"$", label:"Cambio de moneda", soon:false, onClick: () => { setActiveSpecial("cambio"); } },
+              { id:"intercompania",   icon:"⇄", label:"Intercompañía",     soon:false, onClick: () => { setActiveSpecial("intercompania"); } },
+              { id:"cambio",          icon:"$", label:"Cambio de moneda",   soon:false, onClick: () => { setActiveSpecial("cambio"); } },
+              { id:"reconciliacion",  icon:"≡", label:"Conciliación",        soon:false, onClick: () => { setActiveSpecial("reconciliacion"); } },
             ].map(item => {
               const active = !item.soon && activeSpecial === item.id;
               return (
@@ -430,8 +435,9 @@ export default function NumbersApp({ onGoToFranquicias }) {
           <span style={{ fontSize:12, fontWeight:700, color:T.text }}>
             {showMaestros
               ? `Maestros › ${MAESTROS_TABS.find(t => t.id === activeMaestrosTab)?.label ?? ""}`
-              : activeSpecial === "intercompania" ? "Intercompañía"
-              : activeSpecial === "cambio" ? "Cambio de moneda"
+              : activeSpecial === "intercompania"  ? "Intercompañía"
+              : activeSpecial === "cambio"         ? "Cambio de moneda"
+              : activeSpecial === "reconciliacion" ? "Conciliación bancaria"
               : egresoSubView  === "new-compra" ? "Egresos › Nueva Compra"
               : egresoSubView  === "new-gasto"  ? "Gastos › Nuevo Gasto"
               : egresoSubView  === "gastos"     ? "Gastos"
@@ -447,6 +453,13 @@ export default function NumbersApp({ onGoToFranquicias }) {
           </div>
         </div>
 
+        <CierrePanel
+          sociedad={activeSoc?.id}
+          isCerrado={isCerrado}
+          cerrar={cerrar}
+          reabrir={reabrir}
+        />
+
         <div style={{ flex:1, overflow:"auto", display:"flex", flexDirection:"column" }}>
           {!socReady
             ? <div style={{ display:"flex", alignItems:"center", justifyContent:"center",
@@ -457,13 +470,15 @@ export default function NumbersApp({ onGoToFranquicias }) {
             ? <PantallaIntercompania sociedad={activeSoc.id} />
             : activeSpecial === "cambio"
             ? <PantallaCambioMoneda sociedad={activeSoc.id} />
+            : activeSpecial === "reconciliacion"
+            ? <PantallaReconciliacion sociedad={activeSoc.id} />
             : section?.component
             ? section.id === "egresos" && (egresoSubView === "gastos" || egresoSubView === "new-gasto")
-              ? <PantallaGastos   sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView}  />
+              ? <PantallaGastos   sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView}  isCerrado={isCerrado} />
               : section.id === "egresos"
-              ? <PantallaEgresos  sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView}  />
+              ? <PantallaEgresos  sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView}  isCerrado={isCerrado} />
               : section.id === "ingresos"
-              ? <PantallaIngresos sociedad={activeSoc.id} subView={ingresoSubView} onSubViewChange={setIngresoSubView} />
+              ? <PantallaIngresos sociedad={activeSoc.id} subView={ingresoSubView} onSubViewChange={setIngresoSubView} isCerrado={isCerrado} />
               : <section.component sociedad={activeSoc.id} />
             : section?.placeholder
             ? <Placeholder section={section} />

@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import { T } from "./theme";
+import { checkDuplicateComp } from "../lib/numbersApi";
 import { IVA_OPTS, todayISO, addDays, fmtNum } from "../data/numbersData";
 import {
   inputStyle, dateStyle, lookupId, makeCCResolver,
@@ -11,7 +12,7 @@ import {
 } from "./formUtils";
 import { useLineas } from "./useLineas";
 
-export default function NuevoIngresoModal({ onClose, onSave, clientes = [], cuentas = [], centrosCosto, initialData, asPage = false }) {
+export default function NuevoIngresoModal({ onClose, onSave, sociedad, clientes = [], cuentas = [], centrosCosto, initialData, asPage = false }) {
   const isEdit = !!initialData;
   const CC_LIST = useMemo(() => centrosCosto ?? [], [centrosCosto]);
   const CUENTAS_INGRESO = useMemo(() => {
@@ -60,6 +61,9 @@ export default function NuevoIngresoModal({ onClose, onSave, clientes = [], cuen
   const { totalSub, totalIva, totalFinal } = useMemo(() => calcLineasTotals(lineas), [lineas]);
   const canSave = facturaCanSave({ partyId: cliId, cuentaId, fecha, lineas });
 
+  const [dupError, setDupError] = useState(null);
+  useMemo(() => setDupError(null), [nroComp, cliId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const buildPayload = (extra = {}) => {
     const cli = clientes.find(c => c.id === cliId);
     const cuenta = CUENTAS_INGRESO.find(c => c.id === cuentaId);
@@ -83,8 +87,16 @@ export default function NuevoIngresoModal({ onClose, onSave, clientes = [], cuen
     };
   };
 
-  const handleSave = () => runSaveThenMaybeClose(onSave, buildPayload(), asPage, onClose);
-  const handleSaveAndCobrar = () => runSaveThenMaybeClose(onSave, buildPayload({ _saveAndCobrar: true }), asPage, onClose);
+  const handleSave = async () => {
+    const dup = await checkDuplicateComp(sociedad, "INGRESO", nroComp, cliId, isEdit ? initialData.id : null);
+    if (dup) { setDupError(dup); return; }
+    runSaveThenMaybeClose(onSave, buildPayload(), asPage, onClose);
+  };
+  const handleSaveAndCobrar = async () => {
+    const dup = await checkDuplicateComp(sociedad, "INGRESO", nroComp, cliId, isEdit ? initialData.id : null);
+    if (dup) { setDupError(dup); return; }
+    runSaveThenMaybeClose(onSave, buildPayload({ _saveAndCobrar: true }), asPage, onClose);
+  };
 
   const cli = clientes.find(c => c.id === cliId);
   const INGRESO_HEADER_BG = "#1e3a5f";
@@ -126,7 +138,16 @@ export default function NuevoIngresoModal({ onClose, onSave, clientes = [], cuen
         </SoftField>
         <SoftField label="N° comprobante">
           <input value={nroComp} onChange={e => setNroComp(e.target.value)}
-            placeholder="FC-A 0001-00001234" style={inputStyle} />
+            placeholder="FC-A 0001-00001234"
+            style={{ ...inputStyle, ...(dupError ? { borderColor: "#dc2626", background: "#fef2f2" } : {}) }} />
+          {dupError && (
+            <div style={{ marginTop: 5, fontSize: 11, color: "#dc2626", fontWeight: 700,
+              background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 6,
+              padding: "5px 10px", lineHeight: 1.4 }}>
+              ⚠️ Ya existe una FC con este número para este cliente ({dupError}).
+              Verificá si es un duplicado o cambiá el N° de comprobante.
+            </div>
+          )}
         </SoftField>
       </div>
 

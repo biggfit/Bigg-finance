@@ -2030,12 +2030,13 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
 
   // Emite directamente ante AFIP un comp ya guardado en Sheets (sin wizard)
   // dateOverride: string dd/mm/yyyy — si viene, se usa como fecha de emisión en vez de comp.date
-  const handleEmitirAfip = async (fr, comp, dateOverride) => {
+  const handleEmitirAfip = async (fr, comp, dateOverride, conceptoOverride) => {
     const lockKey = `afip-${comp.id}`;
     if (emitLockRef.current.has(lockKey)) return;
     emitLockRef.current.add(lockKey);
     try {
-      const compToEmit = dateOverride ? { ...comp, date: dateOverride } : comp;
+      let compToEmit = dateOverride ? { ...comp, date: dateOverride } : comp;
+      if (conceptoOverride) compToEmit = { ...compToEmit, ref: conceptoOverride, nota: conceptoOverride };
       const result = await emitirComprobante({
         franchisor: franchisor?.ar ?? franchisor,
         franchise:  fr,
