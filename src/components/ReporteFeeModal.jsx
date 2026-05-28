@@ -418,8 +418,8 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
             },
             {
               label: `Fee ${MONTHS[month]}`,
-              value: fesMesUSD > 0 ? fmtMoney(fesMesUSD, "USD") : fesMesEUR > 0 ? fmtMoney(fesMesEUR, "EUR") : fesMesARS > 0 ? fmtMoney(fesMesARS, "ARS") : "—",
-              sub: fesMesARS > 0 ? fmtMoney(fesMesARS, "ARS") : null,
+              value: fmtMoney(fesMesUSD + fesMesARS / cotiz, "USD"),
+              sub: fesMesEUR > 0 ? fmtMoney(fesMesEUR, "EUR") : null,
             },
             {
               label: `Var % vs ${MONTHS[prev.month]}`,
@@ -434,8 +434,8 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
             },
             {
               label: `YTD Ene–${MONTHS[month]}`,
-              value: ytdUSD > 0 ? fmtMoney(ytdUSD, "USD") : ytdEUR > 0 ? fmtMoney(ytdEUR, "EUR") : ytdARS > 0 ? fmtMoney(ytdARS, "ARS") : "—",
-              sub: ytdARS > 0 ? fmtMoney(ytdARS, "ARS") : null,
+              value: fmtMoney(ytdUSD + ytdARS / cotiz, "USD"),
+              sub: ytdEUR > 0 ? fmtMoney(ytdEUR, "EUR") : null,
             },
           ];
 
