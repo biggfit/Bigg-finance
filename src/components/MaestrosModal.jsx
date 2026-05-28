@@ -295,30 +295,6 @@ export default function MaestrosModal({ franchises, franchisor, comps, tiposCamb
   const toastTimer = useRef(null);
 
   const TC_MESES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
-  const [tcFetching, setTcFetching] = useState(false);
-
-  const fetchTcFromApi = async (ym) => {
-    setTcFetching(true);
-    try {
-      const res  = await fetch("https://api.exchangerate-api.com/v4/latest/USD");
-      const data = await res.json();
-      const r    = data.rates ?? {};
-      const tc = {
-        arsUSD: r.ARS ? Math.round(r.ARS)       : "",
-        eurUSD: r.EUR ? Math.round((1 / r.EUR) * 10000) / 10000 : "",
-        uyuUSD: r.UYU ? Math.round(r.UYU * 100) / 100  : "",
-        pygUSD: r.PYG ? Math.round(r.PYG)       : "",
-        clpUSD: r.CLP ? Math.round(r.CLP)       : "",
-        penUSD: r.PEN ? Math.round(r.PEN * 100) / 100  : "",
-      };
-      setTcBufs(prev => ({ ...prev, [ym]: { ...getTcBuf(ym), ...Object.fromEntries(Object.entries(tc).map(([k,v]) => [k, String(v)])) } }));
-    } catch (e) {
-      showSaved("Error al traer tasas: " + e.message);
-    } finally {
-      setTcFetching(false);
-    }
-  };
-
   const TC_FIELDS = [
     { key:"arsUSD", label:"ARS / U$D",  placeholder:"ej. 1400",   step:"1" },
     { key:"eurUSD", label:"€ / U$D",    placeholder:"ej. 1.08",   step:"0.0001" },
@@ -677,20 +653,9 @@ export default function MaestrosModal({ franchises, franchisor, comps, tiposCamb
 
                   {/* Formulario del mes seleccionado */}
                   <div style={{ background:"var(--bg)", border:`1px solid ${dirty ? "var(--accent)" : "var(--border2)"}`, borderRadius:10, padding:16 }}>
-                    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14 }}>
-                      <div style={{ fontSize:12, fontWeight:800, color: dirty ? "var(--accent)" : "var(--text)", letterSpacing:".04em" }}>
-                        {selLabel}
-                        {dirty && <span style={{ fontSize:10, fontWeight:400, color:"var(--accent)", marginLeft:8 }}>● sin guardar</span>}
-                      </div>
-                      <button
-                        onClick={() => fetchTcFromApi(selYm)}
-                        disabled={tcFetching}
-                        title="Trae las tasas actuales de exchangerate-api.com"
-                        style={{ fontSize:11, padding:"4px 12px", borderRadius:6, cursor: tcFetching ? "wait" : "pointer",
-                          background:"var(--bg2)", color:"var(--muted)", border:"1px solid var(--border2)",
-                          display:"flex", alignItems:"center", gap:5, opacity: tcFetching ? .6 : 1 }}>
-                        {tcFetching ? "⏳ Cargando…" : "↓ Traer tasas"}
-                      </button>
+                    <div style={{ fontSize:12, fontWeight:800, color: dirty ? "var(--accent)" : "var(--text)", marginBottom:14, letterSpacing:".04em" }}>
+                      {selLabel}
+                      {dirty && <span style={{ fontSize:10, fontWeight:400, color:"var(--accent)", marginLeft:8 }}>● sin guardar</span>}
                     </div>
                     <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginBottom:14 }}>
                       {TC_FIELDS.map(({ key, label, placeholder, step }) => (
