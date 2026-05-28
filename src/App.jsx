@@ -11,6 +11,7 @@ import "./lib/styles";
 import FrDetail from "./components/FrDetail";
 import AddCompModal from "./components/AddCompModal";
 import MaestrosModal from "./components/MaestrosModal";
+import ReporteFeeModal from "./components/ReporteFeeModal";
 import ImportBankModal from "./components/ImportBankModal";
 import TabResumenMes from "./tabs/TabResumenMes";
 import TabContabilidad from "./tabs/TabContabilidad";
@@ -35,6 +36,7 @@ export default function App({ onVolverNumbers } = {}) {
   const [user,       setUser]      = useState({ name: "Admin" }); // login deshabilitado para testing
   const [showMaestros,  setShowMaestros]  = useState(false);
   const [showImport,    setShowImport]    = useState(false);
+  const [showReporteFee, setShowReporteFee] = useState(false);
   const [showQuickAdd,  setShowQuickAdd]  = useState(false);
   const [franchisor,   setFranchisor]   = useState(null);
   const [tab,        setTab]       = useState("resumen");
@@ -332,6 +334,16 @@ export default function App({ onVolverNumbers } = {}) {
         />
       )}
 
+      {showReporteFee && (
+        <ReporteFeeModal
+          franchises={franchises}
+          comps={comps}
+          defaultMonth={month}
+          defaultYear={year}
+          onClose={() => setShowReporteFee(false)}
+        />
+      )}
+
       {showMaestros && (
         <MaestrosModal
           franchises={franchises}
@@ -442,6 +454,7 @@ export default function App({ onVolverNumbers } = {}) {
                 </div>
                 <div style={{ borderTop: "1px solid var(--border)", padding: "6px 0", display: "flex", flexDirection: "column", gap: 2 }}>
                   {onVolverNumbers && navBtn(onVolverNumbers, "←", "BIGG Numbers")}
+                  {navBtn(() => setShowReporteFee(true), "📊", "Reporte Fee")}
                   {navBtn(() => setShowMaestros(true), "⚙", "Maestros")}
                   {navBtn(() => setUser(null),         "→", "Salir", false, true)}
                 </div>
