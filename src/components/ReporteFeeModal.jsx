@@ -34,38 +34,25 @@ function sumFeeYTD(frComps, year, upToMonth) {
 function buildRows(franchises, comps, year, month) {
   const prev = prevMonth(month, year);
   const rows = [];
-
   for (const fr of franchises) {
     if (fr.activa === false) continue;
-
-    const frComps   = comps[fr.id] ?? [];
-    const feeType   = makeType("FACTURA", "FEE");
-    const feeComps  = frComps.filter(c => c.type === feeType && c.month === month && c.year === year);
-    const feeMes    = sumFee(frComps, year, month);
-    const feePrev   = sumFee(frComps, prev.year, prev.month);
-    const feeYTD    = sumFeeYTD(frComps, year, month);
-    const varPct    = feePrev > 0 ? ((feeMes - feePrev) / feePrev) * 100 : null;
-
+    const frComps  = comps[fr.id] ?? [];
+    const feeType  = makeType("FACTURA", "FEE");
+    const feeComps = frComps.filter(c => c.type === feeType && c.month === month && c.year === year);
+    const feeMes   = sumFee(frComps, year, month);
+    const feePrev  = sumFee(frComps, prev.year, prev.month);
+    const feeYTD   = sumFeeYTD(frComps, year, month);
+    const varPct   = feePrev > 0 ? ((feeMes - feePrev) / feePrev) * 100 : null;
     const feeCurrency = (feeComps[0]?.currency) ??
       frComps.find(c => c.type === makeType("FACTURA","FEE"))?.currency ??
       fr.feeMoneda ?? fr.currency ?? "ARS";
-
     rows.push({
-      sede:      fr.name,
-      sociedad:  fr.sociedad ?? "—",
-      pais:      fr.country  ?? "—",
-      moneda:    feeCurrency,
-      feeYTD,
-      feePrev,
-      feeMes,
-      varPct,
-      sinFeeMes: feeMes === 0,
+      sede: fr.name, sociedad: fr.sociedad ?? "—", pais: fr.country ?? "—",
+      moneda: feeCurrency, feeYTD, feePrev, feeMes, varPct, sinFeeMes: feeMes === 0,
     });
   }
-
-  // orden default: sedes con fee desc, sin fee al fondo
   return rows.sort((a, b) =>
-    (a.sinFeeMes === b.sinFeeMes ? b.feeMes - a.feeMes : a.sinFeeMes ? 1 : -1)
+    a.sinFeeMes === b.sinFeeMes ? b.feeMes - a.feeMes : a.sinFeeMes ? 1 : -1
   );
 }
 
@@ -73,8 +60,6 @@ function buildRows(franchises, comps, year, month) {
 function downloadExcel(rows, year, month, cotiz = 1200) {
   const prev = prevMonth(month, year);
   const wb   = XLSX.utils.book_new();
-
-  // Hoja única con todas las sedes
   const HEADERS = [
     "Sede", "País",
     `Fee ${MONTHS[month]} U$D`,
@@ -82,51 +67,118 @@ function downloadExcel(rows, year, month, cotiz = 1200) {
     `Var % vs ${MONTHS[prev.month]}`,
     `Fee YTD Ene–${MONTHS[month]} (ARS→U$D @ ${cotiz})`,
   ];
-
   const data = [HEADERS, ...rows.map(r => {
     const varPct    = r.feePrev > 0 ? (r.feeMes - r.feePrev) / r.feePrev : "";
-    const feeMesUSD = r.moneda === "ARS" ? r.feeMes / cotiz : (r.moneda === "USD" ? r.feeMes : r.feeMes);
+    const feeMesUSD = r.moneda === "ARS" ? r.feeMes / cotiz : r.feeMes;
     const feeMesARS = r.moneda === "ARS" ? r.feeMes : "";
     const ytdUSD    = r.feeYTD ? (r.moneda === "ARS" ? r.feeYTD / cotiz : r.feeYTD) : "";
     return [r.sede, r.pais, feeMesUSD, feeMesARS, varPct, ytdUSD];
   })];
-
   const ws = XLSX.utils.aoa_to_sheet(data);
-  const numFmt = "#,##0";
-  rows.forEach((r, i) => {
+  rows.forEach((_, i) => {
     const row = i + 2;
-    ["C","D","F"].forEach(col => {
-      const cell = ws[`${col}${row}`];
-      if (cell?.t === "n") cell.z = numFmt;
-    });
-    if (data[i+1][4] !== "") {
-      ws[XLSX.utils.encode_cell({ r: row - 1, c: 4 })] = { v: data[i+1][4], t: "n", z: "0.0%" };
-    }
+    ["C","D","F"].forEach(col => { const c = ws[`${col}${row}`]; if (c?.t === "n") c.z = "#,##0"; });
+    if (data[i+1][4] !== "")
+      ws[XLSX.utils.encode_cell({ r: row-1, c: 4 })] = { v: data[i+1][4], t: "n", z: "0.0%" };
   });
-  ws["!cols"] = [24, 14, 16, 18, 14, 26].map(w => ({ wch: w }));
+  ws["!cols"] = [24,14,16,18,14,26].map(w => ({ wch: w }));
   XLSX.utils.book_append_sheet(wb, ws, `${MONTHS[month]} ${year}`);
-
-  // Resumen por sociedad
   const bySoc = {};
-  for (const r of rows) {
-    if (!bySoc[r.sociedad]) bySoc[r.sociedad] = [];
-    bySoc[r.sociedad].push(r);
-  }
+  for (const r of rows) { if (!bySoc[r.sociedad]) bySoc[r.sociedad] = []; bySoc[r.sociedad].push(r); }
   const resData = [
-    ["Sociedad", "Sedes", `${MONTHS[month]} USD`, `${MONTHS[month]} EUR`, `${MONTHS[month]} ARS`, `YTD USD equiv.`],
+    ["Sociedad","Sedes",`${MONTHS[month]} USD`,`${MONTHS[month]} EUR`,`${MONTHS[month]} ARS`,"YTD USD equiv."],
     ...Object.entries(bySoc).map(([soc, rs]) => [
       soc, rs.length,
-      rs.filter(r => r.moneda === "USD").reduce((s, r) => s + r.feeMes, 0),
-      rs.filter(r => r.moneda === "EUR").reduce((s, r) => s + r.feeMes, 0),
-      rs.filter(r => r.moneda === "ARS").reduce((s, r) => s + r.feeMes, 0),
-      rs.reduce((s, r) => s + (r.moneda === "ARS" ? r.feeYTD / cotiz : r.feeYTD), 0),
+      rs.filter(r => r.moneda==="USD").reduce((s,r)=>s+r.feeMes,0),
+      rs.filter(r => r.moneda==="EUR").reduce((s,r)=>s+r.feeMes,0),
+      rs.filter(r => r.moneda==="ARS").reduce((s,r)=>s+r.feeMes,0),
+      rs.reduce((s,r)=>s+(r.moneda==="ARS"?r.feeYTD/cotiz:r.feeYTD),0),
     ]),
   ];
   const wsRes = XLSX.utils.aoa_to_sheet(resData);
-  wsRes["!cols"] = [28, 8, 14, 14, 18, 16].map(w => ({ wch: w }));
+  wsRes["!cols"] = [28,8,14,14,18,16].map(w => ({ wch: w }));
   XLSX.utils.book_append_sheet(wb, wsRes, "Resumen");
-
   XLSX.writeFile(wb, `Reporte-Fee-${MONTHS[month]}-${year}.xlsx`);
+}
+
+// ─── FilterDropdown ───────────────────────────────────────────────────────────
+// `selected`: Set de items visibles. Set vacío = todos visibles.
+function FilterDropdown({ label, options, selected, onChange }) {
+  const [open, setOpen] = useState(false);
+  const allOn   = selected.size === 0;
+  const active  = !allOn;
+
+  function isChecked(opt) { return allOn || selected.has(opt); }
+
+  function toggle(opt) {
+    if (allOn) {
+      // estábamos mostrando todo → desmarcar uno → mostrar todos excepto ese
+      onChange(new Set(options.filter(o => o !== opt)));
+    } else {
+      const next = new Set(selected);
+      if (next.has(opt)) {
+        next.delete(opt);
+        onChange(next.size === 0 ? new Set(options.filter(o => o !== opt)) : next);
+      } else {
+        next.add(opt);
+        onChange(next.size === options.length ? new Set() : next);
+      }
+    }
+  }
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          fontSize: 11, padding: "4px 10px", borderRadius: 5, cursor: "pointer",
+          background: active ? "rgba(173,255,25,.12)" : "var(--bg)",
+          border: `1px solid ${active ? "var(--lime)" : "var(--border2)"}`,
+          color: active ? "var(--lime)" : "var(--text2)",
+          display: "flex", alignItems: "center", gap: 5, fontWeight: active ? 600 : 400,
+        }}
+      >
+        {label}
+        {active && <span style={{ background: "var(--lime)", color: "#000", borderRadius: 3, fontSize: 9, padding: "1px 5px", fontWeight: 700 }}>{selected.size}</span>}
+        <span style={{ fontSize: 8, opacity: 0.6 }}>▾</span>
+      </button>
+
+      {open && (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 20 }} onClick={() => setOpen(false)} />
+          <div style={{
+            position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 21,
+            background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 8,
+            minWidth: 200, maxHeight: 300, overflowY: "auto",
+            boxShadow: "0 8px 32px rgba(0,0,0,.5)", padding: "6px 0",
+          }}>
+            <div style={{ padding: "4px 12px 6px", display: "flex", gap: 10, borderBottom: "1px solid var(--border)" }}>
+              <button onClick={() => onChange(new Set())} style={{ fontSize: 10, color: "var(--lime)", background: "none", border: "none", cursor: "pointer", padding: 0, fontWeight: 600 }}>
+                ✓ Todos
+              </button>
+              <button onClick={() => onChange(new Set())} style={{ fontSize: 10, color: "var(--text2)", background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+                Limpiar
+              </button>
+            </div>
+            {options.map(opt => (
+              <label
+                key={opt}
+                onClick={() => toggle(opt)}
+                style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 12px", cursor: "pointer", userSelect: "none" }}
+              >
+                <input
+                  type="checkbox" readOnly
+                  checked={isChecked(opt)}
+                  style={{ accentColor: "var(--lime)", cursor: "pointer" }}
+                />
+                <span style={{ fontSize: 12, color: "var(--text)" }}>{opt}</span>
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 // ─── SortTh ──────────────────────────────────────────────────────────────────
@@ -141,7 +193,6 @@ function SortTh({ col, children, sortCol, sortDir, onSort, align = "right" }) {
         background: "var(--bg)", textAlign: align,
         cursor: "pointer", userSelect: "none",
         color: active ? "var(--text)" : "var(--text2)",
-        transition: "color .15s",
       }}
     >
       {children}
@@ -155,37 +206,51 @@ function SortTh({ col, children, sortCol, sortDir, onSort, align = "right" }) {
 // ─── COMPONENTE PRINCIPAL ─────────────────────────────────────────────────────
 export default function ReporteFeeModal({ franchises, comps, defaultMonth, defaultYear, onClose }) {
   const def = prevMonth(defaultMonth, defaultYear);
-  const [month,   setMonth]   = useState(def.month);
-  const [year,    setYear]    = useState(def.year);
-  const [cotiz,   setCotiz]   = useState(1200);
-  const [sortCol, setSortCol] = useState("feeMes");
-  const [sortDir, setSortDir] = useState("desc");
+  const [month,        setMonth]        = useState(def.month);
+  const [year,         setYear]         = useState(def.year);
+  const [cotiz,        setCotiz]        = useState(1200);
+  const [sortCol,      setSortCol]      = useState("feeMesUSD");
+  const [sortDir,      setSortDir]      = useState("desc");
+  const [filterSedes,  setFilterSedes]  = useState(new Set());
+  const [filterPaises, setFilterPaises] = useState(new Set());
 
   const prev = prevMonth(month, year);
 
   const baseRows = useMemo(() => buildRows(franchises, comps, year, month), [franchises, comps, year, month]);
 
-  // Ordenamiento con click en header — sedes sin fee siempre al fondo
+  // Opciones disponibles para los filtros (alfabético)
+  const allSedes  = useMemo(() => [...new Set(baseRows.map(r => r.sede))].sort((a,b) => a.localeCompare(b)), [baseRows]);
+  const allPaises = useMemo(() => [...new Set(baseRows.map(r => r.pais))].sort((a,b) => a.localeCompare(b)), [baseRows]);
+
+  // Filtrar primero, luego ordenar
   const rows = useMemo(() => {
     const toUSD = (r) => r.moneda === "ARS" ? r.feeMes / cotiz : r.feeMes;
-    const dir = sortDir === "asc" ? 1 : -1;
-    return [...baseRows].sort((a, b) => {
-      if (a.sinFeeMes !== b.sinFeeMes) return a.sinFeeMes ? 1 : -1;
-      let cmp = 0;
-      if      (sortCol === "sede")        cmp = a.sede.localeCompare(b.sede);
-      else if (sortCol === "pais")        cmp = a.pais.localeCompare(b.pais);
-      else if (sortCol === "feeMesUSD")   cmp = toUSD(a) - toUSD(b);
-      else if (sortCol === "feeMesARS")   cmp = a.feeMes - b.feeMes;
-      else if (sortCol === "varPct")   cmp = (a.varPct ?? -Infinity) - (b.varPct ?? -Infinity);
-      else if (sortCol === "feeYTD")   cmp = a.feeYTD - b.feeYTD;
-      return cmp * dir;
-    });
-  }, [baseRows, sortCol, sortDir]);
+    const dir   = sortDir === "asc" ? 1 : -1;
+
+    return baseRows
+      .filter(r =>
+        (filterSedes.size  === 0 || filterSedes.has(r.sede)) &&
+        (filterPaises.size === 0 || filterPaises.has(r.pais))
+      )
+      .sort((a, b) => {
+        if (a.sinFeeMes !== b.sinFeeMes) return a.sinFeeMes ? 1 : -1;
+        let cmp = 0;
+        if      (sortCol === "sede")      cmp = a.sede.localeCompare(b.sede);
+        else if (sortCol === "pais")      cmp = a.pais.localeCompare(b.pais);
+        else if (sortCol === "feeMesUSD") cmp = toUSD(a) - toUSD(b);
+        else if (sortCol === "feeMesARS") cmp = a.feeMes - b.feeMes;
+        else if (sortCol === "varPct")    cmp = (a.varPct ?? -Infinity) - (b.varPct ?? -Infinity);
+        else if (sortCol === "feeYTD")    cmp = a.feeYTD - b.feeYTD;
+        return cmp * dir;
+      });
+  }, [baseRows, filterSedes, filterPaises, sortCol, sortDir, cotiz]);
 
   function toggleSort(col) {
     if (sortCol === col) setSortDir(d => d === "asc" ? "desc" : "asc");
     else { setSortCol(col); setSortDir("desc"); }
   }
+
+  const anyFilter = filterSedes.size > 0 || filterPaises.size > 0;
 
   const sel = { fontSize: 12, padding: "4px 9px", background: "var(--bg)", border: "1px solid var(--border2)", borderRadius: 6, color: "var(--text)" };
   const tdS = { padding: "6px 10px", fontSize: 11, verticalAlign: "middle", whiteSpace: "nowrap", textAlign: "right", fontFamily: "monospace" };
@@ -233,11 +298,11 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
         <div style={{ display: "flex", borderBottom: "1px solid var(--border)" }}>
           {[
             { label: "Pagan fee", value: `${rows.filter(r => !r.sinFeeMes).length} / ${rows.length}` },
-            { label: "YTD ARS",           value: fmtMoney(rows.filter(r => r.moneda === "ARS").reduce((s, r) => s + r.feeYTD, 0), "ARS") },
-            { label: "YTD USD",           value: fmtMoney(rows.filter(r => r.moneda === "USD").reduce((s, r) => s + r.feeYTD, 0), "USD") },
-            { label: "YTD EUR",           value: fmtMoney(rows.filter(r => r.moneda === "EUR").reduce((s, r) => s + r.feeYTD, 0), "EUR") },
-            { label: `${MONTHS[month]} ARS`, value: fmtMoney(rows.filter(r => r.moneda === "ARS").reduce((s, r) => s + r.feeMes, 0), "ARS") },
-            { label: `${MONTHS[month]} USD`, value: fmtMoney(rows.filter(r => r.moneda === "USD").reduce((s, r) => s + r.feeMes, 0), "USD") },
+            { label: "YTD ARS",              value: fmtMoney(rows.filter(r => r.moneda==="ARS").reduce((s,r)=>s+r.feeYTD,0),"ARS") },
+            { label: "YTD USD",              value: fmtMoney(rows.filter(r => r.moneda==="USD").reduce((s,r)=>s+r.feeYTD,0),"USD") },
+            { label: "YTD EUR",              value: fmtMoney(rows.filter(r => r.moneda==="EUR").reduce((s,r)=>s+r.feeYTD,0),"EUR") },
+            { label: `${MONTHS[month]} ARS`, value: fmtMoney(rows.filter(r => r.moneda==="ARS").reduce((s,r)=>s+r.feeMes,0),"ARS") },
+            { label: `${MONTHS[month]} USD`, value: fmtMoney(rows.filter(r => r.moneda==="USD").reduce((s,r)=>s+r.feeMes,0),"USD") },
           ].map(({ label, value }) => (
             <div key={label} style={{ flex: 1, padding: "10px 14px", borderRight: "1px solid var(--border)", textAlign: "center" }}>
               <div style={{ fontSize: 9, color: "var(--text2)", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</div>
@@ -246,18 +311,37 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
           ))}
         </div>
 
+        {/* Barra de filtros */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px", borderBottom: "1px solid var(--border)", background: "var(--bg)" }}>
+          <span style={{ fontSize: 10, color: "var(--text2)", marginRight: 2 }}>Filtrar:</span>
+          <FilterDropdown label="Sede"  options={allSedes}  selected={filterSedes}  onChange={setFilterSedes} />
+          <FilterDropdown label="País"  options={allPaises} selected={filterPaises} onChange={setFilterPaises} />
+          {anyFilter && (
+            <button
+              onClick={() => { setFilterSedes(new Set()); setFilterPaises(new Set()); }}
+              style={{ fontSize: 10, color: "var(--red)", background: "none", border: "none", cursor: "pointer", padding: "3px 6px", marginLeft: 4 }}
+            >
+              ✕ Limpiar filtros
+            </button>
+          )}
+          <span style={{ marginLeft: "auto", fontSize: 10, color: "var(--text2)" }}>
+            {rows.length} sede{rows.length !== 1 ? "s" : ""}
+            {anyFilter ? ` de ${baseRows.length}` : ""}
+          </span>
+        </div>
+
         {/* Tabla */}
         <div style={{ overflowY: "auto", flex: 1 }}>
           {rows.length === 0 ? (
             <div style={{ padding: "48px 0", textAlign: "center", color: "var(--text2)", fontSize: 13 }}>
-              No hay sedes activas para mostrar
+              {anyFilter ? "Ninguna sede coincide con los filtros aplicados." : "No hay sedes activas para mostrar."}
             </div>
           ) : (
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
                 <tr>
-                  <SortTh col="sede" align="left"  {...sortProps}>Sede</SortTh>
-                  <SortTh col="pais" align="left"  {...sortProps}>País</SortTh>
+                  <SortTh col="sede" align="left" {...sortProps}>Sede</SortTh>
+                  <SortTh col="pais" align="left" {...sortProps}>País</SortTh>
                   <SortTh col="feeMesUSD" {...sortProps}>
                     Fee {MONTHS[month]}<br/>
                     <span style={{ fontWeight: 400, fontSize: 9 }}>U$D · {year}</span>
@@ -270,7 +354,7 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
                     Var %<br/>
                     <span style={{ fontWeight: 400, fontSize: 9 }}>vs {MONTHS[prev.month]}</span>
                   </SortTh>
-                  <SortTh col="feeYTD"               {...sortProps}>
+                  <SortTh col="feeYTD" {...sortProps}>
                     Fee YTD<br/>
                     <span style={{ fontWeight: 400, fontSize: 9 }}>Ene–{MONTHS[month]} · ARS→U$D</span>
                   </SortTh>
@@ -278,19 +362,16 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
               </thead>
               <tbody>
                 {rows.map((r, i) => {
-                  const varLabel = r.feePrev === 0 && r.feeMes > 0
-                    ? "Nuevo"
+                  const varLabel = r.feePrev === 0 && r.feeMes > 0 ? "Nuevo"
                     : r.varPct == null ? "—"
                     : (r.varPct >= 0 ? "+" : "") + r.varPct.toFixed(1) + "%";
                   const varColor = r.varPct == null ? "var(--text2)"
-                    : r.varPct > 0  ? "var(--green)"
-                    : r.varPct < 0  ? "var(--red)"
+                    : r.varPct > 0 ? "var(--green)"
+                    : r.varPct < 0 ? "var(--red)"
                     : "var(--text2)";
-
                   const ytdDisplay = r.moneda === "ARS"
                     ? fmtMoney(r.feeYTD / cotiz, "USD")
                     : fmtMoney(r.feeYTD, r.moneda);
-
                   return (
                     <tr key={r.sede} style={{
                       background: i % 2 === 0 ? "var(--bg)" : "var(--bg2)",
@@ -299,21 +380,13 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
                     }}>
                       <td style={{ ...tdS, textAlign: "left", fontWeight: 600, fontFamily: "inherit" }}>{r.sede}</td>
                       <td style={{ ...tdS, textAlign: "left", color: "var(--text2)", fontFamily: "inherit" }}>{r.pais}</td>
-                      {/* Fee USD */}
                       <td style={{ ...tdS, fontWeight: 700, color: r.sinFeeMes ? "var(--text2)" : "var(--text)" }}>
-                        {r.sinFeeMes
-                          ? <span style={{ color: "var(--text2)" }}>—</span>
-                          : r.moneda === "ARS"
-                            ? fmtMoney(r.feeMes / cotiz, "USD")
-                            : fmtMoney(r.feeMes, r.moneda)
-                        }
+                        {r.sinFeeMes ? <span style={{ color: "var(--text2)" }}>—</span>
+                          : r.moneda === "ARS" ? fmtMoney(r.feeMes / cotiz, "USD")
+                          : fmtMoney(r.feeMes, r.moneda)}
                       </td>
-                      {/* Fee ARS — solo Argentina */}
                       <td style={{ ...tdS, color: "var(--text2)", fontWeight: 400 }}>
-                        {r.moneda === "ARS" && !r.sinFeeMes
-                          ? fmtMoney(r.feeMes, "ARS")
-                          : ""
-                        }
+                        {r.moneda === "ARS" && !r.sinFeeMes ? fmtMoney(r.feeMes, "ARS") : ""}
                       </td>
                       <td style={{ ...tdS, textAlign: "center", fontWeight: 600, color: varColor, fontFamily: "inherit" }}>
                         {varLabel}
