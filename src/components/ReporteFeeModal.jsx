@@ -167,13 +167,14 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
 
   // Ordenamiento con click en header — sedes sin fee siempre al fondo
   const rows = useMemo(() => {
+    const toUSD = (r) => r.moneda === "ARS" ? r.feeMes / cotiz : r.feeMes;
     const dir = sortDir === "asc" ? 1 : -1;
     return [...baseRows].sort((a, b) => {
       if (a.sinFeeMes !== b.sinFeeMes) return a.sinFeeMes ? 1 : -1;
       let cmp = 0;
       if      (sortCol === "sede")        cmp = a.sede.localeCompare(b.sede);
       else if (sortCol === "pais")        cmp = a.pais.localeCompare(b.pais);
-      else if (sortCol === "feeMesUSD")   cmp = a.feeMes - b.feeMes;
+      else if (sortCol === "feeMesUSD")   cmp = toUSD(a) - toUSD(b);
       else if (sortCol === "feeMesARS")   cmp = a.feeMes - b.feeMes;
       else if (sortCol === "varPct")   cmp = (a.varPct ?? -Infinity) - (b.varPct ?? -Infinity);
       else if (sortCol === "feeYTD")   cmp = a.feeYTD - b.feeYTD;
