@@ -286,7 +286,7 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
   const def = prevMonth(defaultMonth, defaultYear);
   const [month,        setMonth]        = useState(def.month);
   const [year,         setYear]         = useState(def.year);
-  const [cotiz,        setCotiz]        = useState(1200);
+  const [cotiz,        setCotiz]        = useState(1400);
   const [sortCol,      setSortCol]      = useState("feeMesUSD");
   const [sortDir,      setSortDir]      = useState("desc");
   const [filterSedes,  setFilterSedes]  = useState(new Set());
@@ -364,7 +364,7 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
             <button
               onClick={() => downloadExcel(rows, year, month, cotiz)}
               disabled={rows.length === 0}
-              style={{ fontSize: 12, fontWeight: 600, padding: "6px 16px", borderRadius: 6, background: rows.length ? "var(--lime)" : "var(--bg)", color: rows.length ? "#000" : "var(--text2)", border: "none", cursor: rows.length ? "pointer" : "not-allowed" }}
+              style={{ fontSize: 12, fontWeight: 600, padding: "6px 16px", borderRadius: 6, background: rows.length ? "#fff" : "var(--bg)", color: rows.length ? "#111" : "var(--text2)", border: "1px solid #ccc", cursor: rows.length ? "pointer" : "not-allowed" }}
             >
               ↓ Excel
             </button>
