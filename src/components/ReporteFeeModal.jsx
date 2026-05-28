@@ -60,43 +60,51 @@ function buildRows(franchises, comps, year, month) {
 function downloadExcel(rows, year, month, cotiz = 1200) {
   const prev = prevMonth(month, year);
   const wb   = XLSX.utils.book_new();
+  // ── Hoja de detalle ──
   const HEADERS = [
     "Sede", "País",
     `Fee ${MONTHS[month]} U$D`,
-    `Fee ${MONTHS[month]} ARS`,
     `Var % vs ${MONTHS[prev.month]}`,
-    `Fee YTD Ene–${MONTHS[month]} (ARS→U$D @ ${cotiz})`,
+    `Fee YTD Ene–${MONTHS[month]} U$D (@ ${cotiz})`,
   ];
   const data = [HEADERS, ...rows.map(r => {
     const varPct    = r.feePrev > 0 ? (r.feeMes - r.feePrev) / r.feePrev : "";
     const feeMesUSD = r.moneda === "ARS" ? r.feeMes / cotiz : r.feeMes;
-    const feeMesARS = r.moneda === "ARS" ? r.feeMes : "";
     const ytdUSD    = r.feeYTD ? (r.moneda === "ARS" ? r.feeYTD / cotiz : r.feeYTD) : "";
-    return [r.sede, r.pais, feeMesUSD, feeMesARS, varPct, ytdUSD];
+    return [r.sede, r.pais, feeMesUSD, varPct, ytdUSD];
   })];
   const ws = XLSX.utils.aoa_to_sheet(data);
   rows.forEach((_, i) => {
     const row = i + 2;
-    ["C","D","F"].forEach(col => { const c = ws[`${col}${row}`]; if (c?.t === "n") c.z = "#,##0"; });
-    if (data[i+1][4] !== "")
-      ws[XLSX.utils.encode_cell({ r: row-1, c: 4 })] = { v: data[i+1][4], t: "n", z: "0.0%" };
+    ["C","E"].forEach(col => { const c = ws[`${col}${row}`]; if (c?.t === "n") c.z = "#,##0"; });
+    if (data[i+1][3] !== "")
+      ws[XLSX.utils.encode_cell({ r: row-1, c: 3 })] = { v: data[i+1][3], t: "n", z: "0.0%" };
   });
-  ws["!cols"] = [24,14,16,18,14,26].map(w => ({ wch: w }));
+  ws["!cols"] = [24, 14, 16, 14, 26].map(w => ({ wch: w }));
   XLSX.utils.book_append_sheet(wb, ws, `${MONTHS[month]} ${year}`);
+
+  // ── Hoja Resumen por sociedad ──
   const bySoc = {};
   for (const r of rows) { if (!bySoc[r.sociedad]) bySoc[r.sociedad] = []; bySoc[r.sociedad].push(r); }
   const resData = [
-    ["Sociedad","Sedes",`${MONTHS[month]} USD`,`${MONTHS[month]} EUR`,`${MONTHS[month]} ARS`,"YTD USD equiv."],
-    ...Object.entries(bySoc).map(([soc, rs]) => [
-      soc, rs.length,
-      rs.filter(r => r.moneda==="USD").reduce((s,r)=>s+r.feeMes,0),
-      rs.filter(r => r.moneda==="EUR").reduce((s,r)=>s+r.feeMes,0),
-      rs.filter(r => r.moneda==="ARS").reduce((s,r)=>s+r.feeMes,0),
-      rs.reduce((s,r)=>s+(r.moneda==="ARS"?r.feeYTD/cotiz:r.feeYTD),0),
-    ]),
+    ["Sociedad", "Sedes", `Fee ${MONTHS[month]} U$D`, `Var % vs ${MONTHS[prev.month]}`, `Fee YTD U$D (@ ${cotiz})`],
+    ...Object.entries(bySoc).map(([soc, rs]) => {
+      const totMes  = rs.reduce((s, r) => s + (r.moneda === "ARS" ? r.feeMes / cotiz : r.feeMes), 0);
+      const totPrev = rs.reduce((s, r) => s + (r.moneda === "ARS" ? r.feePrev / cotiz : r.feePrev), 0);
+      const varPct  = totPrev > 0 ? (totMes - totPrev) / totPrev : "";
+      const totYTD  = rs.reduce((s, r) => s + (r.moneda === "ARS" ? r.feeYTD / cotiz : r.feeYTD), 0);
+      return [soc, rs.length, totMes, varPct, totYTD];
+    }),
   ];
   const wsRes = XLSX.utils.aoa_to_sheet(resData);
-  wsRes["!cols"] = [28,8,14,14,18,16].map(w => ({ wch: w }));
+  // formato números en resumen
+  Object.entries(bySoc).forEach((_, i) => {
+    const row = i + 2;
+    ["C","E"].forEach(col => { const c = wsRes[`${col}${row}`]; if (c?.t === "n") c.z = "#,##0.00"; });
+    if (resData[i+1][3] !== "")
+      wsRes[XLSX.utils.encode_cell({ r: row-1, c: 3 })] = { v: resData[i+1][3], t: "n", z: "0.0%" };
+  });
+  wsRes["!cols"] = [28, 8, 16, 16, 22].map(w => ({ wch: w }));
   XLSX.utils.book_append_sheet(wb, wsRes, "Resumen");
   XLSX.writeFile(wb, `Reporte-Fee-${MONTHS[month]}-${year}.xlsx`);
 }
@@ -405,10 +413,6 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
                     Fee {MONTHS[month]}<br/>
                     <span style={{ fontWeight: 400, fontSize: 9 }}>U$D · {year}</span>
                   </SortTh>
-                  <SortTh col="feeMesARS" {...sortProps}>
-                    Fee {MONTHS[month]}<br/>
-                    <span style={{ fontWeight: 400, fontSize: 9 }}>ARS · {year}</span>
-                  </SortTh>
                   <SortTh col="varPct" align="center" {...sortProps}>
                     Var %<br/>
                     <span style={{ fontWeight: 400, fontSize: 9 }}>vs {MONTHS[prev.month]}</span>
@@ -443,9 +447,6 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
                         {r.sinFeeMes ? <span style={{ color: "var(--text2)" }}>—</span>
                           : r.moneda === "ARS" ? fmtMoney(r.feeMes / cotiz, "USD")
                           : fmtMoney(r.feeMes, r.moneda)}
-                      </td>
-                      <td style={{ ...tdS, color: "var(--text2)", fontWeight: 400 }}>
-                        {r.moneda === "ARS" && !r.sinFeeMes ? fmtMoney(r.feeMes, "ARS") : ""}
                       </td>
                       <td style={{ ...tdS, textAlign: "center", fontWeight: 600, color: varColor, fontFamily: "inherit" }}>
                         {varLabel}
