@@ -789,14 +789,14 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
 // ── Modo CRM ────────────────────────────────────────────────────────────────
 // TC por país: moneda local → USD. Estas son las monedas locales de los países LATAM
 const COUNTRY_CURRENCY = {
-  "Paraguay":   { code: "PYG", label: "Guaraní",    sym: "₲",   tcField: "pygUSD" },
-  "Chile":      { code: "CLP", label: "Peso CLP",   sym: "CL$", tcField: "clpUSD" },
-  "Perú":       { code: "PEN", label: "Sol",        sym: "S/",  tcField: "penUSD" },
-  "Panamá":     { code: "USD", label: "USD",        sym: "U$D", tcField: null      },
-  "España":     { code: "EUR", label: "Euro",       sym: "€",   tcField: "eurUSD"  },
-  "Portugal":   { code: "EUR", label: "Euro",       sym: "€",   tcField: "eurUSD"  },
-  "Uruguay":    { code: "UYU", label: "Peso UYU",   sym: "U$",  tcField: "uyuUSD" },
-  "Argentina":  { code: "ARS", label: "Peso ARS",   sym: "$",   tcField: null      },
+  "Paraguay":   { code: "PYG", label: "Guaraní",    sym: "₲",   tcField: "pygUSD", defaultTc: "7500" },
+  "Chile":      { code: "CLP", label: "Peso CLP",   sym: "CL$", tcField: "clpUSD", defaultTc: "950"  },
+  "Perú":       { code: "PEN", label: "Sol",        sym: "S/",  tcField: "penUSD", defaultTc: "3.7"  },
+  "Panamá":     { code: "USD", label: "USD",        sym: "U$D", tcField: null,      defaultTc: "1"    },
+  "España":     { code: "EUR", label: "Euro",       sym: "€",   tcField: "eurUSD",  defaultTc: "1.08" },
+  "Portugal":   { code: "EUR", label: "Euro",       sym: "€",   tcField: "eurUSD",  defaultTc: "1.08" },
+  "Uruguay":    { code: "UYU", label: "Peso UYU",   sym: "U$",  tcField: "uyuUSD", defaultTc: "39"   },
+  "Argentina":  { code: "ARS", label: "Peso ARS",   sym: "$",   tcField: null,      defaultTc: null   },
 };
 function getCountryCur(country) {
   return COUNTRY_CURRENCY[country] ?? { code: "USD", label: "USD", sym: "U$D", tcField: null };
@@ -831,7 +831,21 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
 
   const [crmDate, setCrmDate] = useState(() => monthRange(monthProp, yearProp).mesFin);
 
-  // tcMap ya no existe — las tasas vienen de tiposCambio (Maestros)
+  // tcMap: valores editables en el panel CRM. Se inicializa desde Maestros si hay dato, sino desde defaultTc
+  const [tcMap, setTcMap] = useState(() => {
+    const map = {};
+    activeFr.forEach(fr => {
+      if (!fr.country || fr.country === "Argentina") return;
+      const cc  = getCountryCur(fr.country);
+      if (map[fr.country]) return;
+      // Preferir dato de Maestros del mes actual si existe
+      const key = `${yearProp}-${String(monthProp + 1).padStart(2, "0")}`;
+      const maestros = tiposCambio[key];
+      const fromMaestros = cc.tcField && maestros?.[cc.tcField] > 0 ? String(maestros[cc.tcField]) : null;
+      map[fr.country] = fromMaestros ?? cc.defaultTc ?? "";
+    });
+    return map;
+  });
 
   const makeRows = (fr_list = frForCompany) => fr_list.map(fr => ({
     frId: fr.id, frName: fr.name, currency: activeCurrency, country: fr.country,
@@ -880,7 +894,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
       .filter(c => { const code = getCountryCur(c).code; return code !== "USD" && code !== "EUR"; });
   }, [frForCompany]);
 
-  const tcCargados = countriesWithTc.filter(c => getTcRate(c, tiposCambio, crmYear, crmMonth) !== null).length;
+  const tcCargados = countriesWithTc.filter(c => parseFloat(tcMap[c]) > 0).length;
 
   const [crmFetchErrors, setCrmFetchErrors] = useState([]);
 
@@ -936,7 +950,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
     const cc = getCountryCur(r.country);
     // EUR y USD ya son monedas de facturación final — no se convierten
     if (cc.code === "USD" || cc.code === "EUR") return feeLocal;
-    const tc = getTcRate(r.country, tiposCambio, crmYear, crmMonth) ?? 1;
+    const tc = parseFloat(tcMap[r.country] ?? "1") || 1;
     return feeLocal / tc;
   };
 
@@ -1158,17 +1172,15 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {countriesWithTc.map(country => {
                       const cc  = getCountryCur(country);
-                      const rate = getTcRate(country, tiposCambio, crmYear, crmMonth);
-                      const ok  = rate !== null;
+                      const val = tcMap[country] ?? "";
+                      const ok  = parseFloat(val) > 0;
                       return (
                         <div key={country} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <span style={{ fontSize: 12, fontWeight: 700, minWidth: 78 }}>{country}</span>
                           <span style={{ fontSize: 11, color: "var(--muted)", minWidth: 26 }}>{cc.sym}</span>
-                          <span style={{ ...inS, flex: 1, display: "inline-block", textAlign: "right",
-                            color: ok ? "var(--text)" : "var(--muted)",
-                            fontWeight: ok ? 700 : 400 }}>
-                            {ok ? rate.toLocaleString("es-AR") : "—"}
-                          </span>
+                          <input type="number" value={val}
+                            onChange={e => setTcMap(m => ({ ...m, [country]: e.target.value }))}
+                            placeholder="TC" style={{ ...inS, flex: 1 }} />
                           <span style={{ fontSize: 10, color: "var(--muted)" }}>/ USD</span>
                           <span style={{ fontSize: 14, fontWeight: 700,
                             color: ok ? "var(--green, #7ed9a0)" : "var(--red, #ff6b7a)" }}>
@@ -1179,7 +1191,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
                     })}
                   </div>
                   <div style={{ marginTop: 10, fontSize: 10, color: "var(--muted)", borderTop: "1px solid var(--border)", paddingTop: 8 }}>
-                    TC desde Maestros · cargá los datos ahí para actualizar
+                    Las ventas se obtienen de Bigg Eye automáticamente
                   </div>
                 </div>
               )}
