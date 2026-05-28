@@ -7,7 +7,7 @@ const fmtMoney = (n, cur = "ARS") => {
   if (!n && n !== 0) return "—";
   const abs = Math.abs(n);
   const sym = cur === "USD" ? "U$D " : cur === "EUR" ? "€ " : "$ ";
-  return sym + abs.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return sym + abs.toLocaleString("es-AR", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 };
 
 function prevMonth(month, year) {
@@ -100,7 +100,7 @@ function downloadExcel(rows, year, month, cotiz = 1200) {
       return [r.sede, r.pais, r.moneda, r.feeMes || "", varPct, ytdUSD];
     })];
     const ws = XLSX.utils.aoa_to_sheet(data);
-    const numFmt = "#,##0.00";
+    const numFmt = "#,##0";
     socRows.forEach((_, i) => {
       const row = i + 2;
       const cellD = ws[`D${row}`]; if (cellD?.t === "n") cellD.z = numFmt;
@@ -275,7 +275,7 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
                         <td style={{ ...tdS, textAlign: "left", fontWeight: 600, fontFamily: "inherit" }}>{r.sede}</td>
                         <td style={{ ...tdS, textAlign: "left", color: "var(--text2)", fontFamily: "inherit" }}>{r.pais}</td>
                         <td style={{ ...tdS, fontWeight: 700, color: r.sinFeeMes ? "var(--text2)" : "var(--red)" }}>
-                          {r.sinFeeMes ? "$ 0,00" : fmtMoney(r.feeMes, r.moneda)}
+                          {r.sinFeeMes ? "$ 0" : fmtMoney(r.feeMes, r.moneda)}
                         </td>
                         <td style={{ ...tdS, textAlign: "center", fontWeight: 600, color: varColor, fontFamily: "inherit" }}>
                           {varLabel}
