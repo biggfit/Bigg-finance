@@ -35,11 +35,11 @@ function tcFor(tiposCambio, year, month) {
   const key = `${year}-${String(month + 1).padStart(2, "0")}`;
   return tiposCambio[key] ?? null;
 }
-/** Merge TC guardado con fallbacks; devuelve un objeto completo con las 6 monedas */
-function mergeTc(rawTc, fallbackARS, fallbackEUR) {
+/** Construye objeto TC desde Maestros; 0 en cualquier campo no cargado */
+function mergeTc(rawTc) {
   return {
-    arsUSD: rawTc?.arsUSD > 0 ? rawTc.arsUSD : fallbackARS,
-    eurUSD: rawTc?.eurUSD > 0 ? rawTc.eurUSD : fallbackEUR,
+    arsUSD: rawTc?.arsUSD > 0 ? rawTc.arsUSD : 0,
+    eurUSD: rawTc?.eurUSD > 0 ? rawTc.eurUSD : 0,
     uyuUSD: rawTc?.uyuUSD > 0 ? rawTc.uyuUSD : 0,
     pygUSD: rawTc?.pygUSD > 0 ? rawTc.pygUSD : 0,
     clpUSD: rawTc?.clpUSD > 0 ? rawTc.clpUSD : 0,
@@ -57,23 +57,21 @@ function feeToUSD(amount, currency, tc) {
   if (currency === "PEN") return tc.penUSD > 0 ? amount / tc.penUSD : 0;
   return amount; // USD u otras pasan directo
 }
-function computeYTD_USD(frComps, year, upToMonth, feeCurrency, tiposCambio, fallbackARS, fallbackEUR) {
+function computeYTD_USD(frComps, year, upToMonth, feeCurrency, tiposCambio) {
   let total = 0;
   for (let m = 0; m <= upToMonth; m++) {
-    const tc = mergeTc(tcFor(tiposCambio, year, m), fallbackARS, fallbackEUR);
+    const tc = mergeTc(tcFor(tiposCambio, year, m));
     total += feeToUSD(sumFee(frComps, year, m), feeCurrency, tc);
   }
   return total;
 }
 
 // ─── lógica del reporte ──────────────────────────────────────────────────────
-function buildRows(franchises, comps, year, month, tiposCambio = {}, fallbackARS = 1400, fallbackEUR = 1.08) {
+function buildRows(franchises, comps, year, month, tiposCambio = {}) {
   const prev = prevMonth(month, year);
 
-  const rawTc  = tcFor(tiposCambio, year, month);
-  const rawTcp = tcFor(tiposCambio, prev.year, prev.month);
-  const tc     = mergeTc(rawTc,  fallbackARS, fallbackEUR);
-  const tcp    = mergeTc(rawTcp, fallbackARS, fallbackEUR);
+  const tc  = mergeTc(tcFor(tiposCambio, year, month));
+  const tcp = mergeTc(tcFor(tiposCambio, prev.year, prev.month));
 
   const rows = [];
   for (const fr of franchises) {
@@ -89,7 +87,7 @@ function buildRows(franchises, comps, year, month, tiposCambio = {}, fallbackARS
 
     const feeMes_USD  = feeToUSD(feeMes,  feeCurrency, tc);
     const feePrev_USD = feeToUSD(feePrev, feeCurrency, tcp);
-    const feeYTD_USD  = computeYTD_USD(frComps, year, month, feeCurrency, tiposCambio, fallbackARS, fallbackEUR);
+    const feeYTD_USD  = computeYTD_USD(frComps, year, month, feeCurrency, tiposCambio);
     const varPct      = feePrev_USD > 0 ? ((feeMes_USD - feePrev_USD) / feePrev_USD) * 100 : null;
 
     rows.push({
@@ -344,8 +342,6 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
   const def = prevMonth(defaultMonth, defaultYear);
   const [month,        setMonth]        = useState(def.month);
   const [year,         setYear]         = useState(def.year);
-  const [fallbackARS,  setFallbackARS]  = useState(1400);
-  const [fallbackEUR,  setFallbackEUR]  = useState(1.08);
   const [sortCol,      setSortCol]      = useState("feeMesUSD");
   const [sortDir,      setSortDir]      = useState("desc");
   const [filterSedes,  setFilterSedes]  = useState(new Set());
@@ -359,8 +355,8 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
   const tcMissing = !tcActual || !(tcActual.arsUSD > 0);
 
   const baseRows = useMemo(
-    () => buildRows(franchises, comps, year, month, tiposCambio, fallbackARS, fallbackEUR),
-    [franchises, comps, year, month, tiposCambio, fallbackARS, fallbackEUR]
+    () => buildRows(franchises, comps, year, month, tiposCambio),
+    [franchises, comps, year, month, tiposCambio]
   );
 
   const allSedes  = useMemo(() => [...new Set(baseRows.map(r => r.sede))].sort((a,b) => a.localeCompare(b)), [baseRows]);
@@ -414,28 +410,10 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
             <select value={year} onChange={e => setYear(+e.target.value)} style={sel}>
               {AVAILABLE_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
             </select>
-            {tcMissing ? (
-              <>
-                <label style={{ fontSize: 11, color: "#f5a623", display: "flex", alignItems: "center", gap: 5 }} title="No hay TC guardado para este mes — usando fallback">
-                  ⚠ ARS
-                  <input type="number" value={fallbackARS}
-                    onChange={e => setFallbackARS(Math.max(1, +e.target.value || 1))}
-                    style={{ width: 70, fontSize: 12, padding: "3px 7px", background: "var(--bg)", border: "1px solid #f5a623", borderRadius: 5, color: "var(--text)", textAlign: "right" }}
-                  />
-                </label>
-                <label style={{ fontSize: 11, color: "#f5a623", display: "flex", alignItems: "center", gap: 5 }} title="Fallback EUR→USD">
-                  ⚠ €
-                  <input type="number" value={fallbackEUR} step="0.01"
-                    onChange={e => setFallbackEUR(Math.max(0.01, +e.target.value || 0.01))}
-                    style={{ width: 55, fontSize: 12, padding: "3px 7px", background: "var(--bg)", border: "1px solid #f5a623", borderRadius: 5, color: "var(--text)", textAlign: "right" }}
-                  />
-                </label>
-              </>
-            ) : (
-              <span style={{ fontSize: 11, color: "var(--lime, #adff19)", opacity: 0.8 }}>
-                ✓ TC {MONTHS[month]} {year}
-              </span>
-            )}
+            {tcMissing
+              ? <span style={{ fontSize: 11, color: "#f5a623" }} title="Cargá el TC en Maestros para este mes">⚠ TC sin cargar</span>
+              : <span style={{ fontSize: 11, color: "var(--lime, #adff19)", opacity: 0.8 }}>✓ TC {MONTHS[month]} {year}</span>
+            }
             <button
               onClick={() => downloadExcel(rows, year, month)}
               disabled={rows.length === 0}
