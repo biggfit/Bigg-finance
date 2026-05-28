@@ -48,12 +48,17 @@ function buildRows(franchises, comps, year, month) {
       fr.feeMoneda ?? fr.currency ?? "ARS";
     rows.push({
       sede: fr.name, sociedad: fr.sociedad ?? "—", pais: fr.country ?? "—",
-      moneda: feeCurrency, feeYTD, feePrev, feeMes, varPct, sinFeeMes: feeMes === 0,
+      moneda: feeCurrency, feeYTD, feePrev, feeMes, varPct,
+      sinFeeMes: feeMes === 0,
+      hasOpened: frComps.length > 0,   // tiene movimientos → abrió
     });
   }
-  return rows.sort((a, b) =>
-    a.sinFeeMes === b.sinFeeMes ? b.feeMes - a.feeMes : a.sinFeeMes ? 1 : -1
-  );
+  // orden: con fee ↓, abrió sin fee, no abrió al fondo
+  return rows.sort((a, b) => {
+    if (a.hasOpened !== b.hasOpened) return a.hasOpened ? -1 : 1;
+    if (a.sinFeeMes !== b.sinFeeMes) return a.sinFeeMes ? 1 : -1;
+    return b.feeMes - a.feeMes;
+  });
 }
 
 // ─── descarga Excel ──────────────────────────────────────────────────────────
@@ -383,7 +388,7 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
         {/* KPIs */}
         <div style={{ display: "flex", borderBottom: "1px solid var(--border)" }}>
           {[
-            { label: "Pagan fee", value: `${rows.filter(r => !r.sinFeeMes).length} / ${rows.length}` },
+            { label: "Pagan fee", value: `${rows.filter(r => r.hasOpened && !r.sinFeeMes).length} / ${rows.filter(r => r.hasOpened).length}` },
             { label: "YTD ARS",              value: fmtMoney(rows.filter(r => r.moneda==="ARS").reduce((s,r)=>s+r.feeYTD,0),"ARS") },
             { label: "YTD USD",              value: fmtMoney(rows.filter(r => r.moneda==="USD").reduce((s,r)=>s+r.feeYTD,0),"USD") },
             { label: "YTD EUR",              value: fmtMoney(rows.filter(r => r.moneda==="EUR").reduce((s,r)=>s+r.feeYTD,0),"EUR") },
@@ -439,14 +444,17 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
                     <tr key={r.sede} style={{
                       background: i % 2 === 0 ? "var(--bg)" : "var(--bg2)",
                       borderBottom: "1px solid var(--border)",
-                      opacity: r.sinFeeMes ? 0.45 : 1,
+                      opacity: r.hasOpened ? 1 : 0.4,
                     }}>
                       <td style={{ ...tdS, textAlign: "left", fontWeight: 600, fontFamily: "inherit" }}>{r.sede}</td>
                       <td style={{ ...tdS, textAlign: "left", color: "var(--text2)", fontFamily: "inherit" }}>{r.pais}</td>
                       <td style={{ ...tdS, fontWeight: 700, color: r.sinFeeMes ? "var(--text2)" : "var(--text)" }}>
-                        {r.sinFeeMes ? <span style={{ color: "var(--text2)" }}>—</span>
-                          : r.moneda === "ARS" ? fmtMoney(r.feeMes / cotiz, "USD")
-                          : fmtMoney(r.feeMes, r.moneda)}
+                        {!r.hasOpened
+                          ? <span style={{ color: "var(--text2)", fontSize: 10 }}>Sin abrir</span>
+                          : r.sinFeeMes
+                            ? <span style={{ color: "var(--text2)" }}>$ 0</span>
+                            : r.moneda === "ARS" ? fmtMoney(r.feeMes / cotiz, "USD")
+                            : fmtMoney(r.feeMes, r.moneda)}
                       </td>
                       <td style={{ ...tdS, textAlign: "center", fontWeight: 600, color: varColor, fontFamily: "inherit" }}>
                         {varLabel}
