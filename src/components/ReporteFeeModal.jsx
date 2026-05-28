@@ -512,7 +512,7 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
               </thead>
               <tbody>
                 {rows.map((r, i) => {
-                  const varLabel = r.feePrev_USD === 0 && r.feeMes_USD > 0 ? "Nuevo"
+                  const varLabel = r.feePrev === 0 && r.feeMes > 0 ? "Nuevo"
                     : r.varPct == null ? "—"
                     : (r.varPct >= 0 ? "+" : "") + r.varPct.toFixed(1) + "%";
                   const varColor = r.varPct == null ? "var(--text2)"
