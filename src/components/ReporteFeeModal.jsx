@@ -62,7 +62,7 @@ function buildRows(franchises, comps, year, month) {
 }
 
 // ─── descarga Excel ──────────────────────────────────────────────────────────
-function downloadExcel(rows, year, month, cotiz = 1200) {
+function downloadExcel(rows, year, month, cotiz = 1400, cotizEUR = 1.08) {
   const prev = prevMonth(month, year);
   const wb   = XLSX.utils.book_new();
   // ── Hoja de detalle ──
@@ -74,8 +74,8 @@ function downloadExcel(rows, year, month, cotiz = 1200) {
   ];
   const data = [HEADERS, ...rows.map(r => {
     const varPct    = r.feePrev > 0 ? (r.feeMes - r.feePrev) / r.feePrev : "";
-    const feeMesUSD = r.moneda === "ARS" ? r.feeMes / cotiz : r.feeMes;
-    const ytdUSD    = r.feeYTD ? (r.moneda === "ARS" ? r.feeYTD / cotiz : r.feeYTD) : "";
+    const feeMesUSD = r.moneda === "ARS" ? r.feeMes / cotiz : r.moneda === "EUR" ? r.feeMes * cotizEUR : r.feeMes;
+    const ytdUSD    = r.feeYTD ? (r.moneda === "ARS" ? r.feeYTD / cotiz : r.moneda === "EUR" ? r.feeYTD * cotizEUR : r.feeYTD) : "";
     return [r.sede, r.pais, feeMesUSD, varPct, ytdUSD];
   })];
   const ws = XLSX.utils.aoa_to_sheet(data);
@@ -94,10 +94,13 @@ function downloadExcel(rows, year, month, cotiz = 1200) {
   const resData = [
     ["Sociedad", "Sedes", `Fee ${MONTHS[month]} U$D`, `Var % vs ${MONTHS[prev.month]}`, `Fee YTD U$D (@ ${cotiz})`],
     ...Object.entries(bySoc).map(([soc, rs]) => {
-      const totMes  = rs.reduce((s, r) => s + (r.moneda === "ARS" ? r.feeMes / cotiz : r.feeMes), 0);
-      const totPrev = rs.reduce((s, r) => s + (r.moneda === "ARS" ? r.feePrev / cotiz : r.feePrev), 0);
+      const toU  = r => r.moneda === "ARS" ? r.feeMes  / cotiz : r.moneda === "EUR" ? r.feeMes  * cotizEUR : r.feeMes;
+      const toUp = r => r.moneda === "ARS" ? r.feePrev / cotiz : r.moneda === "EUR" ? r.feePrev * cotizEUR : r.feePrev;
+      const toUY = r => r.moneda === "ARS" ? r.feeYTD  / cotiz : r.moneda === "EUR" ? r.feeYTD  * cotizEUR : r.feeYTD;
+      const totMes  = rs.reduce((s, r) => s + toU(r),  0);
+      const totPrev = rs.reduce((s, r) => s + toUp(r), 0);
       const varPct  = totPrev > 0 ? (totMes - totPrev) / totPrev : "";
-      const totYTD  = rs.reduce((s, r) => s + (r.moneda === "ARS" ? r.feeYTD / cotiz : r.feeYTD), 0);
+      const totYTD  = rs.reduce((s, r) => s + toUY(r), 0);
       return [soc, rs.length, totMes, varPct, totYTD];
     }),
   ];
@@ -300,6 +303,7 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
   const [month,        setMonth]        = useState(def.month);
   const [year,         setYear]         = useState(def.year);
   const [cotiz,        setCotiz]        = useState(1400);
+  const [cotizEUR,     setCotizEUR]     = useState(1.08);  // EUR → USD
   const [sortCol,      setSortCol]      = useState("feeMesUSD");
   const [sortDir,      setSortDir]      = useState("desc");
   const [filterSedes,  setFilterSedes]  = useState(new Set());
@@ -315,7 +319,7 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
 
   // Filtrar primero, luego ordenar
   const rows = useMemo(() => {
-    const toUSD = (r) => r.moneda === "ARS" ? r.feeMes / cotiz : r.feeMes;
+    const toUSD = (r) => r.moneda === "ARS" ? r.feeMes / cotiz : r.moneda === "EUR" ? r.feeMes * cotizEUR : r.feeMes;
     const dir   = sortDir === "asc" ? 1 : -1;
 
     return baseRows
@@ -374,8 +378,17 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
               />
               ARS
             </label>
+            <label style={{ fontSize: 11, color: "var(--text2)", display: "flex", alignItems: "center", gap: 5 }}>
+              € 1 =
+              <input
+                type="number" value={cotizEUR} step="0.01"
+                onChange={e => setCotizEUR(Math.max(0.01, +e.target.value || 0.01))}
+                style={{ width: 58, fontSize: 12, padding: "3px 7px", background: "var(--bg)", border: "1px solid var(--border2)", borderRadius: 5, color: "var(--text)", textAlign: "right" }}
+              />
+              U$D
+            </label>
             <button
-              onClick={() => downloadExcel(rows, year, month, cotiz)}
+              onClick={() => downloadExcel(rows, year, month, cotiz, cotizEUR)}
               disabled={rows.length === 0}
               style={{ fontSize: 12, fontWeight: 600, padding: "6px 16px", borderRadius: 6, background: rows.length ? "#fff" : "var(--bg)", color: rows.length ? "#111" : "var(--text2)", border: "1px solid #ccc", cursor: rows.length ? "pointer" : "not-allowed" }}
             >
@@ -387,9 +400,9 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
 
         {/* KPIs */}
         {(() => {
-          const toUSD   = r => r.moneda === "ARS" ? r.feeMes  / cotiz : r.feeMes;
-          const toUSDp  = r => r.moneda === "ARS" ? r.feePrev / cotiz : r.feePrev;
-          const toYTD   = r => r.moneda === "ARS" ? r.feeYTD  / cotiz : r.feeYTD;
+          const toUSD   = r => r.moneda === "ARS" ? r.feeMes  / cotiz : r.moneda === "EUR" ? r.feeMes  * cotizEUR : r.feeMes;
+          const toUSDp  = r => r.moneda === "ARS" ? r.feePrev / cotiz : r.moneda === "EUR" ? r.feePrev * cotizEUR : r.feePrev;
+          const toYTD   = r => r.moneda === "ARS" ? r.feeYTD  / cotiz : r.moneda === "EUR" ? r.feeYTD  * cotizEUR : r.feeYTD;
 
           const pagando   = rows.filter(r => r.hasOpened && !r.sinFeeMes);
           const abiertas  = rows.filter(r => r.hasOpened);
@@ -418,8 +431,8 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
             },
             {
               label: `Fee ${MONTHS[month]}`,
-              value: fmtMoney(fesMesUSD + fesMesARS / cotiz, "USD"),
-              sub: fesMesEUR > 0 ? fmtMoney(fesMesEUR, "EUR") : null,
+              value: fmtMoney(fesMesUSD + fesMesARS / cotiz + fesMesEUR * cotizEUR, "USD"),
+              sub: null,
             },
             {
               label: `Var % vs ${MONTHS[prev.month]}`,
@@ -434,8 +447,8 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
             },
             {
               label: `YTD Ene–${MONTHS[month]}`,
-              value: fmtMoney(ytdUSD + ytdARS / cotiz, "USD"),
-              sub: ytdEUR > 0 ? fmtMoney(ytdEUR, "EUR") : null,
+              value: fmtMoney(ytdUSD + ytdARS / cotiz + ytdEUR * cotizEUR, "USD"),
+              sub: null,
             },
           ];
 
