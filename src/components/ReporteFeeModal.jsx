@@ -203,6 +203,84 @@ function SortTh({ col, children, sortCol, sortDir, onSort, align = "right" }) {
   );
 }
 
+// ─── SortFilterTh — ordena al hacer click en el texto, filtra con el ▾ ───────
+function SortFilterTh({ col, label, options, selected, onChange, sortCol, sortDir, onSort, align = "left" }) {
+  const [open, setOpen] = useState(false);
+  const active     = sortCol === col;
+  const hasFilter  = selected.size > 0;
+  const allOn      = selected.size === 0;
+
+  function isChecked(opt) { return allOn || selected.has(opt); }
+  function toggle(opt) {
+    if (allOn) {
+      onChange(new Set(options.filter(o => o !== opt)));
+    } else {
+      const next = new Set(selected);
+      if (next.has(opt)) { next.delete(opt); onChange(next.size === 0 ? new Set(options.filter(o => o !== opt)) : next); }
+      else { next.add(opt); onChange(next.size === options.length ? new Set() : next); }
+    }
+  }
+
+  return (
+    <th style={{
+      padding: "7px 10px", fontSize: 10, fontWeight: 600,
+      borderBottom: "2px solid var(--border)", whiteSpace: "nowrap",
+      background: "var(--bg)", textAlign: align, userSelect: "none",
+      color: active ? "var(--text)" : "var(--text2)",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        {/* zona de sort */}
+        <span onClick={() => onSort(col)} style={{ cursor: "pointer", flex: 1 }}>
+          {label}
+          <span style={{ marginLeft: 4, opacity: active ? 1 : 0.3, fontSize: 9 }}>
+            {active ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
+          </span>
+        </span>
+        {/* botón de filtro */}
+        <div style={{ position: "relative" }}>
+          <span
+            onClick={e => { e.stopPropagation(); setOpen(o => !o); }}
+            style={{
+              cursor: "pointer", fontSize: 10, borderRadius: 3, padding: "1px 4px",
+              background: hasFilter ? "var(--lime)" : "transparent",
+              color: hasFilter ? "#000" : "var(--text2)",
+              fontWeight: hasFilter ? 700 : 400,
+              border: `1px solid ${hasFilter ? "var(--lime)" : "var(--border2)"}`,
+            }}
+            title="Filtrar"
+          >
+            {hasFilter ? `${selected.size} ▾` : "▾"}
+          </span>
+          {open && (
+            <>
+              <div style={{ position: "fixed", inset: 0, zIndex: 20 }} onClick={() => setOpen(false)} />
+              <div style={{
+                position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 21,
+                background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 8,
+                minWidth: 200, maxHeight: 300, overflowY: "auto",
+                boxShadow: "0 8px 32px rgba(0,0,0,.5)", padding: "6px 0",
+              }}>
+                <div style={{ padding: "4px 12px 6px", borderBottom: "1px solid var(--border)" }}>
+                  <button onClick={() => onChange(new Set())} style={{ fontSize: 10, color: "var(--lime)", background: "none", border: "none", cursor: "pointer", padding: 0, fontWeight: 600 }}>
+                    ✓ Todos
+                  </button>
+                </div>
+                {options.map(opt => (
+                  <label key={opt} onClick={() => toggle(opt)}
+                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 12px", cursor: "pointer", userSelect: "none" }}>
+                    <input type="checkbox" readOnly checked={isChecked(opt)} style={{ accentColor: "var(--lime)", cursor: "pointer" }} />
+                    <span style={{ fontSize: 12, color: "var(--text)" }}>{opt}</span>
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </th>
+  );
+}
+
 // ─── COMPONENTE PRINCIPAL ─────────────────────────────────────────────────────
 export default function ReporteFeeModal({ franchises, comps, defaultMonth, defaultYear, onClose }) {
   const def = prevMonth(defaultMonth, defaultYear);
@@ -311,25 +389,6 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
           ))}
         </div>
 
-        {/* Barra de filtros */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px", borderBottom: "1px solid var(--border)", background: "var(--bg)" }}>
-          <span style={{ fontSize: 10, color: "var(--text2)", marginRight: 2 }}>Filtrar:</span>
-          <FilterDropdown label="Sede"  options={allSedes}  selected={filterSedes}  onChange={setFilterSedes} />
-          <FilterDropdown label="País"  options={allPaises} selected={filterPaises} onChange={setFilterPaises} />
-          {anyFilter && (
-            <button
-              onClick={() => { setFilterSedes(new Set()); setFilterPaises(new Set()); }}
-              style={{ fontSize: 10, color: "var(--red)", background: "none", border: "none", cursor: "pointer", padding: "3px 6px", marginLeft: 4 }}
-            >
-              ✕ Limpiar filtros
-            </button>
-          )}
-          <span style={{ marginLeft: "auto", fontSize: 10, color: "var(--text2)" }}>
-            {rows.length} sede{rows.length !== 1 ? "s" : ""}
-            {anyFilter ? ` de ${baseRows.length}` : ""}
-          </span>
-        </div>
-
         {/* Tabla */}
         <div style={{ overflowY: "auto", flex: 1 }}>
           {rows.length === 0 ? (
@@ -340,8 +399,8 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
                 <tr>
-                  <SortTh col="sede" align="left" {...sortProps}>Sede</SortTh>
-                  <SortTh col="pais" align="left" {...sortProps}>País</SortTh>
+                  <SortFilterTh col="sede" label="Sede" options={allSedes}  selected={filterSedes}  onChange={setFilterSedes}  {...sortProps} />
+                  <SortFilterTh col="pais" label="País" options={allPaises} selected={filterPaises} onChange={setFilterPaises} {...sortProps} />
                   <SortTh col="feeMesUSD" {...sortProps}>
                     Fee {MONTHS[month]}<br/>
                     <span style={{ fontWeight: 400, fontSize: 9 }}>U$D · {year}</span>
