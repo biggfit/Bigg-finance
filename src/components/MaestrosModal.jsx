@@ -604,9 +604,7 @@ export default function MaestrosModal({ franchises, franchisor, comps, tiposCamb
 
             {/* ── Tipo de Cambio ─────────────────────────────────────────── */}
             {topSection === "tc" && (() => {
-              const nowY = new Date().getFullYear();
-              const years = [];
-              for (let y = 2024; y <= nowY + 1; y++) years.push(y);
+              const years = [2026, 2027];
 
               const selYm = `${tcYear}-${String(tcSelectedMonth+1).padStart(2,"0")}`;
               const buf   = getTcBuf(selYm);
