@@ -291,7 +291,7 @@ export default function MaestrosModal({ franchises, franchisor, comps, tiposCamb
   const [sedeFilter,  setSedeFilter]  = useState("activas"); // "activas" | "inactivas" | "todas"
   const [tcBufs,         setTcBufs]         = useState({});
   const [tcYear,         setTcYear]         = useState(new Date().getFullYear());
-  const [tcSelectedMonth, setTcSelectedMonth] = useState(new Date().getMonth());
+  const [tcSelectedMonth, setTcSelectedMonth] = useState(null);
   const toastTimer = useRef(null);
 
   const TC_MESES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
