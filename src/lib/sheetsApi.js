@@ -259,6 +259,27 @@ export async function saveRecordatorio({ frId, fecha, ccMes, ccAnio, to, frName,
   return post({ action: "addRecordatorio", frId, fecha, ccMes: ccMes ?? "", ccAnio: ccAnio ?? "", to, frName: frName ?? "", tipo: tipo ?? "cc", empresa: empresa ?? "", currency: currency ?? "" });
 }
 
+// ─── Tipos de Cambio ─────────────────────────────────────────────────────────
+
+/**
+ * Carga todos los tipos de cambio desde Sheets.
+ * @returns {{ [yearMonth: string]: { yearMonth: string, arsUSD: number, eurUSD: number } }}
+ */
+export async function fetchTiposCambio() {
+  try {
+    return await get("tiposCambio");
+  } catch (e) { console.error("[fetchTiposCambio]", e); return {}; }
+}
+
+/**
+ * Guarda (crea o actualiza) el tipo de cambio de un mes.
+ * @param {string} yearMonth  e.g. "2026-04"
+ * @param {{ arsUSD: number, eurUSD: number }} tc
+ */
+export async function saveTipoCambio(yearMonth, tc) {
+  return post({ action: "saveTC", yearMonth, tc });
+}
+
 // ─── Mail ─────────────────────────────────────────────────────────────────────
 
 /**

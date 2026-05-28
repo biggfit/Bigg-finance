@@ -210,6 +210,33 @@ function doGet(e) {
     return json({ comps: comps, saldos: saldos, franchises: franchises, franchisor: franchisor, recordatorios: recordatorios });
   }
 
+  // ── Tipos de Cambio ───────────────────────────────────────────────────────
+  if (resource === "tiposCambio") {
+    var tcSh = ss.getSheetByName("tipos_cambio");
+    if (!tcSh) return json({});
+    var tcRows = tcSh.getDataRange().getValues();
+    if (tcRows.length < 2) return json({});
+    var tcH = tcRows[0];
+    var result = {};
+    for (var ti = 1; ti < tcRows.length; ti++) {
+      var tObj = {};
+      tcH.forEach(function(h, j) { tObj[h] = tcRows[ti][j]; });
+      var ym = String(tObj.yearMonth).slice(0, 7);
+      if (ym && ym !== "") {
+        result[ym] = {
+          yearMonth: ym,
+          arsUSD: Number(tObj.arsUSD) || 0,
+          eurUSD: Number(tObj.eurUSD) || 0,
+          uyuUSD: Number(tObj.uyuUSD) || 0,
+          pygUSD: Number(tObj.pygUSD) || 0,
+          clpUSD: Number(tObj.clpUSD) || 0,
+          penUSD: Number(tObj.penUSD) || 0,
+        };
+      }
+    }
+    return json(result);
+  }
+
   return err("recurso desconocido: " + resource);
 }
 
@@ -379,6 +406,45 @@ function doPost(e) {
       body.to      || "", body.frName   || "",
       body.tipo    || "cc", body.empresa || "", body.currency || ""
     ]);
+    return json({ ok: true });
+  }
+
+  // ── Tipos de Cambio ───────────────────────────────────────────────────────
+  if (body.action === "saveTC") {
+    var tcSh = ss.getSheetByName("tipos_cambio");
+    var allTcCols = ["yearMonth","arsUSD","eurUSD","uyuUSD","pygUSD","clpUSD","penUSD"];
+    if (!tcSh) {
+      tcSh = ss.insertSheet("tipos_cambio");
+      tcSh.appendRow(allTcCols);
+      tcSh.appendRow(allTcCols.map(function(h) { return h === "yearMonth" ? body.yearMonth : (body.tc[h] != null ? body.tc[h] : ""); }));
+      return json({ ok: true });
+    }
+    var tcData = tcSh.getDataRange().getValues();
+    var tcHeaders = tcData[0];
+    // Agregar columnas nuevas si faltan
+    allTcCols.forEach(function(col) {
+      if (tcHeaders.indexOf(col) === -1) {
+        var newColIdx = tcHeaders.length + 1;
+        tcSh.getRange(1, newColIdx).setValue(col);
+        for (var ri = 1; ri < tcData.length; ri++) {
+          tcSh.getRange(ri + 1, newColIdx).setValue("");
+          tcData[ri].push("");
+        }
+        tcHeaders.push(col);
+      }
+    });
+    var ymCol = tcHeaders.indexOf("yearMonth");
+    // Buscar fila existente
+    for (var ti = 1; ti < tcData.length; ti++) {
+      if (String(tcData[ti][ymCol]) === String(body.yearMonth)) {
+        tcHeaders.forEach(function(h, c) {
+          if (h in body.tc) tcSh.getRange(ti + 1, c + 1).setValue(body.tc[h] != null ? body.tc[h] : "");
+        });
+        return json({ ok: true });
+      }
+    }
+    // Nueva fila
+    tcSh.appendRow(tcHeaders.map(function(h) { return h === "yearMonth" ? body.yearMonth : (body.tc[h] != null ? body.tc[h] : ""); }));
     return json({ ok: true });
   }
 

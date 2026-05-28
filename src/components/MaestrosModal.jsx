@@ -277,8 +277,8 @@ function frToBuf(fr) {
   };
 }
 
-export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr, onAddFr, onDeleteFr, onSaveFranchisor, onClose }) {
-  const [topSection,  setTopSection]  = useState(null);
+export default function MaestrosModal({ franchises, franchisor, comps, tiposCambio = {}, onSaveFr, onAddFr, onDeleteFr, onSaveFranchisor, onSaveTC, onClose }) {
+  const [topSection,  setTopSection]  = useState("tc");  // abre TC por defecto
   const [biggSub,     setBiggSub]     = useState(null);
   const [activeFrId,  setActiveFrId]  = useState(null);
   const [sedesOpen,   setSedesOpen]   = useState(false);
@@ -289,7 +289,51 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
   const [toast,       setToast]       = useState(null);
   const [newMode,     setNewMode]     = useState(false);
   const [sedeFilter,  setSedeFilter]  = useState("activas"); // "activas" | "inactivas" | "todas"
+  const [tcBufs,         setTcBufs]         = useState({});
+  const [tcYear,         setTcYear]         = useState(new Date().getFullYear());
+  const [tcSelectedMonth, setTcSelectedMonth] = useState(new Date().getMonth());
   const toastTimer = useRef(null);
+
+  const TC_MESES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+  const TC_FIELDS = [
+    { key:"arsUSD", label:"ARS / U$D",  placeholder:"ej. 1400",   step:"1" },
+    { key:"eurUSD", label:"€ / U$D",    placeholder:"ej. 1.08",   step:"0.0001" },
+    { key:"uyuUSD", label:"UYU / U$D",  placeholder:"ej. 42",     step:"0.01" },
+    { key:"pygUSD", label:"PYG / U$D",  placeholder:"ej. 7800",   step:"1" },
+    { key:"clpUSD", label:"CLP / U$D",  placeholder:"ej. 950",    step:"1" },
+    { key:"penUSD", label:"PEN / U$D",  placeholder:"ej. 3.7",    step:"0.0001" },
+  ];
+
+  const getTcBuf = (ym) => {
+    if (tcBufs[ym] !== undefined) return tcBufs[ym];
+    const saved = tiposCambio[ym] ?? {};
+    return {
+      arsUSD: saved.arsUSD ? String(saved.arsUSD) : "",
+      eurUSD: saved.eurUSD ? String(saved.eurUSD) : "",
+      uyuUSD: saved.uyuUSD ? String(saved.uyuUSD) : "",
+      pygUSD: saved.pygUSD ? String(saved.pygUSD) : "",
+      clpUSD: saved.clpUSD ? String(saved.clpUSD) : "",
+      penUSD: saved.penUSD ? String(saved.penUSD) : "",
+    };
+  };
+  const setTcField = (ym, field, val) => setTcBufs(prev => ({
+    ...prev,
+    [ym]: { ...getTcBuf(ym), [field]: val },
+  }));
+  const saveTC = (ym) => {
+    const b = getTcBuf(ym);
+    const tc = {
+      arsUSD: parseFloat(b.arsUSD) || 0,
+      eurUSD: parseFloat(b.eurUSD) || 0,
+      uyuUSD: parseFloat(b.uyuUSD) || 0,
+      pygUSD: parseFloat(b.pygUSD) || 0,
+      clpUSD: parseFloat(b.clpUSD) || 0,
+      penUSD: parseFloat(b.penUSD) || 0,
+    };
+    if (onSaveTC) onSaveTC(ym, tc);
+    setTcBufs(prev => { const n = {...prev}; delete n[ym]; return n; });
+    showSaved(`TC ${TC_MESES[parseInt(ym.split("-")[1],10)-1]} ${ym.split("-")[0]} guardado`);
+  };
 
   const showSaved = (msg) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -451,6 +495,18 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
           <div style={{ width:210, borderRight:"1px solid var(--border)",
             padding:"16px 12px", display:"flex", flexDirection:"column", gap:4, flexShrink:0 }}>
 
+            {/* Tipo de Cambio — primer ítem */}
+            <button
+              style={{ ...navBtn(topSection === "tc"), display:"flex", alignItems:"center",
+                justifyContent:"space-between", width:"100%", textAlign:"left" }}
+              onClick={() => {
+                setTopSection(topSection === "tc" ? null : "tc");
+                setActiveFrId(null); setNewMode(false); setSedesOpen(false); setBiggSub(null);
+              }}>
+              <span>💱 Tipo de Cambio</span>
+              <span style={{ fontSize:10, opacity:.6 }}>{topSection === "tc" ? "^" : "v"}</span>
+            </button>
+
             {/* BIGG section — mismo estilo que Sedes */}
             <div>
               <button
@@ -545,6 +601,96 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
 
           {/* Content */}
           <div style={{ flex:1, padding:"20px 24px", overflowY:"auto" }}>
+
+            {/* ── Tipo de Cambio ─────────────────────────────────────────── */}
+            {topSection === "tc" && (() => {
+              const nowY = new Date().getFullYear();
+              const years = [];
+              for (let y = 2024; y <= nowY + 1; y++) years.push(y);
+
+              const selYm = `${tcYear}-${String(tcSelectedMonth+1).padStart(2,"0")}`;
+              const buf   = getTcBuf(selYm);
+              const dirty = tcBufs[selYm] !== undefined;
+              const selLabel = `${TC_MESES[tcSelectedMonth]} ${tcYear}`;
+
+              return (
+                <div>
+                  <div style={{ ...sHdr("var(--accent)"), marginBottom:14 }}>
+                    TIPOS DE CAMBIO MENSUALES
+                  </div>
+
+                  {/* Selector de año */}
+                  <div style={{ display:"flex", gap:6, marginBottom:12 }}>
+                    {years.map(y => (
+                      <button key={y} onClick={() => setTcYear(y)} style={{
+                        padding:"5px 16px", borderRadius:7, fontSize:12, fontWeight:700, cursor:"pointer",
+                        background: tcYear === y ? "var(--accent)" : "var(--bg)",
+                        color:      tcYear === y ? "#1e2022"       : "var(--muted)",
+                        border:     tcYear === y ? "none"          : "1px solid var(--border2)",
+                      }}>{y}</button>
+                    ))}
+                  </div>
+
+                  {/* Grid de meses */}
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(6,1fr)", gap:6, marginBottom:18 }}>
+                    {TC_MESES.map((lbl, idx) => {
+                      const ym = `${tcYear}-${String(idx+1).padStart(2,"0")}`;
+                      const saved = tiposCambio[ym];
+                      const hasSaved = saved?.arsUSD > 0 || saved?.eurUSD > 0 || saved?.uyuUSD > 0;
+                      const isSel = tcSelectedMonth === idx;
+                      return (
+                        <button key={idx} onClick={() => setTcSelectedMonth(idx)} style={{
+                          padding:"9px 0", borderRadius:8, fontSize:11, cursor:"pointer", textAlign:"center",
+                          fontWeight: isSel || hasSaved ? 700 : 400,
+                          background: isSel ? "var(--accent)" : hasSaved ? "rgba(173,255,25,.1)" : "var(--bg)",
+                          color:      isSel ? "#1e2022"       : hasSaved ? "var(--accent)"       : "var(--muted)",
+                          border:     isSel ? "none" : `1px solid ${hasSaved ? "rgba(173,255,25,.35)" : "var(--border2)"}`,
+                        }}>
+                          {lbl}
+                          {hasSaved && !isSel && <div style={{ fontSize:8, marginTop:1, opacity:.7 }}>✓</div>}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Formulario del mes seleccionado */}
+                  <div style={{ background:"var(--bg)", border:`1px solid ${dirty ? "var(--accent)" : "var(--border2)"}`, borderRadius:10, padding:16 }}>
+                    <div style={{ fontSize:12, fontWeight:800, color: dirty ? "var(--accent)" : "var(--text)", marginBottom:14, letterSpacing:".04em" }}>
+                      {selLabel}
+                      {dirty && <span style={{ fontSize:10, fontWeight:400, color:"var(--accent)", marginLeft:8 }}>● sin guardar</span>}
+                    </div>
+                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginBottom:14 }}>
+                      {TC_FIELDS.map(({ key, label, placeholder, step }) => (
+                        <div key={key} style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                          <label style={{ fontSize:10, color:"var(--muted)", fontWeight:700, letterSpacing:".06em" }}>{label}</label>
+                          <input
+                            type="number" placeholder={placeholder} step={step}
+                            value={buf[key] ?? ""}
+                            onChange={e => setTcField(selYm, key, e.target.value)}
+                            style={{ width:"100%", fontSize:13, padding:"7px 10px", textAlign:"right", boxSizing:"border-box",
+                              background:"var(--bg2)", borderRadius:6, color:"var(--text)",
+                              border:`1px solid ${dirty ? "var(--accent)" : "var(--border2)"}` }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ display:"flex", justifyContent:"flex-end", alignItems:"center", gap:12 }}>
+                      {!dirty && tiposCambio[selYm]?.arsUSD > 0 && (
+                        <span style={{ fontSize:11, color:"var(--accent)", opacity:.7 }}>✓ Guardado</span>
+                      )}
+                      {dirty && (
+                        <button onClick={() => saveTC(selYm)} style={{
+                          fontSize:12, padding:"7px 22px", borderRadius:7, cursor:"pointer",
+                          background:"var(--accent)", color:"#1e2022", border:"none", fontWeight:800,
+                        }}>
+                          Guardar {selLabel}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Landing */}
             {!topSection && (
