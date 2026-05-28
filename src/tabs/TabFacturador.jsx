@@ -789,20 +789,28 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
 // ── Modo CRM ────────────────────────────────────────────────────────────────
 // TC por país: moneda local → USD. Estas son las monedas locales de los países LATAM
 const COUNTRY_CURRENCY = {
-  "Paraguay":   { code: "PYG", label: "Guaraní",    sym: "₲",  defaultTc: "7500"  },
-  "Chile":      { code: "CLP", label: "Peso CLP",   sym: "CL$", defaultTc: "950"   },
-  "Perú":       { code: "PEN", label: "Sol",        sym: "S/",  defaultTc: "3.7"   },
-  "Panamá":     { code: "USD", label: "USD",        sym: "U$D", defaultTc: "1"     },
-  "España":     { code: "EUR", label: "Euro",       sym: "€",   defaultTc: "1.08"  },
-  "Portugal":   { code: "EUR", label: "Euro",       sym: "€",   defaultTc: "1.08"  },
-  "Uruguay":    { code: "UYU", label: "Peso UYU",   sym: "U$",  defaultTc: "39"    },
-  "Argentina":  { code: "ARS", label: "Peso ARS",   sym: "$",   defaultTc: null    }, // ARS no necesita TC vs USD
+  "Paraguay":   { code: "PYG", label: "Guaraní",    sym: "₲",   tcField: "pygUSD" },
+  "Chile":      { code: "CLP", label: "Peso CLP",   sym: "CL$", tcField: "clpUSD" },
+  "Perú":       { code: "PEN", label: "Sol",        sym: "S/",  tcField: "penUSD" },
+  "Panamá":     { code: "USD", label: "USD",        sym: "U$D", tcField: null      },
+  "España":     { code: "EUR", label: "Euro",       sym: "€",   tcField: "eurUSD"  },
+  "Portugal":   { code: "EUR", label: "Euro",       sym: "€",   tcField: "eurUSD"  },
+  "Uruguay":    { code: "UYU", label: "Peso UYU",   sym: "U$",  tcField: "uyuUSD" },
+  "Argentina":  { code: "ARS", label: "Peso ARS",   sym: "$",   tcField: null      },
 };
 function getCountryCur(country) {
-  return COUNTRY_CURRENCY[country] ?? { code: "USD", label: "USD", sym: "U$D", defaultTc: "1" };
+  return COUNTRY_CURRENCY[country] ?? { code: "USD", label: "USD", sym: "U$D", tcField: null };
+}
+/** Devuelve la tasa local→USD guardada en tiposCambio para el mes dado, o null si falta */
+function getTcRate(country, tiposCambio, year, month) {
+  const cc = getCountryCur(country);
+  if (!cc.tcField) return null; // USD/ARS no necesitan TC
+  const key = `${year}-${String(month + 1).padStart(2, "0")}`;
+  const tc  = tiposCambio[key];
+  return tc?.[cc.tcField] > 0 ? tc[cc.tcField] : null;
 }
 
-function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchisor, setBatchProg = () => {} }) {
+function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchisor, tiposCambio = {}, setBatchProg = () => {} }) {
   const { franchises, activeCompany } = useStore();
   const activeFr = useMemo(() => franchises.filter(f => f.activa !== false).sort((a,b) => a.name.localeCompare(b.name, "es")), [franchises]);
   const activeCurrency    = COMPANIES[activeCompany]?.currency ?? "ARS";
@@ -823,16 +831,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
 
   const [crmDate, setCrmDate] = useState(() => monthRange(monthProp, yearProp).mesFin);
 
-  const [tcMap, setTcMap] = useState(() => {
-    const map = {};
-    activeFr.forEach(fr => {
-      if (fr.country && fr.country !== "Argentina") {
-        const cc = getCountryCur(fr.country);
-        if (!map[fr.country] && cc.defaultTc) map[fr.country] = cc.defaultTc;
-      }
-    });
-    return map;
-  });
+  // tcMap ya no existe — las tasas vienen de tiposCambio (Maestros)
 
   const makeRows = (fr_list = frForCompany) => fr_list.map(fr => ({
     frId: fr.id, frName: fr.name, currency: activeCurrency, country: fr.country,
@@ -881,7 +880,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
       .filter(c => { const code = getCountryCur(c).code; return code !== "USD" && code !== "EUR"; });
   }, [frForCompany]);
 
-  const tcCargados = countriesWithTc.filter(c => parseFloat(tcMap[c]) > 0).length;
+  const tcCargados = countriesWithTc.filter(c => getTcRate(c, tiposCambio, crmYear, crmMonth) !== null).length;
 
   const [crmFetchErrors, setCrmFetchErrors] = useState([]);
 
@@ -937,7 +936,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
     const cc = getCountryCur(r.country);
     // EUR y USD ya son monedas de facturación final — no se convierten
     if (cc.code === "USD" || cc.code === "EUR") return feeLocal;
-    const tc = parseFloat(tcMap[r.country] ?? "1") || 1;
+    const tc = getTcRate(r.country, tiposCambio, crmYear, crmMonth) ?? 1;
     return feeLocal / tc;
   };
 
@@ -1158,24 +1157,29 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {countriesWithTc.map(country => {
-                      const cc = getCountryCur(country);
-                      const val = tcMap[country] ?? "";
-                      const ok = parseFloat(val) > 0;
+                      const cc  = getCountryCur(country);
+                      const rate = getTcRate(country, tiposCambio, crmYear, crmMonth);
+                      const ok  = rate !== null;
                       return (
                         <div key={country} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <span style={{ fontSize: 12, fontWeight: 700, minWidth: 78 }}>{country}</span>
                           <span style={{ fontSize: 11, color: "var(--muted)", minWidth: 26 }}>{cc.sym}</span>
-                          <input type="number" value={val}
-                            onChange={e => setTcMap(m => ({ ...m, [country]: e.target.value }))}
-                            placeholder="TC" style={{ ...inS, flex: 1 }} />
+                          <span style={{ ...inS, flex: 1, display: "inline-block", textAlign: "right",
+                            color: ok ? "var(--text)" : "var(--muted)",
+                            fontWeight: ok ? 700 : 400 }}>
+                            {ok ? rate.toLocaleString("es-AR") : "—"}
+                          </span>
                           <span style={{ fontSize: 10, color: "var(--muted)" }}>/ USD</span>
-                          <span style={{ fontSize: 13 }}>{ok ? "✓" : "⚠"}</span>
+                          <span style={{ fontSize: 14, fontWeight: 700,
+                            color: ok ? "var(--green, #7ed9a0)" : "var(--red, #ff6b7a)" }}>
+                            {ok ? "✓" : "✗"}
+                          </span>
                         </div>
                       );
                     })}
                   </div>
                   <div style={{ marginTop: 10, fontSize: 10, color: "var(--muted)", borderTop: "1px solid var(--border)", paddingTop: 8 }}>
-                    Las ventas se obtienen de Bigg Eye automáticamente
+                    TC desde Maestros · cargá los datos ahí para actualizar
                   </div>
                 </div>
               )}
@@ -2008,7 +2012,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
 }
 
 // ── Tab principal ───────────────────────────────────────────────────────────
-const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, factState, setFactState, franchisor, onStartImport }) {
+const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, factState, setFactState, franchisor, tiposCambio = {}, onStartImport }) {
   const { editComp, activeCompany } = useStore();
   // Envuelve onAddComp para inyectar automáticamente la empresa activa en todos los comprobantes
   const addCompWithEmpresa = useCallback(
@@ -2211,7 +2215,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
               franchisor={franchisor} prefillFr={prefillFr} prefillComp={prefillComp} />
           )}
           {mode === EMIT_MODE.CRM && (
-            <ModoCRM month={month} year={year} onAddComp={addCompWithEmpresa} onDone={reset} franchisor={franchisor} setBatchProg={setBatchProg} />
+            <ModoCRM month={month} year={year} onAddComp={addCompWithEmpresa} onDone={reset} franchisor={franchisor} tiposCambio={tiposCambio} setBatchProg={setBatchProg} />
           )}
           {mode === EMIT_MODE.EXCEL && (
             <ModoExcel month={month} year={year} onAddComp={addCompWithEmpresa} onDone={reset} franchisor={franchisor} />

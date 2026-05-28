@@ -5,7 +5,8 @@ import { fetchComps, fetchSaldos, appendComp, updateComp, removeComp,
          fetchFranchises, fetchFranchisor,
          sheetsSaveFr, sheetsAddFr, sheetsDeleteFr, sheetsSaveFranchisor,
          fetchRecordatorios, saveRecordatorio,
-         tryDecrementInvoiceSeq } from "./lib/sheetsApi";
+         tryDecrementInvoiceSeq,
+         fetchTiposCambio, saveTipoCambio } from "./lib/sheetsApi";
 import { CURRENCIES, MONTHS, AVAILABLE_YEARS, computeSaldo, computeSaldoPrevMes, downloadCSV } from "./lib/helpers";
 import "./lib/styles";
 import FrDetail from "./components/FrDetail";
@@ -51,6 +52,7 @@ export default function App({ onVolverNumbers } = {}) {
   const [recordatorios,  setRecordatorios]  = useState(() => {
     try { return JSON.parse(localStorage.getItem("recordatorios") ?? "{}"); } catch { return {}; }
   });
+  const [tiposCambio,  setTiposCambio]  = useState({});
   const [sheetsReady,  setSheetsReady] = useState(false);
   const [loadError,    setLoadError]   = useState(null);
   const [modalFrId,  setModalFrId] = useState(null);   // null = closed, number = franchise id
@@ -121,6 +123,11 @@ export default function App({ onVolverNumbers } = {}) {
   const saveFranchisor = useCallback((side, data) => {
     setFranchisor(prev => ({ ...prev, [side]: { ...(prev?.[side] ?? {}), ...data } }));
     sheetsSaveFranchisor(side, data).catch(err => console.error('Sheets saveFranchisor:', err));
+  }, []);
+
+  const saveTC = useCallback((yearMonth, tc) => {
+    setTiposCambio(prev => ({ ...prev, [yearMonth]: { yearMonth, ...tc } }));
+    saveTipoCambio(yearMonth, tc).catch(err => console.error('Sheets saveTC:', err));
   }, []);
 
   const handleNavigate = useCallback((tab, filter, { tipo, cuenta, moneda } = {}) => {
@@ -272,8 +279,8 @@ export default function App({ onVolverNumbers } = {}) {
 
   // Cargar datos de Google Sheets al montar
   useEffect(() => {
-    Promise.allSettled([fetchComps(), fetchSaldos(), fetchFranchises(), fetchFranchisor(), fetchRecordatorios()])
-      .then(([compsRes, saldosRes, frRes, franchisorRes, recRes]) => {
+    Promise.allSettled([fetchComps(), fetchSaldos(), fetchFranchises(), fetchFranchisor(), fetchRecordatorios(), fetchTiposCambio()])
+      .then(([compsRes, saldosRes, frRes, franchisorRes, recRes, tcRes]) => {
         if (compsRes.status === 'fulfilled') setComps(compsRes.value);
         else { console.error('Sheets comps:', compsRes.reason); setLoadError(compsRes.reason.message); }
 
@@ -299,6 +306,8 @@ export default function App({ onVolverNumbers } = {}) {
         if (recRes.status === 'fulfilled' && recRes.value !== null) {
           setRecordatorios(recRes.value ?? {});
         }
+
+        if (tcRes.status === 'fulfilled') setTiposCambio(tcRes.value ?? {});
 
         setSheetsReady(true);
       });
@@ -338,6 +347,7 @@ export default function App({ onVolverNumbers } = {}) {
         <ReporteFeeModal
           franchises={franchises}
           comps={comps}
+          tiposCambio={tiposCambio}
           defaultMonth={month}
           defaultYear={year}
           onClose={() => setShowReporteFee(false)}
@@ -349,10 +359,12 @@ export default function App({ onVolverNumbers } = {}) {
           franchises={franchises}
           franchisor={franchisor}
           comps={comps}
+          tiposCambio={tiposCambio}
           onSaveFr={saveFr}
           onAddFr={addFr}
           onDeleteFr={deleteFr}
           onSaveFranchisor={saveFranchisor}
+          onSaveTC={saveTC}
           onClose={() => setShowMaestros(false)}
         />
       )}
@@ -537,7 +549,7 @@ export default function App({ onVolverNumbers } = {}) {
             {tab === "resumen"      && <TabResumenMes   allFranchises={allActiveFr} month={month} year={year} onNavigate={handleNavigate} selectedFrIds={selectedFrIds} />}
             {tab === "saldos"       && <TabDeudores     franchises={activeFr} filterCur={filterCur} onOpenFr={setModalFrId} cutoff={cutoff} periodMonth={periodMonth} periodYear={periodYear} soloPendiente={soloPendiente} setSoloPendiente={setSoloPendiente} selectedFrIds={selectedFrIds} showDeben={showDeben} setShowDeben={setShowDeben} showOtros={showOtros} setShowOtros={setShowOtros} />}
             {tab === "contabilidad" && <TabContabilidad key={`${detailFilter}-${detailTipo}-${navCount}`} franchises={filteredFr} month={month} year={year} onOpenFr={setModalFrId} initialFilter={detailFilter} initialTipo={detailTipo} showAll={showAll} multiCurrency={filterCur === "ALL"} filterCur={filterCur} onFilteredChange={setDetailFilteredRows} />}
-            {tab === "facturador"   && <TabFacturador   month={month} year={year} onAddComp={addComp} factState={factState} setFactState={setFactState} franchisor={franchisor} onStartImport={() => setShowImport(true)} />}
+            {tab === "facturador"   && <TabFacturador   month={month} year={year} onAddComp={addComp} factState={factState} setFactState={setFactState} franchisor={franchisor} tiposCambio={tiposCambio} onStartImport={() => setShowImport(true)} />}
           </div>
 
         </div>{/* fin área contenido */}
