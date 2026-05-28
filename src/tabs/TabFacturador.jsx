@@ -847,23 +847,6 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
     return map;
   });
 
-  // Sincroniza tcMap con Maestros cuando cambia el mes o llegan los datos
-  React.useEffect(() => {
-    const key = `${crmYear}-${String(crmMonth + 1).padStart(2, "0")}`;
-    const maestros = tiposCambio[key];
-    if (!maestros) return;
-    setTcMap(prev => {
-      const next = { ...prev };
-      countriesWithTc.forEach(country => {
-        const cc = getCountryCur(country);
-        if (cc.tcField && maestros[cc.tcField] > 0) {
-          next[country] = String(maestros[cc.tcField]);
-        }
-      });
-      return next;
-    });
-  }, [tiposCambio, crmYear, crmMonth]); // eslint-disable-line react-hooks/exhaustive-deps
-
   const makeRows = (fr_list = frForCompany) => fr_list.map(fr => ({
     frId: fr.id, frName: fr.name, currency: activeCurrency, country: fr.country,
     royaltyContrato: parseFloat(fr.royaltyPct ?? "7"),
@@ -912,6 +895,23 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
   }, [frForCompany]);
 
   const tcCargados = countriesWithTc.filter(c => parseFloat(tcMap[c]) > 0).length;
+
+  // Sincroniza tcMap con Maestros cuando cambia el mes o llegan los datos
+  React.useEffect(() => {
+    const key = `${crmYear}-${String(crmMonth + 1).padStart(2, "0")}`;
+    const maestros = tiposCambio[key];
+    if (!maestros) return;
+    setTcMap(prev => {
+      const next = { ...prev };
+      countriesWithTc.forEach(country => {
+        const cc = getCountryCur(country);
+        if (cc.tcField && maestros[cc.tcField] > 0) {
+          next[country] = String(maestros[cc.tcField]);
+        }
+      });
+      return next;
+    });
+  }, [tiposCambio, crmYear, crmMonth]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [crmFetchErrors, setCrmFetchErrors] = useState([]);
 
