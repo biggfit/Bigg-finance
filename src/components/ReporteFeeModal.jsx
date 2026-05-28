@@ -264,7 +264,7 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
                   </SortTh>
                   <SortTh col="feeMesARS" {...sortProps}>
                     Fee {MONTHS[month]}<br/>
-                    <span style={{ fontWeight: 400, fontSize: 9 }}>ARS · Argentina</span>
+                    <span style={{ fontWeight: 400, fontSize: 9 }}>ARS · {year}</span>
                   </SortTh>
                   <SortTh col="varPct" align="center" {...sortProps}>
                     Var %<br/>
