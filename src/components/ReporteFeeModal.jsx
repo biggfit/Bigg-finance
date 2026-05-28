@@ -76,33 +76,34 @@ function downloadExcel(rows, year, month, cotiz = 1200) {
 
   // Hoja única con todas las sedes
   const HEADERS = [
-    "Sede", "Sociedad", "País", "Moneda",
-    `Fee ${MONTHS[month]} ${year}`,
+    "Sede", "País",
     `Fee ${MONTHS[month]} U$D`,
+    `Fee ${MONTHS[month]} ARS`,
     `Var % vs ${MONTHS[prev.month]}`,
     `Fee YTD Ene–${MONTHS[month]} (ARS→U$D @ ${cotiz})`,
   ];
 
   const data = [HEADERS, ...rows.map(r => {
-    const varPct  = r.feePrev > 0 ? (r.feeMes - r.feePrev) / r.feePrev : "";
-    const feeMesUSD = r.moneda === "ARS" ? r.feeMes / cotiz : (r.moneda === "USD" ? r.feeMes : "");
-    const ytdUSD  = r.feeYTD ? (r.moneda === "ARS" ? r.feeYTD / cotiz : r.feeYTD) : "";
-    return [r.sede, r.sociedad, r.pais, r.moneda, r.feeMes || 0, feeMesUSD, varPct, ytdUSD];
+    const varPct    = r.feePrev > 0 ? (r.feeMes - r.feePrev) / r.feePrev : "";
+    const feeMesUSD = r.moneda === "ARS" ? r.feeMes / cotiz : (r.moneda === "USD" ? r.feeMes : r.feeMes);
+    const feeMesARS = r.moneda === "ARS" ? r.feeMes : "";
+    const ytdUSD    = r.feeYTD ? (r.moneda === "ARS" ? r.feeYTD / cotiz : r.feeYTD) : "";
+    return [r.sede, r.pais, feeMesUSD, feeMesARS, varPct, ytdUSD];
   })];
 
   const ws = XLSX.utils.aoa_to_sheet(data);
   const numFmt = "#,##0";
   rows.forEach((r, i) => {
     const row = i + 2;
-    ["E","F","H"].forEach(col => {
+    ["C","D","F"].forEach(col => {
       const cell = ws[`${col}${row}`];
       if (cell?.t === "n") cell.z = numFmt;
     });
-    if (data[i+1][6] !== "") {
-      ws[XLSX.utils.encode_cell({ r: row - 1, c: 6 })] = { v: data[i+1][6], t: "n", z: "0.0%" };
+    if (data[i+1][4] !== "") {
+      ws[XLSX.utils.encode_cell({ r: row - 1, c: 4 })] = { v: data[i+1][4], t: "n", z: "0.0%" };
     }
   });
-  ws["!cols"] = [24, 26, 14, 8, 18, 16, 14, 26].map(w => ({ wch: w }));
+  ws["!cols"] = [24, 14, 16, 18, 14, 26].map(w => ({ wch: w }));
   XLSX.utils.book_append_sheet(wb, ws, `${MONTHS[month]} ${year}`);
 
   // Resumen por sociedad
@@ -170,10 +171,10 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
     return [...baseRows].sort((a, b) => {
       if (a.sinFeeMes !== b.sinFeeMes) return a.sinFeeMes ? 1 : -1;
       let cmp = 0;
-      if      (sortCol === "sede")     cmp = a.sede.localeCompare(b.sede);
-      else if (sortCol === "sociedad") cmp = a.sociedad.localeCompare(b.sociedad);
-      else if (sortCol === "pais")     cmp = a.pais.localeCompare(b.pais);
-      else if (sortCol === "feeMes")   cmp = a.feeMes - b.feeMes;
+      if      (sortCol === "sede")        cmp = a.sede.localeCompare(b.sede);
+      else if (sortCol === "pais")        cmp = a.pais.localeCompare(b.pais);
+      else if (sortCol === "feeMesUSD")   cmp = a.feeMes - b.feeMes;
+      else if (sortCol === "feeMesARS")   cmp = a.feeMes - b.feeMes;
       else if (sortCol === "varPct")   cmp = (a.varPct ?? -Infinity) - (b.varPct ?? -Infinity);
       else if (sortCol === "feeYTD")   cmp = a.feeYTD - b.feeYTD;
       return cmp * dir;
@@ -254,12 +255,15 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
                 <tr>
-                  <SortTh col="sede"     align="left"  {...sortProps}>Sede</SortTh>
-                  <SortTh col="sociedad" align="left"  {...sortProps}>Sociedad</SortTh>
-                  <SortTh col="pais"     align="left"  {...sortProps}>País</SortTh>
-                  <SortTh col="feeMes"               {...sortProps}>
+                  <SortTh col="sede" align="left"  {...sortProps}>Sede</SortTh>
+                  <SortTh col="pais" align="left"  {...sortProps}>País</SortTh>
+                  <SortTh col="feeMesUSD" {...sortProps}>
                     Fee {MONTHS[month]}<br/>
-                    <span style={{ fontWeight: 400, fontSize: 9 }}>{year}</span>
+                    <span style={{ fontWeight: 400, fontSize: 9 }}>U$D · {year}</span>
+                  </SortTh>
+                  <SortTh col="feeMesARS" {...sortProps}>
+                    Fee {MONTHS[month]}<br/>
+                    <span style={{ fontWeight: 400, fontSize: 9 }}>ARS · Argentina</span>
                   </SortTh>
                   <SortTh col="varPct" align="center" {...sortProps}>
                     Var %<br/>
@@ -293,21 +297,22 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
                       opacity: r.sinFeeMes ? 0.45 : 1,
                     }}>
                       <td style={{ ...tdS, textAlign: "left", fontWeight: 600, fontFamily: "inherit" }}>{r.sede}</td>
-                      <td style={{ ...tdS, textAlign: "left", color: "var(--text2)", fontFamily: "inherit", fontSize: 10 }}>{r.sociedad}</td>
                       <td style={{ ...tdS, textAlign: "left", color: "var(--text2)", fontFamily: "inherit" }}>{r.pais}</td>
+                      {/* Fee USD */}
                       <td style={{ ...tdS, fontWeight: 700, color: r.sinFeeMes ? "var(--text2)" : "var(--text)" }}>
-                        {r.sinFeeMes ? (
-                          <span style={{ color: "var(--text2)" }}>$ 0</span>
-                        ) : (
-                          <>
-                            <div>{fmtMoney(r.feeMes, r.moneda)}</div>
-                            {r.moneda === "ARS" && (
-                              <div style={{ fontSize: 9, fontWeight: 400, color: "var(--text2)", marginTop: 1 }}>
-                                {fmtMoney(r.feeMes / cotiz, "USD")}
-                              </div>
-                            )}
-                          </>
-                        )}
+                        {r.sinFeeMes
+                          ? <span style={{ color: "var(--text2)" }}>—</span>
+                          : r.moneda === "ARS"
+                            ? fmtMoney(r.feeMes / cotiz, "USD")
+                            : fmtMoney(r.feeMes, r.moneda)
+                        }
+                      </td>
+                      {/* Fee ARS — solo Argentina */}
+                      <td style={{ ...tdS, color: "var(--text2)", fontWeight: 400 }}>
+                        {r.moneda === "ARS" && !r.sinFeeMes
+                          ? fmtMoney(r.feeMes, "ARS")
+                          : ""
+                        }
                       </td>
                       <td style={{ ...tdS, textAlign: "center", fontWeight: 600, color: varColor, fontFamily: "inherit" }}>
                         {varLabel}
