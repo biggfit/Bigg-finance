@@ -386,21 +386,71 @@ export default function ReporteFeeModal({ franchises, comps, defaultMonth, defau
         </div>
 
         {/* KPIs */}
-        <div style={{ display: "flex", borderBottom: "1px solid var(--border)" }}>
-          {[
-            { label: "Pagan fee", value: `${rows.filter(r => r.hasOpened && !r.sinFeeMes).length} / ${rows.filter(r => r.hasOpened).length}` },
-            { label: "YTD ARS",              value: fmtMoney(rows.filter(r => r.moneda==="ARS").reduce((s,r)=>s+r.feeYTD,0),"ARS") },
-            { label: "YTD USD",              value: fmtMoney(rows.filter(r => r.moneda==="USD").reduce((s,r)=>s+r.feeYTD,0),"USD") },
-            { label: "YTD EUR",              value: fmtMoney(rows.filter(r => r.moneda==="EUR").reduce((s,r)=>s+r.feeYTD,0),"EUR") },
-            { label: `${MONTHS[month]} ARS`, value: fmtMoney(rows.filter(r => r.moneda==="ARS").reduce((s,r)=>s+r.feeMes,0),"ARS") },
-            { label: `${MONTHS[month]} USD`, value: fmtMoney(rows.filter(r => r.moneda==="USD").reduce((s,r)=>s+r.feeMes,0),"USD") },
-          ].map(({ label, value }) => (
-            <div key={label} style={{ flex: 1, padding: "10px 14px", borderRight: "1px solid var(--border)", textAlign: "center" }}>
-              <div style={{ fontSize: 9, color: "var(--text2)", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</div>
-              <div style={{ fontSize: 13, fontWeight: 700, fontFamily: "monospace" }}>{value}</div>
+        {(() => {
+          const toUSD   = r => r.moneda === "ARS" ? r.feeMes  / cotiz : r.feeMes;
+          const toUSDp  = r => r.moneda === "ARS" ? r.feePrev / cotiz : r.feePrev;
+          const toYTD   = r => r.moneda === "ARS" ? r.feeYTD  / cotiz : r.feeYTD;
+
+          const pagando   = rows.filter(r => r.hasOpened && !r.sinFeeMes);
+          const abiertas  = rows.filter(r => r.hasOpened);
+
+          const fesMesARS = rows.filter(r => r.moneda === "ARS").reduce((s,r) => s + r.feeMes, 0);
+          const fesMesUSD = rows.filter(r => r.moneda === "USD").reduce((s,r) => s + r.feeMes, 0);
+          const fesMesEUR = rows.filter(r => r.moneda === "EUR").reduce((s,r) => s + r.feeMes, 0);
+
+          const totMesUSD  = rows.reduce((s,r) => s + toUSD(r),  0);
+          const totPrevUSD = rows.reduce((s,r) => s + toUSDp(r), 0);
+          const varAgr     = totPrevUSD > 0 ? ((totMesUSD - totPrevUSD) / totPrevUSD) * 100 : null;
+          const varLabel   = varAgr == null ? "—" : (varAgr >= 0 ? "+" : "") + varAgr.toFixed(1) + "%";
+          const varColor   = varAgr == null ? "var(--text)" : varAgr > 0 ? "var(--green)" : varAgr < 0 ? "var(--red)" : "var(--text)";
+
+          const promUSD    = pagando.length > 0 ? pagando.reduce((s,r) => s + toUSD(r), 0) / pagando.length : 0;
+
+          const ytdARS = rows.filter(r => r.moneda==="ARS").reduce((s,r)=>s+r.feeYTD,0);
+          const ytdUSD = rows.filter(r => r.moneda==="USD").reduce((s,r)=>s+r.feeYTD,0);
+          const ytdEUR = rows.filter(r => r.moneda==="EUR").reduce((s,r)=>s+r.feeYTD,0);
+
+          const kpis = [
+            {
+              label: "Pagan fee",
+              value: `${pagando.length} / ${abiertas.length}`,
+              sub: null,
+            },
+            {
+              label: `Fee ${MONTHS[month]}`,
+              value: fesMesARS > 0 ? fmtMoney(fesMesARS, "ARS") : fesMesUSD > 0 ? fmtMoney(fesMesUSD, "USD") : "—",
+              sub: fesMesARS > 0 && fesMesUSD > 0 ? fmtMoney(fesMesUSD, "USD") : fesMesEUR > 0 ? fmtMoney(fesMesEUR, "EUR") : null,
+            },
+            {
+              label: `Var % vs ${MONTHS[prev.month]}`,
+              value: varLabel,
+              valueColor: varColor,
+              sub: null,
+            },
+            {
+              label: "Promedio por sede",
+              value: fmtMoney(promUSD, "USD"),
+              sub: `${pagando.length} sedes`,
+            },
+            {
+              label: `YTD Ene–${MONTHS[month]}`,
+              value: ytdARS > 0 ? fmtMoney(ytdARS, "ARS") : ytdUSD > 0 ? fmtMoney(ytdUSD, "USD") : "—",
+              sub: ytdARS > 0 && ytdUSD > 0 ? fmtMoney(ytdUSD, "USD") : ytdEUR > 0 ? fmtMoney(ytdEUR, "EUR") : null,
+            },
+          ];
+
+          return (
+            <div style={{ display: "flex", borderBottom: "1px solid var(--border)" }}>
+              {kpis.map(({ label, value, sub, valueColor }) => (
+                <div key={label} style={{ flex: 1, padding: "10px 14px", borderRight: "1px solid var(--border)", textAlign: "center" }}>
+                  <div style={{ fontSize: 9, color: "var(--text2)", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, fontFamily: "monospace", color: valueColor ?? "var(--text)" }}>{value}</div>
+                  {sub && <div style={{ fontSize: 10, color: "var(--text2)", marginTop: 2, fontFamily: "monospace" }}>{sub}</div>}
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          );
+        })()}
 
         {/* Tabla */}
         <div style={{ overflowY: "auto", flex: 1 }}>
