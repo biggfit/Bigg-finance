@@ -130,6 +130,24 @@ export default function App({ onVolverNumbers } = {}) {
     saveTipoCambio(yearMonth, tc).catch(err => console.error('Sheets saveTC:', err));
   }, []);
 
+  // Siembra UYU/PYG/CLP/PEN para Ene–Abr 2026 si están vacíos (una sola vez al cargar)
+  const tcSeeded = React.useRef(false);
+  React.useEffect(() => {
+    if (!sheetsReady || tcSeeded.current) return;
+    tcSeeded.current = true;
+    const LATAM_DEFAULTS = { uyuUSD: 39, pygUSD: 7500, clpUSD: 950, penUSD: 3.7 };
+    ["2026-01","2026-02","2026-03","2026-04"].forEach(ym => {
+      setTiposCambio(prev => {
+        const existing = prev[ym] ?? {};
+        // Solo sembrar si todos los campos LATAM están vacíos
+        if (existing.uyuUSD > 0 || existing.pygUSD > 0 || existing.clpUSD > 0 || existing.penUSD > 0) return prev;
+        const merged = { yearMonth: ym, arsUSD: existing.arsUSD || 0, eurUSD: existing.eurUSD || 0, ...LATAM_DEFAULTS };
+        saveTipoCambio(ym, merged).catch(err => console.error('Sheets seedTC:', err));
+        return { ...prev, [ym]: merged };
+      });
+    });
+  }, [sheetsReady]);
+
   const handleNavigate = useCallback((tab, filter, { tipo, cuenta, moneda } = {}) => {
     setTab(tab === "detalle" ? "contabilidad" : tab);
     if (filter) setDetailFilter(filter);
