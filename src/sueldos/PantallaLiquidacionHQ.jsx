@@ -831,7 +831,7 @@ function ModalBatchPago({ tipo, liqs, mes, anio, onClose, onSaved }) {
   const handleSave = async () => {
     if (savingRef.current) return;
     if (!liqsSelec.length) { alert("Seleccioná al menos un empleado."); return; }
-    if (!form.cuenta_id && tipo !== "efectivo") { alert("Seleccioná una cuenta bancaria."); return; }
+    if (!form.cuenta_id) { alert("Seleccioná una cuenta bancaria."); return; }
     savingRef.current = true; setSaving(true);
     try {
       const ctaNombre = cuentas.find(c => c.id === form.cuenta_id)?.nombre ?? form.cuenta_id;
@@ -870,8 +870,7 @@ function ModalBatchPago({ tipo, liqs, mes, anio, onClose, onSaved }) {
     <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>{children}</label>
   );
 
-  const mostrarSociedad = tipo === "transferencia";   // deposito/efectivo → fija, haberes → no aplica
-  const mostrarCuenta   = tipo !== "efectivo";
+  const mostrarSociedad = tipo === "transferencia";   // deposito/efectivo → fija Beta, haberes → no aplica
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
@@ -930,11 +929,10 @@ function ModalBatchPago({ tipo, liqs, mes, anio, onClose, onSaved }) {
             </div>
           )}
 
-          {/* Cuenta bancaria */}
-          {mostrarCuenta && (
-            <div>
-              <LBL>Cuenta bancaria</LBL>
-              {loadingMeta
+          {/* Cuenta bancaria — siempre visible (efectivo = caja de Beta) */}
+          <div>
+            <LBL>{tipo === "efectivo" ? "Caja" : "Cuenta bancaria"}</LBL>
+            {loadingMeta
                 ? <div style={{ fontSize: 12, color: T.muted }}>Cargando cuentas…</div>
                 : <select style={iStyle} value={form.cuenta_id} onChange={e => set("cuenta_id", e.target.value)}>
                     <option value="">— Seleccioná —</option>
@@ -946,7 +944,6 @@ function ModalBatchPago({ tipo, liqs, mes, anio, onClose, onSaved }) {
                   </select>
               }
             </div>
-          )}
         </div>
 
         <div style={{ display: "flex", gap: 8, marginTop: 18, justifyContent: "flex-end" }}>
@@ -1040,8 +1037,8 @@ function ModalPagoHQ({ mes, anio, liq, onClose, onSaved }) {
   const socFiltro = useMemo(() => {
     if (form.tipo_componente === "haberes")  return liq?.sociedad_id ?? "";
     if (form.tipo_componente === "deposito") return "beta";
-    if (form.tipo_componente === "efectivo") return null;   // sin cuenta
-    return form.sociedad_id;                                // transferencia: el usuario elige
+    if (form.tipo_componente === "efectivo") return "beta";  // caja de Beta
+    return form.sociedad_id;                                 // transferencia: el usuario elige
   }, [form.tipo_componente, form.sociedad_id, liq?.sociedad_id]);
 
   const cuentasFiltradas = useMemo(() =>
@@ -1057,7 +1054,7 @@ function ModalPagoHQ({ mes, anio, liq, onClose, onSaved }) {
   const handleSave = async () => {
     if (savingRef.current) return;
     if (!form.monto) { alert("Completá el monto."); return; }
-    if (!form.cuenta_id && form.tipo_componente !== "efectivo") { alert("Seleccioná una cuenta bancaria."); return; }
+    if (!form.cuenta_id) { alert("Seleccioná una cuenta bancaria."); return; }
     savingRef.current = true; setSaving(true);
     try {
       const cta = cuentas.find(c => c.id === form.cuenta_id);
@@ -1121,31 +1118,29 @@ function ModalPagoHQ({ mes, anio, liq, onClose, onSaved }) {
             </div>
           )}
 
-          {/* Badge sociedad fija para depósito */}
-          {form.tipo_componente === "deposito" && (
+          {/* Badge sociedad fija (depósito y efectivo = Beta) */}
+          {(form.tipo_componente === "deposito" || form.tipo_componente === "efectivo") && (
             <div style={{ fontSize: 12, color: T.muted, background: T.bg, borderRadius: 5, padding: "6px 10px" }}>
               Sociedad: <strong style={{ color: T.text }}>Beta</strong>
             </div>
           )}
 
-          {/* Cuenta bancaria filtrada — no aplica para efectivo */}
-          {form.tipo_componente !== "efectivo" && (
-            <div>
-              <LBL>Cuenta bancaria</LBL>
-              {loadingCtas
-                ? <div style={{ fontSize: 12, color: T.muted }}>Cargando…</div>
-                : <select style={iStyle} value={form.cuenta_id} onChange={e => set("cuenta_id", e.target.value)}
-                    disabled={form.tipo_componente === "transferencia" && !form.sociedad_id}>
-                    <option value="">— Seleccioná —</option>
-                    {cuentasFiltradas.map(c => {
-                      const soc = sociedades.find(s => s.id === c.sociedad)?.nombre ?? c.sociedad;
-                      const mon = c.moneda !== "ARS" ? ` (${c.moneda})` : "";
-                      return <option key={c.id} value={c.id}>{soc} — {c.nombre}{mon}</option>;
-                    })}
-                  </select>
-              }
-            </div>
-          )}
+          {/* Cuenta bancaria — siempre visible, filtrada por componente */}
+          <div>
+            <LBL>{form.tipo_componente === "efectivo" ? "Caja" : "Cuenta bancaria"}</LBL>
+            {loadingCtas
+              ? <div style={{ fontSize: 12, color: T.muted }}>Cargando…</div>
+              : <select style={iStyle} value={form.cuenta_id} onChange={e => set("cuenta_id", e.target.value)}
+                  disabled={form.tipo_componente === "transferencia" && !form.sociedad_id}>
+                  <option value="">— Seleccioná —</option>
+                  {cuentasFiltradas.map(c => {
+                    const soc = sociedades.find(s => s.id === c.sociedad)?.nombre ?? c.sociedad;
+                    const mon = c.moneda !== "ARS" ? ` (${c.moneda})` : "";
+                    return <option key={c.id} value={c.id}>{soc} — {c.nombre}{mon}</option>;
+                  })}
+                </select>
+            }
+          </div>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
           <button onClick={onClose} style={BTN_SECONDARY}>Cancelar</button>
