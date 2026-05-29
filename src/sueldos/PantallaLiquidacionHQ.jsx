@@ -274,7 +274,7 @@ function TablaHQ({ titulo, liqs, totales, editandoId, onEditar, onCancelarEdicio
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr>
-              {["Nombre","Sociedad","CC","Haberes","Monotrib.","Efectivo","Novedades","Total","Pagado","Pendiente",""].map(h => (
+              {["Nombre","Sociedad","Sueldo total","Haberes","Monotrib.","Efectivo","Novedades","Total","Pagado","Pendiente",""].map(h => (
                 <th key={h} style={thStyle}>{h}</th>
               ))}
             </tr>
@@ -382,8 +382,8 @@ function FilaHQ({ liq, idx, editando, ownerStyle, onEditar, onCancelarEdicion, o
         </td>
         {/* Sociedad */}
         <td style={tdStyle({ color: "#64748b" })}>{liq.sociedad_nombre || "—"}</td>
-        {/* CC */}
-        <td style={tdStyle({ color: "#64748b" })}>{liq.sede_nombre || "—"}</td>
+        {/* Sueldo total */}
+        <td style={tdStyle({ textAlign: "right", fontWeight: 600, color: "#64748b" })}>{fmtMoney(liq.sueldo_total_legajo)}</td>
         {/* Haberes */}
         <td style={tdStyle({ textAlign: "right" })}>{fmtMoney(liq.monto_haberes)}</td>
         {/* Monotrib */}
