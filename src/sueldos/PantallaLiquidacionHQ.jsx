@@ -627,6 +627,7 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago, o
             return (
               <th key={id} style={TH({ textAlign: "right" })}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 5 }}>
+                  {label}
                   {todoPagado
                     ? <span title="Todos pagados" style={{ fontSize: 11, color: T.green, fontWeight: 700 }}>✓</span>
                     : hayAlgo && (
@@ -641,7 +642,6 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago, o
                         }}>✓</button>
                     )
                   }
-                  {label}
                 </div>
               </th>
             );
