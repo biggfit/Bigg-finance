@@ -75,7 +75,7 @@ function Placeholder({ section }) {
   );
 }
 
-export default function NumbersApp({ onGoToFranquicias }) {
+export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
   const [activeId,       setActiveId]       = useState("dashboard");
   const [egresoSubView,  setEgresoSubView]  = useState(null);
   const [ingresoSubView, setIngresoSubView] = useState(null);
@@ -407,6 +407,22 @@ export default function NumbersApp({ onGoToFranquicias }) {
               <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>→</span>
               Bigg Franquicias
             </button>
+            {onGoToSueldos && (
+              <button onClick={onGoToSueldos} style={{
+                display:"flex", alignItems:"center", gap:10,
+                width:"calc(100% - 12px)", margin:"0 6px",
+                padding:"9px 10px", borderRadius:8,
+                background:"transparent", border:"none",
+                color:"rgba(255,255,255,.4)",
+                fontFamily:T.font, fontSize:13, fontWeight:500,
+                cursor:"pointer", textAlign:"left", transition:"background .15s",
+              }}
+              onMouseEnter={e=>e.currentTarget.style.background=T.sidebarHover}
+              onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>→</span>
+                BIGG Sueldos
+              </button>
+            )}
           </div>
 
           {/* ── Pie: Maestros ── */}
@@ -442,13 +458,15 @@ export default function NumbersApp({ onGoToFranquicias }) {
               : ingresoSubView === "new-venta"  ? "Ingresos › Nueva Venta"
               : section?.label}
           </span>
-          {/* Badge sociedad activa en el topbar */}
-          <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6,
-            background:"#f0f9ff", border:"1px solid #bae6fd", borderRadius:999,
-            padding:"3px 10px", fontSize:11, fontWeight:700, color:"#0369a1" }}>
-            <span>{activeSoc.bandera}</span>
-            <span>{activeSoc.nombre}</span>
-          </div>
+          {/* Badge sociedad activa — oculto en módulos transversales */}
+          {!showMaestros && (
+            <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6,
+              background:"#f0f9ff", border:"1px solid #bae6fd", borderRadius:999,
+              padding:"3px 10px", fontSize:11, fontWeight:700, color:"#0369a1" }}>
+              <span>{activeSoc.bandera}</span>
+              <span>{activeSoc.nombre}</span>
+            </div>
+          )}
         </div>
 
         <div style={{ flex:1, overflow:"auto", display:"flex", flexDirection:"column" }}>
