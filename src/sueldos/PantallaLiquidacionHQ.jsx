@@ -60,7 +60,7 @@ export default function PantallaLiquidacionHQ() {
 
   // Wizard state
   const [paso,             setPaso]             = useState(1);
-  const [sueldosDraft,     setSueldosDraft]     = useState({});  // { [legajo_id]: pct_str }
+  const [sueldosDraft,     setSueldosDraft]     = useState({});  // { [legajo_id]: { pct: "", total: N } }
   const [actualizarLegs,   setActualizarLegs]   = useState(false);
   const [pagoDraft,        setPagoDraft]        = useState({});  // { [legajo_id]: { monto_haberes, monto_monotributo } }
   const [showPago,         setShowPago]         = useState(null);
@@ -129,10 +129,16 @@ export default function PantallaLiquidacionHQ() {
     if (!liqs.length) return;
     setSueldosDraft(prev => {
       const next = { ...prev };
-      liqs.forEach(liq => { if (!(liq.legajo_id in next)) next[liq.legajo_id] = ""; });
+      liqs.forEach(liq => {
+        if (!(liq.legajo_id in next))
+          next[liq.legajo_id] = { pct: "", total: liq.sueldo_total_legajo };
+      });
       return next;
     });
   }, [liqs.length]);
+
+  // helper para obtener el total final de un liq según draft
+  const getDraftTotal = (liq) => sueldosDraft[liq.legajo_id]?.total ?? liq.sueldo_total_legajo;
 
   // Paso 1 → 2: opcionalmente actualizar legajos, luego init pagoDraft
   async function handleConfirmarSueldos() {
@@ -140,9 +146,9 @@ export default function PantallaLiquidacionHQ() {
       setSaving(true);
       try {
         await Promise.all(liqs.map(liq => {
-          const pct = parseFloat(sueldosDraft[liq.legajo_id] || "") || 0;
-          if (pct === 0) return null;
-          return updateLegajo(liq.legajo_id, { sueldo_total: redondear(liq.sueldo_total_legajo * (1 + pct / 100)) });
+          const nuevoTotal = getDraftTotal(liq);
+          if (nuevoTotal === liq.sueldo_total_legajo) return null;
+          return updateLegajo(liq.legajo_id, { sueldo_total: nuevoTotal });
         }).filter(Boolean));
         await load();
       } finally { setSaving(false); }
@@ -166,10 +172,7 @@ export default function PantallaLiquidacionHQ() {
     setSaving(true);
     try {
       await Promise.all(liqs.map(liq => {
-        const pct        = parseFloat(sueldosDraft[liq.legajo_id] || "") || 0;
-        const target     = pct > 0
-          ? redondear(liq.sueldo_total_legajo * (1 + pct / 100))
-          : liq.sueldo_total_legajo;
+        const target = getDraftTotal(liq);
         const d          = pagoDraft[liq.legajo_id] || {};
         const haberes    = d.monto_haberes    || 0;
         const deposito   = d.monto_monotributo || 0;
@@ -223,7 +226,9 @@ export default function PantallaLiquidacionHQ() {
             <PasoSueldos
               liqStaff={liqStaff} liqOwners={liqOwners}
               sueldosDraft={sueldosDraft}
-              onChangePct={(id, v) => setSueldosDraft(d => ({ ...d, [id]: v }))}
+              onChangeDraft={(id, field, val) =>
+                setSueldosDraft(d => ({ ...d, [id]: { ...(d[id] || {}), [field]: val } }))
+              }
               actualizarLegs={actualizarLegs}
               onChangeActualizar={setActualizarLegs}
               onSiguiente={handleConfirmarSueldos}
@@ -297,7 +302,25 @@ function StepsIndicator({ paso, onPaso }) {
 
 // ── Paso 1: Confirmar sueldos ─────────────────────────────────────────────────
 
-function PasoSueldos({ liqStaff, liqOwners, sueldosDraft, onChangePct, actualizarLegs, onChangeActualizar, onSiguiente, saving }) {
+function PasoSueldos({ liqStaff, liqOwners, sueldosDraft, onChangeDraft, actualizarLegs, onChangeActualizar, onSiguiente, saving }) {
+  const todos       = [...liqStaff, ...liqOwners];
+  const totalActual = todos.reduce((s, l) => s + (l.sueldo_total_legajo || 0), 0);
+  const totalNuevo  = todos.reduce((s, l) => s + (sueldosDraft[l.legajo_id]?.total ?? l.sueldo_total_legajo), 0);
+  const diff        = totalNuevo - totalActual;
+
+  const handlePct = (liq, rawPct) => {
+    const pct = rawPct === "" ? "" : rawPct;
+    const nuevoTotal = pct !== "" ? redondear(liq.sueldo_total_legajo * (1 + parseFloat(pct) / 100)) : liq.sueldo_total_legajo;
+    onChangeDraft(liq.legajo_id, "pct",   pct);
+    onChangeDraft(liq.legajo_id, "total", nuevoTotal);
+  };
+
+  const handleTotal = (liq, rawTotal) => {
+    const total = parseFloat(rawTotal) || liq.sueldo_total_legajo;
+    onChangeDraft(liq.legajo_id, "pct",   "");
+    onChangeDraft(liq.legajo_id, "total", total);
+  };
+
   const renderTabla = (liqs, ownerStyle) => (
     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginBottom: 8 }}>
       <thead>
@@ -310,8 +333,9 @@ function PasoSueldos({ liqStaff, liqOwners, sueldosDraft, onChangePct, actualiza
       </thead>
       <tbody>
         {liqs.map((liq, i) => {
-          const pct        = sueldosDraft[liq.legajo_id] ?? "";
-          const nuevoTotal = pct !== "" ? redondear(liq.sueldo_total_legajo * (1 + parseFloat(pct) / 100)) : liq.sueldo_total_legajo;
+          const d          = sueldosDraft[liq.legajo_id] ?? {};
+          const pct        = d.pct   ?? "";
+          const nuevoTotal = d.total ?? liq.sueldo_total_legajo;
           const subio      = nuevoTotal > liq.sueldo_total_legajo;
           return (
             <tr key={liq.id} style={{ background: i % 2 === 0 ? "#fff" : T.bg }}>
@@ -324,14 +348,24 @@ function PasoSueldos({ liqStaff, liqOwners, sueldosDraft, onChangePct, actualiza
               <td style={TD({ textAlign: "right", fontWeight: 700, color: T.blue })}>{fmtMoney(liq.sueldo_total_legajo)}</td>
               <td style={TD({ textAlign: "right" })}>
                 <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
-                  <input type="number" value={pct} onChange={e => onChangePct(liq.legajo_id, e.target.value)}
-                    placeholder="0" style={INPUT({ width: 64 })} />
+                  <input
+                    type="number" value={pct}
+                    onChange={e => handlePct(liq, e.target.value)}
+                    placeholder="0"
+                    style={INPUT({ width: 64 })}
+                  />
                   <span style={{ color: T.muted, fontSize: 12 }}>%</span>
                 </div>
               </td>
-              <td style={TD({ textAlign: "right", fontWeight: 700, color: subio ? T.green : T.text })}>
-                {fmtMoney(nuevoTotal)}
-                {subio && <span style={{ fontSize: 11, marginLeft: 4 }}>↑</span>}
+              <td style={TD({ textAlign: "right" })}>
+                <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
+                  <input
+                    type="number" value={nuevoTotal || ""}
+                    onChange={e => handleTotal(liq, e.target.value)}
+                    style={INPUT({ width: 110, fontWeight: 700, color: subio ? T.green : T.text })}
+                  />
+                  {subio && <span style={{ fontSize: 12, color: T.green }}>↑</span>}
+                </div>
               </td>
             </tr>
           );
@@ -342,6 +376,20 @@ function PasoSueldos({ liqStaff, liqOwners, sueldosDraft, onChangePct, actualiza
 
   return (
     <div>
+      {/* Resumen de totales */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 20 }}>
+        {[
+          { label: "Total actual",  value: totalActual, color: T.muted },
+          { label: "Total nuevo",   value: totalNuevo,  color: T.blue },
+          { label: "Diferencia",    value: diff,        color: diff > 0 ? T.green : diff < 0 ? T.red : T.muted, prefix: diff > 0 ? "+" : "" },
+        ].map(({ label, value, color, prefix = "" }) => (
+          <div key={label} style={{ background: "#fff", border: `1px solid ${T.border}`, borderRadius: 8, padding: "10px 14px" }}>
+            <div style={{ fontSize: 11, color: T.muted, fontWeight: 600 }}>{label}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color }}>{prefix}{fmtMoney(value)}</div>
+          </div>
+        ))}
+      </div>
+
       {liqStaff.length > 0 && (
         <>
           <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 700 }}>HQ Staff</h3>
@@ -370,10 +418,7 @@ function PasoSueldos({ liqStaff, liqOwners, sueldosDraft, onChangePct, actualiza
 // ── Paso 2: Forma de pago ─────────────────────────────────────────────────────
 
 function PasoPago({ liqStaff, liqOwners, sueldosDraft, pagoDraft, onChangePago, onAtras, onSiguiente, saving }) {
-  const getTarget = (liq) => {
-    const pct = parseFloat(sueldosDraft[liq.legajo_id] || "") || 0;
-    return pct > 0 ? redondear(liq.sueldo_total_legajo * (1 + pct / 100)) : liq.sueldo_total_legajo;
-  };
+  const getTarget = (liq) => sueldosDraft[liq.legajo_id]?.total ?? liq.sueldo_total_legajo;
 
   const renderTabla = (liqs) => (
     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginBottom: 8 }}>
