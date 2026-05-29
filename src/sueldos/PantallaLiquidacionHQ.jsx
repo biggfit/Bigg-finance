@@ -668,8 +668,8 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago, o
                 if (!monto) return <td key={id} style={TD({ textAlign: "right", color: T.dim })}>—</td>;
                 return (
                   <td key={id} style={TD({ textAlign: "right", color: paid ? T.green : color })}>
-                    {paid && <span style={{ marginRight: 3 }}>✓</span>}
                     {fmtMoney(monto)}
+                    {paid && <span style={{ marginLeft: 4 }}>✓</span>}
                   </td>
                 );
               })}
