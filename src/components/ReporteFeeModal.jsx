@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import * as XLSX from "xlsx";
 import { MONTHS, AVAILABLE_YEARS, makeType } from "../lib/helpers";
+import { sendMailFr } from "../lib/sheetsApi";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 const fmtMoney = (n, cur = "ARS") => {
@@ -337,6 +338,116 @@ function SortFilterTh({ col, label, options, selected, onChange, sortCol, sortDi
   );
 }
 
+// ─── Email HTML builder ───────────────────────────────────────────────────────
+function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef }) {
+  const mesLabel  = MONTHS[month];
+  const prevLabel = MONTHS[prev.month];
+  const fmtU = n => n ? "U$D " + Math.round(n).toLocaleString("es-AR") : "—";
+  const fmtP = p => p == null ? "—" : (p >= 0 ? "+" : "") + p.toFixed(1) + "%";
+
+  const EU_PAISES = ["España", "Portugal"];
+  const pagando  = rows.filter(r => r.hasOpened && !r.sinFeeMes);
+  const abiertas = rows.filter(r => r.hasOpened);
+  const totMes   = rows.reduce((s,r) => s + (r.feeMes_USD  || 0), 0);
+  const totPrev  = rows.reduce((s,r) => s + (r.feePrev_USD || 0), 0);
+  const feeARG   = rows.filter(r => r.pais === "Argentina").reduce((s,r) => s + (r.feeMes_USD || 0), 0);
+  const feeLATAM = rows.filter(r => r.pais !== "Argentina" && !EU_PAISES.includes(r.pais)).reduce((s,r) => s + (r.feeMes_USD || 0), 0);
+  const feeEU    = rows.filter(r => EU_PAISES.includes(r.pais)).reduce((s,r) => s + (r.feeMes_USD || 0), 0);
+  const varAgr   = totPrev > 0 ? ((totMes - totPrev) / totPrev) * 100 : null;
+  const promUSD  = pagando.length > 0 ? pagando.reduce((s,r) => s + (r.feeMes_USD || 0), 0) / pagando.length : 0;
+  const ytdUSD   = rows.reduce((s,r) => s + (r.feeYTD_USD  || 0), 0);
+  const varColor = varAgr == null ? "#ffffff" : varAgr > 0 ? "#10d97a" : "#ff5570";
+
+  // TC reference strip
+  const arsC = tcActual?.arsUSD  > 0 ? tcActual.arsUSD  : null;
+  const arsP = tcPrevRef?.arsUSD > 0 ? tcPrevRef.arsUSD : null;
+  const eurC = tcActual?.eurUSD  > 0 ? tcActual.eurUSD  : null;
+  const eurP = tcPrevRef?.eurUSD > 0 ? tcPrevRef.eurUSD : null;
+  const tcParts = [];
+  if (arsC || arsP) tcParts.push(`ARS/USD: $${arsC ? Math.round(arsC).toLocaleString("es-AR") : "—"} (${mesLabel}) · $${arsP ? Math.round(arsP).toLocaleString("es-AR") : "—"} (${prevLabel})`);
+  if (eurC || eurP) tcParts.push(`EUR/USD: ${eurC ? eurC.toFixed(2) : "—"} (${mesLabel}) · ${eurP ? eurP.toFixed(2) : "—"} (${prevLabel})`);
+
+  const tableRows = rows.map((r, i) => {
+    const vl = r.feePrev === 0 && r.feeMes > 0 ? "Nuevo" : r.varPct == null ? "—" : fmtP(r.varPct);
+    const vc = vl === "Nuevo" ? "#adff19" : r.varPct == null ? "#666" : r.varPct > 0 ? "#10d97a" : r.varPct < 0 ? "#ff5570" : "#fff";
+    const bg = i % 2 === 0 ? "#161616" : "#1a1a1a";
+    return `<tr style="background:${bg};">
+      <td style="padding:7px 12px;font-size:12px;color:${r.hasOpened ? "#fff" : "#555"};font-weight:600;">${r.sede}</td>
+      <td style="padding:7px 12px;font-size:12px;color:#888;">${r.pais}</td>
+      <td style="padding:7px 12px;font-size:12px;color:${r.sinFeeMes ? "#555" : "#fff"};font-family:monospace;text-align:right;">${r.sinFeeMes ? "$ 0" : fmtU(r.feeMes_USD)}</td>
+      <td style="padding:7px 12px;font-size:12px;color:${vc};font-family:monospace;text-align:center;font-weight:700;">${vl}</td>
+      <td style="padding:7px 12px;font-size:12px;color:#888;font-family:monospace;text-align:right;">${r.feeYTD_USD ? fmtU(r.feeYTD_USD) : "—"}</td>
+    </tr>`;
+  }).join("");
+
+  const kpiCell = (label, value, color) =>
+    `<td style="text-align:center;padding:14px 6px;border-right:1px solid #2a2a2a;">
+      <div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;">${label}</div>
+      <div style="font-size:17px;font-weight:700;color:${color || "#fff"};font-family:monospace;">${value}</div>
+    </td>`;
+
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f4f4;font-family:Arial,Helvetica,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 16px;">
+<table width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;">
+
+  <tr><td style="background:#111111;padding:24px 32px;border-radius:10px 10px 0 0;">
+    <table width="100%" cellpadding="0" cellspacing="0"><tr>
+      <td><div style="font-size:26px;font-weight:900;color:#adff19;letter-spacing:-1px;line-height:1;">BIGG</div>
+          <div style="font-size:11px;color:#888;margin-top:4px;text-transform:uppercase;letter-spacing:.1em;">Reporte de Fee &mdash; ${mesLabel} ${year}</div></td>
+      <td align="right"><div style="font-size:11px;color:#555;">Distribución interna</div></td>
+    </tr></table>
+  </td></tr>
+
+  <tr><td style="background:#181818;border-bottom:1px solid #2a2a2a;">
+    <table width="100%" cellpadding="0" cellspacing="0"><tr>
+      ${kpiCell(`Pagan Fee`, `${pagando.length} / ${abiertas.length}`, "#fff")}
+      <td style="text-align:center;padding:12px 6px;border-right:1px solid #2a2a2a;">
+        <div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;">Fee ${mesLabel}</div>
+        <div style="font-size:17px;font-weight:700;color:#fff;font-family:monospace;margin-bottom:8px;">${fmtU(totMes)}</div>
+        <table width="100%" cellpadding="0" cellspacing="0">
+          ${[["ARG", feeARG], ["LATAM", feeLATAM], ["Europa", feeEU]].map(([lbl, fee]) => `
+          <tr>
+            <td style="font-size:9px;color:#555;padding:1px 4px;text-align:left;">${lbl}</td>
+            <td style="font-size:9px;color:#888;font-family:monospace;padding:1px 4px;text-align:right;">${fmtU(fee)}</td>
+          </tr>`).join("")}
+        </table>
+      </td>
+      ${kpiCell(`Var % vs ${prevLabel}`, fmtP(varAgr), varColor)}
+      ${kpiCell("Promedio / sede", fmtU(promUSD), "#fff")}
+      <td style="text-align:center;padding:14px 6px;">
+        <div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;">YTD Ene&ndash;${mesLabel}</div>
+        <div style="font-size:17px;font-weight:700;color:#fff;font-family:monospace;">${fmtU(ytdUSD)}</div>
+      </td>
+    </tr></table>
+  </td></tr>
+
+  ${tcParts.length ? `<tr><td style="background:#141414;padding:8px 32px;border-bottom:1px solid #2a2a2a;">
+    <span style="font-size:9px;color:#555;text-transform:uppercase;letter-spacing:.08em;font-weight:700;">TC Ref.&nbsp;&nbsp;</span>
+    <span style="font-size:11px;color:#777;font-family:monospace;">${tcParts.join("&nbsp;&nbsp;|&nbsp;&nbsp;")}</span>
+  </td></tr>` : ""}
+
+  <tr><td style="background:#111111;">
+    <table width="100%" cellpadding="0" cellspacing="0">
+      <tr style="background:#0d0d0d;">
+        <th style="padding:8px 12px;text-align:left;color:#555;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;border-bottom:2px solid #2a2a2a;">Sede</th>
+        <th style="padding:8px 12px;text-align:left;color:#555;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;border-bottom:2px solid #2a2a2a;">País</th>
+        <th style="padding:8px 12px;text-align:right;color:#555;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;border-bottom:2px solid #2a2a2a;">Fee ${mesLabel}</th>
+        <th style="padding:8px 12px;text-align:center;color:#555;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;border-bottom:2px solid #2a2a2a;">Var %</th>
+        <th style="padding:8px 12px;text-align:right;color:#555;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;border-bottom:2px solid #2a2a2a;">Fee YTD</th>
+      </tr>
+      ${tableRows}
+    </table>
+  </td></tr>
+
+  <tr><td style="background:#0d0d0d;padding:16px 32px;border-radius:0 0 10px 10px;text-align:center;">
+    <div style="font-size:10px;color:#444;">Generado por BIGG Finance · ${new Date().toLocaleDateString("es-AR")}</div>
+  </td></tr>
+
+</table></td></tr></table>
+</body></html>`;
+}
+
 // ─── COMPONENTE PRINCIPAL ─────────────────────────────────────────────────────
 export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, defaultMonth, defaultYear, onClose }) {
   const def = prevMonth(defaultMonth, defaultYear);
@@ -346,12 +457,17 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
   const [sortDir,      setSortDir]      = useState("desc");
   const [filterSedes,  setFilterSedes]  = useState(new Set());
   const [filterPaises, setFilterPaises] = useState(new Set());
+  const [showSendPanel, setShowSendPanel] = useState(false);
+  const [sendEmails,    setSendEmails]    = useState(() => { try { return localStorage.getItem("bigg_feeReportEmails") || ""; } catch { return ""; } });
+  const [sendState,     setSendState]     = useState("idle"); // "idle"|"sending"|"sent"|"error"
 
   const prev = prevMonth(month, year);
 
   // ¿Hay TC cargado para el mes seleccionado?
   const tcKey     = `${year}-${String(month+1).padStart(2,'0')}`;
-  const tcActual  = tiposCambio[tcKey] ?? null;
+  const prevKey   = `${prev.year}-${String(prev.month+1).padStart(2,'0')}`;
+  const tcActual  = tiposCambio[tcKey]  ?? null;
+  const tcPrevRef = tiposCambio[prevKey] ?? null;
   const tcMissing = !tcActual || !(tcActual.arsUSD > 0);
 
   const baseRows = useMemo(
@@ -388,6 +504,23 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
 
   const anyFilter = filterSedes.size > 0 || filterPaises.size > 0;
 
+  const handleSendReport = async () => {
+    if (!sendEmails.trim()) return;
+    setSendState("sending");
+    try {
+      try { localStorage.setItem("bigg_feeReportEmails", sendEmails); } catch {}
+      const html = buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef });
+      await sendMailFr({
+        to: sendEmails.trim(),
+        subject: `Reporte de Fee — ${MONTHS[month]} ${year}`,
+        htmlBody: html,
+      });
+      setSendState("sent");
+    } catch {
+      setSendState("error");
+    }
+  };
+
   const sel = { fontSize: 12, padding: "4px 9px", background: "var(--bg)", border: "1px solid var(--border2)", borderRadius: 6, color: "var(--text)" };
   const tdS = { padding: "6px 10px", fontSize: 11, verticalAlign: "middle", whiteSpace: "nowrap", textAlign: "right", fontFamily: "monospace" };
   const sortProps = { sortCol, sortDir, onSort: toggleSort };
@@ -410,20 +543,69 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
             <select value={year} onChange={e => setYear(+e.target.value)} style={sel}>
               {AVAILABLE_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
             </select>
-            {tcMissing
-              ? <span style={{ fontSize: 11, color: "#f5a623" }} title="Cargá el TC en Maestros para este mes">⚠ TC sin cargar</span>
-              : <span style={{ fontSize: 11, color: "var(--lime, #adff19)", opacity: 0.8 }}>✓ TC {MONTHS[month]} {year}</span>
-            }
             <button
-              onClick={() => downloadExcel(rows, year, month)}
-              disabled={rows.length === 0}
-              style={{ fontSize: 12, fontWeight: 600, padding: "6px 16px", borderRadius: 6, background: rows.length ? "#fff" : "var(--bg)", color: rows.length ? "#111" : "var(--text2)", border: "1px solid #ccc", cursor: rows.length ? "pointer" : "not-allowed" }}
+              onClick={() => { setShowSendPanel(s => !s); setSendState("idle"); }}
+              style={{ fontSize: 12, fontWeight: 600, padding: "5px 14px", borderRadius: 6,
+                background: showSendPanel ? "rgba(173,255,25,.15)" : "transparent",
+                color: showSendPanel ? "var(--accent)" : "var(--text2)",
+                border: `1px solid ${showSendPanel ? "var(--accent)" : "var(--border2)"}`,
+                cursor: "pointer" }}
             >
-              ↓ Excel
+              ✉ Enviar
             </button>
             <button className="ghost" style={{ fontSize: 13, padding: "4px 10px" }} onClick={onClose}>✕ Cerrar</button>
           </div>
         </div>
+
+        {/* Panel de envío */}
+        {showSendPanel && (() => {
+          const recipientCount = sendEmails.trim().split(",").filter(e => e.trim()).length;
+          return (
+            <div style={{ padding: "14px 24px", borderBottom: "1px solid var(--border)", background: "rgba(173,255,25,.03)" }}>
+              <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: ".07em", display: "block", marginBottom: 6 }}>
+                    DESTINATARIOS — separados por coma
+                  </label>
+                  <textarea
+                    value={sendEmails}
+                    onChange={e => { setSendEmails(e.target.value); setSendState("idle"); }}
+                    placeholder="director@bigg.fit, cfo@bigg.fit"
+                    rows={2}
+                    style={{ width: "100%", background: "var(--bg)", border: "1px solid var(--border2)", borderRadius: 7,
+                      padding: "8px 12px", color: "var(--text)", fontSize: 12, resize: "none",
+                      boxSizing: "border-box", fontFamily: "inherit" }}
+                  />
+                  {/* Resumen del reporte */}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 18 }}>
+                  <button
+                    onClick={handleSendReport}
+                    disabled={!sendEmails.trim() || sendState === "sending"}
+                    className="btn"
+                    style={{ padding: "8px 22px", fontSize: 12, whiteSpace: "nowrap",
+                      opacity: !sendEmails.trim() ? 0.5 : 1 }}
+                  >
+                    {sendState === "sending" ? "Enviando…" : "✉ Enviar reporte"}
+                  </button>
+                  <button onClick={() => setShowSendPanel(false)} className="ghost" style={{ fontSize: 11, padding: "5px 12px" }}>
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+              {sendState === "sent" && (
+                <div style={{ marginTop: 8, fontSize: 11, color: "var(--green)", fontWeight: 600 }}>
+                  ✓ Reporte enviado a {recipientCount} destinatario{recipientCount !== 1 ? "s" : ""}
+                </div>
+              )}
+              {sendState === "error" && (
+                <div style={{ marginTop: 8, fontSize: 11, color: "var(--red)" }}>
+                  ⚠ Error al enviar. Verificá los destinatarios e intentá de nuevo.
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* KPIs */}
         {(() => {
@@ -442,6 +624,11 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
 
           const ytdUSD = rows.reduce((s,r) => s + (r.feeYTD_USD || 0), 0);
 
+          const EU_PAISES_KPI = ["España", "Portugal"];
+          const feeARG_kpi   = rows.filter(r => r.pais === "Argentina").reduce((s,r) => s + (r.feeMes_USD || 0), 0);
+          const feeLATAM_kpi = rows.filter(r => r.pais !== "Argentina" && !EU_PAISES_KPI.includes(r.pais)).reduce((s,r) => s + (r.feeMes_USD || 0), 0);
+          const feeEU_kpi    = rows.filter(r => EU_PAISES_KPI.includes(r.pais)).reduce((s,r) => s + (r.feeMes_USD || 0), 0);
+
           const kpis = [
             {
               label: "Pagan fee",
@@ -452,6 +639,7 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
               label: `Fee ${MONTHS[month]}`,
               value: fmtMoney(totMesUSD, "USD"),
               sub: null,
+              breakdown: [["ARG", feeARG_kpi], ["LATAM", feeLATAM_kpi], ["Europa", feeEU_kpi]],
             },
             {
               label: `Var % vs ${MONTHS[prev.month]}`,
@@ -473,13 +661,63 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
 
           return (
             <div style={{ display: "flex", borderBottom: "1px solid var(--border)" }}>
-              {kpis.map(({ label, value, sub, valueColor }) => (
+              {kpis.map(({ label, value, sub, valueColor, breakdown }) => (
                 <div key={label} style={{ flex: 1, padding: "10px 14px", borderRight: "1px solid var(--border)", textAlign: "center" }}>
                   <div style={{ fontSize: 9, color: "var(--text2)", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</div>
                   <div style={{ fontSize: 13, fontWeight: 700, fontFamily: "monospace", color: valueColor ?? "var(--text)" }}>{value}</div>
                   {sub && <div style={{ fontSize: 10, color: "var(--text2)", marginTop: 2, fontFamily: "monospace" }}>{sub}</div>}
+                  {breakdown && (
+                    <div style={{ marginTop: 7, borderTop: "1px solid var(--border)", paddingTop: 5 }}>
+                      {breakdown.map(([lbl, fee]) => (
+                        <div key={lbl} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 2, padding: "0 2px" }}>
+                          <span style={{ fontSize: 9, color: "var(--text2)", opacity: .7 }}>{lbl}</span>
+                          <span style={{ fontSize: 10, fontFamily: "monospace", color: "var(--text2)" }}>{fmtMoney(fee, "USD")}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
+            </div>
+          );
+        })()}
+
+        {/* TC Referencia strip */}
+        {(() => {
+          const arsC = tcActual?.arsUSD  > 0 ? tcActual.arsUSD  : null;
+          const arsP = tcPrevRef?.arsUSD > 0 ? tcPrevRef.arsUSD : null;
+          const eurC = tcActual?.eurUSD  > 0 ? tcActual.eurUSD  : null;
+          const eurP = tcPrevRef?.eurUSD > 0 ? tcPrevRef.eurUSD : null;
+          if (!arsC && !arsP && !eurC && !eurP) return null;
+
+          const deltaArsPct = arsC && arsP ? ((arsC - arsP) / arsP) * 100 : null;
+          const deltaEurPct = eurC && eurP ? ((eurC - eurP) / eurP) * 100 : null;
+          const fmtARS = (v) => v ? "$ " + Math.round(v).toLocaleString("es-AR") : "—";
+          const fmtEUR = (v) => v ? v.toFixed(2) : "—";
+          const fmtD   = (d) => d == null ? null : (d >= 0 ? "+" : "") + d.toFixed(1) + "%";
+
+          const Item = ({ label, valC, valP, delta, fmt }) => (
+            <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11 }}>
+              <span style={{ color: "var(--text2)", fontWeight: 700, fontSize: 10, minWidth: 52 }}>{label}</span>
+              <span style={{ fontFamily: "monospace", color: "var(--text)", fontWeight: 600 }}>{fmt(valC)}</span>
+              <span style={{ fontSize: 9, color: "var(--text2)", opacity: .7 }}>{MONTHS[month]}</span>
+              <span style={{ color: "var(--border2)" }}>·</span>
+              <span style={{ fontFamily: "monospace", color: "var(--text2)" }}>{fmt(valP)}</span>
+              <span style={{ fontSize: 9, color: "var(--text2)", opacity: .7 }}>{MONTHS[prev.month]}</span>
+              {delta != null && (
+                <span style={{ fontSize: 10, fontWeight: 600, color: "var(--text2)", marginLeft: 2 }}>
+                  ({fmtD(delta)})
+                </span>
+              )}
+            </div>
+          );
+
+          return (
+            <div style={{ padding: "7px 24px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 28, background: "rgba(0,0,0,.12)", flexWrap: "wrap" }}>
+              <span style={{ fontSize: 9, color: "var(--text2)", fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", whiteSpace: "nowrap", opacity: .6 }}>TC ref.</span>
+              {(arsC || arsP) && <Item label="ARS/USD" valC={arsC} valP={arsP} delta={deltaArsPct} fmt={fmtARS} />}
+              {(arsC || arsP) && (eurC || eurP) && <span style={{ color: "var(--border)", fontSize: 14, opacity: .4 }}>|</span>}
+              {(eurC || eurP) && <Item label="EUR/USD" valC={eurC} valP={eurP} delta={deltaEurPct} fmt={fmtEUR} />}
             </div>
           );
         })()}

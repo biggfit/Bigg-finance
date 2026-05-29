@@ -1,12 +1,13 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { DEFAULT_FRANCHISOR, COMPANIES, COMPANY_NAMES, todayDmy, dmyToIso, isoToDmy } from "./data/franchisor";
 import { StoreCtx } from "./lib/context";
-import { fetchComps, fetchSaldos, appendComp, updateComp, removeComp,
+import { fetchAll,
+         fetchComps, fetchSaldos, appendComp, updateComp, removeComp,
          fetchFranchises, fetchFranchisor,
          sheetsSaveFr, sheetsAddFr, sheetsDeleteFr, sheetsSaveFranchisor,
          fetchRecordatorios, saveRecordatorio,
          tryDecrementInvoiceSeq,
-         fetchTiposCambio, saveTipoCambio } from "./lib/sheetsApi";
+         saveTipoCambio } from "./lib/sheetsApi";
 import { CURRENCIES, MONTHS, AVAILABLE_YEARS, computeSaldo, computeSaldoPrevMes, downloadCSV } from "./lib/helpers";
 import "./lib/styles";
 import FrDetail from "./components/FrDetail";
@@ -126,7 +127,7 @@ export default function App({ onVolverNumbers } = {}) {
 
   const saveTC = useCallback((yearMonth, tc) => {
     setTiposCambio(prev => ({ ...prev, [yearMonth]: { yearMonth, ...tc } }));
-    saveTipoCambio(yearMonth, tc).catch(err => console.error('Sheets saveTC:', err));
+    return saveTipoCambio(yearMonth, tc);
   }, []);
 
 
@@ -277,38 +278,32 @@ export default function App({ onVolverNumbers } = {}) {
 
   // if (!user) return <Login onLogin={setUser} />; // deshabilitado para testing
 
-  // Cargar datos de Google Sheets al montar
+  // Cargar datos de Google Sheets al montar — un solo request "all"
   useEffect(() => {
-    Promise.allSettled([fetchComps(), fetchSaldos(), fetchFranchises(), fetchFranchisor(), fetchRecordatorios(), fetchTiposCambio()])
-      .then(([compsRes, saldosRes, frRes, franchisorRes, recRes, tcRes]) => {
-        if (compsRes.status === 'fulfilled') setComps(compsRes.value);
-        else { console.error('Sheets comps:', compsRes.reason); setLoadError(compsRes.reason.message); }
+    fetchAll()
+      .then(({ comps, saldos, franchises, franchisor: rawFranchisor, recordatorios, tiposCambio: tc }) => {
+        setComps(comps);
+        setSaldoInicial(saldos);
+        setFranchises(franchises);
 
-        if (saldosRes.status === 'fulfilled') setSaldoInicial(saldosRes.value);
-        else console.error('Sheets saldos:', saldosRes.reason);
-
-        if (frRes.status === 'fulfilled') setFranchises(frRes.value);
-        else { console.error('Sheets franchises:', frRes.reason); }
-
-        if (franchisorRes.status === 'fulfilled') {
-          // Merge con DEFAULT_FRANCHISOR para que los campos vacíos en Sheets no pisen los defaults
-          const raw = franchisorRes.value ?? {};
-          const merged = {};
-          for (const side of ["ar", "usa", "es"]) {
-            merged[side] = { ...DEFAULT_FRANCHISOR[side] };
-            for (const [k, v] of Object.entries(raw[side] ?? {})) {
-              if (v !== "" && v != null) merged[side][k] = v;
-            }
+        // Merge con DEFAULT_FRANCHISOR para que los campos vacíos en Sheets no pisen los defaults
+        const merged = {};
+        for (const side of ["ar", "usa", "es"]) {
+          merged[side] = { ...DEFAULT_FRANCHISOR[side] };
+          for (const [k, v] of Object.entries((rawFranchisor ?? {})[side] ?? {})) {
+            if (v !== "" && v != null) merged[side][k] = v;
           }
-          setFranchisor(merged);
-        } else { console.warn('Sheets franchisor (fallback estático):', franchisorRes.reason); setFranchisor(DEFAULT_FRANCHISOR); }
-
-        if (recRes.status === 'fulfilled' && recRes.value !== null) {
-          setRecordatorios(recRes.value ?? {});
         }
+        setFranchisor(merged);
 
-        if (tcRes.status === 'fulfilled') setTiposCambio(tcRes.value ?? {});
-
+        setRecordatorios(recordatorios ?? {});
+        setTiposCambio(tc ?? {});
+        setSheetsReady(true);
+      })
+      .catch(err => {
+        console.error('fetchAll error:', err);
+        setLoadError(err.message);
+        setFranchisor(DEFAULT_FRANCHISOR);
         setSheetsReady(true);
       });
   }, []);

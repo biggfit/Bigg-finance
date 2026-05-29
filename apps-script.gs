@@ -207,7 +207,33 @@ function doGet(e) {
       }
     }
 
-    return json({ comps: comps, saldos: saldos, franchises: franchises, franchisor: franchisor, recordatorios: recordatorios });
+    // Tipos de Cambio
+    var tcSh2 = ss.getSheetByName("tipos_cambio");
+    var tiposCambio = {};
+    if (tcSh2) {
+      var tcRows2 = tcSh2.getDataRange().getValues();
+      if (tcRows2.length >= 2) {
+        var tcH2 = tcRows2[0];
+        for (var tci = 1; tci < tcRows2.length; tci++) {
+          var tObj2 = {};
+          tcH2.forEach(function(h, j) { tObj2[h] = tcRows2[tci][j]; });
+          var ym2 = String(tObj2.yearMonth).slice(0, 7);
+          if (ym2 && ym2 !== "") {
+            tiposCambio[ym2] = {
+              yearMonth: ym2,
+              arsUSD: Number(tObj2.arsUSD) || 0,
+              eurUSD: Number(tObj2.eurUSD) || 0,
+              uyuUSD: Number(tObj2.uyuUSD) || 0,
+              pygUSD: Number(tObj2.pygUSD) || 0,
+              clpUSD: Number(tObj2.clpUSD) || 0,
+              penUSD: Number(tObj2.penUSD) || 0,
+            };
+          }
+        }
+      }
+    }
+
+    return json({ comps: comps, saldos: saldos, franchises: franchises, franchisor: franchisor, recordatorios: recordatorios, tiposCambio: tiposCambio });
   }
 
   // ── Tipos de Cambio ───────────────────────────────────────────────────────
@@ -411,41 +437,50 @@ function doPost(e) {
 
   // ── Tipos de Cambio ───────────────────────────────────────────────────────
   if (body.action === "saveTC") {
-    var tcSh = ss.getSheetByName("tipos_cambio");
-    var allTcCols = ["yearMonth","arsUSD","eurUSD","uyuUSD","pygUSD","clpUSD","penUSD"];
-    if (!tcSh) {
-      tcSh = ss.insertSheet("tipos_cambio");
-      tcSh.appendRow(allTcCols);
-      tcSh.appendRow(allTcCols.map(function(h) { return h === "yearMonth" ? body.yearMonth : (body.tc[h] != null ? body.tc[h] : ""); }));
-      return json({ ok: true });
-    }
-    var tcData = tcSh.getDataRange().getValues();
-    var tcHeaders = tcData[0];
-    // Agregar columnas nuevas si faltan
-    allTcCols.forEach(function(col) {
-      if (tcHeaders.indexOf(col) === -1) {
-        var newColIdx = tcHeaders.length + 1;
-        tcSh.getRange(1, newColIdx).setValue(col);
-        for (var ri = 1; ri < tcData.length; ri++) {
-          tcSh.getRange(ri + 1, newColIdx).setValue("");
-          tcData[ri].push("");
+    try {
+      var tcSh = ss.getSheetByName("tipos_cambio");
+      var allTcCols = ["yearMonth","arsUSD","eurUSD","uyuUSD","pygUSD","clpUSD","penUSD"];
+      var sheetCreated = false;
+      if (!tcSh) {
+        tcSh = ss.insertSheet("tipos_cambio");
+        tcSh.appendRow(allTcCols);
+        tcSh.appendRow(allTcCols.map(function(h) { return h === "yearMonth" ? body.yearMonth : (body.tc[h] != null ? body.tc[h] : ""); }));
+        sheetCreated = true;
+        SpreadsheetApp.flush();
+        return json({ ok: true, sheetCreated: sheetCreated, yearMonth: body.yearMonth, spreadsheetUrl: ss.getUrl() });
+      }
+      var tcData = tcSh.getDataRange().getValues();
+      var tcHeaders = tcData[0];
+      // Agregar columnas nuevas si faltan
+      allTcCols.forEach(function(col) {
+        if (tcHeaders.indexOf(col) === -1) {
+          var newColIdx = tcHeaders.length + 1;
+          tcSh.getRange(1, newColIdx).setValue(col);
+          for (var ri = 1; ri < tcData.length; ri++) {
+            tcSh.getRange(ri + 1, newColIdx).setValue("");
+            tcData[ri].push("");
+          }
+          tcHeaders.push(col);
         }
-        tcHeaders.push(col);
+      });
+      var ymCol = tcHeaders.indexOf("yearMonth");
+      // Buscar fila existente
+      for (var ti = 1; ti < tcData.length; ti++) {
+        if (String(tcData[ti][ymCol]) === String(body.yearMonth)) {
+          tcHeaders.forEach(function(h, c) {
+            if (h in body.tc) tcSh.getRange(ti + 1, c + 1).setValue(body.tc[h] != null ? body.tc[h] : "");
+          });
+          SpreadsheetApp.flush();
+          return json({ ok: true, sheetCreated: false, updated: true, yearMonth: body.yearMonth, spreadsheetUrl: ss.getUrl() });
+        }
       }
-    });
-    var ymCol = tcHeaders.indexOf("yearMonth");
-    // Buscar fila existente
-    for (var ti = 1; ti < tcData.length; ti++) {
-      if (String(tcData[ti][ymCol]) === String(body.yearMonth)) {
-        tcHeaders.forEach(function(h, c) {
-          if (h in body.tc) tcSh.getRange(ti + 1, c + 1).setValue(body.tc[h] != null ? body.tc[h] : "");
-        });
-        return json({ ok: true });
-      }
+      // Nueva fila
+      tcSh.appendRow(tcHeaders.map(function(h) { return h === "yearMonth" ? body.yearMonth : (body.tc[h] != null ? body.tc[h] : ""); }));
+      SpreadsheetApp.flush();
+      return json({ ok: true, sheetCreated: false, added: true, yearMonth: body.yearMonth, spreadsheetUrl: ss.getUrl() });
+    } catch(saveTcErr) {
+      return json({ error: "saveTC falló: " + saveTcErr.message, yearMonth: body.yearMonth });
     }
-    // Nueva fila
-    tcSh.appendRow(tcHeaders.map(function(h) { return h === "yearMonth" ? body.yearMonth : (body.tc[h] != null ? body.tc[h] : ""); }));
-    return json({ ok: true });
   }
 
   // ── Send Mail ─────────────────────────────────────────────────────────────

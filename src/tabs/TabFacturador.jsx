@@ -897,7 +897,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
   const tcCargados = countriesWithTc.filter(c => parseFloat(tcMap[c]) > 0).length;
 
   // Sincroniza tcMap con Maestros cuando cambia el mes o llegan los datos
-  React.useEffect(() => {
+  useEffect(() => {
     const key = `${crmYear}-${String(crmMonth + 1).padStart(2, "0")}`;
     const maestros = tiposCambio[key];
     if (!maestros) return;

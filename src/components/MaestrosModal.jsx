@@ -292,6 +292,7 @@ export default function MaestrosModal({ franchises, franchisor, comps, tiposCamb
   const [tcBufs,         setTcBufs]         = useState({});
   const [tcYear,         setTcYear]         = useState(new Date().getFullYear());
   const [tcSelectedMonth, setTcSelectedMonth] = useState(null);
+  const [tcFetching,     setTcFetching]     = useState(false);
   const toastTimer = useRef(null);
 
   const TC_MESES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
@@ -333,6 +334,161 @@ export default function MaestrosModal({ franchises, franchisor, comps, tiposCamb
     if (onSaveTC) onSaveTC(ym, tc);
     setTcBufs(prev => { const n = {...prev}; delete n[ym]; return n; });
     showSaved(`TC ${TC_MESES[parseInt(ym.split("-")[1],10)-1]} ${ym.split("-")[0]} guardado`);
+  };
+
+  const fetchTasas = async () => {
+    if (tcSelectedMonth === null) return;
+    const year  = tcYear;
+    const month = tcSelectedMonth; // 0-indexed
+    const ym    = `${year}-${String(month + 1).padStart(2, "0")}`;
+
+    setTcFetching(true);
+    try {
+      const todayDate    = new Date();
+      const isFuture     = new Date(year, month + 1, 1) > todayDate;
+      const startDate    = `${ym}-01`;
+      const endDate      = isFuture
+        ? todayDate.toISOString().slice(0, 10)
+        : new Date(year, month + 1, 0).toISOString().slice(0, 10);
+
+      // ── Fetch en paralelo ───────────────────────────────────────────────────
+      const [blueRes, eurRes, clpRes, dolarapiRes, curApiRes] = await Promise.allSettled([
+        // 1. ARS blue — historial completo, filtrar por mes
+        fetch("https://api.argentinadatos.com/v1/cotizaciones/dolares/blue").then(r => r.json()),
+        // 2. EUR/USD — histórico mensual (BCE via frankfurter)
+        isFuture
+          ? Promise.resolve(null)
+          : fetch(`https://api.frankfurter.dev/v1/${startDate}..${endDate}?from=USD&to=EUR`).then(r => r.json()),
+        // 3. CLP/USD — histórico anual (Banco Central Chile)
+        fetch(`https://mindicador.cl/api/dolar/${year}`).then(r => r.json()),
+        // 4. Cotizaciones actuales (fallback general)
+        fetch("https://dolarapi.com/v1/cotizaciones").then(r => r.json()),
+        // 5. Currency API — último día hábil disponible (cubre PYG, PEN, UYU histórico)
+        fetch(`https://${endDate}.currency-api.pages.dev/v1/currencies/usd.json`).then(r => r.json()),
+      ]);
+
+      const cot        = dolarapiRes.status === "fulfilled" ? dolarapiRes.value : [];
+      const usdOficial = cot?.find?.(c => c.moneda === "USD")?.venta;
+      const uyuArs     = cot?.find?.(c => c.moneda === "UYU")?.venta;
+      const eurArs     = cot?.find?.(c => c.moneda === "EUR")?.venta;
+      const clpArs     = cot?.find?.(c => c.moneda === "CLP")?.venta;
+
+      // helper: último registro disponible del mes (= último día hábil con dato)
+      const lastOfMonth = (recs, dateKey = "fecha") =>
+        recs
+          .filter(r => r[dateKey]?.startsWith(ym))
+          .sort((a, b) => b[dateKey].localeCompare(a[dateKey]))[0] ?? null;
+
+      // ── 1. ARS blue — último día hábil del mes ─────────────────────────────
+      let arsUSD, arsLabel = "cotización de hoy";
+      if (blueRes.status === "fulfilled" && Array.isArray(blueRes.value)) {
+        const rec = lastOfMonth(blueRes.value.filter(r => r.venta > 0));
+        if (rec) {
+          arsUSD   = Math.round(rec.venta);
+          arsLabel = `ult. día hábil (${rec.fecha.slice(0, 10)})`;
+        }
+      }
+      if (!arsUSD) { // fallback: blue de hoy
+        const b = await fetch("https://dolarapi.com/v1/dolares/blue").then(r => r.json()).catch(() => null);
+        arsUSD = b?.venta;
+      }
+      if (!arsUSD) throw new Error("Sin dato ARS blue");
+
+      // ── 2. EUR/USD — último día hábil del mes (frankfurter: EUR/USD → invertir) ─
+      let eurUSD, eurLabel = "hoy";
+      if (eurRes.status === "fulfilled" && eurRes.value?.rates) {
+        const dates = Object.keys(eurRes.value.rates).sort((a, b) => b.localeCompare(a));
+        const lastDate = dates[0];
+        const eurPerUsd = eurRes.value.rates[lastDate]?.EUR;
+        if (eurPerUsd) {
+          eurUSD   = (1 / eurPerUsd).toFixed(4);
+          eurLabel = `ult. día hábil (${lastDate})`;
+        }
+      }
+      if (!eurUSD && eurArs && usdOficial) eurUSD = (eurArs / usdOficial).toFixed(4); // fallback
+
+      // ── 3. CLP/USD — último día hábil del mes (mindicador: CLP/USD directo) ──
+      let clpUSD, clpLabel = "hoy";
+      if (clpRes.status === "fulfilled" && clpRes.value?.serie) {
+        const recs = clpRes.value.serie.filter(r => r.valor > 0);
+        const rec  = lastOfMonth(recs, "fecha");
+        if (rec) {
+          clpUSD   = String(Math.round(rec.valor));
+          clpLabel = `ult. día hábil (${rec.fecha.slice(0, 10)})`;
+        }
+      }
+      if (!clpUSD && clpArs && usdOficial) clpUSD = String(Math.round(usdOficial / clpArs)); // fallback
+
+      // ── 4. UYU / PYG / PEN — currency-api histórico por fecha ────────────────
+      const curData = curApiRes.status === "fulfilled" ? curApiRes.value?.usd : null;
+      const curDate = curApiRes.status === "fulfilled" ? (curApiRes.value?.date || endDate) : endDate;
+      const curLabel = `ult. día hábil (${curDate})`;
+
+      let uyuUSD, uyuLabel = "hoy";
+      if (curData?.uyu > 0) {
+        uyuUSD   = curData.uyu.toFixed(2); // UYU per 1 USD directo
+        uyuLabel = curLabel;
+      } else if (uyuArs && usdOficial) {
+        uyuUSD = (usdOficial / uyuArs).toFixed(2); // fallback DolarAPI
+      }
+
+      let pygUSD, pygLabel = "sin dato";
+      if (curData?.pyg > 0) {
+        pygUSD   = String(Math.round(curData.pyg));
+        pygLabel = curLabel;
+      }
+
+      let penUSD, penLabel = "sin dato";
+      if (curData?.pen > 0) {
+        penUSD   = curData.pen.toFixed(4);
+        penLabel = curLabel;
+      }
+
+      const cur = getTcBuf(ym);
+      const fetched = {
+        arsUSD: String(arsUSD),
+        eurUSD: eurUSD  || cur.eurUSD,
+        uyuUSD: uyuUSD  || cur.uyuUSD,
+        clpUSD: clpUSD  || cur.clpUSD,
+        pygUSD: pygUSD  || cur.pygUSD,
+        penUSD: penUSD  || cur.penUSD,
+      };
+
+      // ── Guardar en Sheets automáticamente ──────────────────────────────────
+      const tcToSave = {
+        arsUSD: parseFloat(fetched.arsUSD) || 0,
+        eurUSD: parseFloat(fetched.eurUSD) || 0,
+        uyuUSD: parseFloat(fetched.uyuUSD) || 0,
+        clpUSD: parseFloat(fetched.clpUSD) || 0,
+        pygUSD: parseFloat(fetched.pygUSD) || 0,
+        penUSD: parseFloat(fetched.penUSD) || 0,
+      };
+      // Guardar en Sheets y esperar el resultado real
+      let saveOk = false;
+      let saveErrMsg = null;
+      let saveResult = null;
+      try {
+        if (onSaveTC) saveResult = await onSaveTC(ym, tcToSave);
+        saveOk = true;
+        console.log("[saveTC] respuesta de Sheets:", saveResult);
+      } catch (e) {
+        saveErrMsg = e?.message || "error de conexión";
+        console.error("Error guardando TC en Sheets:", e);
+      }
+
+      // Limpiar buffer local
+      setTcBufs(prev => { const n = { ...prev }; delete n[ym]; return n; });
+
+      if (saveOk) {
+        showSaved(`✓ Guardado — ARS ${arsLabel} · EUR ${eurLabel} · CLP ${clpLabel} · UYU ${uyuLabel} · PYG ${pygLabel} · PEN ${penLabel}`);
+      } else {
+        showSaved(`⚠ Tasas traídas pero no guardadas — ${saveErrMsg}`);
+      }
+    } catch {
+      showSaved("Error al conectar con la API");
+    } finally {
+      setTcFetching(false);
+    }
   };
 
   const showSaved = (msg) => {
@@ -495,18 +651,6 @@ export default function MaestrosModal({ franchises, franchisor, comps, tiposCamb
           <div style={{ width:210, borderRight:"1px solid var(--border)",
             padding:"16px 12px", display:"flex", flexDirection:"column", gap:4, flexShrink:0 }}>
 
-            {/* Tipo de Cambio — primer ítem */}
-            <button
-              style={{ ...navBtn(topSection === "tc"), display:"flex", alignItems:"center",
-                justifyContent:"space-between", width:"100%", textAlign:"left" }}
-              onClick={() => {
-                setTopSection(topSection === "tc" ? null : "tc");
-                setActiveFrId(null); setNewMode(false); setSedesOpen(false); setBiggSub(null);
-              }}>
-              <span>💱 Tipo de Cambio</span>
-              <span style={{ fontSize:10, opacity:.6 }}>{topSection === "tc" ? "^" : "v"}</span>
-            </button>
-
             {/* BIGG section — mismo estilo que Sedes */}
             <div>
               <button
@@ -597,6 +741,18 @@ export default function MaestrosModal({ franchises, franchisor, comps, tiposCamb
                 })()}
               </div>
             )}
+
+            {/* Tipo de Cambio — debajo de Sedes */}
+            <button
+              style={{ ...navBtn(topSection === "tc"), display:"flex", alignItems:"center",
+                justifyContent:"space-between", width:"100%", textAlign:"left", marginTop:4 }}
+              onClick={() => {
+                setTopSection(topSection === "tc" ? null : "tc");
+                setActiveFrId(null); setNewMode(false); setSedesOpen(false); setBiggSub(null);
+              }}>
+              <span>Tipo de Cambio</span>
+              <span style={{ fontSize:10, opacity:.6 }}>{topSection === "tc" ? "^" : "v"}</span>
+            </button>
           </div>
 
           {/* Content */}
@@ -653,12 +809,35 @@ export default function MaestrosModal({ franchises, franchisor, comps, tiposCamb
 
                   {/* Formulario del mes seleccionado */}
                   <div style={{ background:"var(--bg)", border:`1px solid ${dirty ? "var(--accent)" : "var(--border2)"}`, borderRadius:10, padding:16 }}>
-                    <div style={{ fontSize:12, fontWeight:800, color: dirty ? "var(--accent)" : "var(--text)", marginBottom:14, letterSpacing:".04em" }}>
-                      {selLabel}
-                      {dirty && <span style={{ fontSize:10, fontWeight:400, color:"var(--accent)", marginLeft:8 }}>● sin guardar</span>}
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+                      <div style={{ fontSize:12, fontWeight:800, color: dirty ? "var(--accent)" : "var(--text)", letterSpacing:".04em" }}>
+                        {selLabel}
+                        {dirty && <span style={{ fontSize:10, fontWeight:400, color:"var(--accent)", marginLeft:8 }}>● sin guardar</span>}
+                      </div>
+                      {tcSelectedMonth !== null && (
+                        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                          <span style={{ fontSize:10, color:"var(--muted)", opacity:.6 }}>último día hábil del mes · todas las monedas auto</span>
+                          <button onClick={fetchTasas} disabled={tcFetching} style={{
+                            fontSize:11, padding:"5px 14px", borderRadius:6,
+                            cursor: tcFetching ? "not-allowed" : "pointer",
+                            background:"transparent", color: tcFetching ? "var(--muted)" : "var(--text)",
+                            border:"1px solid var(--border2)", fontWeight:600,
+                            opacity: tcFetching ? 0.5 : 1,
+                          }}>
+                            {tcFetching ? "Cargando…" : "↓ Traer tasas"}
+                          </button>
+                        </div>
+                      )}
                     </div>
                     <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginBottom:14 }}>
-                      {TC_FIELDS.map(({ key, label, placeholder, step }) => (
+                      {[
+                        { key:"arsUSD", label:"ARS / U$D", placeholder:"ej. 1400",  step:"1" },
+                        { key:"eurUSD", label:"€ / U$D",   placeholder:"ej. 1.08",  step:"0.0001" },
+                        { key:"uyuUSD", label:"UYU / U$D", placeholder:"ej. 42",    step:"0.01" },
+                        { key:"clpUSD", label:"CLP / U$D", placeholder:"ej. 950",   step:"1" },
+                        { key:"pygUSD", label:"PYG / U$D", placeholder:"ej. 7800",  step:"1" },
+                        { key:"penUSD", label:"PEN / U$D", placeholder:"ej. 3.7",   step:"0.0001" },
+                      ].map(({ key, label, placeholder, step }) => (
                         <div key={key} style={{ display:"flex", flexDirection:"column", gap:4 }}>
                           <label style={{ fontSize:10, color:"var(--muted)", fontWeight:700, letterSpacing:".06em" }}>{label}</label>
                           <input

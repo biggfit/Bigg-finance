@@ -87,7 +87,7 @@ function parseFranchise(f) {
   };
 }
 
-async function fetchAll() {
+export async function fetchAll() {
   const raw = await get("all");
   return {
     comps:          parseComps(raw.comps ?? {}),
@@ -95,6 +95,7 @@ async function fetchAll() {
     franchises:     (raw.franchises ?? []).map(parseFranchise),
     franchisor:     raw.franchisor ?? null,
     recordatorios:  raw.recordatorios ?? {},
+    tiposCambio:    raw.tiposCambio ?? {},
   };
 }
 
