@@ -747,14 +747,14 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago, o
         </>
       )}
       <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "16px 0", borderTop: `1px solid ${T.border}`, marginTop: 8 }}>
-        <button onClick={onAtras} style={BTN_SECONDARY}>← Atrás</button>
-        <div style={{ flex: 1 }} />
         <button style={BTN_EXPORT("#16a34a")} onClick={() => exportarHaberes(todos, mes, anio)}>
           📥 Excel Haberes (banco)
         </button>
         <button style={BTN_EXPORT("#0369a1")} onClick={() => exportarDeposito(todos, mes, anio)}>
           📥 Excel Depósito (financiera)
         </button>
+        <div style={{ flex: 1 }} />
+        <button onClick={onAtras} style={BTN_SECONDARY}>← Atrás</button>
       </div>
 
       {batchModal && (
