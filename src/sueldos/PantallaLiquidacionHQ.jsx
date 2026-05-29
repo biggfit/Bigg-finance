@@ -34,7 +34,7 @@ const TD = (extra = {}) => ({
 const INPUT = (extra = {}) => ({
   border: "1px solid #93c5fd", borderRadius: 5, padding: "4px 8px",
   fontSize: 13, textAlign: "right", fontFamily: T.font, background: "#fff",
-  outline: "none", ...extra,
+  outline: "none", color: T.text, ...extra,
 });
 const BTN_PRIMARY = (disabled) => ({
   background: disabled ? T.dim : T.blue, color: "#fff", border: "none",
