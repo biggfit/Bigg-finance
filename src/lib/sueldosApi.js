@@ -395,6 +395,17 @@ export async function fetchCentrosCostoNumbers() {
   }));
 }
 
+export async function fetchCuentasBancariasNumbers() {
+  const rows = await get("nb_cuentas_bancarias", {}, BASE_NB);
+  return (Array.isArray(rows) ? rows : []).map(r => ({
+    id:       r.id ?? r.nombre,
+    nombre:   r.nombre ?? r.id,
+    sociedad: r.sociedad ?? "",
+    tipo:     r.tipo ?? "",
+    moneda:   r.moneda ?? "ARS",
+  }));
+}
+
 /** Calcula el total bruto de una liquidación de sedes sumando todos los conceptos. */
 export function calcTotalBruto(liq) {
   return (

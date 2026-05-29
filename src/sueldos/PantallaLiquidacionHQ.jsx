@@ -3,6 +3,7 @@ import * as XLSX from "xlsx";
 import {
   fetchLegajos, fetchLiquidaciones, saveLiquidacion, updateLegajo,
   fetchPagos, appendPago, ROLES_HQ,
+  fetchSociedadesNumbers, fetchCuentasBancariasNumbers,
 } from "../lib/sueldosApi";
 
 // ── Estilos compartidos ───────────────────────────────────────────────────────
@@ -759,30 +760,56 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago, o
 // ── Modal batch pago ──────────────────────────────────────────────────────────
 
 function ModalBatchPago({ tipo, liqs, mes, anio, onClose, onSaved }) {
-  const meta = TIPOS_PAGO.find(t => t.id === tipo);
+  const meta   = TIPOS_PAGO.find(t => t.id === tipo);
   const socFija = tipo === "deposito" || tipo === "efectivo" ? "beta" : null;
 
   const [form, setForm] = useState({
-    fecha:          new Date().toISOString().slice(0, 10),
-    cuenta_bancaria: "",
-    sociedad_id:    socFija ?? "",
+    fecha:        new Date().toISOString().slice(0, 10),
+    sociedad_id:  socFija ?? "",
+    cuenta_id:    "",
   });
+  const [sociedades,  setSociedades]  = useState([]);
+  const [cuentas,     setCuentas]     = useState([]);
+  const [loadingMeta, setLoadingMeta] = useState(true);
+  // Empleados seleccionados (empiezan todos tildados)
+  const [selec, setSelec] = useState(() => new Set(liqs.map(l => l.legajo_id)));
   const [saving,    setSaving]    = useState(false);
   const savingRef = useRef(false);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
-  const total = liqs.reduce((s, l) => s + getMontoTipo(l, tipo), 0);
+  useEffect(() => {
+    Promise.all([fetchSociedadesNumbers(), fetchCuentasBancariasNumbers()])
+      .then(([socs, ctas]) => { setSociedades(socs); setCuentas(ctas); })
+      .finally(() => setLoadingMeta(false));
+  }, []);
+
+  // Cuentas filtradas según la sociedad seleccionada (o todas si no aplica)
+  const cuentasFiltradas = useMemo(() => {
+    if (tipo === "haberes") return cuentas;          // haberes: cualquier cuenta (cada mov usa la soc del legajo)
+    if (!form.sociedad_id)  return cuentas;
+    return cuentas.filter(c => c.sociedad === form.sociedad_id);
+  }, [cuentas, form.sociedad_id, tipo]);
+
+  const liqsSelec = liqs.filter(l => selec.has(l.legajo_id));
+  const total     = liqsSelec.reduce((s, l) => s + getMontoTipo(l, tipo), 0);
+
+  const toggleSelec = (id) => setSelec(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
 
   const handleSave = async () => {
     if (savingRef.current) return;
-    if (!form.cuenta_bancaria && tipo !== "efectivo") {
-      alert("Ingresá la cuenta bancaria."); return;
-    }
+    if (!liqsSelec.length) { alert("Seleccioná al menos un empleado."); return; }
+    if (!form.cuenta_id && tipo !== "efectivo") { alert("Seleccioná una cuenta bancaria."); return; }
     savingRef.current = true; setSaving(true);
     try {
-      await Promise.all(liqs.map(liq => {
+      const ctaNombre = cuentas.find(c => c.id === form.cuenta_id)?.nombre ?? form.cuenta_id;
+      const socNombre = sociedades.find(s => s.id === form.sociedad_id)?.nombre ?? form.sociedad_id;
+      await Promise.all(liqsSelec.map(liq => {
         const soc_id     = tipo === "haberes" ? liq.sociedad_id     : (form.sociedad_id || "beta");
-        const soc_nombre = tipo === "haberes" ? liq.sociedad_nombre : (form.sociedad_id || "beta");
+        const soc_nombre = tipo === "haberes" ? liq.sociedad_nombre : socNombre;
         return appendPago({
           mes, anio,
           legajo_id:              liq.legajo_id,
@@ -792,8 +819,8 @@ function ModalBatchPago({ tipo, liqs, mes, anio, onClose, onSaved }) {
           tipo_componente:        tipo,
           monto:                  getMontoTipo(liq, tipo),
           fecha:                  form.fecha,
-          cuenta_bancaria_id:     form.cuenta_bancaria,
-          cuenta_bancaria_nombre: form.cuenta_bancaria,
+          cuenta_bancaria_id:     form.cuenta_id,
+          cuenta_bancaria_nombre: ctaNombre,
         });
       }));
       await onSaved();
@@ -805,63 +832,100 @@ function ModalBatchPago({ tipo, liqs, mes, anio, onClose, onSaved }) {
     }
   };
 
-  const inputStyle = {
+  const iStyle = {
     border: `1px solid ${T.border}`, borderRadius: 6, padding: "7px 10px",
-    fontSize: 13, fontFamily: T.font, width: "100%", boxSizing: "border-box", color: T.text,
+    fontSize: 13, fontFamily: T.font, width: "100%", boxSizing: "border-box",
+    color: T.text, background: "#fff",
   };
+  const LBL = ({ children }) => (
+    <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>{children}</label>
+  );
+
+  const mostrarSociedad = tipo === "transferencia";   // deposito/efectivo → fija, haberes → no aplica
+  const mostrarCuenta   = tipo !== "efectivo";
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
-      <div style={{ background: "#fff", borderRadius: 12, padding: 24, width: 420, boxShadow: "0 8px 32px rgba(0,0,0,.18)", fontFamily: T.font }}>
+      <div style={{ background: "#fff", borderRadius: 12, padding: 24, width: 440, boxShadow: "0 8px 32px rgba(0,0,0,.18)", fontFamily: T.font, maxHeight: "90vh", overflowY: "auto" }}>
         <h3 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 700 }}>
           Confirmar pago — {meta?.label}
         </h3>
-        <p style={{ margin: "0 0 16px", fontSize: 12, color: T.muted }}>
-          {liqs.length} empleado{liqs.length !== 1 ? "s" : ""} · Total {fmtMoney(total)}
+        <p style={{ margin: "0 0 14px", fontSize: 12, color: T.muted }}>
+          {liqsSelec.length} empleado{liqsSelec.length !== 1 ? "s" : ""} · Total <strong>{fmtMoney(total)}</strong>
         </p>
 
-        {/* Lista resumen */}
-        <div style={{ border: `1px solid ${T.border}`, borderRadius: 6, marginBottom: 16, maxHeight: 160, overflowY: "auto" }}>
-          {liqs.map(liq => (
-            <div key={liq.legajo_id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderBottom: `1px solid ${T.border}`, fontSize: 12 }}>
-              <span style={{ color: T.text }}>{liq.legajo_nombre}</span>
-              <span style={{ fontWeight: 700, color: meta?.color }}>{fmtMoney(getMontoTipo(liq, tipo))}</span>
-            </div>
-          ))}
+        {/* Lista con checkboxes */}
+        <div style={{ border: `1px solid ${T.border}`, borderRadius: 6, marginBottom: 16, maxHeight: 180, overflowY: "auto" }}>
+          {liqs.map((liq, i) => {
+            const checked = selec.has(liq.legajo_id);
+            return (
+              <label key={liq.legajo_id} style={{
+                display: "flex", alignItems: "center", gap: 10,
+                padding: "7px 10px", cursor: "pointer", fontSize: 13,
+                borderBottom: i < liqs.length - 1 ? `1px solid ${T.border}` : "none",
+                background: checked ? "#f0fdf4" : "#fff",
+              }}>
+                <input type="checkbox" checked={checked} onChange={() => toggleSelec(liq.legajo_id)}
+                  style={{ accentColor: T.green, width: 14, height: 14, cursor: "pointer" }} />
+                <span style={{ flex: 1, color: T.text }}>{liq.legajo_nombre}</span>
+                <span style={{ fontWeight: 700, color: checked ? (meta?.color || T.text) : T.dim }}>
+                  {fmtMoney(getMontoTipo(liq, tipo))}
+                </span>
+              </label>
+            );
+          })}
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* Fecha */}
           <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>Fecha</label>
-            <input style={inputStyle} type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)} />
+            <LBL>Fecha</LBL>
+            <input style={iStyle} type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)} />
           </div>
-          {tipo !== "efectivo" && (
+
+          {/* Sociedad (solo para transferencia — deposito/efectivo muestran badge fijo) */}
+          {mostrarSociedad && (
             <div>
-              <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>Cuenta bancaria</label>
-              <input style={inputStyle} value={form.cuenta_bancaria} onChange={e => set("cuenta_bancaria", e.target.value)} placeholder="Nombre de la cuenta" />
+              <LBL>Sociedad que transfiere</LBL>
+              <select style={iStyle} value={form.sociedad_id} onChange={e => { set("sociedad_id", e.target.value); set("cuenta_id", ""); }}>
+                <option value="">— Seleccioná —</option>
+                {sociedades.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+              </select>
             </div>
           )}
-          {tipo === "transferencia" && (
-            <div>
-              <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>Sociedad que transfiere</label>
-              <input style={inputStyle} value={form.sociedad_id} onChange={e => set("sociedad_id", e.target.value)} placeholder="ej: beta, nako, hektor…" />
-            </div>
-          )}
+
+          {/* Badge sociedad fija (deposito / efectivo) */}
           {socFija && (
-            <div style={{ fontSize: 11, color: T.muted, background: T.bg, borderRadius: 5, padding: "6px 10px" }}>
-              Sociedad: <strong>Beta</strong>
+            <div style={{ fontSize: 12, color: T.muted, background: T.bg, borderRadius: 5, padding: "6px 10px" }}>
+              Sociedad: <strong style={{ color: T.text }}>Beta</strong>
+            </div>
+          )}
+
+          {/* Cuenta bancaria */}
+          {mostrarCuenta && (
+            <div>
+              <LBL>Cuenta bancaria</LBL>
+              {loadingMeta
+                ? <div style={{ fontSize: 12, color: T.muted }}>Cargando cuentas…</div>
+                : <select style={iStyle} value={form.cuenta_id} onChange={e => set("cuenta_id", e.target.value)}>
+                    <option value="">— Seleccioná —</option>
+                    {cuentasFiltradas.map(c => (
+                      <option key={c.id} value={c.id}>{c.nombre}{c.moneda !== "ARS" ? ` (${c.moneda})` : ""}</option>
+                    ))}
+                  </select>
+              }
             </div>
           )}
         </div>
 
-        <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+        <div style={{ display: "flex", gap: 8, marginTop: 18, justifyContent: "flex-end" }}>
           <button onClick={onClose} style={BTN_SECONDARY}>Cancelar</button>
-          <button onClick={handleSave} disabled={saving} style={{
-            background: saving ? T.dim : T.green, color: "#fff", border: "none",
+          <button onClick={handleSave} disabled={saving || !liqsSelec.length} style={{
+            background: (saving || !liqsSelec.length) ? T.dim : T.green, color: "#fff", border: "none",
             borderRadius: 7, padding: "7px 16px", fontSize: 13, fontWeight: 600,
-            cursor: saving ? "not-allowed" : "pointer",
+            cursor: (saving || !liqsSelec.length) ? "not-allowed" : "pointer",
           }}>
-            {saving ? "Procesando…" : `Confirmar ${liqs.length} pago${liqs.length !== 1 ? "s" : ""}`}
+            {saving ? "Procesando…" : `Confirmar ${liqsSelec.length} pago${liqsSelec.length !== 1 ? "s" : ""}`}
           </button>
         </div>
       </div>
