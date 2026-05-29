@@ -1020,6 +1020,7 @@ function ModalPagoHQ({ mes, anio, liq, onClose, onSaved }) {
     tipo_componente: "haberes",
     monto:           liq?.monto_haberes ?? "",
     fecha:           new Date().toISOString().slice(0, 10),
+    sociedad_id:     "",   // solo para transferencia
     cuenta_id:       "",
   });
   const [cuentas,     setCuentas]     = useState([]);
@@ -1035,11 +1036,22 @@ function ModalPagoHQ({ mes, anio, liq, onClose, onSaved }) {
       .finally(() => setLoadingCtas(false));
   }, []);
 
+  // Sociedad que determina las cuentas disponibles según el componente
+  const socFiltro = useMemo(() => {
+    if (form.tipo_componente === "haberes")  return liq?.sociedad_id ?? "";
+    if (form.tipo_componente === "deposito") return "beta";
+    if (form.tipo_componente === "efectivo") return null;   // sin cuenta
+    return form.sociedad_id;                                // transferencia: el usuario elige
+  }, [form.tipo_componente, form.sociedad_id, liq?.sociedad_id]);
+
+  const cuentasFiltradas = useMemo(() =>
+    socFiltro ? cuentas.filter(c => c.sociedad === socFiltro) : [],
+  [cuentas, socFiltro]);
+
   const handleTipo = (tipo) => {
     const ef = Math.max(0, (liq?.sueldo_total_legajo || 0) - (liq?.monto_haberes || 0) - (liq?.monto_deposito || 0) - (liq?.monto_transferencia || 0));
     const montos = { haberes: liq?.monto_haberes, deposito: liq?.monto_deposito, transferencia: liq?.monto_transferencia, efectivo: ef || "" };
-    set("tipo_componente", tipo);
-    if (montos[tipo]) set("monto", montos[tipo]);
+    setForm(f => ({ ...f, tipo_componente: tipo, cuenta_id: "", sociedad_id: "", ...(montos[tipo] ? { monto: montos[tipo] } : {}) }));
   };
 
   const handleSave = async () => {
@@ -1097,14 +1109,35 @@ function ModalPagoHQ({ mes, anio, liq, onClose, onSaved }) {
             <LBL>Fecha</LBL>
             <input style={iStyle} type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)} />
           </div>
+          {/* Sociedad que transfiere — solo para transferencia */}
+          {form.tipo_componente === "transferencia" && (
+            <div>
+              <LBL>Sociedad que transfiere</LBL>
+              <select style={iStyle} value={form.sociedad_id}
+                onChange={e => setForm(f => ({ ...f, sociedad_id: e.target.value, cuenta_id: "" }))}>
+                <option value="">— Seleccioná —</option>
+                {sociedades.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+              </select>
+            </div>
+          )}
+
+          {/* Badge sociedad fija para depósito */}
+          {form.tipo_componente === "deposito" && (
+            <div style={{ fontSize: 12, color: T.muted, background: T.bg, borderRadius: 5, padding: "6px 10px" }}>
+              Sociedad: <strong style={{ color: T.text }}>Beta</strong>
+            </div>
+          )}
+
+          {/* Cuenta bancaria filtrada — no aplica para efectivo */}
           {form.tipo_componente !== "efectivo" && (
             <div>
               <LBL>Cuenta bancaria</LBL>
               {loadingCtas
                 ? <div style={{ fontSize: 12, color: T.muted }}>Cargando…</div>
-                : <select style={iStyle} value={form.cuenta_id} onChange={e => set("cuenta_id", e.target.value)}>
+                : <select style={iStyle} value={form.cuenta_id} onChange={e => set("cuenta_id", e.target.value)}
+                    disabled={form.tipo_componente === "transferencia" && !form.sociedad_id}>
                     <option value="">— Seleccioná —</option>
-                    {cuentas.map(c => {
+                    {cuentasFiltradas.map(c => {
                       const soc = sociedades.find(s => s.id === c.sociedad)?.nombre ?? c.sociedad;
                       const mon = c.moneda !== "ARS" ? ` (${c.moneda})` : "";
                       return <option key={c.id} value={c.id}>{soc} — {c.nombre}{mon}</option>;
