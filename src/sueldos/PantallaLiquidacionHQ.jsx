@@ -106,10 +106,13 @@ export default function PantallaLiquidacionHQ() {
       const totalRend     = novsMias.filter(n => n.tipo === "rendicion").reduce((s, n) => s + n.monto, 0);
       const totalAnticipo = novsMias.filter(n => n.tipo === "anticipo").reduce((s, n) => s + n.monto, 0);
       const totalPagado   = pagosMios.reduce((s, p) => s + p.monto, 0);
-      const total_bruto   = (liq.monto_haberes || 0) + (liq.monto_monotributo || 0) + (liq.monto_efectivo || 0) + totalNovExtra + totalRend - totalAnticipo;
+      const sueldo_total_legajo = leg?.sueldo_total || 0;
+      // Efectivo siempre es el resto (por si la liquidación fue guardada con valores viejos)
+      const efectivo_real = Math.max(0, sueldo_total_legajo - (liq.monto_haberes || 0) - (liq.monto_monotributo || 0));
+      const total_bruto   = (liq.monto_haberes || 0) + (liq.monto_monotributo || 0) + efectivo_real + totalNovExtra + totalRend - totalAnticipo;
       return {
         ...liq,
-        sueldo_total_legajo: leg?.sueldo_total || 0,
+        sueldo_total_legajo,
         blanco_neto_legajo:  leg?.blanco_neto  || 0,
         novedades: novsMias, pagos: pagosMios,
         total_bruto, total_pagado: totalPagado,
@@ -392,10 +395,15 @@ function FilaHQ({ liq, idx, editando, ownerStyle, onEditar, onCancelarEdicion, o
         <td style={tdStyle({ textAlign: "right", color: liq.monto_monotributo > 0 ? "#0369a1" : "#94a3b8" })}>
           {liq.monto_monotributo > 0 ? fmtMoney(liq.monto_monotributo) : "—"}
         </td>
-        {/* Efectivo */}
-        <td style={tdStyle({ textAlign: "right", color: liq.monto_efectivo > 0 ? "#ca8a04" : "#94a3b8" })}>
-          {liq.monto_efectivo > 0 ? fmtMoney(liq.monto_efectivo) : "—"}
-        </td>
+        {/* Efectivo: siempre el resto de sueldo_total */}
+        {(() => {
+          const ef = Math.max(0, (liq.sueldo_total_legajo || 0) - (liq.monto_haberes || 0) - (liq.monto_monotributo || 0));
+          return (
+            <td style={tdStyle({ textAlign: "right", color: ef > 0 ? "#ca8a04" : "#94a3b8" })}>
+              {ef > 0 ? fmtMoney(ef) : "—"}
+            </td>
+          );
+        })()}
         {/* Novedades */}
         <td style={tdStyle({ textAlign: "right" })}>
           {novExtraTotal !== 0
