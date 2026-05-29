@@ -587,11 +587,11 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago })
       <thead>
         <tr>
           <th style={TH()}>Nombre</th>
+          <th style={TH({ textAlign: "right" })}>Total</th>
           <th style={TH({ textAlign: "right" })}>Haberes</th>
           <th style={TH({ textAlign: "right" })}>Depósito</th>
           <th style={TH({ textAlign: "right" })}>Transferencia</th>
           <th style={TH({ textAlign: "right" })}>Efectivo</th>
-          <th style={TH({ textAlign: "right" })}>Total</th>
           <th style={TH({ textAlign: "right" })}>Pagado</th>
           <th style={TH({ textAlign: "right" })}>Pendiente</th>
           <th style={TH()}></th>
@@ -611,6 +611,7 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago })
                   </div>
                 )}
               </td>
+              <td style={TD({ textAlign: "right", fontWeight: 700, color: T.blue })}>{fmtMoney(liq.total_bruto)}</td>
               <td style={TD({ textAlign: "right" })}>{fmtMoney(liq.monto_haberes)}</td>
               <td style={TD({ textAlign: "right", color: liq.monto_deposito > 0 ? "#0369a1" : T.dim })}>
                 {liq.monto_deposito > 0 ? fmtMoney(liq.monto_deposito) : "—"}
@@ -621,7 +622,6 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago })
               <td style={TD({ textAlign: "right", color: efectivo > 0 ? T.yellow : T.dim })}>
                 {efectivo > 0 ? fmtMoney(efectivo) : "—"}
               </td>
-              <td style={TD({ textAlign: "right", fontWeight: 700, color: T.blue })}>{fmtMoney(liq.total_bruto)}</td>
               <td style={TD({ textAlign: "right", color: T.green })}>{fmtMoney(liq.total_pagado)}</td>
               <td style={TD({ textAlign: "right", fontWeight: 600, color: pendiente > 0 ? T.red : T.green })}>
                 {fmtMoney(pendiente)}
