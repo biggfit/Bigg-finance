@@ -323,18 +323,21 @@ function FilaHQ({ liq, idx, editando, ownerStyle, onEditar, onCancelarEdicion, o
     }
   }, [editando]);
 
-  // Calcular nuevo total cuando cambia el %
-  const totalLegajo = liq.sueldo_total_legajo || (liq.monto_haberes || 0) + (liq.monto_efectivo || 0);
-  const nuevoTotal  = pct !== "" ? redondear(totalLegajo * (1 + parseFloat(pct) / 100)) : null;
+  // Total de referencia: con % aplicado o el del legajo
+  const totalLegajo  = liq.sueldo_total_legajo || (liq.monto_haberes || 0) + (liq.monto_efectivo || 0);
+  const nuevoTotal   = pct !== "" ? redondear(totalLegajo * (1 + parseFloat(pct) / 100)) : null;
+  const targetTotal  = nuevoTotal ?? totalLegajo;
 
-  // Cuando cambia el %, distribuir el nuevo total manteniendo haberes y ajustando efectivo
+  // Efectivo siempre es el resto: target - haberes - monotrib
+  const efectivoAuto = Math.max(0, targetTotal - (draft.monto_haberes || 0) - (draft.monto_monotributo || 0));
+
+  // Cuando cambia el %, actualizar draft con nuevo efectivo
   useEffect(() => {
-    if (nuevoTotal == null || !editando) return;
-    const haberes = draft.monto_haberes || 0;
+    if (!editando) return;
     setDraft(d => ({
       ...d,
-      monto_efectivo: Math.max(0, nuevoTotal - haberes - (d.monto_monotributo || 0)),
-      nuevo_total: nuevoTotal,
+      monto_efectivo: Math.max(0, targetTotal - (d.monto_haberes || 0) - (d.monto_monotributo || 0)),
+      nuevo_total: nuevoTotal ?? undefined,
     }));
   }, [nuevoTotal]);
 
@@ -342,14 +345,14 @@ function FilaHQ({ liq, idx, editando, ownerStyle, onEditar, onCancelarEdicion, o
     if (savingRef.current) return;
     savingRef.current = true; setSaving(true);
     try {
-      await onSaved(liq, draft, actualizarLegajo);
+      await onSaved(liq, { ...draft, monto_efectivo: efectivoAuto }, actualizarLegajo);
     } catch (e) {
       alert("Error: " + e.message);
       setSaving(false);
     } finally { savingRef.current = false; }
   };
 
-  const totalFila    = (draft.monto_haberes || 0) + (draft.monto_monotributo || 0) + (draft.monto_efectivo || 0);
+  const totalFila    = (draft.monto_haberes || 0) + (draft.monto_monotributo || 0) + efectivoAuto;
   const pendiente    = liq.pendiente;
   const novExtraTotal = (liq.total_novedades_extra || 0) + (liq.total_rendiciones || 0) - (liq.total_anticipos || 0);
 
@@ -382,7 +385,7 @@ function FilaHQ({ liq, idx, editando, ownerStyle, onEditar, onCancelarEdicion, o
           )}
         </td>
         {/* Sueldo total */}
-        <td style={tdStyle({ textAlign: "right", fontWeight: 600, color: "#64748b" })}>{fmtMoney(liq.sueldo_total_legajo)}</td>
+        <td style={tdStyle({ textAlign: "right", fontWeight: 700, color: "#2563eb" })}>{fmtMoney(liq.sueldo_total_legajo)}</td>
         {/* Haberes */}
         <td style={tdStyle({ textAlign: "right" })}>{fmtMoney(liq.monto_haberes)}</td>
         {/* Monotrib */}
@@ -476,22 +479,40 @@ function FilaHQ({ liq, idx, editando, ownerStyle, onEditar, onCancelarEdicion, o
               {[
                 { k: "monto_haberes",     label: "Haberes" },
                 { k: "monto_monotributo", label: "Monotrib." },
-                { k: "monto_efectivo",    label: "Efectivo" },
               ].map(({ k, label }) => (
                 <div key={k}>
                   <div style={{ fontSize: 11, color: "#64748b", fontWeight: 600, marginBottom: 4 }}>{label}</div>
                   <input
                     type="number"
                     value={draft[k] ?? 0}
-                    onChange={e => setDraft(d => ({ ...d, [k]: parseFloat(e.target.value) || 0 }))}
+                    onChange={e => {
+                      const val = parseFloat(e.target.value) || 0;
+                      setDraft(d => {
+                        const next = { ...d, [k]: val };
+                        next.monto_efectivo = Math.max(0, targetTotal - (next.monto_haberes || 0) - (next.monto_monotributo || 0));
+                        return next;
+                      });
+                    }}
                     style={inputTd}
                   />
                 </div>
               ))}
 
+              {/* Efectivo: derivado automáticamente */}
               <div>
-                <div style={{ fontSize: 11, color: "#64748b", fontWeight: 600, marginBottom: 4 }}>Nuevo total</div>
-                <div style={{ fontSize: 14, fontWeight: 700 }}>{fmtMoney(totalFila)}</div>
+                <div style={{ fontSize: 11, color: "#ca8a04", fontWeight: 600, marginBottom: 4 }}>Efectivo</div>
+                <div style={{
+                  ...inputTd, display: "flex", alignItems: "center", justifyContent: "flex-end",
+                  background: "#fefce8", border: "1px solid #fde68a", color: "#92400e",
+                  fontWeight: 700, height: 28, boxSizing: "border-box",
+                }}>
+                  {fmtMoney(efectivoAuto)}
+                </div>
+              </div>
+
+              <div>
+                <div style={{ fontSize: 11, color: "#2563eb", fontWeight: 600, marginBottom: 4 }}>= Total</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#2563eb" }}>{fmtMoney(targetTotal)}</div>
               </div>
 
               <div style={{ width: 1, height: 40, background: "#bfdbfe", alignSelf: "center" }} />
