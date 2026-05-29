@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import * as XLSX from "xlsx";
 import {
   fetchLegajos, fetchLiquidaciones, saveLiquidacion, updateLegajo,
   fetchPagos, appendPago, ROLES_HQ,
@@ -122,6 +123,8 @@ export default function PantallaLiquidacionHQ() {
         ...liq,
         sueldo_total_legajo,
         blanco_neto_legajo: leg?.blanco_neto || 0,
+        cbu:   leg?.cbu   || "",
+        banco: leg?.banco || "",
         pagos: pagosMios,
         total_bruto,
         total_pagado: totalPagado,
@@ -261,6 +264,7 @@ export default function PantallaLiquidacionHQ() {
 
           {paso === 3 && (
             <PasoPagos
+              mes={mes} anio={anio}
               liqStaff={liqStaff} liqOwners={liqOwners}
               onAtras={() => setPaso(2)}
               onRegistrarPago={setShowPago}
@@ -537,9 +541,47 @@ function PasoPago({ liqStaff, liqOwners, sueldosDraft, pagoDraft, onChangePago, 
   );
 }
 
+// ── Helpers de exportación Excel (formato Galicia Office) ─────────────────────
+
+const GALICIA_HEADERS = [
+  "CBU/CVU/Alias/Nro cuenta            ",
+  "Monto",
+  "Concepto",
+  "Descripción\r\n(opcional)",
+  "Email destinatario\r\n(opcional)",
+  "Mensaje del email\r\n(opcional)",
+];
+
+function descargarExcelGalicia(filas, nombreArchivo) {
+  const ws = XLSX.utils.aoa_to_sheet([GALICIA_HEADERS, ...filas]);
+  // Ancho de columnas aproximado
+  ws["!cols"] = [{ wch: 28 }, { wch: 12 }, { wch: 32 }, { wch: 14 }, { wch: 24 }, { wch: 24 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Formulario");
+  XLSX.writeFile(wb, nombreArchivo);
+}
+
+function exportarHaberes(liqs, mes, anio) {
+  const desc = `Sueldo ${String(mes).padStart(2, "0")}/${anio}`.slice(0, 12);
+  const filas = liqs
+    .filter(l => (l.monto_haberes || 0) > 0 && l.cbu)
+    .map(l => [l.cbu, l.monto_haberes, "acreditamiento de haberes", desc, "", ""]);
+  if (!filas.length) { alert("No hay empleados con Haberes y CBU cargado."); return; }
+  descargarExcelGalicia(filas, `Haberes_HQ_${String(mes).padStart(2,"0")}_${anio}.xlsx`);
+}
+
+function exportarDeposito(liqs, mes, anio) {
+  const desc = `Dep ${String(mes).padStart(2, "0")}/${anio}`.slice(0, 12);
+  const filas = liqs
+    .filter(l => (l.monto_deposito || 0) > 0 && l.cbu)
+    .map(l => [l.cbu, l.monto_deposito, "varios", desc, "", ""]);
+  if (!filas.length) { alert("No hay empleados con Depósito y CBU cargado."); return; }
+  descargarExcelGalicia(filas, `Deposito_HQ_${String(mes).padStart(2,"0")}_${anio}.xlsx`);
+}
+
 // ── Paso 3: Registrar pagos ───────────────────────────────────────────────────
 
-function PasoPagos({ liqStaff, liqOwners, onAtras, onRegistrarPago }) {
+function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago }) {
   const renderTabla = (liqs) => (
     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginBottom: 8 }}>
       <thead>
@@ -601,9 +643,17 @@ function PasoPagos({ liqStaff, liqOwners, onAtras, onRegistrarPago }) {
     </table>
   );
 
-  const totalBruto  = [...liqStaff, ...liqOwners].reduce((s, l) => s + l.total_bruto,  0);
-  const totalPagado = [...liqStaff, ...liqOwners].reduce((s, l) => s + l.total_pagado, 0);
+  const todos       = [...liqStaff, ...liqOwners];
+  const totalBruto  = todos.reduce((s, l) => s + l.total_bruto,  0);
+  const totalPagado = todos.reduce((s, l) => s + l.total_pagado, 0);
   const totalPend   = totalBruto - totalPagado;
+
+  const BTN_EXPORT = (color) => ({
+    display: "flex", alignItems: "center", gap: 6,
+    border: `1px solid ${color}`, background: "#fff", borderRadius: 7,
+    padding: "7px 14px", fontSize: 12, fontWeight: 600,
+    cursor: "pointer", color, fontFamily: T.font,
+  });
 
   return (
     <div>
@@ -619,6 +669,16 @@ function PasoPagos({ liqStaff, liqOwners, onAtras, onRegistrarPago }) {
             <div style={{ fontSize: 16, fontWeight: 700, color }}>{fmtMoney(value)}</div>
           </div>
         ))}
+      </div>
+
+      {/* Botones de exportación */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <button style={BTN_EXPORT("#16a34a")} onClick={() => exportarHaberes(todos, mes, anio)}>
+          📥 Excel Haberes (banco)
+        </button>
+        <button style={BTN_EXPORT("#0369a1")} onClick={() => exportarDeposito(todos, mes, anio)}>
+          📥 Excel Depósito (financiera)
+        </button>
       </div>
 
       {liqStaff.length > 0 && (
