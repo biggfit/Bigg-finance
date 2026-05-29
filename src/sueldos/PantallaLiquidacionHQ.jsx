@@ -98,10 +98,11 @@ export default function PantallaLiquidacionHQ() {
         sociedad_id: leg.sociedad_id, sociedad_nombre: leg.sociedad_nombre,
         sede_id: leg.sede_id, sede_nombre: leg.sede_nombre,
         rol: leg.rol, tipo_contratacion: leg.tipo_contratacion,
-        sueldo_base:      leg.sueldo_total || leg.blanco_neto,
-        monto_haberes:    leg.blanco_neto,
-        monto_monotributo: 0,
-        monto_efectivo:   Math.max(0, (leg.sueldo_total || 0) - (leg.blanco_neto || 0)),
+        sueldo_base:         leg.sueldo_total || leg.blanco_neto,
+        monto_haberes:       leg.blanco_neto,
+        monto_deposito:      0,
+        monto_transferencia: 0,
+        monto_efectivo:      Math.max(0, (leg.sueldo_total || 0) - (leg.blanco_neto || 0)),
         estado: "borrador",
       })));
       await load();
