@@ -370,15 +370,16 @@ function FilaHQ({ liq, idx, editando, ownerStyle, onEditar, onCancelarEdicion, o
         {/* Nombre */}
         <td style={tdStyle()}>
           <div style={{ fontWeight: 600 }}>{liq.legajo_nombre}</div>
-          <div style={{ fontSize: 11, marginTop: 2 }}>
-            <span style={{
-              background: ownerStyle ? "#f3e8ff" : "#dbeafe",
-              color: ownerStyle ? "#7c3aed" : "#1e40af",
-              padding: "1px 5px", borderRadius: 3, fontWeight: 600,
-            }}>{liq.rol}</span>
-            {liq.tipo_contratacion === "monotributista" &&
-              <span style={{ marginLeft: 4, background: "#f3e8ff", color: "#7c3aed", padding: "1px 5px", borderRadius: 3, fontWeight: 600, fontSize: 10 }}>M</span>}
-          </div>
+          {(ownerStyle || liq.tipo_contratacion === "monotributista") && (
+            <div style={{ fontSize: 11, marginTop: 2 }}>
+              {ownerStyle && (
+                <span style={{ background: "#f3e8ff", color: "#7c3aed", padding: "1px 5px", borderRadius: 3, fontWeight: 600 }}>Owner</span>
+              )}
+              {liq.tipo_contratacion === "monotributista" && (
+                <span style={{ marginLeft: ownerStyle ? 4 : 0, background: "#f3e8ff", color: "#7c3aed", padding: "1px 5px", borderRadius: 3, fontWeight: 600, fontSize: 10 }}>M</span>
+              )}
+            </div>
+          )}
         </td>
         {/* Sociedad */}
         <td style={tdStyle({ color: "#64748b" })}>{liq.sociedad_nombre || "—"}</td>
@@ -566,7 +567,7 @@ function ModalNovedad({ mes, anio, legajo, onClose, onSaved }) {
           )}
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
-          <button onClick={onClose} style={{ border: "1px solid #e2e8f0", background: "#fff", borderRadius: 7, padding: "7px 14px", fontSize: 13, cursor: "pointer" }}>Cancelar</button>
+          <button onClick={onClose} style={{ border: "1px solid #94a3b8", background: "#fff", borderRadius: 7, padding: "7px 14px", fontSize: 13, cursor: "pointer", color: "#1e293b" }}>Cancelar</button>
           <button onClick={handleSave} disabled={saving} style={{ background: saving ? "#94a3b8" : "#2563eb", color: "#fff", border: "none", borderRadius: 7, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: saving ? "not-allowed" : "pointer" }}>
             {saving ? "Guardando…" : "Agregar"}
           </button>
@@ -642,7 +643,7 @@ function ModalPagoHQ({ mes, anio, liq, onClose, onSaved }) {
           <div><label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 3 }}>Concepto (opcional)</label><input style={inputStyle} value={form.concepto} onChange={e => set("concepto", e.target.value)} /></div>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
-          <button onClick={onClose} style={{ border: "1px solid #e2e8f0", background: "#fff", borderRadius: 7, padding: "7px 14px", fontSize: 13, cursor: "pointer" }}>Cancelar</button>
+          <button onClick={onClose} style={{ border: "1px solid #94a3b8", background: "#fff", borderRadius: 7, padding: "7px 14px", fontSize: 13, cursor: "pointer", color: "#1e293b" }}>Cancelar</button>
           <button onClick={handleSave} disabled={saving} style={{ background: saving ? "#94a3b8" : "#16a34a", color: "#fff", border: "none", borderRadius: 7, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: saving ? "not-allowed" : "pointer" }}>
             {saving ? "Procesando…" : "Registrar y enviar a Tesorería"}
           </button>
