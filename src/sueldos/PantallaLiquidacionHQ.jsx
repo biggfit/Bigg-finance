@@ -274,7 +274,7 @@ function TablaHQ({ titulo, liqs, totales, editandoId, onEditar, onCancelarEdicio
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr>
-              {["Nombre","Sueldo total","Haberes","Monotrib.","Efectivo","Novedades","Total","Pagado","Pendiente",""].map(h => (
+              {["Nombre","Sueldo total","Haberes","Depósito","Efectivo","Novedades","Total","Pagado","Pendiente",""].map(h => (
                 <th key={h} style={thStyle}>{h}</th>
               ))}
             </tr>
@@ -388,8 +388,8 @@ function FilaHQ({ liq, idx, editando, ownerStyle, onEditar, onCancelarEdicion, o
         <td style={tdStyle({ textAlign: "right", fontWeight: 700, color: "#2563eb" })}>{fmtMoney(liq.sueldo_total_legajo)}</td>
         {/* Haberes */}
         <td style={tdStyle({ textAlign: "right" })}>{fmtMoney(liq.monto_haberes)}</td>
-        {/* Monotrib */}
-        <td style={tdStyle({ textAlign: "right", color: liq.monto_monotributo > 0 ? "#7c3aed" : "#94a3b8" })}>
+        {/* Depósito */}
+        <td style={tdStyle({ textAlign: "right", color: liq.monto_monotributo > 0 ? "#0369a1" : "#94a3b8" })}>
           {liq.monto_monotributo > 0 ? fmtMoney(liq.monto_monotributo) : "—"}
         </td>
         {/* Efectivo */}
@@ -478,7 +478,7 @@ function FilaHQ({ liq, idx, editando, ownerStyle, onEditar, onCancelarEdicion, o
               {/* Edición de componentes */}
               {[
                 { k: "monto_haberes",     label: "Haberes" },
-                { k: "monto_monotributo", label: "Monotrib." },
+                { k: "monto_monotributo", label: "Depósito" },
               ].map(({ k, label }) => (
                 <div key={k}>
                   <div style={{ fontSize: 11, color: "#64748b", fontWeight: 600, marginBottom: 4 }}>{label}</div>
@@ -651,7 +651,7 @@ function ModalPagoHQ({ mes, anio, liq, onClose, onSaved }) {
             <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b", display: "block", marginBottom: 3 }}>Componente</label>
             <select style={inputStyle} value={form.tipo_componente} onChange={e => handleTipo(e.target.value)}>
               <option value="haberes">Haberes (recibo / transferencia)</option>
-              <option value="monotributista">Factura monotributo</option>
+              <option value="monotributista">Depósito bancario</option>
               <option value="efectivo">Efectivo</option>
               <option value="rendicion">Rendición de gastos</option>
             </select>
