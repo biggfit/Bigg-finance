@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import {
   fetchLegajos, appendLegajo, updateLegajo, deleteLegajo,
   ROLES_SEDES, ROLES_HQ, TIPOS_CONTRATACION,
+  fetchSociedadesNumbers, fetchCentrosCostoNumbers,
 } from "../lib/sueldosApi";
 
 const T = {
@@ -52,19 +53,30 @@ function tipoChip(tipo) {
 }
 
 export default function PantallaLegajos() {
-  const [legajos, setLegajos]   = useState([]);
-  const [loading, setLoading]   = useState(true);
-  const [showForm, setShowForm] = useState(false);
-  const [editing, setEditing]   = useState(null);   // legajo objeto o null
-  const [filtroRol, setFiltroRol] = useState("todos");
+  const [legajos,    setLegajos]    = useState([]);
+  const [sociedades, setSociedades] = useState([]);
+  const [centrosCosto, setCentrosCosto] = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [showForm,   setShowForm]   = useState(false);
+  const [editing,    setEditing]    = useState(null);
+  const [filtroRol,  setFiltroRol]  = useState("todos");
   const [filtroActivo, setFiltroActivo] = useState("activos");
-  const [busqueda, setBusqueda] = useState("");
+  const [busqueda,   setBusqueda]   = useState("");
 
   useEffect(() => { load(); }, []);
 
   async function load() {
     setLoading(true);
-    try { setLegajos(await fetchLegajos()); } finally { setLoading(false); }
+    try {
+      const [legs, socs, ccs] = await Promise.all([
+        fetchLegajos(),
+        fetchSociedadesNumbers(),
+        fetchCentrosCostoNumbers(),
+      ]);
+      setLegajos(legs);
+      setSociedades(socs);
+      setCentrosCosto(ccs);
+    } finally { setLoading(false); }
   }
 
   const visibles = legajos.filter(l => {
@@ -88,6 +100,8 @@ export default function PantallaLegajos() {
     return (
       <FormLegajo
         initial={editing ?? FORM_VACIO}
+        sociedades={sociedades}
+        centrosCosto={centrosCosto}
         onClose={() => setShowForm(false)}
         onSaved={async () => { setShowForm(false); await load(); }}
       />
@@ -150,7 +164,7 @@ export default function PantallaLegajos() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: T.bg }}>
-                {["Nombre", "Rol", "Contratación", "Sociedad", "Sede", "Blanco neto", "Ingreso", "Alta", ""].map(h => (
+                {["Nombre", "Rol", "Contratación", "Sociedad", "Centro de costo", "Blanco neto", "Ingreso", "Alta", ""].map(h => (
                   <th key={h} style={{
                     padding: "8px 12px", textAlign: "left", fontWeight: 600,
                     color: T.muted, fontSize: 11, letterSpacing: ".04em",
@@ -208,13 +222,36 @@ export default function PantallaLegajos() {
 
 // ── Formulario ────────────────────────────────────────────────────────────────
 
-function FormLegajo({ initial, onClose, onSaved }) {
+function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
   const [form, setForm]     = useState({ ...FORM_VACIO, ...initial });
   const [saving, setSaving] = useState(false);
   const savingRef           = useRef(false);
   const esEdicion           = !!initial?.id;
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  // Al cambiar sociedad, limpiar sede si ya no pertenece a esa sociedad
+  const handleSociedad = (socId) => {
+    const soc = sociedades.find(s => s.id === socId);
+    set("sociedad_id",     socId);
+    set("sociedad_nombre", soc?.nombre ?? socId);
+    set("sede_id",         "");
+    set("sede_nombre",     "");
+  };
+
+  const handleSede = (ccId) => {
+    const cc = centrosCosto.find(c => c.id === ccId);
+    set("sede_id",     ccId);
+    set("sede_nombre", cc?.nombre ?? ccId);
+  };
+
+  // Centros de costo filtrados por la sociedad seleccionada
+  const ccFiltrados = useMemo(() => {
+    if (!form.sociedad_id) return centrosCosto;
+    return centrosCosto.filter(c =>
+      !c.sociedad || c.sociedad === form.sociedad_id || c.sociedad === form.sociedad_nombre
+    );
+  }, [centrosCosto, form.sociedad_id, form.sociedad_nombre]);
 
   const handleSave = async () => {
     if (savingRef.current) return;
@@ -279,22 +316,59 @@ function FormLegajo({ initial, onClose, onSaved }) {
 
         {/* Tipo contratación */}
         <div>
-          <label style={labelStyle}>Tipo de contratación</label>
+          <label style={labelStyle}>Relación con la empresa</label>
           <select style={inputStyle} value={form.tipo_contratacion} onChange={e => set("tipo_contratacion", e.target.value)}>
             {TIPOS_CONTRATACION.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
           </select>
+          <span style={{ fontSize: 11, color: T.dim, marginTop: 3, display: "block" }}>
+            {form.tipo_contratacion === "monotributista"
+              ? "La empresa recibe y paga su factura como egreso"
+              : "Relación laboral formal — genera recibo de sueldo y cargas sociales"}
+          </span>
         </div>
 
         {/* Sociedad */}
         <div>
-          <label style={labelStyle}>Sociedad (nombre)</label>
-          <input style={inputStyle} value={form.sociedad_nombre} onChange={e => set("sociedad_nombre", e.target.value)} placeholder="Ej: Hektor" />
+          <label style={labelStyle}>Sociedad</label>
+          <select
+            style={inputStyle}
+            value={form.sociedad_id}
+            onChange={e => handleSociedad(e.target.value)}
+          >
+            <option value="">— Seleccionar —</option>
+            {sociedades.map(s => (
+              <option key={s.id} value={s.id}>{s.nombre}</option>
+            ))}
+          </select>
         </div>
 
-        {/* Sede */}
+        {/* Sede / Centro de costo */}
         <div>
-          <label style={labelStyle}>Sede principal</label>
-          <input style={inputStyle} value={form.sede_nombre} onChange={e => set("sede_nombre", e.target.value)} placeholder={esHQ ? "HQ" : "Ej: Recoleta"} />
+          <label style={labelStyle}>{esHQ ? "Centro de costo" : "Sede principal"}</label>
+          <select
+            style={inputStyle}
+            value={form.sede_id}
+            onChange={e => handleSede(e.target.value)}
+          >
+            <option value="">— Seleccionar —</option>
+            {ccFiltrados.map(c => (
+              <option key={c.id} value={c.id}>{c.nombre}</option>
+            ))}
+          </select>
+          {ccFiltrados.length === 0 && form.sociedad_id && (
+            <span style={{ fontSize: 11, color: T.dim, marginTop: 3, display: "block" }}>
+              No hay centros de costo para esta sociedad en Numbers.
+            </span>
+          )}
+        </div>
+
+        {/* Sueldo total acordado */}
+        <div>
+          <label style={labelStyle}>Sueldo total acordado (ARS)</label>
+          <input style={inputStyle} type="number" value={form.sueldo_total} onChange={e => set("sueldo_total", e.target.value)} placeholder="0" />
+          <span style={{ fontSize: 11, color: T.dim, marginTop: 3, display: "block" }}>
+            Lo que cobra en total (blanco + efectivo). Actualizalo cuando cambia.
+          </span>
         </div>
 
         {/* Blanco neto */}
@@ -304,6 +378,11 @@ function FormLegajo({ initial, onClose, onSaved }) {
             {!form.blanco_neto && !form.fecha_alta && <span style={{ color: T.dim, fontWeight: 400 }}> — sin blanco ni alta = todo efectivo</span>}
           </label>
           <input style={inputStyle} type="number" value={form.blanco_neto} onChange={e => set("blanco_neto", e.target.value)} placeholder="0" />
+          {form.sueldo_total > 0 && form.blanco_neto > 0 && (
+            <span style={{ fontSize: 11, color: T.muted, marginTop: 3, display: "block" }}>
+              Efectivo implícito: ${Math.max(0, (parseFloat(form.sueldo_total) || 0) - (parseFloat(form.blanco_neto) || 0)).toLocaleString("es-AR")}
+            </span>
+          )}
         </div>
 
         {/* Tarifa hora (solo coaches) */}

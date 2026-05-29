@@ -78,8 +78,9 @@ export async function fetchLegajos() {
     sede_nombre:         r.sede_nombre ?? "",
     rol:                 r.rol ?? "",
     tipo_contratacion:   r.tipo_contratacion ?? "relacion_dependencia",
-    blanco_neto:         Number(r.blanco_neto) || 0,
-    tarifa_hora:         Number(r.tarifa_hora) || 0,
+    blanco_neto:         Number(r.blanco_neto)   || 0,
+    sueldo_total:        Number(r.sueldo_total)  || 0,
+    tarifa_hora:         Number(r.tarifa_hora)   || 0,
     activo:              String(r.activo ?? "true").toLowerCase() !== "false",
     fecha_ingreso:       r.fecha_ingreso ?? "",
     fecha_alta:          r.fecha_alta ?? "",
@@ -366,10 +367,32 @@ export async function pagarCargasSociales({
 
 export const ROLES_SEDES = ["COACH_SENIOR", "COACH", "ENCARGADO", "VENTAS", "LIMPIEZA"];
 export const ROLES_HQ    = ["HQ", "HQ_OWNER"];
+
+// Lo que importa es si la empresa recibe su factura (monotributista) o no.
+// La situación impositiva personal del empleado es irrelevante para el módulo.
 export const TIPOS_CONTRATACION = [
   { id: "relacion_dependencia", label: "Relación de dependencia" },
-  { id: "monotributista",       label: "Monotributista" },
+  { id: "monotributista",       label: "Factura a la empresa (monotributista)" },
 ];
+
+// ── Datos maestros desde BIGG Numbers ────────────────────────────────────────
+
+export async function fetchSociedadesNumbers() {
+  const rows = await get("nb_sociedades", {}, BASE_NB);
+  return (Array.isArray(rows) ? rows : []).map(r => ({
+    id:     r.id ?? r.nombre,
+    nombre: r.nombre ?? r.id,
+  }));
+}
+
+export async function fetchCentrosCostoNumbers() {
+  const rows = await get("nb_centros_costo", {}, BASE_NB);
+  return (Array.isArray(rows) ? rows : []).map(r => ({
+    id:       r.id ?? r.nombre,
+    nombre:   r.nombre ?? r.id,
+    sociedad: r.sociedad ?? "",
+  }));
+}
 
 /** Calcula el total bruto de una liquidación de sedes sumando todos los conceptos. */
 export function calcTotalBruto(liq) {

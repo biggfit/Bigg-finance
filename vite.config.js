@@ -23,6 +23,7 @@ function readEnvLocal() {
 const localEnv   = readEnvLocal();
 const sheetsUrl  = localEnv['VITE_SHEETS_API_URL'];
 const numbersUrl = localEnv['VITE_NUMBERS_API_URL'];
+const sueldosUrl = localEnv['VITE_SUELDOS_API_URL'];
 
 // Inyectar todas las vars de .env.local en process.env para que los handlers
 // de /api/* (que corren en Node dentro de Vite) puedan leerlas con process.env
@@ -89,6 +90,23 @@ export default defineConfig({
             if (!req.url || !req.url.startsWith('/api/numbers')) { next(); return; }
             const qs     = req.url.replace('/api/numbers', '');
             const target = numbersUrl + qs;
+            if (req.method === 'POST') {
+              let body = '';
+              req.on('data', chunk => { body += chunk; });
+              req.on('end',  () => { proxyToSheets(target, 'POST', body, res); });
+            } else {
+              proxyToSheets(target, 'GET', null, res);
+            }
+          });
+        }
+
+        // ── Proxy /api/sueldos → Apps Script BIGG Sueldos ────────────────
+        if (sueldosUrl) {
+          console.log('[sueldos-proxy] Proxy activo →', sueldosUrl);
+          server.middlewares.use((req, res, next) => {
+            if (!req.url || !req.url.startsWith('/api/sueldos')) { next(); return; }
+            const qs     = req.url.replace('/api/sueldos', '');
+            const target = sueldosUrl + qs;
             if (req.method === 'POST') {
               let body = '';
               req.on('data', chunk => { body += chunk; });
