@@ -626,22 +626,24 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago, o
             const todoPagado = hayAlgo && pend.length === 0;
             return (
               <th key={id} style={TH({ textAlign: "right" })}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 5 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4 }}>
                   {label}
-                  {todoPagado
-                    ? <span title="Todos pagados" style={{ fontSize: 11, color: T.green, fontWeight: 700 }}>✓</span>
-                    : hayAlgo && (
-                      <button
-                        onClick={() => setBatchModal({ tipo: id })}
-                        title={`Confirmar pago de ${label}`}
-                        style={{
-                          background: T.green, color: "#fff", border: "none",
-                          borderRadius: 4, padding: "1px 6px", fontSize: 10,
-                          fontWeight: 700, cursor: "pointer", lineHeight: "1.6",
-                          fontFamily: T.font,
-                        }}>✓</button>
-                    )
-                  }
+                  <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20 }}>
+                    {todoPagado
+                      ? <span title="Todos pagados" style={{ fontSize: 11, color: T.green, fontWeight: 700 }}>✓</span>
+                      : hayAlgo
+                        ? <button
+                            onClick={() => setBatchModal({ tipo: id })}
+                            title={`Confirmar pago de ${label}`}
+                            style={{
+                              background: T.green, color: "#fff", border: "none",
+                              borderRadius: 4, padding: "1px 6px", fontSize: 10,
+                              fontWeight: 700, cursor: "pointer", lineHeight: "1.6",
+                              fontFamily: T.font,
+                            }}>✓</button>
+                        : null
+                    }
+                  </span>
                 </div>
               </th>
             );
@@ -665,11 +667,22 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago, o
               {TIPOS_PAGO.map(({ id, color }) => {
                 const monto = montos[id];
                 const paid  = isPaid(liq, id);
-                if (!monto) return <td key={id} style={TD({ textAlign: "right", color: T.dim })}>—</td>;
+                if (!monto) return (
+                  <td key={id} style={TD({ textAlign: "right" })}>
+                    <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
+                      <span style={{ color: T.dim }}>—</span>
+                      <span style={{ width: 20 }} />
+                    </div>
+                  </td>
+                );
                 return (
                   <td key={id} style={TD({ textAlign: "right", color: paid ? T.green : color })}>
-                    {fmtMoney(monto)}
-                    {paid && <span style={{ marginLeft: 4 }}>✓</span>}
+                    <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
+                      {fmtMoney(monto)}
+                      <span style={{ display: "inline-flex", justifyContent: "center", width: 20, fontSize: 11, fontWeight: 700 }}>
+                        {paid ? "✓" : ""}
+                      </span>
+                    </div>
                   </td>
                 );
               })}
