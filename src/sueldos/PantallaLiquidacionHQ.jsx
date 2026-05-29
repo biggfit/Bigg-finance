@@ -115,8 +115,8 @@ export default function PantallaLiquidacionHQ() {
       const pagosMios        = pagos.filter(p => p.legajo_id === liq.legajo_id);
       const totalPagado      = pagosMios.reduce((s, p) => s + p.monto, 0);
       const sueldo_total_legajo = leg?.sueldo_total || 0;
-      const efectivo_real    = Math.max(0, sueldo_total_legajo - (liq.monto_haberes || 0) - (liq.monto_monotributo || 0));
-      const total_bruto      = (liq.monto_haberes || 0) + (liq.monto_monotributo || 0) + efectivo_real;
+      const efectivo_real    = Math.max(0, sueldo_total_legajo - (liq.monto_haberes || 0) - (liq.monto_deposito || 0) - (liq.monto_transferencia || 0));
+      const total_bruto      = (liq.monto_haberes || 0) + (liq.monto_deposito || 0) + (liq.monto_transferencia || 0) + efectivo_real;
       return {
         ...liq,
         sueldo_total_legajo,
@@ -163,8 +163,9 @@ export default function PantallaLiquidacionHQ() {
       liqs.forEach(liq => {
         const prev = liqsPrevMes.find(l => l.legajo_id === liq.legajo_id);
         d[liq.legajo_id] = {
-          monto_haberes:     liq.monto_haberes    || liq.blanco_neto_legajo || 0,
-          monto_monotributo: liq.monto_monotributo || prev?.monto_monotributo || 0,
+          monto_haberes:       liq.monto_haberes       || liq.blanco_neto_legajo  || 0,
+          monto_deposito:      liq.monto_deposito      || prev?.monto_deposito      || 0,
+          monto_transferencia: liq.monto_transferencia || prev?.monto_transferencia || 0,
         };
       });
       return d;
@@ -177,17 +178,19 @@ export default function PantallaLiquidacionHQ() {
     setSaving(true);
     try {
       await Promise.all(liqs.map(liq => {
-        const target = getDraftTotal(liq);
-        const d          = pagoDraft[liq.legajo_id] || {};
-        const haberes    = d.monto_haberes    || 0;
-        const deposito   = d.monto_monotributo || 0;
-        const efectivo   = Math.max(0, target - haberes - deposito);
+        const target       = getDraftTotal(liq);
+        const d            = pagoDraft[liq.legajo_id] || {};
+        const haberes      = d.monto_haberes       || 0;
+        const deposito     = d.monto_deposito      || 0;
+        const transferencia = d.monto_transferencia || 0;
+        const efectivo     = Math.max(0, target - haberes - deposito - transferencia);
         return saveLiquidacion({
           ...liq,
-          sueldo_base:       target,
-          monto_haberes:     haberes,
-          monto_monotributo: deposito,
-          monto_efectivo:    efectivo,
+          sueldo_base:         target,
+          monto_haberes:       haberes,
+          monto_deposito:      deposito,
+          monto_transferencia: transferencia,
+          monto_efectivo:      efectivo,
         });
       }));
       await load();
@@ -450,16 +453,18 @@ function PasoPago({ liqStaff, liqOwners, sueldosDraft, pagoDraft, onChangePago, 
           <th style={TH({ textAlign: "right" })}>Sueldo total</th>
           <th style={TH({ textAlign: "right" })}>Haberes</th>
           <th style={TH({ textAlign: "right" })}>Depósito</th>
+          <th style={TH({ textAlign: "right" })}>Transferencia</th>
           <th style={TH({ textAlign: "right" })}>Efectivo</th>
         </tr>
       </thead>
       <tbody>
         {liqs.map((liq, i) => {
-          const target   = getTarget(liq);
-          const d        = pagoDraft[liq.legajo_id] || {};
-          const haberes  = d.monto_haberes    ?? 0;
-          const deposito = d.monto_monotributo ?? 0;
-          const efectivo = Math.max(0, target - haberes - deposito);
+          const target       = getTarget(liq);
+          const d            = pagoDraft[liq.legajo_id] || {};
+          const haberes      = d.monto_haberes       ?? 0;
+          const deposito     = d.monto_deposito      ?? 0;
+          const transferencia = d.monto_transferencia ?? 0;
+          const efectivo     = Math.max(0, target - haberes - deposito - transferencia);
           return (
             <tr key={liq.id} style={{ background: i % 2 === 0 ? "#fff" : T.bg }}>
               <td style={TD({ fontWeight: 600 })}>{liq.legajo_nombre}</td>
@@ -467,16 +472,21 @@ function PasoPago({ liqStaff, liqOwners, sueldosDraft, pagoDraft, onChangePago, 
               <td style={TD({ textAlign: "right" })}>
                 <input type="number" value={haberes}
                   onChange={e => onChangePago(liq.legajo_id, "monto_haberes", parseFloat(e.target.value) || 0)}
-                  style={INPUT({ width: 110 })} />
+                  style={INPUT({ width: 100 })} />
               </td>
               <td style={TD({ textAlign: "right" })}>
                 <input type="number" value={deposito}
-                  onChange={e => onChangePago(liq.legajo_id, "monto_monotributo", parseFloat(e.target.value) || 0)}
-                  style={INPUT({ width: 110 })} />
+                  onChange={e => onChangePago(liq.legajo_id, "monto_deposito", parseFloat(e.target.value) || 0)}
+                  style={INPUT({ width: 100 })} />
+              </td>
+              <td style={TD({ textAlign: "right" })}>
+                <input type="number" value={transferencia}
+                  onChange={e => onChangePago(liq.legajo_id, "monto_transferencia", parseFloat(e.target.value) || 0)}
+                  style={INPUT({ width: 100 })} />
               </td>
               <td style={TD({ textAlign: "right" })}>
                 <div style={{
-                  display: "inline-block", minWidth: 110, background: "#fefce8",
+                  display: "inline-block", minWidth: 90, background: "#fefce8",
                   border: "1px solid #fde68a", borderRadius: 5, padding: "4px 8px",
                   color: "#92400e", fontWeight: 700, textAlign: "right",
                 }}>
@@ -524,6 +534,7 @@ function PasoPagos({ liqStaff, liqOwners, onAtras, onRegistrarPago }) {
           <th style={TH()}>Nombre</th>
           <th style={TH({ textAlign: "right" })}>Haberes</th>
           <th style={TH({ textAlign: "right" })}>Depósito</th>
+          <th style={TH({ textAlign: "right" })}>Transferencia</th>
           <th style={TH({ textAlign: "right" })}>Efectivo</th>
           <th style={TH({ textAlign: "right" })}>Total</th>
           <th style={TH({ textAlign: "right" })}>Pagado</th>
@@ -533,7 +544,7 @@ function PasoPagos({ liqStaff, liqOwners, onAtras, onRegistrarPago }) {
       </thead>
       <tbody>
         {liqs.map((liq, i) => {
-          const efectivo  = Math.max(0, liq.sueldo_total_legajo - (liq.monto_haberes || 0) - (liq.monto_monotributo || 0));
+          const efectivo  = Math.max(0, liq.sueldo_total_legajo - (liq.monto_haberes || 0) - (liq.monto_deposito || 0) - (liq.monto_transferencia || 0));
           const pendiente = liq.pendiente;
           return (
             <tr key={liq.id} style={{ background: i % 2 === 0 ? "#fff" : T.bg }}>
@@ -546,8 +557,11 @@ function PasoPagos({ liqStaff, liqOwners, onAtras, onRegistrarPago }) {
                 )}
               </td>
               <td style={TD({ textAlign: "right" })}>{fmtMoney(liq.monto_haberes)}</td>
-              <td style={TD({ textAlign: "right", color: liq.monto_monotributo > 0 ? "#0369a1" : T.dim })}>
-                {liq.monto_monotributo > 0 ? fmtMoney(liq.monto_monotributo) : "—"}
+              <td style={TD({ textAlign: "right", color: liq.monto_deposito > 0 ? "#0369a1" : T.dim })}>
+                {liq.monto_deposito > 0 ? fmtMoney(liq.monto_deposito) : "—"}
+              </td>
+              <td style={TD({ textAlign: "right", color: liq.monto_transferencia > 0 ? T.purple : T.dim })}>
+                {liq.monto_transferencia > 0 ? fmtMoney(liq.monto_transferencia) : "—"}
               </td>
               <td style={TD({ textAlign: "right", color: efectivo > 0 ? T.yellow : T.dim })}>
                 {efectivo > 0 ? fmtMoney(efectivo) : "—"}
@@ -629,10 +643,11 @@ function ModalPagoHQ({ mes, anio, liq, onClose, onSaved }) {
 
   const handleTipo = (tipo) => {
     let monto = "";
-    if (tipo === "haberes")        monto = liq?.monto_haberes     ?? "";
-    if (tipo === "monotributista") monto = liq?.monto_monotributo ?? "";
+    if (tipo === "haberes")       monto = liq?.monto_haberes       ?? "";
+    if (tipo === "deposito")      monto = liq?.monto_deposito      ?? "";
+    if (tipo === "transferencia") monto = liq?.monto_transferencia ?? "";
     if (tipo === "efectivo") {
-      const ef = Math.max(0, (liq?.sueldo_total_legajo || 0) - (liq?.monto_haberes || 0) - (liq?.monto_monotributo || 0));
+      const ef = Math.max(0, (liq?.sueldo_total_legajo || 0) - (liq?.monto_haberes || 0) - (liq?.monto_deposito || 0) - (liq?.monto_transferencia || 0));
       monto = ef || "";
     }
     set("tipo_componente", tipo);
@@ -673,8 +688,9 @@ function ModalPagoHQ({ mes, anio, liq, onClose, onSaved }) {
           <div>
             <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>Componente</label>
             <select style={inputStyle} value={form.tipo_componente} onChange={e => handleTipo(e.target.value)}>
-              <option value="haberes">Haberes (recibo / transferencia)</option>
-              <option value="monotributista">Depósito bancario</option>
+              <option value="haberes">Haberes (recibo de sueldo)</option>
+              <option value="deposito">Depósito bancario</option>
+              <option value="transferencia">Transferencia (factura monotributo)</option>
               <option value="efectivo">Efectivo</option>
             </select>
           </div>

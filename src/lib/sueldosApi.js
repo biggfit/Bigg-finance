@@ -149,9 +149,10 @@ function parseLiquidacion(r) {
     bonos_cant:            num(r.bonos_cant),
     bonos_monto_unit:      num(r.bonos_monto_unit),
     bonos_total:           num(r.bonos_total),
-    // HQ extras
+    // HQ — formas de pago
     monto_haberes:         num(r.monto_haberes),
-    monto_monotributo:     num(r.monto_monotributo),
+    monto_deposito:        num(r.monto_deposito),
+    monto_transferencia:   num(r.monto_transferencia ?? r.monto_monotributo), // fallback col vieja
     monto_efectivo:        num(r.monto_efectivo),
     // Novedades
     total_novedades_extra: num(r.total_novedades_extra),
