@@ -268,6 +268,7 @@ export default function PantallaLiquidacionHQ() {
               liqStaff={liqStaff} liqOwners={liqOwners}
               onAtras={() => setPaso(2)}
               onRegistrarPago={setShowPago}
+              onBatchPaid={load}
             />
           )}
         </>
@@ -581,17 +582,69 @@ function exportarDeposito(liqs, mes, anio) {
 
 // ── Paso 3: Registrar pagos ───────────────────────────────────────────────────
 
-function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago }) {
+const TIPOS_PAGO = [
+  { id: "haberes",       label: "Haberes",       color: T.text },
+  { id: "deposito",      label: "Depósito",      color: "#0369a1" },
+  { id: "transferencia", label: "Transferencia", color: T.purple },
+  { id: "efectivo",      label: "Efectivo",      color: T.yellow },
+];
+
+function getEfectivo(liq) {
+  return Math.max(0, liq.sueldo_total_legajo - (liq.monto_haberes || 0) - (liq.monto_deposito || 0) - (liq.monto_transferencia || 0));
+}
+
+function getMontoTipo(liq, tipo) {
+  if (tipo === "haberes")       return liq.monto_haberes       || 0;
+  if (tipo === "deposito")      return liq.monto_deposito      || 0;
+  if (tipo === "transferencia") return liq.monto_transferencia || 0;
+  return getEfectivo(liq);
+}
+
+function isPaid(liq, tipo) {
+  return liq.pagos?.some(p => p.tipo_componente === tipo) ?? false;
+}
+
+function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago, onBatchPaid }) {
+  const [batchModal, setBatchModal] = useState(null); // { tipo }
+
+  const todos = [...liqStaff, ...liqOwners];
+
+  // Empleados pendientes de pago para un tipo dado
+  const pendientesTipo = (tipo) =>
+    todos.filter(l => getMontoTipo(l, tipo) > 0 && !isPaid(l, tipo));
+
   const renderTabla = (liqs) => (
     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginBottom: 8 }}>
       <thead>
         <tr>
           <th style={TH()}>Nombre</th>
           <th style={TH({ textAlign: "right" })}>Total</th>
-          <th style={TH({ textAlign: "right" })}>Haberes</th>
-          <th style={TH({ textAlign: "right" })}>Depósito</th>
-          <th style={TH({ textAlign: "right" })}>Transferencia</th>
-          <th style={TH({ textAlign: "right" })}>Efectivo</th>
+          {TIPOS_PAGO.map(({ id, label }) => {
+            const pend   = pendientesTipo(id);
+            const hayAlgo = todos.some(l => getMontoTipo(l, id) > 0);
+            const todoPagado = hayAlgo && pend.length === 0;
+            return (
+              <th key={id} style={TH({ textAlign: "right" })}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 5 }}>
+                  {todoPagado
+                    ? <span title="Todos pagados" style={{ fontSize: 11, color: T.green, fontWeight: 700 }}>✓</span>
+                    : hayAlgo && (
+                      <button
+                        onClick={() => setBatchModal({ tipo: id })}
+                        title={`Confirmar pago de ${label}`}
+                        style={{
+                          background: T.green, color: "#fff", border: "none",
+                          borderRadius: 4, padding: "1px 6px", fontSize: 10,
+                          fontWeight: 700, cursor: "pointer", lineHeight: "1.6",
+                          fontFamily: T.font,
+                        }}>✓</button>
+                    )
+                  }
+                  {label}
+                </div>
+              </th>
+            );
+          })}
           <th style={TH({ textAlign: "right" })}>Pagado</th>
           <th style={TH({ textAlign: "right" })}>Pendiente</th>
           <th style={TH()}></th>
@@ -599,42 +652,39 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago })
       </thead>
       <tbody>
         {liqs.map((liq, i) => {
-          const efectivo  = Math.max(0, liq.sueldo_total_legajo - (liq.monto_haberes || 0) - (liq.monto_deposito || 0) - (liq.monto_transferencia || 0));
+          const efectivo  = getEfectivo(liq);
           const pendiente = liq.pendiente;
+          const montos    = { haberes: liq.monto_haberes || 0, deposito: liq.monto_deposito || 0, transferencia: liq.monto_transferencia || 0, efectivo };
+
           return (
             <tr key={liq.id} style={{ background: i % 2 === 0 ? "#fff" : T.bg }}>
-              <td style={TD({ fontWeight: 600 })}>
-                {liq.legajo_nombre}
-                {liq.pagos?.length > 0 && (
-                  <div style={{ fontSize: 11, color: T.green, marginTop: 2 }}>
-                    {liq.pagos.map(p => `${p.tipo_componente} ${fmtMoney(p.monto)}`).join(" · ")}
-                  </div>
-                )}
-              </td>
+              <td style={TD({ fontWeight: 600 })}>{liq.legajo_nombre}</td>
               <td style={TD({ textAlign: "right", fontWeight: 700, color: T.blue })}>{fmtMoney(liq.total_bruto)}</td>
-              <td style={TD({ textAlign: "right" })}>{fmtMoney(liq.monto_haberes)}</td>
-              <td style={TD({ textAlign: "right", color: liq.monto_deposito > 0 ? "#0369a1" : T.dim })}>
-                {liq.monto_deposito > 0 ? fmtMoney(liq.monto_deposito) : "—"}
-              </td>
-              <td style={TD({ textAlign: "right", color: liq.monto_transferencia > 0 ? T.purple : T.dim })}>
-                {liq.monto_transferencia > 0 ? fmtMoney(liq.monto_transferencia) : "—"}
-              </td>
-              <td style={TD({ textAlign: "right", color: efectivo > 0 ? T.yellow : T.dim })}>
-                {efectivo > 0 ? fmtMoney(efectivo) : "—"}
-              </td>
+
+              {TIPOS_PAGO.map(({ id, color }) => {
+                const monto = montos[id];
+                const paid  = isPaid(liq, id);
+                if (!monto) return <td key={id} style={TD({ textAlign: "right", color: T.dim })}>—</td>;
+                return (
+                  <td key={id} style={TD({ textAlign: "right", color: paid ? T.green : color })}>
+                    {paid && <span style={{ marginRight: 3 }}>✓</span>}
+                    {fmtMoney(monto)}
+                  </td>
+                );
+              })}
+
               <td style={TD({ textAlign: "right", color: T.green })}>{fmtMoney(liq.total_pagado)}</td>
               <td style={TD({ textAlign: "right", fontWeight: 600, color: pendiente > 0 ? T.red : T.green })}>
                 {fmtMoney(pendiente)}
               </td>
               <td style={TD({ whiteSpace: "nowrap" })}>
-                {pendiente > 0 ? (
-                  <button onClick={() => onRegistrarPago(liq.legajo_id)} style={{
-                    background: T.green, color: "#fff", border: "none", borderRadius: 6,
-                    padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer",
-                  }}>💳 Pagar</button>
-                ) : (
-                  <span style={{ fontSize: 12, color: T.green, fontWeight: 600 }}>✓ Pagado</span>
-                )}
+                {pendiente > 0
+                  ? <button onClick={() => onRegistrarPago(liq.legajo_id)} style={{
+                      background: "#fff", color: T.green, border: `1px solid ${T.green}`,
+                      borderRadius: 6, padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer",
+                    }}>💳 Pagar</button>
+                  : <span style={{ fontSize: 12, color: T.green, fontWeight: 600 }}>✓</span>
+                }
               </td>
             </tr>
           );
@@ -643,7 +693,6 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago })
     </table>
   );
 
-  const todos       = [...liqStaff, ...liqOwners];
   const totalBruto  = todos.reduce((s, l) => s + l.total_bruto,  0);
   const totalPagado = todos.reduce((s, l) => s + l.total_pagado, 0);
   const totalPend   = totalBruto - totalPagado;
@@ -660,9 +709,9 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago })
       {/* Resumen */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 20 }}>
         {[
-          { label: "Total a pagar",  value: totalBruto,  color: T.text },
-          { label: "Pagado",         value: totalPagado, color: T.green },
-          { label: "Pendiente",      value: totalPend,   color: totalPend > 0 ? T.red : T.green },
+          { label: "Total a pagar", value: totalBruto,  color: T.text },
+          { label: "Pagado",        value: totalPagado, color: T.green },
+          { label: "Pendiente",     value: totalPend,   color: totalPend > 0 ? T.red : T.green },
         ].map(({ label, value, color }) => (
           <div key={label} style={{ background: "#fff", border: `1px solid ${T.border}`, borderRadius: 8, padding: "10px 14px" }}>
             <div style={{ fontSize: 11, color: T.muted, fontWeight: 600 }}>{label}</div>
@@ -692,6 +741,129 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago })
         <button style={BTN_EXPORT("#0369a1")} onClick={() => exportarDeposito(todos, mes, anio)}>
           📥 Excel Depósito (financiera)
         </button>
+      </div>
+
+      {batchModal && (
+        <ModalBatchPago
+          tipo={batchModal.tipo}
+          liqs={pendientesTipo(batchModal.tipo)}
+          mes={mes} anio={anio}
+          onClose={() => setBatchModal(null)}
+          onSaved={() => { setBatchModal(null); onBatchPaid?.(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Modal batch pago ──────────────────────────────────────────────────────────
+
+function ModalBatchPago({ tipo, liqs, mes, anio, onClose, onSaved }) {
+  const meta = TIPOS_PAGO.find(t => t.id === tipo);
+  const socFija = tipo === "deposito" || tipo === "efectivo" ? "beta" : null;
+
+  const [form, setForm] = useState({
+    fecha:          new Date().toISOString().slice(0, 10),
+    cuenta_bancaria: "",
+    sociedad_id:    socFija ?? "",
+  });
+  const [saving,    setSaving]    = useState(false);
+  const savingRef = useRef(false);
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const total = liqs.reduce((s, l) => s + getMontoTipo(l, tipo), 0);
+
+  const handleSave = async () => {
+    if (savingRef.current) return;
+    if (!form.cuenta_bancaria && tipo !== "efectivo") {
+      alert("Ingresá la cuenta bancaria."); return;
+    }
+    savingRef.current = true; setSaving(true);
+    try {
+      await Promise.all(liqs.map(liq => {
+        const soc_id     = tipo === "haberes" ? liq.sociedad_id     : (form.sociedad_id || "beta");
+        const soc_nombre = tipo === "haberes" ? liq.sociedad_nombre : (form.sociedad_id || "beta");
+        return appendPago({
+          mes, anio,
+          legajo_id:              liq.legajo_id,
+          legajo_nombre:          liq.legajo_nombre,
+          sociedad_id:            soc_id,
+          sociedad_nombre:        soc_nombre,
+          tipo_componente:        tipo,
+          monto:                  getMontoTipo(liq, tipo),
+          fecha:                  form.fecha,
+          cuenta_bancaria_id:     form.cuenta_bancaria,
+          cuenta_bancaria_nombre: form.cuenta_bancaria,
+        });
+      }));
+      await onSaved();
+    } catch (e) {
+      alert("Error: " + e.message);
+      setSaving(false);
+    } finally {
+      savingRef.current = false;
+    }
+  };
+
+  const inputStyle = {
+    border: `1px solid ${T.border}`, borderRadius: 6, padding: "7px 10px",
+    fontSize: 13, fontFamily: T.font, width: "100%", boxSizing: "border-box", color: T.text,
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+      <div style={{ background: "#fff", borderRadius: 12, padding: 24, width: 420, boxShadow: "0 8px 32px rgba(0,0,0,.18)", fontFamily: T.font }}>
+        <h3 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 700 }}>
+          Confirmar pago — {meta?.label}
+        </h3>
+        <p style={{ margin: "0 0 16px", fontSize: 12, color: T.muted }}>
+          {liqs.length} empleado{liqs.length !== 1 ? "s" : ""} · Total {fmtMoney(total)}
+        </p>
+
+        {/* Lista resumen */}
+        <div style={{ border: `1px solid ${T.border}`, borderRadius: 6, marginBottom: 16, maxHeight: 160, overflowY: "auto" }}>
+          {liqs.map(liq => (
+            <div key={liq.legajo_id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderBottom: `1px solid ${T.border}`, fontSize: 12 }}>
+              <span style={{ color: T.text }}>{liq.legajo_nombre}</span>
+              <span style={{ fontWeight: 700, color: meta?.color }}>{fmtMoney(getMontoTipo(liq, tipo))}</span>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>Fecha</label>
+            <input style={inputStyle} type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)} />
+          </div>
+          {tipo !== "efectivo" && (
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>Cuenta bancaria</label>
+              <input style={inputStyle} value={form.cuenta_bancaria} onChange={e => set("cuenta_bancaria", e.target.value)} placeholder="Nombre de la cuenta" />
+            </div>
+          )}
+          {tipo === "transferencia" && (
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>Sociedad que transfiere</label>
+              <input style={inputStyle} value={form.sociedad_id} onChange={e => set("sociedad_id", e.target.value)} placeholder="ej: beta, nako, hektor…" />
+            </div>
+          )}
+          {socFija && (
+            <div style={{ fontSize: 11, color: T.muted, background: T.bg, borderRadius: 5, padding: "6px 10px" }}>
+              Sociedad: <strong>Beta</strong>
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+          <button onClick={onClose} style={BTN_SECONDARY}>Cancelar</button>
+          <button onClick={handleSave} disabled={saving} style={{
+            background: saving ? T.dim : T.green, color: "#fff", border: "none",
+            borderRadius: 7, padding: "7px 16px", fontSize: 13, fontWeight: 600,
+            cursor: saving ? "not-allowed" : "pointer",
+          }}>
+            {saving ? "Procesando…" : `Confirmar ${liqs.length} pago${liqs.length !== 1 ? "s" : ""}`}
+          </button>
+        </div>
       </div>
     </div>
   );
