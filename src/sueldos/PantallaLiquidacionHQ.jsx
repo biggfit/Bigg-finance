@@ -68,7 +68,7 @@ export default function PantallaLiquidacionHQ() {
   const [liqsPrevMes,      setLiqsPrevMes]      = useState([]);
   const [showPago,         setShowPago]         = useState(null);
 
-  useEffect(() => { load(); setPaso(1); }, [mes, anio]);
+  useEffect(() => { load(); }, [mes, anio]);
 
   async function load() {
     setLoading(true);
