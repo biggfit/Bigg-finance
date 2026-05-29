@@ -302,29 +302,48 @@ function StepsIndicator({ paso, onPaso }) {
 // ── Paso 1: Confirmar sueldos ─────────────────────────────────────────────────
 
 function PasoSueldos({ liqStaff, liqOwners, sueldosDraft, onChangeDraft, actualizarLegs, onChangeActualizar, onSiguiente, saving }) {
+  const [pctGlobal, setPctGlobal] = useState("");
+
   const todos       = [...liqStaff, ...liqOwners];
   const totalActual = todos.reduce((s, l) => s + (l.sueldo_total_legajo || 0), 0);
   const totalNuevo  = todos.reduce((s, l) => s + (sueldosDraft[l.legajo_id]?.total ?? l.sueldo_total_legajo), 0);
   const diff        = totalNuevo - totalActual;
 
-  // Un solo call por cambio para evitar doble setState con estado stale
   const handlePct = (liq, rawPct) => {
-    const pct        = rawPct;
     const nuevoTotal = rawPct !== "" ? redondear(liq.sueldo_total_legajo * (1 + parseFloat(rawPct) / 100)) : liq.sueldo_total_legajo;
-    onChangeDraft(liq.legajo_id, { pct, total: nuevoTotal });
+    onChangeDraft(liq.legajo_id, { pct: rawPct, total: nuevoTotal });
   };
 
   const handleTotal = (liq, rawTotal) => {
     onChangeDraft(liq.legajo_id, { pct: "", total: parseFloat(rawTotal) || 0 });
   };
 
-  const renderTabla = (liqs, ownerStyle) => (
+  // Aplica el mismo % a todos los empleados de una vez
+  const handlePctGlobal = (rawPct) => {
+    setPctGlobal(rawPct);
+    todos.forEach(liq => handlePct(liq, rawPct));
+  };
+
+  const renderTabla = (liqs, ownerStyle, esElPrimero = false) => (
     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginBottom: 8 }}>
       <thead>
         <tr>
           <th style={TH()}>Nombre</th>
           <th style={TH({ textAlign: "right" })}>Sueldo actual</th>
-          <th style={TH({ textAlign: "right" })}>% aumento</th>
+          <th style={TH({ textAlign: "right" })}>
+            {esElPrimero ? (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
+                <span>% aumento</span>
+                <input
+                  type="number" value={pctGlobal}
+                  onChange={e => handlePctGlobal(e.target.value)}
+                  placeholder="todos"
+                  title="Aplicar a todos"
+                  style={INPUT({ width: 60, fontSize: 11, padding: "2px 6px", border: "1px solid #6366f1", color: T.text })}
+                />
+              </div>
+            ) : "% aumento"}
+          </th>
           <th style={TH({ textAlign: "right" })}>Nuevo sueldo</th>
         </tr>
       </thead>
@@ -390,13 +409,13 @@ function PasoSueldos({ liqStaff, liqOwners, sueldosDraft, onChangeDraft, actuali
       {liqStaff.length > 0 && (
         <>
           <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 700 }}>HQ Staff</h3>
-          {renderTabla(liqStaff, false)}
+          {renderTabla(liqStaff, false, true)}
         </>
       )}
       {liqOwners.length > 0 && (
         <>
           <h3 style={{ margin: "20px 0 10px", fontSize: 14, fontWeight: 700, color: T.purple }}>⬡ Socios / HQ Owner</h3>
-          {renderTabla(liqOwners, true)}
+          {renderTabla(liqOwners, true, liqStaff.length === 0)}
         </>
       )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 0", borderTop: `1px solid ${T.border}`, marginTop: 8 }}>
