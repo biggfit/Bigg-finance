@@ -909,9 +909,11 @@ function ModalBatchPago({ tipo, liqs, mes, anio, onClose, onSaved }) {
                 ? <div style={{ fontSize: 12, color: T.muted }}>Cargando cuentas…</div>
                 : <select style={iStyle} value={form.cuenta_id} onChange={e => set("cuenta_id", e.target.value)}>
                     <option value="">— Seleccioná —</option>
-                    {cuentasFiltradas.map(c => (
-                      <option key={c.id} value={c.id}>{c.nombre}{c.moneda !== "ARS" ? ` (${c.moneda})` : ""}</option>
-                    ))}
+                    {cuentasFiltradas.map(c => {
+                      const socNombre = sociedades.find(s => s.id === c.sociedad)?.nombre ?? c.sociedad;
+                      const moneda    = c.moneda !== "ARS" ? ` (${c.moneda})` : "";
+                      return <option key={c.id} value={c.id}>{socNombre} — {c.nombre}{moneda}</option>;
+                    })}
                   </select>
               }
             </div>
