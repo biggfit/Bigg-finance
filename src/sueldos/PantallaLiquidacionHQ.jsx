@@ -671,16 +671,6 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago })
         ))}
       </div>
 
-      {/* Botones de exportación */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <button style={BTN_EXPORT("#16a34a")} onClick={() => exportarHaberes(todos, mes, anio)}>
-          📥 Excel Haberes (banco)
-        </button>
-        <button style={BTN_EXPORT("#0369a1")} onClick={() => exportarDeposito(todos, mes, anio)}>
-          📥 Excel Depósito (financiera)
-        </button>
-      </div>
-
       {liqStaff.length > 0 && (
         <>
           <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 700 }}>HQ Staff</h3>
@@ -693,8 +683,15 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago })
           {renderTabla(liqOwners)}
         </>
       )}
-      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", padding: "16px 0", borderTop: `1px solid ${T.border}`, marginTop: 8 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "16px 0", borderTop: `1px solid ${T.border}`, marginTop: 8 }}>
         <button onClick={onAtras} style={BTN_SECONDARY}>← Atrás</button>
+        <div style={{ flex: 1 }} />
+        <button style={BTN_EXPORT("#16a34a")} onClick={() => exportarHaberes(todos, mes, anio)}>
+          📥 Excel Haberes (banco)
+        </button>
+        <button style={BTN_EXPORT("#0369a1")} onClick={() => exportarDeposito(todos, mes, anio)}>
+          📥 Excel Depósito (financiera)
+        </button>
       </div>
     </div>
   );
