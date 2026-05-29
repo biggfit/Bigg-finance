@@ -274,7 +274,7 @@ function TablaHQ({ titulo, liqs, totales, editandoId, onEditar, onCancelarEdicio
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr>
-              {["Nombre","Sociedad","Sueldo total","Haberes","Monotrib.","Efectivo","Novedades","Total","Pagado","Pendiente",""].map(h => (
+              {["Nombre","Sueldo total","Haberes","Monotrib.","Efectivo","Novedades","Total","Pagado","Pendiente",""].map(h => (
                 <th key={h} style={thStyle}>{h}</th>
               ))}
             </tr>
@@ -381,8 +381,6 @@ function FilaHQ({ liq, idx, editando, ownerStyle, onEditar, onCancelarEdicion, o
             </div>
           )}
         </td>
-        {/* Sociedad */}
-        <td style={tdStyle({ color: "#64748b" })}>{liq.sociedad_nombre || "—"}</td>
         {/* Sueldo total */}
         <td style={tdStyle({ textAlign: "right", fontWeight: 600, color: "#64748b" })}>{fmtMoney(liq.sueldo_total_legajo)}</td>
         {/* Haberes */}
@@ -430,7 +428,7 @@ function FilaHQ({ liq, idx, editando, ownerStyle, onEditar, onCancelarEdicion, o
       {/* Fila de pagos registrados */}
       {liq.pagos?.length > 0 && !editando && (
         <tr>
-          <td colSpan={11} style={{ padding: "4px 12px 6px 28px", background: "#f0fdf4", fontSize: 12, color: "#16a34a", borderBottom: "1px solid #e2e8f0" }}>
+          <td colSpan={10} style={{ padding: "4px 12px 6px 28px", background: "#f0fdf4", fontSize: 12, color: "#16a34a", borderBottom: "1px solid #e2e8f0" }}>
             {liq.pagos.map(p => (
               <span key={p.id} style={{ marginRight: 14 }}>
                 {p.tipo_componente}: {fmtMoney(p.monto)} ({p.fecha})
@@ -443,7 +441,7 @@ function FilaHQ({ liq, idx, editando, ownerStyle, onEditar, onCancelarEdicion, o
       {/* Fila de edición */}
       {editando && (
         <tr>
-          <td colSpan={11} style={{ background: "#eff6ff", padding: "14px 16px", borderBottom: `1px solid #bfdbfe` }}>
+          <td colSpan={10} style={{ background: "#eff6ff", padding: "14px 16px", borderBottom: `1px solid #bfdbfe` }}>
             <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-end" }}>
               {/* Referencia del legajo */}
               <div>
