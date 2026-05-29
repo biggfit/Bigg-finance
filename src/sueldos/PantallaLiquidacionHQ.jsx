@@ -446,6 +446,18 @@ function PasoSueldos({ liqStaff, liqOwners, sueldosDraft, onChangeDraft, actuali
 function PasoPago({ liqStaff, liqOwners, sueldosDraft, pagoDraft, onChangePago, onAtras, onSiguiente, saving }) {
   const getTarget = (liq) => sueldosDraft[liq.legajo_id]?.total ?? liq.sueldo_total_legajo;
 
+  // Clampea el valor ingresado para que la suma nunca supere el sueldo total
+  const handleCampo = (liq, campo, rawVal) => {
+    const target  = getTarget(liq);
+    const d       = pagoDraft[liq.legajo_id] || {};
+    const parsed  = parseFloat(rawVal) || 0;
+    const otros   = ["monto_haberes", "monto_deposito", "monto_transferencia"]
+      .filter(f => f !== campo)
+      .reduce((s, f) => s + (d[f] ?? 0), 0);
+    const clamped = Math.min(parsed, Math.max(0, target - otros));
+    onChangePago(liq.legajo_id, campo, clamped);
+  };
+
   const renderTabla = (liqs) => (
     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginBottom: 8 }}>
       <thead>
@@ -460,29 +472,29 @@ function PasoPago({ liqStaff, liqOwners, sueldosDraft, pagoDraft, onChangePago, 
       </thead>
       <tbody>
         {liqs.map((liq, i) => {
-          const target       = getTarget(liq);
-          const d            = pagoDraft[liq.legajo_id] || {};
-          const haberes      = d.monto_haberes       ?? 0;
-          const deposito     = d.monto_deposito      ?? 0;
+          const target        = getTarget(liq);
+          const d             = pagoDraft[liq.legajo_id] || {};
+          const haberes       = d.monto_haberes       ?? 0;
+          const deposito      = d.monto_deposito      ?? 0;
           const transferencia = d.monto_transferencia ?? 0;
-          const efectivo     = Math.max(0, target - haberes - deposito - transferencia);
+          const efectivo      = Math.max(0, target - haberes - deposito - transferencia);
           return (
             <tr key={liq.id} style={{ background: i % 2 === 0 ? "#fff" : T.bg }}>
               <td style={TD({ fontWeight: 600 })}>{liq.legajo_nombre}</td>
               <td style={TD({ textAlign: "right", fontWeight: 700, color: T.blue })}>{fmtMoney(target)}</td>
               <td style={TD({ textAlign: "right" })}>
                 <input type="number" value={haberes}
-                  onChange={e => onChangePago(liq.legajo_id, "monto_haberes", parseFloat(e.target.value) || 0)}
+                  onChange={e => handleCampo(liq, "monto_haberes", e.target.value)}
                   style={INPUT({ width: 100 })} />
               </td>
               <td style={TD({ textAlign: "right" })}>
                 <input type="number" value={deposito}
-                  onChange={e => onChangePago(liq.legajo_id, "monto_deposito", parseFloat(e.target.value) || 0)}
+                  onChange={e => handleCampo(liq, "monto_deposito", e.target.value)}
                   style={INPUT({ width: 100 })} />
               </td>
               <td style={TD({ textAlign: "right" })}>
                 <input type="number" value={transferencia}
-                  onChange={e => onChangePago(liq.legajo_id, "monto_transferencia", parseFloat(e.target.value) || 0)}
+                  onChange={e => handleCampo(liq, "monto_transferencia", e.target.value)}
                   style={INPUT({ width: 100 })} />
               </td>
               <td style={TD({ textAlign: "right" })}>
