@@ -12,10 +12,8 @@ import PantallaCambioMoneda     from "./numbers/PantallaCambioMoneda";
 import PantallaIntercompania    from "./numbers/PantallaIntercompania";
 import PantallaGastos           from "./numbers/PantallaGastos";
 import PantallaReconciliacion   from "./numbers/PantallaReconciliacion";
-import CierrePanel            from "./components/CierrePanel";
 import { SOCIEDADES as SOC_FALLBACK } from "./data/tesoreriaData";
 import { fetchSociedades } from "./lib/numbersApi";
-import { useCierres } from "./numbers/useCierres";
 
 // ─── Nav button style helpers ─────────────────────────────────────────────────
 const navBtnStyle = (active) => ({
@@ -93,7 +91,7 @@ export default function NumbersApp({ onGoToFranquicias }) {
   const showMaestros = activeMaestrosTab !== null;
   const socDropRef = useRef(null);
   const activeSoc = sociedades[socIdx] ?? sociedades[0];
-  const { isCerrado, cerrar, reabrir } = useCierres(activeSoc?.id);
+
 
   // Cerrar dropdown al hacer click afuera
   useEffect(() => {
@@ -453,13 +451,6 @@ export default function NumbersApp({ onGoToFranquicias }) {
           </div>
         </div>
 
-        <CierrePanel
-          sociedad={activeSoc?.id}
-          isCerrado={isCerrado}
-          cerrar={cerrar}
-          reabrir={reabrir}
-        />
-
         <div style={{ flex:1, overflow:"auto", display:"flex", flexDirection:"column" }}>
           {!socReady
             ? <div style={{ display:"flex", alignItems:"center", justifyContent:"center",
@@ -474,11 +465,11 @@ export default function NumbersApp({ onGoToFranquicias }) {
             ? <PantallaReconciliacion sociedad={activeSoc.id} />
             : section?.component
             ? section.id === "egresos" && (egresoSubView === "gastos" || egresoSubView === "new-gasto")
-              ? <PantallaGastos   sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView}  isCerrado={isCerrado} />
+              ? <PantallaGastos   sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView} />
               : section.id === "egresos"
-              ? <PantallaEgresos  sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView}  isCerrado={isCerrado} />
+              ? <PantallaEgresos  sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView} />
               : section.id === "ingresos"
-              ? <PantallaIngresos sociedad={activeSoc.id} subView={ingresoSubView} onSubViewChange={setIngresoSubView} isCerrado={isCerrado} />
+              ? <PantallaIngresos sociedad={activeSoc.id} subView={ingresoSubView} onSubViewChange={setIngresoSubView} />
               : <section.component sociedad={activeSoc.id} />
             : section?.placeholder
             ? <Placeholder section={section} />

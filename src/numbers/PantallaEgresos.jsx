@@ -696,7 +696,7 @@ function RowMenu({ egreso, onPago, onDetalle, onEditar, onCtaCte, onEliminar }) 
 }
 
 // ─── Pantalla principal ───────────────────────────────────────────────────────
-export default function PantallaEgresos({ sociedad = "nako", subView = null, onSubViewChange, isCerrado }) {
+export default function PantallaEgresos({ sociedad = "nako", subView = null, onSubViewChange }) {
   const [busqueda, setBusqueda]         = useState("");
   const [filtroEstado, setFiltroEstado] = useState("todos");
   const filtroFecha = useFiltroFecha();
@@ -884,7 +884,6 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
         centrosCosto={centrosCosto}
         onClose={() => onSubViewChange?.(null)}
         onSave={handleSave}
-        isCerrado={isCerrado}
       />
     );
   }
@@ -1027,7 +1026,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
       </div>
 
       {/* Modales */}
-      {showEditar  && <NuevoEgresoModal  sociedad={sociedad} proveedores={proveedores} cuentas={cuentas} centrosCosto={centrosCosto} initialData={showEditar} onClose={() => setShowEditar(null)} onSave={handleSave} isCerrado={isCerrado} />}
+      {showEditar  && <NuevoEgresoModal  sociedad={sociedad} proveedores={proveedores} cuentas={cuentas} centrosCosto={centrosCosto} initialData={showEditar} onClose={() => setShowEditar(null)} onSave={handleSave} />}
       {showPago    && <AgregarPagoModal  egreso={showPago} saldoPendiente={showPago.saldoPendiente ?? showPago.importe} cuentas={cuentasSoc} onClose={() => setShowPago(null)} onSave={handlePago} />}
       {editingPago && <EditarPagoModal   pago={editingPago} sociedad={sociedad} cuentasSoc={cuentasSoc} onClose={() => setEditingPago(null)} onSaved={() => { setEditingPago(null); cargarEgresos(); }} />}
       {showCtaCte  && <CtaCteModal       proveedor={showCtaCte.proveedor} documentos={showCtaCte.docs} onClose={() => setShowCtaCte(null)} />}

@@ -10,12 +10,11 @@ import {
   FacturaMaestroCuentaFields, FacturaFormChrome,
 } from "./formUtils";
 import { useLineas } from "./useLineas";
-import { useCierreGuard } from "./CierreGuard";
 import { checkDuplicateComp } from "../lib/numbersApi";
 
 const EGRESO_SECONDARY_OUTLINE = "#0e7490";
 
-export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedores = [], cuentas = [], centrosCosto, initialData, asPage = false, isCerrado }) {
+export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedores = [], cuentas = [], centrosCosto, initialData, asPage = false }) {
   const isEdit = !!initialData;
   const CC_LIST = useMemo(() => centrosCosto ?? [], [centrosCosto]);
   const CUENTAS_GASTO = useMemo(() => {
@@ -66,8 +65,6 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
   const { totalSub, totalIva, totalFinal } = useMemo(() => calcLineasTotals(lineas), [lineas]);
   const canSave = facturaCanSave({ partyId: provId, cuentaId, fecha, lineas });
 
-  const { guardSave, CierreModal } = useCierreGuard(isCerrado);
-
   const [dupError, setDupError] = useState(null);
   // Limpiar error de duplicado cuando cambian los campos clave
   useMemo(() => setDupError(null), [nroComp, provId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -96,15 +93,11 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
   };
 
   const handleSave = async () => {
-    const ok = await guardSave(fecha);
-    if (!ok) return;
     const dup = await checkDuplicateComp(sociedad, "EGRESO", nroComp, provId, isEdit ? initialData.id : null);
     if (dup) { setDupError(dup); return; }
     runSaveThenMaybeClose(onSave, buildPayload(), asPage, onClose);
   };
   const handleSaveAndPay = async () => {
-    const ok = await guardSave(fecha);
-    if (!ok) return;
     const dup = await checkDuplicateComp(sociedad, "EGRESO", nroComp, provId, isEdit ? initialData.id : null);
     if (dup) { setDupError(dup); return; }
     runSaveThenMaybeClose(onSave, buildPayload({ _saveAndPay: true }), asPage, onClose);
@@ -204,19 +197,16 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
   const subtitleModal = isEdit ? `Editando ${initialData.id}` : "Completá los datos y las líneas de imputación";
 
   return (
-    <>
-      {CierreModal}
-      <FacturaFormChrome
-        asPage={asPage}
-        onClose={onClose}
-        headerBg={T.accentDark}
-        titleColor={T.accent}
-        title={title}
-        subtitlePage={subtitlePage}
-        subtitleModal={subtitleModal}
-        formBody={formBody}
-        footer={footerBtns}
-      />
-    </>
+    <FacturaFormChrome
+      asPage={asPage}
+      onClose={onClose}
+      headerBg={T.accentDark}
+      titleColor={T.accent}
+      title={title}
+      subtitlePage={subtitlePage}
+      subtitleModal={subtitleModal}
+      formBody={formBody}
+      footer={footerBtns}
+    />
   );
 }
