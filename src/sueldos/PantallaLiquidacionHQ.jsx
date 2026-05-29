@@ -137,7 +137,6 @@ export default function PantallaLiquidacionHQ() {
     });
   }, [liqs.length]);
 
-  // helper para obtener el total final de un liq según draft
   const getDraftTotal = (liq) => sueldosDraft[liq.legajo_id]?.total ?? liq.sueldo_total_legajo;
 
   // Paso 1 → 2: opcionalmente actualizar legajos, luego init pagoDraft
@@ -226,8 +225,8 @@ export default function PantallaLiquidacionHQ() {
             <PasoSueldos
               liqStaff={liqStaff} liqOwners={liqOwners}
               sueldosDraft={sueldosDraft}
-              onChangeDraft={(id, field, val) =>
-                setSueldosDraft(d => ({ ...d, [id]: { ...(d[id] || {}), [field]: val } }))
+              onChangeDraft={(id, updates) =>
+                setSueldosDraft(d => ({ ...d, [id]: { ...(d[id] || {}), ...updates } }))
               }
               actualizarLegs={actualizarLegs}
               onChangeActualizar={setActualizarLegs}
@@ -308,17 +307,15 @@ function PasoSueldos({ liqStaff, liqOwners, sueldosDraft, onChangeDraft, actuali
   const totalNuevo  = todos.reduce((s, l) => s + (sueldosDraft[l.legajo_id]?.total ?? l.sueldo_total_legajo), 0);
   const diff        = totalNuevo - totalActual;
 
+  // Un solo call por cambio para evitar doble setState con estado stale
   const handlePct = (liq, rawPct) => {
-    const pct = rawPct === "" ? "" : rawPct;
-    const nuevoTotal = pct !== "" ? redondear(liq.sueldo_total_legajo * (1 + parseFloat(pct) / 100)) : liq.sueldo_total_legajo;
-    onChangeDraft(liq.legajo_id, "pct",   pct);
-    onChangeDraft(liq.legajo_id, "total", nuevoTotal);
+    const pct        = rawPct;
+    const nuevoTotal = rawPct !== "" ? redondear(liq.sueldo_total_legajo * (1 + parseFloat(rawPct) / 100)) : liq.sueldo_total_legajo;
+    onChangeDraft(liq.legajo_id, { pct, total: nuevoTotal });
   };
 
   const handleTotal = (liq, rawTotal) => {
-    const total = parseFloat(rawTotal) || liq.sueldo_total_legajo;
-    onChangeDraft(liq.legajo_id, "pct",   "");
-    onChangeDraft(liq.legajo_id, "total", total);
+    onChangeDraft(liq.legajo_id, { pct: "", total: parseFloat(rawTotal) || 0 });
   };
 
   const renderTabla = (liqs, ownerStyle) => (
@@ -333,9 +330,9 @@ function PasoSueldos({ liqStaff, liqOwners, sueldosDraft, onChangeDraft, actuali
       </thead>
       <tbody>
         {liqs.map((liq, i) => {
-          const d          = sueldosDraft[liq.legajo_id] ?? {};
-          const pct        = d.pct   ?? "";
-          const nuevoTotal = d.total ?? liq.sueldo_total_legajo;
+          const d          = sueldosDraft[liq.legajo_id];
+          const pct        = d?.pct   ?? "";
+          const nuevoTotal = d?.total ?? liq.sueldo_total_legajo;
           const subio      = nuevoTotal > liq.sueldo_total_legajo;
           return (
             <tr key={liq.id} style={{ background: i % 2 === 0 ? "#fff" : T.bg }}>
