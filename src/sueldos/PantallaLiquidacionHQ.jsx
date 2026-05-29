@@ -63,21 +63,26 @@ export default function PantallaLiquidacionHQ() {
   const [sueldosDraft,     setSueldosDraft]     = useState({});  // { [legajo_id]: { pct: "", total: N } }
   const [actualizarLegs,   setActualizarLegs]   = useState(false);
   const [pagoDraft,        setPagoDraft]        = useState({});  // { [legajo_id]: { monto_haberes, monto_monotributo } }
+  const [liqsPrevMes,      setLiqsPrevMes]      = useState([]);
   const [showPago,         setShowPago]         = useState(null);
 
   useEffect(() => { load(); setPaso(1); }, [mes, anio]);
 
   async function load() {
     setLoading(true);
+    const mesPrev  = mes === 1 ? 12 : mes - 1;
+    const anioPrev = mes === 1 ? anio - 1 : anio;
     try {
-      const [legs, liqs, pags] = await Promise.all([
+      const [legs, liqs, pags, liqsPrev] = await Promise.all([
         fetchLegajos(),
         fetchLiquidaciones(mes, anio),
         fetchPagos(mes, anio),
+        fetchLiquidaciones(mesPrev, anioPrev),
       ]);
       setLegajos(legs.filter(l => ROLES_HQ.includes(l.rol) && l.activo));
       setLiquidaciones(liqs.filter(l => ROLES_HQ.includes(l.rol)));
       setPagos(pags);
+      setLiqsPrevMes(liqsPrev.filter(l => ROLES_HQ.includes(l.rol)));
     } finally { setLoading(false); }
   }
 
@@ -152,13 +157,14 @@ export default function PantallaLiquidacionHQ() {
         await load();
       } finally { setSaving(false); }
     }
-    // Pre-llenar pagoDraft desde blanco_neto del legajo (o valor ya guardado)
+    // Pre-llenar pagoDraft: valor guardado en el período actual > mes anterior > 0
     setPagoDraft(() => {
       const d = {};
       liqs.forEach(liq => {
+        const prev = liqsPrevMes.find(l => l.legajo_id === liq.legajo_id);
         d[liq.legajo_id] = {
-          monto_haberes:    liq.monto_haberes || liq.blanco_neto_legajo || 0,
-          monto_monotributo: liq.monto_monotributo || 0,
+          monto_haberes:     liq.monto_haberes    || liq.blanco_neto_legajo || 0,
+          monto_monotributo: liq.monto_monotributo || prev?.monto_monotributo || 0,
         };
       });
       return d;
