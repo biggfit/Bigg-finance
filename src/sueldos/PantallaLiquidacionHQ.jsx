@@ -961,12 +961,37 @@ function ModalBatchPago({ tipo, liqs, mes, anio, onClose, onSaved }) {
   );
 }
 
-// ── Modal anular pago ─────────────────────────────────────────────────────────
+// ── Modal anular / editar pago ────────────────────────────────────────────────
 
 function ModalAnularPago({ pago, onClose, onAnulado }) {
-  const [saving, setSaving] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [form, setForm] = useState({
+    monto:       pago.monto,
+    fecha:       (pago.fecha ?? "").slice(0, 10),
+    cuenta_id:   pago.cuenta_bancaria_id ?? "",
+    sociedad_id: "",
+  });
+  const [cuentas,     setCuentas]     = useState([]);
+  const [sociedades,  setSociedades]  = useState([]);
+  const [loadingCtas, setLoadingCtas] = useState(false);
+  const [saving,      setSaving]      = useState(false);
   const savingRef = useRef(false);
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const meta = TIPOS_PAGO.find(t => t.id === pago.tipo_componente);
+
+  const handleStartEdit = () => {
+    setLoadingCtas(true);
+    Promise.all([fetchSociedadesNumbers(), fetchCuentasBancariasNumbers()])
+      .then(([socs, ctas]) => { setSociedades(socs); setCuentas(ctas); })
+      .finally(() => setLoadingCtas(false));
+    setEditMode(true);
+  };
+
+  // Filtro de cuentas igual que en ModalPagoHQ
+  const socFiltro = pago.tipo_componente === "haberes"  ? pago.sociedad_id
+    : pago.tipo_componente === "transferencia"           ? form.sociedad_id
+    : "beta";
+  const cuentasFiltradas = socFiltro ? cuentas.filter(c => c.sociedad === socFiltro) : [];
 
   const handleAnular = async () => {
     if (savingRef.current) return;
@@ -977,8 +1002,42 @@ function ModalAnularPago({ pago, onClose, onAnulado }) {
     } catch (e) { alert("Error: " + e.message); setSaving(false); } finally { savingRef.current = false; }
   };
 
+  const handleGuardar = async () => {
+    if (savingRef.current) return;
+    if (!form.monto) { alert("Completá el monto."); return; }
+    if (!form.cuenta_id) { alert("Seleccioná una cuenta."); return; }
+    savingRef.current = true; setSaving(true);
+    try {
+      const cta = cuentas.find(c => c.id === form.cuenta_id);
+      // Borrar viejo + crear nuevo
+      await deletePago(pago.id, pago.nb_movimiento_id);
+      await appendPago({
+        mes:                    pago.mes,
+        anio:                   pago.anio,
+        legajo_id:              pago.legajo_id,
+        legajo_nombre:          pago.legajo_nombre,
+        sociedad_id:            pago.tipo_componente === "haberes" ? pago.sociedad_id : (form.sociedad_id || "beta"),
+        sociedad_nombre:        pago.tipo_componente === "haberes" ? pago.sociedad_nombre : (sociedades.find(s => s.id === (form.sociedad_id || "beta"))?.nombre ?? "Beta"),
+        tipo_componente:        pago.tipo_componente,
+        monto:                  parseFloat(form.monto) || 0,
+        fecha:                  form.fecha,
+        cuenta_bancaria_id:     form.cuenta_id,
+        cuenta_bancaria_nombre: cta?.nombre ?? "",
+      });
+      await onAnulado();
+    } catch (e) { alert("Error: " + e.message); setSaving(false); } finally { savingRef.current = false; }
+  };
+
+  const iStyle = {
+    border: `1px solid ${T.border}`, borderRadius: 6, padding: "7px 10px",
+    fontSize: 13, fontFamily: T.font, width: "100%", boxSizing: "border-box",
+    color: T.text, background: "#fff",
+  };
+  const LBL = ({ children }) => (
+    <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>{children}</label>
+  );
   const ROW = ({ label, value }) => (
-    <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px solid ${T.border}`, fontSize: 13 }}>
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: `1px solid ${T.border}`, fontSize: 13 }}>
       <span style={{ color: T.muted }}>{label}</span>
       <span style={{ fontWeight: 600, color: T.text }}>{value}</span>
     </div>
@@ -986,25 +1045,88 @@ function ModalAnularPago({ pago, onClose, onAnulado }) {
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100 }}>
-      <div style={{ background: "#fff", borderRadius: 12, padding: 24, width: 380, boxShadow: "0 8px 32px rgba(0,0,0,.18)", fontFamily: T.font }}>
-        <h3 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 700 }}>Pago registrado — {pago.legajo_nombre}</h3>
-        <p style={{ margin: "0 0 16px", fontSize: 12, color: T.muted }}>Anular también eliminará el movimiento en Tesorería.</p>
-        <div style={{ marginBottom: 20 }}>
-          <ROW label="Tipo"   value={meta?.label ?? pago.tipo_componente} />
-          <ROW label="Monto"  value={fmtMoney(pago.monto)} />
-          <ROW label="Fecha"  value={pago.fecha} />
-          <ROW label="Cuenta" value={pago.cuenta_bancaria_nombre || "—"} />
-        </div>
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button onClick={onClose} style={BTN_SECONDARY}>Cerrar</button>
-          <button onClick={handleAnular} disabled={saving} style={{
-            background: saving ? T.dim : T.red, color: "#fff", border: "none",
-            borderRadius: 7, padding: "7px 16px", fontSize: 13, fontWeight: 600,
-            cursor: saving ? "not-allowed" : "pointer",
-          }}>
-            {saving ? "Anulando…" : "Anular pago"}
-          </button>
-        </div>
+      <div style={{ background: "#fff", borderRadius: 12, padding: 24, width: 400, boxShadow: "0 8px 32px rgba(0,0,0,.18)", fontFamily: T.font }}>
+        <h3 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 700 }}>
+          {editMode ? "Editar pago" : "Pago registrado"} — {pago.legajo_nombre}
+        </h3>
+        <p style={{ margin: "0 0 16px", fontSize: 12, color: T.muted }}>
+          {editMode ? "Los cambios reemplazan el pago y el movimiento en Tesorería." : `${meta?.label ?? pago.tipo_componente}`}
+        </p>
+
+        {!editMode ? (
+          <>
+            <div style={{ marginBottom: 20 }}>
+              <ROW label="Tipo"   value={meta?.label ?? pago.tipo_componente} />
+              <ROW label="Monto"  value={fmtMoney(pago.monto)} />
+              <ROW label="Fecha"  value={(pago.fecha ?? "").slice(0, 10)} />
+              <ROW label="Cuenta" value={pago.cuenta_bancaria_nombre || "—"} />
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={onClose} style={BTN_SECONDARY}>Cerrar</button>
+              <button onClick={handleStartEdit} style={{ ...BTN_SECONDARY, borderColor: T.blue, color: T.blue }}>✏️ Editar</button>
+              <button onClick={handleAnular} disabled={saving} style={{
+                background: saving ? T.dim : T.red, color: "#fff", border: "none",
+                borderRadius: 7, padding: "7px 16px", fontSize: 13, fontWeight: 600,
+                cursor: saving ? "not-allowed" : "pointer",
+              }}>
+                {saving ? "Anulando…" : "Anular"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div>
+                <LBL>Monto (ARS)</LBL>
+                <input style={iStyle} type="number" value={form.monto} onChange={e => set("monto", e.target.value)} />
+              </div>
+              <div>
+                <LBL>Fecha</LBL>
+                <input style={iStyle} type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)} />
+              </div>
+              {pago.tipo_componente === "transferencia" && (
+                <div>
+                  <LBL>Sociedad que transfiere</LBL>
+                  <select style={iStyle} value={form.sociedad_id}
+                    onChange={e => setForm(f => ({ ...f, sociedad_id: e.target.value, cuenta_id: "" }))}>
+                    <option value="">— Seleccioná —</option>
+                    {sociedades.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+                  </select>
+                </div>
+              )}
+              {(pago.tipo_componente === "deposito" || pago.tipo_componente === "efectivo") && (
+                <div style={{ fontSize: 12, color: T.muted, background: T.bg, borderRadius: 5, padding: "6px 10px" }}>
+                  Sociedad: <strong style={{ color: T.text }}>Beta</strong>
+                </div>
+              )}
+              <div>
+                <LBL>{pago.tipo_componente === "efectivo" ? "Caja" : "Cuenta bancaria"}</LBL>
+                {loadingCtas
+                  ? <div style={{ fontSize: 12, color: T.muted }}>Cargando…</div>
+                  : <select style={iStyle} value={form.cuenta_id} onChange={e => set("cuenta_id", e.target.value)}
+                      disabled={pago.tipo_componente === "transferencia" && !form.sociedad_id}>
+                      <option value="">— Seleccioná —</option>
+                      {cuentasFiltradas.map(c => {
+                        const soc = sociedades.find(s => s.id === c.sociedad)?.nombre ?? c.sociedad;
+                        const mon = c.moneda !== "ARS" ? ` (${c.moneda})` : "";
+                        return <option key={c.id} value={c.id}>{soc} — {c.nombre}{mon}</option>;
+                      })}
+                    </select>
+                }
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+              <button onClick={() => setEditMode(false)} style={BTN_SECONDARY}>Cancelar</button>
+              <button onClick={handleGuardar} disabled={saving} style={{
+                background: saving ? T.dim : T.blue, color: "#fff", border: "none",
+                borderRadius: 7, padding: "7px 16px", fontSize: 13, fontWeight: 600,
+                cursor: saving ? "not-allowed" : "pointer",
+              }}>
+                {saving ? "Guardando…" : "Guardar cambios"}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
