@@ -512,8 +512,8 @@ function FilaHQ({ liq, idx, editando, ownerStyle, onEditar, onCancelarEdicion, o
                     borderRadius: 6, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: saving ? "not-allowed" : "pointer",
                   }}>{saving ? "Guardando…" : "Guardar"}</button>
                   <button onClick={onCancelarEdicion} style={{
-                    border: "1px solid #e2e8f0", background: "#fff", borderRadius: 6,
-                    padding: "7px 14px", fontSize: 12, cursor: "pointer",
+                    border: "1px solid #94a3b8", background: "#fff", borderRadius: 6,
+                    padding: "7px 14px", fontSize: 12, cursor: "pointer", color: "#1e293b",
                   }}>Cancelar</button>
                 </div>
               </div>
