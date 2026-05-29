@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import * as XLSX from "xlsx";
 import {
   fetchLegajos, fetchLiquidaciones, saveLiquidacion, updateLegajo,
-  fetchPagos, appendPago, ROLES_HQ,
+  fetchPagos, appendPago, deletePago, ROLES_HQ,
   fetchSociedadesNumbers, fetchCuentasBancariasNumbers,
 } from "../lib/sueldosApi";
 
@@ -606,7 +606,8 @@ function isPaid(liq, tipo) {
 }
 
 function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago, onBatchPaid }) {
-  const [batchModal, setBatchModal] = useState(null); // { tipo }
+  const [batchModal,  setBatchModal]  = useState(null); // { tipo }
+  const [anularModal, setAnularModal] = useState(null); // pago object
 
   const todos = [...liqStaff, ...liqOwners];
 
@@ -667,6 +668,7 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago, o
               {TIPOS_PAGO.map(({ id, color }) => {
                 const monto = montos[id];
                 const paid  = isPaid(liq, id);
+                const pago  = paid ? liq.pagos.find(p => p.tipo_componente === id) : null;
                 if (!monto) return (
                   <td key={id} style={TD({ textAlign: "right" })}>
                     <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
@@ -680,7 +682,13 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago, o
                     <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
                       {fmtMoney(monto)}
                       <span style={{ display: "inline-flex", justifyContent: "center", width: 20, fontSize: 11, fontWeight: 700 }}>
-                        {paid ? "✓" : ""}
+                        {pago
+                          ? <button
+                              onClick={() => setAnularModal(pago)}
+                              title="Ver / anular este pago"
+                              style={{ background: "none", border: "none", cursor: "pointer", color: T.green, fontSize: 12, fontWeight: 700, padding: 0, lineHeight: 1 }}>✓</button>
+                          : ""
+                        }
                       </span>
                     </div>
                   </td>
@@ -764,6 +772,14 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago, o
           mes={mes} anio={anio}
           onClose={() => setBatchModal(null)}
           onSaved={() => { setBatchModal(null); onBatchPaid?.(); }}
+        />
+      )}
+
+      {anularModal && (
+        <ModalAnularPago
+          pago={anularModal}
+          onClose={() => setAnularModal(null)}
+          onAnulado={() => { setAnularModal(null); onBatchPaid?.(); }}
         />
       )}
     </div>
@@ -948,57 +964,115 @@ function ModalBatchPago({ tipo, liqs, mes, anio, onClose, onSaved }) {
   );
 }
 
-// ── Modal pago HQ ─────────────────────────────────────────────────────────────
+// ── Modal anular pago ─────────────────────────────────────────────────────────
+
+function ModalAnularPago({ pago, onClose, onAnulado }) {
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const meta = TIPOS_PAGO.find(t => t.id === pago.tipo_componente);
+
+  const handleAnular = async () => {
+    if (savingRef.current) return;
+    savingRef.current = true; setSaving(true);
+    try {
+      await deletePago(pago.id, pago.nb_movimiento_id);
+      await onAnulado();
+    } catch (e) { alert("Error: " + e.message); setSaving(false); } finally { savingRef.current = false; }
+  };
+
+  const ROW = ({ label, value }) => (
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px solid ${T.border}`, fontSize: 13 }}>
+      <span style={{ color: T.muted }}>{label}</span>
+      <span style={{ fontWeight: 600, color: T.text }}>{value}</span>
+    </div>
+  );
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100 }}>
+      <div style={{ background: "#fff", borderRadius: 12, padding: 24, width: 380, boxShadow: "0 8px 32px rgba(0,0,0,.18)", fontFamily: T.font }}>
+        <h3 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 700 }}>Pago registrado — {pago.legajo_nombre}</h3>
+        <p style={{ margin: "0 0 16px", fontSize: 12, color: T.muted }}>Anular también eliminará el movimiento en Tesorería.</p>
+        <div style={{ marginBottom: 20 }}>
+          <ROW label="Tipo"   value={meta?.label ?? pago.tipo_componente} />
+          <ROW label="Monto"  value={fmtMoney(pago.monto)} />
+          <ROW label="Fecha"  value={pago.fecha} />
+          <ROW label="Cuenta" value={pago.cuenta_bancaria_nombre || "—"} />
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button onClick={onClose} style={BTN_SECONDARY}>Cerrar</button>
+          <button onClick={handleAnular} disabled={saving} style={{
+            background: saving ? T.dim : T.red, color: "#fff", border: "none",
+            borderRadius: 7, padding: "7px 16px", fontSize: 13, fontWeight: 600,
+            cursor: saving ? "not-allowed" : "pointer",
+          }}>
+            {saving ? "Anulando…" : "Anular pago"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Modal pago HQ (individual) ────────────────────────────────────────────────
 
 function ModalPagoHQ({ mes, anio, liq, onClose, onSaved }) {
   const [form, setForm] = useState({
     tipo_componente: "haberes",
-    monto: liq?.monto_haberes ?? "",
-    fecha: new Date().toISOString().slice(0, 10),
-    cuenta_bancaria_nombre: "",
-    concepto: "",
+    monto:           liq?.monto_haberes ?? "",
+    fecha:           new Date().toISOString().slice(0, 10),
+    cuenta_id:       "",
   });
-  const [saving, setSaving] = useState(false);
+  const [cuentas,     setCuentas]     = useState([]);
+  const [sociedades,  setSociedades]  = useState([]);
+  const [loadingCtas, setLoadingCtas] = useState(true);
+  const [saving,      setSaving]      = useState(false);
   const savingRef = useRef(false);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
+  useEffect(() => {
+    Promise.all([fetchSociedadesNumbers(), fetchCuentasBancariasNumbers()])
+      .then(([socs, ctas]) => { setSociedades(socs); setCuentas(ctas); })
+      .finally(() => setLoadingCtas(false));
+  }, []);
+
   const handleTipo = (tipo) => {
-    let monto = "";
-    if (tipo === "haberes")       monto = liq?.monto_haberes       ?? "";
-    if (tipo === "deposito")      monto = liq?.monto_deposito      ?? "";
-    if (tipo === "transferencia") monto = liq?.monto_transferencia ?? "";
-    if (tipo === "efectivo") {
-      const ef = Math.max(0, (liq?.sueldo_total_legajo || 0) - (liq?.monto_haberes || 0) - (liq?.monto_deposito || 0) - (liq?.monto_transferencia || 0));
-      monto = ef || "";
-    }
+    const ef = Math.max(0, (liq?.sueldo_total_legajo || 0) - (liq?.monto_haberes || 0) - (liq?.monto_deposito || 0) - (liq?.monto_transferencia || 0));
+    const montos = { haberes: liq?.monto_haberes, deposito: liq?.monto_deposito, transferencia: liq?.monto_transferencia, efectivo: ef || "" };
     set("tipo_componente", tipo);
-    if (monto) set("monto", monto);
+    if (montos[tipo]) set("monto", montos[tipo]);
   };
 
   const handleSave = async () => {
     if (savingRef.current) return;
-    if (!form.monto || !form.cuenta_bancaria_nombre) { alert("Completá monto y cuenta bancaria."); return; }
+    if (!form.monto) { alert("Completá el monto."); return; }
+    if (!form.cuenta_id && form.tipo_componente !== "efectivo") { alert("Seleccioná una cuenta bancaria."); return; }
     savingRef.current = true; setSaving(true);
     try {
+      const cta = cuentas.find(c => c.id === form.cuenta_id);
       await appendPago({
         mes, anio,
-        legajo_id: liq.legajo_id, legajo_nombre: liq.legajo_nombre,
-        sociedad_id: liq.sociedad_id, sociedad_nombre: liq.sociedad_nombre,
-        tipo_componente: form.tipo_componente,
-        monto: parseFloat(form.monto) || 0,
-        fecha: form.fecha,
-        cuenta_bancaria_id: form.cuenta_bancaria_nombre,
-        cuenta_bancaria_nombre: form.cuenta_bancaria_nombre,
-        concepto: form.concepto,
+        legajo_id:              liq.legajo_id,
+        legajo_nombre:          liq.legajo_nombre,
+        sociedad_id:            liq.sociedad_id,
+        sociedad_nombre:        liq.sociedad_nombre,
+        tipo_componente:        form.tipo_componente,
+        monto:                  parseFloat(form.monto) || 0,
+        fecha:                  form.fecha,
+        cuenta_bancaria_id:     form.cuenta_id,
+        cuenta_bancaria_nombre: cta?.nombre ?? "",
       });
       await onSaved();
     } catch (e) { alert("Error: " + e.message); setSaving(false); } finally { savingRef.current = false; }
   };
 
-  const inputStyle = {
+  const iStyle = {
     border: `1px solid ${T.border}`, borderRadius: 6, padding: "7px 10px",
     fontSize: 13, fontFamily: T.font, width: "100%", boxSizing: "border-box",
+    color: T.text, background: "#fff",
   };
+  const LBL = ({ children }) => (
+    <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>{children}</label>
+  );
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
@@ -1007,8 +1081,8 @@ function ModalPagoHQ({ mes, anio, liq, onClose, onSaved }) {
         <p style={{ margin: "0 0 16px", fontSize: 12, color: T.muted }}>Pendiente: {fmtMoney(liq?.pendiente)}</p>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>Componente</label>
-            <select style={inputStyle} value={form.tipo_componente} onChange={e => handleTipo(e.target.value)}>
+            <LBL>Componente</LBL>
+            <select style={iStyle} value={form.tipo_componente} onChange={e => handleTipo(e.target.value)}>
               <option value="haberes">Haberes (recibo de sueldo)</option>
               <option value="deposito">Depósito bancario</option>
               <option value="transferencia">Transferencia (factura monotributo)</option>
@@ -1016,25 +1090,37 @@ function ModalPagoHQ({ mes, anio, liq, onClose, onSaved }) {
             </select>
           </div>
           <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>Monto (ARS)</label>
-            <input style={inputStyle} type="number" value={form.monto} onChange={e => set("monto", e.target.value)} />
+            <LBL>Monto (ARS)</LBL>
+            <input style={iStyle} type="number" value={form.monto} onChange={e => set("monto", e.target.value)} />
           </div>
           <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>Fecha</label>
-            <input style={inputStyle} type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)} />
+            <LBL>Fecha</LBL>
+            <input style={iStyle} type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)} />
           </div>
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>Cuenta bancaria</label>
-            <input style={inputStyle} value={form.cuenta_bancaria_nombre} onChange={e => set("cuenta_bancaria_nombre", e.target.value)} />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>Concepto (opcional)</label>
-            <input style={inputStyle} value={form.concepto} onChange={e => set("concepto", e.target.value)} />
-          </div>
+          {form.tipo_componente !== "efectivo" && (
+            <div>
+              <LBL>Cuenta bancaria</LBL>
+              {loadingCtas
+                ? <div style={{ fontSize: 12, color: T.muted }}>Cargando…</div>
+                : <select style={iStyle} value={form.cuenta_id} onChange={e => set("cuenta_id", e.target.value)}>
+                    <option value="">— Seleccioná —</option>
+                    {cuentas.map(c => {
+                      const soc = sociedades.find(s => s.id === c.sociedad)?.nombre ?? c.sociedad;
+                      const mon = c.moneda !== "ARS" ? ` (${c.moneda})` : "";
+                      return <option key={c.id} value={c.id}>{soc} — {c.nombre}{mon}</option>;
+                    })}
+                  </select>
+              }
+            </div>
+          )}
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
-          <button onClick={onClose} style={{ border: "1px solid #94a3b8", background: "#fff", borderRadius: 7, padding: "7px 14px", fontSize: 13, cursor: "pointer", color: T.text }}>Cancelar</button>
-          <button onClick={handleSave} disabled={saving} style={{ background: saving ? T.dim : T.green, color: "#fff", border: "none", borderRadius: 7, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: saving ? "not-allowed" : "pointer" }}>
+          <button onClick={onClose} style={BTN_SECONDARY}>Cancelar</button>
+          <button onClick={handleSave} disabled={saving} style={{
+            background: saving ? T.dim : T.green, color: "#fff", border: "none",
+            borderRadius: 7, padding: "7px 16px", fontSize: 13, fontWeight: 600,
+            cursor: saving ? "not-allowed" : "pointer",
+          }}>
             {saving ? "Procesando…" : "Registrar y enviar a Tesorería"}
           </button>
         </div>
