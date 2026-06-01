@@ -2126,6 +2126,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
         month: monthFinal, year: yearFinal,
         currency: pagoComp.currency ?? "ARS",
         ref: conceptoFinal, nota: conceptoFinal,
+        contado: true,
       };
       if (fr.country === "Argentina" && factComp.currency === "ARS") {
         const result = await emitirComprobante({

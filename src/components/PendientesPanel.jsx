@@ -1106,6 +1106,18 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                 ↺ Reintentar {pagoBatchProgress.errors.length} fallido{pagoBatchProgress.errors.length !== 1 ? "s" : ""}
               </button>
             )}
+            {pagoBatchProgress && !pagoBatchRunning && pagoBatchProgress.errors.length > 0 && (
+              <button
+                className="ghost"
+                style={{ fontSize: 10, padding: "3px 10px", color: "var(--muted)" }}
+                onClick={() => {
+                  const lines = pagoBatchProgress.errors.map(e => `${e.fr.name}: ${e.msg}`).join('\n');
+                  alert(lines);
+                }}
+              >
+                Ver errores
+              </button>
+            )}
             {pagoBatchProgress && !pagoBatchRunning && (
               <button className="ghost" style={{ fontSize: 10, padding: "3px 10px" }} onClick={() => { setPagoBatchProgress(null); setSelectedPagoIds(new Set()); }}>✕ Cerrar</button>
             )}
