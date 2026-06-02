@@ -809,6 +809,14 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                       )}
                       <button
                         className="ghost"
+                        title="Ya existe en Facturante — adjuntar número de factura sin re-emitir"
+                        style={{ fontSize: 10, padding: "2px 8px", color: openAdj ? "var(--muted)" : "var(--cyan)", whiteSpace: "nowrap", opacity: busy ? 0.4 : 1 }}
+                        onClick={() => openAdj ? handleCerrarAdjuntar(comp.id) : handleAbrirAdjuntar(comp.id)}
+                      >
+                        {openAdj ? "Cancelar" : "Ya emitida →"}
+                      </button>
+                      <button
+                        className="ghost"
                         title="Editar descripción"
                         style={{ fontSize: 11, padding: "2px 6px", color: editConcepto ? "var(--cyan)" : "var(--muted)", opacity: busy ? 0.4 : 1 }}
                         onClick={() => {
@@ -841,13 +849,13 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                     {/* Input adjuntar inline */}
                     {openAdj && (
                       <div style={{ background: "rgba(34,211,238,.05)", border: "1px solid rgba(34,211,238,.2)", borderTop: "none", borderRadius: adjErr ? 0 : "0 0 7px 7px", padding: "8px 12px", display: "flex", gap: 8, alignItems: "center" }}>
-                        <span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>Nro. factura franquiciado:</span>
+                        <span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>Nro. de factura AFIP:</span>
                         <input
                           autoFocus
                           value={adjuntarVal[comp.id] ?? ""}
                           onChange={e => setAdjuntarVal(p => ({ ...p, [comp.id]: e.target.value }))}
                           onKeyDown={e => { if (e.key === "Enter") handleConfirmAdjuntar(fr, comp); if (e.key === "Escape") handleCerrarAdjuntar(comp.id); }}
-                          placeholder="Nro. de factura del franquiciado"
+                          placeholder="Ej: FA 0004-00000089"
                           style={{ flex: 1, background: "var(--bg)", border: "1px solid var(--border2)", borderRadius: 5, padding: "4px 8px", fontSize: 12, color: "var(--text)", fontFamily: "var(--font)" }}
                         />
                         <button
