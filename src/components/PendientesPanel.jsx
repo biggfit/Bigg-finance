@@ -855,7 +855,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                           value={adjuntarVal[comp.id] ?? ""}
                           onChange={e => setAdjuntarVal(p => ({ ...p, [comp.id]: e.target.value }))}
                           onKeyDown={e => { if (e.key === "Enter") handleConfirmAdjuntar(fr, comp); if (e.key === "Escape") handleCerrarAdjuntar(comp.id); }}
-                          placeholder="Ej: FA 0004-00000089"
+                          placeholder="Ej: FA 0004-00000089 o 0004-00000089"
                           style={{ flex: 1, background: "var(--bg)", border: "1px solid var(--border2)", borderRadius: 5, padding: "4px 8px", fontSize: 12, color: "var(--text)", fontFamily: "var(--font)" }}
                         />
                         <button

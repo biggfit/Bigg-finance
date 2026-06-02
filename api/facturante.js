@@ -349,9 +349,14 @@ function fetchPdfBuffer(pdfUrl) {
  */
 function parseInvoiceLabel(label) {
   if (!label) return null;
-  const m = String(label).match(/^(FA|FB|NCA|NCB|NDA|NDB)\s*0*(\d+)-0*(\d+)$/);
-  if (!m) return null;
-  return { tipo: m[1], prefijo: m[2], numero: parseInt(m[3], 10) };
+  const s = String(label).trim();
+  // Formato completo: "FA 0004-00000089", "NCA 0100-00000001", etc.
+  let m = s.match(/^(FA|FB|NCA|NCB|NDA|NDB)\s*0*(\d+)-0*(\d+)$/i);
+  if (m) return { tipo: m[1].toUpperCase(), prefijo: m[2], numero: parseInt(m[3], 10) };
+  // Formato bare: "0004-00000089" o "00004-0000125" (sin prefijo — asume FA)
+  m = s.match(/^0*(\d+)-0*(\d+)$/);
+  if (m) return { tipo: 'FA', prefijo: m[1], numero: parseInt(m[2], 10) };
+  return null;
 }
 
 function escXml(str) {
