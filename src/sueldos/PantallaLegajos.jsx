@@ -251,6 +251,22 @@ function Section({ title, hint, children, cols = 3 }) {
   );
 }
 
+// Input numérico con separador de miles (es-AR) que guarda el valor crudo.
+function MoneyInput({ value, onChange, style, placeholder }) {
+  const digits  = String(value ?? "").replace(/[^\d]/g, "");
+  const display = digits === "" ? "" : Number(digits).toLocaleString("es-AR");
+  return (
+    <input
+      style={style}
+      type="text"
+      inputMode="numeric"
+      value={display}
+      placeholder={placeholder}
+      onChange={e => onChange(e.target.value.replace(/[^\d]/g, ""))}
+    />
+  );
+}
+
 function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
   const [form, setForm]     = useState({ ...FORM_VACIO, ...initial });
   const [saving, setSaving] = useState(false);
@@ -365,6 +381,7 @@ function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
 
       {/* Datos de contratación */}
       <Section title="Datos de contratación">
+        {/* Col 1: Rol + ID Bigg Eye */}
         <div style={{ display: "flex", gap: 12 }}>
           <div style={{ flex: 1 }}>
             <label style={labelStyle}>Rol *</label>
@@ -373,32 +390,25 @@ function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
               <optgroup label="HQ">{ROLES_HQ.map(r => <option key={r} value={r}>{r}</option>)}</optgroup>
             </select>
           </div>
-          <div style={{ flex: "0 0 70px" }}>
-            <label style={labelStyle} title="Horas mensuales contratadas (base para coaches)">Hs/mes</label>
-            <input style={inputStyle} type="number" value={form.horas_contratadas} onChange={e => set("horas_contratadas", e.target.value)} placeholder="0" />
-          </div>
           <div style={{ flex: "0 0 80px" }}>
             <label style={labelStyle} title="ID del rol/persona en Bigg Eye, para cruzar datos">ID Bigg Eye</label>
             <input style={inputStyle} value={form.bigg_eye_id} onChange={e => set("bigg_eye_id", e.target.value)} placeholder="—" />
           </div>
         </div>
 
-        {/* Relación con la empresa + detalle a la derecha */}
-        <div style={{ gridColumn: "span 2", display: "flex", gap: 12, alignItems: "flex-start" }}>
-          <div style={{ flex: "0 0 200px" }}>
-            <label style={labelStyle}>Relación con la empresa</label>
-            <select style={inputStyle} value={form.tipo_contratacion} onChange={e => set("tipo_contratacion", e.target.value)}>
-              <option value="">— Sin definir —</option>
-              {TIPOS_CONTRATACION.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
-            </select>
-          </div>
-          {form.tipo_contratacion && (
-            <span style={{ flex: 1, fontSize: 11, color: T.dim, alignSelf: "center", lineHeight: 1.4 }}>
-              {form.tipo_contratacion === "monotributista"
-                ? "La empresa recibe y paga su factura como egreso"
-                : "Relación laboral formal — genera recibo de sueldo y cargas sociales"}
-            </span>
-          )}
+        {/* Col 2: Hs/mes */}
+        <div>
+          <label style={labelStyle} title="Horas mensuales contratadas (base para coaches)">Hs/mes</label>
+          <input style={inputStyle} type="number" value={form.horas_contratadas} onChange={e => set("horas_contratadas", e.target.value)} placeholder="0" />
+        </div>
+
+        {/* Col 3: Relación con la empresa */}
+        <div>
+          <label style={labelStyle}>Relación con la empresa</label>
+          <select style={inputStyle} value={form.tipo_contratacion} onChange={e => set("tipo_contratacion", e.target.value)}>
+            <option value="">— Sin definir —</option>
+            {TIPOS_CONTRATACION.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+          </select>
         </div>
 
         {/* Sociedad / Centro de costo — apilados */}
@@ -443,14 +453,14 @@ function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div>
             <label style={labelStyle}>Sueldo total acordado (ARS)</label>
-            <input style={inputStyle} type="number" value={form.sueldo_total} onChange={e => set("sueldo_total", e.target.value)} placeholder="0" />
+            <MoneyInput style={inputStyle} value={form.sueldo_total} onChange={v => set("sueldo_total", v)} placeholder="0" />
           </div>
           <div>
             <label style={labelStyle}>
               Blanco neto (ARS)
               {!form.blanco_neto && !form.fecha_alta && <span style={{ color: T.dim, fontWeight: 400 }}> — sin blanco ni alta = todo efectivo</span>}
             </label>
-            <input style={inputStyle} type="number" value={form.blanco_neto} onChange={e => set("blanco_neto", e.target.value)} placeholder="0" />
+            <MoneyInput style={inputStyle} value={form.blanco_neto} onChange={v => set("blanco_neto", v)} placeholder="0" />
           </div>
         </div>
       </Section>
@@ -546,7 +556,7 @@ function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
                           </select>
                         </td>
                         <td style={{ ...fpTd, width: 100 }}>
-                          <input type="number" style={fpInput} value={l.importe} onChange={e => fpUpd(l.id, "importe", e.target.value)} placeholder="0" />
+                          <MoneyInput style={fpInput} value={l.importe} onChange={v => fpUpd(l.id, "importe", v)} placeholder="0" />
                         </td>
                         <td style={{ ...fpTd, minWidth: 140 }}>
                           <input style={fpInput} value={l.titular ?? ""} onChange={e => fpUpd(l.id, "titular", e.target.value)} disabled={esEfectivo} placeholder={esEfectivo ? "—" : "Nombre de la cuenta"} />
