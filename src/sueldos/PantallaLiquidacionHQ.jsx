@@ -3,7 +3,8 @@ import * as XLSX from "xlsx";
 import {
   fetchLegajos, fetchLiquidaciones, saveLiquidacion, updateLegajo,
   fetchPagos, appendPago, deletePago, ROLES_HQ,
-  fetchSociedadesNumbers, fetchCuentasBancariasNumbers,
+  FP_TIPOS, FP_TIPO_LABEL, FP_TIPO_COLOR, esTransferencia,
+  fetchSociedadesNumbers, fetchCuentasBancariasNumbers, fetchCuentasContablesNumbers,
 } from "../lib/sueldosApi";
 
 // ── Estilos compartidos ───────────────────────────────────────────────────────
@@ -22,7 +23,9 @@ const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
 
 const fmtMoney = n => (!n && n !== 0) ? "—" : "$" + Math.round(n).toLocaleString("es-AR");
 const redondear = n => Math.round(n / 500) * 500;
-const hoy = new Date();
+const hoy     = new Date();
+const MES_DEF = hoy.getMonth() === 0 ? 12 : hoy.getMonth();
+const ANO_DEF = hoy.getMonth() === 0 ? hoy.getFullYear() - 1 : hoy.getFullYear();
 
 const TH = (extra = {}) => ({
   padding: "8px 12px", textAlign: "left", fontWeight: 600, color: T.muted,
@@ -48,11 +51,72 @@ const BTN_SECONDARY = {
   padding: "8px 20px", fontSize: 13, cursor: "pointer", color: T.text,
 };
 
+const BTN_EXPORT = (color) => ({
+  display: "flex", alignItems: "center", gap: 6,
+  border: `1px solid ${color}`, background: "#fff", borderRadius: 7,
+  padding: "7px 14px", fontSize: 12, fontWeight: 600,
+  cursor: "pointer", color, fontFamily: T.font,
+});
+
+const MODAL_INPUT = {
+  border: `1px solid ${T.border}`, borderRadius: 6, padding: "7px 10px",
+  fontSize: 13, fontFamily: T.font, width: "100%", boxSizing: "border-box",
+  color: T.text, background: "#fff",
+};
+
+function ModalLabel({ children }) {
+  return <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>{children}</label>;
+}
+
+function ctaLabel(c, sociedades) {
+  const soc = sociedades.find(s => s.id === c.sociedad)?.nombre ?? c.sociedad;
+  const mon = c.moneda !== "ARS" ? ` (${c.moneda})` : "";
+  return `${soc} — ${c.nombre}${mon}`;
+}
+
+// ── Formas de pago (receta de líneas por empleado) ────────────────────────────
+
+const nuevaLineaId = () => `fp-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+const lineaVacia = (tipo = "deposito") => ({
+  id: nuevaLineaId(), tipo, importe: 0,
+  banco: "", tipo_cuenta: "", cuenta: "", cbu: "", cuit: "", nota: "",
+});
+
+// Receta por defecto para un legajo sin formas de pago cargadas:
+// 1 línea de haberes (= blanco_neto, con datos bancarios) + 1 de efectivo (el resto).
+function defaultLineasFromLeg(leg) {
+  const total  = leg?.sueldo_total || leg?.blanco_neto || 0;
+  const blanco = leg?.blanco_neto || 0;
+  const lineas = [];
+  if (blanco > 0)
+    lineas.push({ ...lineaVacia("haberes"), importe: blanco, banco: leg?.banco || "", cbu: leg?.cbu || "" });
+  const efectivo = Math.max(0, total - blanco);
+  if (efectivo > 0 || !lineas.length)
+    lineas.push({ ...lineaVacia("efectivo"), importe: efectivo });
+  return lineas;
+}
+
+// Reconstruye líneas a partir de los escalares monto_* de liquidaciones legacy
+// (sin formas_pago). Ids estables por tipo para el fallback de isPaid.
+function legacyLineasFromLiq(liq, leg) {
+  const total    = leg?.sueldo_total || 0;
+  const haberes  = liq.monto_haberes || 0;
+  const deposito = liq.monto_deposito || 0;
+  const transf   = liq.monto_transferencia || 0;
+  const efectivo = Math.max(0, total - haberes - deposito - transf);
+  const out = [];
+  if (haberes)  out.push({ ...lineaVacia("haberes"),       id: "leg-haberes",       importe: haberes,  banco: leg?.banco || "", cbu: leg?.cbu || "" });
+  if (deposito) out.push({ ...lineaVacia("deposito"),      id: "leg-deposito",      importe: deposito });
+  if (transf)   out.push({ ...lineaVacia("transferencia"), id: "leg-transferencia", importe: transf });
+  if (efectivo) out.push({ ...lineaVacia("efectivo"),      id: "leg-efectivo",      importe: efectivo });
+  return out;
+}
+
 // ── Componente principal ──────────────────────────────────────────────────────
 
-export default function PantallaLiquidacionHQ() {
-  const [mes,  setMes]  = useState(hoy.getMonth() + 1);
-  const [anio, setAnio] = useState(hoy.getFullYear());
+export default function PantallaLiquidacionHQ({ pais = "" }) {
+  const [mes,  setMes]  = useState(MES_DEF);
+  const [anio, setAnio] = useState(ANO_DEF);
 
   const [legajos,       setLegajos]       = useState([]);
   const [liquidaciones, setLiquidaciones] = useState([]);
@@ -64,27 +128,27 @@ export default function PantallaLiquidacionHQ() {
   const [paso,             setPaso]             = useState(1);
   const [sueldosDraft,     setSueldosDraft]     = useState({});  // { [legajo_id]: { pct: "", total: N } }
   const [actualizarLegs,   setActualizarLegs]   = useState(false);
-  const [pagoDraft,        setPagoDraft]        = useState({});  // { [legajo_id]: { monto_haberes, monto_monotributo } }
-  const [liqsPrevMes,      setLiqsPrevMes]      = useState([]);
+  const [formasDraft,      setFormasDraft]      = useState({});  // { [legajo_id]: lineas[] }
+  const [actualizarRecetas, setActualizarRecetas] = useState(false);
   const [showPago,         setShowPago]         = useState(null);
 
   useEffect(() => { load(); }, [mes, anio]);
 
   async function load() {
     setLoading(true);
-    const mesPrev  = mes === 1 ? 12 : mes - 1;
-    const anioPrev = mes === 1 ? anio - 1 : anio;
     try {
-      const [legs, liqs, pags, liqsPrev] = await Promise.all([
+      const [legs, liqs, pags] = await Promise.all([
         fetchLegajos(),
         fetchLiquidaciones(mes, anio),
         fetchPagos(mes, anio),
-        fetchLiquidaciones(mesPrev, anioPrev),
       ]);
-      setLegajos(legs.filter(l => ROLES_HQ.includes(l.rol) && l.activo));
+      const legsHQ = legs.filter(l => ROLES_HQ.includes(l.rol) && l.activo);
+      const descartados = legs.filter(l => l.activo && !ROLES_HQ.includes(l.rol));
+      if (descartados.length)
+        console.warn("[HQ] Legajos activos descartados por rol desconocido:", descartados.map(l => `${l.nombre} → "${l.rol}"`));
+      setLegajos(legsHQ);
       setLiquidaciones(liqs.filter(l => ROLES_HQ.includes(l.rol)));
       setPagos(pags);
-      setLiqsPrevMes(liqsPrev.filter(l => ROLES_HQ.includes(l.rol)));
     } finally { setLoading(false); }
   }
 
@@ -94,36 +158,38 @@ export default function PantallaLiquidacionHQ() {
     if (nuevos.length === 0) { alert("Todos los empleados ya tienen liquidación."); return; }
     setSaving(true);
     try {
-      await Promise.all(nuevos.map(leg => saveLiquidacion({
-        mes, anio,
-        legajo_id: leg.id, legajo_nombre: leg.nombre,
-        sociedad_id: leg.sociedad_id, sociedad_nombre: leg.sociedad_nombre,
-        sede_id: leg.sede_id, sede_nombre: leg.sede_nombre,
-        rol: leg.rol, tipo_contratacion: leg.tipo_contratacion,
-        sueldo_base:         leg.sueldo_total || leg.blanco_neto,
-        monto_haberes:       leg.blanco_neto,
-        monto_deposito:      0,
-        monto_transferencia: 0,
-        monto_efectivo:      Math.max(0, (leg.sueldo_total || 0) - (leg.blanco_neto || 0)),
-        estado: "borrador",
-      })));
+      for (const leg of nuevos) {
+        const formas_pago = leg.formas_pago?.length ? leg.formas_pago : defaultLineasFromLeg(leg);
+        await saveLiquidacion({
+          mes, anio,
+          legajo_id: leg.id, legajo_nombre: leg.nombre,
+          sociedad_id: leg.sociedad_id, sociedad_nombre: leg.sociedad_nombre,
+          sede_id: leg.sede_id, sede_nombre: leg.sede_nombre,
+          rol: leg.rol, tipo_contratacion: leg.tipo_contratacion,
+          sueldo_base: leg.sueldo_total || leg.blanco_neto,
+          formas_pago,
+          estado: "borrador",
+        });
+      }
       await load();
+    } catch (e) {
+      alert("Error al inicializar: " + e.message);
     } finally { setSaving(false); }
   }
 
-  // Enriquecer liquidaciones con datos del legajo y pagos
   const liqs = useMemo(() => {
+    const legById = new Map(legajos.map(l => [l.id, l]));
     return liquidaciones.map(liq => {
-      const leg              = legajos.find(l => l.id === liq.legajo_id);
-      const pagosMios        = pagos.filter(p => p.legajo_id === liq.legajo_id);
-      const totalPagado      = pagosMios.reduce((s, p) => s + p.monto, 0);
-      const sueldo_total_legajo = leg?.sueldo_total || 0;
-      const efectivo_real    = Math.max(0, sueldo_total_legajo - (liq.monto_haberes || 0) - (liq.monto_deposito || 0) - (liq.monto_transferencia || 0));
-      const total_bruto      = (liq.monto_haberes || 0) + (liq.monto_deposito || 0) + (liq.monto_transferencia || 0) + efectivo_real;
+      const leg         = legById.get(liq.legajo_id);
+      const lineas      = liq.formas_pago?.length ? liq.formas_pago : legacyLineasFromLiq(liq, leg);
+      const pagosMios   = pagos.filter(p => p.legajo_id === liq.legajo_id);
+      const totalPagado = pagosMios.reduce((s, p) => s + p.monto, 0);
+      const total_bruto = lineas.reduce((s, l) => s + (Number(l.importe) || 0), 0);
       return {
         ...liq,
-        sueldo_total_legajo,
-        blanco_neto_legajo: leg?.blanco_neto || 0,
+        lineas,
+        sueldo_total_legajo: leg?.sueldo_total || 0,
+        blanco_neto_legajo:  leg?.blanco_neto || 0,
         cbu:   leg?.cbu   || "",
         banco: leg?.banco || "",
         pagos: pagosMios,
@@ -134,7 +200,6 @@ export default function PantallaLiquidacionHQ() {
     });
   }, [liquidaciones, pagos, legajos]);
 
-  // Inicializar sueldosDraft cuando cargan liqs (solo entradas nuevas)
   useEffect(() => {
     if (!liqs.length) return;
     setSueldosDraft(prev => {
@@ -147,64 +212,69 @@ export default function PantallaLiquidacionHQ() {
     });
   }, [liqs.length]);
 
+  const faltantes = useMemo(() => {
+    const conLiq = new Set(liqs.map(l => l.legajo_id));
+    return legajos.filter(l => !conLiq.has(l.id));
+  }, [legajos, liqs]);
+
   const getDraftTotal = (liq) => sueldosDraft[liq.legajo_id]?.total ?? liq.sueldo_total_legajo;
 
-  // Paso 1 → 2: opcionalmente actualizar legajos, luego init pagoDraft
   async function handleConfirmarSueldos() {
     if (actualizarLegs) {
       setSaving(true);
       try {
-        await Promise.all(liqs.map(liq => {
+        for (const liq of liqs) {
           const nuevoTotal = getDraftTotal(liq);
-          if (nuevoTotal === liq.sueldo_total_legajo) return null;
-          return updateLegajo(liq.legajo_id, { sueldo_total: nuevoTotal });
-        }).filter(Boolean));
+          if (nuevoTotal !== liq.sueldo_total_legajo)
+            await updateLegajo(liq.legajo_id, { sueldo_total: nuevoTotal });
+        }
         await load();
+      } catch (e) {
+        alert("Error al actualizar legajos: " + e.message);
+        setSaving(false);
+        return;
       } finally { setSaving(false); }
     }
-    // Pre-llenar pagoDraft: valor guardado en el período actual > mes anterior > 0
-    setPagoDraft(() => {
+    setFormasDraft(() => {
       const d = {};
       liqs.forEach(liq => {
-        const prev = liqsPrevMes.find(l => l.legajo_id === liq.legajo_id);
-        d[liq.legajo_id] = {
-          monto_haberes:       liq.monto_haberes       || liq.blanco_neto_legajo  || 0,
-          monto_deposito:      liq.monto_deposito      || prev?.monto_deposito      || 0,
-          monto_transferencia: liq.monto_transferencia || prev?.monto_transferencia || 0,
-        };
+        const base = liq.lineas?.length ? liq.lineas : defaultLineasFromLeg({
+          sueldo_total: getDraftTotal(liq), blanco_neto: liq.blanco_neto_legajo, banco: liq.banco, cbu: liq.cbu,
+        });
+        d[liq.legajo_id] = base.map(l => ({ ...l }));
       });
       return d;
     });
     setPaso(2);
   }
 
-  // Paso 2 → 3: guardar liquidaciones con los componentes definidos
   async function handleConfirmarPago() {
     setSaving(true);
     try {
-      await Promise.all(liqs.map(liq => {
-        const target       = getDraftTotal(liq);
-        const d            = pagoDraft[liq.legajo_id] || {};
-        const haberes      = d.monto_haberes       || 0;
-        const deposito     = d.monto_deposito      || 0;
-        const transferencia = d.monto_transferencia || 0;
-        const efectivo     = Math.max(0, target - haberes - deposito - transferencia);
-        return saveLiquidacion({
-          ...liq,
-          sueldo_base:         target,
-          monto_haberes:       haberes,
-          monto_deposito:      deposito,
-          monto_transferencia: transferencia,
-          monto_efectivo:      efectivo,
+      for (const liq of liqs) {
+        const formas_pago = (formasDraft[liq.legajo_id] || []).map(l => ({ ...l, importe: Number(l.importe) || 0 }));
+        await saveLiquidacion({
+          id: liq.id, mes, anio,
+          legajo_id: liq.legajo_id, legajo_nombre: liq.legajo_nombre,
+          sociedad_id: liq.sociedad_id, sociedad_nombre: liq.sociedad_nombre,
+          sede_id: liq.sede_id, sede_nombre: liq.sede_nombre,
+          rol: liq.rol, tipo_contratacion: liq.tipo_contratacion,
+          sueldo_base: getDraftTotal(liq),
+          formas_pago,
+          estado: liq.estado || "borrador",
         });
-      }));
+        if (actualizarRecetas) await updateLegajo(liq.legajo_id, { formas_pago });
+      }
       await load();
       setPaso(3);
+    } catch (e) {
+      alert("Error al guardar forma de pago: " + e.message);
     } finally { setSaving(false); }
   }
 
-  const liqStaff  = liqs.filter(l => l.rol === "HQ");
-  const liqOwners = liqs.filter(l => l.rol === "HQ_OWNER");
+  const liqStaff    = liqs.filter(l => l.rol === "HQ");
+  const liqOwners   = liqs.filter(l => l.rol === "HQ_OWNER");
+  const liqExternos = liqs.filter(l => l.rol === "HQ_EXT");
 
   if (loading) return (
     <div style={{ padding: 40, color: T.muted, fontFamily: T.font, fontSize: 13 }}>Cargando…</div>
@@ -233,11 +303,27 @@ export default function PantallaLiquidacionHQ() {
         </div>
       ) : (
         <>
+          {faltantes.length > 0 && (
+            <div style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              background: "#fef9c3", border: "1px solid #fde68a", borderRadius: 8,
+              padding: "10px 16px", marginBottom: 16, fontSize: 13, gap: 12,
+            }}>
+              <span>
+                <strong style={{ color: "#92400e" }}>⚠️ {faltantes.length} empleado{faltantes.length > 1 ? "s" : ""} sin liquidación:</strong>
+                {" "}<span style={{ color: "#78350f" }}>{faltantes.map(l => l.nombre).join(", ")}</span>
+              </span>
+              <button onClick={handleInicializar} disabled={saving} style={{ ...BTN_PRIMARY(saving), whiteSpace: "nowrap", fontSize: 12, padding: "6px 14px" }}>
+                {saving ? "Agregando…" : "↻ Agregar faltantes"}
+              </button>
+            </div>
+          )}
+
           <StepsIndicator paso={paso} onPaso={p => p < paso && setPaso(p)} />
 
           {paso === 1 && (
             <PasoSueldos
-              liqStaff={liqStaff} liqOwners={liqOwners}
+              liqStaff={liqStaff} liqOwners={liqOwners} liqExternos={liqExternos}
               sueldosDraft={sueldosDraft}
               onChangeDraft={(id, updates) =>
                 setSueldosDraft(d => ({ ...d, [id]: { ...(d[id] || {}), ...updates } }))
@@ -251,12 +337,12 @@ export default function PantallaLiquidacionHQ() {
 
           {paso === 2 && (
             <PasoPago
-              liqStaff={liqStaff} liqOwners={liqOwners}
+              liqStaff={liqStaff} liqOwners={liqOwners} liqExternos={liqExternos}
               sueldosDraft={sueldosDraft}
-              pagoDraft={pagoDraft}
-              onChangePago={(id, field, val) =>
-                setPagoDraft(d => ({ ...d, [id]: { ...(d[id] || {}), [field]: val } }))
-              }
+              formasDraft={formasDraft}
+              onChangeLineas={(id, lineas) => setFormasDraft(d => ({ ...d, [id]: lineas }))}
+              actualizarRecetas={actualizarRecetas}
+              onChangeActualizar={setActualizarRecetas}
               onAtras={() => setPaso(1)}
               onSiguiente={handleConfirmarPago}
               saving={saving}
@@ -266,7 +352,7 @@ export default function PantallaLiquidacionHQ() {
           {paso === 3 && (
             <PasoPagos
               mes={mes} anio={anio}
-              liqStaff={liqStaff} liqOwners={liqOwners}
+              liqStaff={liqStaff} liqOwners={liqOwners} liqExternos={liqExternos}
               onAtras={() => setPaso(2)}
               onRegistrarPago={setShowPago}
               onBatchPaid={load}
@@ -275,16 +361,64 @@ export default function PantallaLiquidacionHQ() {
         </>
       )}
 
-      {showPago && (
-        <ModalPagoHQ
-          mes={mes} anio={anio}
-          liq={liqs.find(l => l.legajo_id === showPago)}
-          onClose={() => setShowPago(null)}
-          onSaved={async () => { setShowPago(null); await load(); }}
-        />
-      )}
+      {showPago && (() => {
+        const liqSel = liqs.find(l => l.legajo_id === showPago.legajo_id);
+        return (
+          <ModalPagoHQ
+            mes={mes} anio={anio}
+            liq={liqSel}
+            linea={liqSel?.lineas?.find(l => l.id === showPago.linea_id)}
+            onClose={() => setShowPago(null)}
+            onSaved={async () => { setShowPago(null); await load(); }}
+          />
+        );
+      })()}
     </div>
   );
+}
+
+// ── Helpers de ordenamiento ──────────────────────────────────────────────────
+
+function useSortable(defaultCol = null) {
+  const [sortCol, setSortCol] = useState(defaultCol);
+  const [sortDir, setSortDir] = useState("asc");
+  const toggle = (col) => {
+    if (sortCol === col) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortCol(col); setSortDir("asc"); }
+  };
+  const sort = (rows, getVal) => [...rows].sort((a, b) => {
+    if (!sortCol) return 0;
+    const va = getVal(a, sortCol) ?? "";
+    const vb = getVal(b, sortCol) ?? "";
+    if (va < vb) return sortDir === "asc" ? -1 : 1;
+    if (va > vb) return sortDir === "asc" ?  1 : -1;
+    return 0;
+  });
+  return { sortCol, sortDir, toggle, sort };
+}
+
+function SortTH({ col, sortCol, sortDir, onSort, children, style = {} }) {
+  const active = sortCol === col;
+  return (
+    <th onClick={() => onSort(col)} style={{ ...TH(style), cursor: "pointer", userSelect: "none" }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+        {children}
+        <span style={{ fontSize: 10, color: active ? T.blue : T.dim }}>
+          {active ? (sortDir === "asc" ? "▲" : "▼") : "⇅"}
+        </span>
+      </span>
+    </th>
+  );
+}
+
+// ── Badge de rol ─────────────────────────────────────────────────────────────
+
+function RolBadge({ rol }) {
+  if (rol === "HQ_OWNER")
+    return <span style={{ fontSize: 10, background: "#f3e8ff", color: T.purple,  padding: "2px 6px", borderRadius: 3, fontWeight: 600, whiteSpace: "nowrap" }}>Owner</span>;
+  if (rol === "HQ_EXT")
+    return <span style={{ fontSize: 10, background: "#ccfbf1", color: "#0d9488", padding: "2px 6px", borderRadius: 3, fontWeight: 600, whiteSpace: "nowrap" }}>Ext</span>;
+  return null;
 }
 
 // ── Indicador de pasos ────────────────────────────────────────────────────────
@@ -317,10 +451,11 @@ function StepsIndicator({ paso, onPaso }) {
 
 // ── Paso 1: Confirmar sueldos ─────────────────────────────────────────────────
 
-function PasoSueldos({ liqStaff, liqOwners, sueldosDraft, onChangeDraft, actualizarLegs, onChangeActualizar, onSiguiente, saving }) {
+function PasoSueldos({ liqStaff, liqOwners, liqExternos, sueldosDraft, onChangeDraft, actualizarLegs, onChangeActualizar, onSiguiente, saving }) {
   const [pctGlobal, setPctGlobal] = useState("");
+  const { sortCol, sortDir, toggle, sort } = useSortable("nombre");
 
-  const todos       = [...liqStaff, ...liqOwners];
+  const todos       = [...liqStaff, ...liqOwners, ...liqExternos];
   const totalActual = todos.reduce((s, l) => s + (l.sueldo_total_legajo || 0), 0);
   const totalNuevo  = todos.reduce((s, l) => s + (sueldosDraft[l.legajo_id]?.total ?? l.sueldo_total_legajo), 0);
   const diff        = totalNuevo - totalActual;
@@ -340,71 +475,12 @@ function PasoSueldos({ liqStaff, liqOwners, sueldosDraft, onChangeDraft, actuali
     todos.forEach(liq => handlePct(liq, rawPct));
   };
 
-  const renderTabla = (liqs, ownerStyle, esElPrimero = false) => (
-    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginBottom: 8 }}>
-      <thead>
-        <tr>
-          <th style={TH()}>Nombre</th>
-          <th style={TH({ textAlign: "right" })}>Sueldo actual</th>
-          <th style={TH({ textAlign: "right" })}>
-            {esElPrimero ? (
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
-                <span>% aumento</span>
-                <input
-                  type="number" value={pctGlobal}
-                  onChange={e => handlePctGlobal(e.target.value)}
-                  placeholder="todos"
-                  title="Aplicar a todos"
-                  style={INPUT({ width: 60, fontSize: 11, padding: "2px 6px", border: "1px solid #6366f1", color: T.text })}
-                />
-              </div>
-            ) : "% aumento"}
-          </th>
-          <th style={TH({ textAlign: "right" })}>Nuevo sueldo</th>
-        </tr>
-      </thead>
-      <tbody>
-        {liqs.map((liq, i) => {
-          const d          = sueldosDraft[liq.legajo_id];
-          const pct        = d?.pct   ?? "";
-          const nuevoTotal = d?.total ?? liq.sueldo_total_legajo;
-          const subio      = nuevoTotal > liq.sueldo_total_legajo;
-          return (
-            <tr key={liq.id} style={{ background: i % 2 === 0 ? "#fff" : T.bg }}>
-              <td style={TD({ fontWeight: 600 })}>
-                {liq.legajo_nombre}
-                {ownerStyle && (
-                  <span style={{ marginLeft: 6, fontSize: 10, background: "#f3e8ff", color: T.purple, padding: "1px 5px", borderRadius: 3, fontWeight: 600 }}>Owner</span>
-                )}
-              </td>
-              <td style={TD({ textAlign: "right", fontWeight: 700, color: T.blue })}>{fmtMoney(liq.sueldo_total_legajo)}</td>
-              <td style={TD({ textAlign: "right" })}>
-                <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
-                  <input
-                    type="number" value={pct}
-                    onChange={e => handlePct(liq, e.target.value)}
-                    placeholder="0"
-                    style={INPUT({ width: 64 })}
-                  />
-                  <span style={{ color: T.muted, fontSize: 12 }}>%</span>
-                </div>
-              </td>
-              <td style={TD({ textAlign: "right" })}>
-                <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
-                  <input
-                    type="number" value={nuevoTotal || ""}
-                    onChange={e => handleTotal(liq, e.target.value)}
-                    style={INPUT({ width: 110, fontWeight: 700, color: subio ? T.green : T.text })}
-                  />
-                  {subio && <span style={{ fontSize: 12, color: T.green }}>↑</span>}
-                </div>
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
+  const sorted = sort(todos, (r, col) => {
+    if (col === "nombre") return r.legajo_nombre;
+    if (col === "rol")    return r.rol;
+    if (col === "actual") return r.sueldo_total_legajo;
+    if (col === "nuevo")  return sueldosDraft[r.legajo_id]?.total ?? r.sueldo_total_legajo;
+  });
 
   return (
     <div>
@@ -422,18 +498,66 @@ function PasoSueldos({ liqStaff, liqOwners, sueldosDraft, onChangeDraft, actuali
         ))}
       </div>
 
-      {liqStaff.length > 0 && (
-        <>
-          <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 700 }}>HQ Staff</h3>
-          {renderTabla(liqStaff, false, true)}
-        </>
-      )}
-      {liqOwners.length > 0 && (
-        <>
-          <h3 style={{ margin: "20px 0 10px", fontSize: 14, fontWeight: 700, color: T.purple }}>⬡ Socios / HQ Owner</h3>
-          {renderTabla(liqOwners, true, liqStaff.length === 0)}
-        </>
-      )}
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginBottom: 8 }}>
+        <thead>
+          <tr>
+            <SortTH col="nombre" sortCol={sortCol} sortDir={sortDir} onSort={toggle}>Nombre</SortTH>
+
+            <SortTH col="actual" sortCol={sortCol} sortDir={sortDir} onSort={toggle} style={{ textAlign: "right" }}>Sueldo actual</SortTH>
+            <th style={TH({ textAlign: "right" })}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
+                <span>% aumento</span>
+                <input
+                  type="number" value={pctGlobal}
+                  onChange={e => handlePctGlobal(e.target.value)}
+                  placeholder="todos"
+                  title="Aplicar a todos"
+                  style={INPUT({ width: 60, fontSize: 11, padding: "2px 6px", border: "1px solid #6366f1", color: T.text })}
+                />
+              </div>
+            </th>
+            <SortTH col="nuevo" sortCol={sortCol} sortDir={sortDir} onSort={toggle} style={{ textAlign: "right" }}>Nuevo sueldo</SortTH>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((liq, i) => {
+            const d          = sueldosDraft[liq.legajo_id];
+            const pct        = d?.pct   ?? "";
+            const nuevoTotal = d?.total ?? liq.sueldo_total_legajo;
+            const subio      = nuevoTotal > liq.sueldo_total_legajo;
+            return (
+              <tr key={liq.id} style={{ background: i % 2 === 0 ? "#fff" : T.bg }}>
+                <td style={TD({ fontWeight: 600 })}>{liq.legajo_nombre}</td>
+
+                <td style={TD({ textAlign: "right", fontWeight: 700, color: T.blue })}>{fmtMoney(liq.sueldo_total_legajo)}</td>
+                <td style={TD({ textAlign: "right" })}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
+                    <input
+                      type="number" value={pct}
+                      onChange={e => handlePct(liq, e.target.value)}
+                      placeholder="0"
+                      style={INPUT({ width: 64 })}
+                    />
+                    <span style={{ color: T.muted, fontSize: 12 }}>%</span>
+                  </div>
+                </td>
+                <td style={TD({ textAlign: "right" })}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
+                    <input
+                      type="text"
+                      value={nuevoTotal ? Math.round(nuevoTotal).toLocaleString("es-AR") : ""}
+                      onChange={e => handleTotal(liq, e.target.value.replace(/\./g, ""))}
+                      style={INPUT({ width: 110, fontWeight: 700, color: subio ? T.green : T.text })}
+                    />
+                    {subio && <span style={{ fontSize: 12, color: T.green }}>↑</span>}
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 0", borderTop: `1px solid ${T.border}`, marginTop: 8 }}>
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", color: T.text }}>
           <input type="checkbox" checked={actualizarLegs} onChange={e => onChangeActualizar(e.target.checked)} />
@@ -449,95 +573,129 @@ function PasoSueldos({ liqStaff, liqOwners, sueldosDraft, onChangeDraft, actuali
 
 // ── Paso 2: Forma de pago ─────────────────────────────────────────────────────
 
-function PasoPago({ liqStaff, liqOwners, sueldosDraft, pagoDraft, onChangePago, onAtras, onSiguiente, saving }) {
+function PasoPago({ liqStaff, liqOwners, liqExternos, sueldosDraft, formasDraft, onChangeLineas, actualizarRecetas, onChangeActualizar, onAtras, onSiguiente, saving }) {
   const getTarget = (liq) => sueldosDraft[liq.legajo_id]?.total ?? liq.sueldo_total_legajo;
-
-  // Clampea el valor ingresado para que la suma nunca supere el sueldo total
-  const handleCampo = (liq, campo, rawVal) => {
-    const target  = getTarget(liq);
-    const d       = pagoDraft[liq.legajo_id] || {};
-    const parsed  = parseFloat(rawVal) || 0;
-    const otros   = ["monto_haberes", "monto_deposito", "monto_transferencia"]
-      .filter(f => f !== campo)
-      .reduce((s, f) => s + (d[f] ?? 0), 0);
-    const clamped = Math.min(parsed, Math.max(0, target - otros));
-    onChangePago(liq.legajo_id, campo, clamped);
-  };
-
-  const renderTabla = (liqs) => (
-    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginBottom: 8 }}>
-      <thead>
-        <tr>
-          <th style={TH()}>Nombre</th>
-          <th style={TH({ textAlign: "right" })}>Sueldo total</th>
-          <th style={TH({ textAlign: "right" })}>Haberes</th>
-          <th style={TH({ textAlign: "right" })}>Depósito</th>
-          <th style={TH({ textAlign: "right" })}>Transferencia</th>
-          <th style={TH({ textAlign: "right" })}>Efectivo</th>
-        </tr>
-      </thead>
-      <tbody>
-        {liqs.map((liq, i) => {
-          const target        = getTarget(liq);
-          const d             = pagoDraft[liq.legajo_id] || {};
-          const haberes       = d.monto_haberes       ?? 0;
-          const deposito      = d.monto_deposito      ?? 0;
-          const transferencia = d.monto_transferencia ?? 0;
-          const efectivo      = Math.max(0, target - haberes - deposito - transferencia);
-          return (
-            <tr key={liq.id} style={{ background: i % 2 === 0 ? "#fff" : T.bg }}>
-              <td style={TD({ fontWeight: 600 })}>{liq.legajo_nombre}</td>
-              <td style={TD({ textAlign: "right", fontWeight: 700, color: T.blue })}>{fmtMoney(target)}</td>
-              <td style={TD({ textAlign: "right" })}>
-                <input type="number" value={haberes}
-                  onChange={e => handleCampo(liq, "monto_haberes", e.target.value)}
-                  style={INPUT({ width: 100 })} />
-              </td>
-              <td style={TD({ textAlign: "right" })}>
-                <input type="number" value={deposito}
-                  onChange={e => handleCampo(liq, "monto_deposito", e.target.value)}
-                  style={INPUT({ width: 100 })} />
-              </td>
-              <td style={TD({ textAlign: "right" })}>
-                <input type="number" value={transferencia}
-                  onChange={e => handleCampo(liq, "monto_transferencia", e.target.value)}
-                  style={INPUT({ width: 100 })} />
-              </td>
-              <td style={TD({ textAlign: "right" })}>
-                <div style={{
-                  display: "inline-block", minWidth: 90, background: "#fefce8",
-                  border: "1px solid #fde68a", borderRadius: 5, padding: "4px 8px",
-                  color: "#92400e", fontWeight: 700, textAlign: "right",
-                }}>
-                  {fmtMoney(efectivo)}
-                </div>
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
+  const todos = [...liqStaff, ...liqOwners, ...liqExternos];
 
   return (
     <div>
-      {liqStaff.length > 0 && (
-        <>
-          <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 700 }}>HQ Staff</h3>
-          {renderTabla(liqStaff)}
-        </>
-      )}
-      {liqOwners.length > 0 && (
-        <>
-          <h3 style={{ margin: "20px 0 10px", fontSize: 14, fontWeight: 700, color: T.purple }}>⬡ Socios / HQ Owner</h3>
-          {renderTabla(liqOwners)}
-        </>
-      )}
-      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", padding: "16px 0", borderTop: `1px solid ${T.border}`, marginTop: 8 }}>
-        <button onClick={onAtras} style={BTN_SECONDARY}>← Atrás</button>
-        <button onClick={onSiguiente} disabled={saving} style={BTN_PRIMARY(saving)}>
-          {saving ? "Guardando…" : "Guardar y continuar →"}
-        </button>
+      <p style={{ fontSize: 12, color: T.muted, margin: "0 0 16px" }}>
+        Cada empleado trae su receta de pago del legajo. Ajustá las líneas que cambian este mes; el origen del dinero se elige al pagar.
+      </p>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {todos.map(liq => (
+          <EmpleadoFormasEditor
+            key={liq.legajo_id}
+            liq={liq}
+            target={getTarget(liq)}
+            lineas={formasDraft[liq.legajo_id] || []}
+            onChange={(lineas) => onChangeLineas(liq.legajo_id, lineas)}
+          />
+        ))}
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 0", borderTop: `1px solid ${T.border}`, marginTop: 8 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", color: T.text }}>
+          <input type="checkbox" checked={actualizarRecetas} onChange={e => onChangeActualizar(e.target.checked)} />
+          Actualizar la receta en los legajos (aplica a meses futuros)
+        </label>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={onAtras} style={BTN_SECONDARY}>← Atrás</button>
+          <button onClick={onSiguiente} disabled={saving} style={BTN_PRIMARY(saving)}>
+            {saving ? "Guardando…" : "Guardar y continuar →"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const FP_TH = (extra = {}) => ({ padding: "5px 7px", textAlign: "left", fontWeight: 600, color: T.muted, fontSize: 10.5, letterSpacing: ".03em", whiteSpace: "nowrap", ...extra });
+const FP_TD = (extra = {}) => ({ padding: "3px 5px", verticalAlign: "middle", ...extra });
+const FP_INPUT = (extra = {}) => ({ border: `1px solid ${T.border}`, borderRadius: 5, padding: "4px 7px", fontSize: 12.5, fontFamily: T.font, background: "#fff", outline: "none", color: T.text, width: "100%", boxSizing: "border-box", ...extra });
+
+function EmpleadoFormasEditor({ liq, target, lineas, onChange }) {
+  const upd = (id, k, v) => onChange(lineas.map(l => l.id === id ? { ...l, [k]: v } : l));
+  const add = () => onChange([...lineas, lineaVacia("deposito")]);
+  const del = (id) => onChange(lineas.filter(l => l.id !== id));
+  const setResto = () => {
+    const noEf = lineas.filter(l => l.tipo !== "efectivo").reduce((s, l) => s + (parseFloat(l.importe) || 0), 0);
+    const resto = Math.max(0, target - noEf);
+    const idx = lineas.findIndex(l => l.tipo === "efectivo");
+    if (idx >= 0) onChange(lineas.map((l, i) => i === idx ? { ...l, importe: resto } : l));
+    else onChange([...lineas, { ...lineaVacia("efectivo"), importe: resto }]);
+  };
+  const suma = lineas.reduce((s, l) => s + (parseFloat(l.importe) || 0), 0);
+  const dif  = suma - target;
+
+  return (
+    <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 14, background: "#fff" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <strong style={{ fontSize: 14 }}>{liq.legajo_nombre}</strong>
+        <span style={{ fontSize: 12, color: T.muted }}>Sueldo total <strong style={{ color: T.blue }}>{fmtMoney(target)}</strong></span>
+      </div>
+
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, tableLayout: "fixed" }}>
+        <colgroup>
+          <col style={{ width: 120 }} /><col style={{ width: 110 }} /><col /><col style={{ width: 70 }} />
+          <col /><col /><col /><col style={{ width: 140 }} /><col style={{ width: 32 }} />
+        </colgroup>
+        <thead>
+          <tr>
+            <th style={FP_TH()}>Tipo</th>
+            <th style={FP_TH({ textAlign: "right" })}>Importe</th>
+            <th style={FP_TH()}>Banco</th>
+            <th style={FP_TH()}>Tipo cta</th>
+            <th style={FP_TH()}>Cuenta</th>
+            <th style={FP_TH()}>CBU</th>
+            <th style={FP_TH()}>CUIT</th>
+            <th style={FP_TH()}>Nota interna</th>
+            <th style={FP_TH()}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {lineas.map(l => {
+            const esEf = l.tipo === "efectivo";
+            return (
+              <tr key={l.id}>
+                <td style={FP_TD()}>
+                  <select value={l.tipo} onChange={e => upd(l.id, "tipo", e.target.value)}
+                    style={FP_INPUT({ color: FP_TIPO_COLOR[l.tipo] || T.text, fontWeight: 600 })}>
+                    {FP_TIPOS.map(t => <option key={t} value={t}>{FP_TIPO_LABEL[t]}</option>)}
+                  </select>
+                </td>
+                <td style={FP_TD()}>
+                  <input type="number" value={l.importe}
+                    onChange={e => upd(l.id, "importe", e.target.value)}
+                    style={FP_INPUT({ textAlign: "right", fontWeight: 600 })} />
+                </td>
+                <td style={FP_TD()}><input value={l.banco} disabled={esEf} onChange={e => upd(l.id, "banco", e.target.value)} style={FP_INPUT(esEf ? { background: T.bg } : {})} /></td>
+                <td style={FP_TD()}><input value={l.tipo_cuenta} disabled={esEf} onChange={e => upd(l.id, "tipo_cuenta", e.target.value)} placeholder="CA/CC" style={FP_INPUT(esEf ? { background: T.bg } : {})} /></td>
+                <td style={FP_TD()}><input value={l.cuenta} disabled={esEf} onChange={e => upd(l.id, "cuenta", e.target.value)} style={FP_INPUT(esEf ? { background: T.bg } : {})} /></td>
+                <td style={FP_TD()}><input value={l.cbu} disabled={esEf} onChange={e => upd(l.id, "cbu", e.target.value)} style={FP_INPUT(esEf ? { background: T.bg } : {})} /></td>
+                <td style={FP_TD()}><input value={l.cuit} disabled={esEf} onChange={e => upd(l.id, "cuit", e.target.value)} style={FP_INPUT(esEf ? { background: T.bg } : {})} /></td>
+                <td style={FP_TD()}><input value={l.nota} onChange={e => upd(l.id, "nota", e.target.value)} placeholder="Alquiler, cuenta 2…" style={FP_INPUT()} /></td>
+                <td style={FP_TD({ textAlign: "center" })}>
+                  <button onClick={() => del(l.id)} title="Eliminar línea"
+                    style={{ background: "none", border: "none", cursor: "pointer", color: T.red, fontSize: 14, padding: 0 }}>🗑</button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8 }}>
+        <button onClick={add} style={{ background: "none", border: `1px dashed ${T.blue}`, color: T.blue, borderRadius: 6, padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>＋ Agregar línea</button>
+        <button onClick={setResto} style={{ background: "none", border: `1px solid #fde68a`, color: "#92400e", borderRadius: 6, padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>Resto a efectivo</button>
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: T.muted }}>Σ líneas <strong style={{ color: Math.abs(dif) < 1 ? T.green : T.red }}>{fmtMoney(suma)}</strong></span>
+        {Math.abs(dif) >= 1 && (
+          <span style={{ fontSize: 12, color: T.red, fontWeight: 600 }}>
+            ⚠️ {dif > 0 ? "+" : ""}{fmtMoney(dif)} vs sueldo total
+          </span>
+        )}
       </div>
     </div>
   );
@@ -563,168 +721,63 @@ function descargarExcelGalicia(filas, nombreArchivo) {
   XLSX.writeFile(wb, nombreArchivo);
 }
 
+// Genera una fila Galicia por cada línea de pago del tipo indicado (con CBU).
+function lineasGalicia(liqs, tipo) {
+  const filas = [];
+  for (const liq of liqs) {
+    for (const l of liq.lineas || []) {
+      if (l.tipo !== tipo) continue;
+      const cbu = (l.cbu || (tipo === "haberes" ? liq.cbu : "")).trim();
+      if (!cbu || !(Number(l.importe) > 0)) continue;
+      filas.push({ cbu, importe: Number(l.importe), nombre: liq.legajo_nombre, nota: l.nota || "" });
+    }
+  }
+  return filas;
+}
+
 function exportarHaberes(liqs, mes, anio) {
   const desc = `Sueldo ${String(mes).padStart(2, "0")}/${anio}`.slice(0, 12);
-  const filas = liqs
-    .filter(l => (l.monto_haberes || 0) > 0 && l.cbu)
-    .map(l => [l.cbu, l.monto_haberes, "acreditamiento de haberes", desc, "", ""]);
-  if (!filas.length) { alert("No hay empleados con Haberes y CBU cargado."); return; }
+  const filas = lineasGalicia(liqs, "haberes")
+    .map(f => [f.cbu, f.importe, "acreditamiento de haberes", desc, "", ""]);
+  if (!filas.length) { alert("No hay líneas de Haberes con CBU cargado."); return; }
   descargarExcelGalicia(filas, `Haberes_HQ_${String(mes).padStart(2,"0")}_${anio}.xlsx`);
 }
 
 function exportarDeposito(liqs, mes, anio) {
   const desc = `Dep ${String(mes).padStart(2, "0")}/${anio}`.slice(0, 12);
-  const filas = liqs
-    .filter(l => (l.monto_deposito || 0) > 0 && l.cbu)
-    .map(l => [l.cbu, l.monto_deposito, "varios", desc, "", ""]);
-  if (!filas.length) { alert("No hay empleados con Depósito y CBU cargado."); return; }
+  const filas = lineasGalicia(liqs, "deposito")
+    .map(f => [f.cbu, f.importe, f.nota || "varios", desc, "", ""]);
+  if (!filas.length) { alert("No hay líneas de Depósito con CBU cargado."); return; }
   descargarExcelGalicia(filas, `Deposito_HQ_${String(mes).padStart(2,"0")}_${anio}.xlsx`);
 }
 
 // ── Paso 3: Registrar pagos ───────────────────────────────────────────────────
 
-const TIPOS_PAGO = [
-  { id: "haberes",       label: "Haberes",       color: T.text },
-  { id: "deposito",      label: "Depósito",      color: "#0369a1" },
-  { id: "transferencia", label: "Transferencia", color: T.purple },
-  { id: "efectivo",      label: "Efectivo",      color: T.yellow },
-];
-
-function getEfectivo(liq) {
-  return Math.max(0, liq.sueldo_total_legajo - (liq.monto_haberes || 0) - (liq.monto_deposito || 0) - (liq.monto_transferencia || 0));
+// Pagos asociados a una línea: match por forma_pago_id; fallback legacy (líneas
+// reconstruidas "leg-…") por tipo_componente para pagos viejos sin forma_pago_id.
+function getPagosLinea(liq, linea) {
+  const pagos = liq.pagos || [];
+  const byId = pagos.filter(p => p.forma_pago_id === linea.id);
+  if (byId.length) return byId;
+  if (String(linea.id).startsWith("leg-"))
+    return pagos.filter(p => !p.forma_pago_id && p.tipo_componente === linea.tipo);
+  return [];
 }
 
-function getMontoTipo(liq, tipo) {
-  if (tipo === "haberes")       return liq.monto_haberes       || 0;
-  if (tipo === "deposito")      return liq.monto_deposito      || 0;
-  if (tipo === "transferencia") return liq.monto_transferencia || 0;
-  return getEfectivo(liq);
+function describirDestino(l) {
+  if (l.tipo === "efectivo") return l.nota || "Efectivo en mano";
+  const base = [l.banco, l.cuenta || l.cbu].filter(Boolean).join(" · ") || "Sin datos bancarios";
+  return l.nota ? `${base} — ${l.nota}` : base;
 }
 
-function isPaid(liq, tipo) {
-  return liq.pagos?.some(p => p.tipo_componente === tipo) ?? false;
-}
-
-function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago, onBatchPaid }) {
-  const [batchModal,  setBatchModal]  = useState(null); // { tipo }
+function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onRegistrarPago, onBatchPaid }) {
   const [anularModal, setAnularModal] = useState(null); // pago object
 
-  const todos = [...liqStaff, ...liqOwners];
-
-  // Empleados pendientes de pago para un tipo dado
-  const pendientesTipo = (tipo) =>
-    todos.filter(l => getMontoTipo(l, tipo) > 0 && !isPaid(l, tipo));
-
-  const renderTabla = (liqs) => (
-    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginBottom: 8 }}>
-      <thead>
-        <tr>
-          <th style={TH()}>Nombre</th>
-          <th style={TH({ textAlign: "right" })}>Total</th>
-          {TIPOS_PAGO.map(({ id, label }) => {
-            const pend   = pendientesTipo(id);
-            const hayAlgo = todos.some(l => getMontoTipo(l, id) > 0);
-            const todoPagado = hayAlgo && pend.length === 0;
-            return (
-              <th key={id} style={TH({ textAlign: "right" })}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4 }}>
-                  {label}
-                  <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20 }}>
-                    {todoPagado
-                      ? <span title="Todos pagados" style={{ fontSize: 11, color: T.green, fontWeight: 700 }}>✓</span>
-                      : hayAlgo
-                        ? <button
-                            onClick={() => setBatchModal({ tipo: id })}
-                            title={`Confirmar pago de ${label}`}
-                            style={{
-                              background: T.green, color: "#fff", border: "none",
-                              borderRadius: 4, padding: "1px 6px", fontSize: 10,
-                              fontWeight: 700, cursor: "pointer", lineHeight: "1.6",
-                              fontFamily: T.font,
-                            }}>✓</button>
-                        : null
-                    }
-                  </span>
-                </div>
-              </th>
-            );
-          })}
-          <th style={TH({ textAlign: "right" })}>Pagado</th>
-          <th style={TH({ textAlign: "right" })}>Pendiente</th>
-          <th style={TH()}></th>
-        </tr>
-      </thead>
-      <tbody>
-        {liqs.map((liq, i) => {
-          const efectivo  = getEfectivo(liq);
-          const pendiente = liq.pendiente;
-          const montos    = { haberes: liq.monto_haberes || 0, deposito: liq.monto_deposito || 0, transferencia: liq.monto_transferencia || 0, efectivo };
-
-          return (
-            <tr key={liq.id} style={{ background: i % 2 === 0 ? "#fff" : T.bg }}>
-              <td style={TD({ fontWeight: 600 })}>{liq.legajo_nombre}</td>
-              <td style={TD({ textAlign: "right", fontWeight: 700, color: T.blue })}>{fmtMoney(liq.total_bruto)}</td>
-
-              {TIPOS_PAGO.map(({ id, color }) => {
-                const monto = montos[id];
-                const paid  = isPaid(liq, id);
-                const pago  = paid ? liq.pagos.find(p => p.tipo_componente === id) : null;
-                if (!monto) return (
-                  <td key={id} style={TD({ textAlign: "right" })}>
-                    <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
-                      <span style={{ color: T.dim }}>—</span>
-                      <span style={{ width: 20 }} />
-                    </div>
-                  </td>
-                );
-                return (
-                  <td key={id} style={TD({ textAlign: "right", color: paid ? T.green : color })}>
-                    <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
-                      {fmtMoney(monto)}
-                      <span style={{ display: "inline-flex", justifyContent: "center", width: 20, fontSize: 11, fontWeight: 700 }}>
-                        {pago
-                          ? <button
-                              onClick={() => setAnularModal(pago)}
-                              title="Ver / anular este pago"
-                              style={{ background: "none", border: "none", cursor: "pointer", color: T.green, fontSize: 12, fontWeight: 700, padding: 0, lineHeight: 1 }}>✓</button>
-                          : ""
-                        }
-                      </span>
-                    </div>
-                  </td>
-                );
-              })}
-
-              <td style={TD({ textAlign: "right", color: T.green })}>{fmtMoney(liq.total_pagado)}</td>
-              <td style={TD({ textAlign: "right", fontWeight: 600, color: pendiente > 0 ? T.red : T.green })}>
-                {fmtMoney(pendiente)}
-              </td>
-              <td style={TD({ whiteSpace: "nowrap" })}>
-                {pendiente > 0
-                  ? <button onClick={() => onRegistrarPago(liq.legajo_id)} style={{
-                      background: "#fff", color: T.green, border: `1px solid ${T.green}`,
-                      borderRadius: 6, padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer",
-                    }}>💳 Pagar</button>
-                  : <span style={{ fontSize: 12, color: T.green, fontWeight: 600 }}>✓</span>
-                }
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
+  const todos = useMemo(() => [...liqStaff, ...liqOwners, ...liqExternos], [liqStaff, liqOwners, liqExternos]);
 
   const totalBruto  = todos.reduce((s, l) => s + l.total_bruto,  0);
   const totalPagado = todos.reduce((s, l) => s + l.total_pagado, 0);
   const totalPend   = totalBruto - totalPagado;
-
-  const BTN_EXPORT = (color) => ({
-    display: "flex", alignItems: "center", gap: 6,
-    border: `1px solid ${color}`, background: "#fff", borderRadius: 7,
-    padding: "7px 14px", fontSize: 12, fontWeight: 600,
-    cursor: "pointer", color, fontFamily: T.font,
-  });
 
   return (
     <div>
@@ -742,18 +795,21 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago, o
         ))}
       </div>
 
-      {liqStaff.length > 0 && (
-        <>
-          <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 700 }}>HQ Staff</h3>
-          {renderTabla(liqStaff)}
-        </>
-      )}
-      {liqOwners.length > 0 && (
-        <>
-          <h3 style={{ margin: "20px 0 10px", fontSize: 14, fontWeight: 700, color: T.purple }}>⬡ Socios / HQ Owner</h3>
-          {renderTabla(liqOwners)}
-        </>
-      )}
+      <p style={{ fontSize: 12, color: T.muted, margin: "0 0 14px" }}>
+        Cada destino se paga por separado, eligiendo el origen del dinero al momento de pagar. Nada queda cerrado hasta que pagás.
+      </p>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        {todos.map(liq => (
+          <EmpleadoPagosLineas
+            key={liq.legajo_id}
+            liq={liq}
+            onPagar={(linea) => onRegistrarPago({ legajo_id: liq.legajo_id, linea_id: linea.id })}
+            onVerPago={(pago) => setAnularModal(pago)}
+          />
+        ))}
+      </div>
+
       <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "16px 0", borderTop: `1px solid ${T.border}`, marginTop: 8 }}>
         <button style={BTN_EXPORT("#16a34a")} onClick={() => exportarHaberes(todos, mes, anio)}>
           📥 Excel Haberes (banco)
@@ -764,16 +820,6 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago, o
         <div style={{ flex: 1 }} />
         <button onClick={onAtras} style={BTN_SECONDARY}>← Atrás</button>
       </div>
-
-      {batchModal && (
-        <ModalBatchPago
-          tipo={batchModal.tipo}
-          liqs={pendientesTipo(batchModal.tipo)}
-          mes={mes} anio={anio}
-          onClose={() => setBatchModal(null)}
-          onSaved={() => { setBatchModal(null); onBatchPaid?.(); }}
-        />
-      )}
 
       {anularModal && (
         <ModalAnularPago
@@ -786,177 +832,46 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, onAtras, onRegistrarPago, o
   );
 }
 
-// ── Modal batch pago ──────────────────────────────────────────────────────────
-
-function ModalBatchPago({ tipo, liqs, mes, anio, onClose, onSaved }) {
-  const meta   = TIPOS_PAGO.find(t => t.id === tipo);
-  const socFija = tipo === "deposito" || tipo === "efectivo" ? "beta" : null;
-
-  const [form, setForm] = useState({
-    fecha:        new Date().toISOString().slice(0, 10),
-    sociedad_id:  socFija ?? "",
-    cuenta_id:    "",
-  });
-  const [sociedades,  setSociedades]  = useState([]);
-  const [cuentas,     setCuentas]     = useState([]);
-  const [loadingMeta, setLoadingMeta] = useState(true);
-  // Empleados seleccionados (empiezan todos tildados)
-  const [selec, setSelec] = useState(() => new Set(liqs.map(l => l.legajo_id)));
-  const [saving,    setSaving]    = useState(false);
-  const savingRef = useRef(false);
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-
-  useEffect(() => {
-    Promise.all([fetchSociedadesNumbers(), fetchCuentasBancariasNumbers()])
-      .then(([socs, ctas]) => { setSociedades(socs); setCuentas(ctas); })
-      .finally(() => setLoadingMeta(false));
-  }, []);
-
-  // Cuentas filtradas según la sociedad seleccionada (o todas si no aplica)
-  const cuentasFiltradas = useMemo(() => {
-    if (tipo === "haberes") return cuentas;          // haberes: cualquier cuenta (cada mov usa la soc del legajo)
-    if (!form.sociedad_id)  return cuentas;
-    return cuentas.filter(c => c.sociedad === form.sociedad_id);
-  }, [cuentas, form.sociedad_id, tipo]);
-
-  const liqsSelec = liqs.filter(l => selec.has(l.legajo_id));
-  const total     = liqsSelec.reduce((s, l) => s + getMontoTipo(l, tipo), 0);
-
-  const toggleSelec = (id) => setSelec(prev => {
-    const next = new Set(prev);
-    next.has(id) ? next.delete(id) : next.add(id);
-    return next;
-  });
-
-  const handleSave = async () => {
-    if (savingRef.current) return;
-    if (!liqsSelec.length) { alert("Seleccioná al menos un empleado."); return; }
-    if (!form.cuenta_id) { alert("Seleccioná una cuenta bancaria."); return; }
-    savingRef.current = true; setSaving(true);
-    try {
-      const ctaNombre = cuentas.find(c => c.id === form.cuenta_id)?.nombre ?? form.cuenta_id;
-      const socNombre = sociedades.find(s => s.id === form.sociedad_id)?.nombre ?? form.sociedad_id;
-      await Promise.all(liqsSelec.map(liq => {
-        const soc_id     = tipo === "haberes" ? liq.sociedad_id     : (form.sociedad_id || "beta");
-        const soc_nombre = tipo === "haberes" ? liq.sociedad_nombre : socNombre;
-        return appendPago({
-          mes, anio,
-          legajo_id:              liq.legajo_id,
-          legajo_nombre:          liq.legajo_nombre,
-          sociedad_id:            soc_id,
-          sociedad_nombre:        soc_nombre,
-          tipo_componente:        tipo,
-          monto:                  getMontoTipo(liq, tipo),
-          fecha:                  form.fecha,
-          cuenta_bancaria_id:     form.cuenta_id,
-          cuenta_bancaria_nombre: ctaNombre,
-        });
-      }));
-      await onSaved();
-    } catch (e) {
-      alert("Error: " + e.message);
-      setSaving(false);
-    } finally {
-      savingRef.current = false;
-    }
-  };
-
-  const iStyle = {
-    border: `1px solid ${T.border}`, borderRadius: 6, padding: "7px 10px",
-    fontSize: 13, fontFamily: T.font, width: "100%", boxSizing: "border-box",
-    color: T.text, background: "#fff",
-  };
-  const LBL = ({ children }) => (
-    <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>{children}</label>
-  );
-
-  const mostrarSociedad = tipo === "transferencia";   // deposito/efectivo → fija Beta, haberes → no aplica
-
+function EmpleadoPagosLineas({ liq, onPagar, onVerPago }) {
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
-      <div style={{ background: "#fff", borderRadius: 12, padding: 24, width: 440, boxShadow: "0 8px 32px rgba(0,0,0,.18)", fontFamily: T.font, maxHeight: "90vh", overflowY: "auto" }}>
-        <h3 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 700 }}>
-          Confirmar pago — {meta?.label}
-        </h3>
-        <p style={{ margin: "0 0 14px", fontSize: 12, color: T.muted }}>
-          {liqsSelec.length} empleado{liqsSelec.length !== 1 ? "s" : ""} · Total <strong>{fmtMoney(total)}</strong>
-        </p>
+    <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 14, background: "#fff" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+        <strong style={{ fontSize: 14 }}>{liq.legajo_nombre}</strong>
+        <span style={{ fontSize: 12, color: T.muted }}>
+          Total <strong style={{ color: T.blue }}>{fmtMoney(liq.total_bruto)}</strong>
+          {" · "}Pendiente <strong style={{ color: liq.pendiente > 0 ? T.red : T.green }}>{fmtMoney(liq.pendiente)}</strong>
+        </span>
+      </div>
 
-        {/* Lista con checkboxes */}
-        <div style={{ border: `1px solid ${T.border}`, borderRadius: 6, marginBottom: 16, maxHeight: 180, overflowY: "auto" }}>
-          {liqs.map((liq, i) => {
-            const checked = selec.has(liq.legajo_id);
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <tbody>
+          {liq.lineas.map(l => {
+            const pagos  = getPagosLinea(liq, l);
+            const pagado = pagos.length > 0;
+            const dup    = pagos.length > 1;
             return (
-              <label key={liq.legajo_id} style={{
-                display: "flex", alignItems: "center", gap: 10,
-                padding: "7px 10px", cursor: "pointer", fontSize: 13,
-                borderBottom: i < liqs.length - 1 ? `1px solid ${T.border}` : "none",
-                background: checked ? "#f0fdf4" : "#fff",
-              }}>
-                <input type="checkbox" checked={checked} onChange={() => toggleSelec(liq.legajo_id)}
-                  style={{ accentColor: T.green, width: 14, height: 14, cursor: "pointer" }} />
-                <span style={{ flex: 1, color: T.text }}>{liq.legajo_nombre}</span>
-                <span style={{ fontWeight: 700, color: checked ? (meta?.color || T.text) : T.dim }}>
-                  {fmtMoney(getMontoTipo(liq, tipo))}
-                </span>
-              </label>
+              <tr key={l.id} style={{ borderTop: `1px solid ${T.border}` }}>
+                <td style={TD({ width: 110, color: FP_TIPO_COLOR[l.tipo] || T.text, fontWeight: 600 })}>{FP_TIPO_LABEL[l.tipo] || l.tipo}</td>
+                <td style={TD({ color: T.muted, fontSize: 12 })}>{describirDestino(l)}</td>
+                <td style={TD({ textAlign: "right", fontWeight: 700 })}>{fmtMoney(Number(l.importe) || 0)}</td>
+                <td style={TD({ textAlign: "right", whiteSpace: "nowrap", width: 130 })}>
+                  {pagado
+                    ? <button onClick={() => onVerPago(pagos[0])}
+                        title={dup ? `⚠️ ${pagos.length} pagos para esta línea` : "Ver / anular este pago"}
+                        style={{ background: "none", border: `1px solid ${dup ? T.red : T.green}`, color: dup ? T.red : T.green, borderRadius: 6, padding: "3px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>
+                        {dup ? `⚠️ ×${pagos.length}` : "✅ Pagado"}
+                      </button>
+                    : <button onClick={() => onPagar(l)}
+                        style={{ background: "#fff", color: T.green, border: `1px solid ${T.green}`, borderRadius: 6, padding: "3px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>
+                        💳 Pagar
+                      </button>
+                  }
+                </td>
+              </tr>
             );
           })}
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {/* Fecha */}
-          <div>
-            <LBL>Fecha</LBL>
-            <input style={iStyle} type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)} />
-          </div>
-
-          {/* Sociedad (solo para transferencia — deposito/efectivo muestran badge fijo) */}
-          {mostrarSociedad && (
-            <div>
-              <LBL>Sociedad que transfiere</LBL>
-              <select style={iStyle} value={form.sociedad_id} onChange={e => { set("sociedad_id", e.target.value); set("cuenta_id", ""); }}>
-                <option value="">— Seleccioná —</option>
-                {sociedades.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
-              </select>
-            </div>
-          )}
-
-          {/* Badge sociedad fija (deposito / efectivo) */}
-          {socFija && (
-            <div style={{ fontSize: 12, color: T.muted, background: T.bg, borderRadius: 5, padding: "6px 10px" }}>
-              Sociedad: <strong style={{ color: T.text }}>Beta</strong>
-            </div>
-          )}
-
-          {/* Cuenta bancaria — siempre visible (efectivo = caja de Beta) */}
-          <div>
-            <LBL>{tipo === "efectivo" ? "Caja" : "Cuenta bancaria"}</LBL>
-            {loadingMeta
-                ? <div style={{ fontSize: 12, color: T.muted }}>Cargando cuentas…</div>
-                : <select style={iStyle} value={form.cuenta_id} onChange={e => set("cuenta_id", e.target.value)}>
-                    <option value="">— Seleccioná —</option>
-                    {cuentasFiltradas.map(c => {
-                      const socNombre = sociedades.find(s => s.id === c.sociedad)?.nombre ?? c.sociedad;
-                      const moneda    = c.moneda !== "ARS" ? ` (${c.moneda})` : "";
-                      return <option key={c.id} value={c.id}>{socNombre} — {c.nombre}{moneda}</option>;
-                    })}
-                  </select>
-              }
-            </div>
-        </div>
-
-        <div style={{ display: "flex", gap: 8, marginTop: 18, justifyContent: "flex-end" }}>
-          <button onClick={onClose} style={BTN_SECONDARY}>Cancelar</button>
-          <button onClick={handleSave} disabled={saving || !liqsSelec.length} style={{
-            background: (saving || !liqsSelec.length) ? T.dim : T.green, color: "#fff", border: "none",
-            borderRadius: 7, padding: "7px 16px", fontSize: 13, fontWeight: 600,
-            cursor: (saving || !liqsSelec.length) ? "not-allowed" : "pointer",
-          }}>
-            {saving ? "Procesando…" : `Confirmar ${liqsSelec.length} pago${liqsSelec.length !== 1 ? "s" : ""}`}
-          </button>
-        </div>
-      </div>
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -977,7 +892,7 @@ function ModalAnularPago({ pago, onClose, onAnulado }) {
   const [saving,      setSaving]      = useState(false);
   const savingRef = useRef(false);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const meta = TIPOS_PAGO.find(t => t.id === pago.tipo_componente);
+  const tipoLabel = FP_TIPO_LABEL[pago.tipo_componente] ?? pago.tipo_componente;
 
   const handleStartEdit = () => {
     setLoadingCtas(true);
@@ -987,9 +902,8 @@ function ModalAnularPago({ pago, onClose, onAnulado }) {
     setEditMode(true);
   };
 
-  // Filtro de cuentas igual que en ModalPagoHQ
-  const socFiltro = pago.tipo_componente === "haberes"  ? pago.sociedad_id
-    : pago.tipo_componente === "transferencia"           ? form.sociedad_id
+  const socFiltro = pago.tipo_componente === "haberes"       ? pago.sociedad_id
+    : esTransferencia(pago.tipo_componente)                  ? form.sociedad_id
     : "beta";
   const cuentasFiltradas = socFiltro ? cuentas.filter(c => c.sociedad === socFiltro) : [];
 
@@ -1009,7 +923,6 @@ function ModalAnularPago({ pago, onClose, onAnulado }) {
     savingRef.current = true; setSaving(true);
     try {
       const cta = cuentas.find(c => c.id === form.cuenta_id);
-      // Borrar viejo + crear nuevo
       await deletePago(pago.id, pago.nb_movimiento_id);
       await appendPago({
         mes:                    pago.mes,
@@ -1028,14 +941,6 @@ function ModalAnularPago({ pago, onClose, onAnulado }) {
     } catch (e) { alert("Error: " + e.message); setSaving(false); } finally { savingRef.current = false; }
   };
 
-  const iStyle = {
-    border: `1px solid ${T.border}`, borderRadius: 6, padding: "7px 10px",
-    fontSize: 13, fontFamily: T.font, width: "100%", boxSizing: "border-box",
-    color: T.text, background: "#fff",
-  };
-  const LBL = ({ children }) => (
-    <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>{children}</label>
-  );
   const ROW = ({ label, value }) => (
     <div style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: `1px solid ${T.border}`, fontSize: 13 }}>
       <span style={{ color: T.muted }}>{label}</span>
@@ -1050,13 +955,13 @@ function ModalAnularPago({ pago, onClose, onAnulado }) {
           {editMode ? "Editar pago" : "Pago registrado"} — {pago.legajo_nombre}
         </h3>
         <p style={{ margin: "0 0 16px", fontSize: 12, color: T.muted }}>
-          {editMode ? "Los cambios reemplazan el pago y el movimiento en Tesorería." : `${meta?.label ?? pago.tipo_componente}`}
+          {editMode ? "Los cambios reemplazan el pago y el movimiento en Tesorería." : tipoLabel}
         </p>
 
         {!editMode ? (
           <>
             <div style={{ marginBottom: 20 }}>
-              <ROW label="Tipo"   value={meta?.label ?? pago.tipo_componente} />
+              <ROW label="Tipo"   value={tipoLabel} />
               <ROW label="Monto"  value={fmtMoney(pago.monto)} />
               <ROW label="Fecha"  value={(pago.fecha ?? "").slice(0, 10)} />
               <ROW label="Cuenta" value={pago.cuenta_bancaria_nombre || "—"} />
@@ -1077,17 +982,17 @@ function ModalAnularPago({ pago, onClose, onAnulado }) {
           <>
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <div>
-                <LBL>Monto (ARS)</LBL>
-                <input style={iStyle} type="number" value={form.monto} onChange={e => set("monto", e.target.value)} />
+                <ModalLabel>Monto (ARS)</ModalLabel>
+                <input style={MODAL_INPUT} type="number" value={form.monto} onChange={e => set("monto", e.target.value)} />
               </div>
               <div>
-                <LBL>Fecha</LBL>
-                <input style={iStyle} type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)} />
+                <ModalLabel>Fecha</ModalLabel>
+                <input style={MODAL_INPUT} type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)} />
               </div>
-              {pago.tipo_componente === "transferencia" && (
+              {esTransferencia(pago.tipo_componente) && (
                 <div>
-                  <LBL>Sociedad que transfiere</LBL>
-                  <select style={iStyle} value={form.sociedad_id}
+                  <ModalLabel>Sociedad que transfiere</ModalLabel>
+                  <select style={MODAL_INPUT} value={form.sociedad_id}
                     onChange={e => setForm(f => ({ ...f, sociedad_id: e.target.value, cuenta_id: "" }))}>
                     <option value="">— Seleccioná —</option>
                     {sociedades.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
@@ -1100,17 +1005,15 @@ function ModalAnularPago({ pago, onClose, onAnulado }) {
                 </div>
               )}
               <div>
-                <LBL>{pago.tipo_componente === "efectivo" ? "Caja" : "Cuenta bancaria"}</LBL>
+                <ModalLabel>{pago.tipo_componente === "efectivo" ? "Caja" : "Cuenta bancaria"}</ModalLabel>
                 {loadingCtas
                   ? <div style={{ fontSize: 12, color: T.muted }}>Cargando…</div>
-                  : <select style={iStyle} value={form.cuenta_id} onChange={e => set("cuenta_id", e.target.value)}
-                      disabled={pago.tipo_componente === "transferencia" && !form.sociedad_id}>
+                  : <select style={MODAL_INPUT} value={form.cuenta_id} onChange={e => set("cuenta_id", e.target.value)}
+                      disabled={esTransferencia(pago.tipo_componente) && !form.sociedad_id}>
                       <option value="">— Seleccioná —</option>
-                      {cuentasFiltradas.map(c => {
-                        const soc = sociedades.find(s => s.id === c.sociedad)?.nombre ?? c.sociedad;
-                        const mon = c.moneda !== "ARS" ? ` (${c.moneda})` : "";
-                        return <option key={c.id} value={c.id}>{soc} — {c.nombre}{mon}</option>;
-                      })}
+                      {cuentasFiltradas.map(c => (
+                        <option key={c.id} value={c.id}>{ctaLabel(c, sociedades)}</option>
+                      ))}
                     </select>
                 }
               </div>
@@ -1134,44 +1037,39 @@ function ModalAnularPago({ pago, onClose, onAnulado }) {
 
 // ── Modal pago HQ (individual) ────────────────────────────────────────────────
 
-function ModalPagoHQ({ mes, anio, liq, onClose, onSaved }) {
+function ModalPagoHQ({ mes, anio, liq, linea, onClose, onSaved }) {
+  const tipo = linea?.tipo ?? "haberes";
   const [form, setForm] = useState({
-    tipo_componente: "haberes",
-    monto:           liq?.monto_haberes ?? "",
-    fecha:           new Date().toISOString().slice(0, 10),
-    sociedad_id:     "",   // solo para transferencia
-    cuenta_id:       "",
+    monto:              linea?.importe ?? "",
+    fecha:              new Date().toISOString().slice(0, 10),
+    sociedad_id:        "",   // solo para transferencia
+    cuenta_id:          "",
+    cuenta_contable_id: "",
   });
-  const [cuentas,     setCuentas]     = useState([]);
-  const [sociedades,  setSociedades]  = useState([]);
-  const [loadingCtas, setLoadingCtas] = useState(true);
-  const [saving,      setSaving]      = useState(false);
+  const [cuentas,          setCuentas]          = useState([]);
+  const [sociedades,       setSociedades]       = useState([]);
+  const [cuentasContables, setCuentasContables] = useState([]);
+  const [loadingCtas,      setLoadingCtas]      = useState(true);
+  const [saving,           setSaving]           = useState(false);
   const savingRef = useRef(false);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   useEffect(() => {
-    Promise.all([fetchSociedadesNumbers(), fetchCuentasBancariasNumbers()])
-      .then(([socs, ctas]) => { setSociedades(socs); setCuentas(ctas); })
+    Promise.all([fetchSociedadesNumbers(), fetchCuentasBancariasNumbers(), fetchCuentasContablesNumbers()])
+      .then(([socs, ctas, cc]) => { setSociedades(socs); setCuentas(ctas); setCuentasContables(cc); })
       .finally(() => setLoadingCtas(false));
   }, []);
 
-  // Sociedad que determina las cuentas disponibles según el componente
   const socFiltro = useMemo(() => {
-    if (form.tipo_componente === "haberes")  return liq?.sociedad_id ?? "";
-    if (form.tipo_componente === "deposito") return "beta";
-    if (form.tipo_componente === "efectivo") return "beta";  // caja de Beta
-    return form.sociedad_id;                                 // transferencia: el usuario elige
-  }, [form.tipo_componente, form.sociedad_id, liq?.sociedad_id]);
+    if (tipo === "haberes")  return liq?.sociedad_id ?? "";
+    if (tipo === "deposito") return "beta";
+    if (tipo === "efectivo") return "beta";  // caja de Beta
+    return form.sociedad_id;                 // transferencia: el usuario elige
+  }, [tipo, form.sociedad_id, liq?.sociedad_id]);
 
   const cuentasFiltradas = useMemo(() =>
     socFiltro ? cuentas.filter(c => c.sociedad === socFiltro) : [],
   [cuentas, socFiltro]);
-
-  const handleTipo = (tipo) => {
-    const ef = Math.max(0, (liq?.sueldo_total_legajo || 0) - (liq?.monto_haberes || 0) - (liq?.monto_deposito || 0) - (liq?.monto_transferencia || 0));
-    const montos = { haberes: liq?.monto_haberes, deposito: liq?.monto_deposito, transferencia: liq?.monto_transferencia, efectivo: ef || "" };
-    setForm(f => ({ ...f, tipo_componente: tipo, cuenta_id: "", sociedad_id: "", ...(montos[tipo] ? { monto: montos[tipo] } : {}) }));
-  };
 
   const handleSave = async () => {
     if (savingRef.current) return;
@@ -1182,28 +1080,23 @@ function ModalPagoHQ({ mes, anio, liq, onClose, onSaved }) {
       const cta = cuentas.find(c => c.id === form.cuenta_id);
       await appendPago({
         mes, anio,
-        legajo_id:              liq.legajo_id,
-        legajo_nombre:          liq.legajo_nombre,
-        sociedad_id:            liq.sociedad_id,
-        sociedad_nombre:        liq.sociedad_nombre,
-        tipo_componente:        form.tipo_componente,
-        monto:                  parseFloat(form.monto) || 0,
-        fecha:                  form.fecha,
-        cuenta_bancaria_id:     form.cuenta_id,
-        cuenta_bancaria_nombre: cta?.nombre ?? "",
+        legajo_id:               liq.legajo_id,
+        legajo_nombre:           liq.legajo_nombre,
+        sociedad_id:             liq.sociedad_id,
+        sociedad_nombre:         liq.sociedad_nombre,
+        tipo_componente:         tipo,
+        forma_pago_id:           linea?.id ?? "",
+        monto:                   parseFloat(form.monto) || 0,
+        fecha:                   form.fecha,
+        cuenta_bancaria_id:      form.cuenta_id,
+        cuenta_bancaria_nombre:  cta?.nombre ?? "",
+        cuenta_contable_id:      form.cuenta_contable_id,
+        cuenta_contable_nombre:  cuentasContables.find(c => c.id === form.cuenta_contable_id)?.nombre ?? "",
+        concepto:                linea?.nota ? `Sueldo ${liq.legajo_nombre} ${mes}/${anio} · ${linea.nota}` : "",
       });
       await onSaved();
     } catch (e) { alert("Error: " + e.message); setSaving(false); } finally { savingRef.current = false; }
   };
-
-  const iStyle = {
-    border: `1px solid ${T.border}`, borderRadius: 6, padding: "7px 10px",
-    fontSize: 13, fontFamily: T.font, width: "100%", boxSizing: "border-box",
-    color: T.text, background: "#fff",
-  };
-  const LBL = ({ children }) => (
-    <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>{children}</label>
-  );
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
@@ -1211,57 +1104,54 @@ function ModalPagoHQ({ mes, anio, liq, onClose, onSaved }) {
         <h3 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 700 }}>Registrar pago — {liq?.legajo_nombre}</h3>
         <p style={{ margin: "0 0 16px", fontSize: 12, color: T.muted }}>Pendiente: {fmtMoney(liq?.pendiente)}</p>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {linea && (
+            <div style={{ fontSize: 12, color: T.muted, background: T.bg, borderRadius: 5, padding: "8px 10px" }}>
+              <strong style={{ color: FP_TIPO_COLOR[tipo] || T.text }}>{FP_TIPO_LABEL[tipo] || tipo}</strong>
+              {" → "}{describirDestino(linea)}
+            </div>
+          )}
           <div>
-            <LBL>Componente</LBL>
-            <select style={iStyle} value={form.tipo_componente} onChange={e => handleTipo(e.target.value)}>
-              <option value="haberes">Haberes (recibo de sueldo)</option>
-              <option value="deposito">Depósito bancario</option>
-              <option value="transferencia">Transferencia (factura monotributo)</option>
-              <option value="efectivo">Efectivo</option>
-            </select>
+            <ModalLabel>Monto (ARS)</ModalLabel>
+            <input style={MODAL_INPUT} type="number" value={form.monto} onChange={e => set("monto", e.target.value)} />
           </div>
           <div>
-            <LBL>Monto (ARS)</LBL>
-            <input style={iStyle} type="number" value={form.monto} onChange={e => set("monto", e.target.value)} />
+            <ModalLabel>Fecha</ModalLabel>
+            <input style={MODAL_INPUT} type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)} />
           </div>
-          <div>
-            <LBL>Fecha</LBL>
-            <input style={iStyle} type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)} />
-          </div>
-          {/* Sociedad que transfiere — solo para transferencia */}
-          {form.tipo_componente === "transferencia" && (
+          {esTransferencia(tipo) && (
             <div>
-              <LBL>Sociedad que transfiere</LBL>
-              <select style={iStyle} value={form.sociedad_id}
+              <ModalLabel>Sociedad que transfiere</ModalLabel>
+              <select style={MODAL_INPUT} value={form.sociedad_id}
                 onChange={e => setForm(f => ({ ...f, sociedad_id: e.target.value, cuenta_id: "" }))}>
                 <option value="">— Seleccioná —</option>
                 {sociedades.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
               </select>
             </div>
           )}
-
-          {/* Badge sociedad fija (depósito y efectivo = Beta) */}
-          {(form.tipo_componente === "deposito" || form.tipo_componente === "efectivo") && (
+          {(tipo === "deposito" || tipo === "efectivo") && (
             <div style={{ fontSize: 12, color: T.muted, background: T.bg, borderRadius: 5, padding: "6px 10px" }}>
               Sociedad: <strong style={{ color: T.text }}>Beta</strong>
             </div>
           )}
-
-          {/* Cuenta bancaria — siempre visible, filtrada por componente */}
           <div>
-            <LBL>{form.tipo_componente === "efectivo" ? "Caja" : "Cuenta bancaria"}</LBL>
+            <ModalLabel>{tipo === "efectivo" ? "Caja" : "Cuenta bancaria"} (origen)</ModalLabel>
             {loadingCtas
               ? <div style={{ fontSize: 12, color: T.muted }}>Cargando…</div>
-              : <select style={iStyle} value={form.cuenta_id} onChange={e => set("cuenta_id", e.target.value)}
-                  disabled={form.tipo_componente === "transferencia" && !form.sociedad_id}>
+              : <select style={MODAL_INPUT} value={form.cuenta_id} onChange={e => set("cuenta_id", e.target.value)}
+                  disabled={esTransferencia(tipo) && !form.sociedad_id}>
                   <option value="">— Seleccioná —</option>
-                  {cuentasFiltradas.map(c => {
-                    const soc = sociedades.find(s => s.id === c.sociedad)?.nombre ?? c.sociedad;
-                    const mon = c.moneda !== "ARS" ? ` (${c.moneda})` : "";
-                    return <option key={c.id} value={c.id}>{soc} — {c.nombre}{mon}</option>;
-                  })}
+                  {cuentasFiltradas.map(c => (
+                    <option key={c.id} value={c.id}>{ctaLabel(c, sociedades)}</option>
+                  ))}
                 </select>
             }
+          </div>
+          <div>
+            <ModalLabel>Cuenta contable</ModalLabel>
+            <select style={MODAL_INPUT} value={form.cuenta_contable_id} onChange={e => set("cuenta_contable_id", e.target.value)}>
+              <option value="">— Opcional —</option>
+              {cuentasContables.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+            </select>
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
