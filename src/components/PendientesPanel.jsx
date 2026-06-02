@@ -366,18 +366,23 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
   const pagosSinFactura = useMemo(() => {
     return franchises.filter(f => f.activa !== false).flatMap(fr => {
       const frComps = comps[fr.id] ?? [];
-      return frComps
-        .filter(c => c.type === "PAGO_PAUTA" &&
-                     (!activeCompany || compEmpresa(c) === activeCompany))
-        .filter(c => {
-          const hasFact = frComps.some(f2 =>
-            f2.type === makeType("FACTURA","PAUTA") &&
-            inPeriod(f2, dateMonth(c.date), dateYear(c.date)) &&
-            (!activeCompany || compEmpresa(f2) === activeCompany)
-          );
-          return !hasFact;
-        })
-        .map(c => ({ fr, comp: c }));
+      const pagos = frComps.filter(c => c.type === "PAGO_PAUTA" &&
+                     (!activeCompany || compEmpresa(c) === activeCompany));
+      // Agrupar por período para comparar totales (no solo presencia)
+      return pagos.filter(c => {
+        const m = dateMonth(c.date);
+        const y = dateYear(c.date);
+        const totalFacts = frComps
+          .filter(f2 => f2.type === makeType("FACTURA","PAUTA") &&
+                        inPeriod(f2, m, y) &&
+                        (!activeCompany || compEmpresa(f2) === activeCompany))
+          .reduce((a, f2) => a + (f2.amount ?? 0), 0);
+        const totalPagos = pagos
+          .filter(p => dateMonth(p.date) === m && dateYear(p.date) === y)
+          .reduce((a, p) => a + (p.amount ?? 0), 0);
+        // Mostrar si el total facturado NO cubre el total de pagos a cuenta
+        return totalFacts < totalPagos - 0.01;
+      }).map(c => ({ fr, comp: c }));
     });
   }, [franchises, comps, activeCompany]);
 
