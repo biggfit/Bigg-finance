@@ -601,8 +601,11 @@ export default async function handler(req, res) {
       }));
     }
 
-    // Esperar a que AFIP asigne el número secuencial real (necesario para CbteAsoc de futuras NC)
-    const afip = await pollAfipNumero(parsed.idComprobante, 5, 2000);
+    // Intentar obtener el número AFIP con timeout corto (3 intentos × 2s = 6s máx).
+    // Si no llega a tiempo, devolvemos ok=true sin afipNumero — el cliente queda en
+    // "NÚMERO AFIP PENDIENTE" y puede consultarlo después con la acción getNumero.
+    // Esto evita el HTTP 504 de Vercel por requests que duran >30s.
+    const afip = await pollAfipNumero(parsed.idComprobante, 3, 2000);
 
     return res.end(JSON.stringify({
       ok:             true,
