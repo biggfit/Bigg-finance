@@ -695,7 +695,7 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
             {
               label: "Promedio por sede",
               value: fmtMoney(promUSD, "USD"),
-              sub: `${pagando.length} sedes`,
+              sub: null,
               breakdown: [
                 ["ARG",    promReg(rowsARG)   != null ? promReg(rowsARG)   : null],
                 ["LATAM",  promReg(rowsLATAM) != null ? promReg(rowsLATAM) : null],
@@ -705,7 +705,7 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
             {
               label: `YTD Ene–${MONTHS[month]}`,
               value: fmtMoney(ytdUSD, "USD"),
-              sub: `÷${numMeses} = ${fmtMoney(Math.round(ytdUSD / numMeses), "USD")}/mes`,
+              sub: null,
               breakdown: [["ARG", ytdARG], ["LATAM", ytdLATAM], ["Europa", ytdEU]],
             },
           ];
