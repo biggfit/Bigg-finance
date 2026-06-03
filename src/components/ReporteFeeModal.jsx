@@ -390,14 +390,14 @@ function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef }) {
   ].filter(Boolean).join(' &nbsp;|&nbsp; ');
 
   const bd = items => items.map(([l, v]) =>
-    '<tr><td style="font-size:9px;color:#555;padding:1px 4px;text-align:left;">' + l +
-    '</td><td style="font-size:9px;color:#888;font-family:monospace;padding:1px 4px;text-align:right;">' + v + '</td></tr>'
+    '<tr><td style="font-size:11px;color:#666;padding:2px 4px;text-align:left;">' + l +
+    '</td><td style="font-size:11px;color:#aaa;font-family:monospace;padding:2px 4px;text-align:right;">' + v + '</td></tr>'
   ).join('');
 
   const kpi = (label, val, color, items, border) =>
-    '<td class="kpi-cell" style="text-align:center;padding:10px 5px;' + (border !== false ? 'border-right:1px solid #2a2a2a;' : '') + 'vertical-align:top;white-space:nowrap;">' +
-    '<div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;white-space:nowrap;">' + label + '</div>' +
-    '<div class="kpi-val" style="font-size:20px;font-weight:700;color:' + (color || '#fff') + ';font-family:monospace;margin-bottom:' + (items ? '6' : '0') + 'px;white-space:nowrap;">' + val + '</div>' +
+    '<td class="kpi-cell" style="text-align:center;padding:20px 12px;' + (border !== false ? 'border-right:1px solid #2a2a2a;' : '') + 'vertical-align:top;white-space:nowrap;">' +
+    '<div style="font-size:11px;color:#777;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;white-space:nowrap;">' + label + '</div>' +
+    '<div class="kpi-val" style="font-size:30px;font-weight:700;color:' + (color || '#fff') + ';font-family:monospace;margin-bottom:' + (items ? '10' : '0') + 'px;white-space:nowrap;line-height:1.1;">' + val + '</div>' +
     (items ? '<table width="100%" cellpadding="0" cellspacing="0" style="margin:0 auto;">' + bd(items) + '</table>' : '') +
     '</td>';
 
