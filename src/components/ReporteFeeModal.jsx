@@ -395,10 +395,10 @@ function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef }) {
   ).join('');
 
   const kpi = (label, val, color, items, border) =>
-    '<td style="text-align:center;padding:12px 6px;' + (border !== false ? 'border-right:1px solid #2a2a2a;' : '') + 'vertical-align:top;">' +
-    '<div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;">' + label + '</div>' +
-    '<div style="font-size:16px;font-weight:700;color:' + (color || '#fff') + ';font-family:monospace;margin-bottom:' + (items ? '6' : '0') + 'px;">' + val + '</div>' +
-    (items ? '<table width="100%" cellpadding="0" cellspacing="0">' + bd(items) + '</table>' : '') +
+    '<td class="kpi-cell" style="text-align:center;padding:10px 5px;' + (border !== false ? 'border-right:1px solid #2a2a2a;' : '') + 'vertical-align:top;white-space:nowrap;">' +
+    '<div style="font-size:8px;color:#666;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px;white-space:nowrap;">' + label + '</div>' +
+    '<div class="kpi-val" style="font-size:15px;font-weight:700;color:' + (color || '#fff') + ';font-family:monospace;margin-bottom:' + (items ? '4' : '0') + 'px;white-space:nowrap;">' + val + '</div>' +
+    (items ? '<table width="100%" cellpadding="0" cellspacing="0" style="margin:0 auto;">' + bd(items) + '</table>' : '') +
     '</td>';
 
   const tableRows = rows.map((r, i) => {
@@ -414,7 +414,9 @@ function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef }) {
       '</tr>';
   }).join('');
 
-  return '<!DOCTYPE html><html><head><meta charset="UTF-8"></head>' +
+  return '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<style>@media only screen and (max-width:600px){.kpi-cell{padding:6px 3px !important;}.kpi-val{font-size:12px !important;}table[class="kpi-row"] td{display:block;width:100% !important;border-right:none !important;border-bottom:1px solid #2a2a2a;}}</style>' +
+    '</head>' +
     '<body style="margin:0;padding:0;background:#111111;font-family:Arial,sans-serif;">' +
     '<table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:0;">' +
     '<table width="100%" cellpadding="0" cellspacing="0" style="width:100%;">' +
@@ -429,7 +431,7 @@ function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef }) {
 
     // KPIs
     '<tr><td style="background:#181818;border-bottom:1px solid #2a2a2a;">' +
-    '<table width="100%" cellpadding="0" cellspacing="0"><tr>' +
+    '<table class="kpi-row" width="100%" cellpadding="0" cellspacing="0"><tr>' +
     kpi('Pagan Fee', pagando.length + ' / ' + abiertas.length, '#fff',
       [['ARG', regPag(rowsARG)], ['LATAM', regPag(rowsLATAM)], ['Europa', regPag(rowsEU)]]) +
     kpi('Fee ' + mesLabel, fmtU(totMes), '#fff',
