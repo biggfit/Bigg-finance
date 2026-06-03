@@ -1363,8 +1363,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                     </div>
                   )}
                 </div>);
-              })
-              ))}
+              })}
             </div>
           )}
         </div>
