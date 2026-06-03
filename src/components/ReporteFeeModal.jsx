@@ -409,12 +409,12 @@ function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef }) {
   }).join('');
 
   return '<!DOCTYPE html><html><head><meta charset="UTF-8"></head>' +
-    '<body style="margin:0;padding:0;background:#f4f4f4;font-family:Arial,sans-serif;">' +
-    '<table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 16px;">' +
-    '<table width="680" cellpadding="0" cellspacing="0" style="max-width:680px;width:100%;">' +
+    '<body style="margin:0;padding:0;background:#111111;font-family:Arial,sans-serif;">' +
+    '<table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:0;">' +
+    '<table width="100%" cellpadding="0" cellspacing="0" style="width:100%;">' +
 
     // Header
-    '<tr><td style="background:#111;padding:22px 28px;border-radius:10px 10px 0 0;">' +
+    '<tr><td style="background:#111;padding:22px 32px;">' +
     '<table width="100%" cellpadding="0" cellspacing="0"><tr>' +
     '<td><div style="font-size:24px;font-weight:900;color:#adff19;letter-spacing:-1px;">BIGG</div>' +
     '<div style="font-size:10px;color:#888;margin-top:3px;text-transform:uppercase;letter-spacing:.1em;">Reporte de Fee &mdash; ' + mesLabel + ' ' + year + '</div></td>' +
@@ -450,9 +450,10 @@ function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef }) {
     '</tr>' + tableRows + '</table></td></tr>' +
 
     // Footer con TC
-    '<tr><td style="background:#0d0d0d;padding:12px 28px;border-top:1px solid #2a2a2a;border-radius:0 0 10px 10px;">' +
-    (tcLine ? '<div style="font-size:10px;color:#555;font-family:monospace;margin-bottom:6px;"><span style="font-size:9px;font-weight:700;color:#444;text-transform:uppercase;letter-spacing:.06em;">TC Ref.&nbsp;&nbsp;</span>' + tcLine + '</div>' : '') +
-    '<div style="font-size:10px;color:#333;text-align:center;">Generado por BIGG Finance · ' + new Date().toLocaleDateString('es-AR') + '</div>' +
+    '<tr><td style="background:#0d0d0d;padding:16px 32px;border-top:1px solid #2a2a2a;">' +
+    (tcLine ? '<div style="font-size:10px;color:#555;font-family:monospace;margin-bottom:10px;"><span style="font-size:9px;font-weight:700;color:#444;text-transform:uppercase;letter-spacing:.06em;">TC Ref.&nbsp;&nbsp;</span>' + tcLine + '</div>' : '') +
+    '<div style="font-size:11px;color:#888;margin-bottom:6px;">Ante cualquier consulta, no dude en contactarse con <a href="mailto:lpini@bigg.fit" style="color:#adff19;text-decoration:none;font-weight:600;">lpini@bigg.fit</a>.</div>' +
+    '<div style="font-size:10px;color:#444;">Generado por BIGG Finance · ' + new Date().toLocaleDateString('es-AR') + '</div>' +
     '</td></tr>' +
 
     '</table></td></tr></table></body></html>';
