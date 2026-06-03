@@ -77,6 +77,7 @@ function buildRows(franchises, comps, year, month, tiposCambio = {}) {
   const rows = [];
   for (const fr of franchises) {
     if (fr.activa === false) continue;
+    if (fr.paysFee === false) continue; // sedes propias — no pagan fee
     const frComps  = comps[fr.id] ?? [];
     const feeType  = makeType("FACTURA", "FEE");
     const feeComps = frComps.filter(c => c.type === feeType && c.month === month && c.year === year);

@@ -1166,6 +1166,17 @@ export default function MaestrosModal({ franchises, franchisor, comps, tiposCamb
                         {buf.activa ? "● ACTIVA" : "○ INACTIVA"}
                       </button>
                     )}
+                    {!newMode && (
+                      <button onClick={() => setBuf(b => ({ ...b, paysFee: !b.paysFee }))}
+                        style={{
+                          padding:"2px 8px", borderRadius:20, fontSize:9, fontWeight:800, cursor:"pointer", border:"none",
+                          color:       buf.paysFee !== false ? "var(--cyan)" : "var(--muted)",
+                          background:  buf.paysFee !== false ? "rgba(34,211,238,.10)" : "rgba(255,255,255,.05)",
+                          letterSpacing:".06em",
+                        }} title={buf.paysFee !== false ? "Click para marcar como sede propia (sin fee)" : "Click para que pague fee"}>
+                        {buf.paysFee !== false ? "$ PAGA FEE" : "○ SIN FEE"}
+                      </button>
+                    )}
                   </div>
                   {/* Menu ... con Eliminar */}
                   {!newMode && (
