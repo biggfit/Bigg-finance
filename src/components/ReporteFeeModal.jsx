@@ -712,7 +712,7 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
 
           return (
             <div style={{ display: "flex", borderBottom: "1px solid var(--border)" }}>
-              {kpis.map(({ label, value, sub, valueColor, breakdown }) => (
+              {kpis.map(({ label, value, sub, valueColor, breakdown, bdMono }) => (
                 <div key={label} style={{ flex: 1, padding: "10px 14px", borderRight: "1px solid var(--border)", textAlign: "center" }}>
                   <div style={{ fontSize: 9, color: "var(--text2)", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</div>
                   <div style={{ fontSize: 13, fontWeight: 700, fontFamily: "monospace", color: valueColor ?? "var(--text)" }}>{value}</div>
