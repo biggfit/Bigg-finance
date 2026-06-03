@@ -10,6 +10,11 @@ const fmtMoney = (n, cur = "ARS") => {
   const sym = cur === "USD" ? "U$D " : cur === "EUR" ? "€ " : "$ ";
   return sym + abs.toLocaleString("es-AR", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 };
+// Solo el número, sin símbolo de moneda (para filas de tabla)
+const fmtNum = (n) => {
+  if (!n && n !== 0) return "—";
+  return Math.abs(n).toLocaleString("es-AR", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+};
 
 function prevMonth(month, year) {
   return month === 0 ? { month: 11, year: year - 1 } : { month: month - 1, year };
@@ -344,6 +349,7 @@ function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef }) {
   const mesLabel  = MONTHS[month];
   const prevLabel = MONTHS[prev.month];
   const fmtU = n => n ? 'U$D ' + Math.round(n).toLocaleString('es-AR') : '—';
+  const fmtN = n => n ? Math.round(n).toLocaleString('es-AR') : '—'; // sin símbolo, para filas de tabla
   const fmtP = p => p == null ? '—' : (p >= 0 ? '+' : '') + p.toFixed(1) + '%';
 
   const EU_PAISES = ['España', 'Portugal'];
@@ -402,9 +408,9 @@ function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef }) {
     return '<tr style="background:' + bg + ';">' +
       '<td style="padding:7px 12px;font-size:12px;color:' + (r.hasOpened ? '#fff' : '#555') + ';font-weight:600;">' + r.sede + '</td>' +
       '<td style="padding:7px 12px;font-size:12px;color:#888;">' + r.pais + '</td>' +
-      '<td style="padding:7px 12px;font-size:12px;color:' + (r.sinFeeMes ? '#555' : '#fff') + ';font-family:monospace;text-align:right;">' + (r.sinFeeMes ? '—' : fmtU(r.feeMes_USD)) + '</td>' +
+      '<td style="padding:7px 12px;font-size:12px;color:' + (r.sinFeeMes ? '#555' : '#fff') + ';font-family:monospace;text-align:right;">' + (r.sinFeeMes ? '—' : fmtN(r.feeMes_USD)) + '</td>' +
       '<td style="padding:7px 12px;font-size:12px;color:' + vc + ';font-family:monospace;text-align:center;font-weight:700;">' + vl + '</td>' +
-      '<td style="padding:7px 12px;font-size:12px;color:#888;font-family:monospace;text-align:right;">' + (r.feeYTD_USD ? fmtU(r.feeYTD_USD) : '—') + '</td>' +
+      '<td style="padding:7px 12px;font-size:12px;color:#888;font-family:monospace;text-align:right;">' + (r.feeYTD_USD ? fmtN(r.feeYTD_USD) : '—') + '</td>' +
       '</tr>';
   }).join('');
 
@@ -838,14 +844,14 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
                         {!r.hasOpened
                           ? <span style={{ color: "var(--text2)", fontSize: 10 }}>Sin abrir</span>
                           : r.sinFeeMes
-                            ? <span style={{ color: "var(--text2)" }}>$ 0</span>
-                            : fmtMoney(r.feeMes_USD, "USD")}
+                            ? <span style={{ color: "var(--text2)" }}>0</span>
+                            : fmtNum(r.feeMes_USD)}
                       </td>
                       <td style={{ ...tdS, textAlign: "center", fontWeight: 600, color: varColor, fontFamily: "inherit" }}>
                         {varLabel}
                       </td>
                       <td style={{ ...tdS, color: "var(--text2)" }}>
-                        {r.feeYTD_USD ? fmtMoney(r.feeYTD_USD, "USD") : "—"}
+                        {r.feeYTD_USD ? fmtNum(r.feeYTD_USD) : "—"}
                       </td>
                     </tr>
                   );
