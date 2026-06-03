@@ -626,15 +626,53 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
           const ytdUSD = rows.reduce((s,r) => s + (r.feeYTD_USD || 0), 0);
 
           const EU_PAISES_KPI = ["España", "Portugal"];
-          const feeARG_kpi   = rows.filter(r => r.pais === "Argentina").reduce((s,r) => s + (r.feeMes_USD || 0), 0);
-          const feeLATAM_kpi = rows.filter(r => r.pais !== "Argentina" && !EU_PAISES_KPI.includes(r.pais)).reduce((s,r) => s + (r.feeMes_USD || 0), 0);
-          const feeEU_kpi    = rows.filter(r => EU_PAISES_KPI.includes(r.pais)).reduce((s,r) => s + (r.feeMes_USD || 0), 0);
+          const rowsARG   = rows.filter(r => r.pais === "Argentina");
+          const rowsLATAM = rows.filter(r => r.pais !== "Argentina" && !EU_PAISES_KPI.includes(r.pais));
+          const rowsEU    = rows.filter(r => EU_PAISES_KPI.includes(r.pais));
+
+          const feeARG_kpi   = rowsARG.reduce((s,r)   => s + (r.feeMes_USD || 0), 0);
+          const feeLATAM_kpi = rowsLATAM.reduce((s,r) => s + (r.feeMes_USD || 0), 0);
+          const feeEU_kpi    = rowsEU.reduce((s,r)    => s + (r.feeMes_USD || 0), 0);
+
+          // Var % por región
+          const varReg = (regRows) => {
+            const m = regRows.reduce((s,r) => s + (r.feeMes_USD  || 0), 0);
+            const p = regRows.reduce((s,r) => s + (r.feePrev_USD || 0), 0);
+            if (!p) return null;
+            const v = ((m - p) / p) * 100;
+            return (v >= 0 ? "+" : "") + v.toFixed(1) + "%";
+          };
+
+          // Promedio por región (solo sedes que pagaron)
+          const promReg = (regRows) => {
+            const pag = regRows.filter(r => !r.sinFeeMes && r.hasOpened);
+            if (!pag.length) return null;
+            return pag.reduce((s,r) => s + (r.feeMes_USD || 0), 0) / pag.length;
+          };
+
+          // YTD por región
+          const ytdARG   = rowsARG.reduce((s,r)   => s + (r.feeYTD_USD || 0), 0);
+          const ytdLATAM = rowsLATAM.reduce((s,r) => s + (r.feeYTD_USD || 0), 0);
+          const ytdEU    = rowsEU.reduce((s,r)    => s + (r.feeYTD_USD || 0), 0);
+
+          // Pagan fee por región
+          const pagARG   = rowsARG.filter(r   => !r.sinFeeMes && r.hasOpened).length;
+          const pagLATAM = rowsLATAM.filter(r => !r.sinFeeMes && r.hasOpened).length;
+          const pagEU    = rowsEU.filter(r    => !r.sinFeeMes && r.hasOpened).length;
+
+          const numMeses = month + 1; // Ene=0 → 1 mes, Mayo=4 → 5 meses
 
           const kpis = [
             {
               label: "Pagan fee",
               value: `${pagando.length} / ${abiertas.length}`,
               sub: null,
+              breakdown: [
+                ["ARG",    `${pagARG} sedes`],
+                ["LATAM",  `${pagLATAM} sedes`],
+                ["Europa", `${pagEU} sedes`],
+              ],
+              bdMono: false,
             },
             {
               label: `Fee ${MONTHS[month]}`,
@@ -647,16 +685,28 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
               value: varLabel,
               valueColor: varColor,
               sub: null,
+              breakdown: [
+                ["ARG",    varReg(rowsARG)],
+                ["LATAM",  varReg(rowsLATAM)],
+                ["Europa", varReg(rowsEU)],
+              ],
+              bdMono: false,
             },
             {
               label: "Promedio por sede",
               value: fmtMoney(promUSD, "USD"),
               sub: `${pagando.length} sedes`,
+              breakdown: [
+                ["ARG",    promReg(rowsARG)   != null ? promReg(rowsARG)   : null],
+                ["LATAM",  promReg(rowsLATAM) != null ? promReg(rowsLATAM) : null],
+                ["Europa", promReg(rowsEU)    != null ? promReg(rowsEU)    : null],
+              ],
             },
             {
               label: `YTD Ene–${MONTHS[month]}`,
               value: fmtMoney(ytdUSD, "USD"),
-              sub: null,
+              sub: `÷${numMeses} = ${fmtMoney(Math.round(ytdUSD / numMeses), "USD")}/mes`,
+              breakdown: [["ARG", ytdARG], ["LATAM", ytdLATAM], ["Europa", ytdEU]],
             },
           ];
 
@@ -669,12 +719,18 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
                   {sub && <div style={{ fontSize: 10, color: "var(--text2)", marginTop: 2, fontFamily: "monospace" }}>{sub}</div>}
                   {breakdown && (
                     <div style={{ marginTop: 7, borderTop: "1px solid var(--border)", paddingTop: 5 }}>
-                      {breakdown.map(([lbl, fee]) => (
-                        <div key={lbl} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 2, padding: "0 2px" }}>
-                          <span style={{ fontSize: 9, color: "var(--text2)", opacity: .7 }}>{lbl}</span>
-                          <span style={{ fontSize: 10, fontFamily: "monospace", color: "var(--text2)" }}>{fmtMoney(fee, "USD")}</span>
-                        </div>
-                      ))}
+                      {breakdown.map(([lbl, val]) => {
+                        const display = val == null ? "—"
+                          : bdMono === false ? String(val)
+                          : typeof val === "number" ? fmtMoney(val, "USD")
+                          : String(val);
+                        return (
+                          <div key={lbl} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 2, padding: "0 2px" }}>
+                            <span style={{ fontSize: 9, color: "var(--text2)", opacity: .7 }}>{lbl}</span>
+                            <span style={{ fontSize: 10, fontFamily: "monospace", color: "var(--text2)" }}>{display}</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
