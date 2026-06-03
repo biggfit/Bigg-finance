@@ -655,10 +655,13 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
           const ytdLATAM = rowsLATAM.reduce((s,r) => s + (r.feeYTD_USD || 0), 0);
           const ytdEU    = rowsEU.reduce((s,r)    => s + (r.feeYTD_USD || 0), 0);
 
-          // Pagan fee por región
+          // Pagan fee por región (pagando / total activas con historial)
           const pagARG   = rowsARG.filter(r   => !r.sinFeeMes && r.hasOpened).length;
           const pagLATAM = rowsLATAM.filter(r => !r.sinFeeMes && r.hasOpened).length;
           const pagEU    = rowsEU.filter(r    => !r.sinFeeMes && r.hasOpened).length;
+          const totARG   = rowsARG.filter(r   => r.hasOpened).length;
+          const totLATAM = rowsLATAM.filter(r => r.hasOpened).length;
+          const totEU    = rowsEU.filter(r    => r.hasOpened).length;
 
           const numMeses = month + 1; // Ene=0 → 1 mes, Mayo=4 → 5 meses
 
@@ -668,9 +671,9 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
               value: `${pagando.length} / ${abiertas.length}`,
               sub: null,
               breakdown: [
-                ["ARG",    `${pagARG} sedes`],
-                ["LATAM",  `${pagLATAM} sedes`],
-                ["Europa", `${pagEU} sedes`],
+                ["ARG",    `${pagARG} / ${totARG}`],
+                ["LATAM",  `${pagLATAM} / ${totLATAM}`],
+                ["Europa", `${pagEU} / ${totEU}`],
               ],
               bdMono: false,
             },
