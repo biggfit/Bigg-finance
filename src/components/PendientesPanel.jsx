@@ -446,6 +446,14 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
   // ── Emitir individual ──
   const handleEmitAfip = async (fr, comp) => {
     if (emitting[comp.id] || batchRunning) return;
+    // NCA sin refInvoice → mostrar modal de referencia antes de emitir
+    const isNC     = String(comp.type ?? "").startsWith("NC");
+    const isAR_IVA = fr.applyIVA === true;
+    if (isNC && isAR_IVA && !comp.refInvoice) {
+      const ultima = fasPerFr[String(fr.id)]?.[0];
+      setNcRefModal([{ fr, comp, refInvoice: ultima?.invoice ?? "", refDate: ultima?.date ?? "" }]);
+      return;
+    }
     setEmitting(p => ({ ...p, [comp.id]: true }));
     setErrors(p => { const n = { ...p }; delete n[comp.id]; return n; });
     try {
@@ -488,7 +496,25 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
 
   const handleConfirmNcRefs = async () => {
     if (!ncRefModal) return;
-    // Guardar refInvoice en Sheets para cada NC y actualizar el comp local
+    // Si el modal vino de un click individual (1 NC), emitir solo esa
+    const isIndividual = ncRefModal.length === 1 && !toEmit.find(e => e.comp.id === ncRefModal[0].comp.id);
+    if (isIndividual) {
+      const row = ncRefModal[0];
+      editComp(row.fr.id, row.comp.id, { refInvoice: row.refInvoice, refDate: row.refDate });
+      const updatedComp = { ...row.comp, refInvoice: row.refInvoice, refDate: row.refDate };
+      setNcRefModal(null);
+      setEmitting(p => ({ ...p, [row.comp.id]: true }));
+      try {
+        const dateOverride = batchDate ? toAR(batchDate) : null;
+        await onEmitirAfip(row.fr, updatedComp, dateOverride);
+      } catch (err) {
+        setErrors(p => ({ ...p, [row.comp.id]: err.message ?? "Error AFIP" }));
+      } finally {
+        setEmitting(p => { const n = { ...p }; delete n[row.comp.id]; return n; });
+      }
+      return;
+    }
+    // Batch: guardar refInvoice en Sheets para cada NC y actualizar el comp local
     const updatedToEmit = toEmit.map(({ fr, comp }) => {
       const row = ncRefModal.find(r => r.comp.id === comp.id);
       if (!row) return { fr, comp };
