@@ -450,11 +450,11 @@ function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef }) {
     '<tr><td style="background:#111;">' +
     '<table width="100%" cellpadding="0" cellspacing="0">' +
     '<tr style="background:#0d0d0d;">' +
-    '<th style="padding:8px 12px;text-align:left;color:#555;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;border-bottom:2px solid #2a2a2a;">Sede</th>' +
-    '<th style="padding:8px 12px;text-align:left;color:#555;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;border-bottom:2px solid #2a2a2a;">País</th>' +
-    '<th style="padding:8px 12px;text-align:right;color:#555;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;border-bottom:2px solid #2a2a2a;">Fee ' + mesLabel + '</th>' +
-    '<th style="padding:8px 12px;text-align:center;color:#555;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;border-bottom:2px solid #2a2a2a;">Var % vs ' + prevLabel + '</th>' +
-    '<th style="padding:8px 12px;text-align:right;color:#555;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;border-bottom:2px solid #2a2a2a;">Fee YTD</th>' +
+    '<th style="padding:8px 12px;text-align:left;color:#888;font-size:10px;font-weight:600;border-bottom:2px solid #2a2a2a;">Sede</th>' +
+    '<th style="padding:8px 12px;text-align:left;color:#888;font-size:10px;font-weight:600;border-bottom:2px solid #2a2a2a;">País</th>' +
+    '<th style="padding:8px 12px;text-align:right;color:#888;font-size:10px;font-weight:600;border-bottom:2px solid #2a2a2a;">Fee ' + mesLabel + '<br><span style="font-size:8px;font-weight:400;color:#555;">U$D · ' + year + '</span></th>' +
+    '<th style="padding:8px 12px;text-align:center;color:#888;font-size:10px;font-weight:600;border-bottom:2px solid #2a2a2a;">Var %<br><span style="font-size:8px;font-weight:400;color:#555;">vs ' + prevLabel + '</span></th>' +
+    '<th style="padding:8px 12px;text-align:right;color:#888;font-size:10px;font-weight:600;border-bottom:2px solid #2a2a2a;">Fee YTD<br><span style="font-size:8px;font-weight:400;color:#555;">Ene–' + mesLabel + ' · U$D</span></th>' +
     '</tr>' + tableRows + '</table></td></tr>' +
 
     // Footer con TC
