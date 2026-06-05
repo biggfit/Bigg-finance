@@ -19,6 +19,18 @@
 const SHEET_ID = "18CCRMQ_7dU5TnZWhum5YQE2NVG_vz8vzq5c0iuZf5kk";
 const TOKEN    = "bigg-finance-2026-secreto";
 
+// Normaliza el yearMonth de tipos_cambio a "YYYY-MM".
+// Google Sheets puede interpretar "2026-01" como Date y devolverlo como objeto Date
+// (ej. "Thu Jan 01 2026..."), por eso reconstruimos la clave desde el Date si hace falta.
+function normalizeYearMonth(v) {
+  if (v instanceof Date) {
+    var y = v.getFullYear();
+    var m = ("0" + (v.getMonth() + 1)).slice(-2);
+    return y + "-" + m;
+  }
+  return String(v).slice(0, 7);
+}
+
 // ─── GET ─────────────────────────────────────────────────────────────────────
 
 function doGet(e) {
@@ -217,7 +229,7 @@ function doGet(e) {
         for (var tci = 1; tci < tcRows2.length; tci++) {
           var tObj2 = {};
           tcH2.forEach(function(h, j) { tObj2[h] = tcRows2[tci][j]; });
-          var ym2 = String(tObj2.yearMonth).slice(0, 7);
+          var ym2 = normalizeYearMonth(tObj2.yearMonth);
           if (ym2 && ym2 !== "") {
             tiposCambio[ym2] = {
               yearMonth: ym2,
@@ -247,7 +259,7 @@ function doGet(e) {
     for (var ti = 1; ti < tcRows.length; ti++) {
       var tObj = {};
       tcH.forEach(function(h, j) { tObj[h] = tcRows[ti][j]; });
-      var ym = String(tObj.yearMonth).slice(0, 7);
+      var ym = normalizeYearMonth(tObj.yearMonth);
       if (ym && ym !== "") {
         result[ym] = {
           yearMonth: ym,
@@ -444,6 +456,7 @@ function doPost(e) {
       if (!tcSh) {
         tcSh = ss.insertSheet("tipos_cambio");
         tcSh.appendRow(allTcCols);
+        tcSh.getRange("A:A").setNumberFormat("@"); // yearMonth como texto, evita coerción a Date
         tcSh.appendRow(allTcCols.map(function(h) { return h === "yearMonth" ? body.yearMonth : (body.tc[h] != null ? body.tc[h] : ""); }));
         sheetCreated = true;
         SpreadsheetApp.flush();
@@ -464,9 +477,13 @@ function doPost(e) {
         }
       });
       var ymCol = tcHeaders.indexOf("yearMonth");
-      // Buscar fila existente
+      // Forzar columna yearMonth a texto para evitar que Sheets la convierta a Date
+      tcSh.getRange(1, ymCol + 1, tcSh.getMaxRows(), 1).setNumberFormat("@");
+      // Buscar fila existente (normalizamos por si filas viejas quedaron como Date)
       for (var ti = 1; ti < tcData.length; ti++) {
-        if (String(tcData[ti][ymCol]) === String(body.yearMonth)) {
+        if (normalizeYearMonth(tcData[ti][ymCol]) === String(body.yearMonth)) {
+          // Sanea la clave por si quedó guardada como Date
+          tcSh.getRange(ti + 1, ymCol + 1).setValue(String(body.yearMonth));
           tcHeaders.forEach(function(h, c) {
             if (h in body.tc) tcSh.getRange(ti + 1, c + 1).setValue(body.tc[h] != null ? body.tc[h] : "");
           });

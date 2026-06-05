@@ -341,7 +341,7 @@
       <div class="dot orange">5</div>
       <div class="body">
         <h4>AFIP procesa y asigna el numero</h4>
-        <p>AFIP puede tardar unos segundos en procesar. El sistema consulta repetidamente (hasta 8 veces) hasta obtener el numero oficial asignado.</p>
+        <p>AFIP puede tardar unos segundos en procesar. Tras un comprobante creado, el servidor reconsulta <code>DetalleComprobanteFull</code> hasta 5 veces, con 2 s entre consultas, hasta obtener el numero oficial (implementacion: <code>pollAfipNumero(id, 5, 2000)</code> en <code>api/facturante.js</code>).</p>
       </div>
     </div>
     <div class="flow-step">
@@ -529,8 +529,8 @@
       <div class="t-wrap"><div class="t-bar b1">hasta ~15 seg</div></div>
     </div>
     <div class="t-row" style="margin-top:6px">
-      <span class="t-lbl">Espera numero AFIP</span>
-      <div class="t-wrap"><div class="t-bar b2">hasta ~20 seg</div></div>
+      <span class="t-lbl">Espera numero AFIP (polling)</span>
+      <div class="t-wrap"><div class="t-bar b2">hasta ~12 seg (5x2s)</div></div>
     </div>
     <div class="t-row" style="margin-top:6px">
       <span class="t-lbl">Tiempo total maximo</span>
@@ -556,8 +556,8 @@
       </tr>
       <tr>
         <td>AFIP tarda en asignar el numero</td>
-        <td><span class="pill yes">Si, 8 veces</span></td>
-        <td>Consulta cada 2.5 segundos. Si no llega, la factura queda emitida pero sin numero visible todavia</td>
+        <td><span class="pill yes">Si, 5 veces</span></td>
+        <td>2 s entre consultas (tras el primer intento). Si no llega, la emision es valida y queda <code>idComprobante</code>; luego <code>getNumero</code> o guardado con reintento puede completar el numero</td>
       </tr>
       <tr>
         <td>El PDF no esta disponible</td>
@@ -598,7 +598,8 @@
 </div>
 
 <footer>
-  bigg-finance &mdash; Integracion Facturante &mdash; 2026
+  <p>bigg-finance &mdash; Integracion Facturante &mdash; 2026</p>
+  <p style="margin-top:10px;font-size:.82rem"><a href="facturante-homologacion.md" style="color:var(--accent2)">Documento de homologacion (mapeo BFF, SOAP, seguridad): facturante-homologacion.md</a></p>
 </footer>
 
 </body>
