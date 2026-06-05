@@ -47,6 +47,7 @@ function proxyToSheets(targetUrl, method, body, res) {
     headers:  method === 'POST'
       ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body || '') }
       : {},
+    rejectUnauthorized: false,
   };
 
   const req = httpsRequest(options, (upstream) => {
