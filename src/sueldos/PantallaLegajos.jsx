@@ -21,7 +21,7 @@ const T = {
 const TODOS_LOS_ROLES = [...ROLES_SEDES, ...ROLES_HQ];
 
 const FORM_VACIO = {
-  nombre: "", cuil: "", cbu: "", numero_cuenta: "", banco: "",
+  nombre: "", cuil: "", email: "", cbu: "", numero_cuenta: "", banco: "",
   cbu_sec: "", numero_cuenta_sec: "", banco_sec: "",
   bigg_eye_id: "", horas_contratadas: "",
   sociedad_id: "", sociedad_nombre: "", pais: "",
@@ -369,13 +369,17 @@ function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
 
       {/* Datos personales */}
       <Section title="Datos personales">
-        <div style={{ gridColumn: "span 2" }}>
+        <div>
           <label style={labelStyle}>Nombre *</label>
           <input style={inputStyle} value={form.nombre} onChange={e => set("nombre", e.target.value)} />
         </div>
         <div>
           <label style={labelStyle}>CUIL</label>
           <input style={inputStyle} value={form.cuil} onChange={e => set("cuil", e.target.value)} placeholder="20-12345678-9" />
+        </div>
+        <div>
+          <label style={labelStyle}>Email</label>
+          <input style={inputStyle} type="email" value={form.email} onChange={e => set("email", e.target.value)} placeholder="nombre@bigg.com" />
         </div>
       </Section>
 

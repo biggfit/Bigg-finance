@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, PageHeader } from "./theme";
 import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas } from "../lib/numbersApi";
+import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, SALARY_BUCKETS, pagoTipoABucket, devengadoPorFormaYSociedad } from "../lib/sueldosApi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
 
 const MESES    = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
@@ -579,13 +580,16 @@ const addVals = (a, b) => ({ ARS: a.ARS + b.ARS, USD: a.USD + b.USD, EUR: a.EUR 
 const subVals = (a, b) => ({ ARS: a.ARS - b.ARS, USD: a.USD - b.USD, EUR: a.EUR - b.EUR });
 const ZERO    = { ARS: 0, USD: 0, EUR: 0 };
 
-function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad }) {
+const SALARY_BUCKET_LABEL = { haberes: "Haberes", deposito: "Depósito", monotributo: "Monotributo", efectivo: "Efectivo" };
+
+function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCerradas = [], pagosSueldos = [] }) {
   const [activoOpen,  setActivoOpen]  = useState(true);
   const [pasivoOpen,  setPasivoOpen]  = useState(true);
   const [cajaOpen,    setCajaOpen]    = useState(true);
   const [bancosOpen,  setBancosOpen]  = useState(true);
   const [cxcOpen,     setCxcOpen]     = useState(true);
   const [cxpOpen,     setCxpOpen]     = useState(true);
+  const [cxpSldOpen,  setCxpSldOpen]  = useState(true);
 
   const saldos = useMemo(() => {
     const map = {};
@@ -623,8 +627,35 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad }) {
   const cxcTot = useMemo(() => sumMon(cxcRows, r => r.moneda ?? "ARS", r => Number(r.total) || 0), [cxcRows]);
   const cxpTot = useMemo(() => sumMon(cxpRows, r => r.moneda ?? "ARS", r => Number(r.total) || 0), [cxpRows]);
 
+  // Cuenta por pagar de sueldos = devengado (cerradas) − pagado (su_pagos), por balde de
+  // forma de pago (efectivo ≠ haberes), filtrado por la sociedad de cada forma. Solo ARS.
+  const sueldoSoc = (sociedad ?? "").toLowerCase();
+  const cxpSueldosBuckets = useMemo(() => {
+    const match = (s) => !sueldoSoc || (s ?? "").toLowerCase() === sueldoSoc;
+    const dev = {}, pag = {};
+    for (const { bucket } of SALARY_BUCKETS) { dev[bucket] = 0; pag[bucket] = 0; }
+    // Sociedad del devengado por (legajo, balde): la obligación de haberes es del legajo,
+    // no de la caja con la que se pagó. El pago se atribuye a esta sociedad, no a su origen.
+    const devSoc = new Map();
+    for (const liq of liqsCerradas)
+      for (const { bucket, sociedad, total } of devengadoPorFormaYSociedad(liq)) {
+        if (match(sociedad)) dev[bucket] += total;
+        const k = liq.legajo_id + "|" + bucket;
+        if (!devSoc.has(k)) devSoc.set(k, sociedad);
+      }
+    for (const p of pagosSueldos) {
+      const bucket = pagoTipoABucket(p.tipo_componente);
+      const soc = devSoc.get(p.legajo_id + "|" + bucket) ?? p.sociedad_id;  // devengado, no caja
+      if (match(soc)) pag[bucket] += Number(p.monto) || 0;
+    }
+    return SALARY_BUCKETS
+      .map(({ bucket }) => ({ bucket, pendiente: Math.max(0, dev[bucket] - pag[bucket]) }))
+      .filter(b => b.pendiente > 0);
+  }, [liqsCerradas, pagosSueldos, sueldoSoc]);
+  const cxpSueldosTot = { ...ZERO, ARS: cxpSueldosBuckets.reduce((s, b) => s + b.pendiente, 0) };
+
   const activoTot  = addVals(addVals(cajaTot, bancoTot), cxcTot);
-  const pasivoTot  = cxpTot;
+  const pasivoTot  = addVals(cxpTot, cxpSueldosTot);
   const pnTot      = subVals(activoTot, pasivoTot);
 
   return (
@@ -661,6 +692,13 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad }) {
             <BGrpRow label="Cuentas a Pagar" expanded={cxpOpen} onToggle={() => setCxpOpen(o => !o)} />
             {cxpOpen && <BDRow label="Facturas pendientes de pago" vals={cxpTot} indent />}
             <BSubRow label="Total Cuentas a Pagar" vals={cxpTot} color={T.red} />
+
+            <BGrpRow label="Cuentas a Pagar — Sueldos" expanded={cxpSldOpen} onToggle={() => setCxpSldOpen(o => !o)} />
+            {cxpSldOpen && cxpSueldosBuckets.map(b => (
+              <BDRow key={b.bucket} label={SALARY_BUCKET_LABEL[b.bucket] ?? b.bucket} vals={{ ...ZERO, ARS: b.pendiente }} indent />
+            ))}
+            {cxpSldOpen && cxpSueldosBuckets.length === 0 && <BDRow label="(sin saldo de sueldos)" vals={ZERO} indent />}
+            <BSubRow label="Total Cuentas a Pagar — Sueldos" vals={cxpSueldosTot} color={T.red} />
           </>}
           <BResRow label="TOTAL PASIVO" vals={pasivoTot} />
 
@@ -962,6 +1000,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const [cuentasBancarias, setCuentasBancarias] = useState([]);
   const [cuentas,   setCuentas]   = useState([]);
   const [ccs,       setCcs]       = useState([]);
+  const [liqsCerradas, setLiqsCerradas] = useState([]);  // su_liquidaciones cerradas (devengado sueldos)
+  const [pagosSueldos, setPagosSueldos] = useState([]);  // su_pagos (para cuenta por pagar de sueldos)
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState(null);
   const [loadKey,   setLoadKey]   = useState(0);
@@ -984,13 +1024,15 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     const run = async () => {
       setLoading(true); setError(null);
       try {
-        const [eg, ing, movs, cbs, ccList, ctaList] = await Promise.all([
+        const [eg, ing, movs, cbs, ccList, ctaList, liqsC, pagosS] = await Promise.all([
           fetchLineasEnriquecidas(sociedad, ["EGRESO", "GASTO"]).catch(() => []),
           fetchLineasEnriquecidas(sociedad, "INGRESO").catch(() => []),
           fetchMovTesoreria(sociedad).catch(() => []),
           fetchCuentasBancarias().catch(() => []),
           fetchCentrosCosto().catch(() => []),
           fetchCuentas().catch(() => []),
+          fetchLiquidacionesCerradas().catch(() => []),
+          fetchPagosAnio().catch(() => []),
         ]);
         if (cancelled) return;
         setRawEg(eg);
@@ -999,6 +1041,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         setCuentasBancarias(Array.isArray(cbs) ? cbs : []);
         setCcs(Array.isArray(ccList) ? ccList : []);
         setCuentas(Array.isArray(ctaList) ? ctaList : []);
+        setLiqsCerradas(Array.isArray(liqsC) ? liqsC : []);
+        setPagosSueldos(Array.isArray(pagosS) ? pagosS : []);
       } catch (e) {
         if (!cancelled) setError(e.message);
       } finally {
@@ -1046,13 +1090,28 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     return selectedSedeCCs;
   }, [selectedSedeCCs, sedeCCs]);
 
+  // P&L = UNA lógica de agregación (buildPnL/HQ) + DOS adaptadores ("normalizar y agregar"):
+  //   · nb_comprobantes → ya viene en formato {fecha,sociedad,centro_costo,cuenta_contable,total}
+  //   · su_liquidaciones → liquidacionToPnLRows lo adapta a ese mismo formato (cuenta "Sueldos")
+  // No es doble lógica: el P&L no sabe de qué libro vino la fila. Decisión: Opción A (su_liquidaciones
+  // es la única verdad del sueldo, sin partida doble en nb_comprobantes). Ver memoria project_pnl_sueldos.
+  // OJO: nunca sumar nb_movimientos SUELDO acá (eso es caja → Cash Flow; duplicaría el devengado).
+  const salaryRows = useMemo(() => {
+    const soc = (sociedad ?? "").toLowerCase();
+    return liqsCerradas
+      .flatMap(liquidacionToPnLRows)
+      .filter(r => !soc || (r.sociedad ?? "").toLowerCase() === soc);
+  }, [liqsCerradas, sociedad]);
+
+  const egConSueldos = useMemo(() => [...rawEg, ...salaryRows], [rawEg, salaryRows]);
+
   const pnlSede = useMemo(
-    () => buildPnL(rawIn, rawEg, cuentaMap, resolvedCCSede, year, monedaPL),
-    [rawIn, rawEg, cuentaMap, resolvedCCSede, year, monedaPL]
+    () => buildPnL(rawIn, egConSueldos, cuentaMap, resolvedCCSede, year, monedaPL),
+    [rawIn, egConSueldos, cuentaMap, resolvedCCSede, year, monedaPL]
   );
   const pnlHQ = useMemo(
-    () => buildPnLHQ(rawIn, rawEg, ccMap, year, monedaPL),
-    [rawIn, rawEg, ccMap, year, monedaPL]
+    () => buildPnLHQ(rawIn, egConSueldos, ccMap, year, monedaPL),
+    [rawIn, egConSueldos, ccMap, year, monedaPL]
   );
 
   const subSede = useMemo(() => computeSubtotals(pnlSede), [pnlSede]);
@@ -1286,6 +1345,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
           rawIn={rawIn}
           rawEg={rawEg}
           sociedad={sociedad}
+          liqsCerradas={liqsCerradas}
+          pagosSueldos={pagosSueldos}
         />
       )}
 

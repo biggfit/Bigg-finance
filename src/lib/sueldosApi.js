@@ -21,22 +21,34 @@ function cacheGet(key) {
 
 // ── Helpers HTTP ──────────────────────────────────────────────────────────────
 
-async function get(sheet, params = {}, base = BASE) {
+async function get(sheet, params = {}, base = BASE, { retries = 2, retryDelayMs = 1200 } = {}) {
   const qs = new URLSearchParams({ resource: sheet, token: TOKEN, ...params }).toString();
   const key = `${base}?${qs}`;
   const hit = cacheGet(key);
   if (hit) return hit;
   if (_inflight.has(key)) return _inflight.get(key);
 
-  const p = fetch(`${base}?${qs}`)
-    .then(r => r.json())
-    .then(data => {
-      _cache.set(key, { data, ts: Date.now() });
-      _inflight.delete(key);
-      return data;
-    })
-    .catch(e => { _inflight.delete(key); throw e; });
+  // GAS devuelve 500 con HTML de forma intermitente (rate-limit / lock). Sin reintento,
+  // un solo fallo tumba el Promise.all del que carga la pantalla → "no hay datos" engañoso.
+  const run = async () => {
+    let lastErr;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      if (attempt) await new Promise(r => setTimeout(r, retryDelayMs * attempt));
+      try {
+        const res  = await fetch(`${base}?${qs}`);
+        const text = await res.text();
+        let data;
+        try { data = JSON.parse(text); }
+        catch { throw new Error(`Error del servidor (${res.status}): ${text.slice(0, 120)}`); }
+        if (data?.error) throw new Error(data.error);
+        _cache.set(key, { data, ts: Date.now() });
+        return data;
+      } catch (e) { lastErr = e; }
+    }
+    throw lastErr;
+  };
 
+  const p = run().finally(() => _inflight.delete(key));
   _inflight.set(key, p);
   return p;
 }
@@ -76,33 +88,30 @@ function newId(prefix = "SU") {
 // ── Formas de pago (receta de cobro por empleado) ─────────────────────────────
 // Cada línea: { id, tipo, importe, banco, tipo_cuenta, cuenta, cbu, cuit, nota }
 // tipo ∈ haberes | deposito | transferencia | efectivo
-export const FP_TIPOS = ["haberes", "deposito", "transferencia", "transferencia_financiera", "monotributo", "efectivo"];
+export const FP_TIPOS = ["haberes", "deposito", "transferencia_financiera", "monotributo", "efectivo"];
 export const FP_TIPO_LABEL = {
   haberes: "Haberes",
   deposito: "Depósito",
-  transferencia: "Transf. (nuestra)",
-  transferencia_financiera: "Transf. financiera",
+  transferencia_financiera: "Trf. financiera",
   monotributo: "Monotributo",
   efectivo: "Efectivo",
 };
 export const FP_TIPO_COLOR = {
   haberes: "#1e293b",
   deposito: "#0369a1",
-  transferencia: "#7c3aed",
   transferencia_financiera: "#0d9488",
   monotributo: "#db2777",
   efectivo: "#ca8a04",
 };
 
 // Tipos que se pagan como transferencia (el usuario elige la sociedad de origen al pagar).
-const FP_TRANSFER_TIPOS = ["transferencia", "transferencia_financiera", "monotributo"];
+const FP_TRANSFER_TIPOS = ["transferencia_financiera", "monotributo"];
 export const esTransferencia = (tipo) => FP_TRANSFER_TIPOS.includes(tipo);
 
 // Cada tipo de línea cae en uno de los 4 baldes escalares persistidos (compatibilidad).
 const FP_SCALAR_BUCKET = {
   haberes: "haberes",
   deposito: "deposito",
-  transferencia: "transferencia",
   transferencia_financiera: "transferencia",
   monotributo: "transferencia",
   efectivo: "efectivo",
@@ -113,17 +122,6 @@ function safeParseArray(raw) {
   if (Array.isArray(raw)) return raw;
   try { const v = JSON.parse(raw); return Array.isArray(v) ? v : []; }
   catch { return []; }
-}
-
-// Suma los importes de las líneas agrupados por tipo de componente.
-export function sumByTipo(lineas = []) {
-  const acc = { haberes: 0, deposito: 0, transferencia: 0, efectivo: 0 };
-  for (const l of lineas) {
-    const bucket = FP_SCALAR_BUCKET[l.tipo] ?? "deposito";
-    acc[bucket] += Number(l.importe) || 0;
-  }
-  acc.total = acc.haberes + acc.deposito + acc.transferencia + acc.efectivo;
-  return acc;
 }
 
 // Convierte el array `formas_pago` a la columna `formas_pago_json` antes de
@@ -144,6 +142,7 @@ const ROL_SHEET_MAP = {
   "BIGG COACH":    "COACH",
   "BOTANICO":      "BOTANICO",
   "BOTÁNICO":      "BOTANICO",
+  "YOGA":          "YOGA",
   // Códigos internos (ya normalizados) → pass-through
   "COACH_SENIOR":  "COACH_SENIOR",
   "COACH":         "COACH",
@@ -168,6 +167,7 @@ export async function fetchLegajos() {
     id:                  r.id,
     nombre:              r.nombre ?? "",
     cuil:                r.cuil ?? "",
+    email:               r.email ?? "",
     cbu:                 r.cbu ?? "",
     numero_cuenta:       r.numero_cuenta ?? "",
     banco:               r.banco ?? "",
@@ -222,7 +222,7 @@ export async function deleteLegajo(id) {
 
 export async function fetchLiquidaciones(mes, anio) {
   const rows = await get("su_liquidaciones", { mes, anio });
-  return (Array.isArray(rows) ? rows : []).map(parseLiquidacion);
+  return parseLiquidacionesRows(rows);
 }
 
 function parseLiquidacion(r) {
@@ -231,6 +231,7 @@ function parseLiquidacion(r) {
     id:                    r.id,
     mes:                   r.mes,
     anio:                  r.anio,
+    pais:                  r.pais ?? "",
     legajo_id:             r.legajo_id ?? "",
     legajo_nombre:         r.legajo_nombre ?? "",
     sociedad_id:           r.sociedad_id ?? "",
@@ -268,6 +269,9 @@ function parseLiquidacion(r) {
     monto_deposito:        num(r.monto_deposito),
     monto_transferencia:   num(r.monto_transferencia ?? r.monto_monotributo), // fallback col vieja
     monto_efectivo:        num(r.monto_efectivo),
+    // Sociedad desde la que se paga el monotributo, congelada al cerrar (haberes = sociedad
+    // del legajo; efectivo = beta → no necesitan persistirse).
+    sociedad_monotributo:  r.sociedad_monotributo ?? "",
     // Novedades
     total_novedades_extra: num(r.total_novedades_extra),
     total_rendiciones:     num(r.total_rendiciones),
@@ -280,24 +284,269 @@ function parseLiquidacion(r) {
   };
 }
 
-export async function saveLiquidacion(data) {
-  const id = data.id ?? newId("LIQ");
-  const row = { id, ...withFormasPagoJson(data) };
-  // Si vienen líneas de pago, derivar los escalares monto_* para compatibilidad
-  // con PasoPagos, exports Galicia y su_pagos (fuente de verdad = las líneas).
-  if ("formas_pago" in data) {
-    const s = sumByTipo(data.formas_pago);
-    row.monto_haberes       = s.haberes;
-    row.monto_deposito      = s.deposito;
-    row.monto_transferencia = s.transferencia;
-    row.monto_efectivo      = s.efectivo;
+// ── Modelo de líneas de su_liquidaciones (refactor) ───────────────────────────
+// Cada liquidación se persiste como N filas con un `id_liq` común y un `tipo`:
+//   "concepto" (desglose del sueldo) | "pago" (reparto por forma×sociedad) | "novedad".
+// _agruparPorLiq + liqFromLineas reconstruyen el objeto con los NOMBRES LEGACY, para
+// que el resto de la app no cambie. La capa lee formato nuevo (líneas) Y viejo (fila gorda).
+
+// concepto (label de la fila) → prefijo del campo legacy
+const LIQ_CONCEPTO_CAMPO = {
+  "Sueldo base":     "sueldo_base",
+  "Horas":           "horas",
+  "CDP":             "cdp",            // legacy (CDP único, antes del split coach/front)
+  "CDP coach":       "cdp_coach",
+  "CDP front desk":  "cdp_front",
+  "One Shot":        "one_shot",
+  "Objetivos":       "objetivos",
+  "Objetivo grupal": "bonos",
+  "Feriados":        "feriados",
+  "Domingos":        "domingos",
+  "Yoga":            "yoga",
+  "Programaciones":  "programacion",   // legacy (la comisión del encargado pasó a ser novedad)
+  "Redondeo":        "redondeo",       // aumento de sueldo por redondear el efectivo hacia arriba
+};
+
+function _agruparPorLiq(rows) {
+  const map = new Map();
+  for (const r of rows) {
+    if (!map.has(r.id_liq)) map.set(r.id_liq, []);
+    map.get(r.id_liq).push(r);
   }
-  await post({ action: data.id ? "upd" : "add", sheet: "su_liquidaciones", id, row });
-  return id;
+  return map;
+}
+
+// Reconstruye el objeto liquidación (shape legacy de parseLiquidacion) desde sus líneas.
+function liqFromLineas(idLiq, lineas) {
+  const num = (v) => Number(v) || 0;
+  const h = lineas[0] || {};
+  const out = {
+    id: idLiq, mes: h.mes, anio: h.anio, pais: h.pais ?? "",
+    legajo_id: h.legajo_id ?? "", legajo_nombre: h.legajo_nombre ?? "",
+    sociedad_id: h.sociedad_id ?? "", sociedad_nombre: h.sociedad_nombre ?? "",
+    sede_id: h.sede_id ?? "", sede_nombre: h.sede_nombre ?? "",
+    rol: normalizarRol(h.rol ?? ""), tipo_contratacion: h.tipo_contratacion ?? "relacion_dependencia",
+    sueldo_base: 0,
+    horas_cant: 0, horas_monto_unit: 0, horas_total: 0,
+    cdp_cant: 0, cdp_monto_unit: 0, cdp_total: 0,
+    cdp_coach_cant: 0, cdp_coach_monto_unit: 0, cdp_coach_total: 0,
+    cdp_front_cant: 0, cdp_front_monto_unit: 0, cdp_front_total: 0,
+    one_shot_cant: 0, one_shot_monto_unit: 0, one_shot_total: 0,
+    objetivos_cant: 0, objetivos_monto_unit: 0, objetivos_total: 0,
+    feriados_cant: 0, feriados_monto_unit: 0, feriados_total: 0,
+    domingos_cant: 0, domingos_monto_unit: 0, domingos_total: 0,
+    yoga_cant: 0, yoga_monto_unit: 0, yoga_total: 0,
+    programacion_cant: 0, programacion_monto_unit: 0, programacion_total: 0,
+    bonos_cant: 0, bonos_monto_unit: 0, bonos_total: 0,
+    redondeo_cant: 0, redondeo_monto_unit: 0, redondeo_total: 0,
+    formas_pago: [],
+    monto_haberes: 0, monto_deposito: 0, monto_transferencia: 0, monto_efectivo: 0,
+    sociedad_monotributo: "",
+    total_novedades_extra: 0, total_rendiciones: 0, total_anticipos: 0,
+    novedades: [],
+    total_bruto: 0, blanco_neto: num(h.blanco_neto), efectivo: 0,
+    estado: h.estado ?? "borrador",
+  };
+  for (const l of lineas) {
+    const monto = num(l.monto);
+    if (l.tipo === "concepto") {
+      const campo = LIQ_CONCEPTO_CAMPO[l.concepto];
+      if (campo === "sueldo_base") out.sueldo_base += monto;
+      else if (campo) {
+        out[`${campo}_cant`]       += num(l.cantidad);
+        out[`${campo}_monto_unit`]  = num(l.monto_unit);
+        out[`${campo}_total`]      += monto;
+      }
+    } else if (l.tipo === "pago") {
+      const bucket = FP_SCALAR_BUCKET[l.forma_pago] ?? "deposito";
+      out[`monto_${bucket}`] += monto;
+      out.formas_pago.push({ id: l.id, tipo: l.forma_pago, importe: monto, sociedad_id: l.sociedad_id ?? "" });
+      if (l.forma_pago === "monotributo" && l.sociedad_id) out.sociedad_monotributo = l.sociedad_id;
+      out.total_bruto += monto;
+    } else if (l.tipo === "novedad") {
+      out.total_novedades_extra += monto;
+      out.novedades.push({
+        id: l.id, monto, tipo: "extra", forma_pago: l.forma_pago ?? "efectivo",
+        // cuenta = la cuenta contable (para el P&L); descripcion = la etiqueta de la novedad
+        // (lo que se ve, ej. "Feriado X Día"). Fallback a concepto para datos legacy.
+        cuenta_contable_nombre: l.cuenta_contable || l.concepto || "",
+        cuenta_contable_id: l.cuenta_contable_id ?? "",
+        descripcion: l.concepto ?? "",
+      });
+    }
+  }
+  return out;
+}
+
+// Devuelve objetos liquidación leyendo formato nuevo (líneas con id_liq) o viejo (fila gorda).
+function parseLiquidacionesRows(rows) {
+  const arr = Array.isArray(rows) ? rows : [];
+  const out = arr.filter(r => !r.id_liq).map(parseLiquidacion);   // legacy: idéntico a hoy
+  const grupos = _agruparPorLiq(arr.filter(r => r.id_liq));
+  for (const [idLiq, ls] of grupos) out.push(liqFromLineas(idLiq, ls));
+  return out;
 }
 
 export async function deleteLiquidacion(id) {
   await post({ action: "del", sheet: "su_liquidaciones", id });
+}
+
+// ── Escritura por líneas (refactor su_liquidaciones) ──────────────────────────
+
+// id de grupo determinístico (idempotente al re-cerrar). Incluye sede para que los
+// coaches multi-sede (una liquidación por sede) tengan ids distintos.
+export function idLiqDe(legajo_id, mes, anio, sede_id = "") {
+  return `LIQ-${legajo_id}-${sede_id || "0"}-${anio}${String(mes).padStart(2, "0")}`;
+}
+
+// Sociedad desde la que se paga una forma (al construir las líneas `pago`/`novedad`).
+export function sociedadDeFormaPago(forma, lineSoc, legajoSoc) {
+  if (forma === "haberes")     return legajoSoc || "";
+  if (forma === "monotributo") return lineSoc || legajoSoc || "";
+  return "beta";  // deposito, efectivo, transferencia_financiera
+}
+
+// Construye una fila-línea con el header denormalizado (como nb_comprobantes).
+export function lineaLiq(header, extra) {
+  return {
+    mes: header.mes, anio: header.anio, pais: header.pais ?? "",
+    legajo_id: header.legajo_id, legajo_nombre: header.legajo_nombre ?? "",
+    sociedad_id: header.sociedad_id ?? "", sociedad_nombre: header.sociedad_nombre ?? "",
+    sede_id: header.sede_id ?? "", sede_nombre: header.sede_nombre ?? "",
+    rol: header.rol ?? "", tipo_contratacion: header.tipo_contratacion ?? "",
+    estado: header.estado ?? "borrador",
+    tipo: "", concepto: "", cuenta_contable: "", cuenta_contable_id: "",
+    forma_pago: "", cantidad: 0, monto_unit: 0, monto: 0,
+    ...extra,
+  };
+}
+
+// Borra todas las líneas de una liquidación. Usa del_comp; si el GAS no lo soporta,
+// cae a borrar línea por línea.
+export async function delLiquidacionComp(id_liq) {
+  try {
+    await post({ action: "del_comp", sheet: "su_liquidaciones", id_liq });
+  } catch {
+    const rows = await get("su_liquidaciones", {});
+    const mias = (Array.isArray(rows) ? rows : []).filter(r => r.id_liq === id_liq);
+    for (const r of mias) await post({ action: "del", sheet: "su_liquidaciones", id: r.id });
+  }
+}
+
+// Reescribe una liquidación como N líneas (delete-all-then-re-add, secuencial:
+// GAS pierde escrituras concurrentes). Devuelve los ids de línea en orden.
+export async function saveLiquidacionLines(id_liq, lineas) {
+  await delLiquidacionComp(id_liq);
+  const created_at = new Date().toISOString();
+  const rows = lineas.map((l, i) => ({
+    id: `${id_liq}-L${String(i + 1).padStart(2, "0")}`, id_liq, ...l, created_at,
+  }));
+  if (!rows.length) return [];
+  // Alta en lote (1 request). Si el GAS no soporta add_batch, cae a alta secuencial.
+  try {
+    await post({ action: "add_batch", sheet: "su_liquidaciones", rows });
+  } catch {
+    for (const row of rows) await post({ action: "add", sheet: "su_liquidaciones", row });
+  }
+  return rows.map(r => r.id);
+}
+
+// ── Devengado de sueldos para el P&L (Numbers) ────────────────────────────────
+// Una liquidación CERRADA es gasto devengado. El P&L de Numbers la lee y la une a
+// nb_comprobantes (Opción A: su_liquidaciones es la única fuente de verdad del sueldo).
+
+// HQ escribe estado "cerrada"; Sedes "cerrado". El lector acepta ambos.
+export const isCerrada = (estado) => {
+  const s = String(estado ?? "").toLowerCase();
+  return s === "cerrada" || s === "cerrado";
+};
+
+// Sociedad desde la que se paga cada forma (congelada al cerrar):
+//   haberes → sociedad del legajo; monotributo → la elegida al cerrar (fallback legajo);
+//   efectivo → "beta" (caja B).
+export function sociedadDeForma(liq, bucket) {
+  if (bucket === "haberes")                       return liq.sociedad_id || "";
+  if (bucket === "efectivo" || bucket === "deposito") return "beta";
+  return liq.sociedad_monotributo || liq.sociedad_id || "";  // monotributo
+}
+
+// Baldes de forma de pago que componen el devengado del sueldo (cubren el total_bruto).
+// La cuenta contable es siempre "Sueldos" (el monotributo es sueldo, no honorarios);
+// varía la sociedad. tipo_componente de su_pagos → balde para la cuenta por pagar.
+export const SALARY_BUCKETS = [
+  { bucket: "haberes",     campo: "monto_haberes" },
+  { bucket: "deposito",    campo: "monto_deposito" },
+  { bucket: "monotributo", campo: "monto_transferencia" },
+  { bucket: "efectivo",    campo: "monto_efectivo" },
+];
+
+export const pagoTipoABucket = (tipo) => {
+  if (tipo === "haberes")  return "haberes";
+  if (tipo === "deposito") return "deposito";
+  if (tipo === "efectivo") return "efectivo";
+  return "monotributo";  // monotributo | transferencia_financiera
+};
+
+// Devengado de una liquidación desglosado por (balde de forma, sociedad).
+// HQ guarda líneas (formas_pago) con `sociedad_id` por línea de monotributo; Sedes usa
+// los escalares monto_*. Única fuente de la derivación de sociedad por forma.
+export function devengadoPorFormaYSociedad(liq) {
+  const out = [];
+  // Sueldo (cuenta "Sueldos"): por línea (HQ) o por escalares (Sedes).
+  if (Array.isArray(liq.formas_pago) && liq.formas_pago.length) {
+    for (const l of liq.formas_pago) {
+      const total = Number(l.importe) || 0;
+      if (total <= 0) continue;
+      // Solo el monotributo elige sociedad; trf. financiera / depósito / efectivo → Beta;
+      // haberes → sociedad del legajo.
+      let sociedad;
+      if (l.tipo === "monotributo")                    sociedad = l.sociedad_id || liq.sociedad_monotributo || liq.sociedad_id || "";
+      else if (l.tipo === "transferencia_financiera")  sociedad = "beta";
+      else if (l.tipo === "haberes")                   sociedad = liq.sociedad_id || "";
+      else                                             sociedad = "beta";  // depósito, efectivo
+      out.push({ bucket: pagoTipoABucket(l.tipo), sociedad, total, cuenta_contable: "Sueldos" });
+    }
+  } else {
+    for (const { bucket, campo } of SALARY_BUCKETS) {
+      const total = Number(liq[campo]) || 0;
+      if (total > 0) out.push({ bucket, sociedad: sociedadDeForma(liq, bucket), total, cuenta_contable: "Sueldos" });
+    }
+  }
+  // Novedades congeladas: cada una a SU cuenta contable (Autónomos, Monotributo…).
+  for (const n of (liq.novedades || [])) {
+    const total = Number(n.monto) || 0;
+    if (total > 0) out.push({
+      bucket: pagoTipoABucket(n.forma_pago),
+      sociedad: sociedadDeFormaPago(n.forma_pago, "", liq.sociedad_id),
+      total,
+      cuenta_contable: n.cuenta_contable_nombre || "Sueldos",
+    });
+  }
+  return out;
+}
+
+// Convierte una liquidación en filas estilo-comprobante para el P&L: una por (forma, sociedad)
+// con monto > 0. centro_costo = sede del legajo (roles fijos) o sede de las horas (coaches).
+export function liquidacionToPnLRows(liq) {
+  const mes = Number(liq.mes) || 0, anio = Number(liq.anio) || 0;
+  const ultimoDia = mes ? new Date(anio, mes, 0).getDate() : 28;
+  const fecha = `${anio}-${String(mes).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
+  return devengadoPorFormaYSociedad(liq).map(({ bucket, sociedad, total, cuenta_contable }) => ({
+    fecha,
+    moneda:          "ARS",
+    centro_costo:    liq.sede_id || "",
+    cuenta_contable: cuenta_contable || "Sueldos",
+    sociedad,
+    total,
+    bucket,
+  }));
+}
+
+// Liquidaciones CERRADAS (HQ + Sedes comparten el sheet). Sin `anio` → todas.
+export async function fetchLiquidacionesCerradas(anio) {
+  const rows = await get("su_liquidaciones", anio ? { anio } : {});
+  return parseLiquidacionesRows(rows)
+    .filter(l => isCerrada(l.estado) && (anio == null || Number(l.anio) === Number(anio)));
 }
 
 // ── NOVEDADES ─────────────────────────────────────────────────────────────────
@@ -310,9 +559,13 @@ export async function fetchNovedades(mes, anio) {
     anio:                    r.anio,
     legajo_id:               r.legajo_id ?? "",
     legajo_nombre:           r.legajo_nombre ?? "",
+    // Sede (solo novedades de Sedes; las de HQ vienen vacías). Distingue ámbito HQ vs Sedes.
+    sede_id:                 r.sede_id ?? "",
+    sede_nombre:             r.sede_nombre ?? "",
     tipo:                    r.tipo ?? "extra",       // extra | anticipo | rendicion
     descripcion:             r.descripcion ?? "",
     monto:                   Number(r.monto) || 0,
+    forma_pago:              r.forma_pago ?? "efectivo",
     cuenta_contable_id:      r.cuenta_contable_id ?? "",
     cuenta_contable_nombre:  r.cuenta_contable_nombre ?? "",
   }));
@@ -324,15 +577,18 @@ export async function appendNovedad(data) {
   return id;
 }
 
+export async function updateNovedad(id, data) {
+  await post({ action: "upd", sheet: "su_novedades", id, row: data });
+}
+
 export async function deleteNovedad(id) {
   await post({ action: "del", sheet: "su_novedades", id });
 }
 
 // ── PAGOS ─────────────────────────────────────────────────────────────────────
 
-export async function fetchPagos(mes, anio) {
-  const rows = await get("su_pagos", { mes, anio });
-  return (Array.isArray(rows) ? rows : []).map(r => ({
+function parsePago(r) {
+  return {
     id:                       r.id,
     mes:                      r.mes,
     anio:                     r.anio,
@@ -341,7 +597,8 @@ export async function fetchPagos(mes, anio) {
     legajo_nombre:            r.legajo_nombre ?? "",
     sociedad_id:              r.sociedad_id ?? "",
     sociedad_nombre:          r.sociedad_nombre ?? "",
-    // haberes | monotributista | efectivo | rendicion
+    centro_costo:             r.centro_costo ?? "",
+    // haberes | deposito | monotributo | transferencia_financiera | efectivo | rendicion
     tipo_componente:          r.tipo_componente ?? "haberes",
     monto:                    Number(r.monto) || 0,
     fecha:                    r.fecha ?? "",
@@ -350,8 +607,21 @@ export async function fetchPagos(mes, anio) {
     forma_pago_id:            r.forma_pago_id ?? "",
     nb_movimiento_id:         r.nb_movimiento_id ?? "",
     concepto:                 r.concepto ?? "",
+    nota:                     r.nota ?? "",
     registrado_por:           r.registrado_por ?? "",
-  }));
+    ambito:                   r.ambito ?? "",   // "hq" | "sedes" — separa pagos de un legajo con liquidación en ambos
+  };
+}
+
+export async function fetchPagos(mes, anio) {
+  const rows = await get("su_pagos", { mes, anio });
+  return (Array.isArray(rows) ? rows : []).map(parsePago);
+}
+
+// Pagos de sueldo (para la cuenta por pagar de sueldos en el Balance). Sin `anio` → todos.
+export async function fetchPagosAnio(anio) {
+  const rows = await get("su_pagos", anio ? { anio } : {});
+  return (Array.isArray(rows) ? rows : []).map(parsePago);
 }
 
 /**
@@ -362,7 +632,7 @@ export async function appendPago({
   tipo_componente, monto, fecha, cuenta_bancaria_id, cuenta_bancaria_nombre,
   cuenta_contable_id = "", cuenta_contable_nombre = "",
   forma_pago_id = "",
-  centro_costo = "", concepto = "", registrado_por = "",
+  centro_costo = "", concepto = "", nota = "", registrado_por = "", ambito = "",
 }) {
   // 1. Crear movimiento en Numbers
   const nb_concepto = concepto || `Sueldo ${legajo_nombre} ${mes}/${anio} · ${tipo_componente}`;
@@ -389,11 +659,11 @@ export async function appendPago({
     action: "add", sheet: "su_pagos",
     row: {
       id, mes, anio, pais, legajo_id, legajo_nombre,
-      sociedad_id, sociedad_nombre,
+      sociedad_id, sociedad_nombre, centro_costo,
       tipo_componente, monto, fecha,
       cuenta_bancaria_id, cuenta_bancaria_nombre,
       forma_pago_id,
-      nb_movimiento_id, concepto: nb_concepto, registrado_por,
+      nb_movimiento_id, concepto: nb_concepto, nota, registrado_por, ambito,
       created_at: new Date().toISOString(),
     },
   });
@@ -526,8 +796,8 @@ export async function fetchCdpDesdeEye(mes, anio, pais = "", locationIds = []) {
 
 // ── CONSTANTES ────────────────────────────────────────────────────────────────
 
-export const ROLES_SEDES   = ["COACH_SENIOR", "COACH", "BOTANICO", "ENCARGADO", "VENTAS", "LIMPIEZA"];
-export const ROLES_COACHES = ["COACH_SENIOR", "COACH", "BOTANICO"];
+export const ROLES_SEDES   = ["COACH_SENIOR", "COACH", "BOTANICO", "YOGA", "ENCARGADO", "VENTAS", "LIMPIEZA"];
+export const ROLES_COACHES = ["COACH_SENIOR", "COACH", "BOTANICO", "YOGA"];
 export const ROLES_FRONT   = ["ENCARGADO", "VENTAS"];
 export const ROLES_LIMP    = ["LIMPIEZA"];
 export const ROLES_HQ      = ["HQ", "HQ_OWNER", "HQ_EXT"];
@@ -537,7 +807,68 @@ export const ROL_CONCEPTO = {
   COACH_SENIOR: "COACH SENIOR",
   COACH:        "BIGG COACH",
   BOTANICO:     "BOTÁNICO",
+  YOGA:         "YOGA",
 };
+
+// Desglose por concepto de una liquidación (para la ficha de Resumen, solo lectura).
+// Sedes persiste cantidades (horas_cant, cdp_cant) pero no sus importes → se recalculan
+// con las tarifas de `categorias`, igual que calcTotal en la pantalla de liquidación.
+// `total_bruto` guardado es el número autoritativo del total.
+export function desglosarLiquidacion(liq, categorias = []) {
+  const tarifa = (concepto) =>
+    concepto ? (categorias.find(c => (c.concepto || "").toUpperCase() === String(concepto).toUpperCase())?.monto ?? 0) : 0;
+  const isCoach  = ROLES_COACHES.includes(liq.rol);
+  const tarifaHora = isCoach ? tarifa(ROL_CONCEPTO[liq.rol] ?? liq.rol) : 0;
+  const tCdpCoach = tarifa("CDP COACHES");
+  const tCdpFront = tarifa("CDP FRONT DESK");
+  const tarifaOS      = tarifa("ONE SHOT");
+  const tarifaDomingo = tarifa("DOMINGO");
+  const tarifaYoga    = tarifa("YOGA");
+
+  const horasCant     = Number(liq.horas_cant) || 0;
+  const horasMonto    = horasCant * tarifaHora;
+  // CDP en dos baldes (coach + front desk) + legacy "CDP" único (datos viejos).
+  const cdpCoachCant  = Number(liq.cdp_coach_cant) || 0;
+  const cdpFrontCant  = Number(liq.cdp_front_cant) || 0;
+  const cdpLegacyCant = Number(liq.cdp_cant) || 0;
+  const cdpCant       = cdpCoachCant + cdpFrontCant + cdpLegacyCant;
+  const cdpMonto      = cdpCoachCant * tCdpCoach + cdpFrontCant * tCdpFront
+                      + cdpLegacyCant * (isCoach ? tCdpCoach : tCdpFront);
+  const oneShotCant   = Number(liq.one_shot_cant) || 0;
+  const oneShotMonto  = Number(liq.one_shot_total) || 0;
+  const asignaciones  = Number(liq.objetivos_total) || 0;
+  const objGrupalPct  = Number(liq.bonos_cant) || 0;
+  const objGrupalMonto = Number(liq.bonos_total) || 0;
+  const feriadosCant  = Number(liq.feriados_cant) || 0;
+  const feriadosMonto = Number(liq.feriados_total) || (feriadosCant * tarifaHora);
+  const domingosCant  = Number(liq.domingos_cant) || 0;
+  const domingosMonto = Number(liq.domingos_total) || (domingosCant * tarifaDomingo);
+  const yogaCant      = Number(liq.yoga_cant) || 0;
+  const yogaMonto     = Number(liq.yoga_total) || (yogaCant * tarifaYoga);
+  const redondeo      = Number(liq.redondeo_total) || 0;
+  const programaciones = Number(liq.programacion_total) || 0;
+  const fijo          = Number(liq.sueldo_base) || 0;
+
+  const sueldoFijo     = fijo + horasMonto;
+  const sueldoVariable = cdpMonto + oneShotMonto + asignaciones + objGrupalMonto
+                       + feriadosMonto + domingosMonto + yogaMonto + redondeo + programaciones;
+  const sueldoTotal    = sueldoFijo + sueldoVariable;
+  // total_bruto (Σ líneas pago = sueldo) es la fuente de verdad; si no está, se reconstruye.
+  const totalLiquidar  = Number(liq.total_bruto) || sueldoTotal;
+
+  return {
+    rol: liq.rol, tarifaHora, tCdpCoach, tCdpFront, tarifaOS, tarifaDomingo, tarifaYoga,
+    fijo, horasCant, horasMonto,
+    cdpCant, cdpMonto, cdpCoachCant, cdpFrontCant,
+    oneShotCant, oneShotMonto,
+    asignaciones, objGrupalPct, objGrupalMonto,
+    feriadosCant, feriadosMonto, domingosCant, domingosMonto, yogaCant, yogaMonto, redondeo, programaciones,
+    sueldoFijo, sueldoVariable, sueldoTotal, totalLiquidar,
+    monto_haberes:       Number(liq.monto_haberes) || 0,
+    monto_transferencia: Number(liq.monto_transferencia) || 0,
+    monto_efectivo:      Number(liq.monto_efectivo) || 0,
+  };
+}
 
 // Lo que importa es si la empresa recibe su factura (monotributista) o no.
 // La situación impositiva personal del empleado es irrelevante para el módulo.
@@ -665,89 +996,58 @@ export async function saveObjetivos(mes, anio, pais, rows) {
 
 // ── Liquidación Sedes (reutiliza su_liquidaciones, filtra por pais + ROLES_SEDES) ──
 
-export async function fetchLiquidacionesSedes(mes, anio, pais) {
-  const rows = await get("su_liquidaciones", { mes, anio });
-  const allRoles = [...ROLES_COACHES, ...ROLES_FRONT, ...ROLES_LIMP];
-  return (Array.isArray(rows) ? rows : [])
-    .filter(r =>
-      Number(r.mes) === Number(mes) &&
-      Number(r.anio) === Number(anio) &&
-      r.pais === pais &&
-      allRoles.includes(r.rol)
-    )
-    .map(r => ({
-      id:              r.id,
-      mes:             Number(r.mes),
-      anio:            Number(r.anio),
-      pais:            r.pais            ?? "",
-      legajo_id:       r.legajo_id       ?? "",
-      legajo_nombre:   r.legajo_nombre   ?? "",
-      sociedad_id:     r.sociedad_id     ?? "",
-      sociedad_nombre: r.sociedad_nombre ?? "",
-      sede_id:         r.sede_id         ?? "",
-      sede_nombre:     r.sede_nombre     ?? "",
-      rol:             normalizarRol(r.rol),
-      horas:           Number(r.horas_cant)      || 0,
-      horas_feriados:  Number(r.feriados_cant)   || 0,
-      q_cdp:               Number(r.cdp_cant)          || 0,
-      q_one_shot:          Number(r.one_shot_cant)     || 0,
-      asignado:            Number(r.objetivos_total)   || 0,
-      c_grupo_pct:         Number(r.bonos_cant)        || 0,   // % ingresado por el usuario
-      comision_encargado:  Number(r.programacion_total)|| 0,
-      sueldo_base:     Number(r.sueldo_base)     || 0,
-      total:           Number(r.total_bruto)     || 0,
-      monto_haberes:       Number(r.monto_haberes)       || 0,
-      monto_deposito:      Number(r.monto_deposito)      || 0,
-      monto_transferencia: Number(r.monto_transferencia) || 0,
-      monto_efectivo:      Number(r.monto_efectivo)      || 0,
-      estado:          r.estado ?? "borrador",
-    }));
+// Mapea un objeto con nombres legacy (fila gorda raw o liqFromLineas) a la forma
+// interna que usa la pantalla de Sedes (horas, q_cdp, asignado, c_grupo_pct, total…).
+function mapRowToSedes(r) {
+  return {
+    id:              r.id,
+    mes:             Number(r.mes),
+    anio:            Number(r.anio),
+    pais:            r.pais            ?? "",
+    legajo_id:       r.legajo_id       ?? "",
+    legajo_nombre:   r.legajo_nombre   ?? "",
+    sociedad_id:     r.sociedad_id     ?? "",
+    sociedad_nombre: r.sociedad_nombre ?? "",
+    sede_id:         r.sede_id         ?? "",
+    sede_nombre:     r.sede_nombre     ?? "",
+    rol:             normalizarRol(r.rol),
+    horas:           Number(r.horas_cant)      || 0,
+    horas_feriados:  Number(r.feriados_cant)   || 0,
+    horas_domingos:  Number(r.domingos_cant)   || 0,
+    horas_yoga:      Number(r.yoga_cant)       || 0,
+    q_cdp_coach:         Number(r.cdp_coach_cant)    || 0,
+    q_cdp_front:         Number(r.cdp_front_cant ?? r.cdp_cant) || 0,  // legacy "CDP" → front
+    q_one_shot:          Number(r.one_shot_cant)     || 0,
+    asignado:            Number(r.objetivos_total)   || 0,
+    c_grupo_pct:         Number(r.bonos_cant)        || 0,   // % ingresado por el usuario
+    redondeo:        Number(r.redondeo_total)  || 0,   // aumento por redondeo del efectivo (congelado al cerrar)
+    sueldo_base:     Number(r.sueldo_base)     || 0,
+    total:           Number(r.total_bruto)     || 0,
+    monto_haberes:       Number(r.monto_haberes)       || 0,
+    monto_deposito:      Number(r.monto_deposito)      || 0,
+    monto_transferencia: Number(r.monto_transferencia) || 0,
+    monto_efectivo:      Number(r.monto_efectivo)      || 0,
+    estado:          r.estado ?? "borrador",
+  };
 }
 
-export async function upsertLiquidacionSede(row) {
-  // Treat as new if id is missing OR has a "new-" prefix (local-only placeholder)
-  const isNew = !row.id || String(row.id).startsWith("new-") || String(row._id ?? "").startsWith("new-");
-  const data = {
-    mes: row.mes, anio: row.anio, pais: row.pais,
-    legajo_id: row.legajo_id, legajo_nombre: row.legajo_nombre,
-    sociedad_id: row.sociedad_id, sociedad_nombre: row.sociedad_nombre,
-    sede_id: row.sede_id, sede_nombre: row.sede_nombre,
-    rol: row.rol,
-    horas_cant:          Number(row.horas)              || 0,
-    feriados_cant:       Number(row.horas_feriados)     || 0,
-    cdp_cant:            Number(row.q_cdp)               || 0,
-    one_shot_cant:       Number(row.q_one_shot)          || 0,
-    one_shot_total:      Number(row.one_shot_total)      || 0,
-    objetivos_total:     Number(row.asignado)            || 0,
-    bonos_cant:          Number(row.c_grupo_pct)          || 0,   // % ingresado
-    bonos_total:         Number(row.c_grupo_total)        || 0,   // $ calculado (lo pasa el caller)
-    programacion_total:  Number(row.comision_encargado)  || 0,
-    sueldo_base:         Number(row.sueldo_base)        || 0,
-    total_bruto:         Number(row.total)              || 0,
-    monto_haberes:       Number(row.monto_haberes)       || 0,
-    monto_deposito:      Number(row.monto_deposito)      || 0,
-    monto_transferencia: Number(row.monto_transferencia) || 0,
-    monto_efectivo:      Number(row.monto_efectivo)      || 0,
-    estado:              row.estado ?? "borrador",
-  };
-  if (isNew) {
-    const id = newId("LIQ-S");
-    await post({ action: "add", sheet: "su_liquidaciones", row: { id, ...data, created_at: new Date().toISOString() } });
-    return id;   // caller stamps local state so re-saves do upd, not add
-  } else {
-    try {
-      await post({ action: "upd", sheet: "su_liquidaciones", id: row.id, row: data });
-    } catch (e) {
-      // Row missing in Sheets (deleted, or never written due to a GAS race on a previous save).
-      // Re-insert with the same id so future saves keep updating the same row.
-      if (/no encontrado|not found/i.test(e.message)) {
-        await post({ action: "add", sheet: "su_liquidaciones", row: { id: row.id, ...data, created_at: new Date().toISOString() } });
-      } else {
-        throw e;
-      }
-    }
-    return row.id;
+export async function fetchLiquidacionesSedes(mes, anio, pais) {
+  const rows = await get("su_liquidaciones", { mes, anio });
+  const arr = Array.isArray(rows) ? rows : [];
+  const allRoles = [...ROLES_COACHES, ...ROLES_FRONT, ...ROLES_LIMP];
+  const enPeriodo = (r) => Number(r.mes) === Number(mes) && Number(r.anio) === Number(anio) && r.pais === pais;
+
+  // Legacy (fila gorda): mapear directo si está en período y es rol Sedes.
+  const out = arr
+    .filter(r => !r.id_liq && enPeriodo(r) && allRoles.includes(normalizarRol(r.rol)))
+    .map(mapRowToSedes);
+
+  // Nuevo (líneas): agrupar por id_liq, proyectar y mapear a la forma Sedes.
+  for (const [idLiq, ls] of _agruparPorLiq(arr.filter(r => r.id_liq && enPeriodo(r)))) {
+    const liq = liqFromLineas(idLiq, ls);
+    if (allRoles.includes(liq.rol)) out.push(mapRowToSedes(liq));
   }
+  return out;
 }
 
 export async function deleteLiquidacionSede(id) {
