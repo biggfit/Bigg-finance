@@ -296,6 +296,12 @@ export default function PantallaLiquidacionHQ({ pais = "" }) {
       if (!novByLegajo.has(n.legajo_id)) novByLegajo.set(n.legajo_id, []);
       novByLegajo.get(n.legajo_id).push(n);
     }
+    // Index de pagos por legajo (evita el filter O(legajos × pagos); mismo patrón que Sedes).
+    const pagosByLegajo = new Map();
+    for (const p of pagos) {
+      if (!pagosByLegajo.has(p.legajo_id)) pagosByLegajo.set(p.legajo_id, []);
+      pagosByLegajo.get(p.legajo_id).push(p);
+    }
     return legajos.map(leg => {
       const liq = liqByLegajo.get(leg.id);
       // Split escalar congelado al cerrar (monto_*): si existe, es la fuente de verdad del
@@ -313,7 +319,7 @@ export default function PantallaLiquidacionHQ({ pais = "" }) {
         const base = leg.formas_pago?.length ? leg.formas_pago : defaultLineasFromLeg(leg);
         lineas = normalizeEfectivo(withHaberesFromLeg(base, leg), leg.sueldo_total || 0);
       }
-      const pagosMios   = pagos.filter(p => p.legajo_id === leg.id);
+      const pagosMios   = pagosByLegajo.get(leg.id) ?? [];
       const totalPagado = pagosMios.reduce((s, p) => s + p.monto, 0);
       const total_bruto = lineas.reduce((s, l) => s + (Number(l.importe) || 0), 0);
       // Cerrada → novedades CONGELADAS en la liquidación (líneas); borrador → su_novedades en vivo.

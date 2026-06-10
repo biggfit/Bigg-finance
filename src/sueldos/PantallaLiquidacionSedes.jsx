@@ -332,11 +332,14 @@ export default function PantallaLiquidacionSedes({ pais = "" }) {
   // Match de tarifa insensible a mayúsculas Y acentos: "BOTÁNICO" (ROL_CONCEPTO) debe
   // matchear con la categoría guardada "BOTANICO" (sin acento), etc.
   const normConcepto = (s) => String(s || "").toUpperCase().normalize("NFD").replace(/\p{Diacritic}/gu, "").trim();
-  const getTarifa = useCallback((concepto) => {
-    if (!concepto) return 0;
-    const target = normConcepto(concepto);
-    return categorias.find(c => normConcepto(c.concepto) === target)?.monto ?? 0;
+  // Mapa normConcepto → monto, armado una sola vez por mes (getTarifa hace lookup O(1);
+  // antes era un .find lineal sobre `categorias` y se llama ~6 veces por fila).
+  const tarifasMap = useMemo(() => {
+    const m = new Map();
+    for (const c of categorias) m.set(normConcepto(c.concepto), Number(c.monto) || 0);
+    return m;
   }, [categorias]);
+  const getTarifa = useCallback((concepto) => concepto ? (tarifasMap.get(normConcepto(concepto)) ?? 0) : 0, [tarifasMap]);
 
   // Tarifa por hora: los roles coach usan la tarifa de su rol; cualquier otro rol que
   // dé clases (horas que bajan de Eye) se paga a tarifa COACH SENIOR (decisión de negocio).
@@ -344,60 +347,39 @@ export default function PantallaLiquidacionSedes({ pais = "" }) {
     getTarifa(ROLES_COACHES.includes(rol) ? (ROL_CONCEPTO[rol] ?? rol) : ROL_CONCEPTO.COACH_SENIOR),
   [getTarifa]);
 
-  const calcTotal = useCallback((row) => {
+  // Fórmula ÚNICA de los montos por concepto de una fila (la usan calcTotal y lineasConceptoDeRow,
+  // así no divergen). `total` = sueldo SIN redondeo (el redondeo se calcula al cerrar y se guarda).
+  const montosDeRow = useCallback((row) => {
     const tarifaHora = tarifaHoraRow(row.rol);
-    // CDP en dos columnas: una persona puede hacer ambas (coach + front desk), cada una a su tarifa.
     const tCdpCoach  = getTarifa("CDP COACHES");
     const tCdpFront  = getTarifa("CDP FRONT DESK");
     const tarifaOS   = getTarifa("ONE SHOT");
-    const horasMonto = (Number(row.horas) || 0) * tarifaHora;
-    // Feriados: 1 hora extra por feriado a tarifa normal (la hora del feriado ya viene
-    // contada en Hs. Coach, así que esta suma una más → queda pago doble).
-    const feriadosMonto = (Number(row.horas_feriados) || 0) * tarifaHora;
-    // Domingos: adicional por hora de domingo a tarifa propia (categoría "DOMINGO").
-    // La hora normal ya está en Hs. Coach; esto suma el diferencial del domingo.
-    const domingosMonto = (Number(row.horas_domingos) || 0) * getTarifa("DOMINGO");
-    // Yoga: horas de yoga a tarifa propia (categoría "YOGA"), su columna en Paso 2.
-    const yogaMonto = (Number(row.horas_yoga) || 0) * getTarifa("YOGA");
-    const baseGrupo  = baseGrupalDe(row.rol, {
-      horasMonto, feriadosMonto,
-      asignado: Number(row.asignado) || 0,
-      sueldoBase: Number(row.sueldo_base) || 0,
-    });
-    const cGrupoMonto = baseGrupo * ((Number(row.c_grupo_pct) || 0) / 100);
-    return (
-      (Number(row.sueldo_base)         || 0) +
-      horasMonto +
-      feriadosMonto +
-      domingosMonto +
-      yogaMonto +
-      (Number(row.q_cdp_coach)         || 0) * tCdpCoach +
-      (Number(row.q_cdp_front)         || 0) * tCdpFront +
-      (Number(row.q_one_shot)          || 0) * tarifaOS +
-      (Number(row.asignado)            || 0) +
-      cGrupoMonto +
-      (Number(row.redondeo)            || 0)
-    );
+    const tarifaDom  = getTarifa("DOMINGO");
+    const tarifaYoga = getTarifa("YOGA");
+    const fijo     = Number(row.sueldo_base) || 0;
+    const horas    = Number(row.horas) || 0,          horasMonto    = horas * tarifaHora;
+    const feriados = Number(row.horas_feriados) || 0, feriadosMonto = feriados * tarifaHora;
+    const domingos = Number(row.horas_domingos) || 0, domingosMonto = domingos * tarifaDom;
+    const yoga     = Number(row.horas_yoga) || 0,     yogaMonto     = yoga * tarifaYoga;
+    const cdpCoach = Number(row.q_cdp_coach) || 0,    cdpCoachMonto = cdpCoach * tCdpCoach;
+    const cdpFront = Number(row.q_cdp_front) || 0,    cdpFrontMonto = cdpFront * tCdpFront;
+    const os       = Number(row.q_one_shot) || 0,     osMonto       = os * tarifaOS;
+    const asignado  = Number(row.asignado) || 0;
+    const cGrupoPct = Number(row.c_grupo_pct) || 0;
+    const cGrupoMonto = baseGrupalDe(row.rol, { horasMonto, feriadosMonto, asignado, sueldoBase: fijo }) * (cGrupoPct / 100);
+    const total = fijo + horasMonto + feriadosMonto + domingosMonto + yogaMonto
+                + cdpCoachMonto + cdpFrontMonto + osMonto + asignado + cGrupoMonto;
+    return { tarifaHora, tCdpCoach, tCdpFront, tarifaOS, tarifaDom, tarifaYoga, fijo,
+      horas, horasMonto, feriados, feriadosMonto, domingos, domingosMonto, yoga, yogaMonto,
+      cdpCoach, cdpCoachMonto, cdpFront, cdpFrontMonto, os, osMonto, asignado, cGrupoPct, cGrupoMonto, total };
   }, [getTarifa, tarifaHoraRow]);
 
-  // Líneas `concepto` de una fila de Sedes (desglose del sueldo que compone calcTotal).
-  // Σ conceptos = calcTotal(r). Devuelve { lineas, total }.
+  // Total de la fila = sueldo (montos) + el redondeo guardado (se calcula al cerrar).
+  const calcTotal = useCallback((row) => montosDeRow(row).total + (Number(row.redondeo) || 0), [montosDeRow]);
+
+  // Líneas `concepto` de una fila de Sedes (desglose del sueldo). Σ conceptos = total (sin redondeo).
   const lineasConceptoDeRow = useCallback((r, estado) => {
-    const tarifaHora = tarifaHoraRow(r.rol);
-    const tCdpCoach  = getTarifa("CDP COACHES");
-    const tCdpFront  = getTarifa("CDP FRONT DESK");
-    const tarifaOS   = getTarifa("ONE SHOT");
-    const horas = Number(r.horas) || 0,  horasMonto = horas * tarifaHora;
-    const feriados = Number(r.horas_feriados) || 0, feriadosMonto = feriados * tarifaHora;
-    const domingos = Number(r.horas_domingos) || 0, domingosMonto = domingos * getTarifa("DOMINGO");
-    const yoga = Number(r.horas_yoga) || 0, yogaMonto = yoga * getTarifa("YOGA");
-    const cdpCoach = Number(r.q_cdp_coach) || 0, cdpCoachMonto = cdpCoach * tCdpCoach;
-    const cdpFront = Number(r.q_cdp_front) || 0, cdpFrontMonto = cdpFront * tCdpFront;
-    const os    = Number(r.q_one_shot) || 0, osMonto = os * tarifaOS;
-    const asignado = Number(r.asignado) || 0;
-    const cGrupoPct = Number(r.c_grupo_pct) || 0;
-    const fijo = Number(r.sueldo_base) || 0;
-    const cGrupoMonto = baseGrupalDe(r.rol, { horasMonto, feriadosMonto, asignado, sueldoBase: fijo }) * (cGrupoPct / 100);
+    const m = montosDeRow(r);
     const h = {
       mes, anio, pais, estado,
       legajo_id: r.legajo_id, legajo_nombre: r.legajo_nombre,
@@ -409,18 +391,18 @@ export default function PantallaLiquidacionSedes({ pais = "" }) {
     const add = (concepto, cantidad, monto_unit, monto) => {
       if (monto > 0) L.push(lineaLiq(h, { tipo: "concepto", concepto, cuenta_contable: "Sueldos", cantidad, monto_unit, monto }));
     };
-    add("Sueldo base", 0, 0, fijo);
-    add("Horas", horas, tarifaHora, horasMonto);
-    add("Feriados", feriados, tarifaHora, feriadosMonto);
-    add("Domingos", domingos, getTarifa("DOMINGO"), domingosMonto);
-    add("Yoga", yoga, getTarifa("YOGA"), yogaMonto);
-    add("CDP coach", cdpCoach, tCdpCoach, cdpCoachMonto);
-    add("CDP front desk", cdpFront, tCdpFront, cdpFrontMonto);
-    add("One Shot", os, tarifaOS, osMonto);
-    add("Objetivos", 0, 0, asignado);
-    add("Objetivo grupal", cGrupoPct, 0, cGrupoMonto);
-    return { lineas: L, total: fijo + horasMonto + feriadosMonto + domingosMonto + yogaMonto + cdpCoachMonto + cdpFrontMonto + osMonto + asignado + cGrupoMonto, header: h };
-  }, [getTarifa, tarifaHoraRow, mes, anio, pais]);
+    add("Sueldo base", 0, 0, m.fijo);
+    add("Horas", m.horas, m.tarifaHora, m.horasMonto);
+    add("Feriados", m.feriados, m.tarifaHora, m.feriadosMonto);
+    add("Domingos", m.domingos, m.tarifaDom, m.domingosMonto);
+    add("Yoga", m.yoga, m.tarifaYoga, m.yogaMonto);
+    add("CDP coach", m.cdpCoach, m.tCdpCoach, m.cdpCoachMonto);
+    add("CDP front desk", m.cdpFront, m.tCdpFront, m.cdpFrontMonto);
+    add("One Shot", m.os, m.tarifaOS, m.osMonto);
+    add("Objetivos", 0, 0, m.asignado);
+    add("Objetivo grupal", m.cGrupoPct, 0, m.cGrupoMonto);
+    return { lineas: L, total: m.total, header: h };
+  }, [montosDeRow, mes, anio, pais]);
 
   // ── Roster derivado en vivo (cross BIGG Eye × legajos × liquidaciones guardadas) ──
   // Reemplaza el botón "Inicializar": cada carga reconstruye el roster con clave estable
