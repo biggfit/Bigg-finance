@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { request as httpsRequest } from 'https'
+import { pathToFileURL } from 'url'
+import path from 'path'
 import fs from 'fs'
 
 // Lee el .env.local antes de que Vite cargue sus propias vars
@@ -123,7 +125,8 @@ export default defineConfig({
             let body = '';
             req.on('data', chunk => { body += chunk; });
             req.on('end', () => {
-              import('./api/facturante.js').then(mod => {
+              const facturanteUrl = pathToFileURL(path.join(server.config.root, 'api/facturante.js')).href + `?t=${Date.now()}`;
+              import(facturanteUrl).then(mod => {
                 const mockReq = Object.assign(Object.create(req), {
                   on: (ev, cb) => { if (ev === 'data') cb(body); if (ev === 'end') cb(); return mockReq; },
                 });
@@ -151,15 +154,21 @@ export default defineConfig({
             return;
           }
 
-          // ── Proxy /api/bigg-eye → MCP server de Bigg Eye ──────────────────
+          // ── Proxy /api/bigg-eye-* → handlers locales de Bigg Eye ──────────
+          // IMPORTANTE: las rutas más específicas deben ir primero.
           if (req.url && req.url.startsWith('/api/bigg-eye')) {
-            // En dev, importar y ejecutar el handler directamente
-            import('./api/bigg-eye.js').then(mod => {
-              // Parsear query string manualmente
-              const urlObj = new URL('http://localhost' + req.url);
+            const apiFile = req.url.startsWith('/api/bigg-eye-horas')
+              ? 'api/bigg-eye-horas.js'
+              : req.url.startsWith('/api/bigg-eye-cdp')
+              ? 'api/bigg-eye-cdp.js'
+              : 'api/bigg-eye.js';
+            // Ruta absoluta + timestamp → fuerza reimport en cada request,
+            // así los cambios en /api/*.js se reflejan sin reiniciar el servidor.
+            const absUrl = pathToFileURL(path.join(server.config.root, apiFile)).href + `?t=${Date.now()}`;
+
+            import(absUrl).then(mod => {
+              const urlObj  = new URL('http://localhost' + req.url);
               const fakeReq = { query: Object.fromEntries(urlObj.searchParams), url: req.url, method: req.method };
-              const chunks = [];
-              let statusCode = 200;
               const fakeRes = {
                 setHeader: () => {},
                 statusCode: 200,

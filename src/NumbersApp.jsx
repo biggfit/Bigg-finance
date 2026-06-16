@@ -13,7 +13,7 @@ import PantallaIntercompania    from "./numbers/PantallaIntercompania";
 import PantallaGastos           from "./numbers/PantallaGastos";
 import PantallaReconciliacion   from "./numbers/PantallaReconciliacion";
 import { SOCIEDADES as SOC_FALLBACK } from "./data/tesoreriaData";
-import { fetchSociedades } from "./lib/numbersApi";
+import { fetchSociedades, fetchMovimientosPendientes } from "./lib/numbersApi";
 
 // ─── Nav button style helpers ─────────────────────────────────────────────────
 const navBtnStyle = (active) => ({
@@ -38,6 +38,7 @@ const MAESTROS_TABS = [
   { id:"cuentas",     label:"Plan de Cuentas",  icon:"📋" },
   { id:"clientes",    label:"Clientes",          icon:"🏢" },
   { id:"proveedores", label:"Proveedores",       icon:"🧾" },
+  { id:"banco_reglas",label:"Reglas de banco",   icon:"⚙" },
 ];
 
 const SECTIONS = [
@@ -45,6 +46,7 @@ const SECTIONS = [
   { id:"ingresos",  label:"Ingresos",  icon:"↑", component: PantallaIngresos  },
   { id:"egresos",   label:"Egresos",   icon:"↓", component: PantallaEgresos   },
   { id:"tesoreria", label:"Tesorería", icon:"⬡", component: PantallaTesoreria },
+  { id:"reconciliacion", label:"Conciliación", icon:"≡", component: PantallaReconciliacion },
   { id:"reportes",  label:"Reportes",  icon:"▦", component: PantallaReportes  },
 ];
 
@@ -86,6 +88,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
   const [showSocDrop,    setShowSocDrop]    = useState(false);
   const [socReady,       setSocReady]       = useState(false);
   const [activeSpecial,  setActiveSpecial]  = useState(null);
+  const [pendConcil,     setPendConcil]     = useState(0);
   // null = main app; string = maestros active tab
   const [activeMaestrosTab, setActiveMaestrosTab] = useState(null);
   const showMaestros = activeMaestrosTab !== null;
@@ -120,6 +123,14 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
       .catch(err => console.error("[Numbers] fetchSociedades error:", err))
       .finally(() => setSocReady(true));
   }, []);
+
+  // Contador de movimientos sin conciliar (sociedad activa) para el badge
+  useEffect(() => {
+    if (!socReady || !activeSoc?.id) return;
+    fetchMovimientosPendientes(activeSoc.id)
+      .then(r => setPendConcil(Array.isArray(r) ? r.length : 0))
+      .catch(() => setPendConcil(0));
+  }, [socReady, activeSoc?.id]);
 
   const section = SECTIONS.find(s => s.id === activeId);
 
@@ -365,7 +376,11 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
                   aria-current={active ? "page" : undefined}
                   style={navBtnStyle(active)} {...navBtnHover(active)}>
                   <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>{s.icon}</span>
-                  {s.label}
+                  <span style={{ flex:1 }}>{s.label}</span>
+                  {s.id === "reconciliacion" && pendConcil > 0 && (
+                    <span style={{ fontSize:10, fontWeight:800, padding:"1px 7px", borderRadius:999,
+                      background:"#dc2626", color:"#fff", flexShrink:0 }}>{pendConcil}</span>
+                  )}
                 </button>
               );
             })}
@@ -377,7 +392,6 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
             {[
               { id:"intercompania",   icon:"⇄", label:"Intercompañía",     soon:false, onClick: () => { setActiveSpecial("intercompania"); } },
               { id:"cambio",          icon:"$", label:"Cambio de moneda",   soon:false, onClick: () => { setActiveSpecial("cambio"); } },
-              { id:"reconciliacion",  icon:"≡", label:"Conciliación",        soon:false, onClick: () => { setActiveSpecial("reconciliacion"); } },
             ].map(item => {
               const active = !item.soon && activeSpecial === item.id;
               return (
@@ -488,6 +502,8 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
               ? <PantallaEgresos  sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView} />
               : section.id === "ingresos"
               ? <PantallaIngresos sociedad={activeSoc.id} subView={ingresoSubView} onSubViewChange={setIngresoSubView} />
+              : section.id === "reconciliacion"
+              ? <PantallaReconciliacion sociedad={activeSoc.id} onPendientes={setPendConcil} />
               : <section.component sociedad={activeSoc.id} />
             : section?.placeholder
             ? <Placeholder section={section} />

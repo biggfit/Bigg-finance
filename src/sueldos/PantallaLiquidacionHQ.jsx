@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, Fragment } from "react";
 import * as XLSX from "xlsx";
 import {
   fetchLegajos, fetchLiquidaciones, updateLegajo,
-  fetchPagos, appendPago, deletePago, fetchNovedades, ROLES_HQ,
+  fetchPagos, appendPago, deletePago, nuevoLote, fetchNovedades, ROLES_HQ,
   FP_TIPOS, FP_TIPO_LABEL, FP_TIPO_COLOR,
   fetchSociedadesNumbers, fetchCuentasBancariasNumbers, fetchCuentasContablesNumbers,
   idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionLines, isCerrada,
@@ -38,7 +38,7 @@ const conceptoPago = (it, liq, mes, anio) => it.kind === "novedad"
   ? `Novedad ${it.ref.cuenta_contable_nombre || ""} ${liq.legajo_nombre} ${mes}/${anio}${it.ref.descripcion ? ` · ${it.ref.descripcion}` : ""}`.trim()
   : (it.ref.nota ? `Sueldo ${liq.legajo_nombre} ${mes}/${anio} · ${it.ref.nota}` : "");
 
-// Nota interna que se persiste en su_pagos (la nota de la línea de receta; las
+// Nota interna que se persiste en el movimiento de sueldo (nb_movimientos; la nota de la línea de receta; las
 // novedades no llevan nota interna → su descripción ya viaja en el concepto).
 const notaPago = (it) => it.kind === "novedad" ? "" : (it.ref.nota || "");
 
@@ -189,9 +189,9 @@ function legacyLineasFromLiq(liq, leg) {
 
 // ── Componente principal ──────────────────────────────────────────────────────
 
-export default function PantallaLiquidacionHQ({ pais = "" }) {
-  const [mes,  setMes]  = useState(MES_DEF);
-  const [anio, setAnio] = useState(ANO_DEF);
+export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAnio, initialPaso }) {
+  const [mes,  setMes]  = useState(initialMes  ?? MES_DEF);
+  const [anio, setAnio] = useState(initialAnio ?? ANO_DEF);
 
   const [legajos,       setLegajos]       = useState([]);
   const [liquidaciones, setLiquidaciones] = useState([]);
@@ -202,7 +202,7 @@ export default function PantallaLiquidacionHQ({ pais = "" }) {
   const [saving,        setSaving]        = useState(false);
 
   // Wizard state
-  const [paso,             setPaso]             = useState(1);
+  const [paso,             setPaso]             = useState(initialPaso ?? 1);
   const [sueldosDraft,     setSueldosDraft]     = useState({});  // { [legajo_id]: { pct: "", total: N } }
   const [actualizarLegs,   setActualizarLegs]   = useState(false);
   const [formasDraft,      setFormasDraft]      = useState({});  // { [legajo_id]: lineas[] }
@@ -1295,7 +1295,7 @@ function getPagosLinea(liq, linea) {
 }
 
 // Pagos de una novedad: vinculados por forma_pago_id = id de la novedad (NOV…).
-// Requiere la columna forma_pago_id en su_pagos; sin ella el pago no se puede
+// Requiere la columna forma_pago_id en nb_movimientos; sin ella el pago no se puede
 // anclar a una novedad concreta (dos novedades iguales serían indistinguibles).
 function getPagosNovedad(liq, nov) {
   if (!nov.id) return [];
@@ -1641,6 +1641,7 @@ function ModalAnularPago({ pago, onClose, onAnulado }) {
       await appendPago({
         mes:                    pago.mes,
         anio:                   pago.anio,
+        lote_pago:              nuevoLote(),
         legajo_id:              pago.legajo_id,
         legajo_nombre:          pago.legajo_nombre,
         // Sociedad pagadora = la dueña de la cuenta elegida (quién mueve la tesorería).
@@ -1812,8 +1813,10 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
       const cta = cuentas.find(c => c.id === form.cuenta_id);
       // Datos comunes a todos los movimientos de la celda. La sociedad pagadora =
       // dueña de la cuenta elegida (quién mueve la tesorería), no la del empleado.
+      // Un lote por acción de pago → Conciliación matchea el débito contra el total del lote.
+      const lote_pago = nuevoLote();
       const comunes = {
-        mes, anio,
+        mes, anio, lote_pago,
         legajo_id:               liq.legajo_id,
         legajo_nombre:           liq.legajo_nombre,
         sociedad_id:             cta?.sociedad ?? liq.sociedad_id,
@@ -1827,7 +1830,7 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
         cuenta_contable_nombre:  cuentasContables.find(c => c.id === form.cuenta_contable_id)?.nombre ?? "",
       };
       // Un nb_movimiento por ítem (granularidad por línea). Secuencial a propósito:
-      // el backend GAS pierde escrituras concurrentes a su_pagos (appendRow colisiona).
+      // el backend GAS pierde escrituras concurrentes a nb_movimientos (appendRow colisiona).
       for (const it of cell.items) {
         await appendPago({ ...comunes, forma_pago_id: it.ref.id, monto: montoItem(it), concepto: conceptoPago(it, liq, mes, anio), nota: notaPago(it), ambito: "hq" });
       }
@@ -1960,14 +1963,15 @@ function ModalBatchPago({ tipo, items, mes, anio, onClose, onSaved }) {
     try {
       const cta        = cuentas.find(c => c.id === form.cuenta_id);
       const socNombre  = sociedades.find(s => s.id === cta?.sociedad)?.nombre ?? "";
+      const lote_pago  = nuevoLote();
       // Secuencial a propósito: el backend GAS pierde escrituras concurrentes a
-      // su_pagos (appendRow colisiona si se disparan en paralelo).
+      // nb_movimientos (appendRow colisiona si se disparan en paralelo).
       for (const it of itemsSel) {
         const { liq, ref } = it;
         const cc = cuentaItem(it);
         const concepto = conceptoPago(it, liq, mes, anio);
         await appendPago({
-          mes, anio,
+          mes, anio, lote_pago,
           legajo_id:              liq.legajo_id,
           legajo_nombre:          liq.legajo_nombre,
           sociedad_id:            cta?.sociedad ?? liq.sociedad_id,

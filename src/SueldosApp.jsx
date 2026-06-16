@@ -9,6 +9,7 @@ import PantallaCargasSociales  from "./sueldos/PantallaCargasSociales";
 import PantallaCategorias       from "./sueldos/PantallaCategorias";
 import PantallaObjetivos        from "./sueldos/PantallaObjetivos";
 import PantallaResumen          from "./sueldos/PantallaResumen";
+import PantallaSueldosPagar     from "./sueldos/PantallaSueldosPagar";
 import { fetchPaises }          from "./lib/sueldosApi";
 
 const T = {
@@ -26,19 +27,21 @@ const T = {
 };
 
 const NAV = [
+  { id: "sueldos-pagar", icon: "💸", label: "Sueldos por pagar" },
+  { id: "resumen",       icon: "🧾", label: "Resúmenes" },
   { id: "liq-hq",     icon: "⬡",  label: "Liquidación HQ" },
   { id: "novedades",  icon: "◦",  label: "Novedades de HQ", sub: true },
   { id: "liq-sedes",  icon: "◈",  label: "Liquidación Sedes" },
   { id: "nov-sedes",  icon: "◦",  label: "Novedades de Sedes", sub: true },
   { id: "categorias", icon: "◦",  label: "Categorías",   sub: true },
   { id: "objetivos",  icon: "◦",  label: "Objetivos",    sub: true },
-  { id: "resumen",    icon: "🧾", label: "Resumen" },
   { id: "cargas",     icon: "📋", label: "Cargas sociales" },
   { id: "legajos",    icon: "👤", label: "Legajos" },
 ];
 
 export default function SueldosApp({ onVolver }) {
   const [activeId, setActiveId] = useState("liq-hq");
+  const [navParams,    setNavParams]    = useState(null);
   const [paises,       setPaises]       = useState([]);
   const [paisActivo,   setPaisActivo]   = useState("AR");
   const [showPaisDrop, setShowPaisDrop] = useState(false);
@@ -61,14 +64,20 @@ export default function SueldosApp({ onVolver }) {
   const breadcrumb = {
     "liq-sedes":  "Liquidación · Sedes",
     "nov-sedes":  "Liquidación · Sedes › Novedades",
-    "resumen":    "Resumen",
+    "resumen":    "Resúmenes",
     "categorias": "Liquidación · Sedes › Categorías",
     "objetivos":  "Liquidación · Sedes › Objetivos",
     "liq-hq":     "Liquidación · HQ",
     "novedades":  "Liquidación · HQ › Novedades",
     "legajos":    "Legajos",
     "cargas":     "Cargas sociales",
+    "sueldos-pagar": "Sueldos por pagar",
   }[activeId] ?? "";
+
+  // Deep-link desde "Sueldos por pagar" → wizard del mes/legajo de la deuda.
+  const handleNavigate = (id, params) => { setActiveId(id); setNavParams(params); };
+  // Navegación manual por el sidebar limpia el deep-link (no “pega” el período).
+  const goTo = (id) => { setNavParams(null); setActiveId(id); };
 
   return (
     <div style={{ display: "flex", height: "100vh", fontFamily: T.font, overflow: "hidden" }}>
@@ -143,7 +152,7 @@ export default function SueldosApp({ onVolver }) {
             return (
               <button
                 key={id}
-                onClick={() => setActiveId(id)}
+                onClick={() => goTo(id)}
                 style={{
                   display: "flex", alignItems: "center", gap: 10, width: "100%",
                   background: isActive ? T.activeBg : "transparent",
@@ -193,12 +202,15 @@ export default function SueldosApp({ onVolver }) {
 
         {/* Contenido */}
         <div style={{ flex: 1, overflow: "auto" }}>
-          {activeId === "liq-sedes"  && <PantallaLiquidacionSedes pais={paisActivo} />}
+          {activeId === "liq-sedes"  && <PantallaLiquidacionSedes pais={paisActivo}
+            initialMes={navParams?.mes} initialAnio={navParams?.anio} initialPaso={navParams?.paso} />}
           {activeId === "nov-sedes"  && <PantallaNovedadesSedes   pais={paisActivo} />}
           {activeId === "resumen"    && <PantallaResumen          pais={paisActivo} />}
+          {activeId === "sueldos-pagar" && <PantallaSueldosPagar  pais={paisActivo} onNavigate={handleNavigate} />}
           {activeId === "categorias" && <PantallaCategorias       pais={paisActivo} />}
           {activeId === "objetivos"  && <PantallaObjetivos        pais={paisActivo} />}
-          {activeId === "liq-hq"    && <PantallaLiquidacionHQ    pais={paisActivo} />}
+          {activeId === "liq-hq"    && <PantallaLiquidacionHQ    pais={paisActivo}
+            initialMes={navParams?.mes} initialAnio={navParams?.anio} initialPaso={navParams?.paso} />}
           {activeId === "novedades" && <PantallaNovedades        pais={paisActivo} />}
           {activeId === "legajos"   && <PantallaLegajos           pais={paisActivo} />}
           {activeId === "cargas"    && <PantallaCargasSociales    pais={paisActivo} />}

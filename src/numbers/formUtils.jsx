@@ -74,7 +74,10 @@ export function initialFacturaLineas(initialData, resolveCC) {
 }
 
 export function facturaCanSave({ partyId, cuentaId, fecha, lineas }) {
-  return !!(partyId && cuentaId && fecha && lineas.some(l => Number(l.subtotal) > 0));
+  // Toda línea con monto debe tener centro de costo: sin centro la fila desaparece de los P&L
+  // (Sedes filtra por centro de sede, BIGG por centro HQ). Exigirlo evita el agujero.
+  const conMonto = lineas.filter(l => Number(l.subtotal) > 0);
+  return !!(partyId && cuentaId && fecha && conMonto.length > 0 && conMonto.every(l => l.cc));
 }
 
 export function runSaveThenMaybeClose(onSave, payload, asPage, onClose) {
@@ -391,7 +394,9 @@ export function InvoiceLineasTable({
             transition: "background .12s ease",
           }}>
             <select value={l.cc} onChange={e => updLinea(l.id, "cc", e.target.value)}
-              style={{ ...inputStyle, padding: "6px 8px", fontSize: 12 }}>
+              title={sub > 0 && !l.cc ? "Falta el centro de costo (obligatorio)" : ""}
+              style={{ ...inputStyle, padding: "6px 8px", fontSize: 12,
+                ...(sub > 0 && !l.cc ? { border: "1px solid #fb923c", background: "#fff7ed" } : {}) }}>
               <option value="">— Centro de Costo —</option>
               <CCSelectOptions ccGroups={ccGroups} />
             </select>

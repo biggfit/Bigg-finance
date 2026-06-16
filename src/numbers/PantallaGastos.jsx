@@ -68,7 +68,7 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
       if (editGasto) {
         const r    = rows[0];
         const prov = proveedores.find(p => p.id === r.proveedorId);
-        await updateGastoDirecto(editGasto.rowId, editGasto._movId, {
+        await updateGastoDirecto(editGasto._movId, {
           fecha:              r.fecha,
           cuenta_contable:    r.cuenta_contable,
           cuenta_contable_id: cuentasGasto.find(c => c.nombre === r.cuenta_contable)?.id ?? "",
@@ -336,7 +336,7 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
   const handleEliminar = async (gasto) => {
     if (!confirm("¿Eliminar este gasto?")) return;
     try {
-      await deleteGasto(gasto.rowId, gasto._movId);
+      await deleteGasto(gasto._movId);
       setGastos(prev => prev.filter(g => g.id !== gasto.id));
     } catch (e) {
       alert("Error al eliminar: " + e.message);

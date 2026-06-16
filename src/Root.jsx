@@ -5,7 +5,7 @@ import SueldosApp from "./SueldosApp";
 
 // ─── ROOT: switch entre BIGG Numbers, Bigg Franquicias y BIGG Sueldos ──────
 export default function Root() {
-  const [activeApp, setActiveApp] = useState("franquicias");
+  const [activeApp, setActiveApp] = useState("numbers");
 
   if (activeApp === "franquicias") {
     return <App onVolverNumbers={() => setActiveApp("numbers")} />;

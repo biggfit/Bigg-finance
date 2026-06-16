@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, PageHeader } from "./theme";
-import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas } from "../lib/numbersApi";
+import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, SALARY_BUCKETS, pagoTipoABucket, devengadoPorFormaYSociedad } from "../lib/sueldosApi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
 
@@ -53,6 +53,34 @@ function buildPnL(inRows, egRows, cuentaMap, ccFilter, year, moneda) {
     if (!bucket[nombre]) bucket[nombre] = new Array(12).fill(0);
   }
   return cats;
+}
+
+// Adapter: nb_movimientos imputados que SON el hecho económico (gasto contado /
+// conciliación contabilizada) → mismo formato que las filas de nb_comprobantes.
+// Marcador único: documento_id empieza con "CONTAB-" (devengado-vía-movimiento).
+// Si una fila se reimputa como pago de una FC, su documento_id pasa al id_comp y
+// SALE del P&L automáticamente (el devengado lo aporta el comprobante de la FC).
+// total = |monto| (la categoría P&L de la cuenta/centro decide ingreso vs gasto).
+function movimientoToPnLRows(movs, sociedad) {
+  const soc = (sociedad ?? "").toLowerCase();
+  const out = [];
+  for (const m of (movs ?? [])) {
+    if (soc && (m.sociedad ?? "").toLowerCase() !== soc) continue;
+    if (!(m.cuenta_contable ?? "").trim()) continue;
+    // Entra al P&L: gasto contado/conciliado (CONTAB-) o retención sufrida (resultado negativo,
+    // como gasto). La retención lleva documento_id de la factura para netear la CxC, por eso
+    // se la reconoce por origen, no por el prefijo.
+    if (!String(m.documento_id ?? "").startsWith("CONTAB-") && m.origen !== "retencion") continue;
+    out.push({
+      fecha:           m.fecha,
+      sociedad:        m.sociedad,
+      centro_costo:    m.centro_costo ?? "",
+      cuenta_contable: m.cuenta_contable ?? "",
+      moneda:          m.moneda ?? "ARS",
+      total:           Math.abs(Number(m.monto) || 0),
+    });
+  }
+  return out;
 }
 
 const sumCat = (catObj) =>
@@ -627,7 +655,7 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCer
   const cxcTot = useMemo(() => sumMon(cxcRows, r => r.moneda ?? "ARS", r => Number(r.total) || 0), [cxcRows]);
   const cxpTot = useMemo(() => sumMon(cxpRows, r => r.moneda ?? "ARS", r => Number(r.total) || 0), [cxpRows]);
 
-  // Cuenta por pagar de sueldos = devengado (cerradas) − pagado (su_pagos), por balde de
+  // Cuenta por pagar de sueldos = devengado (cerradas) − pagado (nb_movimientos origen sueldos), por balde de
   // forma de pago (efectivo ≠ haberes), filtrado por la sociedad de cada forma. Solo ARS.
   const sueldoSoc = (sociedad ?? "").toLowerCase();
   const cxpSueldosBuckets = useMemo(() => {
@@ -714,6 +742,8 @@ function TabCashFlow({ rawMovs, year, moneda }) {
 
   const movsFilt = useMemo(() => rawMovs.filter(m => {
     if (!m.fecha) return false;
+    if (esIgnorado(m)) return false;                 // líneas descartadas no entran al flujo
+    if (m.origen === "retencion") return false;      // retención sufrida no es caja
     if (m.fecha.slice(0, 4) !== String(year)) return false;
     if ((m.moneda ?? "ARS") !== moneda) return false;
     return true;
@@ -1001,7 +1031,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const [cuentas,   setCuentas]   = useState([]);
   const [ccs,       setCcs]       = useState([]);
   const [liqsCerradas, setLiqsCerradas] = useState([]);  // su_liquidaciones cerradas (devengado sueldos)
-  const [pagosSueldos, setPagosSueldos] = useState([]);  // su_pagos (para cuenta por pagar de sueldos)
+  const [pagosSueldos, setPagosSueldos] = useState([]);  // pagos de sueldo (nb_movimientos origen sueldos)
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState(null);
   const [loadKey,   setLoadKey]   = useState(0);
@@ -1090,12 +1120,14 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     return selectedSedeCCs;
   }, [selectedSedeCCs, sedeCCs]);
 
-  // P&L = UNA lógica de agregación (buildPnL/HQ) + DOS adaptadores ("normalizar y agregar"):
+  // P&L = UNA lógica de agregación (buildPnL/HQ) + TRES adaptadores ("normalizar y agregar"):
   //   · nb_comprobantes → ya viene en formato {fecha,sociedad,centro_costo,cuenta_contable,total}
   //   · su_liquidaciones → liquidacionToPnLRows lo adapta a ese mismo formato (cuenta "Sueldos")
+  //   · nb_movimientos imputados (gasto contado / conciliación contabilizada) → movimientoToPnLRows
   // No es doble lógica: el P&L no sabe de qué libro vino la fila. Decisión: Opción A (su_liquidaciones
   // es la única verdad del sueldo, sin partida doble en nb_comprobantes). Ver memoria project_pnl_sueldos.
-  // OJO: nunca sumar nb_movimientos SUELDO acá (eso es caja → Cash Flow; duplicaría el devengado).
+  // OJO: nunca sumar nb_movimientos SUELDO acá (eso es caja → Cash Flow; el devengado viene de liquidaciones).
+  // movimientoToPnLRows excluye sueldos, transferencias y pagos de factura (esos ya están vía comprobante).
   const salaryRows = useMemo(() => {
     const soc = (sociedad ?? "").toLowerCase();
     return liqsCerradas
@@ -1103,7 +1135,9 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       .filter(r => !soc || (r.sociedad ?? "").toLowerCase() === soc);
   }, [liqsCerradas, sociedad]);
 
-  const egConSueldos = useMemo(() => [...rawEg, ...salaryRows], [rawEg, salaryRows]);
+  const gastoMovRows = useMemo(() => movimientoToPnLRows(rawMovs, sociedad), [rawMovs, sociedad]);
+
+  const egConSueldos = useMemo(() => [...rawEg, ...salaryRows, ...gastoMovRows], [rawEg, salaryRows, gastoMovRows]);
 
   const pnlSede = useMemo(
     () => buildPnL(rawIn, egConSueldos, cuentaMap, resolvedCCSede, year, monedaPL),

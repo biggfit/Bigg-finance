@@ -105,8 +105,8 @@ export default function PantallaDashboard({ sociedad = "nako" }) {
         ]);
         if (cancelled) return;
 
-        const pagos  = (pcs ?? []).filter(p => p.tipo === "PAGO_FC" || p.tipo === "EGRESO_GASTO");
-        const cobros = (pcs ?? []).filter(p => p.tipo === "COBRO_FC");
+        const pagos  = (pcs ?? []).filter(p => p.tipo === "PAGO" || p.tipo === "EGRESO_GASTO");
+        const cobros = (pcs ?? []).filter(p => p.tipo === "COBRO");
 
         setEgresos((egs ?? []).map(doc => {
           const docPagos = pagos.filter(p => p.documento_id === doc.id);

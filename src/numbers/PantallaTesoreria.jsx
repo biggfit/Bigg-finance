@@ -8,8 +8,11 @@ import {
   fetchMovTesoreria, appendMovTesoreria, deleteMovTesoreria, updateMovTesoreria,
   fetchEgresos, fetchIngresos, fetchPagosCobros, calcSaldoPendiente,
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto,
-  appendGastoDirecto,
+  appendGastoDirecto, esIgnorado,
 } from "../lib/numbersApi";
+import {
+  fetchLiquidacionesCerradas, parsePagoFromMov, normSoc, pendienteSueldosPorLegajo,
+} from "../lib/sueldosApi";
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const TIPO_CFG = {
@@ -18,6 +21,7 @@ const TIPO_CFG = {
   EGRESO_GASTO:  { bg:"#fef9c3", color:"#ca8a04", label:"Gasto"       },
   TRANSFERENCIA: { bg:"#dbeafe", color:"#2563eb", label:"Transferencia"},
 };
+
 
 /** Botones de barra — misma geometría; variante por intención */
 const tesoreriaActionBtn = {
@@ -459,7 +463,7 @@ function PaginaAging({ item, fechaCorte, headerColor, onBack }) {
           <span style={{ fontSize:11, color:T.muted, textTransform:"uppercase",
             letterSpacing:".06em", fontWeight:700 }}>Total pendiente</span>
           <span style={{ fontSize:22, fontFamily:"var(--mono)", fontWeight:900,
-            color: headerColor }}>{fmtSaldo(totRow.total, mon)}</span>
+            color: headerColor, whiteSpace:"nowrap" }}>{fmtSaldo(totRow.total, mon)}</span>
         </div>
       </div>
 
@@ -599,7 +603,7 @@ function CuentaRow({ cuenta, onClick }) {
         width:36, textAlign:"center" }}>{cuenta.moneda}</span>
       <span style={{ fontSize:13, fontFamily:"var(--mono)", fontWeight:700,
         color: saldo < 0 ? T.red : saldo === 0 ? T.dim : T.text,
-        width:110, textAlign:"right", flexShrink:0 }}>
+        minWidth:110, textAlign:"right", flexShrink:0, whiteSpace:"nowrap" }}>
         {fmtSaldo(saldo, cuenta.moneda)}
       </span>
     </div>
@@ -651,7 +655,7 @@ function GrupoBlock({ icon, label, cuentas, onCuentaClick }) {
               <span style={{ fontSize:10, fontWeight:800, color:T.dim,
                 letterSpacing:".04em" }}>{mon}</span>
               <span style={{ fontSize:12, fontFamily:"var(--mono)", fontWeight:700,
-                color: tot < 0 ? T.red : T.text }}>
+                color: tot < 0 ? T.red : T.text, whiteSpace:"nowrap" }}>
                 {fmtSaldo(tot, mon)}
               </span>
             </div>
@@ -686,7 +690,7 @@ function ResumenMonedas({ cuentas }) {
             <span style={{ fontSize:10, fontWeight:800, color:T.muted,
               letterSpacing:".12em", textTransform:"uppercase" }}>Disponible {m}</span>
             <span style={{ fontSize:18, fontFamily:"var(--mono)", fontWeight:900,
-              color: saldo < 0 ? T.red : saldo === 0 ? T.dim : T.text }}>
+              color: saldo < 0 ? T.red : saldo === 0 ? T.dim : T.text, whiteSpace:"nowrap" }}>
               {fmtSaldo(saldo, m)}
             </span>
           </div>
@@ -801,9 +805,9 @@ function TabMovimientos({ movimientos, cuentas, filtroCuenta, onLimpiarFiltro, o
     return m;
   }, [centrosCosto]);
 
-  const rows = filtroCuenta
+  const rows = (filtroCuenta
     ? movimientos.filter(m => m.cuenta_bancaria === filtroCuenta)
-    : movimientos;
+    : movimientos).filter(m => !esIgnorado(m));   // ocultar las líneas descartadas del ledger
 
   const sorted = useMemo(() => [...rows].sort((a, b) => {
     const fa = a.fecha ?? ""; const fb = b.fecha ?? "";
@@ -931,19 +935,21 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
   const [cuentasBancarias, setCuentasBancarias] = useState([]);
   const [cuentasContables, setCuentasContables] = useState([]);
   const [centrosCosto,     setCentrosCosto]     = useState(CENTROS_COSTO);
+  const [liqsSueldos,      setLiqsSueldos]      = useState([]);
 
   // ── Fetch all data ────────────────────────────────────────────────────────
   const cargarMovimientos = async () => {
     setLoading(true);
     setError(null);
     try {
-      const [movs, egs, ings, pcs, cbList, ctaList] = await Promise.all([
+      const [movs, egs, ings, pcs, cbList, ctaList, liqsS] = await Promise.all([
         fetchMovTesoreria(sociedad),
         fetchEgresos(sociedad).catch(() => []),
         fetchIngresos(sociedad).catch(() => []),
         fetchPagosCobros(sociedad).catch(() => []),
         fetchCuentasBancarias().catch(() => []),
         fetchCuentas().catch(() => []),
+        fetchLiquidacionesCerradas().catch(() => []),
       ]);
       setMovimientos(Array.isArray(movs) ? movs : []);
       setEgresos(Array.isArray(egs) ? egs : []);
@@ -951,6 +957,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
       setPagosCobros(Array.isArray(pcs) ? pcs : []);
       setCuentasBancarias(Array.isArray(cbList) ? cbList : []);
       setCuentasContables(Array.isArray(ctaList) ? ctaList : []);
+      setLiqsSueldos(Array.isArray(liqsS) ? liqsS : []);
       fetchCentrosCosto().then(data => {
         if (Array.isArray(data) && data.length > 0) setCentrosCosto(data);
       }).catch(() => {});
@@ -973,6 +980,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
       .map(cuenta => {
         const movsCuenta = movimientos.filter(m =>
           m.cuenta_bancaria === cuenta.id &&
+          !esIgnorado(m) &&                                   // las líneas descartadas no cuentan
           (!fechaCorte || (m.fecha ?? "") <= fechaCorte)
         );
         const saldo = movsCuenta.reduce((s, m) => s + (Number(m.monto) || 0), 0);
@@ -1000,7 +1008,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
 
   const aCobrar = useMemo(() => {
     const corte  = fechaCorte || null;
-    const cobros = pagosCobros.filter(p => p.tipo === "COBRO_FC" && (!corte || (p.fecha ?? "") <= corte));
+    const cobros = pagosCobros.filter(p => p.tipo === "COBRO" && (!corte || (p.fecha ?? "") <= corte));
     const grouped = {};
     for (const ing of ingresos) {
       if (corte && (ing.fecha ?? "") > corte) continue;
@@ -1019,7 +1027,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
 
   const aPagar = useMemo(() => {
     const corte  = fechaCorte || null;
-    const pagos  = pagosCobros.filter(p => (p.tipo === "PAGO_FC" || p.tipo === "EGRESO_GASTO") && (!corte || (p.fecha ?? "") <= corte));
+    const pagos  = pagosCobros.filter(p => (p.tipo === "PAGO" || p.tipo === "EGRESO_GASTO") && (!corte || (p.fecha ?? "") <= corte));
     const pasivoLabel    = { proveedores:"Proveedores", sueldos:"Sueldos", impuestos:"Impuestos", financiero:"Financiero", ventas:"Ventas" };
     const grouped = {};
     for (const eg of egresos) {
@@ -1037,6 +1045,43 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
     }
     return Object.values(grouped).sort((a, b) => b.saldo - a.saldo);
   }, [egresos, pagosCobros, cuentaById, cuentaByNombre, fechaCorte, _resolveCuenta]);
+
+  // ── Pasivo de SUELDOS de esta sociedad (devengado − pagado) ──
+  // Los pagos de sueldo SON movimientos (origen "sueldos") — una sola tabla, sin fetch aparte.
+  const pagosSueldos = useMemo(
+    () => movimientos.filter(m => m.origen === "sueldos").map(parsePagoFromMov),
+    [movimientos]
+  );
+  // Deriva del netter único de la lib (mismo número que la pantalla "Sueldos por pagar"):
+  // toma los items de esta sociedad y los arma como docs para el Pasivo.
+  const sueldosPasivo = useMemo(() => {
+    const soc = normSoc(sociedad);
+    const docs = []; let total = 0;
+    for (const leg of pendienteSueldosPorLegajo(liqsSueldos, pagosSueldos)) {
+      for (const it of leg.items) {
+        if (normSoc(it.sociedad) !== soc) continue;
+        total += it.monto;
+        docs.push({ contraparte: leg.legajo, vto: `${String(it.mes).padStart(2, "0")}/${it.anio}`, saldo: it.monto, moneda: "ARS" });
+      }
+    }
+    docs.sort((a, b) => b.saldo - a.saldo);
+    return { total, docs };
+  }, [liqsSueldos, pagosSueldos, sociedad]);
+
+  // Pasivo combinado: cuentas a pagar (comprobantes) + sueldos pendientes (base de sueldos).
+  // Se funde en el item "Sueldos" si ya existe (mismo label/moneda), si no se agrega.
+  const aPagarFull = useMemo(() => {
+    if (sueldosPasivo.total <= 0) return aPagar;
+    const out = aPagar.map(it => ({ ...it }));
+    const existente = out.find(it => it.label === "Sueldos" && it.moneda === "ARS");
+    if (existente) {
+      existente.saldo += sueldosPasivo.total;
+      existente.docs  = [...existente.docs, ...sueldosPasivo.docs];
+    } else {
+      out.push({ label: "Sueldos", moneda: "ARS", saldo: sueldosPasivo.total, docs: sueldosPasivo.docs, headerColor: "#dc2626" });
+    }
+    return out.sort((a, b) => b.saldo - a.saldo);
+  }, [aPagar, sueldosPasivo]);
 
   // ── Guardar movimiento entre cuentas ──────────────────────────────────────
   const handleGuardarMovimiento = async (form) => {
@@ -1285,7 +1330,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
             <TabSaldos
               cuentas={cuentas}
               aCobrar={aCobrar}
-              aPagar={aPagar}
+              aPagar={aPagarFull}
               filtroMoneda={filtroMoneda}
               onCuentaClick={handleCuentaClick}
               onItemClick={setDrillDownItem}

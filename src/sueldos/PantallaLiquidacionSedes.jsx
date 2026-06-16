@@ -4,7 +4,7 @@ import {
   fetchLegajos, fetchCategorias, fetchObjetivos,
   fetchLiquidacionesSedes, deleteLiquidacionSede,
   fetchCentrosCostoNumbers, fetchSociedadesNumbers, fetchCuentasBancariasNumbers,
-  fetchPagos, appendPago, deletePago, updateLegajo, fetchHorasDesdeEye, fetchCdpDesdeEye,
+  fetchPagos, appendPago, deletePago, nuevoLote, updateLegajo, fetchHorasDesdeEye, fetchCdpDesdeEye,
   fetchNovedades,
   ROLES_COACHES, ROLES_FRONT, ROLES_LIMP, ROL_CONCEPTO,
   FP_TIPO_LABEL, FP_TIPO_COLOR, esTransferencia,
@@ -176,10 +176,11 @@ function applyObjetivosToRows(rowsArr, objetivosArr) {
 
 // ── Componente principal ───────────────────────────────────────────────────────
 
-export default function PantallaLiquidacionSedes({ pais = "" }) {
-  const [mes,  setMes]  = useState(MES_DEF);
-  const [anio, setAnio] = useState(ANO_DEF);
-  const [paso, setPaso] = useState(1);
+export default function PantallaLiquidacionSedes({ pais = "", initialMes, initialAnio, initialPaso }) {
+  const [mes,  setMes]  = useState(initialMes  ?? MES_DEF);
+  const [anio, setAnio] = useState(initialAnio ?? ANO_DEF);
+  const [paso, setPaso] = useState(initialPaso ?? 1);
+  const deepLinkPasoRef = useRef(false);  // consumir initialPaso (deep-link) una sola vez
 
   const [legajos,    setLegajos]    = useState([]);
   const [liqsSaved,  setLiqsSaved]  = useState([]);  // su_liquidaciones guardadas (se mergean en rosterBase)
@@ -291,18 +292,21 @@ export default function PantallaLiquidacionSedes({ pais = "" }) {
     setDraftSavedAt(null);
     const raw = (() => { try { return localStorage.getItem(draftKey); } catch { return null; } })();
     lastDraftRef.current = raw;
+    // Deep-link (1ª corrida): respetar el paso pedido en vez del draft/1.
+    const deep = !deepLinkPasoRef.current && initialPaso != null;
+    if (deep) deepLinkPasoRef.current = true;
     if (raw) {
       try {
         const d = JSON.parse(raw);
         setEdits(d.edits || {});
         setManualRows(d.manualRows || []);
-        setPaso(d.paso || 1);
+        setPaso(deep ? initialPaso : (d.paso || 1));
         return;
       } catch { /* fall through */ }
     }
     setEdits({});
     setManualRows([]);
-    setPaso(1);
+    setPaso(deep ? initialPaso : 1);
   }, [mes, anio, pais]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Borrador local automático (debounced). La pestaña "vive abierta como un mail".
@@ -773,16 +777,19 @@ export default function PantallaLiquidacionSedes({ pais = "" }) {
         const d    = pagoDraft[r.legajo_id] || {};
         const habRow   = Math.round((Number(d.monto_haberes)       || 0) * share);
         const monoRow  = Math.round((Number(d.monto_transferencia) || 0) * share);
-        const eftExacto = Math.max(0, rowTotal - habRow - monoRow);
-        const eftRow    = Math.ceil(eftExacto / 100) * 100;   // efectivo en mano → redondeado SIEMPRE hacia arriba a $100
-        const redondeo  = eftRow - eftExacto;                 // el aumento por redondear: se suma al sueldo (concepto)
+        // Novedades de esta fila: las pagadas EN EFECTIVO entran al redondeo (la plata EN MANO debe quedar redonda).
+        const novsR    = novsByRowKey[rowKeyDe(r.legajo_id, r.sede_id)] || [];
+        const novEfectivo = novsR.reduce((s, n) => ((n.forma_pago || "efectivo") === "efectivo" ? s + (Number(n.monto) || 0) : s), 0);
+        const eftExacto  = Math.max(0, rowTotal - habRow - monoRow);
+        const cashExacto = eftExacto + novEfectivo;            // efectivo del sueldo + novedades en efectivo
+        const redondeo   = Math.ceil(cashExacto / 100) * 100 - cashExacto;  // ajuste para que la plata en mano sea múltiplo de $100
+        const eftRow     = eftExacto + redondeo;               // efectivo base + ajuste (sumado a las novedades en efectivo → redondo)
         const pagos = [];
         if (habRow > 0)  pagos.push(lineaLiq(header, { tipo: "pago", concepto: FP_TIPO_LABEL.haberes,     cuenta_contable: "Sueldos", forma_pago: "haberes",     sociedad_id: sociedadDeFormaPago("haberes", "", r.sociedad_id),     monto: habRow }));
         if (monoRow > 0) pagos.push(lineaLiq(header, { tipo: "pago", concepto: FP_TIPO_LABEL.monotributo, cuenta_contable: "Sueldos", forma_pago: "monotributo", sociedad_id: sociedadDeFormaPago("monotributo", "", r.sociedad_id), monto: monoRow }));
         if (eftRow > 0)  pagos.push(lineaLiq(header, { tipo: "pago", concepto: FP_TIPO_LABEL.efectivo,    cuenta_contable: "Sueldos", forma_pago: "efectivo",    sociedad_id: "beta",                                              monto: eftRow }));
         // Novedades de esta fila (extra): se congelan como líneas tipo "novedad", cada una con
         // SU cuenta contable y forma de pago. No entran en el reparto del sueldo de arriba.
-        const novsR   = novsByRowKey[rowKeyDe(r.legajo_id, r.sede_id)] || [];
         const novLineas = novsR.map(n => lineaLiq(header, {
           tipo: "novedad",
           concepto: n.descripcion || n.cuenta_contable_nombre || "Novedad",   // etiqueta visible (ej. "Feriado X Día")
@@ -2060,11 +2067,12 @@ function ModalBatchPago({ tipo, empls, mes, anio, onClose, onSaved }) {
     try {
       const ctaNombre = cuentas.find(c => c.id === form.cuenta_id)?.nombre ?? form.cuenta_id;
       const socNombre = sociedades.find(s => s.id === form.sociedad_id)?.nombre ?? form.sociedad_id;
+      const lote_pago = nuevoLote();   // un lote por tanda → Conciliación matchea el débito contra su total
       for (const empl of emplsSelec) {
         const soc_id     = tipo === "haberes" ? empl.sociedad_id     : (form.sociedad_id || "beta");
         const soc_nombre = tipo === "haberes" ? empl.sociedad_nombre : socNombre;
         await appendPago({
-          mes, anio,
+          mes, anio, lote_pago,
           legajo_id:              empl.legajo_id,
           legajo_nombre:          empl.legajo_nombre,
           sociedad_id:            soc_id,
@@ -2233,6 +2241,7 @@ function ModalAnularPago({ pago, onClose, onAnulado }) {
       await appendPago({
         mes:                    pago.mes,
         anio:                   pago.anio,
+        lote_pago:              nuevoLote(),
         legajo_id:              pago.legajo_id,
         legajo_nombre:          pago.legajo_nombre,
         sociedad_id:            pago.tipo_componente === "haberes" ? pago.sociedad_id : (form.sociedad_id || "beta"),
@@ -2388,6 +2397,7 @@ function ModalPagoSede({ mes, anio, liq, onClose, onSaved }) {
       const cta = cuentas.find(c => c.id === form.cuenta_id);
       await appendPago({
         mes, anio,
+        lote_pago:              nuevoLote(),
         legajo_id:              liq.legajo_id,
         legajo_nombre:          liq.legajo_nombre,
         sociedad_id:            liq.sociedad_id,

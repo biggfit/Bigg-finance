@@ -1,438 +1,857 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
-import { T, fmtMoney, fmtDate } from "./theme";
-import { fetchCuentasBancarias, fetchMovTesoreria, marcarConciliado } from "../lib/numbersApi";
-import { parseGalicia, isBankFee } from "./parsers/galicia";
-import { autoMatch, matchStats, normFecha } from "./reconciliacion/matchEngine";
+import { useState, useEffect, useMemo, useRef, Fragment } from "react";
+import { T } from "./theme";
+import {
+  fetchCuentasBancarias, fetchMovimientosPendientes, ingestarExtracto, aceptarMovimiento,
+  aceptarCobroFranquicia, fetchBancoReglas, fetchProveedores, fetchCuentas, fetchCentrosCosto, fetchSociedades,
+  ignorarMovimiento, restaurarMovimiento, fetchMovimientosIgnorados, fetchPagosSueldos,
+  fetchEgresos, fetchPagosCobros, calcSaldoPendiente, imputarPagoFC,
+  appendBancoRegla, fetchIngresos, imputarCobroIngreso,
+} from "../lib/numbersApi";
+import { BancoReglaModal } from "./PantallaMaestros";
+import { fetchAll } from "../lib/sheetsApi";
+import { computeSaldoReal } from "../lib/helpers";
+import { parseGalicia } from "./parsers/galicia";
+import { clasificarLineas } from "./reconciliacion/ruleEngine";
 
-// ─── Colores de estado ────────────────────────────────────────────────────────
-const ESTADO_COLOR = {
-  matched:  { bg: "rgba(34,197,94,.10)",  border: "rgba(34,197,94,.3)",  text: "#16a34a", label: "✓ OK" },
-  multiple: { bg: "rgba(234,179, 8,.10)", border: "rgba(234,179, 8,.3)", text: "#ca8a04", label: "? Múltiple" },
-  no_match: { bg: "rgba(239,68, 68,.10)", border: "rgba(239,68, 68,.3)", text: "#dc2626", label: "✕ Sin match" },
-  ignored:  { bg: "rgba(156,163,175,.08)", border: "rgba(156,163,175,.2)", text: "#9ca3af", label: "— Ignorado" },
+const TIPO_LABEL = {
+  impuesto: "Impuesto", comision: "Comisión", interes: "Interés", servicio: "Servicio",
+  transferencia_interna: "Transf. interna", ingreso: "Ingreso", financiacion: "Financiación",
+  pago_proveedor: "Pago proveedor", cobro_franquicia: "Cobro franquicia", sin_clasificar: "Sin clasificar",
 };
+// fr_tipo según monto vs deuda viva del franquiciado. Crédito que matchea la deuda → PAGO de CC;
+// si no hay deuda que lo respalde → PAGO_PAUTA (a cuenta). Débito → PAGO_ENVIADO.
+const sugerirFrTipo = (monto, deuda) => {
+  if ((Number(monto) || 0) < 0) return "PAGO_ENVIADO";
+  const d = Number(deuda) || 0;   // positivo = debe; solo es Pago de CC si hay deuda que lo respalde
+  return d > 0 && Math.abs(Math.abs(monto) - d) <= Math.max(500, d * 0.02) ? "PAGO" : "PAGO_PAUTA";
+};
+const FR_TIPO_LABEL = { PAGO: "Pago de CC", PAGO_PAUTA: "Pago a cuenta", PAGO_ENVIADO: "Transf. enviada" };
+// Etiqueta legible del saldo de CC (positivo = debe, negativo = a favor).
+const deudaLabel = (d) => Math.abs(Number(d) || 0) < 1 ? "al día" : (Number(d) > 0 ? `debe ${fmt(d)}` : `a favor ${fmt(-d)}`);
+const fmt = n => (Number(n) || 0).toLocaleString("es-AR", { minimumFractionDigits: 2 });
+const normCuit = s => String(s ?? "").replace(/\D/g, "").replace(/^0+/, "");
+// Dedup por id: el master de centros/cuentas tiene ids repetidos (ej. cc-2026-chueca) que
+// rompen la reconciliación de React (claves duplicadas) y filtran opciones de un select a otro.
+const dedupById = arr => { const seen = new Set(); return (arr || []).filter(x => x && !seen.has(x.id) && seen.add(x.id)); };
+const MENU_ITEM = { display: "block", width: "100%", textAlign: "left", padding: "9px 12px", fontSize: 11, border: "none", borderBottom: "1px solid #f1f5f9", background: "#fff", color: "#111827", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" };
+const parseMeta = ref => Object.fromEntries(String(ref || "").split(";").map(kv => kv.split("=")).filter(a => a.length === 2));
+const sel = { fontSize: 11, padding: "4px 6px", border: "1px solid #94a3b8", borderRadius: 6, fontFamily: T.font, color: "#111827", background: "#f8fafc" };
+// Campo imputado: VERDE si está completo (no tocar) / ÁMBAR si falta elegir. Ancho fijo → columnas alineadas.
+const fld = (lleno, w = 150) => ({ fontSize: 11, padding: "4px 6px", borderRadius: 6, fontFamily: T.font, color: "#111827", width: w, boxSizing: "border-box",
+  background: lleno ? "#dcfce7" : "#fff7ed", border: `1px solid ${lleno ? "#4ade80" : "#fb923c"}` });
 
-// ─── Helpers de UI ────────────────────────────────────────────────────────────
-const pill = (color, text) => (
-  <span style={{
-    fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4,
-    background: color.bg, border: `1px solid ${color.border}`, color: color.text,
-    letterSpacing: ".04em", whiteSpace: "nowrap",
-  }}>{text}</span>
-);
+export default function PantallaReconciliacion({ sociedad, onPendientes }) {
+  const [cuentas,    setCuentas]    = useState([]);
+  const [cuentasAll, setCuentasAll] = useState([]); // todas las cuentas bancarias (todas las sociedades) para destino de transferencia
+  const [cuentaTab,  setCuentaTab]  = useState("");
+  const [pendientes, setPendientes] = useState([]);
+  const [planCuentas,setPlanCuentas]= useState([]);
+  const [centros,    setCentros]    = useState([]);
+  const [reglas,     setReglas]     = useState([]);
+  const [proveedores,setProveedores]= useState([]);
+  const [franquicias,setFranquicias]= useState([]);
+  const [sociedades, setSociedades] = useState([]); // nb_sociedades (con cuit) para detectar intercompany
+  const [frComps,    setFrComps]    = useState({});
+  const [frSaldos,   setFrSaldos]   = useState({});
+  const [pagosSueldos,setPagosSueldos]= useState([]); // movs origen=sueldos haberes (para matchear lotes)
+  const [egresos,    setEgresos]    = useState([]);    // facturas de proveedor (para imputar pagos)
+  const [ingresos,   setIngresos]   = useState([]);    // facturas de venta (para imputar cobros)
+  const [pagosCobros,setPagosCobros]= useState([]);    // pagos/cobros (para saldo pendiente de cada FC)
+  const [ignorados,  setIgnorados]  = useState([]);    // líneas del extracto ya descartadas
+  const [verIgnorados,setVerIgnorados]= useState(false);
+  const [reglaModal, setReglaModal] = useState(null);  // {prefill} para crear regla desde una línea
+  const [loading,    setLoading]    = useState(true);
+  const [uploading,  setUploading]  = useState(false);
+  const [msg,        setMsg]        = useState("");
+  const [edits,      setEdits]      = useState({}); // movId → {cuenta_contable, centro_costo}
+  const [menuFor,    setMenuFor]    = useState(null); // movId con el menú ⋯ abierto
+  const fileRef = useRef(null);
 
-function StatBadge({ label, value, color }) {
-  return (
-    <div style={{
-      display: "flex", flexDirection: "column", alignItems: "center",
-      background: T.card, border: `1px solid ${T.cardBorder}`,
-      borderRadius: 10, padding: "10px 18px", minWidth: 80,
-    }}>
-      <span style={{ fontSize: 22, fontWeight: 900, color }}>{value}</span>
-      <span style={{ fontSize: 10, color: T.muted, fontWeight: 600, marginTop: 2 }}>{label}</span>
-    </div>
-  );
-}
-
-// ─── Pantalla principal ───────────────────────────────────────────────────────
-export default function PantallaReconciliacion({ sociedad }) {
-  const [step,        setStep]        = useState(1);       // 1 upload, 2 match, 3 confirmar
-  const [cuentas,     setCuentas]     = useState([]);
-  const [cuentaId,    setCuentaId]    = useState("");
-  const [movimientos, setMovimientos] = useState([]);
-  const [parsed,      setParsed]      = useState(null);    // { lineas, fuente, total }
-  const [results,     setResults]     = useState([]);      // líneas con estado de match
-  const [saving,      setSaving]      = useState(false);
-  const [done,        setDone]        = useState(false);
-  const [dragOver,    setDragOver]    = useState(false);
-  const [filterEstado,setFilterEstado]= useState("all");   // all | unmatched
-  const [error,       setError]       = useState("");
-  const [loadingMovs, setLoadingMovs] = useState(false);
-
-  // Cargar cuentas bancarias de la sociedad
+  // Cerrar el menú ⋯ al clickear afuera
   useEffect(() => {
-    fetchCuentasBancarias()
-      .then(all => {
-        const soc = all.filter(c => c.sociedad === sociedad && c.tipo !== "inversion");
-        setCuentas(soc);
-        if (soc.length === 1) setCuentaId(soc[0].id);
-      })
-      .catch(console.error);
+    if (menuFor === null) return;
+    const h = () => setMenuFor(null);
+    document.addEventListener("click", h);
+    return () => document.removeEventListener("click", h);
+  }, [menuFor]);
+
+  // Avisa al sidebar el conteo de pendientes (badge en vivo)
+  useEffect(() => { onPendientes?.(pendientes.length); }, [pendientes, onPendientes]);
+
+  const recargar = async () => {
+    setLoading(true);
+    try {
+      const pend = await fetchMovimientosPendientes(sociedad);
+      setPendientes(Array.isArray(pend) ? pend : []);
+    } catch (e) { setMsg("Error al cargar pendientes: " + e.message); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => {
+    setMsg("");
+    fetchCuentasBancarias().then(all => {
+      setCuentasAll(all || []);
+      const soc = (all || []).filter(c => c.sociedad === sociedad);
+      setCuentas(soc);
+      setCuentaTab(soc[0]?.id || "");
+    }).catch(console.error);
+    fetchCuentas().then(c => setPlanCuentas(dedupById(c))).catch(console.error);
+    fetchCentrosCosto().then(c => setCentros(dedupById(c))).catch(console.error);
+    fetchBancoReglas().then(r => setReglas(r || [])).catch(console.error);
+    fetchProveedores().then(p => setProveedores(p || [])).catch(console.error);
+    fetchSociedades().then(s => setSociedades(s || [])).catch(console.error);
+    // Master de franquicias + su cuenta corriente (read-only, sistema de Franquicias) para
+    // reconocer cobros y sugerir Pago de CC vs Pago a cuenta contra la deuda viva.
+    fetchAll().then(({ franchises, comps, saldos }) => {
+      setFranquicias(franchises || []);
+      setFrComps(comps || {});
+      setFrSaldos(saldos || {});
+    }).catch(console.error);
+    fetchPagosSueldos(sociedad).then(p => setPagosSueldos(p || [])).catch(console.error);
+    fetchMovimientosIgnorados(sociedad).then(i => setIgnorados(i || [])).catch(console.error);
+    fetchEgresos(sociedad).then(e => setEgresos(e || [])).catch(console.error);
+    fetchIngresos(sociedad).then(i => setIngresos(i || [])).catch(console.error);
+    fetchPagosCobros(sociedad).then(p => setPagosCobros(p || [])).catch(console.error);
+    recargar();
   }, [sociedad]);
 
-  // Cargar movimientos cuando se selecciona cuenta
-  useEffect(() => {
-    if (!cuentaId) return;
-    setLoadingMovs(true);
-    fetchMovTesoreria(sociedad)
-      .then(setMovimientos)
-      .catch(console.error)
-      .finally(() => setLoadingMovs(false));
-  }, [sociedad, cuentaId]);
+  // Deuda viva del franquiciado (saldo de su CC al mes actual). Positivo = debe.
+  // Memoizado con cache por franquicia: computeSaldoReal es pesado y se pide muchas veces por render.
+  const deudaFr = useMemo(() => {
+    const cache = new Map();
+    return (frId) => {
+      const key = String(frId);
+      if (cache.has(key)) return cache.get(key);
+      const fr = franquicias.find(f => String(f.id) === key);
+      let v = 0;
+      if (fr) { const now = new Date(); v = computeSaldoReal(fr.id, now.getFullYear(), now.getMonth(), frComps, frSaldos, fr.moneda || fr.currency || "ARS", null, null); }
+      cache.set(key, v);
+      return v;
+    };
+  }, [franquicias, frComps, frSaldos]);
+  const frNombre = (frId) => franquicias.find(f => String(f.id) === String(frId))?.name || "";
 
-  // Parsear archivo y correr auto-match
-  const processFile = useCallback(async (file) => {
-    setError("");
+  const byName = (a, b) => String(a.name ?? a.nombre ?? "").localeCompare(String(b.name ?? b.nombre ?? ""));
+  const monedaCuenta = useMemo(() => cuentas.find(c => c.id === cuentaTab)?.moneda || "ARS", [cuentas, cuentaTab]);
+  // Selector manual: TODAS las franquicias activas (sin filtrar por moneda) — una franquicia
+  // de otra moneda puede cobrar en pesos (ej. Pocitos). El sufijo avisa cuando difiere.
+  const franquiciasManual = useMemo(
+    () => franquicias.filter(f => f.activa !== false).sort(byName),
+    [franquicias]);
+  const frMonedaSuf = (f) => { const cur = (f.currencies || [])[0] || f.moneda || f.currency || ""; return cur && cur !== monedaCuenta ? ` · ${cur}` : ""; };
+  // Cuentas contables por dirección: ingreso (crédito) vs gasto (débito).
+  const cuentasIngreso = useMemo(() => planCuentas.filter(c => /vent|ingres/i.test(`${c.tipo} ${c.categoria_pnl}`)).sort(byName), [planCuentas]);
+  const cuentasGasto   = useMemo(() => planCuentas.filter(c => !/vent|ingres/i.test(`${c.tipo} ${c.categoria_pnl}`)).sort(byName), [planCuentas]);
+
+  // ── Pago de haberes: el débito del banco ya está en los movs origen=sueldos (doble conteo).
+  // Agrupamos esos movs por lote_pago (un lote = una tanda de pago) → matcheamos el débito
+  // contra el TOTAL del lote para sugerir "ya está en Sueldos — descartar".
+  const lotesConsumidos = useMemo(() => {           // lotes ya conciliados (una línea ignorada los tomó)
+    const s = new Set();
+    ignorados.forEach(m => { const ig = parseMeta(m.referencia).ign || ""; if (ig.startsWith("haberes:")) s.add(ig.slice(8)); });
+    return s;
+  }, [ignorados]);
+  const lotesHaberes = useMemo(() => {
+    const g = {};
+    for (const p of pagosSueldos) {
+      const lote = p.lote_pago || "";
+      if (!lote || lotesConsumidos.has(lote) || String(p.cuenta_bancaria) !== String(cuentaTab)) continue;
+      if (!g[lote]) g[lote] = { lote, fecha: p.fecha, total: 0, count: 0 };
+      g[lote].total += Math.abs(Number(p.monto) || 0);
+      g[lote].count += 1;
+    }
+    return Object.values(g);
+  }, [pagosSueldos, lotesConsumidos, cuentaTab]);
+  const haberesMatch = (mov) => {
+    if ((Number(mov.monto) || 0) >= 0) return null;
+    const t = Math.abs(Number(mov.monto) || 0);
+    return lotesHaberes.find(L => Math.abs(L.total - t) <= Math.max(500, L.total * 0.01)) || null;
+  };
+
+  // ── Imputar a factura: facturas de proveedor con saldo pendiente, de la moneda de la cuenta.
+  const facturasPendientes = useMemo(() => {
+    const pagosFC = pagosCobros.filter(p => p.tipo === "PAGO" || p.tipo === "EGRESO_GASTO");
+    return egresos
+      .map(eg => ({ ...eg, saldo: calcSaldoPendiente(eg.importe ?? eg.total, pagosFC.filter(p => p.documento_id === eg.id)) }))
+      .filter(eg => eg.saldo > 0.01 && (eg.moneda || "ARS") === monedaCuenta);
+  }, [egresos, pagosCobros, monedaCuenta]);
+  // Proveedores que tienen al menos una factura pendiente (para la 1ª caja del modo FC).
+  const provConPendientes = useMemo(() => {
+    const m = new Map();
+    facturasPendientes.forEach(f => { if (!m.has(String(f.proveedorId))) m.set(String(f.proveedorId), f.proveedor || "Sin proveedor"); });
+    return [...m.entries()].map(([id, nombre]) => ({ id, nombre })).sort((a, b) => a.nombre.localeCompare(b.nombre));
+  }, [facturasPendientes]);
+  const fcsDeProv = (provId) => facturasPendientes
+    .filter(f => String(f.proveedorId) === String(provId))
+    .sort((a, b) => String(a.vto || "").localeCompare(String(b.vto || "")));
+  const fcLabel = (f) => `${f.nroComp || f.id} · saldo ${fmt(f.saldo)}${f.vto ? ` · vto ${f.vto}` : ""}`;
+  // Proveedor efectivo de una línea en modo FC: el editado, o el reconocido si tiene pendientes.
+  const fcProvDe = (mov) => {
+    const ed = edits[mov.id] || {}, meta = parseMeta(mov.referencia);
+    return ed.fc_prov ?? ((meta.prov && provConPendientes.some(p => p.id === String(meta.prov))) ? String(meta.prov) : "");
+  };
+  // FC efectiva: la editada, o la única del proveedor si hay exactamente una.
+  const fcIdDe = (mov) => {
+    const ed = edits[mov.id] || {};
+    if (ed.fc_id != null) return ed.fc_id;
+    const fcs = fcsDeProv(fcProvDe(mov));
+    return fcs.length === 1 ? String(fcs[0].id) : "";
+  };
+
+  // ── Cobro de venta: facturas de venta con saldo pendiente (espejo de facturasPendientes).
+  const ventasPendientes = useMemo(() => {
+    const cobros = pagosCobros.filter(p => p.tipo === "COBRO");
+    return ingresos
+      .map(ing => ({ ...ing, saldo: calcSaldoPendiente(ing.importe ?? ing.total, cobros.filter(c => c.documento_id === ing.id)) }))
+      .filter(ing => ing.saldo > 0.01 && (ing.moneda || "ARS") === monedaCuenta);
+  }, [ingresos, pagosCobros, monedaCuenta]);
+  const clientesConPendientes = useMemo(() => {
+    const m = new Map();
+    ventasPendientes.forEach(v => { if (!m.has(String(v.clienteId))) m.set(String(v.clienteId), v.cliente || "Sin cliente"); });
+    return [...m.entries()].map(([id, nombre]) => ({ id, nombre })).sort((a, b) => a.nombre.localeCompare(b.nombre));
+  }, [ventasPendientes]);
+  const ventasDeCliente = (cliId) => ventasPendientes
+    .filter(v => String(v.clienteId) === String(cliId))
+    .sort((a, b) => String(a.vto || "").localeCompare(String(b.vto || "")));
+  const cobClienteDe = (mov) => {
+    const ed = edits[mov.id] || {};
+    return ed.cob_cli ?? "";
+  };
+  const cobIdDe = (mov) => {
+    const ed = edits[mov.id] || {};
+    if (ed.cob_id != null) return ed.cob_id;
+    const vs = ventasDeCliente(cobClienteDe(mov));
+    return vs.length === 1 ? String(vs[0].id) : "";
+  };
+  // Cuenta contable por defecto para retenciones sufridas (si existe una en el plan).
+  const cuentaRetencionDefault = useMemo(
+    () => planCuentas.find(c => /retenc/i.test(`${c.nombre} ${c.id}`))?.id || "",
+    [planCuentas]);
+  // Centro de las retenciones = "HQ - Impuestos" (son impuestos de la compañía → P&L BIGG, no sede).
+  const centroRetencion = useMemo(
+    () => (centros.find(c => (c.grupo ?? "").toLowerCase() === "hq" && /impuesto/i.test(c.nombre))
+        || centros.find(c => /impuesto/i.test(c.nombre)))?.id || "",
+    [centros]);
+
+  // Subir extracto → ingestar como pendientes
+  const onFile = async (file) => {
+    if (!file || !cuentaTab) return;
+    setUploading(true); setMsg("");
     try {
       const data = await parseGalicia(file);
-      setParsed(data);
+      const cta = cuentas.find(c => c.id === cuentaTab);
+      const ctx = { banco: cta?.banco, sociedad, pais: "", franquicias, sociedades, cuentas: cuentasAll, moneda: cta?.moneda || "ARS" };
+      const lineas = clasificarLineas(data.lineas, reglas, proveedores, ctx);
+      const { creados, dups, errores } = await ingestarExtracto({
+        sociedad, cuenta_bancaria: cuentaTab, moneda: cta?.moneda || "ARS", lineas,
+      });
+      setMsg(`✓ ${creados} nuevos${dups ? ` · ${dups} duplicados` : ""}${errores ? ` · ⚠ ${errores} con error — re-subí para reintentar` : ""}.`);
+      await recargar();
+    } catch (e) { setMsg("Error: " + e.message); }
+    finally { setUploading(false); if (fileRef.current) fileRef.current.value = ""; }
+  };
 
-      // Auto-ignorar impuestos y comisiones bancarias
-      const lineasConEstado = data.lineas.map(l => ({
-        ...l,
-        estado:   isBankFee(l) ? "ignored" : "no_match",
-        selected: null,
-        candidates: [],
-      }));
-
-      const matched = autoMatch(lineasConEstado, movimientos, cuentaId);
-      setResults(matched);
-      setStep(2);
-    } catch (e) {
-      setError(e.message);
+  // Estado de "modo franquicia" de una fila (auto por reconocimiento, o manual).
+  // opciones = SOLO franquicias (master), nunca centros.
+  const frState = (mov) => {
+    const meta = parseMeta(mov.referencia);
+    const ed = edits[mov.id] || {};
+    // Reconocimiento EN VIVO por CUIT (robusto al timing de carga del master y al dedup):
+    // si el CUIT empacado matchea franquicia(s), es cobro de franquicia aunque al ingestar no se haya clasificado.
+    const credito = (Number(mov.monto) || 0) > 0;
+    const porCuit = (meta.cuit && credito)
+      ? franquicias.filter(f => f.activa !== false && normCuit(f.cuit) === normCuit(meta.cuit))
+      : [];
+    const es = !ed.noFranquicia && (meta.tipo === "cobro_franquicia" || porCuit.length > 0 || !!ed.modoFranquicia);
+    if (!es) return { es: false };
+    let opciones;
+    if (ed.modoFranquicia) opciones = franquiciasManual;    // manual → activas de la moneda de la cuenta
+    else if (porCuit.length) opciones = porCuit;            // vivo → las del CUIT
+    else {                                                   // baked → las del CUIT empacado
+      const ids = (meta.frops || "").split("|").filter(Boolean);
+      opciones = ids.length ? franquicias.filter(f => ids.includes(String(f.id)))
+               : (meta.fr ? franquicias.filter(f => String(f.id) === String(meta.fr)) : franquiciasManual);
+      if (!opciones.length) opciones = franquiciasManual;
     }
-  }, [movimientos, cuentaId]);
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    setDragOver(false);
-    const file = e.dataTransfer.files[0];
-    if (file) processFile(file);
+    opciones = [...opciones].sort(byName);                   // siempre alfabético
+    const franquiciaSel = ed.franquicia_id ?? (opciones.length === 1 ? String(opciones[0].id) : (meta.fr || ""));
+    const deuda = franquiciaSel ? deudaFr(franquiciaSel) : 0;
+    const frTipoSel = ed.fr_tipo ?? sugerirFrTipo(mov.monto, deuda);
+    return { es: true, manual: !!ed.modoFranquicia, opciones, franquiciaSel, deuda, frTipoSel, split: ed.split || null };
   };
 
-  const handleFileInput = (e) => {
-    const file = e.target.files[0];
-    if (file) processFile(file);
+  const destinoDe = (mov) => (edits[mov.id]?.cuenta_destino) ?? mov.cuenta_destino ?? "";
+  const esTransferMov = (mov) => {
+    const meta = parseMeta(mov.referencia);
+    const tipo = meta.tipo || (Number(mov.monto) > 0 ? "ingreso" : "");
+    return tipo === "transferencia_interna" || !!edits[mov.id]?.modoTransfer;
+  };
+  const esInterco = (mov) => {
+    const d = destinoDe(mov); if (!d) return false;
+    const soc = cuentasAll.find(c => String(c.id) === String(d))?.sociedad;
+    return !!soc && soc !== sociedad;
   };
 
-  // Acciones sobre líneas
-  const toggleIgnore = (idx) =>
-    setResults(prev => prev.map(r =>
-      r.idx === idx
-        ? { ...r, estado: r.estado === "ignored" ? (r.candidates.length > 0 ? "matched" : "no_match") : "ignored", selected: null }
-        : r,
-    ));
+  // ¿La fila está lista para aceptar? (imputación completa).
+  const puedeAceptarMov = (mov) => {
+    if (esTransferMov(mov)) return !!destinoDe(mov);
+    const fr = frState(mov);
+    const total = Math.abs(Number(mov.monto) || 0);
+    if (fr.es) {
+      if (fr.split) { const sum = fr.split.reduce((s, p) => s + (Number(p.monto) || 0), 0); return fr.split.every(p => p.franquicia_id) && Math.abs(sum - total) <= 0.01; }
+      return !!fr.franquiciaSel && !!fr.frTipoSel;
+    }
+    if (edits[mov.id]?.modoFC) return !!fcIdDe(mov);
+    if (edits[mov.id]?.modoCobro) {
+      if (!cobIdDe(mov)) return false;
+      const rets = edits[mov.id]?.rets || [];
+      if (rets.some(r => (Number(r.monto) || 0) > 0 && !r.cuenta)) return false;   // falta cuenta en una retención
+      return true;
+    }
+    const cuentaSel = (edits[mov.id]?.cuenta_contable) ?? mov.cuenta_contable ?? "";
+    const ccSel = (edits[mov.id]?.centro_costo) ?? mov.centro_costo ?? "";
+    return !!cuentaSel && !!ccSel;
+  };
 
-  const assignMatch = (idx, movimiento) =>
-    setResults(prev => prev.map(r =>
-      r.idx === idx ? { ...r, estado: "matched", selected: movimiento } : r,
-    ));
+  // Ejecuta la aceptación (asume fila lista). Lanza si el GAS falla.
+  const doAceptar = async (mov) => {
+    if (esTransferMov(mov)) {
+      await aceptarMovimiento(mov, { tipo: "transferencia_interna", cuenta_destino: destinoDe(mov), interco: esInterco(mov) });
+      setPendientes(prev => prev.filter(m => m.id !== mov.id));
+      return;
+    }
+    const fcId = (edits[mov.id]?.modoFC) ? fcIdDe(mov) : "";
+    if (fcId) {
+      const fc = facturasPendientes.find(f => String(f.id) === String(fcId));
+      await imputarPagoFC(mov, {
+        documento_id: fcId,
+        cuenta_contable: fc?.cuentaId || fc?.cuenta || "",
+        centro_costo: fc?.cc || "",
+        proveedor_id: fc?.proveedorId || "",
+        proveedor_nombre: fc?.proveedor || "",
+      });
+      // Reflejar el pago localmente para que baje el saldo de la FC sin refetch.
+      setPagosCobros(prev => [...prev, { tipo: "PAGO", documento_id: fcId, monto: mov.monto }]);
+      setPendientes(prev => prev.filter(m => m.id !== mov.id));
+      return;
+    }
+    const cobId = (edits[mov.id]?.modoCobro) ? cobIdDe(mov) : "";
+    if (cobId) {
+      const ing = ventasPendientes.find(v => String(v.id) === String(cobId));
+      const ed = edits[mov.id] || {};
+      const deposito = Math.abs(Number(mov.monto) || 0);
+      const rets = (ed.rets || []).filter(r => r.cuenta && Number(r.monto) > 0).map(r => ({ cuenta: r.cuenta, monto: Number(r.monto) }));
+      await imputarCobroIngreso(mov, {
+        documento_id: cobId,
+        cuenta_contable: ing?.cuentaId || ing?.cuenta || "",
+        centro_costo: ing?.cc || "",
+        cliente_id: ing?.clienteId || "", cliente_nombre: ing?.cliente || "",
+        retenciones: rets, retencion_centro: centroRetencion,
+      });
+      setPagosCobros(prev => [...prev,
+        { tipo: "COBRO", documento_id: cobId, monto: deposito },
+        ...rets.map(r => ({ tipo: "COBRO", documento_id: cobId, monto: r.monto }))]);
+      setPendientes(prev => prev.filter(m => m.id !== mov.id));
+      return;
+    }
+    const fr = frState(mov);
+    if (fr.es) {
+      const partes = fr.split
+        ? fr.split.map(p => ({ franquicia_id: p.franquicia_id, franquicia_nombre: frNombre(p.franquicia_id), fr_tipo: p.fr_tipo || fr.frTipoSel, monto: p.monto }))
+        : [{ franquicia_id: fr.franquiciaSel, franquicia_nombre: frNombre(fr.franquiciaSel), fr_tipo: fr.frTipoSel, monto: Math.abs(Number(mov.monto) || 0) }];
+      await aceptarCobroFranquicia(mov, partes);
+    } else {
+      const ed = edits[mov.id] || {};
+      const meta = parseMeta(mov.referencia);
+      const tipo = meta.tipo || (Number(mov.monto) > 0 ? "ingreso" : "");
+      await aceptarMovimiento(mov, {
+        tipo, cuenta_contable: ed.cuenta_contable || mov.cuenta_contable || "",
+        centro_costo: ed.centro_costo || mov.centro_costo || "", proveedor_id: meta.prov || "",
+      });
+    }
+    setPendientes(prev => prev.filter(m => m.id !== mov.id));
+  };
 
-  // Confirmar conciliación
-  const handleConfirmar = async () => {
-    setSaving(true);
+  const aceptar = async (mov) => {
+    if (!puedeAceptarMov(mov)) { setMsg("Completá la imputación antes de aceptar."); return; }
+    try { await doAceptar(mov); } catch (e) { setMsg("Error al aceptar: " + e.message); }
+  };
+
+  // Aceptar masivo: todas las filas listas de la cuenta activa (resiliente).
+  const aceptarTodos = async () => {
+    const listos = filtered.filter(puedeAceptarMov);
+    if (!listos.length) { setMsg("No hay movimientos listos para aceptar."); return; }
+    setUploading(true); let ok = 0, err = 0;
+    for (const m of listos) { try { await doAceptar(m); ok++; } catch (e) { err++; } }
+    setUploading(false);
+    setMsg(`✓ ${ok} aceptados${err ? ` · ⚠ ${err} con error` : ""}.`);
+  };
+
+  // Ignorar: descarta la línea sin contabilizar (soft-mark IGN-). Sale de pendientes y no cuenta
+  // en Tesorería/Cash Flow. motivo "haberes:<lote>" cuando matchea un pago de sueldos ya registrado.
+  const ignorar = async (mov, motivo = "") => {
     try {
-      const toMark = results.filter(r => r.estado === "matched" && r.selected);
-      await Promise.all(
-        toMark.map(r => marcarConciliado(r.selected.id, `${r.fecha} · ${r.descripcion}`)),
-      );
-      setDone(true);
-      setStep(3);
-    } catch (e) {
-      setError("Error al guardar: " + e.message);
-    } finally {
-      setSaving(false);
-    }
+      await ignorarMovimiento(mov, motivo);
+      setPendientes(prev => prev.filter(m => m.id !== mov.id));
+      const ref = String(mov.referencia || "").replace(/;?ign=[^;]*/g, "") + `;ign=${motivo || "1"}`;
+      setIgnorados(prev => [{ ...mov, documento_id: "IGN-" + mov.id, referencia: ref }, ...prev]);
+    } catch (e) { setMsg("Error al ignorar: " + e.message); }
+  };
+  const restaurar = async (mov) => {
+    try {
+      await restaurarMovimiento(mov);
+      setIgnorados(prev => prev.filter(m => m.id !== mov.id));
+      await recargar();
+    } catch (e) { setMsg("Error al restaurar: " + e.message); }
   };
 
-  const stats = useMemo(() => matchStats(results), [results]);
+  // Generar regla en vivo: pre-carga el modal de Maestros con los datos de la línea.
+  // Si hay código de concepto matchea por código (estable); si no, por alias (contraparte/glosa).
+  const prefillRegla = (mov) => {
+    const meta = parseMeta(mov.referencia);
+    const cta = cuentas.find(c => c.id === cuentaTab);
+    const credito = (Number(mov.monto) || 0) > 0;
+    return {
+      prioridad: 20,
+      match_tipo: meta.cod ? "codigo" : "alias",
+      match_valor: meta.cod || mov.contraparte_nombre || mov.concepto || "",
+      banco: cta?.banco || "", pais: "AR",
+      tipo: credito ? "ingreso" : (meta.tipo && meta.tipo !== "sin_clasificar" ? meta.tipo : "pago_proveedor"),
+      cuenta_contable: edits[mov.id]?.cuenta_contable || mov.cuenta_contable || "",
+      centro_costo: edits[mov.id]?.centro_costo || mov.centro_costo || "",
+      cuenta_destino: "", sociedad: "", proveedor_id: meta.prov || "",
+      accion: "escala", nota: "",
+    };
+  };
+  const handleSaveRegla = async (regla) => {
+    try {
+      const { id, ...rest } = regla;   // siempre alta (sin id) — appendBancoRegla genera el suyo
+      await appendBancoRegla(rest);
+      const r = await fetchBancoReglas();
+      setReglas(r || []);
+      setMsg("✓ Regla creada — aplica al próximo extracto que subas.");
+    } catch (e) { setMsg("Error al crear la regla: " + e.message); }
+  };
 
-  const visibleResults = useMemo(() =>
-    filterEstado === "unmatched"
-      ? results.filter(r => r.estado === "no_match" || r.estado === "multiple")
-      : results,
-  [results, filterEstado]);
+  const setEdit = (id, k, v) => setEdits(e => ({ ...e, [id]: { ...e[id], [k]: v } }));
+  const setModo = (id, patch) => setEdits(e => ({ ...e, [id]: { ...e[id], ...patch } }));
 
-  const cuenta = cuentas.find(c => c.id === cuentaId);
+  // ── Retenciones de un cobro (N líneas cuenta+monto; IIBB/Ganancias/IVA) ──
+  const addRet = (id, monto = 0) => setEdits(e => ({ ...e, [id]: { ...e[id], rets: [...(e[id]?.rets || []), { cuenta: cuentaRetencionDefault, monto }] } }));
+  const updRet = (id, idx, k, v) => setEdits(e => {
+    const rets = (e[id]?.rets || []).map((r, i) => i === idx ? { ...r, [k]: k === "monto" ? (parseFloat(String(v).replace(",", ".")) || 0) : v } : r);
+    return { ...e, [id]: { ...e[id], rets } };
+  });
+  const rmRet = (id, idx) => setEdits(e => ({ ...e, [id]: { ...e[id], rets: (e[id]?.rets || []).filter((_, i) => i !== idx) } }));
 
-  // ─── Step 1: Upload ────────────────────────────────────────────────────────
-  if (step === 1) {
-    return (
-      <div className="fade" style={{ padding: "32px 40px", maxWidth: 680 }}>
-        <h2 style={{ fontSize: 22, fontWeight: 900, color: T.text, margin: "0 0 6px" }}>
-          Conciliación bancaria
-        </h2>
-        <p style={{ fontSize: 13, color: T.muted, margin: "0 0 28px" }}>
-          Importá el extracto del banco y la app matcheará automáticamente los movimientos ya cargados.
-        </p>
+  // ── Split entre franquicias (⋯) ──
+  const toggleSplit = (mov) => setEdits(e => {
+    const ed = e[mov.id] || {};
+    if (ed.split) { const { split, ...rest } = ed; return { ...e, [mov.id]: rest }; }
+    const monto = Math.abs(Number(mov.monto) || 0);
+    return { ...e, [mov.id]: { ...ed, split: [{ franquicia_id: "", fr_tipo: ed.fr_tipo || "PAGO", monto }] } };
+  });
+  const updSplit = (id, idx, k, v) => setEdits(e => {
+    const split = (e[id]?.split || []).map((p, i) => i === idx ? { ...p, [k]: k === "monto" ? (parseFloat(String(v).replace(",", ".")) || 0) : v } : p);
+    return { ...e, [id]: { ...e[id], split } };
+  });
+  const addSplit = (id) => setEdits(e => ({ ...e, [id]: { ...e[id], split: [...(e[id]?.split || []), { franquicia_id: "", fr_tipo: "PAGO", monto: 0 }] } }));
+  const rmSplit = (id, idx) => setEdits(e => {
+    const split = (e[id]?.split || []).filter((_, i) => i !== idx);
+    return { ...e, [id]: { ...e[id], split: split.length ? split : null } };
+  });
 
-        {/* Selector de cuenta */}
-        <div style={{ marginBottom: 20 }}>
-          <label style={{ fontSize: 12, fontWeight: 700, color: T.muted, display: "block", marginBottom: 6 }}>
-            Cuenta bancaria a conciliar
-          </label>
-          <select
-            value={cuentaId}
-            onChange={e => setCuentaId(e.target.value)}
-            style={{
-              width: "100%", maxWidth: 420, padding: "9px 12px",
-              background: "#fff", border: `1px solid ${T.cardBorder}`,
-              borderRadius: 8, fontSize: 13, color: T.text, fontFamily: T.font,
-            }}
-          >
-            <option value="">— Seleccionar cuenta —</option>
-            {cuentas.map(c => (
-              <option key={c.id} value={c.id}>{c.nombre} ({c.moneda})</option>
-            ))}
-          </select>
-          {loadingMovs && (
-            <p style={{ fontSize: 11, color: T.muted, marginTop: 6 }}>Cargando movimientos…</p>
-          )}
-        </div>
+  const filtered = useMemo(
+    () => pendientes.filter(m => !cuentaTab || String(m.cuenta_bancaria) === String(cuentaTab)),
+    [pendientes, cuentaTab]);
+  const countByCuenta = useMemo(() => {
+    const o = {}; pendientes.forEach(m => { o[m.cuenta_bancaria] = (o[m.cuenta_bancaria] || 0) + 1; }); return o;
+  }, [pendientes]);
+  const listosCount = filtered.filter(puedeAceptarMov).length;
 
-        {/* Drop zone */}
-        {cuentaId && (
-          <div
-            onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={handleDrop}
-            style={{
-              border: `2px dashed ${dragOver ? T.accent : T.cardBorder}`,
-              borderRadius: 12, padding: "40px 32px", textAlign: "center",
-              background: dragOver ? "rgba(173,255,25,.04)" : T.card,
-              transition: "all .2s", cursor: "pointer",
-            }}
-            onClick={() => document.getElementById("concil-file-input").click()}
-          >
-            <div style={{ fontSize: 32, marginBottom: 10 }}>📄</div>
-            <p style={{ fontSize: 14, fontWeight: 700, color: T.text, margin: "0 0 4px" }}>
-              Arrastrá el extracto de Galicia aquí
-            </p>
-            <p style={{ fontSize: 12, color: T.muted, margin: 0 }}>
-              o hacé click para seleccionar el archivo .xlsx
-            </p>
-            <input
-              id="concil-file-input"
-              type="file"
-              accept=".xlsx,.xls"
-              style={{ display: "none" }}
-              onChange={handleFileInput}
-            />
-          </div>
-        )}
-
-        {error && (
-          <p style={{ fontSize: 12, color: "#dc2626", marginTop: 12, padding: "8px 12px",
-            background: "rgba(239,68,68,.08)", borderRadius: 8, border: "1px solid rgba(239,68,68,.2)" }}>
-            {error}
-          </p>
-        )}
-      </div>
-    );
-  }
-
-  // ─── Step 3: Listo ─────────────────────────────────────────────────────────
-  if (step === 3) {
-    const confirmed = results.filter(r => r.estado === "matched").length;
-    return (
-      <div className="fade" style={{ padding: "32px 40px", maxWidth: 560 }}>
-        <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
-        <h2 style={{ fontSize: 22, fontWeight: 900, color: T.text, margin: "0 0 8px" }}>
-          Conciliación guardada
-        </h2>
-        <p style={{ fontSize: 13, color: T.muted, margin: "0 0 24px" }}>
-          Se marcaron <strong>{confirmed}</strong> movimientos como conciliados en {cuenta?.nombre}.
-        </p>
-        {stats.noMatch > 0 && (
-          <p style={{ fontSize: 12, color: "#ca8a04", padding: "10px 14px",
-            background: "rgba(234,179,8,.08)", borderRadius: 8,
-            border: "1px solid rgba(234,179,8,.2)", margin: "0 0 20px" }}>
-            Quedan <strong>{stats.noMatch}</strong> líneas del banco sin movimiento en la app.
-            Revisalas en Egresos o Tesorería.
-          </p>
-        )}
-        <button
-          onClick={() => { setStep(1); setParsed(null); setResults([]); setDone(false); setError(""); }}
-          style={{ padding: "9px 20px", borderRadius: 8, background: T.accent, border: "none",
-            color: "#000", fontFamily: T.font, fontSize: 13, fontWeight: 700, cursor: "pointer" }}
-        >
-          Nueva conciliación
-        </button>
-      </div>
-    );
-  }
-
-  // ─── Step 2: Match ─────────────────────────────────────────────────────────
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
-
-      {/* Header fijo */}
-      <div style={{
-        padding: "14px 24px", background: T.card, borderBottom: `1px solid ${T.cardBorder}`,
-        display: "flex", alignItems: "center", gap: 16, flexShrink: 0,
-      }}>
-        <button
-          onClick={() => setStep(1)}
-          style={{ background: "none", border: "none", color: T.muted, cursor: "pointer",
-            fontSize: 18, padding: 0, lineHeight: 1 }}
-        >
-          ←
-        </button>
-        <div>
-          <div style={{ fontSize: 14, fontWeight: 800, color: T.text }}>
-            {cuenta?.nombre} — {parsed?.total} líneas
-          </div>
-          <div style={{ fontSize: 11, color: T.muted }}>Extracto {parsed?.fuente}</div>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: "20px 28px", boxSizing: "border-box" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
+        <h2 style={{ fontSize: 20, fontWeight: 900, color: T.text, margin: 0 }}>Conciliación</h2>
+        <span style={{ fontSize: 12, color: T.muted }}>
+          {pendientes.length} movimientos sin conciliar
+        </span>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+          {listosCount > 0 && (
+            <button onClick={aceptarTodos} disabled={uploading}
+              style={{ background: "#16a34a", border: "none", borderRadius: 8, padding: "9px 16px",
+                fontSize: 13, fontWeight: 700, color: "#fff", cursor: uploading ? "default" : "pointer",
+                fontFamily: T.font, opacity: uploading ? .6 : 1 }}>
+              Aceptar {listosCount} listo{listosCount !== 1 ? "s" : ""} ✓
+            </button>
+          )}
+          <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }}
+            onChange={e => onFile(e.target.files[0])} />
+          <button onClick={() => fileRef.current?.click()} disabled={!cuentaTab || uploading}
+            style={{ background: T.accent, border: "none", borderRadius: 8, padding: "9px 18px",
+              fontSize: 13, fontWeight: 700, color: "#000", cursor: cuentaTab ? "pointer" : "default",
+              fontFamily: T.font, opacity: uploading ? .6 : 1 }}>
+            {uploading ? "Subiendo…" : "⬆ Subir extracto"}
+          </button>
         </div>
-
-        {/* Stats */}
-        <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
-          <StatBadge label="Matcheados"  value={stats.matched}  color="#16a34a" />
-          <StatBadge label="Múltiple"    value={stats.multiple} color="#ca8a04" />
-          <StatBadge label="Sin match"   value={stats.noMatch}  color="#dc2626" />
-          <StatBadge label="Ignorados"   value={stats.ignored}  color="#9ca3af" />
-        </div>
-
-        {/* Filtro */}
-        <select
-          value={filterEstado}
-          onChange={e => setFilterEstado(e.target.value)}
-          style={{ padding: "6px 10px", borderRadius: 7, border: `1px solid ${T.cardBorder}`,
-            background: T.bg, color: T.text, fontSize: 12, fontFamily: T.font, cursor: "pointer" }}
-        >
-          <option value="all">Todas las líneas</option>
-          <option value="unmatched">Solo sin match</option>
-        </select>
-
-        <button
-          onClick={handleConfirmar}
-          disabled={saving || stats.matched === 0}
-          style={{
-            padding: "9px 20px", borderRadius: 8, fontSize: 13, fontWeight: 700,
-            background: stats.matched > 0 ? T.accent : "rgba(255,255,255,.08)",
-            border: "none", color: stats.matched > 0 ? "#000" : T.dim,
-            fontFamily: T.font, cursor: stats.matched > 0 ? "pointer" : "default",
-            opacity: saving ? .5 : 1,
-          }}
-        >
-          {saving ? "Guardando…" : `Confirmar (${stats.matched})`}
-        </button>
       </div>
 
-      {error && (
-        <div style={{ padding: "8px 24px", background: "rgba(239,68,68,.08)",
-          borderBottom: "1px solid rgba(239,68,68,.2)", fontSize: 12, color: "#dc2626" }}>
-          {error}
-        </div>
-      )}
+      {/* Pestañas por cuenta bancaria */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+        {cuentas.map(c => {
+          const active = c.id === cuentaTab;
+          const n = countByCuenta[c.id] || 0;
+          return (
+            <button key={c.id} onClick={() => setCuentaTab(c.id)}
+              style={{ display: "flex", alignItems: "center", gap: 7, padding: "6px 12px", borderRadius: 8,
+                border: `1px solid ${active ? T.accent : T.cardBorder}`, background: active ? "rgba(173,255,25,.1)" : T.card,
+                color: active ? T.text : T.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: T.font }}>
+              {c.nombre}
+              {n > 0 && <span style={{ fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 999,
+                background: "#dc2626", color: "#fff" }}>{n}</span>}
+            </button>
+          );
+        })}
+      </div>
 
-      {/* Tabla de match */}
-      <div style={{ flex: 1, overflow: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-          <thead>
-            <tr style={{ background: T.card, position: "sticky", top: 0, zIndex: 1 }}>
-              {["Fecha","Descripción banco","Monto","Estado","Movimiento app","Acciones"].map(h => (
-                <th key={h} style={{ padding: "8px 12px", textAlign: "left",
-                  fontSize: 10, fontWeight: 700, color: T.muted, letterSpacing: ".07em",
-                  borderBottom: `1px solid ${T.cardBorder}`, whiteSpace: "nowrap" }}>
-                  {h.toUpperCase()}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {visibleResults.map(line => {
-              const ec     = ESTADO_COLOR[line.estado] ?? ESTADO_COLOR.no_match;
-              const isMon  = line.monto < 0;
+      {msg && <div style={{ fontSize: 12, color: msg.startsWith("Error") ? "#dc2626" : "#16a34a", marginBottom: 10 }}>{msg}</div>}
 
-              return (
-                <tr
-                  key={line.idx}
-                  style={{
-                    background: ec.bg,
-                    borderBottom: `1px solid ${T.cardBorder}`,
-                    opacity: line.estado === "ignored" ? .55 : 1,
-                  }}
-                >
-                  {/* Fecha */}
-                  <td style={{ padding: "7px 12px", color: T.muted, whiteSpace: "nowrap" }}>
-                    {line.fecha}
-                  </td>
-
-                  {/* Descripción */}
-                  <td style={{ padding: "7px 12px", color: T.text, maxWidth: 200 }}>
-                    <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {line.descripcion}
-                    </div>
-                    {line.contraparte && (
-                      <div style={{ fontSize: 10, color: T.muted, marginTop: 1 }}>
-                        {line.contraparte}
-                      </div>
-                    )}
-                  </td>
-
-                  {/* Monto */}
-                  <td style={{ padding: "7px 12px", fontWeight: 700, whiteSpace: "nowrap",
-                    color: isMon ? "#dc2626" : "#16a34a", textAlign: "right" }}>
-                    {isMon ? "−" : "+"}{Math.abs(line.monto).toLocaleString("es-AR", { minimumFractionDigits: 2 })}
-                  </td>
-
-                  {/* Estado */}
-                  <td style={{ padding: "7px 12px" }}>
-                    {pill(ec, ec.label)}
-                  </td>
-
-                  {/* Movimiento app */}
-                  <td style={{ padding: "7px 12px", minWidth: 200 }}>
-                    {line.selected ? (
-                      <div>
-                        <div style={{ fontWeight: 600, color: T.text }}>
-                          {line.selected.concepto || line.selected.tipo}
-                        </div>
-                        <div style={{ fontSize: 10, color: T.muted, marginTop: 1 }}>
-                          {normFecha(line.selected.fecha)} · {Math.abs(Number(line.selected.monto)).toLocaleString("es-AR", { minimumFractionDigits: 2 })}
-                        </div>
-                      </div>
-                    ) : (
-                      <span style={{ color: T.dim, fontSize: 11, fontStyle: "italic" }}>
-                        {line.estado === "ignored" ? "—" : "Sin movimiento"}
-                      </span>
-                    )}
-
-                    {/* Selector si hay múltiples candidatos */}
-                    {line.estado === "multiple" && line.candidates.length > 1 && (
-                      <select
-                        value={line.selected?.id ?? ""}
-                        onChange={e => {
-                          const mov = line.candidates.find(c => c.id === e.target.value);
-                          if (mov) assignMatch(line.idx, mov);
-                        }}
-                        style={{ fontSize: 11, marginTop: 4, padding: "3px 6px",
-                          background: "#fff", border: `1px solid ${T.cardBorder}`,
-                          borderRadius: 5, color: T.text, fontFamily: T.font, width: "100%" }}
-                      >
-                        {line.candidates.map(c => (
-                          <option key={c.id} value={c.id}>
-                            {normFecha(c.fecha)} · {c.concepto || c.tipo} · {Math.abs(Number(c.monto)).toLocaleString("es-AR")}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                  </td>
-
-                  {/* Acciones */}
-                  <td style={{ padding: "7px 12px", whiteSpace: "nowrap" }}>
-                    <button
-                      onClick={() => toggleIgnore(line.idx)}
-                      style={{ fontSize: 10, padding: "3px 8px", borderRadius: 5,
-                        background: "rgba(255,255,255,.06)", border: `1px solid ${T.cardBorder}`,
-                        color: T.muted, fontFamily: T.font, cursor: "pointer", fontWeight: 600 }}
-                    >
-                      {line.estado === "ignored" ? "Activar" : "Ignorar"}
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-
-        {visibleResults.length === 0 && (
-          <div style={{ padding: "40px", textAlign: "center", color: T.muted, fontSize: 13 }}>
-            No hay líneas para mostrar con este filtro.
+      <div style={{ flex: 1, overflow: "auto", background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10 }}>
+        {loading ? (
+          <div style={{ padding: 50, textAlign: "center", color: T.muted }}>Cargando…</div>
+        ) : filtered.length === 0 ? (
+          <div style={{ padding: 50, textAlign: "center", color: T.muted, fontSize: 14 }}>
+            No hay movimientos pendientes en esta cuenta. Subí un extracto para empezar.
           </div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: T.tableHead, position: "sticky", top: 0, zIndex: 1 }}>
+                {[["Fecha","left"],["Descripción","left"],["Débitos","right"],["Créditos","right"],["Propuesta","left"],["Imputación","right"],["Acción","left"]].map(([h, al]) => (
+                  <th key={h} style={{ padding: "9px 12px", textAlign: al, fontSize: 10, fontWeight: 700,
+                    color: T.tableHeadText, letterSpacing: ".06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((m, i) => {
+                const meta = parseMeta(m.referencia);
+                const tipo = meta.tipo || (Number(m.monto) > 0 ? "ingreso" : "");
+                const esTransf = tipo === "transferencia_interna";
+                const modoTransfer = esTransf || !!edits[m.id]?.modoTransfer;
+                const destinoSel = (edits[m.id]?.cuenta_destino) ?? m.cuenta_destino ?? "";
+                const interco = !!destinoSel && (cuentasAll.find(c => String(c.id) === String(destinoSel))?.sociedad ?? sociedad) !== sociedad;
+                const fr = frState(m);
+                const cuentaSel = (edits[m.id]?.cuenta_contable) ?? m.cuenta_contable ?? "";
+                const ccSel = (edits[m.id]?.centro_costo) ?? m.centro_costo ?? "";
+                const neg = Number(m.monto) < 0;
+                const bg = i % 2 ? "#eef2f7" : "#ffffff";
+                const total = Math.abs(Number(m.monto) || 0);
+                const splitSum = fr.split ? fr.split.reduce((s, p) => s + (Number(p.monto) || 0), 0) : 0;
+                const splitOk = fr.split ? (fr.split.every(p => p.franquicia_id) && Math.abs(splitSum - total) <= 0.01) : false;
+                const puedeAceptar = puedeAceptarMov(m);
+                const modoFC = !fr.es && !modoTransfer && !!edits[m.id]?.modoFC;
+                // Caja 1 = proveedor (default: el reconocido si tiene pendientes). Caja 2 = sus facturas.
+                const fcProvSel = fcProvDe(m);
+                const fcDelProv = modoFC && fcProvSel ? fcsDeProv(fcProvSel) : [];
+                const fcSel = modoFC ? fcIdDe(m) : "";
+                const fcSelObj = fcSel ? facturasPendientes.find(f => String(f.id) === String(fcSel)) : null;
+                // Modo cobro de venta (créditos): cliente → su factura de venta + retención opcional.
+                const modoCobro = !fr.es && !modoTransfer && !modoFC && !!edits[m.id]?.modoCobro;
+                const cobCliSel = cobClienteDe(m);
+                const venDelCli = modoCobro && cobCliSel ? ventasDeCliente(cobCliSel) : [];
+                const cobSel = modoCobro ? cobIdDe(m) : "";
+                const cobSelObj = cobSel ? ventasPendientes.find(v => String(v.id) === String(cobSel)) : null;
+                const cobDiff = cobSelObj ? (cobSelObj.saldo - total) : 0;   // saldo factura − depósito
+                const cobRets = edits[m.id]?.rets || [];                      // retenciones [{cuenta, monto}]
+                const cobRetSum = cobRets.reduce((s, r) => s + (Number(r.monto) || 0), 0);
+                const hMatch = (!fr.es && !modoTransfer && !modoFC && !modoCobro) ? haberesMatch(m) : null;   // débito que coincide con un lote de haberes
+                return (
+                  <Fragment key={m.id}>
+                  <tr style={{ borderBottom: fr.split ? "none" : "1px solid #cbd5e1", background: bg }}>
+                    <td style={{ padding: "8px 12px", color: T.muted, whiteSpace: "nowrap" }}>{m.fecha}</td>
+                    <td style={{ padding: "8px 12px", maxWidth: 220 }}>
+                      <div style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.concepto}</div>
+                      {m.contraparte_nombre && <div style={{ fontSize: 10, color: T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={m.contraparte_nombre}>{m.contraparte_nombre}</div>}
+                    </td>
+                    <td style={{ padding: "8px 12px", fontWeight: 700, textAlign: "right", whiteSpace: "nowrap", color: "#16a34a" }}>
+                      {Number(m.monto) > 0 ? fmt(total) : ""}
+                    </td>
+                    <td style={{ padding: "8px 12px", fontWeight: 700, textAlign: "right", whiteSpace: "nowrap", color: "#dc2626" }}>
+                      {neg ? fmt(total) : ""}
+                    </td>
+                    <td style={{ padding: "8px 12px" }}>
+                      {fr.es ? (
+                        <div>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: T.text }}>Cobro franquicia</span>
+                          {fr.franquiciaSel
+                            ? <div style={{ fontSize: 10, color: T.muted }}>{frNombre(fr.franquiciaSel)} · {deudaLabel(fr.deuda)}</div>
+                            : <div style={{ fontSize: 10, color: "#b45309" }}>{fr.manual ? "elegí franquicia" : "varias con ese CUIT"}</div>}
+                        </div>
+                      ) : modoFC ? (
+                        <div>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#0ea5e9" }}>Pago de factura</span>
+                          {fcSelObj
+                            ? <div style={{ fontSize: 10, color: total + 0.01 < fcSelObj.saldo ? "#b45309" : T.muted }}>
+                                {fcSelObj.proveedor} · {total + 0.01 < fcSelObj.saldo ? `parcial: $${fmt(total)} de $${fmt(fcSelObj.saldo)} (queda $${fmt(fcSelObj.saldo - total)})` : `saldo $${fmt(fcSelObj.saldo)}`}
+                              </div>
+                            : <div style={{ fontSize: 10, color: "#b45309" }}>{!provConPendientes.length ? "sin facturas pendientes" : !fcProvSel ? "elegí proveedor" : "elegí factura"}</div>}
+                        </div>
+                      ) : modoCobro ? (
+                        <div>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#0ea5e9" }}>Cobro de venta</span>
+                          {cobSelObj
+                            ? <div style={{ fontSize: 10, color: cobDiff > 0.01 ? "#b45309" : T.muted }}>
+                                {cobSelObj.cliente} · {cobDiff > 0.01 ? `dep $${fmt(total)}${cobRetSum > 0 ? ` + ret $${fmt(cobRetSum)}` : ""} de $${fmt(cobSelObj.saldo)}` : `saldo $${fmt(cobSelObj.saldo)}`}
+                              </div>
+                            : <div style={{ fontSize: 10, color: "#b45309" }}>{!clientesConPendientes.length ? "sin facturas de venta pendientes" : !cobCliSel ? "elegí cliente" : "elegí factura"}</div>}
+                        </div>
+                      ) : hMatch ? (
+                        <div>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed" }}>Pago de haberes</span>
+                          <div style={{ fontSize: 10, color: T.muted }}>{hMatch.fecha} · {hMatch.count} pers · ${fmt(hMatch.total)} · ya en Sueldos</div>
+                        </div>
+                      ) : (
+                        <>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: T.text }}>{TIPO_LABEL[tipo] || tipo || "—"}</span>
+                          {meta.regla && <span style={{ fontSize: 9, color: T.dim, marginLeft: 5 }}>({meta.regla})</span>}
+                        </>
+                      )}
+                    </td>
+                    <td style={{ padding: "8px 4px 8px 12px", minWidth: 220, textAlign: "right" }}>
+                      {modoTransfer ? (
+                        <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", alignItems: "center" }}>
+                          {interco && <span style={{ fontSize: 9, fontWeight: 800, color: "#7c3aed", background: "#ede9fe", border: "1px solid #c4b5fd", borderRadius: 6, padding: "2px 6px", whiteSpace: "nowrap" }}>INTERCO</span>}
+                          <span style={{ fontSize: 11, color: T.muted }}>→</span>
+                          <select value={destinoSel} onChange={e => setEdit(m.id, "cuenta_destino", e.target.value)} style={fld(!!destinoSel)}>
+                            <option value="">— cuenta destino —</option>
+                            {cuentasAll.filter(c => String(c.id) !== String(m.cuenta_bancaria)).map(c => (
+                              <option key={c.id} value={c.id}>{c.nombre}{c.sociedad !== sociedad ? ` · ${c.sociedad}` : ""}</option>
+                            ))}
+                          </select>
+                        </div>
+                      ) : fr.es ? (
+                        fr.split ? (
+                          <span style={{ fontSize: 11, color: T.muted }}>Dividido en {fr.split.length} franquicia{fr.split.length !== 1 ? "s" : ""} ↓</span>
+                        ) : (
+                          <div key="franq" style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                            <select value={fr.frTipoSel} onChange={e => setEdit(m.id, "fr_tipo", e.target.value)} style={fld(true)}>
+                              {neg ? <option value="PAGO_ENVIADO">Transf. enviada</option> : <>
+                                <option value="PAGO">Pago de CC</option>
+                                <option value="PAGO_PAUTA">Pago a cuenta</option>
+                              </>}
+                            </select>
+                            <select value={fr.franquiciaSel} onChange={e => setEdit(m.id, "franquicia_id", e.target.value)} style={fld(!!fr.franquiciaSel)}>
+                              <option value="">— franquicia —</option>
+                              {fr.opciones.map(f => <option key={f.id} value={String(f.id)}>{f.name}{frMonedaSuf(f)}</option>)}
+                            </select>
+                          </div>
+                        )
+                      ) : modoFC ? (
+                        <div key="fc" style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                          <select value={fcProvSel} disabled={!provConPendientes.length} onChange={e => setModo(m.id, { fc_prov: e.target.value, fc_id: "" })} style={fld(!!fcProvSel, 160)}>
+                            <option value="">{provConPendientes.length ? "— proveedor —" : "sin facturas pendientes"}</option>
+                            {provConPendientes.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                          </select>
+                          <select value={fcSel} onChange={e => setEdit(m.id, "fc_id", e.target.value)} disabled={!fcProvSel} style={fld(!!fcSel, 200)}>
+                            <option value="">{fcProvSel ? "— factura —" : "elegí proveedor"}</option>
+                            {fcDelProv.map(f => <option key={f.id} value={String(f.id)}>{fcLabel(f)}</option>)}
+                          </select>
+                        </div>
+                      ) : modoCobro ? (
+                        <div key="cob" style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+                          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                            <select value={cobCliSel} disabled={!clientesConPendientes.length} onChange={e => setModo(m.id, { cob_cli: e.target.value, cob_id: "" })} style={fld(!!cobCliSel, 160)}>
+                              <option value="">{clientesConPendientes.length ? "— cliente —" : "sin facturas de venta"}</option>
+                              {clientesConPendientes.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                            </select>
+                            <select value={cobSel} onChange={e => setEdit(m.id, "cob_id", e.target.value)} disabled={!cobCliSel} style={fld(!!cobSel, 200)}>
+                              <option value="">{cobCliSel ? "— factura —" : "elegí cliente"}</option>
+                              {venDelCli.map(v => <option key={v.id} value={String(v.id)}>{fcLabel(v)}</option>)}
+                            </select>
+                          </div>
+                          {cobSelObj && cobDiff > 0.01 && (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", fontSize: 11, color: T.muted }}>
+                              {cobRets.map((r, idx) => (
+                                <div key={idx} style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "flex-end" }}>
+                                  <select value={r.cuenta} onChange={e => updRet(m.id, idx, "cuenta", e.target.value)} style={fld(!!r.cuenta, 150)}>
+                                    <option value="">— retención —</option>
+                                    {cuentasGasto.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                                  </select>
+                                  <input type="number" value={r.monto} onChange={e => updRet(m.id, idx, "monto", e.target.value)}
+                                    style={{ width: 90, textAlign: "right", ...sel }} />
+                                  <button onClick={() => rmRet(m.id, idx)} title="Quitar" style={{ border: "none", background: "transparent", color: T.muted, cursor: "pointer", fontSize: 12 }}>✕</button>
+                                </div>
+                              ))}
+                              <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
+                                {cobRets.length > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: Math.abs(cobRetSum + total - cobSelObj.saldo) <= 0.01 ? "#16a34a" : "#b45309" }}>ret ${fmt(cobRetSum)} + dep ${fmt(total)} {Math.abs(cobRetSum + total - cobSelObj.saldo) <= 0.01 ? "= total ✓" : `de ${fmt(cobSelObj.saldo)}`}</span>}
+                                <button onClick={() => addRet(m.id, Math.max(0, cobDiff - cobRetSum))}
+                                  style={{ fontSize: 11, border: "none", background: "transparent", color: "#0ea5e9", cursor: "pointer", fontWeight: 700 }}>+ retención</button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div key="normal" style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "flex-end" }}>
+                          <select value={cuentaSel} onChange={e => setEdit(m.id, "cuenta_contable", e.target.value)}
+                            style={fld(!!cuentaSel)}>
+                            <option value="">— cuenta —</option>
+                            {(neg ? cuentasGasto : cuentasIngreso).map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                          </select>
+                          <select value={ccSel} onChange={e => setEdit(m.id, "centro_costo", e.target.value)} style={fld(!!ccSel)}>
+                            <option value="">— centro —</option>
+                            {centros.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                          </select>
+                        </div>
+                      )}
+                    </td>
+                    <td style={{ padding: "8px 12px 8px 4px", whiteSpace: "nowrap", position: "relative" }}>
+                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <button onClick={() => aceptar(m)} disabled={!puedeAceptar}
+                          title={puedeAceptar ? "" : "Completá la imputación"}
+                          style={{ background: puedeAceptar ? "#16a34a" : "#cbd5e1", border: "none", borderRadius: 6, padding: "5px 12px",
+                            fontSize: 11, fontWeight: 700, color: "#fff", cursor: puedeAceptar ? "pointer" : "default", fontFamily: T.font }}>
+                          Aceptar ✓
+                        </button>
+                        {!esTransf && (
+                          <button onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === m.id ? null : m.id); }} title="Más acciones"
+                            style={{ background: menuFor === m.id ? T.accent : T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "4px 8px",
+                              fontSize: 12, fontWeight: 800, color: T.text, cursor: "pointer", lineHeight: 1 }}>⋯</button>
+                        )}
+                      </div>
+                      {menuFor === m.id && (
+                        <div onClick={(e) => e.stopPropagation()} style={{ position: "absolute", right: 6, top: "calc(100% - 2px)", zIndex: 30,
+                          background: "#fff", border: "1px solid #cbd5e1", borderRadius: 8, boxShadow: "0 6px 18px rgba(0,0,0,.14)", minWidth: 220, overflow: "hidden" }}>
+                          {!fr.es && !modoTransfer && (
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFranquicia: true, noFranquicia: false, modoTransfer: false }); setMenuFor(null); }}>↪ Convertir a {Number(m.monto) < 0 ? "transferencia a franquicia" : "cobro de franquicia"}</button>
+                          )}
+                          {!fr.es && !modoTransfer && (
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoTransfer: true, modoFranquicia: false, noFranquicia: true }); setMenuFor(null); }}>⇄ Convertir a transferencia entre cuentas</button>
+                          )}
+                          {neg && !fr.es && !modoTransfer && !modoFC && (
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFC: true, modoFranquicia: false, modoTransfer: false, noFranquicia: true }); setMenuFor(null); }}>🧾 Imputar a una factura…</button>
+                          )}
+                          {modoFC && (
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFC: false, fc_id: undefined, noFranquicia: false }); setMenuFor(null); }}>↩ Volver a normal (no es pago de factura)</button>
+                          )}
+                          {!neg && !fr.es && !modoTransfer && !modoCobro && (
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCobro: true, modoFranquicia: false, modoTransfer: false, noFranquicia: true }); setMenuFor(null); }}>🧾 Imputar a factura de venta (cobro)…</button>
+                          )}
+                          {modoCobro && (
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCobro: false, cob_id: undefined, cob_cli: undefined, retiene: false, noFranquicia: false }); setMenuFor(null); }}>↩ Volver a normal (no es cobro de venta)</button>
+                          )}
+                          {fr.es && (
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFranquicia: false, noFranquicia: true, modoTransfer: false, split: null }); setMenuFor(null); }}>↩ No es franquicia (volver a normal)</button>
+                          )}
+                          {!fr.es && modoTransfer && (
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoTransfer: false, noFranquicia: false, cuenta_destino: undefined }); setMenuFor(null); }}>↩ Volver a normal (no es transferencia)</button>
+                          )}
+                          {fr.es && fr.opciones.length > 1 && !fr.split && (
+                            <button style={MENU_ITEM} onClick={() => { toggleSplit(m); setMenuFor(null); }}>Dividir entre franquicias</button>
+                          )}
+                          {fr.es && fr.split && (
+                            <button style={MENU_ITEM} onClick={() => { toggleSplit(m); setMenuFor(null); }}>Quitar división</button>
+                          )}
+                          {hMatch && (
+                            <button style={{ ...MENU_ITEM, color: "#7c3aed", fontWeight: 700 }} onClick={() => { ignorar(m, `haberes:${hMatch.lote}`); setMenuFor(null); }}>✓ Ya está en Sueldos — descartar</button>
+                          )}
+                          <button style={MENU_ITEM} onClick={() => { setReglaModal({ prefill: prefillRegla(m) }); setMenuFor(null); }}>⚙ Crear regla de banco…</button>
+                          <button style={{ ...MENU_ITEM, color: "#b45309" }} onClick={() => { if (window.confirm(`Ignorar esta línea (no se contabiliza)?\n${m.concepto || ""} · $${fmt(total)}`)) ignorar(m); setMenuFor(null); }}>🚫 Ignorar (no contabilizar)</button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                  {fr.es && fr.split && (
+                    <>
+                      {fr.split.map((p, idx) => (
+                        <tr key={`${m.id}-sp-${idx}`} style={{ background: bg, borderLeft: `3px solid ${T.accent}` }}>
+                          <td /><td />
+                          <td style={{ padding: "4px 12px", textAlign: "right" }}>
+                            <input type="number" value={p.monto} onChange={e => updSplit(m.id, idx, "monto", e.target.value)}
+                              style={{ width: 110, textAlign: "right", ...sel }} />
+                          </td>
+                          <td />
+                          <td />
+                          <td style={{ padding: "4px 12px" }}>
+                            <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                              <select value={p.fr_tipo} onChange={e => updSplit(m.id, idx, "fr_tipo", e.target.value)} style={fld(true)}>
+                                <option value="PAGO">Pago de CC</option>
+                                <option value="PAGO_PAUTA">Pago a cuenta</option>
+                              </select>
+                              <select value={p.franquicia_id} onChange={e => updSplit(m.id, idx, "franquicia_id", e.target.value)} style={fld(!!p.franquicia_id)}>
+                                <option value="">— franquicia —</option>
+                                {franquiciasManual.map(f => <option key={f.id} value={String(f.id)}>{f.name}{frMonedaSuf(f)}</option>)}
+                              </select>
+                            </div>
+                          </td>
+                          <td style={{ padding: "4px 12px" }}>
+                            <button onClick={() => rmSplit(m.id, idx)} title="Quitar"
+                              style={{ border: "none", background: "transparent", color: T.muted, cursor: "pointer", fontSize: 12 }}>✕</button>
+                          </td>
+                        </tr>
+                      ))}
+                      <tr style={{ background: bg, borderBottom: `1px solid ${T.cardBorder}`, borderLeft: `3px solid ${T.accent}` }}>
+                        <td /><td />
+                        <td style={{ padding: "4px 12px", textAlign: "right", fontSize: 10, fontWeight: 700, color: splitOk ? "#16a34a" : "#dc2626" }}>
+                          {fmt(splitSum)} / {fmt(total)} {splitOk ? "✓" : "⚠"}
+                        </td>
+                        <td />
+                        <td />
+                        <td style={{ padding: "4px 12px", textAlign: "right" }}>
+                          <button onClick={() => addSplit(m.id)}
+                            style={{ fontSize: 11, border: "none", background: "transparent", color: T.accentDark || "#16a34a", cursor: "pointer", fontWeight: 700 }}>+ franquicia</button>
+                        </td>
+                        <td />
+                      </tr>
+                    </>
+                  )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
         )}
       </div>
+
+      {/* Ignorados de la cuenta activa: descartados sin contabilizar, restaurables. */}
+      {(() => {
+        const ign = ignorados.filter(m => String(m.cuenta_bancaria) === String(cuentaTab));
+        if (!ign.length) return null;
+        return (
+          <div style={{ marginTop: 10 }}>
+            <button onClick={() => setVerIgnorados(v => !v)}
+              style={{ background: "transparent", border: "none", color: T.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: T.font, padding: 0 }}>
+              {verIgnorados ? "▾" : "▸"} Ignorados ({ign.length})
+            </button>
+            {verIgnorados && (
+              <div style={{ marginTop: 6, background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 8, overflow: "hidden" }}>
+                {ign.map(m => {
+                  const ig = parseMeta(m.referencia).ign || "";
+                  return (
+                    <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 12px", borderBottom: "1px solid #f1f5f9", fontSize: 12 }}>
+                      <span style={{ color: T.muted, whiteSpace: "nowrap" }}>{m.fecha}</span>
+                      <span style={{ flex: 1, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.concepto}</span>
+                      {ig.startsWith("haberes:") && <span style={{ fontSize: 9, fontWeight: 800, color: "#7c3aed", background: "#ede9fe", borderRadius: 6, padding: "2px 6px" }}>HABERES</span>}
+                      <span style={{ fontWeight: 700, color: Number(m.monto) < 0 ? "#dc2626" : "#16a34a", whiteSpace: "nowrap" }}>{fmt(Math.abs(Number(m.monto) || 0))}</span>
+                      <button onClick={() => restaurar(m)}
+                        style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "3px 10px", fontSize: 11, fontWeight: 700, color: T.text, cursor: "pointer", fontFamily: T.font }}>
+                        Restaurar
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {reglaModal && (
+        <BancoReglaModal
+          prefill={reglaModal.prefill}
+          cuentas={planCuentas} centros={centros} cuentasBancarias={cuentasAll} proveedores={proveedores}
+          onClose={() => setReglaModal(null)} onSave={handleSaveRegla} />
+      )}
     </div>
   );
 }

@@ -108,7 +108,7 @@ export default function PantallaResumen({ pais = "AR" }) {
     return legajos.find(l => l.id === sel.id || l.nombre === sel.nombre)?.email || "";
   }, [sel, legajos]);
 
-  // Pagos individuales del empleado seleccionado (su_pagos), ordenados por forma y fecha.
+  // Pagos individuales del empleado seleccionado (nb_movimientos origen sueldos), ordenados por forma y fecha.
   const pagosEmpleado = useMemo(() => {
     if (!sel) return [];
     return pagos
@@ -132,6 +132,9 @@ export default function PantallaResumen({ pais = "AR" }) {
     const sedes = [];
     const novedades = [];           // novedades congeladas de la(s) liquidación(es)
     let tarifas = {};
+    const porSede = {};             // sede → total (para elegir la principal)
+    const cs = { horas: new Set(), feriado: new Set(), domingo: new Set(),
+                 cdpCoach: new Set(), cdpFront: new Set(), oneShot: new Set() };  // sedes que aportan a cada concepto
     for (const row of sel.rows) {
       const d = desglosarLiquidacion(row, categorias);
       tarifas = { tarifaHora: d.tarifaHora, tCdpCoach: d.tCdpCoach, tCdpFront: d.tCdpFront,
@@ -143,13 +146,23 @@ export default function PantallaResumen({ pais = "AR" }) {
                        "yogaCant","yogaMonto","redondeo","sueldoVariable"]) {
         acc[k] += d[k] || 0;
       }
-      sedes.push({ sede: row.sede_nombre || "—", horas: d.horasCant, total: d.totalLiquidar });
+      const sn = row.sede_nombre || "—";
+      porSede[sn] = (porSede[sn] || 0) + (Number(d.totalLiquidar) || 0);
+      if ((d.horasCant || 0) + (d.yogaCant || 0) > 0) cs.horas.add(sn);
+      if (d.feriadosCant > 0) cs.feriado.add(sn);
+      if (d.domingosCant > 0) cs.domingo.add(sn);
+      if (d.cdpCoachCant > 0) cs.cdpCoach.add(sn);
+      if (d.cdpFrontCant > 0) cs.cdpFront.add(sn);
+      if (d.oneShotCant  > 0) cs.oneShot.add(sn);
+      sedes.push({ sede: sn, horas: d.horasCant, total: d.totalLiquidar });
       for (const n of (row.novedades || [])) novedades.push({ cuenta: n.cuenta_contable_nombre || "Novedad", descripcion: n.descripcion || "", monto: Number(n.monto) || 0 });
     }
-    acc.sueldoFijo  = acc.fijo + acc.horasMonto;
-    acc.sueldoTotal = acc.sueldoFijo + acc.sueldoVariable;
-    const totalNov  = novedades.reduce((s, n) => s + n.monto, 0);
-    return { ...acc, ...tarifas, sedes, novedades, totalNov, totalLiquidar: acc.sueldoTotal + totalNov };
+    const principalSede = Object.entries(porSede).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+    const conceptoSedes = Object.fromEntries(Object.entries(cs).map(([k, set]) => [k, [...set]]));
+    // El desglose de la ficha (FichaSedes) arma sus propios subtotales; acá solo el total.
+    const totalNov = novedades.reduce((s, n) => s + n.monto, 0);
+    const totalLiquidar = acc.fijo + acc.horasMonto + acc.sueldoVariable + totalNov;
+    return { ...acc, ...tarifas, sedes, novedades, totalNov, principalSede, conceptoSedes, totalLiquidar };
   }, [vista, sel, categorias]);
 
   // Desglose HQ: sueldo base + novedades por cuenta + split de formas de pago.
@@ -229,7 +242,7 @@ export default function PantallaResumen({ pais = "AR" }) {
 }
 
 // Marco compartido de la ficha: header + componentes (children) + total + pagos.
-function FichaShell({ sel, subtitulo, totalLiquidar, pagos, email, periodo, children }) {
+function FichaShell({ sel, subtitulo, totalLiquidar, pagos, email, periodo, tag, children }) {
   const imprimir = () => window.print();
   const enviarMail = () => {
     const asunto = `Liquidación ${periodo} — ${sel.nombre}`;
@@ -250,7 +263,10 @@ function FichaShell({ sel, subtitulo, totalLiquidar, pagos, email, periodo, chil
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12,
         padding: "16px 20px", borderBottom: `1px solid ${T.border}`, background: "#e2e8f0" }}>
         <div>
-          <div style={{ fontSize: 17, fontWeight: 800 }}>{sel.nombre}</div>
+          <div style={{ fontSize: 17, fontWeight: 800 }}>
+            {sel.nombre}
+            {tag && <span style={{ fontSize: 12, fontWeight: 600, color: T.muted, marginLeft: 8 }}>· {tag}</span>}
+          </div>
           <div style={{ fontSize: 13, color: T.muted, marginTop: 2 }}>{subtitulo}</div>
         </div>
         <div className="no-print" style={{ display: "flex", gap: 8, flexShrink: 0 }}>
@@ -277,35 +293,49 @@ function FichaShell({ sel, subtitulo, totalLiquidar, pagos, email, periodo, chil
 function FichaSedes({ sel, resumen, pagos, email, periodo }) {
   const sedes = resumen.sedes.length;
   const subtitulo = `${ROL_LABEL[sel.rol] ?? sel.rol} · ${sedes} sede${sedes !== 1 ? "s" : ""} · ${fmtNum(resumen.horasCant)} hs`;
+  // Fijo = base + horas (base/feriado/domingo/yoga) + asignaciones (la base sobre la que pega la comisión grupal).
+  const sueldoFijo  = resumen.fijo + resumen.horasMonto + resumen.yogaMonto + resumen.feriadosMonto + resumen.domingosMonto + resumen.asignaciones;
+  const incentivos  = resumen.cdpMonto + resumen.oneShotMonto;
+  const totalSueldo = sueldoFijo + resumen.objGrupalMonto + incentivos;
+  // Sedes extra (≠ principal) que aportan a un concepto → se muestran entre paréntesis.
+  const extra = (key) => {
+    const list = (resumen.conceptoSedes?.[key] || []).filter(s => s !== resumen.principalSede);
+    return list.length ? ` (${list.join(", ")})` : "";
+  };
   return (
-    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo}>
+    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={resumen.principalSede}>
       <Section titulo="Componentes">
         <table style={tbl}>
           <thead><tr><Th>Concepto</Th><Th right>Cant.</Th><Th right>Valor u.</Th><Th right>Importe</Th></tr></thead>
           <tbody>
-            <Linea label="Sueldo base"      importe={resumen.fijo} />
-            <Linea label="Horas"            cant={resumen.horasCant}    valor={resumen.tarifaHora}    importe={resumen.horasMonto} />
-            <Subtotal label="Sueldo Fijo" importe={resumen.sueldoFijo} />
+            {/* Sueldo Fijo: base + horas (base/feriado/domingo) + asignaciones */}
+            <Linea label="Sueldo base"   importe={resumen.fijo} />
+            <Linea label={`Horas base${extra("horas")}`}
+              cant={resumen.horasCant + resumen.yogaCant}
+              valor={resumen.horasCant > 0 ? resumen.tarifaHora : resumen.tarifaYoga}
+              importe={resumen.horasMonto + resumen.yogaMonto} />
+            <Linea label={`Horas feriado${extra("feriado")}`} cant={resumen.feriadosCant} valor={resumen.tarifaHora}    importe={resumen.feriadosMonto} />
+            <Linea label={`Horas domingo${extra("domingo")}`} cant={resumen.domingosCant} valor={resumen.tarifaDomingo} importe={resumen.domingosMonto} />
+            <Linea label="Asignaciones"  importe={resumen.asignaciones} />
+            <Subtotal label="Sueldo Fijo" importe={sueldoFijo} />
 
-            <Linea label="CDP coach"        cant={resumen.cdpCoachCant} valor={resumen.tCdpCoach}     importe={resumen.cdpCoachCant * resumen.tCdpCoach} />
-            <Linea label="CDP front desk"   cant={resumen.cdpFrontCant} valor={resumen.tCdpFront}     importe={resumen.cdpFrontCant * resumen.tCdpFront} />
-            <Linea label="One Shot"         cant={resumen.oneShotCant}  valor={resumen.tarifaOS}      importe={resumen.oneShotMonto} />
-            <Linea label="Feriados"         cant={resumen.feriadosCant} valor={resumen.tarifaHora}    importe={resumen.feriadosMonto} />
-            <Linea label="Domingos"         cant={resumen.domingosCant} valor={resumen.tarifaDomingo} importe={resumen.domingosMonto} />
-            <Linea label="Yoga"             cant={resumen.yogaCant}     valor={resumen.tarifaYoga}    importe={resumen.yogaMonto} />
-            <Linea label="Asignaciones"     importe={resumen.asignaciones} />
-            <Linea label="Objetivo Grupal"  importe={resumen.objGrupalMonto} />
-            <Linea label="Redondeo"         importe={resumen.redondeo} />
-            <Subtotal label="Sueldo Variable" importe={resumen.sueldoVariable} />
+            <Linea label="Comisión grupal"  importe={resumen.objGrupalMonto} />
 
-            <Subtotal label="Sueldo Total" importe={resumen.sueldoTotal} fuerte />
+            {/* Incentivos: todo CDP */}
+            <Linea label={`CDP coach${extra("cdpCoach")}`}      cant={resumen.cdpCoachCant} valor={resumen.tCdpCoach}     importe={resumen.cdpCoachCant * resumen.tCdpCoach} />
+            <Linea label={`CDP front desk${extra("cdpFront")}`} cant={resumen.cdpFrontCant} valor={resumen.tCdpFront}     importe={resumen.cdpFrontCant * resumen.tCdpFront} />
+            <Linea label={`One Shot${extra("oneShot")}`}        cant={resumen.oneShotCant}  valor={resumen.tarifaOS}      importe={resumen.oneShotMonto} />
+            <Subtotal label="Incentivos" importe={incentivos} />
 
-            {resumen.novedades.length > 0 && resumen.novedades.map((n, i) => (
+            <Subtotal label="Total sueldo" importe={totalSueldo} fuerte />
+
+            {/* Adicionales sobre el sueldo */}
+            {resumen.novedades.map((n, i) => (
               <Linea key={i} label={n.descripcion || n.cuenta} importe={n.monto} />
             ))}
-            {resumen.totalNov > 0 && (
-              <Subtotal label="Total a liquidar" importe={resumen.totalLiquidar} fuerte />
-            )}
+            <Linea label="Redondeo"         importe={resumen.redondeo} />
+
+            <Subtotal label="Total a liquidar" importe={resumen.totalLiquidar} fuerte />
           </tbody>
         </table>
       </Section>
@@ -349,7 +379,7 @@ function notaDePago(p) {
   return p.legajo_nombre ? p.concepto.replace(p.legajo_nombre, "").replace(/\s{2,}/g, " ").trim() : p.concepto;
 }
 
-// Una línea por pago real (su_pagos): fecha · forma · nota · monto.
+// Una línea por pago real (nb_movimientos origen sueldos): fecha · forma · nota · monto.
 function FormaPagoTabla({ pagos }) {
   return (
     <table style={tbl}>
@@ -424,14 +454,14 @@ function Linea({ label, cant, valor, importe }) {
     <tr style={{ borderTop: `1px solid ${T.border}` }}>
       <Td>{label}</Td>
       <Td right dim={!cant}>{cant ? fmtNum(cant) : "—"}</Td>
-      <Td right dim>{Number(valor) ? fmt(valor) : "—"}</Td>
+      <Td right dim>{Number(cant) > 0 && Number(valor) ? fmt(valor) : "—"}</Td>
       <Td right dim={!hay}>{Number(importe) ? fmt(importe) : "—"}</Td>
     </tr>
   );
 }
 function Subtotal({ label, importe, fuerte }) {
   return (
-    <tr style={{ borderTop: `1px solid ${T.border}`, background: fuerte ? "#f1f5f9" : "#fafbfc" }}>
+    <tr style={{ borderTop: `1px solid ${T.border}`, background: fuerte ? "#dbeafe" : "#e2e8f0" }}>
       <td colSpan={3} style={{ fontSize: 13, fontWeight: fuerte ? 800 : 700, padding: "7px 4px" }}>{label}</td>
       <td style={{ textAlign: "right", fontSize: 13, fontWeight: fuerte ? 800 : 700, padding: "7px 4px",
         fontVariantNumeric: "tabular-nums" }}>{fmt(importe)}</td>

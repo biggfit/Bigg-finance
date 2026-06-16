@@ -322,7 +322,10 @@ export function calcEstadoIngreso(saldo, totalDoc, vtoStr) {
 // ─── MOVIMIENTOS DE TESORERÍA ─────────────────────────────────────────────────
 
 export async function fetchMovTesoreria(sociedad) {
-  return get("nb_movimientos", { sociedad });
+  // Excluye en la FUENTE las líneas ignoradas (IGN-): así Tesorería, Reportes (Balance/Cash
+  // Flow/PN) y Dashboard nunca las cuentan, sin tener que filtrar reporte por reporte.
+  const rows = await get("nb_movimientos", { sociedad });
+  return rows.filter(m => !esIgnorado(m));
 }
 
 export async function appendMovTesoreria({ sociedad, fecha, tipo, cuenta_bancaria, cuenta_destino = "", cuenta = "", concepto, moneda, monto, origen = "manual", origen_id = "", centro_costo = "" }) {
@@ -497,144 +500,315 @@ export async function deleteCentroCosto(id) {
   return post({ action: "del", sheet: "nb_centros_costo", id });
 }
 
+// ─── REGLAS DE BANCO (motor de conciliación) ─────────────────────────────────
+// Tabla de customizaciones: cada fila es una regla que clasifica una línea del
+// extracto. match_tipo ∈ codigo|glosa|cuenta_servicio|cuit|alias ; scope por banco/sociedad/pais.
+export async function fetchBancoReglas() {
+  return get("nb_banco_reglas");
+}
+
+export async function appendBancoRegla(regla) {
+  return post({ action: "add", sheet: "nb_banco_reglas", row: { id: newId("BR"), ...regla, activo: true, created_at: new Date().toISOString() } });
+}
+
+export async function updateBancoRegla(id, patch) {
+  return post({ action: "edit", sheet: "nb_banco_reglas", id, patch });
+}
+
+export async function deleteBancoRegla(id) {
+  return post({ action: "del", sheet: "nb_banco_reglas", id });
+}
+
 // ─── GASTO DIRECTO ───────────────────────────────────────────────────────────
 //
-// Un gasto directo se paga en el momento → genera:
-//   1. Una fila en nb_comprobantes  (subtipo=GASTO)  → aparece en P&L
-//   2. Una fila en nb_movimientos   (tipo=EGRESO_GASTO) → aparece en Cash Flow
+// Un gasto contado es devengado y caja a la vez → UNA sola fila en nb_movimientos
+// (tipo=EGRESO_GASTO, origen="gasto_directo"), imputada (cuenta_contable=NOMBRE +
+// centro_costo + IVA + contraparte). El P&L la lee vía adapter (PantallaReportes);
+// el Cash Flow ya la leía. NO se crea comprobante (no hay doble escritura).
 
 export async function appendGastoDirecto({ sociedad, fecha, cuenta_contable, cuenta_contable_id = "", cc = "", moneda = "ARS", subtotal, ivaRate = 0, nota = "", cuenta_bancaria, referencia = "", proveedor_id = "", proveedor_nombre = "" }) {
-  const id_comp    = newId("GD");
   const created_at = new Date().toISOString();
-  const sub = Number(subtotal) || 0;
-  const iva = sub * ((Number(ivaRate) || 0) / 100);
+  const sub  = Number(subtotal) || 0;
+  const rate = Number(ivaRate) || 0;       // entero (ej. 21), no fracción
+  const iva  = sub * (rate / 100);
   const total = sub + iva;
 
-  // 1. Comprobante
-  await post({
-    action: "add", sheet: "nb_comprobantes",
-    row: {
-      id:                  `${id_comp}-L001`,
-      id_comp,
-      sociedad, fecha,
-      vto:                 fecha,
-      subtipo:             "GASTO",
-      contraparte_id:      proveedor_id,
-      contraparte_nombre:  proveedor_nombre,
-      cuenta_contable,
-      cuenta_contable_id,
-      moneda,
-      centro_costo:        cc,
-      subtotal:            sub,
-      iva_rate:            Number(ivaRate) || 0,
-      iva_monto:           iva,
-      total,
-      nro_comp:            "",
-      nota,
-      created_at,
-    },
-  });
-
-  // 2. Movimiento de tesorería
+  const id = newId("GD");
   await post({
     action: "add", sheet: "nb_movimientos",
     row: {
-      id:              newId("GD-MOV"),
+      id,
       sociedad, fecha,
-      tipo:            "EGRESO_GASTO",
+      tipo:               "EGRESO_GASTO",
       cuenta_bancaria,
-      cuenta_destino:  "",
-      cuenta_contable,
-      centro_costo:    cc,
+      cuenta_destino:     "",
+      cuenta_contable,                       // NOMBRE (buildPnL busca por nombre)
+      centro_costo:       cc,
       moneda,
-      monto:           -total,
-      documento_id:    id_comp,
-      concepto:        nota || `Gasto directo: ${cuenta_contable}`,
+      monto:              -total,            // bruto (lo que sale del banco)
+      documento_id:       "CONTAB-" + id,    // marca devengado-vía-movimiento; si se reimputa a una FC se pisa con el id_comp y sale del P&L
+      concepto:           nota || `Gasto directo: ${cuenta_contable}`,
+      contraparte_id:     proveedor_id,
+      contraparte_nombre: proveedor_nombre,
+      iva_rate:           rate,
+      iva_monto:          iva,
       referencia,
-      origen:          "gasto_directo",
+      origen:             "gasto_directo",
       created_at,
     },
   });
 
-  return { ok: true, id_comp };
+  return { ok: true, id };
+}
+
+// ─── CONCILIACIÓN v2: bandeja persistida ─────────────────────────────────────
+// Al subir el extracto, cada línea entra como nb_movimientos PENDIENTE
+// (origen="extracto", conciliado=""). Aceptar la pasa a conciliado.
+
+// Un movimiento "ignorado" (descartado en la bandeja sin contabilizar): se marca con
+// documento_id "IGN-…". Sale de pendientes y NO cuenta en Tesorería ni Cash Flow (evita
+// el doble conteo, ej. el débito del pago de haberes que ya está en los movs origen=sueldos).
+export const esIgnorado = m => String(m?.documento_id || "").startsWith("IGN-");
+
+// Ingesta: crea movimientos pendientes con dedupe (no duplica al re-subir).
+const _saldoDe = m => { const x = String(m.referencia || "").match(/saldo=([^;]*)/); return x ? x[1] : ""; };
+
+export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "ARS", lineas = [] }) {
+  const todos = await get("nb_movimientos", { sociedad });
+  // dedupe contra TODOS los movimientos de la cuenta (pendientes, aceptados, splits de franquicia).
+  // Clave por SALDO del extracto (running balance, único por línea) → robusta a edición de
+  // monto y a splits; fallback a fecha|monto cuando no hay saldo.
+  const keyOf = (fecha, monto, saldo) => saldo ? `${fecha}|${saldo}` : `${fecha}|${Number(monto) || 0}`;
+  const existentes = todos.filter(m => String(m.cuenta_bancaria) === String(cuenta_bancaria));
+  const seen = new Set(existentes.map(m => keyOf(m.fecha, m.monto, _saldoDe(m))));
+  let creados = 0, dups = 0, errores = 0;
+  for (const l of lineas) {
+    const k = keyOf(l.fecha, l.monto, l.saldo);
+    if (seen.has(k)) { dups++; continue; }
+    const p = l.propuesta || {};
+    try {
+      // Resiliente: si un POST falla (GAS lento/timeout), no aborta el lote — sigue con los demás.
+      // No marcamos `seen` hasta confirmar; así un re-upload reintenta solo los que faltaron.
+      await post({ action: "add", sheet: "nb_movimientos", row: {
+        id: newId("EXT"), sociedad, fecha: l.fecha,
+        tipo: (Number(l.monto) || 0) > 0 ? "INGRESO" : "EGRESO",
+        cuenta_bancaria, cuenta_destino: p.cuenta_destino || "",
+        cuenta_contable: p.cuenta_contable || "", centro_costo: p.centro_costo || "",
+        moneda, monto: Number(l.monto) || 0, documento_id: "",
+        concepto: l.descripcion || "",
+        contraparte_id: "", contraparte_nombre: l.ley1 || l.contraparte || "",   // razón social del banco (Leyenda 1)
+        referencia: `cod=${l.codigoConcepto || ""};tipo=${p.tipo || ""};regla=${p.regla_id || ""};prov=${p.proveedor_id || ""};fr=${p.franquicia_id || ""};frops=${(p.franquicia_opciones || []).join("|")};cuit=${l.ley2 || l.cuit || ""};saldo=${l.saldo || ""}`,
+        origen: "extracto",
+        created_at: new Date().toISOString(),
+      }});
+      seen.add(k);
+      creados++;
+    } catch (e) {
+      errores++;
+    }
+  }
+  return { creados, dups, errores };
+}
+
+// Trae los movimientos del extracto que faltan conciliar.
+// Estado por documento_id: vacío = pendiente; con valor = conciliado (linkeado a su asiento).
+export async function fetchMovimientosPendientes(sociedad) {
+  const rows = await get("nb_movimientos", { sociedad });
+  return rows.filter(m => m.origen === "extracto" && !m.documento_id);
+}
+
+// Acepta un movimiento pendiente: lo IMPUTA in-place y lo deja conciliado.
+// Una sola escritura (no crea comprobante): el movimiento es el hecho devengado+caja;
+// el P&L lo lee vía adapter por documento_id que empieza con "CONTAB-".
+export async function aceptarMovimiento(mov, prop = {}) {
+  const tipo = prop.tipo || "";
+  if (tipo === "transferencia_interna") {
+    // Si el destino es de otra sociedad → intercompany (una pata por lado; la otra la concilia
+    // el extracto de la otra sociedad, no se auto-genera el espejo → no duplica).
+    const interco = !!prop.interco;
+    return post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
+      tipo: interco ? "INTERCOMPANIA" : "TRANSFERENCIA",
+      cuenta_destino: prop.cuenta_destino || mov.cuenta_destino || "",
+      documento_id: newId(interco ? "INT" : "TRF"),
+    }});
+  }
+  const cuentaId = prop.cuenta_contable || mov.cuenta_contable || "";
+  const esEgreso = (Number(mov.monto) || 0) < 0;
+  return post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
+    tipo:               esEgreso ? "EGRESO_GASTO" : "INGRESO",   // unifica con el gasto directo manual
+    cuenta_contable:    String(cuentaId).replace(/^CUENTA_/, ""),   // NOMBRE para el P&L
+    centro_costo:       prop.centro_costo || mov.centro_costo || "",
+    contraparte_id:     prop.proveedor_id || "",
+    contraparte_nombre: prop.proveedor_nombre || mov.contraparte_nombre || "",
+    documento_id:       "CONTAB-" + mov.id,
+  }});
+}
+
+// Acepta un COBRO de franquiciado (1 o varias franquicias = split).
+// partes: [{ franquicia_id, franquicia_nombre, fr_tipo, monto }]. La 1ª pisa el movimiento
+// original (sale de pendientes al flipear origen→"franquicias"); el resto se agregan.
+// NO crea comprobante ni lleva documento_id (es caja; el devengado vive en Franquicias).
+// fr_tipo PAGO/PAGO_PAUTA = COBRO; PAGO_ENVIADO = EGRESO. El signo se hereda del monto original.
+export async function aceptarCobroFranquicia(mov, partes = []) {
+  if (!partes.length) return;
+  const signo = (Number(mov.monto) || 0) < 0 ? -1 : 1;
+  const tipoMov = ft => (ft === "PAGO_ENVIADO" ? "EGRESO" : "COBRO");
+  const [p0, ...resto] = partes;
+  await post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
+    tipo: tipoMov(p0.fr_tipo), origen: "franquicias", fr_tipo: p0.fr_tipo,
+    contraparte_id: String(p0.franquicia_id || ""), contraparte_nombre: p0.franquicia_nombre || "",
+    monto: signo * Math.abs(Number(p0.monto) || 0),
+    cuenta_contable: "", centro_costo: "",
+  }});
+  for (const p of resto) {
+    await post({ action: "add", sheet: "nb_movimientos", row: {
+      id: newId("FRQ"), sociedad: mov.sociedad, fecha: mov.fecha,
+      tipo: tipoMov(p.fr_tipo), cuenta_bancaria: mov.cuenta_bancaria, cuenta_destino: "",
+      cuenta_contable: "", centro_costo: "", moneda: mov.moneda || "ARS",
+      monto: signo * Math.abs(Number(p.monto) || 0), documento_id: "",
+      concepto: mov.concepto || "", contraparte_id: String(p.franquicia_id || ""), contraparte_nombre: p.franquicia_nombre || "",
+      fr_tipo: p.fr_tipo, referencia: mov.referencia || "", origen: "franquicias",
+      created_at: new Date().toISOString(),
+    }});
+  }
+}
+
+// Imputa una línea del extracto a una factura de proveedor existente: la convierte en un
+// PAGO linkeado a esa FC. Tesorería netea la CxP (match por documento_id); el P&L la excluye
+// (no es "CONTAB-": el devengado ya está en el comprobante). Pago parcial = si |monto| < saldo
+// de la FC, el remanente sigue pendiente. No crea fila nueva: edita la del extracto in-place.
+export async function imputarPagoFC(mov, { documento_id, cuenta_contable = "", centro_costo = "", proveedor_id = "", proveedor_nombre = "" }) {
+  return post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
+    tipo:               "PAGO",
+    cuenta_contable:    String(cuenta_contable || "").replace(/^CUENTA_/, ""),
+    centro_costo,
+    contraparte_id:     proveedor_id,
+    contraparte_nombre: proveedor_nombre || mov.contraparte_nombre || "",
+    documento_id,                                       // id de la FC → netea CxP en Tesorería
+    concepto:           mov.concepto || `Pago ${documento_id}`,
+  }});
+}
+
+// Imputa un crédito del banco a una factura de VENTA (cobro). Simétrico a imputarPagoFC.
+// Las retenciones (lo que el cliente retuvo) van como N líneas, una por cuenta contable
+// (IIBB / Ganancias / IVA): cada una cierra parte de la CxC (netea por documento_id) y entra
+// al P&L como resultado negativo (gasto) vía origen="retencion". NO son caja → cuenta_bancaria
+// vacía (no tocan saldos de banco) y se excluyen del Cash Flow.
+// retenciones: [{ cuenta, monto }]  (cuenta = id o nombre de cuenta contable)
+// retencion_centro: centro de costo para las retenciones (normalmente "HQ - Impuestos" → van al
+// P&L BIGG bajo Impuestos, no a la sede). El cobro (caja) usa centro_costo de la factura.
+export async function imputarCobroIngreso(mov, { documento_id, cuenta_contable = "", centro_costo = "", cliente_id = "", cliente_nombre = "", retenciones = [], retencion_centro = "" }) {
+  await post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
+    tipo:               "COBRO",
+    cuenta_contable:    String(cuenta_contable || "").replace(/^CUENTA_/, ""),
+    centro_costo,
+    contraparte_id:     cliente_id,
+    contraparte_nombre: cliente_nombre || mov.contraparte_nombre || "",
+    documento_id,
+    concepto:           mov.concepto || `Cobro ${documento_id}`,
+  }});
+  for (const r of retenciones) {
+    const ret = Math.abs(Number(r?.monto) || 0);
+    if (ret <= 0.01 || !r?.cuenta) continue;
+    await post({ action: "add", sheet: "nb_movimientos", row: {
+      id: newId("RET"), sociedad: mov.sociedad, fecha: mov.fecha,
+      tipo: "COBRO", cuenta_bancaria: "", cuenta_destino: "",
+      cuenta_contable: String(r.cuenta).replace(/^CUENTA_/, ""),
+      centro_costo: retencion_centro || centro_costo, moneda: mov.moneda || "ARS",
+      monto: ret, documento_id,
+      concepto: `Retención s/ ${documento_id}`,
+      contraparte_id: cliente_id, contraparte_nombre: cliente_nombre || "",
+      origen: "retencion", created_at: new Date().toISOString(),
+    }});
+  }
+}
+
+// Ignora una línea del extracto: la descarta sin contabilizar. Soft-mark (no borra):
+// la fila conserva su `saldo=` en referencia → el dedup la ve y NO la re-crea al re-subir.
+// Reversible con restaurarMovimiento. motivo: texto libre (para haberes = "haberes:<lote>").
+export async function ignorarMovimiento(mov, motivo = "") {
+  const ref = String(mov.referencia || "").replace(/;?ign=[^;]*/g, "");
+  return post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
+    documento_id: "IGN-" + mov.id,
+    referencia: `${ref};ign=${motivo || "1"}`,
+  }});
+}
+
+// Restaura una línea ignorada → vuelve a pendiente (documento_id vacío, sin marca ign=).
+export async function restaurarMovimiento(mov) {
+  const ref = String(mov.referencia || "").replace(/;?ign=[^;]*/g, "");
+  return post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
+    documento_id: "", referencia: ref,
+  }});
+}
+
+// Líneas del extracto ya ignoradas (para el panel "Ver ignorados" con opción Restaurar).
+export async function fetchMovimientosIgnorados(sociedad) {
+  const rows = await get("nb_movimientos", { sociedad });
+  return rows.filter(m => m.origen === "extracto" && esIgnorado(m));
+}
+
+// Pagos de haberes ya registrados por Sueldos (nb_movimientos origen="sueldos"), para que
+// Conciliación agrupe por lote_pago y matchee el débito del banco contra el total del lote.
+export async function fetchPagosSueldos(sociedad) {
+  const rows = await get("nb_movimientos", { sociedad });
+  return rows.filter(m => m.origen === "sueldos" && m.tipo_componente === "haberes" && !esIgnorado(m));
 }
 
 /**
- * Trae todos los gastos directos de una sociedad (subtipo=GASTO).
- * Cada gasto genera 1 fila en nb_comprobantes y 1 en nb_movimientos.
- * Devuelve filas planas enriquecidas con la cuenta bancaria usada.
+ * Trae todos los gastos directos de una sociedad (nb_movimientos origen="gasto_directo").
+ * Una sola fila por gasto; sin join a comprobantes.
  */
 export async function fetchGastos(sociedad) {
-  const [compRows, movRows] = await Promise.all([
-    get("nb_comprobantes", { sociedad }),
-    get("nb_movimientos",  { sociedad }),
-  ]);
-  const gastos = compRows.filter(r => (r.subtipo ?? "").toUpperCase() === "GASTO");
-  const movMap = new Map();
-  for (const m of movRows) {
-    if (m.tipo === "EGRESO_GASTO") movMap.set(m.documento_id, m);
-  }
-  return gastos.map(r => {
-    const mov = movMap.get(r.id_comp);
-    return {
-      id:              r.id_comp,
-      rowId:           r.id,
-      fecha:           r.fecha ?? "",
-      cuenta_contable: r.cuenta_contable ?? "",
-      cc:              r.centro_costo ?? "",
-      moneda:          r.moneda ?? "ARS",
-      subtotal:        toNum(r.subtotal),
-      ivaRate:         toNum(r.iva_rate),
-      total:           toNum(r.total),
-      proveedor:       r.contraparte_nombre ?? "",
-      nota:            r.nota ?? "",
-      cuentaBancaria:  mov?.cuenta_bancaria ?? "",
-      _movId:          mov?.id ?? null,
-    };
-  }).sort((a, b) => (b.fecha > a.fecha ? 1 : -1));
+  const movRows = await get("nb_movimientos", { sociedad });
+  return movRows
+    .filter(m => m.origen === "gasto_directo")
+    .map(m => {
+      const total = Math.abs(toNum(m.monto));
+      const iva   = toNum(m.iva_monto);
+      return {
+        id:              m.id,
+        _movId:          m.id,
+        fecha:           m.fecha ?? "",
+        cuenta_contable: m.cuenta_contable ?? "",
+        cc:              m.centro_costo ?? "",
+        moneda:          m.moneda ?? "ARS",
+        subtotal:        total - iva,
+        ivaRate:         toNum(m.iva_rate),
+        total,
+        proveedor:       m.contraparte_nombre ?? "",
+        nota:            m.concepto ?? "",
+        cuentaBancaria:  m.cuenta_bancaria ?? "",
+      };
+    })
+    .sort((a, b) => (b.fecha > a.fecha ? 1 : -1));
 }
 
-/** Elimina un gasto directo (comprobante + movimiento de tesorería). */
-export async function deleteGasto(rowId, movId) {
-  const ops = [post({ action: "del", sheet: "nb_comprobantes", id: rowId })];
-  if (movId) ops.push(post({ action: "del", sheet: "nb_movimientos", id: movId }));
-  await Promise.all(ops);
+/** Elimina un gasto directo (solo el movimiento). */
+export async function deleteGasto(movId) {
+  await post({ action: "del", sheet: "nb_movimientos", id: movId });
 }
 
-/** Actualiza un gasto directo existente (comprobante + movimiento de tesorería). */
-export async function updateGastoDirecto(rowId, movId, { fecha, cuenta_contable, cuenta_contable_id = "", cc = "", moneda = "ARS", subtotal, ivaRate = 0, nota = "", cuenta_bancaria, referencia = "", proveedor_id = "", proveedor_nombre = "" }) {
+/** Actualiza un gasto directo existente (solo el movimiento). */
+export async function updateGastoDirecto(movId, { fecha, cuenta_contable, cuenta_contable_id = "", cc = "", moneda = "ARS", subtotal, ivaRate = 0, nota = "", cuenta_bancaria, referencia = "", proveedor_id = "", proveedor_nombre = "" }) {
   const sub   = Number(subtotal) || 0;
-  const iva   = sub * ((Number(ivaRate) || 0) / 100);
+  const rate  = Number(ivaRate) || 0;
+  const iva   = sub * (rate / 100);
   const total = sub + iva;
-  const ops = [
-    post({ action: "edit", sheet: "nb_comprobantes", id: rowId, patch: {
-      fecha, vto: fecha,
-      contraparte_id:     proveedor_id,
-      contraparte_nombre: proveedor_nombre,
-      cuenta_contable,
-      cuenta_contable_id,
-      moneda,
-      centro_costo:       cc,
-      subtotal:           sub,
-      iva_rate:           Number(ivaRate) || 0,
-      iva_monto:          iva,
-      total,
-      nota,
-    }}),
-  ];
-  if (movId) ops.push(
-    post({ action: "edit", sheet: "nb_movimientos", id: movId, patch: {
-      fecha,
-      cuenta_bancaria,
-      cuenta_contable,
-      centro_costo: cc,
-      moneda,
-      monto:        -total,
-      concepto:     nota || `Gasto directo: ${cuenta_contable}`,
-      referencia,
-    }}),
-  );
-  await Promise.all(ops);
+  await post({ action: "edit", sheet: "nb_movimientos", id: movId, patch: {
+    fecha,
+    cuenta_bancaria,
+    cuenta_contable,
+    centro_costo:       cc,
+    moneda,
+    monto:              -total,
+    concepto:           nota || `Gasto directo: ${cuenta_contable}`,
+    contraparte_id:     proveedor_id,
+    contraparte_nombre: proveedor_nombre,
+    iva_rate:           rate,
+    iva_monto:          iva,
+    referencia,
+  }});
 }
 
 // ─── P&L — Líneas enriquecidas ────────────────────────────────────────────────

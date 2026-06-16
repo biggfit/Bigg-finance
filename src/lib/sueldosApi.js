@@ -85,6 +85,11 @@ function newId(prefix = "SU") {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
 }
 
+// Id de LOTE de pago: se genera UNA vez por acción de "Registrar pago" y se estampa
+// en todos los movimientos de esa tanda → Conciliación matchea el débito del banco
+// contra el total del lote (no del mes), evitando el doble conteo de la caja de sueldos.
+export function nuevoLote() { return newId("LOTE"); }
+
 // ── Formas de pago (receta de cobro por empleado) ─────────────────────────────
 // Cada línea: { id, tipo, importe, banco, tipo_cuenta, cuenta, cbu, cuit, nota }
 // tipo ∈ haberes | deposito | transferencia | efectivo
@@ -472,7 +477,7 @@ export function sociedadDeForma(liq, bucket) {
 
 // Baldes de forma de pago que componen el devengado del sueldo (cubren el total_bruto).
 // La cuenta contable es siempre "Sueldos" (el monotributo es sueldo, no honorarios);
-// varía la sociedad. tipo_componente de su_pagos → balde para la cuenta por pagar.
+// varía la sociedad. tipo_componente del pago → balde para la cuenta por pagar.
 export const SALARY_BUCKETS = [
   { bucket: "haberes",     campo: "monto_haberes" },
   { bucket: "deposito",    campo: "monto_deposito" },
@@ -549,6 +554,47 @@ export async function fetchLiquidacionesCerradas(anio) {
     .filter(l => isCerrada(l.estado) && (anio == null || Number(l.anio) === Number(anio)));
 }
 
+// Alias beta↔b: sueldos deriva "beta" para efectivo/depósito; Numbers la registra "b".
+export const normSoc = (s) => {
+  const v = String(s ?? "").toLowerCase().trim();
+  return (v === "b" || v === "beta") ? "beta" : v;
+};
+
+// Deuda viva de sueldos POR LEGAJO: devengado (liquidaciones cerradas) − pagado
+// (nb_movimientos origen sueldos), neteado por legajo+mes+sociedad y agregado por legajo.
+// La antigüedad (aging) se calcula en la pantalla con la fecha de hoy sobre `items`.
+// `ambito` (hq/sedes) sale del rol de la liquidación → sirve para el deep-link al wizard.
+export function pendienteSueldosPorLegajo(liqsCerradas, pagos, { pais } = {}) {
+  const liqs = (liqsCerradas || []).filter(l => !pais || !l.pais || l.pais === pais);
+  const neto = new Map();   // legajo|anio-mes|soc → { legajo_id, legajo, mes, anio, sociedad, ambito, monto }
+  for (const liq of liqs) {
+    const mes = Number(liq.mes) || 0, anio = Number(liq.anio) || 0;
+    const ambito = ROLES_HQ.includes(liq.rol) ? "hq" : "sedes";
+    const legajo = liq.legajo_nombre || liq.legajo_id || "Sin nombre";
+    for (const d of devengadoPorFormaYSociedad(liq)) {
+      const soc = normSoc(d.sociedad);
+      const key = `${liq.legajo_id}|${anio}-${mes}|${soc}`;
+      const cur = neto.get(key) || { legajo_id: liq.legajo_id, legajo, mes, anio, sociedad: soc, ambito, monto: 0 };
+      cur.monto += Number(d.total) || 0;
+      neto.set(key, cur);
+    }
+  }
+  for (const p of (pagos || [])) {
+    const key = `${p.legajo_id}|${Number(p.anio) || 0}-${Number(p.mes) || 0}|${normSoc(p.sociedad_id)}`;
+    const cur = neto.get(key);
+    if (cur) cur.monto -= Number(p.monto) || 0;
+  }
+  const porLegajo = new Map();
+  for (const v of neto.values()) {
+    if (v.monto <= 0.5) continue;   // tolerancia de redondeo
+    const g = porLegajo.get(v.legajo_id) || { legajo_id: v.legajo_id, legajo: v.legajo, total: 0, items: [] };
+    g.total += v.monto;
+    g.items.push({ mes: v.mes, anio: v.anio, sociedad: v.sociedad, ambito: v.ambito, monto: v.monto });
+    porLegajo.set(v.legajo_id, g);
+  }
+  return [...porLegajo.values()].sort((a, b) => b.total - a.total);
+}
+
 // ── NOVEDADES ─────────────────────────────────────────────────────────────────
 
 export async function fetchNovedades(mes, anio) {
@@ -586,57 +632,76 @@ export async function deleteNovedad(id) {
 }
 
 // ── PAGOS ─────────────────────────────────────────────────────────────────────
+// Un pago de sueldo ES un nb_movimientos (origen "sueldos"). No hay tabla su_pagos:
+// se eliminó para evitar la doble escritura y la doble lectura (igual que proveedores,
+// donde el pago es un nb_movimientos con documento_id contra su comprobante).
 
-function parsePago(r) {
+// Mapea una fila CRUDA de nb_movimientos (origen sueldos) al shape de "pago" que las
+// pantallas ya esperan. La hoja guarda monto NEGATIVO (egreso de caja); acá lo
+// devolvemos POSITIVO porque las sumas de "pagado" trabajan en positivo.
+export function parsePagoFromMov(m) {
   return {
-    id:                       r.id,
-    mes:                      r.mes,
-    anio:                     r.anio,
-    pais:                     r.pais ?? "",
-    legajo_id:                r.legajo_id ?? "",
-    legajo_nombre:            r.legajo_nombre ?? "",
-    sociedad_id:              r.sociedad_id ?? "",
-    sociedad_nombre:          r.sociedad_nombre ?? "",
-    centro_costo:             r.centro_costo ?? "",
+    id:                       m.id,
+    nb_movimiento_id:         m.id,
+    mes:                      m.mes,
+    anio:                     m.anio,
+    pais:                     m.pais ?? "",
+    legajo_id:                m.legajo_id ?? "",
+    legajo_nombre:            m.legajo_nombre ?? "",
+    sociedad_id:              m.sociedad ?? "",
+    sociedad_nombre:          m.sociedad_nombre ?? "",
+    centro_costo:             m.centro_costo ?? "",
     // haberes | deposito | monotributo | transferencia_financiera | efectivo | rendicion
-    tipo_componente:          r.tipo_componente ?? "haberes",
-    monto:                    Number(r.monto) || 0,
-    fecha:                    r.fecha ?? "",
-    cuenta_bancaria_id:       r.cuenta_bancaria_id ?? "",
-    cuenta_bancaria_nombre:   r.cuenta_bancaria_nombre ?? "",
-    forma_pago_id:            r.forma_pago_id ?? "",
-    nb_movimiento_id:         r.nb_movimiento_id ?? "",
-    concepto:                 r.concepto ?? "",
-    nota:                     r.nota ?? "",
-    registrado_por:           r.registrado_por ?? "",
-    ambito:                   r.ambito ?? "",   // "hq" | "sedes" — separa pagos de un legajo con liquidación en ambos
+    tipo_componente:          m.tipo_componente ?? "haberes",
+    monto:                    Math.abs(Number(m.monto) || 0),
+    fecha:                    m.fecha ?? "",
+    cuenta_bancaria_id:       m.cuenta_bancaria ?? "",
+    cuenta_bancaria_nombre:   m.cuenta_bancaria_nombre ?? "",
+    forma_pago_id:            m.forma_pago_id ?? "",
+    concepto:                 m.concepto ?? "",
+    nota:                     m.nota ?? "",
+    registrado_por:           m.registrado_por ?? "",
+    ambito:                   m.ambito ?? "",   // "hq" | "sedes" — separa pagos de un legajo con liquidación en ambos
   };
 }
 
+// Pagos de sueldo = movimientos de Numbers con origen "sueldos". El filtro mes/anio es
+// el PERÍODO de la liquidación (columnas mes/anio del movimiento), no la fecha de pago.
+function _pagosDeMovs(rows, { mes, anio } = {}) {
+  return (Array.isArray(rows) ? rows : [])
+    .filter(m => m.origen === "sueldos")
+    .filter(m => mes  == null || Number(m.mes)  === Number(mes))
+    .filter(m => anio == null || Number(m.anio) === Number(anio))
+    .map(parsePagoFromMov);
+}
+
 export async function fetchPagos(mes, anio) {
-  const rows = await get("su_pagos", { mes, anio });
-  return (Array.isArray(rows) ? rows : []).map(parsePago);
+  const rows = await get("nb_movimientos", {}, BASE_NB);
+  return _pagosDeMovs(rows, { mes, anio });
 }
 
 // Pagos de sueldo (para la cuenta por pagar de sueldos en el Balance). Sin `anio` → todos.
 export async function fetchPagosAnio(anio) {
-  const rows = await get("su_pagos", anio ? { anio } : {});
-  return (Array.isArray(rows) ? rows : []).map(parsePago);
+  const rows = await get("nb_movimientos", {}, BASE_NB);
+  return _pagosDeMovs(rows, anio != null ? { anio } : {});
 }
 
 /**
- * Registra un pago real. Crea la fila en su_pagos Y un nb_movimientos en Numbers (Tesorería).
+ * Registra un pago real como UN movimiento en Numbers (Tesorería). origen="sueldos".
+ * Las columnas mes/anio/legajo_id/legajo_nombre/tipo_componente/ambito/forma_pago_id/nota
+ * son las que antes vivían en su_pagos (ahora exclusivas del movimiento de sueldo).
  */
 export async function appendPago({
   mes, anio, pais = "", legajo_id, legajo_nombre, sociedad_id, sociedad_nombre,
   tipo_componente, monto, fecha, cuenta_bancaria_id, cuenta_bancaria_nombre,
   cuenta_contable_id = "", cuenta_contable_nombre = "",
-  forma_pago_id = "",
+  forma_pago_id = "", lote_pago = "",
   centro_costo = "", concepto = "", nota = "", registrado_por = "", ambito = "",
 }) {
-  // 1. Crear movimiento en Numbers
   const nb_concepto = concepto || `Sueldo ${legajo_nombre} ${mes}/${anio} · ${tipo_componente}`;
   const nb_movimiento_id = newId("MOV");
+  // Link estilo-proveedores contra la liquidación (sede solo aplica en Sedes).
+  const documento_id = idLiqDe(legajo_id, mes, anio, ambito === "sedes" ? centro_costo : "");
   const nbRow = {
     id:              nb_movimiento_id,
     sociedad:        sociedad_id,
@@ -646,38 +711,22 @@ export async function appendPago({
     cuenta_contable: cuenta_contable_id,
     moneda:          "ARS",
     monto:           -Math.abs(monto),
+    documento_id,
     concepto:        nb_concepto,
     centro_costo,
     origen:          "sueldos",
+    // ── Columnas de nómina (antes su_pagos) ──
+    mes, anio, legajo_id, legajo_nombre,
+    tipo_componente, forma_pago_id, lote_pago, ambito, nota,
     created_at:      new Date().toISOString(),
   };
   await post({ action: "add", sheet: "nb_movimientos", row: nbRow }, BASE_NB);
-
-  // 2. Crear registro en su_pagos
-  const id = newId("PAG");
-  await post({
-    action: "add", sheet: "su_pagos",
-    row: {
-      id, mes, anio, pais, legajo_id, legajo_nombre,
-      sociedad_id, sociedad_nombre, centro_costo,
-      tipo_componente, monto, fecha,
-      cuenta_bancaria_id, cuenta_bancaria_nombre,
-      forma_pago_id,
-      nb_movimiento_id, concepto: nb_concepto, nota, registrado_por, ambito,
-      created_at: new Date().toISOString(),
-    },
-  });
-
-  return { id, nb_movimiento_id };
+  return { id: nb_movimiento_id, nb_movimiento_id };
 }
 
 export async function deletePago(id, nb_movimiento_id) {
-  await Promise.all([
-    post({ action: "del", sheet: "su_pagos", id }),
-    nb_movimiento_id
-      ? post({ action: "del", sheet: "nb_movimientos", id: nb_movimiento_id }, BASE_NB)
-      : null,
-  ].filter(Boolean));
+  const movId = nb_movimiento_id || id;
+  if (movId) await post({ action: "del", sheet: "nb_movimientos", id: movId }, BASE_NB);
 }
 
 // ── CARGAS SOCIALES ───────────────────────────────────────────────────────────
