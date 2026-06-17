@@ -11,7 +11,7 @@ import { BancoReglaModal } from "./PantallaMaestros";
 import { fetchAll } from "../lib/sheetsApi";
 import { computeSaldoReal } from "../lib/helpers";
 import { parseGalicia } from "./parsers/galicia";
-import { clasificarLineas } from "./reconciliacion/ruleEngine";
+import { clasificarLineas, clasificarLinea } from "./reconciliacion/ruleEngine";
 
 const TIPO_LABEL = {
   impuesto: "Impuesto", comision: "Comisión", interes: "Interés", servicio: "Servicio",
@@ -58,6 +58,8 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
   const [ingresos,   setIngresos]   = useState([]);    // facturas de venta (para imputar cobros)
   const [pagosCobros,setPagosCobros]= useState([]);    // pagos/cobros (para saldo pendiente de cada FC)
   const [ignorados,  setIgnorados]  = useState([]);    // líneas del extracto ya descartadas
+  const [erroresIngesta, setErroresIngesta] = useState(null); // { lineas, cuenta_bancaria, moneda } que fallaron al subir
+  const [filtroTipo, setFiltroTipo] = useState("");   // filtro por grupo de Propuesta (para aprobar por grupos)
   const [verIgnorados,setVerIgnorados]= useState(false);
   const [reglaModal, setReglaModal] = useState(null);  // {prefill} para crear regla desde una línea
   const [loading,    setLoading]    = useState(true);
@@ -139,9 +141,15 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
     () => franquicias.filter(f => f.activa !== false).sort(byName),
     [franquicias]);
   const frMonedaSuf = (f) => { const cur = (f.currencies || [])[0] || f.moneda || f.currency || ""; return cur && cur !== monedaCuenta ? ` · ${cur}` : ""; };
-  // Cuentas contables por dirección: ingreso (crédito) vs gasto (débito).
-  const cuentasIngreso = useMemo(() => planCuentas.filter(c => /vent|ingres/i.test(`${c.tipo} ${c.categoria_pnl}`)).sort(byName), [planCuentas]);
-  const cuentasGasto   = useMemo(() => planCuentas.filter(c => !/vent|ingres/i.test(`${c.tipo} ${c.categoria_pnl}`)).sort(byName), [planCuentas]);
+  // Cuentas contables: TODAS (ordenadas). No filtramos por signo con heurística de nombre porque
+  // misclasifica (ej. "IIBB / Ingresos Brutos" es un impuesto, no un ingreso) → ocultaba la cuenta
+  // que la regla ya había imputado. El usuario elige; la regla pre-llena.
+  const cuentasTodas = useMemo(() => [...planCuentas].sort(byName), [planCuentas]);
+  // Sets de ids para validar O(1) (verde/aceptable solo si el valor existe en el master).
+  const cuentasId = useMemo(() => new Set(cuentasTodas.map(c => String(c.id))), [cuentasTodas]);
+  const centrosId = useMemo(() => new Set(centros.map(c => String(c.id))), [centros]);
+  const cuentaValida = (id) => !!id && cuentasId.has(String(id));
+  const ccValido     = (id) => !!id && centrosId.has(String(id));
 
   // ── Pago de haberes: el débito del banco ya está en los movs origen=sueldos (doble conteo).
   // Agrupamos esos movs por lote_pago (un lote = una tanda de pago) → matcheamos el débito
@@ -242,13 +250,26 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
       const cta = cuentas.find(c => c.id === cuentaTab);
       const ctx = { banco: cta?.banco, sociedad, pais: "", franquicias, sociedades, cuentas: cuentasAll, moneda: cta?.moneda || "ARS" };
       const lineas = clasificarLineas(data.lineas, reglas, proveedores, ctx);
-      const { creados, dups, errores } = await ingestarExtracto({
-        sociedad, cuenta_bancaria: cuentaTab, moneda: cta?.moneda || "ARS", lineas,
-      });
-      setMsg(`✓ ${creados} nuevos${dups ? ` · ${dups} duplicados` : ""}${errores ? ` · ⚠ ${errores} con error — re-subí para reintentar` : ""}.`);
+      const moneda = cta?.moneda || "ARS";
+      const { creados, dups, errores, fallidas } = await ingestarExtracto({ sociedad, cuenta_bancaria: cuentaTab, moneda, lineas });
+      setMsg(`✓ ${creados} nuevos${dups ? ` · ${dups} duplicados` : ""}${errores ? ` · ⚠ ${errores} con error` : ""}.`);
+      setErroresIngesta(errores ? { lineas: fallidas, cuenta_bancaria: cuentaTab, moneda } : null);
       await recargar();
     } catch (e) { setMsg("Error: " + e.message); }
     finally { setUploading(false); if (fileRef.current) fileRef.current.value = ""; }
+  };
+
+  // Reintenta SOLO las líneas que fallaron en la última carga (no hace falta re-subir el archivo).
+  const reintentarErrores = async () => {
+    if (!erroresIngesta?.lineas?.length) return;
+    setUploading(true); setMsg("");
+    try {
+      const { creados, dups, errores, fallidas } = await ingestarExtracto({ sociedad, ...erroresIngesta });
+      setMsg(`✓ ${creados} reintentadas${dups ? ` · ${dups} ya estaban` : ""}${errores ? ` · ⚠ ${errores} siguen con error` : ""}.`);
+      setErroresIngesta(errores ? { ...erroresIngesta, lineas: fallidas } : null);
+      await recargar();
+    } catch (e) { setMsg("Error: " + e.message); }
+    finally { setUploading(false); }
   };
 
   // Estado de "modo franquicia" de una fila (auto por reconocimiento, o manual).
@@ -310,13 +331,16 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
     }
     const cuentaSel = (edits[mov.id]?.cuenta_contable) ?? mov.cuenta_contable ?? "";
     const ccSel = (edits[mov.id]?.centro_costo) ?? mov.centro_costo ?? "";
-    return !!cuentaSel && !!ccSel;
+    // cuenta y centro deben resolver a una opción real (si no, no se ven y se perderían en el P&L).
+    return cuentaValida(cuentaSel) && ccValido(ccSel);
   };
 
   // Ejecuta la aceptación (asume fila lista). Lanza si el GAS falla.
   const doAceptar = async (mov) => {
     if (esTransferMov(mov)) {
-      await aceptarMovimiento(mov, { tipo: "transferencia_interna", cuenta_destino: destinoDe(mov), interco: esInterco(mov) });
+      const dest = cuentasAll.find(c => String(c.id) === String(destinoDe(mov)));
+      await aceptarMovimiento(mov, { tipo: "transferencia_interna", cuenta_destino: destinoDe(mov), interco: esInterco(mov),
+        destino_sociedad: dest?.sociedad, destino_moneda: dest?.moneda });
       setPendientes(prev => prev.filter(m => m.id !== mov.id));
       return;
     }
@@ -461,13 +485,60 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
     return { ...e, [id]: { ...e[id], split: split.length ? split : null } };
   });
 
-  const filtered = useMemo(
+  // Grupo de "Propuesta" de una fila → para filtrar y aprobar por grupos.
+  const grupoDe = (m) => {
+    if (esTransferMov(m)) return "Transferencia";
+    if (frState(m).es) return "Cobro franquicia";
+    if (haberesMatch(m)) return "Pago de haberes";
+    const meta = parseMeta(m.referencia);
+    const tipo = meta.tipo || (Number(m.monto) > 0 ? "ingreso" : "");
+    return TIPO_LABEL[tipo] || tipo || "Sin clasificar";
+  };
+  const pendCuenta = useMemo(
     () => pendientes.filter(m => !cuentaTab || String(m.cuenta_bancaria) === String(cuentaTab)),
     [pendientes, cuentaTab]);
+  // Grupos presentes en la cuenta (con conteo) para el desplegable del header.
+  const gruposDisp = useMemo(() => {
+    const o = {}; pendCuenta.forEach(m => { const g = grupoDe(m); o[g] = (o[g] || 0) + 1; });
+    return Object.entries(o).sort((a, b) => b[1] - a[1]);
+  }, [pendCuenta, franquicias, pagosSueldos, edits]);
+  const filtered = useMemo(
+    () => filtroTipo ? pendCuenta.filter(m => grupoDe(m) === filtroTipo) : pendCuenta,
+    [pendCuenta, filtroTipo, franquicias, pagosSueldos, edits]);
   const countByCuenta = useMemo(() => {
     const o = {}; pendientes.forEach(m => { o[m.cuenta_bancaria] = (o[m.cuenta_bancaria] || 0) + 1; }); return o;
   }, [pendientes]);
   const listosCount = filtered.filter(puedeAceptarMov).length;
+
+  // Re-evaluar las reglas actuales sobre los pendientes de la cuenta (sin re-subir ni escribir):
+  // reconstruye la línea desde el movimiento, la clasifica y pre-carga la propuesta en `edits`.
+  // El usuario revisa y acepta (las reglas escala/auto caen como propuesta, no se contabilizan solas).
+  const reEvaluar = () => {
+    const cta = cuentas.find(c => c.id === cuentaTab);
+    const ctx = { banco: cta?.banco, sociedad, pais: "", franquicias, sociedades, cuentas: cuentasAll, moneda: cta?.moneda || "ARS" };
+    const lineaDeMov = (m) => {
+      const meta = parseMeta(m.referencia);
+      return { fecha: m.fecha, monto: Number(m.monto) || 0, descripcion: m.concepto || "",
+        ley1: m.contraparte_nombre || "", ley2: meta.cuit || "", cuit: meta.cuit || "",
+        codigoConcepto: meta.cod || "", grupoCodigo: meta.cod || "", saldo: meta.saldo || "" };
+    };
+    let n = 0;
+    setEdits(prev => {
+      const next = { ...prev };
+      for (const m of pendCuenta) {
+        const p = clasificarLinea(lineaDeMov(m), reglas, proveedores, ctx);
+        if (!p || p.tipo === "sin_clasificar") continue;
+        if (p.tipo === "transferencia_interna") {
+          next[m.id] = { ...next[m.id], modoTransfer: true, modoFranquicia: false, modoFC: false, modoCobro: false, noFranquicia: true, cuenta_destino: p.cuenta_destino || next[m.id]?.cuenta_destino };
+        } else if (p.cuenta_contable) {
+          next[m.id] = { ...next[m.id], cuenta_contable: p.cuenta_contable, centro_costo: p.centro_costo || next[m.id]?.centro_costo };
+        } else continue;
+        n++;
+      }
+      return next;
+    });
+    setMsg(`Re-evaluado con reglas: ${n} con propuesta actualizada. Revisá y aceptá.`);
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: "20px 28px", boxSizing: "border-box" }}>
@@ -483,6 +554,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                 fontSize: 13, fontWeight: 700, color: "#fff", cursor: uploading ? "default" : "pointer",
                 fontFamily: T.font, opacity: uploading ? .6 : 1 }}>
               Aceptar {listosCount} listo{listosCount !== 1 ? "s" : ""} ✓
+            </button>
+          )}
+          {pendCuenta.length > 0 && (
+            <button onClick={reEvaluar} disabled={uploading} title="Aplicar las reglas actuales a los pendientes de esta cuenta"
+              style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "9px 14px",
+                fontSize: 13, fontWeight: 700, color: T.text, cursor: "pointer", fontFamily: T.font }}>
+              ↻ Re-evaluar reglas
             </button>
           )}
           <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }}
@@ -502,7 +580,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
           const active = c.id === cuentaTab;
           const n = countByCuenta[c.id] || 0;
           return (
-            <button key={c.id} onClick={() => setCuentaTab(c.id)}
+            <button key={c.id} onClick={() => { setCuentaTab(c.id); setFiltroTipo(""); }}
               style={{ display: "flex", alignItems: "center", gap: 7, padding: "6px 12px", borderRadius: 8,
                 border: `1px solid ${active ? T.accent : T.cardBorder}`, background: active ? "rgba(173,255,25,.1)" : T.card,
                 color: active ? T.text : T.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: T.font }}>
@@ -516,6 +594,26 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
 
       {msg && <div style={{ fontSize: 12, color: msg.startsWith("Error") ? "#dc2626" : "#16a34a", marginBottom: 10 }}>{msg}</div>}
 
+      {erroresIngesta?.lineas?.length > 0 && (
+        <div style={{ marginBottom: 12, background: "#fff7ed", border: "1px solid #fb923c", borderRadius: 8, padding: "10px 14px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: "#b45309" }}>⚠ {erroresIngesta.lineas.length} línea{erroresIngesta.lineas.length !== 1 ? "s" : ""} no se pudo cargar</span>
+            <button onClick={reintentarErrores} disabled={uploading}
+              style={{ background: "#fb923c", border: "none", borderRadius: 6, padding: "5px 14px", fontSize: 12, fontWeight: 700, color: "#fff", cursor: uploading ? "default" : "pointer", fontFamily: T.font, opacity: uploading ? .6 : 1 }}>
+              {uploading ? "Reintentando…" : "Reintentar estas"}
+            </button>
+            <button onClick={() => setErroresIngesta(null)} style={{ background: "transparent", border: "none", color: T.muted, fontSize: 11, cursor: "pointer", fontFamily: T.font }}>descartar</button>
+          </div>
+          {erroresIngesta.lineas.map((l, i) => (
+            <div key={i} style={{ display: "flex", gap: 10, fontSize: 11, color: T.text, padding: "2px 0" }}>
+              <span style={{ color: T.muted, whiteSpace: "nowrap" }}>{l.fecha}</span>
+              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.descripcion || l.ley1 || ""}</span>
+              <span style={{ fontWeight: 700, whiteSpace: "nowrap", color: (Number(l.monto) || 0) < 0 ? "#dc2626" : "#16a34a" }}>{fmt(Math.abs(Number(l.monto) || 0))}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div style={{ flex: 1, overflow: "auto", background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10 }}>
         {loading ? (
           <div style={{ padding: 50, textAlign: "center", color: T.muted }}>Cargando…</div>
@@ -527,9 +625,21 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr style={{ background: T.tableHead, position: "sticky", top: 0, zIndex: 1 }}>
-                {[["Fecha","left"],["Descripción","left"],["Débitos","right"],["Créditos","right"],["Propuesta","left"],["Imputación","right"],["Acción","left"]].map(([h, al]) => (
+                {[["Fecha","left"],["Descripción","left"],["Débitos","right"],["Créditos","right"],["Propuesta","left"],["Imputación","center"],["Acción","left"]].map(([h, al]) => (
                   <th key={h} style={{ padding: "9px 12px", textAlign: al, fontSize: 10, fontWeight: 700,
-                    color: T.tableHeadText, letterSpacing: ".06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
+                    color: T.tableHeadText, letterSpacing: ".06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>
+                    {h === "Propuesta" ? (
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span>{h}</span>
+                        <select value={filtroTipo} onChange={e => setFiltroTipo(e.target.value)} title="Filtrar por tipo"
+                          style={{ fontSize: 10, fontWeight: 700, padding: "2px 4px", borderRadius: 5, border: `1px solid ${filtroTipo ? T.accent : T.cardBorder}`,
+                            background: filtroTipo ? "#ecfccb" : "#fff", color: "#111827", fontFamily: T.font, cursor: "pointer", textTransform: "none", letterSpacing: 0 }}>
+                          <option value="">Todos ({pendCuenta.length})</option>
+                          {gruposDisp.map(([g, n]) => <option key={g} value={g}>{g} ({n})</option>)}
+                        </select>
+                      </div>
+                    ) : h}
+                  </th>
                 ))}
               </tr>
             </thead>
@@ -544,7 +654,11 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                 const fr = frState(m);
                 const cuentaSel = (edits[m.id]?.cuenta_contable) ?? m.cuenta_contable ?? "";
                 const ccSel = (edits[m.id]?.centro_costo) ?? m.centro_costo ?? "";
+                // Verde solo si el centro RESUELVE a una opción real (un valor que no matchea —ej. casing—
+                // muestra "— centro —" y no debe contar como completo, ni dejarse aceptar: se perdería en el P&L).
+                const ccOk = ccValido(ccSel);
                 const neg = Number(m.monto) < 0;
+                const cuentaOk = cuentaValida(cuentaSel);
                 const bg = i % 2 ? "#eef2f7" : "#ffffff";
                 const total = Math.abs(Number(m.monto) || 0);
                 const splitSum = fr.split ? fr.split.reduce((s, p) => s + (Number(p.monto) || 0), 0) : 0;
@@ -618,9 +732,9 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                         </>
                       )}
                     </td>
-                    <td style={{ padding: "8px 4px 8px 12px", minWidth: 220, textAlign: "right" }}>
+                    <td style={{ padding: "8px 4px 8px 12px", minWidth: 220, textAlign: "center" }}>
                       {modoTransfer ? (
-                        <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", alignItems: "center" }}>
+                        <div style={{ display: "flex", gap: 6, justifyContent: "center", alignItems: "center" }}>
                           {interco && <span style={{ fontSize: 9, fontWeight: 800, color: "#7c3aed", background: "#ede9fe", border: "1px solid #c4b5fd", borderRadius: 6, padding: "2px 6px", whiteSpace: "nowrap" }}>INTERCO</span>}
                           <span style={{ fontSize: 11, color: T.muted }}>→</span>
                           <select value={destinoSel} onChange={e => setEdit(m.id, "cuenta_destino", e.target.value)} style={fld(!!destinoSel)}>
@@ -634,7 +748,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                         fr.split ? (
                           <span style={{ fontSize: 11, color: T.muted }}>Dividido en {fr.split.length} franquicia{fr.split.length !== 1 ? "s" : ""} ↓</span>
                         ) : (
-                          <div key="franq" style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                          <div key="franq" style={{ display: "flex", gap: 6, justifyContent: "center" }}>
                             <select value={fr.frTipoSel} onChange={e => setEdit(m.id, "fr_tipo", e.target.value)} style={fld(true)}>
                               {neg ? <option value="PAGO_ENVIADO">Transf. enviada</option> : <>
                                 <option value="PAGO">Pago de CC</option>
@@ -648,7 +762,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                           </div>
                         )
                       ) : modoFC ? (
-                        <div key="fc" style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                        <div key="fc" style={{ display: "flex", gap: 6, justifyContent: "center" }}>
                           <select value={fcProvSel} disabled={!provConPendientes.length} onChange={e => setModo(m.id, { fc_prov: e.target.value, fc_id: "" })} style={fld(!!fcProvSel, 160)}>
                             <option value="">{provConPendientes.length ? "— proveedor —" : "sin facturas pendientes"}</option>
                             {provConPendientes.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
@@ -660,7 +774,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                         </div>
                       ) : modoCobro ? (
                         <div key="cob" style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
-                          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                          <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
                             <select value={cobCliSel} disabled={!clientesConPendientes.length} onChange={e => setModo(m.id, { cob_cli: e.target.value, cob_id: "" })} style={fld(!!cobCliSel, 160)}>
                               <option value="">{clientesConPendientes.length ? "— cliente —" : "sin facturas de venta"}</option>
                               {clientesConPendientes.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
@@ -673,17 +787,17 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                           {cobSelObj && cobDiff > 0.01 && (
                             <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", fontSize: 11, color: T.muted }}>
                               {cobRets.map((r, idx) => (
-                                <div key={idx} style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "flex-end" }}>
+                                <div key={idx} style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "center" }}>
                                   <select value={r.cuenta} onChange={e => updRet(m.id, idx, "cuenta", e.target.value)} style={fld(!!r.cuenta, 150)}>
                                     <option value="">— retención —</option>
-                                    {cuentasGasto.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                                    {cuentasTodas.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                                   </select>
                                   <input type="number" value={r.monto} onChange={e => updRet(m.id, idx, "monto", e.target.value)}
                                     style={{ width: 90, textAlign: "right", ...sel }} />
                                   <button onClick={() => rmRet(m.id, idx)} title="Quitar" style={{ border: "none", background: "transparent", color: T.muted, cursor: "pointer", fontSize: 12 }}>✕</button>
                                 </div>
                               ))}
-                              <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
+                              <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "center" }}>
                                 {cobRets.length > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: Math.abs(cobRetSum + total - cobSelObj.saldo) <= 0.01 ? "#16a34a" : "#b45309" }}>ret ${fmt(cobRetSum)} + dep ${fmt(total)} {Math.abs(cobRetSum + total - cobSelObj.saldo) <= 0.01 ? "= total ✓" : `de ${fmt(cobSelObj.saldo)}`}</span>}
                                 <button onClick={() => addRet(m.id, Math.max(0, cobDiff - cobRetSum))}
                                   style={{ fontSize: 11, border: "none", background: "transparent", color: "#0ea5e9", cursor: "pointer", fontWeight: 700 }}>+ retención</button>
@@ -692,13 +806,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                           )}
                         </div>
                       ) : (
-                        <div key="normal" style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "flex-end" }}>
-                          <select value={cuentaSel} onChange={e => setEdit(m.id, "cuenta_contable", e.target.value)}
-                            style={fld(!!cuentaSel)}>
+                        <div key="normal" style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "center" }}>
+                          <select value={cuentaOk ? cuentaSel : ""} onChange={e => setEdit(m.id, "cuenta_contable", e.target.value)}
+                            style={fld(cuentaOk)}>
                             <option value="">— cuenta —</option>
-                            {(neg ? cuentasGasto : cuentasIngreso).map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                            {cuentasTodas.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                           </select>
-                          <select value={ccSel} onChange={e => setEdit(m.id, "centro_costo", e.target.value)} style={fld(!!ccSel)}>
+                          <select value={ccOk ? ccSel : ""} onChange={e => setEdit(m.id, "centro_costo", e.target.value)} style={fld(ccOk)}>
                             <option value="">— centro —</option>
                             {centros.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                           </select>
@@ -738,7 +852,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCobro: true, modoFranquicia: false, modoTransfer: false, noFranquicia: true }); setMenuFor(null); }}>🧾 Imputar a factura de venta (cobro)…</button>
                           )}
                           {modoCobro && (
-                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCobro: false, cob_id: undefined, cob_cli: undefined, retiene: false, noFranquicia: false }); setMenuFor(null); }}>↩ Volver a normal (no es cobro de venta)</button>
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCobro: false, cob_id: undefined, cob_cli: undefined, rets: [], noFranquicia: false }); setMenuFor(null); }}>↩ Volver a normal (no es cobro de venta)</button>
                           )}
                           {fr.es && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFranquicia: false, noFranquicia: true, modoTransfer: false, split: null }); setMenuFor(null); }}>↩ No es franquicia (volver a normal)</button>
@@ -773,7 +887,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                           <td />
                           <td />
                           <td style={{ padding: "4px 12px" }}>
-                            <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                            <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
                               <select value={p.fr_tipo} onChange={e => updSplit(m.id, idx, "fr_tipo", e.target.value)} style={fld(true)}>
                                 <option value="PAGO">Pago de CC</option>
                                 <option value="PAGO_PAUTA">Pago a cuenta</option>

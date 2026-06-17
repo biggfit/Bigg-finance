@@ -581,7 +581,8 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
   const keyOf = (fecha, monto, saldo) => saldo ? `${fecha}|${saldo}` : `${fecha}|${Number(monto) || 0}`;
   const existentes = todos.filter(m => String(m.cuenta_bancaria) === String(cuenta_bancaria));
   const seen = new Set(existentes.map(m => keyOf(m.fecha, m.monto, _saldoDe(m))));
-  let creados = 0, dups = 0, errores = 0;
+  let creados = 0, dups = 0;
+  const fallidas = [];   // líneas cuyo POST falló → se devuelven para reintentar solo esas
   for (const l of lineas) {
     const k = keyOf(l.fecha, l.monto, l.saldo);
     if (seen.has(k)) { dups++; continue; }
@@ -604,10 +605,10 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
       seen.add(k);
       creados++;
     } catch (e) {
-      errores++;
+      fallidas.push(l);
     }
   }
-  return { creados, dups, errores };
+  return { creados, dups, errores: fallidas.length, fallidas };
 }
 
 // Trae los movimientos del extracto que faltan conciliar.
@@ -623,14 +624,29 @@ export async function fetchMovimientosPendientes(sociedad) {
 export async function aceptarMovimiento(mov, prop = {}) {
   const tipo = prop.tipo || "";
   if (tipo === "transferencia_interna") {
-    // Si el destino es de otra sociedad → intercompany (una pata por lado; la otra la concilia
-    // el extracto de la otra sociedad, no se auto-genera el espejo → no duplica).
-    const interco = !!prop.interco;
-    return post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
-      tipo: interco ? "INTERCOMPANIA" : "TRANSFERENCIA",
-      cuenta_destino: prop.cuenta_destino || mov.cuenta_destino || "",
-      documento_id: newId(interco ? "INT" : "TRF"),
+    // SIEMPRE genera las DOS patas (interco entre sociedades o entre cuentas propias de la misma):
+    // la línea del extracto + la contrapartida en la cuenta destino, con documento_id compartido
+    // (signo opuesto) → quedan emparejadas (Tesorería refleja ambos lados al instante; interco se ve
+    // cerrada en el módulo Intercompañía). Pendiente (a futuro): al subir el extracto de la cuenta
+    // destino, esa línea es duplicado de esta contrapartida → deduplicar / Ignorar.
+    const interco  = !!prop.interco;
+    const destino  = prop.cuenta_destino || mov.cuenta_destino || "";
+    const tipoMov  = interco ? "INTERCOMPANIA" : "TRANSFERENCIA";
+    const sharedId = newId(interco ? "INTERCOMPANY" : "TRF");
+    await post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
+      tipo: tipoMov, cuenta_destino: destino, documento_id: sharedId, referencia: "1",
     }});
+    await post({ action: "add", sheet: "nb_movimientos", row: {
+      id: `${sharedId}-E`, sociedad: prop.destino_sociedad || mov.sociedad, fecha: mov.fecha,
+      tipo: tipoMov, cuenta_bancaria: destino, cuenta_destino: mov.cuenta_bancaria,
+      cuenta_contable: "", centro_costo: "",
+      moneda: prop.destino_moneda || mov.moneda || "ARS",
+      monto: -(Number(mov.monto) || 0),   // signo opuesto al de la línea del extracto
+      documento_id: sharedId, concepto: mov.concepto || (interco ? "Intercompañía" : "Transferencia interna"),
+      referencia: "1", origen: interco ? "intercompania" : "transferencia",
+      created_at: new Date().toISOString(),
+    }});
+    return;
   }
   const cuentaId = prop.cuenta_contable || mov.cuenta_contable || "";
   const esEgreso = (Number(mov.monto) || 0) < 0;
