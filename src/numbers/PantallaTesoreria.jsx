@@ -1,19 +1,28 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { T, Btn, Input, Select, PageHeader, fmtDate } from "./theme";
 import {
-  TIPO_CUENTA, MONEDA_SYM, fmtSaldo,
+  TIPO_CUENTA, MONEDA_SYM,
 } from "../data/tesoreriaData";
 import { CENTROS_COSTO } from "../data/numbersData";
 import {
   fetchMovTesoreria, appendMovTesoreria, deleteMovTesoreria, updateMovTesoreria,
   fetchEgresos, fetchIngresos, fetchPagosCobros, calcSaldoPendiente,
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto,
-  appendGastoDirecto, esIgnorado,
+  appendGastoDirecto, esIgnorado, fetchFinanciaciones, financiacionPasivoBuckets,
+  agruparAnticipos, anticipoPasivo,
 } from "../lib/numbersApi";
 import {
   fetchLiquidacionesCerradas, parsePagoFromMov, normSoc, pendienteSueldosPorLegajo,
 } from "../lib/sueldosApi";
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// Tesorería muestra montos SIN decimales (pesos enteros). Local: no toca fmtSaldo global (pdf.js).
+const fmtSaldo = (n, moneda) => {
+  const sym = MONEDA_SYM[moneda] ?? moneda;
+  const abs = Math.abs(Number(n) || 0);
+  const neg = Number(n) < 0;
+  return `${neg ? "-" : ""}${sym} ${abs.toLocaleString("es-AR", { maximumFractionDigits: 0 })}`;
+};
 
 const TIPO_CFG = {
   PAGO_FC:       { bg:"#fff7ed", color:"#f97316", label:"Pago FC"     },
@@ -303,10 +312,10 @@ function GastoDirectoModal({ sociedad, cuentasBancarias, cuentasContables = [], 
               padding:"8px 14px", fontSize:13, color:"#78350f",
               display:"flex", justifyContent:"space-between", alignItems:"center" }}>
               <span style={{ color:"#92400e" }}>
-                IVA: {sym} {iva.toLocaleString("es-AR", { minimumFractionDigits:2 })}
+                IVA: {sym} {iva.toLocaleString("es-AR", { maximumFractionDigits:0 })}
               </span>
               <strong>
-                Total: {sym} {total.toLocaleString("es-AR", { minimumFractionDigits:2 })}
+                Total: {sym} {total.toLocaleString("es-AR", { maximumFractionDigits:0 })}
               </strong>
             </div>
           )}
@@ -569,7 +578,7 @@ function BalanceBlock({ title, items, headerColor, onItemClick }) {
             </span>
           ))}
           {Object.keys(totals).length === 0 && (
-            <span style={{ fontSize:12, color:T.dim }}>$ 0,00</span>
+            <span style={{ fontSize:12, color:T.dim }}>$ 0</span>
           )}
         </div>
       </div>
@@ -661,7 +670,7 @@ function GrupoBlock({ icon, label, cuentas, onCuentaClick }) {
             </div>
           ))}
           {Object.keys(porMoneda).length === 0 && (
-            <span style={{ fontSize:12, color:T.dim }}>$ 0,00</span>
+            <span style={{ fontSize:12, color:T.dim }}>$ 0</span>
           )}
         </div>
       </div>
@@ -936,13 +945,14 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
   const [cuentasContables, setCuentasContables] = useState([]);
   const [centrosCosto,     setCentrosCosto]     = useState(CENTROS_COSTO);
   const [liqsSueldos,      setLiqsSueldos]      = useState([]);
+  const [financiaciones,   setFinanciaciones]   = useState([]);
 
   // ── Fetch all data ────────────────────────────────────────────────────────
   const cargarMovimientos = async () => {
     setLoading(true);
     setError(null);
     try {
-      const [movs, egs, ings, pcs, cbList, ctaList, liqsS] = await Promise.all([
+      const [movs, egs, ings, pcs, cbList, ctaList, liqsS, fin] = await Promise.all([
         fetchMovTesoreria(sociedad),
         fetchEgresos(sociedad).catch(() => []),
         fetchIngresos(sociedad).catch(() => []),
@@ -950,6 +960,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
         fetchCuentasBancarias().catch(() => []),
         fetchCuentas().catch(() => []),
         fetchLiquidacionesCerradas().catch(() => []),
+        fetchFinanciaciones(sociedad).catch(() => []),
       ]);
       setMovimientos(Array.isArray(movs) ? movs : []);
       setEgresos(Array.isArray(egs) ? egs : []);
@@ -958,6 +969,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
       setCuentasBancarias(Array.isArray(cbList) ? cbList : []);
       setCuentasContables(Array.isArray(ctaList) ? ctaList : []);
       setLiqsSueldos(Array.isArray(liqsS) ? liqsS : []);
+      setFinanciaciones(Array.isArray(fin) ? fin : []);
       fetchCentrosCosto().then(data => {
         if (Array.isArray(data) && data.length > 0) setCentrosCosto(data);
       }).catch(() => {});
@@ -1068,20 +1080,53 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
     return { total, docs };
   }, [liqsSueldos, pagosSueldos, sociedad]);
 
-  // Pasivo combinado: cuentas a pagar (comprobantes) + sueldos pendientes (base de sueldos).
-  // Se funde en el item "Sueldos" si ya existe (mismo label/moneda), si no se agrega.
-  const aPagarFull = useMemo(() => {
-    if (sueldosPasivo.total <= 0) return aPagar;
-    const out = aPagar.map(it => ({ ...it }));
-    const existente = out.find(it => it.label === "Sueldos" && it.moneda === "ARS");
-    if (existente) {
-      existente.saldo += sueldosPasivo.total;
-      existente.docs  = [...existente.docs, ...sueldosPasivo.docs];
-    } else {
-      out.push({ label: "Sueldos", moneda: "ARS", saldo: sueldosPasivo.total, docs: sueldosPasivo.docs, headerColor: "#dc2626" });
+  // ── Pasivo de FINANCIACIONES (planes AFIP + créditos) ──
+  // Líneas PROPIAS, separadas de los comprobantes. Usa el helper compartido de numbersApi
+  // (misma clasificación/saldo que Reportes→Balance). "Planes de pago" (impuestos) / "Créditos".
+  const finPasivo = useMemo(() => {
+    const b = financiacionPasivoBuckets(financiaciones, sociedad);
+    const items = [];
+    const armar = (bucket, label) => {
+      for (const mon of ["ARS", "USD", "EUR"]) {
+        if (bucket.tot[mon] <= 0) continue;
+        const docs = bucket.docs.filter(d => d.moneda === mon)
+          .map(d => ({ contraparte: `${d.acreedor || "—"}${d.nro_plan ? " · " + d.nro_plan : ""}`, vto: d.prox_vto, saldo: d.saldo, moneda: mon }));
+        items.push({ label, moneda: mon, saldo: bucket.tot[mon], docs, headerColor: "#dc2626" });
+      }
+    };
+    armar(b.impuestos, "Planes de pago");
+    armar(b.financiero, "Créditos");
+    return items;
+  }, [financiaciones, sociedad]);
+
+  // ── Pasivo de ANTICIPOS de clientes (ingresos diferidos) — derivado de los movimientos ──
+  const anticiposPasivo = useMemo(() => {
+    const { tot, docs } = anticipoPasivo(agruparAnticipos(movimientos), sociedad);
+    const items = [];
+    for (const mon of ["ARS", "USD", "EUR"]) {
+      if (tot[mon] <= 0) continue;
+      const d = docs.filter(x => x.moneda === mon).map(x => ({ contraparte: x.cliente || "—", vto: x.fecha, saldo: x.saldo, moneda: mon }));
+      items.push({ label: "Anticipos de clientes", moneda: mon, saldo: tot[mon], docs: d, headerColor: "#dc2626" });
     }
+    return items;
+  }, [movimientos, sociedad]);
+
+  // Pasivo combinado: cuentas a pagar (comprobantes) + sueldos pendientes + financiaciones.
+  // Sueldos se funde en su item si ya existe; financiaciones van como líneas propias.
+  const aPagarFull = useMemo(() => {
+    const out = aPagar.map(it => ({ ...it }));
+    if (sueldosPasivo.total > 0) {
+      const existente = out.find(it => it.label === "Sueldos" && it.moneda === "ARS");
+      if (existente) {
+        existente.saldo += sueldosPasivo.total;
+        existente.docs  = [...existente.docs, ...sueldosPasivo.docs];
+      } else {
+        out.push({ label: "Sueldos", moneda: "ARS", saldo: sueldosPasivo.total, docs: sueldosPasivo.docs, headerColor: "#dc2626" });
+      }
+    }
+    out.push(...finPasivo, ...anticiposPasivo);
     return out.sort((a, b) => b.saldo - a.saldo);
-  }, [aPagar, sueldosPasivo]);
+  }, [aPagar, sueldosPasivo, finPasivo, anticiposPasivo]);
 
   // ── Guardar movimiento entre cuentas ──────────────────────────────────────
   const handleGuardarMovimiento = async (form) => {

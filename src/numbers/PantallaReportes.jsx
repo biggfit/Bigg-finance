@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, PageHeader } from "./theme";
-import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado } from "../lib/numbersApi";
+import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, SALARY_BUCKETS, pagoTipoABucket, devengadoPorFormaYSociedad } from "../lib/sueldosApi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
 
@@ -79,6 +79,35 @@ function movimientoToPnLRows(movs, sociedad) {
       moneda:          m.moneda ?? "ARS",
       total:           Math.abs(Number(m.monto) || 0),
     });
+  }
+  return out;
+}
+
+// Adapter: financiaciones (planes AFIP + créditos) → filas P&L. Dos reconocimientos en
+// distinta línea de tiempo (sin partida doble; la caja vive aparte en nb_movimientos):
+//   · Capital del plan AFIP = el impuesto → 1 fila en el mes de consolidación (salvo apertura,
+//     que ya está en Contagram). El capital de un préstamo NO entra (es deuda, no gasto).
+//   · Interés financiero + IVA + sellos de cada cuota → en el mes de su VENCIMIENTO (devengo
+//     mes a mes, pagada o no). El resarcitorio solo si se pagó tardío (fecha_pago > vto).
+function financiacionToPnLRows(planes, sociedad) {
+  const soc = (sociedad ?? "").toLowerCase();
+  const out = [];
+  for (const p of (planes ?? [])) {
+    if (soc && (p.sociedad ?? "").toLowerCase() !== soc) continue;
+    if (p.tipo === "plan_afip" && !p.es_apertura && p.cuenta_capital) {
+      const capTot = (p.cuotas ?? []).reduce((s, c) => s + (Number(c.capital) || 0), 0);
+      if (capTot > 0) out.push({ fecha: p.fecha_consolidacion, sociedad: p.sociedad, centro_costo: p.centro_capital, cuenta_contable: p.cuenta_capital, moneda: p.moneda, total: capTot });
+    }
+    const base = { sociedad: p.sociedad, moneda: p.moneda };
+    const push = (cuenta, centro, total, fecha) => { if (total > 0 && cuenta) out.push({ ...base, fecha, centro_costo: centro, cuenta_contable: cuenta, total }); };
+    for (const c of (p.cuotas ?? [])) {
+      if (c.estado === "cancelada") continue;
+      push(p.cuenta_interes,   p.centro_interes,   c.interes,   c.vto);
+      push(p.cuenta_iva,       p.centro_iva,       c.iva,       c.vto);
+      push(p.cuenta_impuestos, p.centro_impuestos, c.impuestos, c.vto);
+      if (c.estado === "pagada" && c.fecha_pago && c.fecha_pago > c.vto)
+        push(p.cuenta_interes, p.centro_interes, c.interes_resarc, c.fecha_pago);   // resarcitorio (pago tardío)
+    }
   }
   return out;
 }
@@ -610,7 +639,14 @@ const ZERO    = { ARS: 0, USD: 0, EUR: 0 };
 
 const SALARY_BUCKET_LABEL = { haberes: "Haberes", deposito: "Depósito", monotributo: "Monotributo", efectivo: "Efectivo" };
 
-function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCerradas = [], pagosSueldos = [] }) {
+// Pasivo de financiaciones por bucket (impuestos/financiero). Usa el helper compartido de
+// numbersApi → mismo número que Tesorería (una sola fuente de la clasificación).
+function financiacionPasivoRows(planes, sociedad) {
+  const b = financiacionPasivoBuckets(planes, sociedad);
+  return { impuestos: b.impuestos.tot, financiero: b.financiero.tot };
+}
+
+function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCerradas = [], pagosSueldos = [], rawFin = [] }) {
   const [activoOpen,  setActivoOpen]  = useState(true);
   const [pasivoOpen,  setPasivoOpen]  = useState(true);
   const [cajaOpen,    setCajaOpen]    = useState(true);
@@ -682,8 +718,18 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCer
   }, [liqsCerradas, pagosSueldos, sueldoSoc]);
   const cxpSueldosTot = { ...ZERO, ARS: cxpSueldosBuckets.reduce((s, b) => s + b.pendiente, 0) };
 
+  // Pasivo de financiaciones (planes AFIP → impuestos, créditos → financiero)
+  const [finOpen, setFinOpen] = useState(true);
+  const finPasivo    = useMemo(() => financiacionPasivoRows(rawFin, sociedad), [rawFin, sociedad]);
+  const finPasivoTot = useMemo(() => addVals(finPasivo.impuestos, finPasivo.financiero), [finPasivo]);
+  const hayFin = (finPasivoTot.ARS + finPasivoTot.USD + finPasivoTot.EUR) > 0;
+
+  // Pasivo de anticipos de clientes (ingresos diferidos), derivado de los movimientos
+  const antPasivo    = useMemo(() => anticipoPasivo(agruparAnticipos(rawMovs), sociedad).tot, [rawMovs, sociedad]);
+  const hayAnt = (antPasivo.ARS + antPasivo.USD + antPasivo.EUR) > 0;
+
   const activoTot  = addVals(addVals(cajaTot, bancoTot), cxcTot);
-  const pasivoTot  = addVals(cxpTot, cxpSueldosTot);
+  const pasivoTot  = addVals(addVals(addVals(cxpTot, cxpSueldosTot), finPasivoTot), antPasivo);
   const pnTot      = subVals(activoTot, pasivoTot);
 
   return (
@@ -727,6 +773,19 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCer
             ))}
             {cxpSldOpen && cxpSueldosBuckets.length === 0 && <BDRow label="(sin saldo de sueldos)" vals={ZERO} indent />}
             <BSubRow label="Total Cuentas a Pagar — Sueldos" vals={cxpSueldosTot} color={T.red} />
+
+            {hayFin && <>
+              <BGrpRow label="Financiaciones (planes y créditos)" expanded={finOpen} onToggle={() => setFinOpen(o => !o)} />
+              {finOpen && (finPasivo.impuestos.ARS + finPasivo.impuestos.USD + finPasivo.impuestos.EUR) > 0 && <BDRow label="Planes de pago (impuestos)" vals={finPasivo.impuestos} indent />}
+              {finOpen && (finPasivo.financiero.ARS + finPasivo.financiero.USD + finPasivo.financiero.EUR) > 0 && <BDRow label="Créditos / préstamos" vals={finPasivo.financiero} indent />}
+              <BSubRow label="Total Financiaciones" vals={finPasivoTot} color={T.red} />
+            </>}
+
+            {hayAnt && <>
+              <BGrpRow label="Anticipos de clientes (ingresos diferidos)" expanded onToggle={() => {}} />
+              <BDRow label="Saldo de anticipos sin facturar" vals={antPasivo} indent />
+              <BSubRow label="Total Anticipos" vals={antPasivo} color={T.red} />
+            </>}
           </>}
           <BResRow label="TOTAL PASIVO" vals={pasivoTot} />
 
@@ -743,7 +802,7 @@ function TabCashFlow({ rawMovs, year, moneda }) {
   const movsFilt = useMemo(() => rawMovs.filter(m => {
     if (!m.fecha) return false;
     if (esIgnorado(m)) return false;                 // líneas descartadas no entran al flujo
-    if (m.origen === "retencion") return false;      // retención sufrida no es caja
+    if (!m.cuenta_bancaria) return false;            // sin banco = no es caja (retención, consumo de anticipo, apertura)
     if (m.fecha.slice(0, 4) !== String(year)) return false;
     if ((m.moneda ?? "ARS") !== moneda) return false;
     return true;
@@ -1032,6 +1091,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const [ccs,       setCcs]       = useState([]);
   const [liqsCerradas, setLiqsCerradas] = useState([]);  // su_liquidaciones cerradas (devengado sueldos)
   const [pagosSueldos, setPagosSueldos] = useState([]);  // pagos de sueldo (nb_movimientos origen sueldos)
+  const [rawFin,    setRawFin]    = useState([]);        // financiaciones (planes AFIP + créditos)
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState(null);
   const [loadKey,   setLoadKey]   = useState(0);
@@ -1054,7 +1114,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     const run = async () => {
       setLoading(true); setError(null);
       try {
-        const [eg, ing, movs, cbs, ccList, ctaList, liqsC, pagosS] = await Promise.all([
+        const [eg, ing, movs, cbs, ccList, ctaList, liqsC, pagosS, fin] = await Promise.all([
           fetchLineasEnriquecidas(sociedad, ["EGRESO", "GASTO"]).catch(() => []),
           fetchLineasEnriquecidas(sociedad, "INGRESO").catch(() => []),
           fetchMovTesoreria(sociedad).catch(() => []),
@@ -1063,6 +1123,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
           fetchCuentas().catch(() => []),
           fetchLiquidacionesCerradas().catch(() => []),
           fetchPagosAnio().catch(() => []),
+          fetchFinanciaciones(sociedad).catch(() => []),
         ]);
         if (cancelled) return;
         setRawEg(eg);
@@ -1073,6 +1134,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         setCuentas(Array.isArray(ctaList) ? ctaList : []);
         setLiqsCerradas(Array.isArray(liqsC) ? liqsC : []);
         setPagosSueldos(Array.isArray(pagosS) ? pagosS : []);
+        setRawFin(Array.isArray(fin) ? fin : []);
       } catch (e) {
         if (!cancelled) setError(e.message);
       } finally {
@@ -1137,7 +1199,10 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
   const gastoMovRows = useMemo(() => movimientoToPnLRows(rawMovs, sociedad), [rawMovs, sociedad]);
 
-  const egConSueldos = useMemo(() => [...rawEg, ...salaryRows, ...gastoMovRows], [rawEg, salaryRows, gastoMovRows]);
+  // Financiaciones: capital del impuesto (plan AFIP) + interés/IVA/impuestos por cuota (mes a mes).
+  const finRows = useMemo(() => financiacionToPnLRows(rawFin, sociedad), [rawFin, sociedad]);
+
+  const egConSueldos = useMemo(() => [...rawEg, ...salaryRows, ...gastoMovRows, ...finRows], [rawEg, salaryRows, gastoMovRows, finRows]);
 
   const pnlSede = useMemo(
     () => buildPnL(rawIn, egConSueldos, cuentaMap, resolvedCCSede, year, monedaPL),
@@ -1381,6 +1446,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
           sociedad={sociedad}
           liqsCerradas={liqsCerradas}
           pagosSueldos={pagosSueldos}
+          rawFin={rawFin}
         />
       )}
 

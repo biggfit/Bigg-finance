@@ -1090,3 +1090,375 @@ export async function reabrirPeriodo(id) {
     fields: { estado: "abierto", reabierto_at: new Date().toISOString() },
   });
 }
+
+// ─── FINANCIACIONES — familia "cuotas" (planes AFIP + créditos) ───────────────
+//
+// Deuda amortizable en cuotas. UNA hoja plana nb_financiaciones, una fila por cuota
+// (campos del plan repetidos, agrupados por plan_id) — misma convención que nb_comprobantes.
+// Componentes como COLUMNAS, cada uno con destino fijo en el P&L (ver PantallaReportes):
+//   capital → pasivo (no P&L) · interes → Gastos Financieros · iva → IVA ·
+//   impuestos (sellos) → Impuestos · interes_resarc → Gastos Financieros (solo si pago tardío).
+// NO partida doble: el cronograma devenga el resultado (mes a mes en el vto); la caja vive
+// en nb_movimientos (la cuota pagada es una fila no-CONTAB- → excluida del P&L).
+//
+// Schema nb_financiaciones (una fila por cuota):
+//   id | plan_id | nro_plan | tipo(plan_afip|prestamo) | acreedor_id | acreedor_nombre |
+//   acreedor_cuit | sociedad | moneda | fecha_consolidacion | es_apertura | comprobante_origen |
+//   cuenta_capital | centro_capital | cuenta_interes | centro_interes | cuenta_iva | centro_iva |
+//   cuenta_impuestos | centro_impuestos | cuenta_bancaria | nro_cuota | vto |
+//   vto_tardio | capital | interes | iva | impuestos | interes_resarc | total | total_tardio |
+//   estado(pendiente|pagada|cancelada) | movimiento_id | fecha_pago | nota | created_at
+
+const round2 = n => Math.round((Number(n) || 0) * 100) / 100;
+
+function _finRowToCuota(r) {
+  return {
+    rowId:          r.id,
+    nro_cuota:      Number(r.nro_cuota) || 0,
+    vto:            r.vto ?? "",
+    vto_tardio:     r.vto_tardio ?? "",
+    capital:        toNum(r.capital),
+    interes:        toNum(r.interes),
+    iva:            toNum(r.iva),
+    impuestos:      toNum(r.impuestos),
+    interes_resarc: toNum(r.interes_resarc),
+    total:          toNum(r.total),
+    total_tardio:   toNum(r.total_tardio),
+    estado:         r.estado || "pendiente",
+    movimiento_id:  r.movimiento_id ?? "",
+    fecha_pago:     r.fecha_pago ?? "",
+  };
+}
+
+/** Agrupa las filas planas (una por cuota) en planes con su cronograma + derivados. */
+export function agruparPlanes(rows = []) {
+  const map = new Map();
+  for (const r of rows) {
+    const key = r.plan_id;
+    if (!key) continue;
+    if (!map.has(key)) {
+      map.set(key, {
+        plan_id:             r.plan_id,
+        nro_plan:            r.nro_plan ?? "",
+        tipo:                r.tipo || "plan_afip",
+        acreedor_id:         r.acreedor_id ?? "",
+        acreedor_nombre:     r.acreedor_nombre ?? "",
+        acreedor_cuit:       r.acreedor_cuit ?? "",
+        sociedad:            r.sociedad ?? "",
+        moneda:              r.moneda || "ARS",
+        fecha_consolidacion: r.fecha_consolidacion ?? "",
+        es_apertura:         String(r.es_apertura).toLowerCase() === "true",
+        comprobante_origen:  r.comprobante_origen ?? "",
+        cuenta_capital:      r.cuenta_capital ?? "",   centro_capital:   r.centro_capital ?? "",
+        cuenta_interes:      r.cuenta_interes ?? "",   centro_interes:   r.centro_interes ?? "",
+        cuenta_iva:          r.cuenta_iva ?? "",       centro_iva:       r.centro_iva ?? "",
+        cuenta_impuestos:    r.cuenta_impuestos ?? "", centro_impuestos: r.centro_impuestos ?? "",
+        cuenta_bancaria:     r.cuenta_bancaria ?? "",
+        nota:                r.nota ?? "",
+        cuotas:              [],
+      });
+    }
+    map.get(key).cuotas.push(_finRowToCuota(r));
+  }
+  return Array.from(map.values()).map(p => {
+    p.cuotas.sort((a, b) => a.nro_cuota - b.nro_cuota);
+    const pagadas        = p.cuotas.filter(c => c.estado === "pagada");
+    const capital_total  = p.cuotas.reduce((s, c) => s + c.capital, 0);
+    const capital_pagado = pagadas.reduce((s, c) => s + c.capital, 0);
+    const saldo          = Math.max(0, capital_total - capital_pagado);
+    const prox           = p.cuotas.find(c => c.estado === "pendiente");
+    return {
+      ...p,
+      capital_total, capital_pagado, saldo,
+      n_cuotas:  p.cuotas.length,
+      n_pagadas: pagadas.length,
+      prox_vto:  prox?.vto ?? "",
+      estado:    saldo <= 0.01 ? "saldado" : "vigente",
+    };
+  });
+}
+
+/** Trae las financiaciones de una sociedad, ya agrupadas por plan_id con derivados. */
+export async function fetchFinanciaciones(sociedad) {
+  const rows = await get("nb_financiaciones", sociedad ? { sociedad } : {});
+  return agruparPlanes(rows);
+}
+
+/**
+ * Pasivo de financiaciones por bucket (planes AFIP → impuestos, créditos → financiero).
+ * Fuente ÚNICA para el pasivo que muestran Reportes→Balance y Tesorería (mismo número en los dos).
+ * Devuelve { impuestos|financiero: { tot:{ARS,USD,EUR}, docs:[{acreedor,nro_plan,prox_vto,saldo,moneda}] } }.
+ */
+export function financiacionPasivoBuckets(planes, sociedad) {
+  const soc = String(sociedad ?? "").toLowerCase();
+  const mk  = () => ({ ARS: 0, USD: 0, EUR: 0 });
+  const out = { impuestos: { tot: mk(), docs: [] }, financiero: { tot: mk(), docs: [] } };
+  for (const p of (planes ?? [])) {
+    if (soc && String(p.sociedad ?? "").toLowerCase() !== soc) continue;
+    const saldo = Number(p.saldo) || 0;
+    if (saldo <= 0) continue;
+    const k   = p.tipo === "prestamo" ? "financiero" : "impuestos";
+    const mon = p.moneda || "ARS";
+    if (mon in out[k].tot) out[k].tot[mon] += saldo;
+    out[k].docs.push({ acreedor: p.acreedor_nombre, nro_plan: p.nro_plan, prox_vto: p.prox_vto, saldo, moneda: mon });
+  }
+  return out;
+}
+
+/**
+ * Genera un cronograma de cuotas (sistema francés: cuota fija, interés decreciente,
+ * capital creciente). Puro (sin I/O): para previsualizar/editar en el modal. El usuario
+ * sobreescribe a mano con los números exactos del PDF (AFIP/banco traen el detalle).
+ */
+export function generarCuotas({ capital_original, n_cuotas, tasaMensual = 0, ivaPct = 0, impuestoPct = 0, fecha_inicio, periodicidad = "mensual" }) {
+  const n    = Math.max(1, Math.floor(Number(n_cuotas) || 0));
+  const cap0 = Number(capital_original) || 0;
+  const i    = (Number(tasaMensual) || 0) / 100;
+  const cuotaFija = i > 0 ? cap0 * (i * Math.pow(1 + i, n)) / (Math.pow(1 + i, n) - 1) : cap0 / n;
+  const base = _parseVto(fecha_inicio) || new Date();
+  const stepMeses = periodicidad === "trimestral" ? 3 : periodicidad === "bimestral" ? 2 : 1;
+  const out = [];
+  let saldo = cap0;     // remanente para calcular el interés
+  let capAcum = 0;      // suma de capitales YA redondeados (para que la suma cuadre exacto)
+  for (let k = 1; k <= n; k++) {
+    const interes = round2(i > 0 ? saldo * i : 0);
+    // La última cuota absorbe TODO el redondeo acumulado → Σ capital === capital_original exacto.
+    const capital = k === n ? round2(cap0 - capAcum) : round2(i > 0 ? cuotaFija - interes : cap0 / n);
+    capAcum = round2(capAcum + capital);
+    saldo   = Math.max(0, round2(cap0 - capAcum));
+    const iva       = round2(interes * ((Number(ivaPct) || 0) / 100));
+    const impuestos = round2((capital + interes) * ((Number(impuestoPct) || 0) / 100));
+    const d = new Date(base);
+    d.setMonth(d.getMonth() + (k - 1) * stepMeses);
+    out.push({
+      nro_cuota: k,
+      vto:       d.toISOString().slice(0, 10),
+      vto_tardio: "",
+      capital, interes, iva, impuestos,
+      interes_resarc: 0,
+      total:      round2(capital + interes + iva + impuestos),
+      total_tardio: 0,
+    });
+  }
+  return out;
+}
+
+/**
+ * Crea una financiación: escribe N filas (una por cuota) en nb_financiaciones, secuencial
+ * (GAS no reintenta). Para préstamo no-apertura registra además la fila de caja del alta
+ * (+capital) vía appendMovTesoreria — entra a Cash Flow/saldo pero NO al P&L (documento_id
+ * = plan_id, no "CONTAB-"). Plan AFIP no tiene alta de caja (el capital es el impuesto).
+ */
+export async function appendFinanciacion({ tipo = "plan_afip", nro_plan = "", acreedor_id = "", acreedor_nombre = "", acreedor_cuit = "", sociedad, moneda = "ARS", fecha_consolidacion, es_apertura = false, comprobante_origen = "", cuenta_capital = "", centro_capital = "", cuenta_interes = "", centro_interes = "", cuenta_iva = "", centro_iva = "", cuenta_impuestos = "", centro_impuestos = "", cuenta_bancaria = "", nota = "", cuotas = [] }) {
+  const plan_id    = newId("FIN");
+  const created_at = new Date().toISOString();
+
+  if (tipo === "prestamo" && !es_apertura && cuenta_bancaria) {
+    const capital_total = cuotas.reduce((s, c) => s + (Number(c.capital) || 0), 0);
+    await appendMovTesoreria({
+      sociedad, fecha: fecha_consolidacion, tipo: "INGRESO",
+      cuenta_bancaria, concepto: `Alta préstamo ${nro_plan || plan_id}`,
+      moneda, monto: Math.abs(capital_total),
+      origen: "financiacion_alta", origen_id: plan_id, centro_costo: centro_capital || centro_interes || "",
+    });
+  }
+
+  for (let k = 0; k < cuotas.length; k++) {
+    const c = cuotas[k];
+    await post({ action: "add", sheet: "nb_financiaciones", row: {
+      id: `${plan_id}-C${pad(k + 1)}`,
+      plan_id, nro_plan, tipo,
+      acreedor_id, acreedor_nombre, acreedor_cuit,
+      sociedad, moneda, fecha_consolidacion,
+      es_apertura:    es_apertura ? "true" : "",
+      comprobante_origen,
+      cuenta_capital, centro_capital, cuenta_interes, centro_interes, cuenta_iva, centro_iva, cuenta_impuestos, centro_impuestos, cuenta_bancaria,
+      nro_cuota:      Number(c.nro_cuota) || 0,
+      vto:            c.vto ?? "",
+      vto_tardio:     c.vto_tardio ?? "",
+      capital:        Number(c.capital) || 0,
+      interes:        Number(c.interes) || 0,
+      iva:            Number(c.iva) || 0,
+      impuestos:      Number(c.impuestos) || 0,
+      interes_resarc: Number(c.interes_resarc) || 0,
+      total:          Number(c.total) || 0,
+      total_tardio:   Number(c.total_tardio) || 0,
+      estado:         "pendiente",
+      movimiento_id:  "",
+      fecha_pago:     "",
+      nota,
+      created_at,
+    }});
+  }
+  return { ok: true, plan_id };
+}
+
+/**
+ * Imputa una línea del extracto a una cuota: la convierte en PAGO (documento_id
+ * FIN-<plan_id>#<nro>, no-CONTAB- → excluida del P&L) y marca la cuota pagada. El capital
+ * baja el pasivo; interés/IVA/impuestos ya se devengaron mes a mes vía el cronograma.
+ * El resarcitorio (si pagó tardío) lo deriva el adapter por fecha_pago > vto.
+ */
+export async function imputarCuota(mov, { plan_id, nro_cuota, row_id, concepto = "" }) {
+  await post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
+    tipo: "PAGO", origen: "cuota",
+    documento_id: `FIN-${plan_id}#${nro_cuota}`,
+    concepto: concepto || mov.concepto || `Cuota ${nro_cuota} ${plan_id}`,
+  }});
+  await post({ action: "edit", sheet: "nb_financiaciones", id: row_id, patch: {
+    estado: "pagada", movimiento_id: mov.id, fecha_pago: mov.fecha,
+  }});
+}
+
+/**
+ * Vincula el crédito del desembolso de un préstamo (línea del extracto) a la financiación.
+ * Es caja (Cash Flow/saldo) pero NO P&L (documento_id = plan_id, no "CONTAB-").
+ */
+export async function registrarAltaPrestamo(mov, { plan_id, concepto = "" }) {
+  return post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
+    tipo: "INGRESO", origen: "financiacion_alta",
+    documento_id: plan_id,
+    concepto: concepto || mov.concepto || `Alta préstamo ${plan_id}`,
+  }});
+}
+
+/** Paga una cuota manualmente (sin línea de banco): registra el egreso de caja y marca pagada. */
+export async function pagarCuota({ plan, cuota, fecha, cuenta_bancaria }) {
+  await appendMovTesoreria({
+    sociedad: plan.sociedad, fecha, tipo: "PAGO",
+    cuenta_bancaria, concepto: `Cuota ${cuota.nro_cuota} ${plan.nro_plan || plan.plan_id}`,
+    moneda: plan.moneda, monto: -Math.abs(Number(cuota.total) || 0),
+    origen: "cuota", origen_id: `FIN-${plan.plan_id}#${cuota.nro_cuota}`,
+  });
+  await post({ action: "edit", sheet: "nb_financiaciones", id: cuota.rowId, patch: {
+    estado: "pagada", fecha_pago: fecha,
+  }});
+}
+
+/** Aplica un patch a TODAS las filas de un plan (campos de plan repetidos). */
+export async function updateFinanciacion(plan_id, patch) {
+  const rows = await get("nb_financiaciones", {});
+  const ids  = rows.filter(r => r.plan_id === plan_id).map(r => r.id);
+  for (const id of ids) await post({ action: "edit", sheet: "nb_financiaciones", id, patch });
+}
+
+/** Cancela las cuotas pendientes de un plan (precancelación); el pasivo baja a 0. */
+export async function cancelarFinanciacion(plan_id) {
+  const rows = await get("nb_financiaciones", {});
+  const ids  = rows.filter(r => r.plan_id === plan_id && r.estado === "pendiente").map(r => r.id);
+  for (const id of ids) await post({ action: "edit", sheet: "nb_financiaciones", id, patch: { estado: "cancelada" } });
+}
+
+/** Borra un plan entero (todas sus filas). */
+export async function deleteFinanciacion(plan_id) {
+  const rows = await get("nb_financiaciones", {});
+  const ids  = rows.filter(r => r.plan_id === plan_id).map(r => r.id);
+  for (const id of ids) await post({ action: "del", sheet: "nb_financiaciones", id });
+}
+
+// ─── ANTICIPOS DE CLIENTES ────────────────────────────────────────────────────
+//
+// Cobro adelantado de un cliente: entra plata (caja) pero NO es ingreso → pasivo
+// "ingresos diferidos". Se consume al FACTURAR (la factura reconoce el ingreso) cobrando
+// "contra el anticipo": un movimiento sin caja que cierra la CxC de la factura y baja el
+// saldo del anticipo. Todo vive en nb_movimientos (sin tabla nueva):
+//   · alta    → origen="anticipo_alta",    tipo=COBRO, documento_id=self, contraparte=cliente
+//   · consumo → origen="anticipo_consumo", tipo=COBRO, cuenta_bancaria="", documento_id=factura,
+//               referencia="anticipo=<altaId>"
+// Ninguno entra al P&L (no llevan "CONTAB-"); el ingreso lo aporta la factura (nb_comprobantes).
+
+/** Agrupa los movimientos en anticipos (alta + sus consumos) con saldo derivado. Puro. */
+export function agruparAnticipos(movs = []) {
+  const consumos = {};   // altaId → [{id, factura_id, monto, fecha}]
+  for (const m of movs) {
+    if (m.origen !== "anticipo_consumo") continue;
+    const ant = (String(m.referencia || "").match(/anticipo=([^;]+)/) || [])[1] || "";
+    if (!ant) continue;
+    (consumos[ant] ||= []).push({ id: m.id, factura_id: m.documento_id, monto: Math.abs(toNum(m.monto)), fecha: m.fecha });
+  }
+  return movs.filter(m => m.origen === "anticipo_alta").map(a => {
+    const monto     = Math.abs(toNum(a.monto));
+    const cons      = consumos[a.id] || [];
+    const consumido = cons.reduce((s, c) => s + c.monto, 0);
+    const saldo     = Math.max(0, monto - consumido);
+    return {
+      id: a.id, sociedad: a.sociedad, fecha: a.fecha, moneda: a.moneda || "ARS",
+      cliente_id: a.contraparte_id || "", cliente_nombre: a.contraparte_nombre || "",
+      monto, consumido, saldo,
+      estado: saldo <= 0.01 ? "consumido" : "disponible",
+      es_apertura: /anticipo_apertura=1/.test(a.referencia || ""),
+      consumos: cons,
+    };
+  });
+}
+
+/** Trae los anticipos de una sociedad, agrupados con saldo + consumos. */
+export async function fetchAnticipos(sociedad) {
+  const movs = await get("nb_movimientos", sociedad ? { sociedad } : {});
+  return agruparAnticipos(movs);
+}
+
+/**
+ * Alta de un anticipo de cliente. Caja ↑ (salvo apertura: la plata ya está en el saldo inicial
+ * → sin cuenta bancaria). Nace el pasivo; NO es ingreso (no toca el P&L).
+ */
+export async function appendAnticipo({ sociedad, cliente_id = "", cliente_nombre = "", fecha, monto, moneda = "ARS", cuenta_bancaria = "", es_apertura = false, nota = "" }) {
+  const id = newId("ANT");
+  return post({ action: "add", sheet: "nb_movimientos", row: {
+    id, sociedad, fecha,
+    tipo: "COBRO",
+    cuenta_bancaria: es_apertura ? "" : cuenta_bancaria,
+    cuenta_destino: "", cuenta_contable: "", centro_costo: "",
+    moneda, monto: Math.abs(Number(monto) || 0),
+    documento_id: id,                                   // self → no matchea ninguna factura
+    concepto: `Anticipo ${cliente_nombre || ""}`.trim() + (nota ? ` · ${nota}` : ""),
+    contraparte_id: cliente_id, contraparte_nombre: cliente_nombre,
+    referencia: es_apertura ? "anticipo_apertura=1" : "",
+    origen: "anticipo_alta",
+    created_at: new Date().toISOString(),
+  }});
+}
+
+/**
+ * Cobra una factura de venta CONTRA un anticipo (sin caja): cierra la CxC de la factura
+ * (documento_id) y baja el saldo del anticipo (referencia anticipo=<id>). Parcial OK.
+ */
+export async function cobrarContraAnticipo({ factura_id, anticipo_id, sociedad, fecha, monto, moneda = "ARS", cliente_id = "", cliente_nombre = "" }) {
+  const id = newId("ANTC");
+  return post({ action: "add", sheet: "nb_movimientos", row: {
+    id, sociedad, fecha,
+    tipo: "COBRO", cuenta_bancaria: "", cuenta_destino: "", cuenta_contable: "", centro_costo: "",
+    moneda, monto: Math.abs(Number(monto) || 0),
+    documento_id: factura_id,                           // netea la CxC de la factura
+    concepto: `Cobro c/ anticipo ${factura_id}`,
+    contraparte_id: cliente_id, contraparte_nombre: cliente_nombre,
+    referencia: `anticipo=${anticipo_id}`,
+    origen: "anticipo_consumo",
+    created_at: new Date().toISOString(),
+  }});
+}
+
+/** Borra un anticipo y sus consumos (re-abre las CxC que había cerrado). */
+export async function deleteAnticipo(anticipo_id) {
+  const movs = await get("nb_movimientos", {});
+  const ids = movs.filter(m =>
+    (m.origen === "anticipo_alta" && m.id === anticipo_id) ||
+    (m.origen === "anticipo_consumo" && new RegExp(`anticipo=${anticipo_id}(;|$)`).test(m.referencia || ""))
+  ).map(m => m.id);
+  for (const id of ids) await post({ action: "del", sheet: "nb_movimientos", id });
+}
+
+/** Pasivo de anticipos (ingresos diferidos) por moneda + docs. Fuente única para Tesorería/Balance. */
+export function anticipoPasivo(anticipos, sociedad) {
+  const soc = String(sociedad ?? "").toLowerCase();
+  const tot = { ARS: 0, USD: 0, EUR: 0 };
+  const docs = [];
+  for (const a of (anticipos ?? [])) {
+    if (soc && String(a.sociedad ?? "").toLowerCase() !== soc) continue;
+    if (a.saldo <= 0) continue;
+    const mon = a.moneda || "ARS";
+    if (mon in tot) tot[mon] += a.saldo;
+    docs.push({ cliente: a.cliente_nombre, fecha: a.fecha, saldo: a.saldo, moneda: mon });
+  }
+  return { tot, docs };
+}

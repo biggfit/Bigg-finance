@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, ESTADO_INGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
-import { fetchIngresos, appendIngreso, deleteIngreso, appendCobro, fetchPagosCobros, calcSaldoPendiente, calcEstadoIngreso, fetchClientes, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, deleteMovTesoreria, updateMovTesoreria, shortId } from "../lib/numbersApi";
+import { fetchIngresos, appendIngreso, deleteIngreso, appendCobro, fetchPagosCobros, calcSaldoPendiente, calcEstadoIngreso, fetchClientes, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, deleteMovTesoreria, updateMovTesoreria, shortId, agruparAnticipos, cobrarContraAnticipo } from "../lib/numbersApi";
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 import { makeResolveCC, makeResolveCB } from "./formUtils";
 import NuevoIngresoModal from "./NuevoIngresoModal";
@@ -16,7 +16,7 @@ function CCDisplay({ lineas, resolveCC }) {
 }
 
 // ─── Modal: Registrar Cobro ───────────────────────────────────────────────────
-function RegistrarCobroModal({ ingreso, saldoPendiente, cuentas, onClose, onSave }) {
+function RegistrarCobroModal({ ingreso, saldoPendiente, cuentas, anticipos = [], onClose, onSave }) {
   const [form, setForm] = useState({
     fecha:      new Date().toISOString().slice(0, 10),
     monto:      String(saldoPendiente ?? ingreso.importe ?? ""),
@@ -27,12 +27,15 @@ function RegistrarCobroModal({ ingreso, saldoPendiente, cuentas, onClose, onSave
   const excede   = montoNum > (saldoPendiente ?? ingreso.importe ?? 0);
   const canSave  = form.fecha && form.monto && form.medioCobro && !excede;
 
-  const mediosCobro = cuentas
-    .filter(c => c.moneda === ingreso.moneda)
-    .map(c => ({
-      id:     c.id,
-      nombre: `${TIPO_CUENTA[c.tipo]?.icon ?? "💳"} ${c.nombre}`,
-    }));
+  const mediosCobro = [
+    ...cuentas
+      .filter(c => c.moneda === ingreso.moneda)
+      .map(c => ({ id: c.id, nombre: `${TIPO_CUENTA[c.tipo]?.icon ?? "💳"} ${c.nombre}` })),
+    // Anticipos del cliente con saldo (cobrar contra anticipo → no toca caja, baja el pasivo)
+    ...anticipos
+      .filter(a => (a.moneda || "ARS") === ingreso.moneda)
+      .map(a => ({ id: `ant:${a.id}`, nombre: `🎟 Anticipo · saldo ${fmtMoney(a.saldo, ingreso.moneda)}` })),
+  ];
 
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.5)", zIndex:500,
@@ -685,6 +688,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
   const [filtroEstado, setFiltroEstado] = useState("todos");
   const filtroFecha = useFiltroFecha();
   const [ingresos, setIngresos]         = useState([]);
+  const [anticipos, setAnticipos]       = useState([]);   // anticipos de clientes con saldo (cobrar contra anticipo)
   const [loading, setLoading]           = useState(true);
   const [error, setError]               = useState(null);
   const [showCobro, setShowCobro]               = useState(null);
@@ -721,6 +725,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
                  pagosVinculados: docCobros, estado: calcEstadoIngreso(saldo, doc.total, doc.vto) };
       });
       setIngresos(enriched);
+      setAnticipos(agruparAnticipos(pagos).filter(a => a.saldo > 0.01));
     } catch (e) {
       setError(e.message);
     } finally {
@@ -790,18 +795,32 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
     const ingreso = ingresos.find(i => i.id === data.ingresoId);
     const ccHeredado = ingreso?.lineas?.find(l => l.cc)?.cc ?? "";
     try {
-      await appendCobro({
-        documento_id:    data.ingresoId,
-        sociedad,
-        fecha:           data.fecha,
-        monto:           Number(data.monto),
-        moneda:          ingreso?.moneda ?? "ARS",
-        cuenta_bancaria: data.medioCobro,
-        cuenta:          ingreso?.cuenta ?? "",
-        referencia:      data.referencia ?? "",
-        nota:            data.nota ?? "",
-        centro_costo:    ccHeredado,
-      });
+      if (String(data.medioCobro).startsWith("ant:")) {
+        // Cobrar CONTRA un anticipo: no toca caja, cierra la CxC y baja el saldo del anticipo.
+        await cobrarContraAnticipo({
+          factura_id:   data.ingresoId,
+          anticipo_id:  String(data.medioCobro).slice(4),
+          sociedad,
+          fecha:        data.fecha,
+          monto:        Number(data.monto),
+          moneda:       ingreso?.moneda ?? "ARS",
+          cliente_id:   ingreso?.clienteId ?? "",
+          cliente_nombre: ingreso?.cliente ?? "",
+        });
+      } else {
+        await appendCobro({
+          documento_id:    data.ingresoId,
+          sociedad,
+          fecha:           data.fecha,
+          monto:           Number(data.monto),
+          moneda:          ingreso?.moneda ?? "ARS",
+          cuenta_bancaria: data.medioCobro,
+          cuenta:          ingreso?.cuenta ?? "",
+          referencia:      data.referencia ?? "",
+          nota:            data.nota ?? "",
+          centro_costo:    ccHeredado,
+        });
+      }
       // Recargar con pagos para recalcular estado
       await cargarIngresos();
     } catch (e) {
@@ -849,7 +868,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
           onEditar={i => { setShowDetalle(null); setShowEditar(i); }}
           onEditarCobro={p => setEditingCobro(p)}
         />
-        {showCobro    && <RegistrarCobroModal ingreso={showCobro} saldoPendiente={showCobro.saldoPendiente ?? showCobro.importe} cuentas={cuentasSoc} onClose={() => setShowCobro(null)} onSave={handleCobro} />}
+        {showCobro    && <RegistrarCobroModal ingreso={showCobro} saldoPendiente={showCobro.saldoPendiente ?? showCobro.importe} cuentas={cuentasSoc} anticipos={anticipos.filter(a => String(a.cliente_id) === String(showCobro.clienteId))} onClose={() => setShowCobro(null)} onSave={handleCobro} />}
         {editingCobro && <EditarCobroModal    cobro={editingCobro} sociedad={sociedad} cuentasSoc={cuentasSoc} onClose={() => setEditingCobro(null)} onSaved={() => { setEditingCobro(null); cargarIngresos(); }} />}
       </>
     );
@@ -1004,7 +1023,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
       </div>
 
       {showEditar  && <NuevoIngresoModal   sociedad={sociedad} clientes={clientes} cuentas={cuentas} centrosCosto={centrosCosto} initialData={showEditar} onClose={() => setShowEditar(null)} onSave={handleSave} />}
-      {showCobro   && <RegistrarCobroModal ingreso={showCobro} saldoPendiente={showCobro.saldoPendiente ?? showCobro.importe} cuentas={cuentasSoc} onClose={() => setShowCobro(null)} onSave={handleCobro} />}
+      {showCobro   && <RegistrarCobroModal ingreso={showCobro} saldoPendiente={showCobro.saldoPendiente ?? showCobro.importe} cuentas={cuentasSoc} anticipos={anticipos.filter(a => String(a.cliente_id) === String(showCobro.clienteId))} onClose={() => setShowCobro(null)} onSave={handleCobro} />}
       {editingCobro && <EditarCobroModal  cobro={editingCobro} sociedad={sociedad} cuentasSoc={cuentasSoc} onClose={() => setEditingCobro(null)} onSaved={() => { setEditingCobro(null); cargarIngresos(); }} />}
       {showCtaCte  && <CtaCteModal         cliente={showCtaCte.cliente} documentos={showCtaCte.docs} onClose={() => setShowCtaCte(null)} />}
     </div>

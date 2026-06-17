@@ -6,17 +6,19 @@ import {
   ignorarMovimiento, restaurarMovimiento, fetchMovimientosIgnorados, fetchPagosSueldos,
   fetchEgresos, fetchPagosCobros, calcSaldoPendiente, imputarPagoFC,
   appendBancoRegla, fetchIngresos, imputarCobroIngreso,
+  fetchFinanciaciones, imputarCuota,
 } from "../lib/numbersApi";
 import { BancoReglaModal } from "./PantallaMaestros";
 import { fetchAll } from "../lib/sheetsApi";
 import { computeSaldoReal } from "../lib/helpers";
 import { parseGalicia } from "./parsers/galicia";
-import { clasificarLineas, clasificarLinea } from "./reconciliacion/ruleEngine";
+import { clasificarLineas, clasificarLinea, reconocerCuota } from "./reconciliacion/ruleEngine";
 
 const TIPO_LABEL = {
   impuesto: "Impuesto", comision: "Comisión", interes: "Interés", servicio: "Servicio",
   transferencia_interna: "Transf. interna", ingreso: "Ingreso", financiacion: "Financiación",
-  pago_proveedor: "Pago proveedor", cobro_franquicia: "Cobro franquicia", sin_clasificar: "Sin clasificar",
+  pago_proveedor: "Pago proveedor", cobro_franquicia: "Cobro franquicia",
+  cuota_financiacion: "Cuota de financiación", sin_clasificar: "Sin clasificar",
 };
 // fr_tipo según monto vs deuda viva del franquiciado. Crédito que matchea la deuda → PAGO de CC;
 // si no hay deuda que lo respalde → PAGO_PAUTA (a cuenta). Débito → PAGO_ENVIADO.
@@ -57,6 +59,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
   const [egresos,    setEgresos]    = useState([]);    // facturas de proveedor (para imputar pagos)
   const [ingresos,   setIngresos]   = useState([]);    // facturas de venta (para imputar cobros)
   const [pagosCobros,setPagosCobros]= useState([]);    // pagos/cobros (para saldo pendiente de cada FC)
+  const [financiaciones, setFinanciaciones] = useState([]); // planes AFIP + créditos (para imputar cuotas)
   const [ignorados,  setIgnorados]  = useState([]);    // líneas del extracto ya descartadas
   const [erroresIngesta, setErroresIngesta] = useState(null); // { lineas, cuenta_bancaria, moneda } que fallaron al subir
   const [filtroTipo, setFiltroTipo] = useState("");   // filtro por grupo de Propuesta (para aprobar por grupos)
@@ -114,6 +117,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
     fetchEgresos(sociedad).then(e => setEgresos(e || [])).catch(console.error);
     fetchIngresos(sociedad).then(i => setIngresos(i || [])).catch(console.error);
     fetchPagosCobros(sociedad).then(p => setPagosCobros(p || [])).catch(console.error);
+    fetchFinanciaciones(sociedad).then(f => setFinanciaciones(f || [])).catch(console.error);
     recargar();
   }, [sociedad]);
 
@@ -231,6 +235,26 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
     const vs = ventasDeCliente(cobClienteDe(mov));
     return vs.length === 1 ? String(vs[0].id) : "";
   };
+  // ── Cuotas de financiación pendientes (planes AFIP + créditos), de la moneda de la cuenta.
+  const cuotasPendientes = useMemo(() => {
+    const out = [];
+    for (const p of financiaciones) {
+      if (p.moneda && p.moneda !== monedaCuenta) continue;
+      for (const c of (p.cuotas || [])) {
+        if (c.estado !== "pendiente") continue;
+        out.push({ plan_id: p.plan_id, nro_plan: p.nro_plan, acreedor_cuit: p.acreedor_cuit, acreedor_nombre: p.acreedor_nombre,
+          nro_cuota: c.nro_cuota, row_id: c.rowId, total: c.total, total_tardio: c.total_tardio, vto: c.vto, moneda: p.moneda });
+      }
+    }
+    return out;
+  }, [financiaciones, monedaCuenta]);
+  const planesVigentes = useMemo(() => {
+    const m = new Map();
+    cuotasPendientes.forEach(c => { if (!m.has(c.plan_id)) m.set(c.plan_id, { plan_id: c.plan_id, label: `${c.acreedor_nombre || "Plan"}${c.nro_plan ? " · " + c.nro_plan : ""}` }); });
+    return [...m.values()];
+  }, [cuotasPendientes]);
+  const cuotasDePlan = (planId) => cuotasPendientes.filter(c => String(c.plan_id) === String(planId)).sort((a, b) => a.nro_cuota - b.nro_cuota);
+
   // Cuenta contable por defecto para retenciones sufridas (si existe una en el plan).
   const cuentaRetencionDefault = useMemo(
     () => planCuentas.find(c => /retenc/i.test(`${c.nombre} ${c.id}`))?.id || "",
@@ -248,7 +272,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
     try {
       const data = await parseGalicia(file);
       const cta = cuentas.find(c => c.id === cuentaTab);
-      const ctx = { banco: cta?.banco, sociedad, pais: "", franquicias, sociedades, cuentas: cuentasAll, moneda: cta?.moneda || "ARS" };
+      const ctx = { banco: cta?.banco, sociedad, pais: "", franquicias, sociedades, cuentas: cuentasAll, moneda: cta?.moneda || "ARS", cuotasPendientes };
       const lineas = clasificarLineas(data.lineas, reglas, proveedores, ctx);
       const moneda = cta?.moneda || "ARS";
       const { creados, dups, errores, fallidas } = await ingestarExtracto({ sociedad, cuenta_bancaria: cuentaTab, moneda, lineas });
@@ -313,6 +337,31 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
     return !!soc && soc !== sociedad;
   };
 
+  // Estado de "modo cuota de financiación" de una fila (auto por reconocimiento, o manual ⋯).
+  // Auto solo para débitos que reconoce reconocerCuota (Nº de plan o CUIT+monto). Cede a los
+  // otros modos (FC/cobro/transfer). Devuelve la financiación y cuota pre-seleccionadas.
+  const cuotaState = (mov) => {
+    const ed = edits[mov.id] || {};
+    if (ed.noCuota || ed.modoFC || ed.modoCobro || ed.modoTransfer) return { es: false };
+    const manual = !!ed.modoCuota;
+    let auto = null;
+    if (!manual) {
+      if ((Number(mov.monto) || 0) >= 0) return { es: false };   // solo débitos para auto
+      const meta = parseMeta(mov.referencia);
+      auto = reconocerCuota(
+        { monto: Number(mov.monto) || 0, descripcion: mov.concepto || "", ley1: mov.contraparte_nombre || "", ley2: meta.cuit || "", cuit: meta.cuit || "" },
+        cuotasPendientes, monedaCuenta);
+      if (!auto) return { es: false };
+    }
+    const planSel = ed.cuota_plan ?? auto?.plan_id ?? "";
+    let cuotaSel = ed.cuota_row;
+    if (cuotaSel == null) {
+      if (auto && (!ed.cuota_plan || String(ed.cuota_plan) === String(auto.plan_id))) cuotaSel = auto.cuota_row_id;
+      else { const cs = cuotasDePlan(planSel); cuotaSel = cs.length === 1 ? String(cs[0].row_id) : ""; }
+    }
+    return { es: true, manual, planSel, cuotaSel: cuotaSel || "" };
+  };
+
   // ¿La fila está lista para aceptar? (imputación completa).
   const puedeAceptarMov = (mov) => {
     if (esTransferMov(mov)) return !!destinoDe(mov);
@@ -329,6 +378,8 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
       if (rets.some(r => (Number(r.monto) || 0) > 0 && !r.cuenta)) return false;   // falta cuenta en una retención
       return true;
     }
+    const cs = cuotaState(mov);
+    if (cs.es) return !!cs.cuotaSel;
     const cuentaSel = (edits[mov.id]?.cuenta_contable) ?? mov.cuenta_contable ?? "";
     const ccSel = (edits[mov.id]?.centro_costo) ?? mov.centro_costo ?? "";
     // cuenta y centro deben resolver a una opción real (si no, no se ven y se perderían en el P&L).
@@ -377,6 +428,19 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
         ...rets.map(r => ({ tipo: "COBRO", documento_id: cobId, monto: r.monto }))]);
       setPendientes(prev => prev.filter(m => m.id !== mov.id));
       return;
+    }
+    const cs = cuotaState(mov);
+    if (cs.es && cs.cuotaSel) {
+      const cuota = cuotasPendientes.find(c => String(c.row_id) === String(cs.cuotaSel));
+      if (cuota) {
+        await imputarCuota(mov, { plan_id: cuota.plan_id, nro_cuota: cuota.nro_cuota, row_id: cuota.row_id });
+        // Reflejar localmente: la cuota pasa a pagada (sale de cuotasPendientes / no se re-sugiere).
+        setFinanciaciones(prev => prev.map(p => p.plan_id === cuota.plan_id
+          ? { ...p, cuotas: p.cuotas.map(x => String(x.rowId) === String(cuota.row_id) ? { ...x, estado: "pagada" } : x) }
+          : p));
+        setPendientes(prev => prev.filter(m => m.id !== mov.id));
+        return;
+      }
     }
     const fr = frState(mov);
     if (fr.es) {
@@ -487,8 +551,9 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
 
   // Grupo de "Propuesta" de una fila → para filtrar y aprobar por grupos.
   const grupoDe = (m) => {
-    if (esTransferMov(m)) return "Transferencia";
+    if (esTransferMov(m)) return esInterco(m) ? "Transferencia interco" : "Transferencia propia";
     if (frState(m).es) return "Cobro franquicia";
+    if (cuotaState(m).es) return "Cuota de financiación";
     if (haberesMatch(m)) return "Pago de haberes";
     const meta = parseMeta(m.referencia);
     const tipo = meta.tipo || (Number(m.monto) > 0 ? "ingreso" : "");
@@ -508,14 +573,15 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
   const countByCuenta = useMemo(() => {
     const o = {}; pendientes.forEach(m => { o[m.cuenta_bancaria] = (o[m.cuenta_bancaria] || 0) + 1; }); return o;
   }, [pendientes]);
-  const listosCount = filtered.filter(puedeAceptarMov).length;
+  // Memoizado: puedeAceptarMov es caro (frState/cuotaState/haberesMatch por fila) y esto corre por render.
+  const listosCount = useMemo(() => filtered.filter(puedeAceptarMov).length, [filtered, edits, cuotasPendientes]);
 
   // Re-evaluar las reglas actuales sobre los pendientes de la cuenta (sin re-subir ni escribir):
   // reconstruye la línea desde el movimiento, la clasifica y pre-carga la propuesta en `edits`.
   // El usuario revisa y acepta (las reglas escala/auto caen como propuesta, no se contabilizan solas).
   const reEvaluar = () => {
     const cta = cuentas.find(c => c.id === cuentaTab);
-    const ctx = { banco: cta?.banco, sociedad, pais: "", franquicias, sociedades, cuentas: cuentasAll, moneda: cta?.moneda || "ARS" };
+    const ctx = { banco: cta?.banco, sociedad, pais: "", franquicias, sociedades, cuentas: cuentasAll, moneda: cta?.moneda || "ARS", cuotasPendientes };
     const lineaDeMov = (m) => {
       const meta = parseMeta(m.referencia);
       return { fecha: m.fecha, monto: Number(m.monto) || 0, descripcion: m.concepto || "",
@@ -679,7 +745,10 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                 const cobDiff = cobSelObj ? (cobSelObj.saldo - total) : 0;   // saldo factura − depósito
                 const cobRets = edits[m.id]?.rets || [];                      // retenciones [{cuenta, monto}]
                 const cobRetSum = cobRets.reduce((s, r) => s + (Number(r.monto) || 0), 0);
-                const hMatch = (!fr.es && !modoTransfer && !modoFC && !modoCobro) ? haberesMatch(m) : null;   // débito que coincide con un lote de haberes
+                const cuotaSt = cuotaState(m);
+                const modoCuota = cuotaSt.es;
+                const cuotaSelObj = modoCuota && cuotaSt.cuotaSel ? cuotasPendientes.find(c => String(c.row_id) === String(cuotaSt.cuotaSel)) : null;
+                const hMatch = (!fr.es && !modoTransfer && !modoFC && !modoCobro && !modoCuota) ? haberesMatch(m) : null;   // débito que coincide con un lote de haberes
                 return (
                   <Fragment key={m.id}>
                   <tr style={{ borderBottom: fr.split ? "none" : "1px solid #cbd5e1", background: bg }}>
@@ -719,6 +788,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                                 {cobSelObj.cliente} · {cobDiff > 0.01 ? `dep $${fmt(total)}${cobRetSum > 0 ? ` + ret $${fmt(cobRetSum)}` : ""} de $${fmt(cobSelObj.saldo)}` : `saldo $${fmt(cobSelObj.saldo)}`}
                               </div>
                             : <div style={{ fontSize: 10, color: "#b45309" }}>{!clientesConPendientes.length ? "sin facturas de venta pendientes" : !cobCliSel ? "elegí cliente" : "elegí factura"}</div>}
+                        </div>
+                      ) : modoCuota ? (
+                        <div>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed" }}>Cuota de financiación</span>
+                          {cuotaSelObj
+                            ? <div style={{ fontSize: 10, color: T.muted }}>{cuotaSelObj.acreedor_nombre || cuotaSelObj.nro_plan || "plan"} · cuota {cuotaSelObj.nro_cuota}{Math.abs(total - (cuotaSelObj.total_tardio || 0)) < Math.abs(total - cuotaSelObj.total) ? " (tardío)" : ""}</div>
+                            : <div style={{ fontSize: 10, color: "#b45309" }}>{planesVigentes.length ? "elegí financiación/cuota" : "sin cuotas pendientes"}</div>}
                         </div>
                       ) : hMatch ? (
                         <div>
@@ -805,6 +881,17 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                             </div>
                           )}
                         </div>
+                      ) : modoCuota ? (
+                        <div key="cuota" style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+                          <select value={cuotaSt.planSel} onChange={e => setModo(m.id, { cuota_plan: e.target.value, cuota_row: "" })} style={fld(!!cuotaSt.planSel, 170)}>
+                            <option value="">{planesVigentes.length ? "— financiación —" : "sin cuotas pendientes"}</option>
+                            {planesVigentes.map(p => <option key={p.plan_id} value={p.plan_id}>{p.label}</option>)}
+                          </select>
+                          <select value={cuotaSt.cuotaSel} onChange={e => setEdit(m.id, "cuota_row", e.target.value)} disabled={!cuotaSt.planSel} style={fld(!!cuotaSt.cuotaSel, 190)}>
+                            <option value="">{cuotaSt.planSel ? "— cuota —" : "elegí financiación"}</option>
+                            {cuotasDePlan(cuotaSt.planSel).map(c => <option key={c.row_id} value={String(c.row_id)}>Cuota {c.nro_cuota} · {fmt(c.total)}{c.vto ? ` · ${c.vto}` : ""}</option>)}
+                          </select>
+                        </div>
                       ) : (
                         <div key="normal" style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "center" }}>
                           <select value={cuentaOk ? cuentaSel : ""} onChange={e => setEdit(m.id, "cuenta_contable", e.target.value)}
@@ -842,11 +929,17 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                           {!fr.es && !modoTransfer && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoTransfer: true, modoFranquicia: false, noFranquicia: true }); setMenuFor(null); }}>⇄ Convertir a transferencia entre cuentas</button>
                           )}
-                          {neg && !fr.es && !modoTransfer && !modoFC && (
+                          {neg && !fr.es && !modoTransfer && !modoFC && !modoCuota && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFC: true, modoFranquicia: false, modoTransfer: false, noFranquicia: true }); setMenuFor(null); }}>🧾 Imputar a una factura…</button>
                           )}
                           {modoFC && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFC: false, fc_id: undefined, noFranquicia: false }); setMenuFor(null); }}>↩ Volver a normal (no es pago de factura)</button>
+                          )}
+                          {neg && !fr.es && !modoTransfer && !modoFC && !modoCobro && !modoCuota && (
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCuota: true, noCuota: false, modoFranquicia: false, modoTransfer: false, modoFC: false, modoCobro: false, noFranquicia: true }); setMenuFor(null); }}>💳 Imputar a cuota de financiación…</button>
+                          )}
+                          {modoCuota && (
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCuota: false, noCuota: true, cuota_plan: undefined, cuota_row: undefined, noFranquicia: false }); setMenuFor(null); }}>↩ No es cuota de financiación</button>
                           )}
                           {!neg && !fr.es && !modoTransfer && !modoCobro && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCobro: true, modoFranquicia: false, modoTransfer: false, noFranquicia: true }); setMenuFor(null); }}>🧾 Imputar a factura de venta (cobro)…</button>
