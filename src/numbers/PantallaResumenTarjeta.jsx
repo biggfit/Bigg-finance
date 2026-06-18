@@ -6,7 +6,7 @@ import {
 import { parseTarjetaPdf } from "./parsers/tarjetaPdf";
 
 const inputStyle = {
-  width: "100%", background: "#f9fafb", border: `1px solid ${T.cardBorder}`,
+  width: "100%", background: "#eceff3", border: "1px solid #d3d9e0",
   borderRadius: 8, padding: "8px 12px", fontSize: 13, color: T.text,
   fontFamily: T.font, outline: "none", boxSizing: "border-box",
 };
