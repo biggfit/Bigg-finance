@@ -141,7 +141,7 @@ export default function PantallaSueldosPagar({ pais = "AR", onNavigate }) {
               {filas.map((f) => (
                 <tr key={f.legajo_id}
                   style={{ borderBottom: `1px solid ${T.border}` }}
-                  onMouseEnter={e => e.currentTarget.style.background = "#f9fafb"}
+                  onMouseEnter={e => e.currentTarget.style.background = "#eceff3"}
                   onMouseLeave={e => e.currentTarget.style.background = ""}>
                   <td style={{ ...td, fontWeight: 600, color: T.text }}>{f.legajo}</td>
                   {periodos.map(p => {

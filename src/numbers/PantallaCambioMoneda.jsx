@@ -151,7 +151,7 @@ export default function PantallaCambioMoneda({ sociedad }) {
 
       {/* ── Formulario inline ── */}
       {showForm && (
-        <div style={{ background:"#f9fafb", border:"1px solid #e5e7eb", borderRadius:12,
+        <div style={{ background:"#eceff3", border:"1px solid #e5e7eb", borderRadius:12,
           padding:"20px 24px", marginBottom:24 }}>
           {/* Grilla unificada: fecha/TC | origen | → | destino */}
           <div style={{ display:"grid", gridTemplateColumns:"150px 1fr 40px 1fr", gap:12, alignItems:"end", marginBottom:16 }}>
@@ -322,7 +322,7 @@ function TablaCambios({ cambios, ctaNombre, handleEliminar, deleting, showSocied
             : "—";
           return (
             <tr key={c.id} style={{ borderBottom:`1px solid ${T.cardBorder}` }}
-              onMouseEnter={e=>e.currentTarget.style.background="#f9fafb"}
+              onMouseEnter={e=>e.currentTarget.style.background="#eceff3"}
               onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
               {showSociedad && (
                 <td style={{ padding:"10px 12px" }}>

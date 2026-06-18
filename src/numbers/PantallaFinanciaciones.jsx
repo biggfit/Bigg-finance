@@ -60,7 +60,7 @@ const montosPorMoneda = (items, getSaldo) => {
 function Cell({ value, onChange, type = "number", w = 96 }) {
   return (
     <input type={type} value={value} onChange={e => onChange(e.target.value)}
-      style={{ width: w, background: "#f9fafb", border: `1px solid ${T.cardBorder}`,
+      style={{ width: w, background: "#eceff3", border: `1px solid ${T.cardBorder}`,
         borderRadius: 6, padding: "5px 7px", fontSize: 12, color: T.text,
         fontFamily: T.font, outline: "none", boxSizing: "border-box", textAlign: type === "number" ? "right" : "left" }} />
   );
@@ -74,7 +74,7 @@ function Field({ label, children }) {
   );
 }
 const inputStyle = {
-  width: "100%", background: "#f9fafb", border: `1px solid ${T.cardBorder}`,
+  width: "100%", background: "#eceff3", border: `1px solid ${T.cardBorder}`,
   borderRadius: 8, padding: "8px 12px", fontSize: 13, color: T.text,
   fontFamily: T.font, outline: "none", boxSizing: "border-box",
 };
@@ -564,7 +564,7 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
       </div>
 
       {/* Generador de cronograma (alternativa manual) */}
-      <div style={{ background: "#f9fafb", border: `1px dashed ${T.cardBorder}`, borderRadius: T.radius, padding: 14, marginBottom: 14 }}>
+      <div style={{ background: "#eceff3", border: `1px dashed ${T.cardBorder}`, borderRadius: T.radius, padding: 14, marginBottom: 14 }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: T.muted, marginBottom: 10 }}>O generar a mano (sistema francés — después editás cada cuota)</div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
           <Field label="Capital total"><input type="number" value={gen.capital_original} onChange={e => setGen(s => ({ ...s, capital_original: e.target.value }))} style={{ ...inputStyle, width: 140 }} /></Field>

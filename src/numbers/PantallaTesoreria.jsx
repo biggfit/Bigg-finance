@@ -118,7 +118,7 @@ function MovimientoModal({ sociedad, cuentasBancarias, onClose, onSave }) {
               marginBottom:4, textTransform:"uppercase", letterSpacing:".06em" }}>Observación</label>
             <textarea value={form.observacion} onChange={e => set("observacion", e.target.value)}
               placeholder="Concepto del movimiento..."
-              style={{ width:"100%", background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+              style={{ width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`,
                 borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text,
                 fontFamily:T.font, outline:"none", resize:"vertical", minHeight:64, boxSizing:"border-box" }} />
           </div>
@@ -170,7 +170,7 @@ function GastoDirectoModal({ sociedad, cuentasBancarias, cuentasContables = [], 
   const canSave = form.fecha && form.medioPago && form.cuenta_contable && form.cc && sub > 0;
 
   const fi = { // field input style
-    width:"100%", background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+    width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`,
     borderRadius:7, padding:"8px 10px", fontSize:13, color:T.text,
     fontFamily:T.font, outline:"none", boxSizing:"border-box",
   };
@@ -554,7 +554,7 @@ function BalanceBlock({ title, items, headerColor, onItemClick }) {
             style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
               padding:"8px 18px", borderBottom:`1px solid ${T.cardBorder}`,
               cursor: onItemClick ? "pointer" : "default", transition:"background .1s" }}
-            onMouseEnter={e => { if (onItemClick) e.currentTarget.style.background="#f9fafb"; }}
+            onMouseEnter={e => { if (onItemClick) e.currentTarget.style.background="#eceff3"; }}
             onMouseLeave={e => { e.currentTarget.style.background=""; }}>
             <span style={{ fontSize:13, color:T.text, flex:1, overflow:"hidden",
               textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{item.label}</span>
@@ -1317,7 +1317,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
             const on = filtroMoneda === m;
             return (
               <button key={m} type="button" onClick={() => setFiltroMoneda(m)} style={{
-                background: on ? T.accentDark : "#f9fafb",
+                background: on ? T.accentDark : "#eceff3",
                 color: on ? T.accent : T.muted,
                 border: `1px solid ${on ? T.accentDark : T.cardBorder}`,
                 borderRadius: 999,
@@ -1340,7 +1340,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
           <button type="button" onClick={() => { datePickerRef.current?.showPicker?.(); datePickerRef.current?.click(); }}
             style={{
               border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "6px 12px",
-              fontSize: 12, fontFamily: T.font, background: "#f9fafb",
+              fontSize: 12, fontFamily: T.font, background: "#eceff3",
               color: fechaCorte ? T.text : T.dim, cursor: "pointer", whiteSpace: "nowrap",
               display: "inline-flex", alignItems: "center", gap: 6,
               minWidth: 124, justifyContent: "center", fontWeight: 600,

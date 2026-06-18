@@ -440,7 +440,7 @@ export function InvoiceLineasTable({
         );
       })}
 
-      <div style={{ borderTop: `1px solid ${T.cardBorder}`, padding: "10px 14px", background: "#f9fafb" }}>
+      <div style={{ borderTop: `1px solid ${T.cardBorder}`, padding: "10px 14px", background: "#eceff3" }}>
         <button type="button" onClick={addLinea} style={{
           background: "transparent", border: "1.5px dashed rgba(17, 24, 39, 0.18)",
           borderRadius: 8, padding: "8px 18px", fontSize: 12, color: T.muted,
@@ -569,7 +569,7 @@ export function InvoiceFormFooter({
         cursor: "pointer", fontFamily: T.font,
         transition: "background .15s, border-color .15s, color .15s",
       }}
-      onMouseEnter={e => { e.currentTarget.style.background = "#f9fafb"; e.currentTarget.style.color = T.text; }}
+      onMouseEnter={e => { e.currentTarget.style.background = "#eceff3"; e.currentTarget.style.color = T.text; }}
       onMouseLeave={e => { e.currentTarget.style.background = "#fff"; e.currentTarget.style.color = T.muted; }}>
         {asPage ? "← Cancelar" : "Cancelar"}
       </button>

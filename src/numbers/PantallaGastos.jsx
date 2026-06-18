@@ -164,7 +164,7 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
                 const sym    = moneda === "USD" ? "U$D" : moneda === "EUR" ? "€" : "$";
                 return (
                   <tr key={r._id} style={{ borderBottom:`1px solid ${T.cardBorder}`,
-                    background: i%2===0 ? "#fff" : "#f9fafb" }}>
+                    background: i%2===0 ? "#fff" : "#eceff3" }}>
 
                     <td style={{ padding:"6px 8px" }}>
                       <input type="date" value={r.fecha}
@@ -390,7 +390,7 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
           value={busqueda}
           onChange={e => setBusqueda(e.target.value)}
           placeholder="Buscar por cuenta contable, CC, forma de pago, nota…"
-          style={{ flex:1, minWidth:200, background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+          style={{ flex:1, minWidth:200, background:"#eceff3", border:`1px solid ${T.cardBorder}`,
             borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text,
             outline:"none", fontFamily:T.font }}
         />

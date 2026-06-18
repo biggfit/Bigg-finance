@@ -145,7 +145,7 @@ const fmtN   = n => !n ? "—" : Math.round(Math.abs(n)).toLocaleString("es-AR")
 const CTRL_H = 36;
 
 const selStyle = {
-  background: "#f9fafb", border: `1px solid ${T.cardBorder}`,
+  background: "#eceff3", border: `1px solid ${T.cardBorder}`,
   borderRadius: 8, padding: "0 12px", fontSize: 13, color: T.text,
   fontFamily: T.font, outline: "none", cursor: "pointer", height: CTRL_H,
   lineHeight: `${CTRL_H}px`,
@@ -1391,7 +1391,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Sedes</label>
             <button onClick={() => setSedeOpen(o => !o)} style={{
               ...selStyle, display: "flex", alignItems: "center", gap: 8, minWidth: 190,
-              background: sedeOpen ? "#f0f2f5" : "#f9fafb",
+              background: sedeOpen ? "#f0f2f5" : "#eceff3",
             }}>
               <span style={{ flex: 1, textAlign: "left" }}>
                 {selectedSedeCCs.length === 0 ? "Todas las Sedes" : `${selectedSedeCCs.length} sede${selectedSedeCCs.length > 1 ? "s" : ""}`}
@@ -1424,7 +1424,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
                       cursor: "pointer", userSelect: "none", color: T.text,
                       transition: "background .1s",
                     }}
-                      onMouseEnter={e => e.currentTarget.style.background = "#f9fafb"}
+                      onMouseEnter={e => e.currentTarget.style.background = "#eceff3"}
                       onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
                       <input type="checkbox" checked={checked}
                         onChange={() => toggleSedeCC(cc.id)} style={{ cursor: "pointer", accentColor: T.accentDark }} />

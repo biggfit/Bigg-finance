@@ -407,7 +407,7 @@ function TabProveedores() {
         marginBottom:12, gap:12, flexShrink:0, paddingBottom:4 }}>
         <input value={busqueda} onChange={e=>setBusqueda(e.target.value)}
           placeholder="Buscar proveedor..."
-          style={{ flex:1, maxWidth:340, background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+          style={{ flex:1, maxWidth:340, background:"#eceff3", border:`1px solid ${T.cardBorder}`,
             borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text, outline:"none", fontFamily:T.font }} />
         <span style={{ fontSize:12, color:T.dim }}>{proveedores.length} proveedores</span>
         <Btn variant="accent" onClick={()=>setModal("nuevo")}>+ Nuevo Proveedor</Btn>
@@ -566,7 +566,7 @@ function TabClientes() {
         marginBottom:12, gap:12, flexShrink:0, paddingBottom:4 }}>
         <input value={busqueda} onChange={e=>setBusqueda(e.target.value)}
           placeholder="Buscar cliente..."
-          style={{ flex:1, maxWidth:340, background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+          style={{ flex:1, maxWidth:340, background:"#eceff3", border:`1px solid ${T.cardBorder}`,
             borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text, outline:"none", fontFamily:T.font }} />
         <span style={{ fontSize:12, color:T.dim }}>{clientes.length} clientes</span>
         <Btn variant="primary" onClick={()=>setModal("nuevo")}>+ Nuevo Cliente</Btn>
@@ -810,7 +810,7 @@ function TabCuentas() {
       <div style={{ display:"flex", gap:10, alignItems:"center", marginBottom:12, flexWrap:"wrap", flexShrink:0 }}>
         <input value={busqueda} onChange={e=>setBusqueda(e.target.value)}
           placeholder="Buscar cuenta..."
-          style={{ flex:1, maxWidth:300, background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+          style={{ flex:1, maxWidth:300, background:"#eceff3", border:`1px solid ${T.cardBorder}`,
             borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text, outline:"none", fontFamily:T.font }} />
         {["todos","gasto","ingreso","financiero"].map(t=>(
           <button key={t} onClick={()=>setFiltroTipo(t)} style={{
@@ -946,7 +946,7 @@ function CuentaBancariaModal({ initial, onClose, onSave, sociedades = [] }) {
             <label style={{ fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:5 }}>Nota</label>
             <textarea value={form.nota ?? ""} onChange={e=>set("nota",e.target.value)}
               placeholder="Observaciones..."
-              style={{ width:"100%", background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+              style={{ width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`,
                 borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text,
                 fontFamily:T.font, outline:"none", resize:"vertical", minHeight:56, boxSizing:"border-box" }} />
           </div>
@@ -1105,7 +1105,7 @@ function TabCajas() {
       {/* Toolbar */}
       <div style={{ display:"flex", gap:10, alignItems:"center", marginBottom:16, flexWrap:"wrap", flexShrink:0 }}>
         <select value={filtroSoc} onChange={e=>setFiltroSoc(e.target.value)}
-          style={{ background:"#f9fafb", border:`1px solid ${T.cardBorder}`, borderRadius:8,
+          style={{ background:"#eceff3", border:`1px solid ${T.cardBorder}`, borderRadius:8,
             padding:"7px 12px", fontSize:13, color:T.text, outline:"none", fontFamily:T.font }}>
           <option value="todos">Todas las sociedades</option>
           {sociedades.map(s=>(
@@ -1366,7 +1366,7 @@ function TabCC() {
         marginBottom:16, gap:12, flexShrink:0 }}>
         <input value={busqueda} onChange={e=>setBusqueda(e.target.value)}
           placeholder="Buscar centro de costo..."
-          style={{ flex:1, maxWidth:340, background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+          style={{ flex:1, maxWidth:340, background:"#eceff3", border:`1px solid ${T.cardBorder}`,
             borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text,
             outline:"none", fontFamily:T.font }} />
         <span style={{ fontSize:12, color:T.dim }}>{ccs.length} centros</span>
@@ -1738,7 +1738,7 @@ function TabBancoReglas() {
     <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", minHeight:0 }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, gap:12, flexShrink:0 }}>
         <input value={busqueda} onChange={e=>setBusqueda(e.target.value)} placeholder="Buscar regla (código, tipo, banco…)"
-          style={{ flex:1, maxWidth:340, background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+          style={{ flex:1, maxWidth:340, background:"#eceff3", border:`1px solid ${T.cardBorder}`,
             borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text, outline:"none", fontFamily:T.font }} />
         <span style={{ fontSize:12, color:T.dim }}>{reglas.length} reglas</span>
         <Btn variant="accent" onClick={()=>setModal("nuevo")}>+ Nueva regla</Btn>

@@ -65,7 +65,7 @@ function RegistrarCobroModal({ ingreso, saldoPendiente, cuentas, anticipos = [],
             <div>
               <label style={{ fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:5 }}>Fecha</label>
               <input type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)}
-                style={{ width:"100%", background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+                style={{ width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`,
                   borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text,
                   fontFamily:T.font, outline:"none", boxSizing:"border-box" }} />
             </div>
@@ -74,7 +74,7 @@ function RegistrarCobroModal({ ingreso, saldoPendiente, cuentas, anticipos = [],
               <input type="number" value={form.monto}
                 min={0} max={saldoPendiente ?? ingreso.importe ?? undefined}
                 onChange={e => set("monto", e.target.value)}
-                style={{ width:"100%", background:"#f9fafb",
+                style={{ width:"100%", background:"#eceff3",
                   border:`1.5px solid ${excede ? "#dc2626" : T.cardBorder}`,
                   borderRadius:8, padding:"8px 12px", fontSize:13, color: excede ? "#dc2626" : T.text,
                   fontFamily:T.font, outline:"none", boxSizing:"border-box" }} />
@@ -97,7 +97,7 @@ function RegistrarCobroModal({ ingreso, saldoPendiente, cuentas, anticipos = [],
               )}
               {mediosCobro.map(m => (
                 <button key={m.id} onClick={() => set("medioCobro", m.id)} style={{
-                  background: form.medioCobro === m.id ? "#eff6ff" : "#f9fafb",
+                  background: form.medioCobro === m.id ? "#eff6ff" : "#eceff3",
                   border:`1.5px solid ${form.medioCobro === m.id ? "#2563eb" : T.cardBorder}`,
                   borderRadius:8, padding:"9px 14px", cursor:"pointer",
                   display:"flex", alignItems:"center", gap:10, textAlign:"left",
@@ -190,14 +190,14 @@ function EditarCobroModal({ cobro, sociedad, cuentasSoc, onClose, onSaved }) {
                 letterSpacing:".07em", display:"block", marginBottom:4 }}>Fecha</label>
               <input type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)}
                 style={{ width:"100%", padding:"8px 10px", fontSize:13, borderRadius:8, boxSizing:"border-box",
-                  border:`1px solid ${T.cardBorder}`, background:"#f9fafb", color:T.text, fontFamily:"inherit" }} />
+                  border:`1px solid ${T.cardBorder}`, background:"#eceff3", color:T.text, fontFamily:"inherit" }} />
             </div>
             <div>
               <label style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase",
                 letterSpacing:".07em", display:"block", marginBottom:4 }}>Monto</label>
               <input type="number" value={form.monto} onChange={e => set("monto", e.target.value)}
                 style={{ width:"100%", padding:"8px 10px", fontSize:13, borderRadius:8, boxSizing:"border-box",
-                  border:`1px solid ${T.cardBorder}`, background:"#f9fafb", color:T.text, fontFamily:"inherit" }} />
+                  border:`1px solid ${T.cardBorder}`, background:"#eceff3", color:T.text, fontFamily:"inherit" }} />
             </div>
           </div>
           <div>
@@ -205,7 +205,7 @@ function EditarCobroModal({ cobro, sociedad, cuentasSoc, onClose, onSaved }) {
               letterSpacing:".07em", display:"block", marginBottom:4 }}>Medio de cobro</label>
             <select value={form.cuenta_bancaria} onChange={e => set("cuenta_bancaria", e.target.value)}
               style={{ width:"100%", padding:"8px 10px", fontSize:13, borderRadius:8,
-                border:`1px solid ${T.cardBorder}`, background:"#f9fafb", color:T.text, fontFamily:"inherit" }}>
+                border:`1px solid ${T.cardBorder}`, background:"#eceff3", color:T.text, fontFamily:"inherit" }}>
               <option value="">— Seleccionar —</option>
               {cuentasOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
@@ -215,7 +215,7 @@ function EditarCobroModal({ cobro, sociedad, cuentasSoc, onClose, onSaved }) {
               letterSpacing:".07em", display:"block", marginBottom:4 }}>Nota</label>
             <textarea value={form.nota} onChange={e => set("nota", e.target.value)} rows={3}
               style={{ width:"100%", padding:"8px 10px", fontSize:13, borderRadius:8, boxSizing:"border-box",
-                border:`1px solid ${T.cardBorder}`, background:"#f9fafb", color:T.text,
+                border:`1px solid ${T.cardBorder}`, background:"#eceff3", color:T.text,
                 fontFamily:"inherit", resize:"vertical" }} />
           </div>
         </div>
@@ -934,7 +934,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
         display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
         <input value={busqueda} onChange={e => setBusqueda(e.target.value)}
           placeholder="Buscar cliente, cuenta, CC..."
-          style={{ flex:1, minWidth:200, background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+          style={{ flex:1, minWidth:200, background:"#eceff3", border:`1px solid ${T.cardBorder}`,
             borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text, outline:"none", fontFamily:T.font }} />
         <FiltroFecha {...filtroFecha} />
         {["todos","cobrado","a_cobrar","vencido"].map(e => (

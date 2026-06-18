@@ -119,7 +119,7 @@ export function Input({ label, value, onChange, placeholder, type="text", requir
       </label>
       <input type={type} value={value} onChange={e=>onChange(e.target.value)}
         placeholder={placeholder}
-        style={{ width:"100%", background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+        style={{ width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`,
           borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text,
           fontFamily:T.font, outline:"none", boxSizing:"border-box" }} />
     </div>
@@ -133,7 +133,7 @@ export function Select({ label, value, onChange, options, required }) {
         {label}{required && <span style={{ color:T.red }}> *</span>}
       </label>
       <select value={value} onChange={e=>onChange(e.target.value)}
-        style={{ width:"100%", background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+        style={{ width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`,
           borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text,
           fontFamily:T.font, outline:"none", boxSizing:"border-box" }}>
         <option value="">— Seleccionar —</option>

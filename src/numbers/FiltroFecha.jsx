@@ -74,7 +74,7 @@ export function useFiltroFecha(defaultOpcion = "todos") {
 
 // ─── Componente ─────────────────────────────────────────────────────────────
 const SEL_STYLE = {
-  background: "#f9fafb",
+  background: "#eceff3",
   border: `1px solid ${T.cardBorder}`,
   borderRadius: 8,
   color: T.text,
@@ -86,7 +86,7 @@ const SEL_STYLE = {
 };
 
 const DATE_STYLE = {
-  background: "#f9fafb",
+  background: "#eceff3",
   border: `1px solid ${T.cardBorder}`,
   borderRadius: 8,
   color: T.text,
