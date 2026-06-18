@@ -709,7 +709,6 @@ function CuentaModal({ initial, onClose, onSave }) {
             options={[
               { value:"",                   label:"— Sin clasificar —"        },
               { value:"ventas",             label:"Ventas"                    },
-              { value:"interusos",          label:"Interusos"                 },
               { value:"costo_venta",        label:"Costo por Venta"           },
               { value:"gastos_operativos",  label:"Gastos Operativos"         },
               { value:"gastos_financieros", label:"Gastos Financieros"        },
