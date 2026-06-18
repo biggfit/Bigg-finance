@@ -10,8 +10,8 @@ import { parsePlanPdf } from "./parsers/planPdf";
 
 // ─── Config por tipo (planes AFIP vs créditos comparten todo, cambian labels/default) ──
 const TIPOS = {
-  plan_afip: { label: "Planes", nuevoLabel: "Nuevo plan de pago", acreedorLabel: "Organismo (AFIP / ARCA)", defCapital: "Plan Facilidades AFIP", capitalEsGasto: true },
-  prestamo:  { label: "Préstamos", nuevoLabel: "Nuevo crédito",   acreedorLabel: "Banco / acreedor",          defCapital: "",                     capitalEsGasto: false },
+  plan_afip: { label: "Planes", nuevoLabel: "Nuevo plan de pago", acreedorLabel: "Organismo (AFIP / ARCA)", capitalEsGasto: true },
+  prestamo:  { label: "Préstamos", nuevoLabel: "Nuevo crédito",   acreedorLabel: "Banco / acreedor",          capitalEsGasto: false },
 };
 const ESTADO_FIN = {
   vigente: { label: "Vigente", bg: T.blueBg,  color: T.blue },
@@ -26,13 +26,14 @@ const ESTADO_ANT = {
   disponible: { label: "Disponible", bg: T.blueBg,  color: T.blue },
   consumido:  { label: "Consumido",  bg: T.greenBg, color: T.green },
 };
-const DEF_INTERES = "Pérdidas Financieras";
+const DEF_INTERES = "Perdidas Financieras";   // nombre exacto de la cuenta (sin acento)
+const DEF_IVA     = "IVA";
 
 // Componentes de la cuota que pegan al P&L, cada uno con su cuenta + centro de costo propios
 // (ej. capital → "Impuestos", interés → "Financieros"). soloPlan = solo aplica a planes AFIP.
 const COMPONENTES = [
   { key: "capital",   label: "Capital (impuesto)",   cuentaK: "cuenta_capital",   centroK: "centro_capital",   soloPlan: true },
-  { key: "interes",   label: "Interés financiero",   cuentaK: "cuenta_interes",   centroK: "centro_interes" },
+  { key: "interes",   label: "Interés financiero (+ resarcitorio)", cuentaK: "cuenta_interes", centroK: "centro_interes" },
   { key: "iva",       label: "IVA",                  cuentaK: "cuenta_iva",       centroK: "centro_iva" },
   { key: "impuestos", label: "Sellos / otros imp.",  cuentaK: "cuenta_impuestos", centroK: "centro_impuestos" },
 ];
@@ -118,7 +119,7 @@ export default function PantallaFinanciaciones({ sociedad }) {
   const PILLS = [["plan_afip", "Planes"], ["prestamo", "Préstamos"], ["anticipo", "Anticipos"]];
 
   return (
-    <div className="fade" style={{ padding: "28px 32px", maxWidth: 1100 }}>
+    <div className="fade" style={{ padding: "28px 32px" }}>
       <PageHeader title="Financiaciones" subtitle="Planes de pago AFIP, créditos tomados y anticipos de clientes"
         action={tab !== "anticipo" ? <Btn variant="accent" onClick={() => setView({ mode: "alta" })}>+ {tab === "plan_afip" ? "Nuevo plan" : "Nuevo crédito"}</Btn> : null} />
 
@@ -372,15 +373,20 @@ function DetalleAnticipo({ anticipo: a, ingById = new Map(), onBack, onChanged }
 // ════════════════════════════════════════════════════════════════════════════
 function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedores = [], onCancel, onSaved }) {
   const cfg = TIPOS[tipo];
-  const [h, setH] = useState({
-    acreedor_id: "", acreedor_nombre: "", acreedor_cuit: "", nro_plan: "", moneda: "ARS",
-    fecha_consolidacion: new Date().toISOString().slice(0, 10),
-    es_apertura: false,
-    cuenta_capital: cfg.defCapital, centro_capital: "",
-    cuenta_interes: DEF_INTERES, centro_interes: "",
-    cuenta_iva: "", centro_iva: "",
-    cuenta_impuestos: "", centro_impuestos: "",
-    cuenta_bancaria: "", nota: "",
+  const [h, setH] = useState(() => {
+    // Pre-cargamos centros buscándolos por nombre (capital/iva → Impuestos, interés/sellos → Financieros).
+    const ccPorNombre = frag => centros.find(c => new RegExp(frag, "i").test(c.nombre || ""))?.id || "";
+    const ccImpuestos = ccPorNombre("impuesto"), ccFinancieros = ccPorNombre("financ");
+    return {
+      acreedor_id: "", acreedor_nombre: "", acreedor_cuit: "", nro_plan: "", moneda: "ARS",
+      fecha_consolidacion: new Date().toISOString().slice(0, 10),
+      es_apertura: false,
+      cuenta_capital: "",            centro_capital: ccImpuestos,   // vacía a propósito: el impuesto cambia por plan → se elige a mano
+      cuenta_interes: DEF_INTERES,   centro_interes: ccFinancieros,
+      cuenta_iva: DEF_IVA,           centro_iva: ccImpuestos,
+      cuenta_impuestos: "",          centro_impuestos: ccFinancieros,
+      cuenta_bancaria: "", nota: "",
+    };
   });
   const [gen, setGen] = useState({ capital_original: "", n_cuotas: "12", tasaMensual: "", ivaPct: "", impuestoPct: "", periodicidad: "mensual" });
   const [cuotas, setCuotas] = useState([]);
@@ -433,11 +439,22 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
   }
   function rmCuota(i) { setCuotas(cs => cs.filter((_, idx) => idx !== i).map((c, idx) => ({ ...c, nro_cuota: idx + 1 }))); }
 
-  const capitalTotal = useMemo(() => cuotas.reduce((s, c) => s + num(c.capital), 0), [cuotas]);
   const totalCuotas  = useMemo(() => cuotas.reduce((s, c) => s + num(c.total), 0), [cuotas]);
+  // Suma por componente del cronograma → define qué cuentas son obligatorias.
+  const compSum = useMemo(() => {
+    const s = { capital: 0, interes: 0, iva: 0, impuestos: 0 };
+    for (const c of cuotas) { s.capital += num(c.capital); s.interes += num(c.interes); s.iva += num(c.iva); s.impuestos += num(c.impuestos); }
+    return s;
+  }, [cuotas]);
+  // Una cuenta es obligatoria solo si el cronograma tiene importe para ese componente
+  // (y, para el capital, solo si en este tipo el capital es gasto — el préstamo no).
+  const compRequerido = comp => comp.key === "capital"
+    ? cfg.capitalEsGasto && compSum.capital > 0
+    : compSum[comp.key] > 0;
+  const compsVisibles = COMPONENTES.filter(comp => !comp.soloPlan || cfg.capitalEsGasto);
+  const faltanCuentas = compsVisibles.some(comp => compRequerido(comp) && !h[comp.cuentaK]);
   const cuotasOk = cuotas.length > 0 && cuotas.every(c => num(c.total) > 0 && c.vto);
-  const canSave = h.acreedor_nombre.trim() && h.fecha_consolidacion && h.cuenta_interes
-    && (!cfg.capitalEsGasto || h.cuenta_capital) && cuotasOk && !busy;
+  const canSave = h.acreedor_nombre.trim() && h.fecha_consolidacion && h.cuenta_bancaria && cuotasOk && !faltanCuentas && !busy;
 
   async function guardar() {
     if (!canSave) return;
@@ -452,10 +469,12 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
   }
 
   return (
-    <div className="fade" style={{ padding: "28px 32px", maxWidth: 1100 }}>
-      <button onClick={onCancel} style={{ background: "none", border: "none", color: T.muted, fontSize: 13, cursor: "pointer", marginBottom: 12, fontFamily: T.font }}>‹ Volver</button>
-      <PageHeader title={cfg.nuevoLabel}
-        subtitle={cfg.capitalEsGasto ? "El capital es el impuesto (gasto al consolidar); el interés se devenga mes a mes" : "El capital es deuda (no es gasto); solo el interés es resultado"} />
+    <div className="fade" style={{ padding: "28px 32px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
+        <PageHeader title={cfg.nuevoLabel}
+          subtitle={cfg.capitalEsGasto ? "El capital es el impuesto (gasto al consolidar); el interés se devenga mes a mes" : "El capital es deuda (no es gasto); solo el interés es resultado"} />
+        <button onClick={onCancel} style={{ background: "none", border: "none", color: T.muted, fontSize: 13, cursor: "pointer", fontFamily: T.font, whiteSpace: "nowrap", flexShrink: 0 }}>‹ Volver</button>
+      </div>
 
       {/* 1 · Datos del acreedor */}
       <SectionCard title="Datos del acreedor">
@@ -479,7 +498,7 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
             {["ARS", "USD", "EUR"].map(m => <option key={m} value={m}>{m}</option>)}
           </select>
         </Field>
-        <Field label={cfg.capitalEsGasto ? "Cuenta de débito (opcional)" : "Cuenta del desembolso"}>
+        <Field label={cfg.capitalEsGasto ? "Cuenta de débito *" : "Cuenta del desembolso *"}>
           <select value={h.cuenta_bancaria} onChange={e => set("cuenta_bancaria", e.target.value)} style={inputStyle}>
             <option value="">— elegir —</option>
             {bancos.map(b => <option key={b.id} value={b.id}>{b.nombre || b.id}</option>)}
@@ -498,24 +517,37 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
 
       {/* 3 · Imputación contable por componente (cuenta + centro propios) */}
       <SectionCard title="Imputación contable — cuenta y centro por componente" cols="1.4fr 1.4fr 1.2fr">
+        <div style={{ gridColumn: "1 / -1", fontSize: 11, color: T.muted, lineHeight: 1.5, marginBottom: 2 }}>
+          La cuota tiene 5 componentes, pero el <b>interés resarcitorio</b> (recargo por mora) es costo financiero igual que el interés → se imputa a la <b>misma cuenta de Interés financiero</b>. Por eso hay 4 filas. Cubre también préstamos bancarios (capital · interés · IVA s/interés · sellos/IVAP).
+        </div>
         <div style={{ fontSize: 11, fontWeight: 700, color: T.muted }}>Componente</div>
         <div style={{ fontSize: 11, fontWeight: 700, color: T.muted }}>Cuenta contable</div>
         <div style={{ fontSize: 11, fontWeight: 700, color: T.muted }}>Centro de costo</div>
-        {COMPONENTES.filter(comp => !comp.soloPlan || cfg.capitalEsGasto).map(comp => (
-          <Fragment key={comp.key}>
-            <div style={{ fontSize: 13, color: T.text, alignSelf: "center", fontWeight: 600 }}>
-              {comp.label}{(comp.key === "capital" || comp.key === "interes") ? " *" : ""}
-            </div>
-            <select value={h[comp.cuentaK]} onChange={e => set(comp.cuentaK, e.target.value)} style={inputStyle}>
-              <option value="">— {comp.key === "capital" || comp.key === "interes" ? "elegir" : "sin " + comp.key} —</option>
-              {cuentaOpts.map(n => <option key={n} value={n}>{n}</option>)}
-            </select>
-            <select value={h[comp.centroK]} onChange={e => set(comp.centroK, e.target.value)} style={inputStyle}>
-              <option value="">— sin centro —</option>
-              {centros.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-            </select>
-          </Fragment>
-        ))}
+        {compsVisibles.map(comp => {
+          const req   = compRequerido(comp);
+          const falta = !h[comp.cuentaK];
+          // rojo = obligatoria sin cargar · ámbar = opcional sin cargar · normal = cargada
+          const tone  = falta ? (req ? T.red : "#b45309") : T.text;
+          const selSt = falta
+            ? { ...inputStyle, border: `1px solid ${req ? T.red : "#f59e0b"}`, background: req ? "#fef2f2" : "#fffbeb" }
+            : inputStyle;
+          return (
+            <Fragment key={comp.key}>
+              <div style={{ fontSize: 13, color: tone, alignSelf: "center", fontWeight: 600 }}>
+                {comp.label}{req ? " *" : ""}
+                {falta && <span style={{ fontSize: 10, marginLeft: 6, fontWeight: 700 }}>{req ? "falta" : "opcional"}</span>}
+              </div>
+              <select value={h[comp.cuentaK]} onChange={e => set(comp.cuentaK, e.target.value)} style={selSt}>
+                <option value="">— {req ? "elegir" : "sin " + comp.key} —</option>
+                {cuentaOpts.map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <select value={h[comp.centroK]} onChange={e => set(comp.centroK, e.target.value)} style={inputStyle}>
+                <option value="">— sin centro —</option>
+                {centros.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+              </select>
+            </Fragment>
+          );
+        })}
       </SectionCard>
 
       {/* Subir PDF del plan (AFIP) — método principal */}
@@ -566,7 +598,7 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
                   <td style={{ padding: "5px 10px" }}><Cell value={c.iva} onChange={v => updCuota(i, "iva", v)} /></td>
                   <td style={{ padding: "5px 10px" }}><Cell value={c.impuestos} onChange={v => updCuota(i, "impuestos", v)} /></td>
                   <td style={{ padding: "5px 10px" }}><Cell value={c.interes_resarc} onChange={v => updCuota(i, "interes_resarc", v)} /></td>
-                  <td style={{ padding: "5px 10px", textAlign: "right", fontFamily: T.mono, fontWeight: 600 }}>{fmtMoney(c.total, h.moneda)}</td>
+                  <td style={{ padding: "5px 10px", textAlign: "right", fontFamily: T.mono, fontWeight: 600, color: T.text }}>{fmtMoney(c.total, h.moneda)}</td>
                   <td style={{ padding: "5px 10px", textAlign: "center" }}>
                     <button onClick={() => rmCuota(i)} style={{ background: "none", border: "none", color: T.red, cursor: "pointer", fontSize: 15 }}>×</button>
                   </td>
@@ -574,13 +606,13 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
               ))}
             </tbody>
             <tfoot>
-              <tr style={{ borderTop: `2px solid ${T.cardBorder}`, background: "#fafafa", fontWeight: 700 }}>
+              <tr style={{ borderTop: `2px solid ${T.cardBorder}`, background: "#fafafa", fontWeight: 700, color: T.text }}>
                 <td colSpan={3} style={{ padding: "8px 10px" }}>
                   <button onClick={addCuota} style={{ background: "none", border: "none", color: T.blue, cursor: "pointer", fontSize: 12, fontFamily: T.font, fontWeight: 700 }}>+ Agregar cuota</button>
                 </td>
-                <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: T.mono }}>{fmtMoney(capitalTotal, h.moneda)}</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: T.mono, color: T.text }}>{fmtMoney(compSum.capital, h.moneda)}</td>
                 <td colSpan={4} />
-                <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: T.mono }}>{fmtMoney(totalCuotas, h.moneda)}</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: T.mono, color: T.text }}>{fmtMoney(totalCuotas, h.moneda)}</td>
                 <td />
               </tr>
             </tfoot>
@@ -622,7 +654,7 @@ function DetalleFinanciacion({ plan, bancos, onBack, onChanged }) {
   }
 
   return (
-    <div className="fade" style={{ padding: "28px 32px", maxWidth: 1100 }}>
+    <div className="fade" style={{ padding: "28px 32px" }}>
       <button onClick={onBack} style={{ background: "none", border: "none", color: T.muted, fontSize: 13, cursor: "pointer", marginBottom: 12, fontFamily: T.font }}>‹ Volver</button>
       <PageHeader title={plan.acreedor_nombre || "Financiación"}
         subtitle={`${TIPOS[plan.tipo]?.label || ""} · Nº ${plan.nro_plan || "—"} · consolidado ${fmtDate(plan.fecha_consolidacion)}${plan.es_apertura ? " · apertura" : ""}`}
@@ -651,12 +683,12 @@ function DetalleFinanciacion({ plan, bancos, onBack, onChanged }) {
             {plan.cuotas.map(c => (
               <tr key={c.rowId} style={{ borderTop: `1px solid ${T.cardBorder}` }}>
                 <td style={{ padding: "7px 10px", color: T.muted }}>{c.nro_cuota === 0 ? "PC" : c.nro_cuota}</td>
-                <td style={{ padding: "7px 10px" }}>{fmtDate(c.vto)}</td>
-                <td style={{ padding: "7px 10px", textAlign: "right", fontFamily: T.mono }}>{fmtMoney(c.capital, plan.moneda)}</td>
-                <td style={{ padding: "7px 10px", textAlign: "right", fontFamily: T.mono }}>{fmtMoney(c.interes, plan.moneda)}</td>
+                <td style={{ padding: "7px 10px", color: T.text }}>{fmtDate(c.vto)}</td>
+                <td style={{ padding: "7px 10px", textAlign: "right", fontFamily: T.mono, color: T.text }}>{fmtMoney(c.capital, plan.moneda)}</td>
+                <td style={{ padding: "7px 10px", textAlign: "right", fontFamily: T.mono, color: T.text }}>{fmtMoney(c.interes, plan.moneda)}</td>
                 <td style={{ padding: "7px 10px", textAlign: "right", fontFamily: T.mono, color: T.dim }}>{c.iva ? fmtMoney(c.iva, plan.moneda) : "—"}</td>
                 <td style={{ padding: "7px 10px", textAlign: "right", fontFamily: T.mono, color: T.dim }}>{c.impuestos ? fmtMoney(c.impuestos, plan.moneda) : "—"}</td>
-                <td style={{ padding: "7px 10px", textAlign: "right", fontFamily: T.mono, fontWeight: 600 }}>{fmtMoney(c.total, plan.moneda)}</td>
+                <td style={{ padding: "7px 10px", textAlign: "right", fontFamily: T.mono, fontWeight: 600, color: T.text }}>{fmtMoney(c.total, plan.moneda)}</td>
                 <td style={{ padding: "7px 10px" }}><Badge estado={c.estado} cfg={ESTADO_CUOTA} /></td>
                 <td style={{ padding: "7px 10px", textAlign: "right" }}>
                   {c.estado === "pendiente" && (

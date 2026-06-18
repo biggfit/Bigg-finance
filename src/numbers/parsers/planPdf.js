@@ -39,7 +39,10 @@ async function extractLines(file) {
   return lines;
 }
 
-const NUM_RE  = /-?\d{1,3}(?:\.\d{3})*,\d{2}|(?<![\d.,])-(?![\d])/g;  // monto AR o un guión suelto (=0)
+// Monto AR en cualquiera de los dos formatos que mezcla ARCA en un mismo PDF:
+//   con puntos de miles → "136.255,91"   ·   sin separador → "352809,37"
+// (o un guión suelto = 0). El alternante con puntos va primero por ser el más específico.
+const NUM_RE  = /-?\d{1,3}(?:\.\d{3})+,\d{2}|-?\d+,\d{2}|(?<![\d.,])-(?![\d])/g;
 const DATE_RE = /(\d{2}\/\d{2}\/\d{4})/;
 
 /**

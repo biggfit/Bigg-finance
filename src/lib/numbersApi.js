@@ -1263,33 +1263,32 @@ export async function appendFinanciacion({ tipo = "plan_afip", nro_plan = "", ac
     });
   }
 
-  for (let k = 0; k < cuotas.length; k++) {
-    const c = cuotas[k];
-    await post({ action: "add", sheet: "nb_financiaciones", row: {
-      id: `${plan_id}-C${pad(k + 1)}`,
-      plan_id, nro_plan, tipo,
-      acreedor_id, acreedor_nombre, acreedor_cuit,
-      sociedad, moneda, fecha_consolidacion,
-      es_apertura:    es_apertura ? "true" : "",
-      comprobante_origen,
-      cuenta_capital, centro_capital, cuenta_interes, centro_interes, cuenta_iva, centro_iva, cuenta_impuestos, centro_impuestos, cuenta_bancaria,
-      nro_cuota:      Number(c.nro_cuota) || 0,
-      vto:            c.vto ?? "",
-      vto_tardio:     c.vto_tardio ?? "",
-      capital:        Number(c.capital) || 0,
-      interes:        Number(c.interes) || 0,
-      iva:            Number(c.iva) || 0,
-      impuestos:      Number(c.impuestos) || 0,
-      interes_resarc: Number(c.interes_resarc) || 0,
-      total:          Number(c.total) || 0,
-      total_tardio:   Number(c.total_tardio) || 0,
-      estado:         "pendiente",
-      movimiento_id:  "",
-      fecha_pago:     "",
-      nota,
-      created_at,
-    }});
-  }
+  // Una sola escritura batch (un plan puede tener 70+ cuotas → 70 requests = HTTP 500/parcial).
+  const rows = cuotas.map((c, k) => ({
+    id: `${plan_id}-C${pad(k + 1)}`,
+    plan_id, nro_plan, tipo,
+    acreedor_id, acreedor_nombre, acreedor_cuit,
+    sociedad, moneda, fecha_consolidacion,
+    es_apertura:    es_apertura ? "true" : "",
+    comprobante_origen,
+    cuenta_capital, centro_capital, cuenta_interes, centro_interes, cuenta_iva, centro_iva, cuenta_impuestos, centro_impuestos, cuenta_bancaria,
+    nro_cuota:      Number(c.nro_cuota) || 0,
+    vto:            c.vto ?? "",
+    vto_tardio:     c.vto_tardio ?? "",
+    capital:        Number(c.capital) || 0,
+    interes:        Number(c.interes) || 0,
+    iva:            Number(c.iva) || 0,
+    impuestos:      Number(c.impuestos) || 0,
+    interes_resarc: Number(c.interes_resarc) || 0,
+    total:          Number(c.total) || 0,
+    total_tardio:   Number(c.total_tardio) || 0,
+    estado:         "pendiente",
+    movimiento_id:  "",
+    fecha_pago:     "",
+    nota,
+    created_at,
+  }));
+  await post({ action: "add_batch", sheet: "nb_financiaciones", rows });
   return { ok: true, plan_id };
 }
 
