@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { T, PageHeader, Btn, fmtMoney } from "./theme";
 import {
-  fetchProveedores, fetchCuentas, fetchCentrosCosto, appendResumenTarjeta,
+  fetchProveedores, fetchCuentas, fetchCentrosCosto, appendResumenTarjeta, fetchEgresos,
 } from "../lib/numbersApi";
 import { parseTarjetaPdf } from "./parsers/tarjetaPdf";
 
@@ -12,6 +12,8 @@ const inputStyle = {
 };
 const cellStyle = { ...inputStyle, padding: "5px 7px", fontSize: 12, borderRadius: 6 };
 const num = v => Number(v) || 0;
+// Clave de memoria: normaliza comercio/titular para que matcheen mes a mes (mayúsculas, espacios colapsados).
+const normCom = s => String(s || "").toUpperCase().replace(/\s+/g, " ").trim();
 const nuevaLinea = (over = {}) => ({ comercio: "", titular: "", cuenta: "", cuentaId: "", cc: "", pesos: "", dolares: "", ...over });
 
 // Resumen de tarjeta → un egreso por moneda. Cada línea: comercio + titular + cuenta + centro + moneda + monto.
@@ -22,6 +24,7 @@ export default function PantallaResumenTarjeta({ sociedad }) {
   const [centros, setCentros]         = useState([]);
   const [h, setH] = useState({ tarjetaId: "", tarjeta: "", periodo: "", fecha: new Date().toISOString().slice(0, 10), vto: "" });
   const [lineas, setLineas] = useState([nuevaLinea()]);
+  const [histLineas, setHistLineas] = useState([]);   // líneas de resúmenes TC anteriores (memoria)
   const [busy, setBusy]     = useState(false);
   const [pdfMsg, setPdfMsg] = useState("");
   const [okMsg, setOkMsg]   = useState("");
@@ -32,9 +35,30 @@ export default function PantallaResumenTarjeta({ sociedad }) {
     fetchCentrosCosto().then(c => setCentros(Array.isArray(c) ? c : [])).catch(() => {});
   }, []);
 
+  // Memoria: líneas de resúmenes de tarjeta ya cargados (proveedor "^Tarjeta") → autocompletar cuenta/centro.
+  useEffect(() => {
+    fetchEgresos(sociedad)
+      .then(egs => setHistLineas((Array.isArray(egs) ? egs : [])
+        .filter(e => /^tarjeta/i.test(e.proveedor || ""))
+        .flatMap(e => e.lineas || [])))
+      .catch(() => {});
+  }, [sociedad]);
+
   const tarjetas  = useMemo(() => proveedores.filter(p => /^tarjeta/i.test(p.nombre || "") && p.activo !== false), [proveedores]);
   const cuentaOpts = useMemo(() => cuentas.map(c => c.nombre).filter(Boolean), [cuentas]);
   const cuentaIdDe = (nombre) => cuentas.find(c => c.nombre === nombre)?.id ?? "";
+
+  // De la memoria: cuenta ← por comercio; centro ← por comercio y, en su defecto, por titular. El último uso gana.
+  const memoria = useMemo(() => {
+    const porComercio = {}, centroPorComercio = {}, porTitular = {};
+    for (const l of histLineas) {
+      const com = normCom(l.comercio), tit = normCom(l.titular);
+      if (com && l.cuenta) porComercio[com] = { cuenta: l.cuenta, cuentaId: l.cuentaId || "" };
+      if (com && l.cc)     centroPorComercio[com] = l.cc;
+      if (tit && l.cc)     porTitular[tit] = l.cc;
+    }
+    return { porComercio, centroPorComercio, porTitular };
+  }, [histLineas]);
 
   const set = (k, v) => setH(s => ({ ...s, [k]: v }));
   const pickTarjeta = (id) => { const p = proveedores.find(x => String(x.id) === String(id)); setH(s => ({ ...s, tarjetaId: id, tarjeta: p?.nombre || "" })); };
@@ -49,8 +73,19 @@ export default function PantallaResumenTarjeta({ sociedad }) {
     try {
       const r = await parseTarjetaPdf(file);
       if (!r.lineas.length) { setPdfMsg("No pude leer líneas del PDF — cargalas a mano."); return; }
-      setLineas(r.lineas.map(x => nuevaLinea({ comercio: x.comercio, titular: x.titular || "", [x.moneda === "USD" ? "dolares" : "pesos"]: x.monto })));
-      setPdfMsg(`✓ ${r.lineas.length} líneas leídas (titular y moneda autocompletados). Asigná cuenta/centro y revisá montos.`);
+      let conMemoria = 0;
+      const nuevas = r.lineas.map(x => {
+        const c  = memoria.porComercio[normCom(x.comercio)];
+        const cc = memoria.centroPorComercio[normCom(x.comercio)] || memoria.porTitular[normCom(x.titular)] || "";
+        if (c || cc) conMemoria++;
+        return nuevaLinea({
+          comercio: x.comercio, titular: x.titular || "",
+          cuenta: c?.cuenta || "", cuentaId: c?.cuentaId || "", cc,
+          [x.moneda === "USD" ? "dolares" : "pesos"]: x.monto,
+        });
+      });
+      setLineas(nuevas);
+      setPdfMsg(`✓ ${r.lineas.length} líneas leídas` + (conMemoria ? ` · ${conMemoria} con cuenta/centro precargados de meses anteriores` : "") + ". Revisá montos y completá lo que falte.");
     } catch (e) { setPdfMsg("Error al leer el PDF: " + (e?.message || e)); }
   }
 
