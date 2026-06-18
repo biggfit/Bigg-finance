@@ -26,9 +26,31 @@ function normCat(raw) {
   return s;
 }
 
-// ─── Pivot P&L estructurado ───────────────────────────────────────────────────
+// ─── Estructura estándar del P&L (rol + labels por categoría) ──────────────────
+// El usuario controla membresía y orden por cuenta (categoria_pnl + orden_pnl en
+// nb_cuentas); esto define la FORMA del P&L (estable). rol "ingreso" → muestra el
+// subtotal de la sección; rol "egreso" → muestra el resultado acumulado tras la sección.
+const PNL_SECCIONES = {
+  ventas:             { rol: "ingreso", seccion: "Ventas",            total: "Ingreso por Ventas",           color: T.green   },
+  interusos:          { rol: "ingreso", seccion: "Interusos",         total: "Ingreso / Egreso (Interusos)", color: "#0ea5e9" },
+  costo_venta:        { rol: "egreso",  seccion: "Costo por Venta",    total: "Margen Bruto",                 color: "#f97316" },
+  gastos_operativos:  { rol: "egreso",  seccion: "Gastos Operativos",  total: "Resultado Operativo",          color: T.red     },
+  gastos_financieros: { rol: "egreso",  seccion: "Gastos Financieros", total: "Resultado antes de Impuestos", color: "#8b5cf6" },
+  impuestos:          { rol: "egreso",  seccion: "Impuestos",          total: "Resultado Neto",               color: "#64748b" },
+};
+const PNL_ORDEN_DEFAULT = ["ventas", "interusos", "costo_venta", "gastos_operativos", "gastos_financieros", "impuestos"];
+
+// Signo de la cuenta en el P&L: explícito (signo_pnl) o default por rol de su categoría
+// (ingreso +, egreso −). Resuelve el neteo del bloque Interusos (Agregadores +, Interuso −).
+function signoPnl(cuenta, cat) {
+  const s = Number(cuenta?.signo_pnl);
+  if (s === 1 || s === -1) return s;
+  return PNL_SECCIONES[cat]?.rol === "egreso" ? -1 : 1;
+}
+
+// ─── Pivot P&L estructurado (buckets dinámicos por categoria_pnl, valores con signo) ──
 function buildPnL(inRows, egRows, cuentaMap, ccFilter, year, moneda) {
-  const cats = { ventas:{}, costo_venta:{}, gastos_operativos:{}, gastos_financieros:{}, impuestos:{}, sin_categoria:{} };
+  const cats = { sin_categoria: {} };
   const add = (rows) => {
     for (const row of rows) {
       if (!row.fecha || row.fecha.slice(0,4) !== String(year)) continue;
@@ -40,10 +62,11 @@ function buildPnL(inRows, egRows, cuentaMap, ccFilter, year, moneda) {
       const m = parseInt(row.fecha.slice(5,7), 10) - 1;
       if (m < 0 || m > 11) continue;
       const nombre = (row.cuenta_contable ?? "").trim() || "Sin cuenta";
-      const cat    = normCat(cuentaMap.get(nombre)?.categoria_pnl);
-      const bucket = cats[cat] ?? cats.sin_categoria;
+      const cuenta = cuentaMap.get(nombre);
+      const cat    = normCat(cuenta?.categoria_pnl) || "sin_categoria";
+      const bucket = (cats[cat] ??= {});
       if (!bucket[nombre]) bucket[nombre] = new Array(12).fill(0);
-      bucket[nombre][m] += Number(row.total) || 0;
+      bucket[nombre][m] += (Number(row.total) || 0) * signoPnl(cuenta, cat);
     }
   };
   add(inRows);
@@ -51,7 +74,7 @@ function buildPnL(inRows, egRows, cuentaMap, ccFilter, year, moneda) {
   for (const [nombre, cuenta] of cuentaMap) {
     const cat = normCat(cuenta.categoria_pnl);
     if (!cat) continue;
-    const bucket = cats[cat] ?? cats.sin_categoria;
+    const bucket = (cats[cat] ??= {});
     if (!bucket[nombre]) bucket[nombre] = new Array(12).fill(0);
   }
   return cats;
@@ -117,25 +140,43 @@ function financiacionToPnLRows(planes, sociedad) {
 const sumCat = (catObj) =>
   MESES.map((_, m) => Object.values(catObj).reduce((s, arr) => s + (arr[m] || 0), 0));
 
-function computeSubtotals(pnl) {
-  const ventasTot   = sumCat(pnl.ventas);
-  const costoTot    = sumCat(pnl.costo_venta);
-  const opexTot     = sumCat(pnl.gastos_operativos);
-  const finTot      = sumCat(pnl.gastos_financieros);
-  const impTot      = sumCat(pnl.impuestos);
-  const margenBruto = MESES.map((_,m) => ventasTot[m]  - costoTot[m]);
-  const resOp       = MESES.map((_,m) => margenBruto[m] - opexTot[m]);
-  const resAntesImp = MESES.map((_,m) => resOp[m]       - finTot[m]);
-  const resNeto     = MESES.map((_,m) => resAntesImp[m] - impTot[m]);
+// Arma la lista ordenada de filas del P&L Sedes desde los datos: secciones ordenadas por
+// orden_pnl (mín de sus cuentas), total corriente acumulando los subtotales firmados, y un
+// subtotal (rol ingreso) o resultado acumulado (rol egreso) tras cada sección. Sin estructura
+// cableada: el orden y la membresía salen de nb_cuentas; sólo el rol/label es estándar.
+function computeLayout(pnl, cuentaMap) {
+  const ordenDe = (cat) => {
+    let min = Infinity;
+    for (const nombre of Object.keys(pnl[cat] || {})) {
+      const o = Number(cuentaMap.get(nombre)?.orden_pnl);
+      if (Number.isFinite(o)) min = Math.min(min, o);
+    }
+    const fallback = PNL_ORDEN_DEFAULT.indexOf(cat);
+    return Number.isFinite(min) ? min : (fallback >= 0 ? fallback : 99) * 1000;
+  };
+  const cats = Object.keys(pnl)
+    .filter(c => c !== "sin_categoria")
+    .sort((a, b) => (ordenDe(a) - ordenDe(b))
+      || (PNL_ORDEN_DEFAULT.indexOf(a) - PNL_ORDEN_DEFAULT.indexOf(b)));
+
+  const filas = [];
+  let running = new Array(12).fill(0);
+  for (const cat of cats) {
+    const cfg = PNL_SECCIONES[cat] || { rol: "ingreso", seccion: cat, total: cat, color: T.muted };
+    const sectionTotal = sumCat(pnl[cat]);
+    running = MESES.map((_, m) => running[m] + sectionTotal[m]);
+    filas.push({ tipo: "section", cat, label: cfg.seccion, color: cfg.color });
+    if (cfg.rol === "egreso") filas.push({ tipo: "resultado", label: cfg.total, values: [...running] });
+    else                      filas.push({ tipo: "subtotal",  label: cfg.total, values: sectionTotal, color: cfg.color });
+  }
+
   const months = new Set();
   Object.values(pnl).forEach(cat =>
     Object.values(cat).forEach(arr => arr.forEach((v,i) => { if (v) months.add(i); }))
   );
   const curMonth = new Date().getMonth();
   for (let i = 0; i <= curMonth; i++) months.add(i);
-  return { ventasTot, costoTot, opexTot, finTot, impTot,
-           margenBruto, resOp, resAntesImp, resNeto,
-           activeMonths: [...months].sort((a,b) => a-b) };
+  return { filas, activeMonths: [...months].sort((a,b) => a-b) };
 }
 
 const rowSum = arr => arr.reduce((s, v) => s + v, 0);
@@ -285,9 +326,8 @@ function ResultadoRow({ label, values, activeMonths }) {
 }
 
 // ─── PnLTable ─────────────────────────────────────────────────────────────────
-function PnLTable({ pnl, sub, year, moneda, label }) {
-  const { ventasTot, costoTot, opexTot, finTot, impTot,
-          margenBruto, resOp, resAntesImp, resNeto, activeMonths } = sub;
+function PnLTable({ pnl, sub, year, moneda, label, cuentaMap }) {
+  const { filas, activeMonths } = sub;
   const ncols = activeMonths.length + 2;
 
   if (activeMonths.length === 0) return (
@@ -319,26 +359,15 @@ function PnLTable({ pnl, sub, year, moneda, label }) {
           </tr>
         </thead>
         <tbody>
-          <PnlSection label="Ventas" accounts={pnl.ventas}
-            activeMonths={activeMonths} color={T.green} ncols={ncols} />
-          <SubtotalRow label="Total Ventas" values={ventasTot}
-            activeMonths={activeMonths} color={T.green} />
-
-          <PnlSection label="Costo por Venta" accounts={pnl.costo_venta}
-            activeMonths={activeMonths} color="#f97316" ncols={ncols} />
-          <ResultadoRow label="Margen Bruto" values={margenBruto} activeMonths={activeMonths} />
-
-          <PnlSection label="Gastos Operativos" accounts={pnl.gastos_operativos}
-            activeMonths={activeMonths} color={T.red} ncols={ncols} />
-          <ResultadoRow label="Resultado Operativo" values={resOp} activeMonths={activeMonths} />
-
-          <PnlSection label="Gastos Financieros" accounts={pnl.gastos_financieros}
-            activeMonths={activeMonths} color="#8b5cf6" ncols={ncols} />
-          <ResultadoRow label="Resultado antes de Impuestos" values={resAntesImp} activeMonths={activeMonths} />
-
-          <PnlSection label="Impuestos" accounts={pnl.impuestos}
-            activeMonths={activeMonths} color="#64748b" ncols={ncols} />
-          <ResultadoRow label="Resultado Neto" values={resNeto} activeMonths={activeMonths} />
+          {filas.map((f, i) => {
+            if (f.tipo === "section")
+              return <PnlSection key={`s-${f.cat}`} label={f.label} accounts={pnl[f.cat] ?? {}}
+                       activeMonths={activeMonths} color={f.color} ncols={ncols} cuentaMap={cuentaMap} />;
+            if (f.tipo === "subtotal")
+              return <SubtotalRow key={`t-${i}`} label={f.label} values={f.values}
+                       activeMonths={activeMonths} color={f.color} />;
+            return <ResultadoRow key={`r-${i}`} label={f.label} values={f.values} activeMonths={activeMonths} />;
+          })}
         </tbody>
       </table>
     </div>
@@ -358,9 +387,10 @@ function PnLTable({ pnl, sub, year, moneda, label }) {
 }
 
 // ─── PnlSection ───────────────────────────────────────────────────────────────
-function PnlSection({ label, accounts, activeMonths, color, ncols, sub }) {
+function PnlSection({ label, accounts, activeMonths, color, ncols, sub, cuentaMap }) {
   const [expanded, setExpanded] = useState(true);
-  const rows = Object.entries(accounts).sort(([a],[b]) => a.localeCompare(b));
+  const ordenOf = (nombre) => { const o = Number(cuentaMap?.get(nombre)?.orden_pnl); return Number.isFinite(o) ? o : Infinity; };
+  const rows = Object.entries(accounts).sort(([a],[b]) => (ordenOf(a) - ordenOf(b)) || a.localeCompare(b));
   const subTotals = MESES.map((_,m) => rows.reduce((s,[,v]) => s + (v[m] || 0), 0));
   const toggle = () => setExpanded(e => !e);
   return (
@@ -1229,7 +1259,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     [inConFranq, egConSueldos, ccMap, year, monedaPL]
   );
 
-  const subSede = useMemo(() => computeSubtotals(pnlSede), [pnlSede]);
+  const subSede = useMemo(() => computeLayout(pnlSede, cuentaMap), [pnlSede, cuentaMap]);
   const subHQ   = useMemo(() => computeSubtotalsHQ(pnlHQ), [pnlHQ]);
 
   const toggleSedeCC = (id) => {
@@ -1440,7 +1470,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
       {/* ── P&L Sedes ── */}
       {activeTab === "pl_sede" && (
-        <PnLTable pnl={pnlSede} sub={subSede} year={year} moneda={monedaPL}
+        <PnLTable pnl={pnlSede} sub={subSede} year={year} moneda={monedaPL} cuentaMap={cuentaMap}
           label={selectedSedeCCs.length === 0 ? "Todas las Sedes" : `${selectedSedeCCs.length} seleccionada${selectedSedeCCs.length > 1 ? "s" : ""}`} />
       )}
 
