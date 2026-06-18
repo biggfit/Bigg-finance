@@ -104,8 +104,9 @@ export default function PantallaResumenTarjeta({ sociedad }) {
   const aplicarTodas = (k, v) => { if (!v) return; setLineas(ls => ls.map(l => l[k] ? l : (k === "cuenta" ? { ...l, cuenta: v, cuentaId: cuentaIdDe(v) } : { ...l, [k]: v }))); };
 
   const lineasOk = lineas.filter(l => (num(l.pesos) !== 0 || num(l.dolares) !== 0) && l.cuenta);
-  const totPesos   = useMemo(() => lineasOk.reduce((s, l) => s + num(l.pesos), 0), [lineas]);
-  const totDolares = useMemo(() => lineasOk.reduce((s, l) => s + num(l.dolares), 0), [lineas]);
+  // Totales de TODAS las líneas cargadas (no solo las ya imputadas) → para cruzar contra el resumen.
+  const totPesos   = useMemo(() => lineas.reduce((s, l) => s + num(l.pesos), 0), [lineas]);
+  const totDolares = useMemo(() => lineas.reduce((s, l) => s + num(l.dolares), 0), [lineas]);
   const canSave = h.tarjetaId && h.fecha && lineasOk.length > 0 && lineasOk.every(l => l.cc) && !busy;
 
   async function guardar() {
