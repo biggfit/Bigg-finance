@@ -49,7 +49,6 @@ const SECTIONS = [
   { id:"egresos",   label:"Egresos",   icon:"↓", component: PantallaEgresos   },
   { id:"tesoreria", label:"Tesorería", icon:"⬡", component: PantallaTesoreria },
   { id:"financiaciones", label:"Financiaciones", icon:"%", component: PantallaFinanciaciones },
-  { id:"tarjetas",  label:"Tarjetas",  icon:"💳", component: PantallaResumenTarjeta },
   { id:"reconciliacion", label:"Conciliación", icon:"≡", component: PantallaReconciliacion },
   { id:"reportes",  label:"Reportes",  icon:"▦", component: PantallaReportes  },
 ];
@@ -278,6 +277,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
                     {egresoOpen && [
                       { id:"new-compra", label:"Compras", listId:null,      ariaAdd:"Agregar compra" },
                       { id:"new-gasto",  label:"Gastos",  listId:"gastos",  ariaAdd:"Agregar gasto"  },
+                      { id:"new-resumen-tc", label:"Tarjetas", listId:"new-resumen-tc", ariaAdd:"Cargar resumen de tarjeta" },
                     ].map(sub => {
                       const subActive = sub.listId === null
                         ? (egresoSubView === null || egresoSubView === "new-compra")
@@ -473,6 +473,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
               : egresoSubView  === "new-compra" ? "Egresos › Nueva Compra"
               : egresoSubView  === "new-gasto"  ? "Gastos › Nuevo Gasto"
               : egresoSubView  === "gastos"     ? "Gastos"
+              : egresoSubView  === "new-resumen-tc" ? "Egresos › Resumen de tarjeta"
               : ingresoSubView === "new-venta"  ? "Ingresos › Nueva Venta"
               : section?.label}
           </span>
@@ -500,7 +501,9 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
             : activeSpecial === "reconciliacion"
             ? <PantallaReconciliacion sociedad={activeSoc.id} />
             : section?.component
-            ? section.id === "egresos" && (egresoSubView === "gastos" || egresoSubView === "new-gasto")
+            ? section.id === "egresos" && egresoSubView === "new-resumen-tc"
+              ? <PantallaResumenTarjeta sociedad={activeSoc.id} />
+              : section.id === "egresos" && (egresoSubView === "gastos" || egresoSubView === "new-gasto")
               ? <PantallaGastos   sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView} />
               : section.id === "egresos"
               ? <PantallaEgresos  sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView} />
