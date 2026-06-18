@@ -3,6 +3,8 @@ import { T, PageHeader } from "./theme";
 import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, SALARY_BUCKETS, pagoTipoABucket, devengadoPorFormaYSociedad } from "../lib/sueldosApi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
+import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
+import { franquiciasIngresoPnLRows } from "../lib/franquiciasAdapter";
 
 const MESES    = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
 const CUR_YEAR = new Date().getFullYear();
@@ -1092,6 +1094,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const [liqsCerradas, setLiqsCerradas] = useState([]);  // su_liquidaciones cerradas (devengado sueldos)
   const [pagosSueldos, setPagosSueldos] = useState([]);  // pagos de sueldo (nb_movimientos origen sueldos)
   const [rawFin,    setRawFin]    = useState([]);        // financiaciones (planes AFIP + créditos)
+  const [rawFranq,  setRawFranq]  = useState({});        // comprobantes de Franquicias (read-only)
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState(null);
   const [loadKey,   setLoadKey]   = useState(0);
@@ -1135,6 +1138,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         setLiqsCerradas(Array.isArray(liqsC) ? liqsC : []);
         setPagosSueldos(Array.isArray(pagosS) ? pagosS : []);
         setRawFin(Array.isArray(fin) ? fin : []);
+        // Franquicias (read-only) — fuera del Promise.all para NO bloquear Reportes si ese backend tarda.
+        fetchComps().then(c => { if (!cancelled && c && typeof c === "object") setRawFranq(c); }).catch(() => {});
       } catch (e) {
         if (!cancelled) setError(e.message);
       } finally {
@@ -1204,13 +1209,24 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
   const egConSueldos = useMemo(() => [...rawEg, ...salaryRows, ...gastoMovRows, ...finRows], [rawEg, salaryRows, gastoMovRows, finRows]);
 
+  // Facturación a franquiciados (read-only) → ingreso del P&L HQ, en el centro HQ de Ventas.
+  const ventasCcId = useMemo(
+    () => ccs.find(c => (c.grupo ?? "").toLowerCase() === "hq" && normCat(c.categoria_pnl) === "ventas")?.id ?? "",
+    [ccs]
+  );
+  const franqRows = useMemo(
+    () => franquiciasIngresoPnLRows(rawFranq, sociedad, ventasCcId),
+    [rawFranq, sociedad, ventasCcId]
+  );
+  const inConFranq = useMemo(() => [...rawIn, ...franqRows], [rawIn, franqRows]);
+
   const pnlSede = useMemo(
-    () => buildPnL(rawIn, egConSueldos, cuentaMap, resolvedCCSede, year, monedaPL),
-    [rawIn, egConSueldos, cuentaMap, resolvedCCSede, year, monedaPL]
+    () => buildPnL(inConFranq, egConSueldos, cuentaMap, resolvedCCSede, year, monedaPL),
+    [inConFranq, egConSueldos, cuentaMap, resolvedCCSede, year, monedaPL]
   );
   const pnlHQ = useMemo(
-    () => buildPnLHQ(rawIn, egConSueldos, ccMap, year, monedaPL),
-    [rawIn, egConSueldos, ccMap, year, monedaPL]
+    () => buildPnLHQ(inConFranq, egConSueldos, ccMap, year, monedaPL),
+    [inConFranq, egConSueldos, ccMap, year, monedaPL]
   );
 
   const subSede = useMemo(() => computeSubtotals(pnlSede), [pnlSede]);
@@ -1280,21 +1296,20 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     <div style={{ padding: "28px 32px", maxWidth: 1400 }} className="fade">
 
       {/* ── Header ── */}
+      {/* ── Header + pill tabs (misma fila) ── */}
       <PageHeader
         title="Reportes"
-              />
-
-      {/* ── Pill tabs ── */}
-      <div
-        ref={tabsRef}
-        role="tablist"
-        aria-label="Reportes financieros"
-        onKeyDown={handleTabKeyDown}
-        style={{
-          display: "inline-flex", gap: 2, marginBottom: 20,
-          background: "#f3f4f6", borderRadius: 10, padding: 3,
-        }}
-      >
+        action={
+        <div
+          ref={tabsRef}
+          role="tablist"
+          aria-label="Reportes financieros"
+          onKeyDown={handleTabKeyDown}
+          style={{
+            display: "inline-flex", gap: 2,
+            background: "#f3f4f6", borderRadius: 10, padding: 3,
+          }}
+        >
         {TABS.map(tab => {
           const active = activeTab === tab.id;
           return (
@@ -1324,7 +1339,9 @@ export default function PantallaReportes({ sociedad = "nako" }) {
             </button>
           );
         })}
-      </div>
+        </div>
+        }
+      />
 
       {/* ── Toolbar / Filters ── */}
       <div style={{

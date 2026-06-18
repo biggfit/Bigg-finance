@@ -14,6 +14,8 @@ import {
 import {
   fetchLiquidacionesCerradas, parsePagoFromMov, normSoc, pendienteSueldosPorLegajo,
 } from "../lib/sueldosApi";
+import { fetchAll } from "../lib/sheetsApi";        // Franquicias (read-only)
+import { franquiciasSaldosCxC } from "../lib/franquiciasAdapter";
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 // Tesorería muestra montos SIN decimales (pesos enteros). Local: no toca fmtSaldo global (pdf.js).
@@ -946,6 +948,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
   const [centrosCosto,     setCentrosCosto]     = useState(CENTROS_COSTO);
   const [liqsSueldos,      setLiqsSueldos]      = useState([]);
   const [financiaciones,   setFinanciaciones]   = useState([]);
+  const [franqData,        setFranqData]        = useState({ comps: {}, saldos: {}, franchises: [] });  // Franquicias (read-only)
 
   // ── Fetch all data ────────────────────────────────────────────────────────
   const cargarMovimientos = async () => {
@@ -972,6 +975,10 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
       setFinanciaciones(Array.isArray(fin) ? fin : []);
       fetchCentrosCosto().then(data => {
         if (Array.isArray(data) && data.length > 0) setCentrosCosto(data);
+      }).catch(() => {});
+      // Franquicias (read-only) — fuera del Promise.all para NO bloquear Tesorería si ese backend tarda.
+      fetchAll().then(franq => {
+        if (franq && franq.comps) setFranqData(franq);
       }).catch(() => {});
     } catch (e) {
       setError(e.message);
@@ -1036,6 +1043,24 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
     }
     return Object.values(grouped).sort((a, b) => b.saldo - a.saldo);
   }, [ingresos, pagosCobros, cuentaById, cuentaByNombre, fechaCorte, _resolveCuenta]);
+
+  // ── Saldos de franquiciados (Bigg Franquicias, read-only) ───────────────────
+  // Presentación BRUTA, sin netear (igual que Franquicias muestra DEBEN/DEBEMOS):
+  //   · saldo > 0 (nos deben)  → Activo "Franquiciados" (cuentas por cobrar)
+  //   · saldo < 0 (les debemos) → Pasivo "Franquiciados (saldo a favor)" = ingreso diferido,
+  //     misma naturaleza que un anticipo de cliente.
+  // computeSaldoReal = misma lógica que la app de Franquicias (facturado − cobrado, tope de pauta),
+  // scoping por empresa+moneda de la sociedad activa. OJO: hoy el cobro se lee de comprobantes;
+  // cuando se haga el switch (financieros solo en nb_movimientos) hay que reapuntar la fuente.
+  const franqCC = useMemo(() => {
+    const now = new Date();
+    return franquiciasSaldosCxC(franqData, sociedad, now.getFullYear(), now.getMonth());
+  }, [franqData, sociedad]);
+
+  const aCobrarFull = useMemo(
+    () => [...aCobrar, ...franqCC.activo].sort((a, b) => b.saldo - a.saldo),
+    [aCobrar, franqCC]
+  );
 
   const aPagar = useMemo(() => {
     const corte  = fechaCorte || null;
@@ -1124,9 +1149,9 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
         out.push({ label: "Sueldos", moneda: "ARS", saldo: sueldosPasivo.total, docs: sueldosPasivo.docs, headerColor: "#dc2626" });
       }
     }
-    out.push(...finPasivo, ...anticiposPasivo);
+    out.push(...finPasivo, ...anticiposPasivo, ...franqCC.pasivo);
     return out.sort((a, b) => b.saldo - a.saldo);
-  }, [aPagar, sueldosPasivo, finPasivo, anticiposPasivo]);
+  }, [aPagar, sueldosPasivo, finPasivo, anticiposPasivo, franqCC]);
 
   // ── Guardar movimiento entre cuentas ──────────────────────────────────────
   const handleGuardarMovimiento = async (form) => {
@@ -1374,7 +1399,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
           {activeTab === "saldos" && (
             <TabSaldos
               cuentas={cuentas}
-              aCobrar={aCobrar}
+              aCobrar={aCobrarFull}
               aPagar={aPagarFull}
               filtroMoneda={filtroMoneda}
               onCuentaClick={handleCuentaClick}
