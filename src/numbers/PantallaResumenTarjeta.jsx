@@ -120,22 +120,22 @@ export default function PantallaResumenTarjeta({ sociedad }) {
           <tbody>
             {lineas.map((l, i) => (
               <tr key={i} style={{ borderTop: `1px solid ${T.cardBorder}` }}>
-                <td style={{ padding: "4px 8px" }}><input value={l.comercio} onChange={e => updLinea(i, "comercio", e.target.value)} style={{ ...cellStyle, minWidth: 160 }} /></td>
-                <td style={{ padding: "4px 8px" }}><input value={l.titular} onChange={e => updLinea(i, "titular", e.target.value)} style={{ ...cellStyle, width: 110 }} /></td>
+                <td style={{ padding: "4px 8px" }}><input value={l.comercio} onChange={e => updLinea(i, "comercio", e.target.value)} style={{ ...cellStyle, minWidth: 230 }} /></td>
+                <td style={{ padding: "4px 8px" }}><input value={l.titular} onChange={e => updLinea(i, "titular", e.target.value)} style={{ ...cellStyle, minWidth: 150 }} /></td>
                 <td style={{ padding: "4px 8px" }}>
-                  <select value={l.cuenta} onChange={e => updLinea(i, "cuenta", e.target.value)} style={{ ...cellStyle, minWidth: 160, color: l.cuenta ? T.text : T.red }}>
+                  <select value={l.cuenta} onChange={e => updLinea(i, "cuenta", e.target.value)} style={{ ...cellStyle, width: 150, minWidth: 150, maxWidth: 150, color: l.cuenta ? T.text : T.red }}>
                     <option value="">— cuenta —</option>
                     {cuentaOpts.map(n => <option key={n} value={n}>{n}</option>)}
                   </select>
                 </td>
                 <td style={{ padding: "4px 8px" }}>
-                  <select value={l.cc} onChange={e => updLinea(i, "cc", e.target.value)} style={{ ...cellStyle, minWidth: 140, color: l.cc ? T.text : T.red }}>
+                  <select value={l.cc} onChange={e => updLinea(i, "cc", e.target.value)} style={{ ...cellStyle, width: 150, minWidth: 150, maxWidth: 150, color: l.cc ? T.text : T.red }}>
                     <option value="">— centro —</option>
                     {centros.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                   </select>
                 </td>
-                <td style={{ padding: "4px 8px" }}><input type="number" value={l.pesos} onChange={e => updLinea(i, "pesos", e.target.value)} placeholder="$" style={{ ...cellStyle, width: 110, textAlign: "right" }} /></td>
-                <td style={{ padding: "4px 8px" }}><input type="number" value={l.dolares} onChange={e => updLinea(i, "dolares", e.target.value)} placeholder="U$D" style={{ ...cellStyle, width: 110, textAlign: "right" }} /></td>
+                <td style={{ padding: "4px 8px" }}><input type="number" value={l.pesos} onChange={e => updLinea(i, "pesos", e.target.value)} placeholder="$" style={{ ...cellStyle, width: 88, textAlign: "right" }} /></td>
+                <td style={{ padding: "4px 8px" }}><input type="number" value={l.dolares} onChange={e => updLinea(i, "dolares", e.target.value)} placeholder="U$D" style={{ ...cellStyle, width: 88, textAlign: "right" }} /></td>
                 <td style={{ padding: "4px 8px", textAlign: "center" }}>
                   <button onClick={() => rmLinea(i)} style={{ background: "none", border: "none", color: T.red, cursor: "pointer", fontSize: 15 }}>×</button>
                 </td>
