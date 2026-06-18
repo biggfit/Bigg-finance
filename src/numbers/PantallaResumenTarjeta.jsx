@@ -12,7 +12,7 @@ const inputStyle = {
 };
 const cellStyle = { ...inputStyle, padding: "5px 7px", fontSize: 12, borderRadius: 6 };
 const num = v => Number(v) || 0;
-const nuevaLinea = (over = {}) => ({ comercio: "", titular: "", cuenta: "", cuentaId: "", cc: "", moneda: "ARS", monto: "", ...over });
+const nuevaLinea = (over = {}) => ({ comercio: "", titular: "", cuenta: "", cuentaId: "", cc: "", pesos: "", dolares: "", ...over });
 
 // Resumen de tarjeta → un egreso por moneda. Cada línea: comercio + titular + cuenta + centro + moneda + monto.
 // Reusa la maquinaria de egresos (CxP / conciliación / P&L). La tarjeta es un proveedor "^Tarjeta".
@@ -49,25 +49,29 @@ export default function PantallaResumenTarjeta({ sociedad }) {
     try {
       const r = await parseTarjetaPdf(file);
       if (!r.lineas.length) { setPdfMsg("No pude leer líneas del PDF — cargalas a mano."); return; }
-      setLineas(r.lineas.map(x => nuevaLinea({ comercio: x.comercio, moneda: x.moneda, monto: x.monto })));
-      setPdfMsg(`✓ ${r.lineas.length} líneas leídas. Asigná cuenta/centro/titular y revisá moneda y montos.`);
+      setLineas(r.lineas.map(x => nuevaLinea({ comercio: x.comercio, titular: x.titular || "", [x.moneda === "USD" ? "dolares" : "pesos"]: x.monto })));
+      setPdfMsg(`✓ ${r.lineas.length} líneas leídas (titular y moneda autocompletados). Asigná cuenta/centro y revisá montos.`);
     } catch (e) { setPdfMsg("Error al leer el PDF: " + (e?.message || e)); }
   }
 
   // "Aplicar a todas las vacías": setea un valor en las líneas que aún no lo tienen.
   const aplicarTodas = (k, v) => { if (!v) return; setLineas(ls => ls.map(l => l[k] ? l : (k === "cuenta" ? { ...l, cuenta: v, cuentaId: cuentaIdDe(v) } : { ...l, [k]: v }))); };
 
-  const lineasOk = lineas.filter(l => num(l.monto) !== 0 && l.cuenta);
-  const totalPorMoneda = useMemo(() => {
-    const t = {}; for (const l of lineasOk) t[l.moneda] = (t[l.moneda] || 0) + num(l.monto); return Object.entries(t);
-  }, [lineas]);
+  const lineasOk = lineas.filter(l => (num(l.pesos) !== 0 || num(l.dolares) !== 0) && l.cuenta);
+  const totPesos   = useMemo(() => lineasOk.reduce((s, l) => s + num(l.pesos), 0), [lineas]);
+  const totDolares = useMemo(() => lineasOk.reduce((s, l) => s + num(l.dolares), 0), [lineas]);
   const canSave = h.tarjetaId && h.fecha && lineasOk.length > 0 && lineasOk.every(l => l.cc) && !busy;
 
   async function guardar() {
     if (!canSave) return;
     setBusy(true); setOkMsg("");
     try {
-      const r = await appendResumenTarjeta({ sociedad, tarjetaId: h.tarjetaId, tarjeta: h.tarjeta, periodo: h.periodo, fecha: h.fecha, vto: h.vto, lineas: lineasOk });
+      // El importe va en la columna Pesos o Dólares → la moneda sale de cuál tiene valor.
+      const payload = lineasOk.map(l => ({
+        cuenta: l.cuenta, cuentaId: l.cuentaId, cc: l.cc, titular: l.titular, comercio: l.comercio,
+        moneda: num(l.dolares) ? "USD" : "ARS", monto: num(l.dolares) || num(l.pesos),
+      }));
+      const r = await appendResumenTarjeta({ sociedad, tarjetaId: h.tarjetaId, tarjeta: h.tarjeta, periodo: h.periodo, fecha: h.fecha, vto: h.vto, lineas: payload });
       setOkMsg(`✓ Resumen guardado (${r.ids.map(x => x.moneda).join(" + ")}). Aparece en Egresos → Compras como CxP "Tarjeta de crédito".`);
       setLineas([nuevaLinea()]); setH(s => ({ ...s, periodo: "" }));
     } catch (e) { alert("Error al guardar: " + (e?.message || e)); }
@@ -108,8 +112,8 @@ export default function PantallaResumenTarjeta({ sociedad }) {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr style={{ background: T.tableHead, color: T.tableHeadText }}>
-              {["Comercio", "Titular", "Cuenta", "Centro", "Moneda", "Monto", ""].map((c, i) => (
-                <th key={i} style={{ padding: "8px 10px", textAlign: i === 5 ? "right" : "left", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{c}</th>
+              {["Comercio", "Titular", "Cuenta", "Centro", "Pesos", "Dólares", ""].map((c, i) => (
+                <th key={i} style={{ padding: "8px 10px", textAlign: (i === 4 || i === 5) ? "right" : "left", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{c}</th>
               ))}
             </tr>
           </thead>
@@ -130,12 +134,8 @@ export default function PantallaResumenTarjeta({ sociedad }) {
                     {centros.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                   </select>
                 </td>
-                <td style={{ padding: "4px 8px" }}>
-                  <select value={l.moneda} onChange={e => updLinea(i, "moneda", e.target.value)} style={{ ...cellStyle, width: 80 }}>
-                    {["ARS", "USD", "EUR"].map(m => <option key={m} value={m}>{m}</option>)}
-                  </select>
-                </td>
-                <td style={{ padding: "4px 8px" }}><input type="number" value={l.monto} onChange={e => updLinea(i, "monto", e.target.value)} style={{ ...cellStyle, width: 110, textAlign: "right" }} /></td>
+                <td style={{ padding: "4px 8px" }}><input type="number" value={l.pesos} onChange={e => updLinea(i, "pesos", e.target.value)} placeholder="$" style={{ ...cellStyle, width: 110, textAlign: "right" }} /></td>
+                <td style={{ padding: "4px 8px" }}><input type="number" value={l.dolares} onChange={e => updLinea(i, "dolares", e.target.value)} placeholder="U$D" style={{ ...cellStyle, width: 110, textAlign: "right" }} /></td>
                 <td style={{ padding: "4px 8px", textAlign: "center" }}>
                   <button onClick={() => rmLinea(i)} style={{ background: "none", border: "none", color: T.red, cursor: "pointer", fontSize: 15 }}>×</button>
                 </td>
@@ -144,12 +144,12 @@ export default function PantallaResumenTarjeta({ sociedad }) {
           </tbody>
           <tfoot>
             <tr style={{ borderTop: `2px solid ${T.cardBorder}`, background: "#fafafa", fontWeight: 700, color: T.text }}>
-              <td colSpan={5} style={{ padding: "8px 10px" }}>
+              <td colSpan={4} style={{ padding: "8px 10px" }}>
                 <button onClick={addLinea} style={{ background: "none", border: "none", color: T.blue, cursor: "pointer", fontSize: 12, fontFamily: T.font, fontWeight: 700 }}>+ Agregar línea</button>
               </td>
-              <td colSpan={2} style={{ padding: "8px 10px", textAlign: "right", fontFamily: T.mono }}>
-                {totalPorMoneda.length ? totalPorMoneda.map(([m, v]) => fmtMoney(v, m)).join("  ·  ") : "—"}
-              </td>
+              <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: T.mono }}>{totPesos ? fmtMoney(totPesos, "ARS") : "—"}</td>
+              <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: T.mono }}>{totDolares ? fmtMoney(totDolares, "USD") : "—"}</td>
+              <td />
             </tr>
           </tfoot>
         </table>
@@ -163,9 +163,6 @@ export default function PantallaResumenTarjeta({ sociedad }) {
         </select>
         <select onChange={e => { aplicarTodas("cc", e.target.value); e.target.value = ""; }} style={{ ...cellStyle, width: 150 }}>
           <option value="">centro…</option>{centros.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-        </select>
-        <select onChange={e => { aplicarTodas("moneda", e.target.value); e.target.value = ""; }} style={{ ...cellStyle, width: 90 }}>
-          <option value="">moneda…</option>{["ARS", "USD", "EUR"].map(m => <option key={m} value={m}>{m}</option>)}
         </select>
       </div>
 
