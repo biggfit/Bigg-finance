@@ -13,6 +13,7 @@ import PantallaIntercompania    from "./numbers/PantallaIntercompania";
 import PantallaGastos           from "./numbers/PantallaGastos";
 import PantallaReconciliacion   from "./numbers/PantallaReconciliacion";
 import PantallaFinanciaciones   from "./numbers/PantallaFinanciaciones";
+import PantallaResumenTarjeta   from "./numbers/PantallaResumenTarjeta";
 import { SOCIEDADES as SOC_FALLBACK } from "./data/tesoreriaData";
 import { fetchSociedades, fetchMovimientosPendientes } from "./lib/numbersApi";
 
@@ -48,6 +49,7 @@ const SECTIONS = [
   { id:"egresos",   label:"Egresos",   icon:"↓", component: PantallaEgresos   },
   { id:"tesoreria", label:"Tesorería", icon:"⬡", component: PantallaTesoreria },
   { id:"financiaciones", label:"Financiaciones", icon:"%", component: PantallaFinanciaciones },
+  { id:"tarjetas",  label:"Tarjetas",  icon:"💳", component: PantallaResumenTarjeta },
   { id:"reconciliacion", label:"Conciliación", icon:"≡", component: PantallaReconciliacion },
   { id:"reportes",  label:"Reportes",  icon:"▦", component: PantallaReportes  },
 ];

@@ -15,7 +15,8 @@ const arNum = s => {
 const toISO = d => { const m = String(d || "").match(/(\d{2})\/(\d{2})\/(\d{4})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : ""; };
 
 // Extrae las líneas de texto del PDF, reconstruidas por coordenada Y (filas) y ordenadas por X.
-async function extractLines(file) {
+// Genérico y reusable (lo usa también parsers/tarjetaPdf.js).
+export async function extractLines(file) {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
   const lines = [];

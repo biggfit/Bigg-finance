@@ -1074,7 +1074,10 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
       if (saldo <= 0) continue;
       const cuentaDef = _resolveCuenta(cuentaById, cuentaByNombre, eg.cuentaId, eg.cuenta);
       const bucket    = (cuentaDef?.cuenta_pasivo ?? "").toLowerCase() || "proveedores";
-      const label     = pasivoLabel[bucket] ?? cuentaDef?.cuenta_pasivo ?? "Proveedores";
+      // Resumen de tarjeta: el pasivo agrupa como "Tarjeta de crédito" (contraparte ^Tarjeta),
+      // aunque las líneas tengan cuentas reales (Servicios, Software, impuestos…) para el P&L.
+      const label     = /^tarjeta/i.test(eg.proveedor ?? "") ? "Tarjeta de crédito"
+                        : (pasivoLabel[bucket] ?? cuentaDef?.cuenta_pasivo ?? "Proveedores");
       const key       = `${label}||${eg.moneda ?? "ARS"}`;
       if (!grouped[key]) grouped[key] = { label, moneda: eg.moneda ?? "ARS", saldo: 0, docs: [], headerColor:"#dc2626" };
       grouped[key].saldo += saldo;
