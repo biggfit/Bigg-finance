@@ -95,6 +95,14 @@ export default function PantallaResumenTarjeta({ sociedad }) {
     const t = normNom(titular); if (!t) return "";
     let best = null, score = 0;
     for (const l of legajosNorm) { const s = nameScore(t, l._norm); if (s > score) { score = s; best = l; } }
+    // Fallback por apellido único: cubre apodos (banco "GUILLERMO MAZZONI" = legajo "Gigio Mazzoni").
+    // El último token suele ser el apellido; si un solo legajo lo lleva, no hay ambigüedad.
+    if (score < 1.5) {
+      const toks = t.split(" ").filter(w => w.length > 3);
+      const ape  = toks[toks.length - 1];
+      const cand = ape ? legajosNorm.filter(l => l._norm.split(" ").includes(ape)) : [];
+      if (cand.length === 1) { best = cand[0]; score = 1.5; }
+    }
     return (score >= 1.5 && best && centroIds.has(best.sede_id)) ? best.sede_id : "";
   };
 
