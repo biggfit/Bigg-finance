@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, Fragment } from "react";
 import { T, PageHeader, Btn, fmtMoney } from "./theme";
 import {
   fetchProveedores, fetchCuentas, fetchCentrosCosto, appendResumenTarjeta, fetchEgresos,
@@ -149,6 +149,16 @@ export default function PantallaResumenTarjeta({ sociedad }) {
   // "Aplicar a todas las vacías": setea un valor en las líneas que aún no lo tienen.
   const aplicarTodas = (k, v) => { if (!v) return; setLineas(ls => ls.map(l => l[k] ? l : (k === "cuenta" ? { ...l, cuenta: v, cuentaId: cuentaIdDe(v) } : { ...l, [k]: v }))); };
 
+  // Cortes por titular (como el resumen): cada grupo lleva su subtotal en pesos y dólares.
+  const gruposTit = useMemo(() => {
+    const order = [], by = new Map();
+    lineas.forEach((l, idx) => { const k = l.titular || ""; if (!by.has(k)) { by.set(k, []); order.push(k); } by.get(k).push(idx); });
+    return order.map(tit => {
+      const idxs = by.get(tit);
+      return { tit, idxs, p: idxs.reduce((s, i) => s + num(lineas[i].pesos), 0), d: idxs.reduce((s, i) => s + num(lineas[i].dolares), 0) };
+    });
+  }, [lineas]);
+
   const lineasOk = lineas.filter(l => (num(l.pesos) !== 0 || num(l.dolares) !== 0) && l.cuenta);
   // Totales de TODAS las líneas cargadas (no solo las ya imputadas) → para cruzar contra el resumen.
   const totPesos   = useMemo(() => lineas.reduce((s, l) => s + num(l.pesos), 0), [lineas]);
@@ -211,32 +221,43 @@ export default function PantallaResumenTarjeta({ sociedad }) {
             </tr>
           </thead>
           <tbody>
-            {lineas.map((l, i) => {
-              const esP = num(l.pesos) !== 0, esD = num(l.dolares) !== 0;   // moneda activa de la línea
-              return (
-              <tr key={i} style={{ borderTop: `1px solid ${T.cardBorder}` }}>
-                <td style={{ padding: "4px 8px" }}><input value={l.comercio} onChange={e => updLinea(i, "comercio", e.target.value)} style={{ ...cellStyle, minWidth: 230 }} /></td>
-                <td style={{ padding: "4px 8px" }}><input value={l.titular} onChange={e => updLinea(i, "titular", e.target.value)} style={{ ...cellStyle, minWidth: 150 }} /></td>
-                <td style={{ padding: "4px 8px" }}>
-                  <select value={l.cuenta} onChange={e => updLinea(i, "cuenta", e.target.value)} style={{ ...cellStyle, width: 150, minWidth: 150, maxWidth: 150, color: l.cuenta ? T.text : T.red }}>
-                    <option value="">— cuenta —</option>
-                    {cuentaOpts.map(n => <option key={n} value={n}>{n}</option>)}
-                  </select>
-                </td>
-                <td style={{ padding: "4px 8px" }}>
-                  <select value={l.cc} onChange={e => updLinea(i, "cc", e.target.value)} style={{ ...cellStyle, width: 150, minWidth: 150, maxWidth: 150, color: l.cc ? T.text : T.red }}>
-                    <option value="">— centro —</option>
-                    {centros.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-                  </select>
-                </td>
-                <td style={{ padding: "4px 3px", width: 108, minWidth: 108, maxWidth: 108 }}><MoneyCell value={l.pesos} onChange={v => updLinea(i, "pesos", v)} placeholder={esD ? "" : "$"} muted={esD} /></td>
-                <td style={{ padding: "4px 3px", width: 108, minWidth: 108, maxWidth: 108 }}><MoneyCell value={l.dolares} onChange={v => updLinea(i, "dolares", v)} placeholder={esP ? "" : "U$D"} muted={esP} /></td>
-                <td style={{ padding: "4px 8px", textAlign: "center" }}>
-                  <button onClick={() => rmLinea(i)} style={{ background: "none", border: "none", color: T.red, cursor: "pointer", fontSize: 15 }}>×</button>
-                </td>
-              </tr>
-              );
-            })}
+            {gruposTit.map(g => (
+              <Fragment key={g.tit || "(sin titular)"}>
+                {g.idxs.map(i => {
+                  const l = lineas[i];
+                  const esP = num(l.pesos) !== 0, esD = num(l.dolares) !== 0;   // moneda activa de la línea
+                  return (
+                  <tr key={i} style={{ borderTop: `1px solid ${T.cardBorder}` }}>
+                    <td style={{ padding: "4px 8px" }}><input value={l.comercio} onChange={e => updLinea(i, "comercio", e.target.value)} style={{ ...cellStyle, minWidth: 230 }} /></td>
+                    <td style={{ padding: "4px 8px" }}><input value={l.titular} onChange={e => updLinea(i, "titular", e.target.value)} style={{ ...cellStyle, minWidth: 150 }} /></td>
+                    <td style={{ padding: "4px 8px" }}>
+                      <select value={l.cuenta} onChange={e => updLinea(i, "cuenta", e.target.value)} style={{ ...cellStyle, width: 150, minWidth: 150, maxWidth: 150, color: l.cuenta ? T.text : T.red }}>
+                        <option value="">— cuenta —</option>
+                        {cuentaOpts.map(n => <option key={n} value={n}>{n}</option>)}
+                      </select>
+                    </td>
+                    <td style={{ padding: "4px 8px" }}>
+                      <select value={l.cc} onChange={e => updLinea(i, "cc", e.target.value)} style={{ ...cellStyle, width: 150, minWidth: 150, maxWidth: 150, color: l.cc ? T.text : T.red }}>
+                        <option value="">— centro —</option>
+                        {centros.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                      </select>
+                    </td>
+                    <td style={{ padding: "4px 3px", width: 108, minWidth: 108, maxWidth: 108 }}><MoneyCell value={l.pesos} onChange={v => updLinea(i, "pesos", v)} placeholder={esD ? "" : "$"} muted={esD} /></td>
+                    <td style={{ padding: "4px 3px", width: 108, minWidth: 108, maxWidth: 108 }}><MoneyCell value={l.dolares} onChange={v => updLinea(i, "dolares", v)} placeholder={esP ? "" : "U$D"} muted={esP} /></td>
+                    <td style={{ padding: "4px 8px", textAlign: "center" }}>
+                      <button onClick={() => rmLinea(i)} style={{ background: "none", border: "none", color: T.red, cursor: "pointer", fontSize: 15 }}>×</button>
+                    </td>
+                  </tr>
+                  );
+                })}
+                <tr style={{ borderTop: `1px solid ${T.cardBorder}`, background: "#e6eaf0", fontWeight: 700, color: T.text }}>
+                  <td colSpan={4} style={{ padding: "6px 10px", fontSize: 11.5 }}>Total Consumos de {g.tit || "Sin titular"}</td>
+                  <td style={{ padding: "6px 7px", textAlign: "right", fontFamily: T.mono }}>{g.p ? fmtMoney(g.p, "ARS") : "—"}</td>
+                  <td style={{ padding: "6px 7px", textAlign: "right", fontFamily: T.mono }}>{g.d ? fmtMoney(g.d, "USD") : "—"}</td>
+                  <td />
+                </tr>
+              </Fragment>
+            ))}
           </tbody>
           <tfoot>
             <tr style={{ borderTop: `2px solid ${T.cardBorder}`, background: "#fafafa", fontWeight: 700, color: T.text }}>
