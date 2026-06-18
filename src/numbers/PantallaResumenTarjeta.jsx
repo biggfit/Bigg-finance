@@ -85,7 +85,18 @@ export default function PantallaResumenTarjeta({ sociedad }) {
         });
       });
       setLineas(nuevas);
-      setPdfMsg(`✓ ${r.lineas.length} líneas leídas` + (conMemoria ? ` · ${conMemoria} con cuenta/centro precargados de meses anteriores` : "") + ". Revisá montos y completá lo que falte.");
+      // Cabecera del PDF: precargar período, fecha de cierre y vencimiento si los trae.
+      const hd = r.header || {};
+      const hdMsg = [];
+      if (hd.fechaCierre || hd.vto || hd.periodo) {
+        setH(s => ({ ...s, periodo: hd.periodo || s.periodo, fecha: hd.fechaCierre || s.fecha, vto: hd.vto || s.vto }));
+        if (hd.fechaCierre) hdMsg.push(`cierre ${hd.fechaCierre}`);
+        if (hd.vto) hdMsg.push(`vto ${hd.vto}`);
+      }
+      setPdfMsg(`✓ ${r.lineas.length} líneas leídas`
+        + (conMemoria ? ` · ${conMemoria} con cuenta/centro precargados de meses anteriores` : "")
+        + (hdMsg.length ? ` · cabecera: ${hdMsg.join(", ")}` : "")
+        + ". Revisá montos y completá lo que falte.");
     } catch (e) { setPdfMsg("Error al leer el PDF: " + (e?.message || e)); }
   }
 

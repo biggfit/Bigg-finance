@@ -13,8 +13,27 @@ const arNum = s => { const n = parseFloat(String(s).replace(/\./g, "").replace("
 const DATE  = /^(\d{2}-\d{2}-\d{2})\b/;
 const AMT   = /-?\d{1,3}(?:\.\d{3})*,\d{2}/g;
 
+// Fechas del ciclo de facturación: mes ALFABÉTICO ("08-Jun-26"). Los consumos usan
+// mes numérico ("05-05-26") → este formato es único de la cabecera, sin ambigüedad.
+const MESES = { ENE: "01", FEB: "02", MAR: "03", ABR: "04", MAY: "05", JUN: "06", JUL: "07", AGO: "08", SEP: "09", SET: "09", OCT: "10", NOV: "11", DIC: "12" };
+const CICLO = /\b(\d{2})-([A-Za-z]{3})-(\d{2})\b/g;
+const cicloISO = m => { const mes = MESES[m[2].toUpperCase()]; return mes ? `20${m[3]}-${mes}-${m[1]}` : ""; };
+
+// Cabecera del resumen: Nº, fecha de cierre y vencimiento (del ciclo de facturación).
+// El ciclo lista 6 fechas en orden fijo: cierre ant · vto ant · CIERRE ACTUAL · VTO ACTUAL · próx cierre · próx vto.
+function parseHeader(lines) {
+  const text = lines.join(" ");
+  const ciclo = [...text.matchAll(CICLO)].map(cicloISO).filter(Boolean);
+  const nro = (text.match(/Resumen\s*N[º°o]?\s*([A-Z0-9]+)/i) || [])[1] || "";
+  const fechaCierre = ciclo[2] || "";          // 3ª fecha = cierre actual
+  const vto         = ciclo[3] || "";          // 4ª fecha = vencimiento actual
+  const periodo     = fechaCierre ? fechaCierre.slice(0, 7) : "";   // "2026-05"
+  return { nroResumen: nro, fechaCierre, vto, periodo };
+}
+
 export async function parseTarjetaPdf(file) {
   const lines = await extractLines(file);
+  const header = parseHeader(lines);
   const out = [];
   let pending = [];
   let inDetalle = false;
@@ -47,5 +66,5 @@ export async function parseTarjetaPdf(file) {
     pending.push({ fecha: dm[1], comercio: desc.slice(0, 60), monto, moneda });
   }
   flush("");                                             // grupo final sin "Total Consumos"
-  return { lineas: out };
+  return { lineas: out, header };
 }
