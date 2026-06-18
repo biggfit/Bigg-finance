@@ -11,6 +11,9 @@ const inputStyle = {
   fontFamily: T.font, outline: "none", boxSizing: "border-box",
 };
 const cellStyle = { ...inputStyle, padding: "5px 7px", fontSize: 12, borderRadius: 6 };
+// Celda de monto: box centrado que ocupa el ancho. Si el consumo es en la otra moneda, se oculta el box.
+const moneyBox   = { ...cellStyle, width: "100%", textAlign: "center" };
+const moneyMuted = { ...moneyBox, background: "transparent", border: "1px solid transparent", color: T.muted };
 const num = v => Number(v) || 0;
 // Clave de memoria: normaliza comercio/titular para que matcheen mes a mes (mayúsculas, espacios colapsados).
 const normCom = s => String(s || "").toUpperCase().replace(/\s+/g, " ").trim();
@@ -160,12 +163,14 @@ export default function PantallaResumenTarjeta({ sociedad }) {
           <thead>
             <tr style={{ background: T.tableHead, color: T.tableHeadText }}>
               {["Comercio", "Titular", "Cuenta", "Centro", "Pesos", "Dólares", ""].map((c, i) => (
-                <th key={i} style={{ padding: "8px 10px", textAlign: (i === 4 || i === 5) ? "right" : "left", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{c}</th>
+                <th key={i} style={{ padding: "8px 10px", textAlign: (i === 4 || i === 5) ? "center" : "left", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{c}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {lineas.map((l, i) => (
+            {lineas.map((l, i) => {
+              const esP = num(l.pesos) !== 0, esD = num(l.dolares) !== 0;   // moneda activa de la línea
+              return (
               <tr key={i} style={{ borderTop: `1px solid ${T.cardBorder}` }}>
                 <td style={{ padding: "4px 8px" }}><input value={l.comercio} onChange={e => updLinea(i, "comercio", e.target.value)} style={{ ...cellStyle, minWidth: 230 }} /></td>
                 <td style={{ padding: "4px 8px" }}><input value={l.titular} onChange={e => updLinea(i, "titular", e.target.value)} style={{ ...cellStyle, minWidth: 150 }} /></td>
@@ -181,21 +186,22 @@ export default function PantallaResumenTarjeta({ sociedad }) {
                     {centros.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                   </select>
                 </td>
-                <td style={{ padding: "4px 8px" }}><input type="number" value={l.pesos} onChange={e => updLinea(i, "pesos", e.target.value)} placeholder="$" style={{ ...cellStyle, width: 88, textAlign: "right" }} /></td>
-                <td style={{ padding: "4px 8px" }}><input type="number" value={l.dolares} onChange={e => updLinea(i, "dolares", e.target.value)} placeholder="U$D" style={{ ...cellStyle, width: 88, textAlign: "right" }} /></td>
+                <td style={{ padding: "4px 3px", width: 108, minWidth: 108, maxWidth: 108 }}><input type="number" value={l.pesos} onChange={e => updLinea(i, "pesos", e.target.value)} placeholder={esD ? "" : "$"} style={esD ? moneyMuted : moneyBox} /></td>
+                <td style={{ padding: "4px 3px", width: 108, minWidth: 108, maxWidth: 108 }}><input type="number" value={l.dolares} onChange={e => updLinea(i, "dolares", e.target.value)} placeholder={esP ? "" : "U$D"} style={esP ? moneyMuted : moneyBox} /></td>
                 <td style={{ padding: "4px 8px", textAlign: "center" }}>
                   <button onClick={() => rmLinea(i)} style={{ background: "none", border: "none", color: T.red, cursor: "pointer", fontSize: 15 }}>×</button>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
           <tfoot>
             <tr style={{ borderTop: `2px solid ${T.cardBorder}`, background: "#fafafa", fontWeight: 700, color: T.text }}>
               <td colSpan={4} style={{ padding: "8px 10px" }}>
                 <button onClick={addLinea} style={{ background: "none", border: "none", color: T.blue, cursor: "pointer", fontSize: 12, fontFamily: T.font, fontWeight: 700 }}>+ Agregar línea</button>
               </td>
-              <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: T.mono }}>{totPesos ? fmtMoney(totPesos, "ARS") : "—"}</td>
-              <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: T.mono }}>{totDolares ? fmtMoney(totDolares, "USD") : "—"}</td>
+              <td style={{ padding: "8px 3px", textAlign: "center", fontFamily: T.mono }}>{totPesos ? fmtMoney(totPesos, "ARS") : "—"}</td>
+              <td style={{ padding: "8px 3px", textAlign: "center", fontFamily: T.mono }}>{totDolares ? fmtMoney(totDolares, "USD") : "—"}</td>
               <td />
             </tr>
           </tfoot>
