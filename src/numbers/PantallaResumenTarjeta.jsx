@@ -3,6 +3,7 @@ import { T, PageHeader, Btn, fmtMoney } from "./theme";
 import {
   fetchProveedores, fetchCuentas, fetchCentrosCosto, appendResumenTarjeta, fetchEgresos,
 } from "../lib/numbersApi";
+import { fetchLegajos } from "../lib/sueldosApi";
 import { parseTarjetaPdf } from "./parsers/tarjetaPdf";
 
 const inputStyle = {
@@ -34,6 +35,11 @@ function MoneyCell({ value, onChange, placeholder, muted }) {
 const num = v => Number(v) || 0;
 // Clave de memoria: normaliza comercio/titular para que matcheen mes a mes (mayúsculas, espacios colapsados).
 const normCom = s => String(s || "").toUpperCase().replace(/\s+/g, " ").trim();
+
+// Fuzzy-match titular ↔ legajo (mismo criterio que el roster de Sedes, umbral 1.5).
+const normNom = s => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
+const overlapNom = (a, b) => { const wb = new Set(b.split(" ").filter(w => w.length > 2)); return a.split(" ").filter(w => w.length > 2 && wb.has(w)).length; };
+const nameScore = (a, b) => a === b ? 4 : (a.includes(b) || b.includes(a)) ? 2 : overlapNom(a, b) >= 2 ? 1.5 : 0;
 const nuevaLinea = (over = {}) => ({ comercio: "", titular: "", cuenta: "", cuentaId: "", cc: "", pesos: "", dolares: "", ...over });
 
 // Resumen de tarjeta → un egreso por moneda. Cada línea: comercio + titular + cuenta + centro + moneda + monto.
@@ -45,6 +51,7 @@ export default function PantallaResumenTarjeta({ sociedad }) {
   const [h, setH] = useState({ tarjetaId: "", tarjeta: "", periodo: "", fecha: new Date().toISOString().slice(0, 10), vto: "" });
   const [lineas, setLineas] = useState([nuevaLinea()]);
   const [histLineas, setHistLineas] = useState([]);   // líneas de resúmenes TC anteriores (memoria)
+  const [legajos, setLegajos] = useState([]);          // para sugerir el centro del legajo del titular
   const [busy, setBusy]     = useState(false);
   const [pdfMsg, setPdfMsg] = useState("");
   const [okMsg, setOkMsg]   = useState("");
@@ -53,6 +60,7 @@ export default function PantallaResumenTarjeta({ sociedad }) {
     fetchProveedores().then(p => setProveedores(Array.isArray(p) ? p : [])).catch(() => {});
     fetchCuentas().then(c => setCuentas(Array.isArray(c) ? c : [])).catch(() => {});
     fetchCentrosCosto().then(c => setCentros(Array.isArray(c) ? c : [])).catch(() => {});
+    fetchLegajos().then(l => setLegajos(Array.isArray(l) ? l : [])).catch(() => {});
   }, []);
 
   // Memoria: líneas de resúmenes de tarjeta ya cargados (proveedor "^Tarjeta") → autocompletar cuenta/centro.
@@ -80,6 +88,16 @@ export default function PantallaResumenTarjeta({ sociedad }) {
     return { porComercio, centroPorComercio, porTitular };
   }, [histLineas]);
 
+  // Centro del legajo del titular (fallback cuando la memoria no encontró nada).
+  const legajosNorm = useMemo(() => legajos.map(l => ({ sede_id: l.sede_id, _norm: normNom(l.nombre) })).filter(l => l.sede_id && l._norm), [legajos]);
+  const centroIds   = useMemo(() => new Set(centros.map(c => c.id)), [centros]);
+  const centroDeLegajo = (titular) => {
+    const t = normNom(titular); if (!t) return "";
+    let best = null, score = 0;
+    for (const l of legajosNorm) { const s = nameScore(t, l._norm); if (s > score) { score = s; best = l; } }
+    return (score >= 1.5 && best && centroIds.has(best.sede_id)) ? best.sede_id : "";
+  };
+
   const set = (k, v) => setH(s => ({ ...s, [k]: v }));
   const pickTarjeta = (id) => { const p = proveedores.find(x => String(x.id) === String(id)); setH(s => ({ ...s, tarjetaId: id, tarjeta: p?.nombre || "" })); };
 
@@ -96,7 +114,7 @@ export default function PantallaResumenTarjeta({ sociedad }) {
       let conMemoria = 0;
       const nuevas = r.lineas.map(x => {
         const c  = memoria.porComercio[normCom(x.comercio)];
-        const cc = memoria.centroPorComercio[normCom(x.comercio)] || memoria.porTitular[normCom(x.titular)] || "";
+        const cc = memoria.centroPorComercio[normCom(x.comercio)] || memoria.porTitular[normCom(x.titular)] || centroDeLegajo(x.titular) || "";
         if (c || cc) conMemoria++;
         return nuevaLinea({
           comercio: x.comercio, titular: x.titular || "",
