@@ -17,7 +17,9 @@ const T = {
 const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
                 "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 
-const hoy = new Date();
+const hoy     = new Date();
+const MES_DEF = hoy.getMonth() === 0 ? 12 : hoy.getMonth();
+const ANO_DEF = hoy.getMonth() === 0 ? hoy.getFullYear() - 1 : hoy.getFullYear();
 const FORM_VACIO = {
   sociedad_id: "", sociedad_nombre: "",
   monto_total: "",
@@ -29,9 +31,9 @@ function fmtMoney(n) {
   return "$" + Math.round(n).toLocaleString("es-AR");
 }
 
-export default function PantallaCargasSociales({ mes: mesProp, anio: anioProp }) {
-  const [mes,  setMes]  = useState(mesProp  ?? hoy.getMonth() + 1);
-  const [anio, setAnio] = useState(anioProp ?? hoy.getFullYear());
+export default function PantallaCargasSociales({ mes: mesProp, anio: anioProp, pais = "" }) {
+  const [mes,  setMes]  = useState(mesProp  ?? MES_DEF);
+  const [anio, setAnio] = useState(anioProp ?? ANO_DEF);
   const [cargas,  setCargas]  = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);

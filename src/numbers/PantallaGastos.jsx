@@ -68,7 +68,7 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
       if (editGasto) {
         const r    = rows[0];
         const prov = proveedores.find(p => p.id === r.proveedorId);
-        await updateGastoDirecto(editGasto.rowId, editGasto._movId, {
+        await updateGastoDirecto(editGasto._movId, {
           fecha:              r.fecha,
           cuenta_contable:    r.cuenta_contable,
           cuenta_contable_id: cuentasGasto.find(c => c.nombre === r.cuenta_contable)?.id ?? "",
@@ -164,7 +164,7 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
                 const sym    = moneda === "USD" ? "U$D" : moneda === "EUR" ? "€" : "$";
                 return (
                   <tr key={r._id} style={{ borderBottom:`1px solid ${T.cardBorder}`,
-                    background: i%2===0 ? "#fff" : "#f9fafb" }}>
+                    background: i%2===0 ? "#fff" : "#eceff3" }}>
 
                     <td style={{ padding:"6px 8px" }}>
                       <input type="date" value={r.fecha}
@@ -336,7 +336,7 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
   const handleEliminar = async (gasto) => {
     if (!confirm("¿Eliminar este gasto?")) return;
     try {
-      await deleteGasto(gasto.rowId, gasto._movId);
+      await deleteGasto(gasto._movId);
       setGastos(prev => prev.filter(g => g.id !== gasto.id));
     } catch (e) {
       alert("Error al eliminar: " + e.message);
@@ -390,7 +390,7 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
           value={busqueda}
           onChange={e => setBusqueda(e.target.value)}
           placeholder="Buscar por cuenta contable, CC, forma de pago, nota…"
-          style={{ flex:1, minWidth:200, background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+          style={{ flex:1, minWidth:200, background:"#eceff3", border:`1px solid ${T.cardBorder}`,
             borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text,
             outline:"none", fontFamily:T.font }}
         />

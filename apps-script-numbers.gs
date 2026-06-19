@@ -143,6 +143,27 @@ function doPost(e) {
     return nbJson({ ok: true });
   }
 
+  // ── ADD_BATCH: agrega N filas en UNA sola escritura (atómico, rápido) ──────
+  // Para cargas grandes (ej. cronograma de 70 cuotas) — evita 70 requests.
+  if (body.action === "add_batch") {
+    const list = body.rows || [];
+    if (!list.length) return nbJson({ ok: true, n: 0 });
+    let lastCol = sh.getLastColumn();
+    let headers;
+    if (lastCol === 0) {                 // Sheet sin headers — poblar desde la 1ª fila
+      headers = Object.keys(list[0]);
+      sh.appendRow(headers);
+    } else {
+      headers = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+    }
+    const matrix = list.map(row => headers.map(h => {
+      const v = row[h];
+      return (v === undefined || v === null) ? "" : v;
+    }));
+    sh.getRange(sh.getLastRow() + 1, 1, matrix.length, headers.length).setValues(matrix);
+    return nbJson({ ok: true, n: matrix.length });
+  }
+
   // ── EDIT: actualiza campos de una fila por id ─────────────────────────────
   // body.id_field permite usar una columna clave distinta a "id"
   // (ej: nb_egresos / nb_ingresos usan "id_linea" como clave por fila)

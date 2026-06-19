@@ -9,6 +9,7 @@ import {
   fetchCuentas, appendCuenta, updateCuenta, deleteCuenta,
   fetchSociedades, appendSociedad, updateSociedad, deleteSociedad,
   appendSaldoInicial, fetchSaldoInicialMovimiento, updateSaldoInicial,
+  fetchBancoReglas, appendBancoRegla, updateBancoRegla, deleteBancoRegla,
 } from "../lib/numbersApi";
 import { CUENTAS as CUENTAS_STATIC, CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 
@@ -406,7 +407,7 @@ function TabProveedores() {
         marginBottom:12, gap:12, flexShrink:0, paddingBottom:4 }}>
         <input value={busqueda} onChange={e=>setBusqueda(e.target.value)}
           placeholder="Buscar proveedor..."
-          style={{ flex:1, maxWidth:340, background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+          style={{ flex:1, maxWidth:340, background:"#eceff3", border:`1px solid ${T.cardBorder}`,
             borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text, outline:"none", fontFamily:T.font }} />
         <span style={{ fontSize:12, color:T.dim }}>{proveedores.length} proveedores</span>
         <Btn variant="accent" onClick={()=>setModal("nuevo")}>+ Nuevo Proveedor</Btn>
@@ -565,7 +566,7 @@ function TabClientes() {
         marginBottom:12, gap:12, flexShrink:0, paddingBottom:4 }}>
         <input value={busqueda} onChange={e=>setBusqueda(e.target.value)}
           placeholder="Buscar cliente..."
-          style={{ flex:1, maxWidth:340, background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+          style={{ flex:1, maxWidth:340, background:"#eceff3", border:`1px solid ${T.cardBorder}`,
             borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text, outline:"none", fontFamily:T.font }} />
         <span style={{ fontSize:12, color:T.dim }}>{clientes.length} clientes</span>
         <Btn variant="primary" onClick={()=>setModal("nuevo")}>+ Nuevo Cliente</Btn>
@@ -809,7 +810,7 @@ function TabCuentas() {
       <div style={{ display:"flex", gap:10, alignItems:"center", marginBottom:12, flexWrap:"wrap", flexShrink:0 }}>
         <input value={busqueda} onChange={e=>setBusqueda(e.target.value)}
           placeholder="Buscar cuenta..."
-          style={{ flex:1, maxWidth:300, background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+          style={{ flex:1, maxWidth:300, background:"#eceff3", border:`1px solid ${T.cardBorder}`,
             borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text, outline:"none", fontFamily:T.font }} />
         {["todos","gasto","ingreso","financiero"].map(t=>(
           <button key={t} onClick={()=>setFiltroTipo(t)} style={{
@@ -945,7 +946,7 @@ function CuentaBancariaModal({ initial, onClose, onSave, sociedades = [] }) {
             <label style={{ fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:5 }}>Nota</label>
             <textarea value={form.nota ?? ""} onChange={e=>set("nota",e.target.value)}
               placeholder="Observaciones..."
-              style={{ width:"100%", background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+              style={{ width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`,
                 borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text,
                 fontFamily:T.font, outline:"none", resize:"vertical", minHeight:56, boxSizing:"border-box" }} />
           </div>
@@ -1104,7 +1105,7 @@ function TabCajas() {
       {/* Toolbar */}
       <div style={{ display:"flex", gap:10, alignItems:"center", marginBottom:16, flexWrap:"wrap", flexShrink:0 }}>
         <select value={filtroSoc} onChange={e=>setFiltroSoc(e.target.value)}
-          style={{ background:"#f9fafb", border:`1px solid ${T.cardBorder}`, borderRadius:8,
+          style={{ background:"#eceff3", border:`1px solid ${T.cardBorder}`, borderRadius:8,
             padding:"7px 12px", fontSize:13, color:T.text, outline:"none", fontFamily:T.font }}>
           <option value="todos">Todas las sociedades</option>
           {sociedades.map(s=>(
@@ -1365,7 +1366,7 @@ function TabCC() {
         marginBottom:16, gap:12, flexShrink:0 }}>
         <input value={busqueda} onChange={e=>setBusqueda(e.target.value)}
           placeholder="Buscar centro de costo..."
-          style={{ flex:1, maxWidth:340, background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+          style={{ flex:1, maxWidth:340, background:"#eceff3", border:`1px solid ${T.cardBorder}`,
             borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text,
             outline:"none", fontFamily:T.font }} />
         <span style={{ fontSize:12, color:T.dim }}>{ccs.length} centros</span>
@@ -1613,6 +1614,191 @@ function TabSociedades() {
   );
 }
 
+// ─── Modal: Regla de banco ────────────────────────────────────────────────────
+const REGLA_MATCH_TIPOS = [
+  { value:"codigo",          label:"Código de concepto (ej. 907176)" },
+  { value:"cuenta_servicio", label:"Nº de cuenta/suministro (→ sede)" },
+  { value:"glosa",           label:"Glosa / descripción (texto)" },
+  { value:"cuit",            label:"CUIT de contraparte" },
+  { value:"alias",           label:"Alias en el banco (texto)" },
+];
+const REGLA_TIPOS = [
+  { value:"impuesto", label:"Impuesto" }, { value:"comision", label:"Comisión" },
+  { value:"interes", label:"Interés" }, { value:"servicio", label:"Servicio (por sede)" },
+  { value:"transferencia_interna", label:"Transferencia entre cuentas propias" },
+  { value:"ingreso", label:"Ingreso" }, { value:"financiacion", label:"Financiación" },
+  { value:"pago_proveedor", label:"Pago de proveedor" },
+];
+
+export function BancoReglaModal({ initial, prefill, onClose, onSave, cuentas, centros, cuentasBancarias, proveedores }) {
+  const [form, setForm] = useState(initial ?? prefill ?? {
+    prioridad:10, match_tipo:"codigo", match_valor:"", banco:"Banco Galicia", pais:"AR",
+    tipo:"impuesto", cuenta_contable:"", centro_costo:"", cuenta_destino:"",
+    sociedad:"", proveedor_id:"", accion:"auto", nota:"",
+  });
+  const set = (k,v) => setForm(f => ({ ...f, [k]:v }));
+  const canSave = !!String(form.match_valor).trim() && !!form.match_tipo;
+  const bancos = [...new Set((cuentasBancarias||[]).map(c=>c.banco).filter(Boolean))];
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.45)", zIndex:500,
+      display:"flex", alignItems:"center", justifyContent:"center", padding:16 }} onClick={onClose}>
+      <div className="fade" style={{ background:T.card, borderRadius:14, width:560, maxWidth:"97vw",
+        maxHeight:"92vh", overflow:"auto", boxShadow:"0 20px 60px rgba(0,0,0,.25)" }} onClick={e=>e.stopPropagation()}>
+        <div style={{ background:T.accentDark, padding:"18px 24px", display:"flex",
+          justifyContent:"space-between", alignItems:"center", position:"sticky", top:0 }}>
+          <div style={{ fontSize:16, fontWeight:900, color:T.accent }}>
+            {initial ? `Editar regla ${initial.id||""}` : "Nueva regla de banco"}
+          </div>
+          <button onClick={onClose} style={{ background:"transparent", border:"none",
+            color:"rgba(255,255,255,.4)", fontSize:18, cursor:"pointer" }}>✕</button>
+        </div>
+        <div style={{ padding:24, display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+          <Select label="Cuando matchee por…" value={form.match_tipo} onChange={v=>set("match_tipo",v)} options={REGLA_MATCH_TIPOS} />
+          <Input label="Valor a buscar *" value={form.match_valor} onChange={v=>set("match_valor",v)}
+            placeholder="907176 / 0002328038 / IMP LEY…" required />
+          <Select label="Banco" value={form.banco} onChange={v=>set("banco",v)}
+            options={[{value:"",label:"Todos"}, ...bancos.map(b=>({value:b,label:b}))]} />
+          <Select label="País" value={form.pais} onChange={v=>set("pais",v)}
+            options={[{value:"",label:"Todos"},{value:"AR",label:"AR"},{value:"ES",label:"ES"},{value:"CO",label:"CO"}]} />
+          <Select label="Tipo de movimiento" value={form.tipo} onChange={v=>set("tipo",v)} options={REGLA_TIPOS} />
+          <Select label="Acción" value={form.accion} onChange={v=>set("accion",v)}
+            options={[{value:"auto",label:"Auto (contabiliza solo)"},{value:"escala",label:"Escala (a la bandeja)"}]} />
+          <Select label="Cuenta contable" value={form.cuenta_contable} onChange={v=>set("cuenta_contable",v)}
+            options={[{value:"",label:"—"}, ...(cuentas||[]).map(c=>({value:c.id,label:c.nombre}))]} />
+          <Select label="Centro de costo (sede)" value={form.centro_costo} onChange={v=>set("centro_costo",v)}
+            options={[{value:"",label:"— (por transacción)"}, ...(centros||[]).map(c=>({value:c.id,label:c.nombre}))]} />
+          <Select label="Cuenta destino (transf. interna)" value={form.cuenta_destino} onChange={v=>set("cuenta_destino",v)}
+            options={[{value:"",label:"—"}, ...(cuentasBancarias||[]).map(c=>({value:c.id,label:c.nombre+" ("+(c.sociedad||"")+")"}))]} />
+          <Select label="Proveedor (opcional)" value={form.proveedor_id} onChange={v=>set("proveedor_id",v)}
+            options={[{value:"",label:"—"}, ...(proveedores||[]).map(p=>({value:p.id,label:p.nombre}))]} />
+          <Input label="Sociedad (vacío = todas del banco)" value={form.sociedad ?? ""} onChange={v=>set("sociedad",v)} placeholder="hektor / nako…" />
+          <Input label="Prioridad" value={form.prioridad ?? ""} onChange={v=>set("prioridad",v)} placeholder="10" />
+          <div style={{ gridColumn:"1 / -1" }}>
+            <Input label="Nota" value={form.nota ?? ""} onChange={v=>set("nota",v)} placeholder="Observaciones" />
+          </div>
+        </div>
+        <div style={{ padding:"14px 24px", borderTop:`1px solid ${T.cardBorder}`,
+          display:"flex", justifyContent:"flex-end", gap:10, position:"sticky", bottom:0, background:T.card }}>
+          <button onClick={onClose} style={{ background:"#dc2626", border:"none", borderRadius:8,
+            padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff", cursor:"pointer", fontFamily:T.font }}>Cancelar ✕</button>
+          <button onClick={() => { onSave(initial ? {...form, id:initial.id} : form); onClose(); }}
+            disabled={!canSave} style={{ background: canSave?"#16a34a":"#9ca3af", border:"none",
+            borderRadius:8, padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff",
+            cursor: canSave?"pointer":"default", fontFamily:T.font }}>Guardar ✓</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Tab: Reglas de banco ─────────────────────────────────────────────────────
+function TabBancoReglas() {
+  const [reglas,   setReglas]   = useState([]);
+  const [aux,      setAux]      = useState({ cuentas:[], centros:[], cb:[], prov:[] });
+  const [loading,  setLoading]  = useState(true);
+  const [busqueda, setBusqueda] = useState("");
+  const [modal,    setModal]    = useState(null);
+
+  const recargar = async () => {
+    setLoading(true);
+    try {
+      const [r, cuentas, centros, cb, prov] = await Promise.all([
+        fetchBancoReglas(), fetchCuentas(), fetchCentrosCosto(), fetchCuentasBancarias(), fetchProveedores(),
+      ]);
+      setReglas(Array.isArray(r) ? r : []);
+      setAux({ cuentas:cuentas||[], centros:centros||[], cb:cb||[], prov:prov||[] });
+    } catch (e) { alert("Error al cargar reglas: " + e.message); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { recargar(); }, []);
+
+  const nombreDe = (list, id) => (list.find(x=>x.id===id)?.nombre) ?? id ?? "";
+
+  const handleSave = async (rg) => {
+    try {
+      if (rg.id) { const { id, ...patch } = rg; await updateBancoRegla(id, patch); }
+      else       { await appendBancoRegla(rg); }
+      await recargar();
+    } catch (e) { alert("Error al guardar: " + e.message); }
+  };
+  const handleEliminar = async (rg) => {
+    if (!confirm(`¿Eliminar regla ${rg.id}?`)) return;
+    try { await deleteBancoRegla(rg.id); setReglas(prev => prev.filter(r => r.id !== rg.id)); }
+    catch (e) { alert("Error al eliminar: " + e.message); }
+  };
+
+  const rows = useMemo(() => {
+    const q = busqueda.toLowerCase();
+    return !q ? reglas : reglas.filter(r =>
+      Object.values(r).some(v => String(v).toLowerCase().includes(q)));
+  }, [busqueda, reglas]);
+
+  return (
+    <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", minHeight:0 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, gap:12, flexShrink:0 }}>
+        <input value={busqueda} onChange={e=>setBusqueda(e.target.value)} placeholder="Buscar regla (código, tipo, banco…)"
+          style={{ flex:1, maxWidth:340, background:"#eceff3", border:`1px solid ${T.cardBorder}`,
+            borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text, outline:"none", fontFamily:T.font }} />
+        <span style={{ fontSize:12, color:T.dim }}>{reglas.length} reglas</span>
+        <Btn variant="accent" onClick={()=>setModal("nuevo")}>+ Nueva regla</Btn>
+      </div>
+      {loading ? (
+        <div style={{ padding:"60px 24px", textAlign:"center", color:T.muted, fontSize:14 }}>Cargando reglas…</div>
+      ) : reglas.length === 0 ? (
+        <EmptyState icon="⚙" label="Todavía no hay reglas de banco."
+          action={<Btn variant="accent" onClick={()=>setModal("nuevo")}>Crear la primera</Btn>} />
+      ) : (
+        <div style={{ flex:1, background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:T.radius,
+          boxShadow:T.shadow, overflow:"auto", minHeight:0 }}>
+          <table style={{ width:"100%", borderCollapse:"collapse" }}>
+            <thead>
+              <tr style={{ background:T.tableHead }}>
+                {["ID","Match","Banco","Tipo","Cuenta","Sede","Acción",""].map(h=>(
+                  <th key={h} style={{ padding:"10px 14px", fontSize:11, fontWeight:700, letterSpacing:".08em",
+                    textTransform:"uppercase", color:T.tableHeadText, textAlign:"left",
+                    position:"sticky", top:0, zIndex:1, background:T.tableHead }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0
+                ? <tr><td colSpan={8} style={{ padding:32, textAlign:"center", color:T.dim, fontSize:13 }}>Sin resultados</td></tr>
+                : rows.map((r, i) => (
+                  <tr key={r.id} style={{ borderBottom:`1px solid ${T.cardBorder}`, background:i%2===0?T.card:"#fafbfc" }}>
+                    <td style={{ padding:"9px 14px", fontSize:11, color:T.muted, fontFamily:"var(--mono)", fontWeight:700 }}>{r.id}</td>
+                    <td style={{ padding:"9px 14px", fontSize:12, color:T.text }}>
+                      <span style={{ fontSize:10, color:T.dim }}>{r.match_tipo}</span><br/><b>{r.match_valor}</b>
+                    </td>
+                    <td style={{ padding:"9px 14px", fontSize:12, color:T.muted }}>{r.banco || "Todos"}</td>
+                    <td style={{ padding:"9px 14px", fontSize:12, color:T.text }}>{r.tipo}</td>
+                    <td style={{ padding:"9px 14px", fontSize:11, color:T.muted }}>{nombreDe(aux.cuentas, r.cuenta_contable) || (r.cuenta_destino ? "→"+nombreDe(aux.cb,r.cuenta_destino) : "—")}</td>
+                    <td style={{ padding:"9px 14px", fontSize:11, color:T.muted }}>{r.centro_costo ? nombreDe(aux.centros, r.centro_costo) : "—"}</td>
+                    <td style={{ padding:"9px 14px" }}>
+                      <span style={{ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:999,
+                        background: r.accion==="auto"?"#dcfce7":"#fef9c3", color:r.accion==="auto"?"#16a34a":"#b45309" }}>{r.accion||"auto"}</span>
+                    </td>
+                    <td style={{ padding:"9px 14px", textAlign:"right", whiteSpace:"nowrap" }}>
+                      <button onClick={()=>setModal(r)} style={{ background:"transparent", border:`1px solid ${T.cardBorder}`,
+                        borderRadius:6, padding:"4px 10px", fontSize:11, color:T.muted, cursor:"pointer", fontFamily:T.font, fontWeight:600, marginRight:6 }}>Editar</button>
+                      <button onClick={()=>handleEliminar(r)} style={{ background:"transparent", border:`1px solid #fecaca`,
+                        borderRadius:6, padding:"4px 10px", fontSize:11, color:T.red, cursor:"pointer", fontFamily:T.font, fontWeight:600 }}>Eliminar</button>
+                    </td>
+                  </tr>
+                ))
+              }
+            </tbody>
+          </table>
+        </div>
+      )}
+      {modal && (
+        <BancoReglaModal initial={modal === "nuevo" ? null : modal} onClose={()=>setModal(null)} onSave={handleSave}
+          cuentas={aux.cuentas} centros={aux.centros} cuentasBancarias={aux.cb} proveedores={aux.prov} />
+      )}
+    </div>
+  );
+}
+
 // ─── Pantalla principal ───────────────────────────────────────────────────────
 export default function PantallaMaestros({ activeTab = "sociedades" }) {
   return (
@@ -1629,6 +1815,7 @@ export default function PantallaMaestros({ activeTab = "sociedades" }) {
        : activeTab === "cajas"     ? <TabCajas />
        : activeTab === "cuentas"   ? <TabCuentas />
        : activeTab === "cc"        ? <TabCC />
+       : activeTab === "banco_reglas" ? <TabBancoReglas />
        : <TabSociedades />}
     </div>
   );

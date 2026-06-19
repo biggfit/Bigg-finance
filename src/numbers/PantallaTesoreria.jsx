@@ -1,16 +1,30 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import { T, Btn, Input, Select, PageHeader, fmtDate } from "./theme";
+import { T, Btn, Input, Select, PageHeader, fmtDate, fmtMoney } from "./theme";
 import {
-  TIPO_CUENTA, MONEDA_SYM, fmtSaldo,
+  TIPO_CUENTA, MONEDA_SYM,
 } from "../data/tesoreriaData";
 import { CENTROS_COSTO } from "../data/numbersData";
 import {
   fetchMovTesoreria, appendMovTesoreria, deleteMovTesoreria, updateMovTesoreria,
   fetchEgresos, fetchIngresos, fetchPagosCobros, calcSaldoPendiente,
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto,
-  appendGastoDirecto,
+  appendGastoDirecto, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets,
+  agruparAnticipos, anticipoPasivo, pagarTarjeta,
 } from "../lib/numbersApi";
+import {
+  fetchLiquidacionesCerradas, parsePagoFromMov, normSoc, pendienteSueldosPorLegajo,
+} from "../lib/sueldosApi";
+import { fetchAll } from "../lib/sheetsApi";        // Franquicias (read-only)
+import { franquiciasSaldosCxC } from "../lib/franquiciasAdapter";
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// Tesorería muestra montos SIN decimales (pesos enteros). Local: no toca fmtSaldo global (pdf.js).
+const fmtSaldo = (n, moneda) => {
+  const sym = MONEDA_SYM[moneda] ?? moneda;
+  const abs = Math.abs(Number(n) || 0);
+  const neg = Number(n) < 0;
+  return `${neg ? "-" : ""}${sym} ${abs.toLocaleString("es-AR", { maximumFractionDigits: 0 })}`;
+};
 
 const TIPO_CFG = {
   PAGO_FC:       { bg:"#fff7ed", color:"#f97316", label:"Pago FC"     },
@@ -18,6 +32,7 @@ const TIPO_CFG = {
   EGRESO_GASTO:  { bg:"#fef9c3", color:"#ca8a04", label:"Gasto"       },
   TRANSFERENCIA: { bg:"#dbeafe", color:"#2563eb", label:"Transferencia"},
 };
+
 
 /** Botones de barra — misma geometría; variante por intención */
 const tesoreriaActionBtn = {
@@ -103,7 +118,7 @@ function MovimientoModal({ sociedad, cuentasBancarias, onClose, onSave }) {
               marginBottom:4, textTransform:"uppercase", letterSpacing:".06em" }}>Observación</label>
             <textarea value={form.observacion} onChange={e => set("observacion", e.target.value)}
               placeholder="Concepto del movimiento..."
-              style={{ width:"100%", background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+              style={{ width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`,
                 borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text,
                 fontFamily:T.font, outline:"none", resize:"vertical", minHeight:64, boxSizing:"border-box" }} />
           </div>
@@ -115,6 +130,72 @@ function MovimientoModal({ sociedad, cuentasBancarias, onClose, onSave }) {
               background: canSave ? "#16a34a" : "#9ca3af", border:"none", borderRadius:8,
               padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff",
               cursor: canSave ? "pointer" : "default", fontFamily:T.font }}>Crear ✓</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Modal: Pagar tarjeta ─────────────────────────────────────────────────────
+// Paga el saldo de una cuenta-tarjeta (total o parcial) desde una caja/banco real.
+// Genera el par PAGO_TARJETA: la caja real baja (salida real) y la cuenta-tarjeta sube (baja la deuda).
+function PagarTarjetaModal({ sociedad, cuentas, onClose, onSave }) {
+  const _soc = (sociedad ?? "").toLowerCase();
+  const cuentasSoc = cuentas.filter(c => (c.sociedad ?? "").toLowerCase() === _soc);
+  const tarjetas   = cuentasSoc.filter(esCuentaCredito);
+  const [form, setForm] = useState({
+    fecha: new Date().toISOString().slice(0, 10), tarjeta: "", cuentaReal: "", monto: "",
+  });
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const tjt        = tarjetas.find(c => c.id === form.tarjeta);
+  const monedaTjt  = tjt?.moneda ?? null;
+  const deuda      = tjt ? Math.abs(Number(tjt.saldo) || 0) : 0;
+  // Cajas/bancos reales de la MISMA moneda que la tarjeta (no otra tarjeta).
+  const realesOpts = cuentasSoc
+    .filter(c => !esCuentaCredito(c) && (!monedaTjt || c.moneda === monedaTjt))
+    .map(c => ({ value: c.id, label: `${TIPO_CUENTA[c.tipo]?.icon ?? "💳"} ${c.nombre} (${c.moneda})` }));
+  const tjtOpts    = tarjetas.map(c => ({ value: c.id, label: `💳 ${c.nombre} (${c.moneda}) · debe ${fmtMoney(Math.abs(Number(c.saldo) || 0), c.moneda)}` }));
+
+  const monto    = Number(form.monto) || 0;
+  const canSave  = form.fecha && form.tarjeta && form.cuentaReal && monto > 0;
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.45)", zIndex:500,
+      display:"flex", alignItems:"center", justifyContent:"center", padding:16 }} onClick={onClose}>
+      <div className="fade" style={{ background:T.card, borderRadius:10, width:520, maxWidth:"97vw",
+        boxShadow:"0 20px 60px rgba(0,0,0,.25)", overflow:"hidden" }} onClick={e => e.stopPropagation()}>
+        <div style={{ background:"#dc2626", padding:"14px 22px", display:"flex",
+          justifyContent:"space-between", alignItems:"center" }}>
+          <span style={{ fontSize:15, fontWeight:800, color:"#fff" }}>Pagar Tarjeta</span>
+          <button onClick={onClose} style={{ background:"transparent", border:"none",
+            color:"rgba(255,255,255,.6)", fontSize:20, cursor:"pointer", lineHeight:1 }}>✕</button>
+        </div>
+        <div style={{ padding:24, display:"flex", flexDirection:"column", gap:14 }}>
+          <Select label="Tarjeta a pagar" required value={form.tarjeta}
+            onChange={v => { const t = tarjetas.find(c => c.id === v); set("tarjeta", v); set("cuentaReal", ""); set("monto", t ? String(Math.abs(Number(t.saldo) || 0)) : ""); }}
+            options={tjtOpts} />
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            <Input label="Fecha" required type="date" value={form.fecha} onChange={v => set("fecha", v)} />
+            <Input label={`Importe${monedaTjt ? " ("+monedaTjt+")" : ""}`} required type="number" value={form.monto} onChange={v => set("monto", v)} placeholder="0,00" />
+          </div>
+          {tjt && monto > deuda + 0.01 && (
+            <div style={{ fontSize:11, color:"#b45309" }}>El importe supera la deuda ({fmtMoney(deuda, monedaTjt)}). ¿Seguro?</div>
+          )}
+          <Select label="Pagar desde (caja/banco)" required value={form.cuentaReal} onChange={v => set("cuentaReal", v)} options={realesOpts} />
+          {monedaTjt === "USD" && (
+            <div style={{ fontSize:11, color:T.muted }}>
+              Para pagar en pesos: primero comprá los USD en <strong>Cambio de moneda</strong> (al TC de la tarjeta) y pagá desde la caja USD.
+            </div>
+          )}
+          <div style={{ display:"flex", justifyContent:"flex-end", gap:10 }}>
+            <button onClick={onClose} style={{ background:"#6b7280", border:"none", borderRadius:8,
+              padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff", cursor:"pointer", fontFamily:T.font }}>Cancelar</button>
+            <button onClick={() => { onSave({ ...form, moneda: monedaTjt }); onClose(); }} disabled={!canSave} style={{
+              background: canSave ? "#16a34a" : "#9ca3af", border:"none", borderRadius:8,
+              padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff",
+              cursor: canSave ? "pointer" : "default", fontFamily:T.font }}>Pagar ✓</button>
           </div>
         </div>
       </div>
@@ -155,7 +236,7 @@ function GastoDirectoModal({ sociedad, cuentasBancarias, cuentasContables = [], 
   const canSave = form.fecha && form.medioPago && form.cuenta_contable && form.cc && sub > 0;
 
   const fi = { // field input style
-    width:"100%", background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+    width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`,
     borderRadius:7, padding:"8px 10px", fontSize:13, color:T.text,
     fontFamily:T.font, outline:"none", boxSizing:"border-box",
   };
@@ -299,10 +380,10 @@ function GastoDirectoModal({ sociedad, cuentasBancarias, cuentasContables = [], 
               padding:"8px 14px", fontSize:13, color:"#78350f",
               display:"flex", justifyContent:"space-between", alignItems:"center" }}>
               <span style={{ color:"#92400e" }}>
-                IVA: {sym} {iva.toLocaleString("es-AR", { minimumFractionDigits:2 })}
+                IVA: {sym} {iva.toLocaleString("es-AR", { maximumFractionDigits:0 })}
               </span>
               <strong>
-                Total: {sym} {total.toLocaleString("es-AR", { minimumFractionDigits:2 })}
+                Total: {sym} {total.toLocaleString("es-AR", { maximumFractionDigits:0 })}
               </strong>
             </div>
           )}
@@ -459,7 +540,7 @@ function PaginaAging({ item, fechaCorte, headerColor, onBack }) {
           <span style={{ fontSize:11, color:T.muted, textTransform:"uppercase",
             letterSpacing:".06em", fontWeight:700 }}>Total pendiente</span>
           <span style={{ fontSize:22, fontFamily:"var(--mono)", fontWeight:900,
-            color: headerColor }}>{fmtSaldo(totRow.total, mon)}</span>
+            color: headerColor, whiteSpace:"nowrap" }}>{fmtSaldo(totRow.total, mon)}</span>
         </div>
       </div>
 
@@ -539,7 +620,7 @@ function BalanceBlock({ title, items, headerColor, onItemClick }) {
             style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
               padding:"8px 18px", borderBottom:`1px solid ${T.cardBorder}`,
               cursor: onItemClick ? "pointer" : "default", transition:"background .1s" }}
-            onMouseEnter={e => { if (onItemClick) e.currentTarget.style.background="#f9fafb"; }}
+            onMouseEnter={e => { if (onItemClick) e.currentTarget.style.background="#eceff3"; }}
             onMouseLeave={e => { e.currentTarget.style.background=""; }}>
             <span style={{ fontSize:13, color:T.text, flex:1, overflow:"hidden",
               textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{item.label}</span>
@@ -565,7 +646,7 @@ function BalanceBlock({ title, items, headerColor, onItemClick }) {
             </span>
           ))}
           {Object.keys(totals).length === 0 && (
-            <span style={{ fontSize:12, color:T.dim }}>$ 0,00</span>
+            <span style={{ fontSize:12, color:T.dim }}>$ 0</span>
           )}
         </div>
       </div>
@@ -599,7 +680,7 @@ function CuentaRow({ cuenta, onClick }) {
         width:36, textAlign:"center" }}>{cuenta.moneda}</span>
       <span style={{ fontSize:13, fontFamily:"var(--mono)", fontWeight:700,
         color: saldo < 0 ? T.red : saldo === 0 ? T.dim : T.text,
-        width:110, textAlign:"right", flexShrink:0 }}>
+        minWidth:110, textAlign:"right", flexShrink:0, whiteSpace:"nowrap" }}>
         {fmtSaldo(saldo, cuenta.moneda)}
       </span>
     </div>
@@ -651,13 +732,13 @@ function GrupoBlock({ icon, label, cuentas, onCuentaClick }) {
               <span style={{ fontSize:10, fontWeight:800, color:T.dim,
                 letterSpacing:".04em" }}>{mon}</span>
               <span style={{ fontSize:12, fontFamily:"var(--mono)", fontWeight:700,
-                color: tot < 0 ? T.red : T.text }}>
+                color: tot < 0 ? T.red : T.text, whiteSpace:"nowrap" }}>
                 {fmtSaldo(tot, mon)}
               </span>
             </div>
           ))}
           {Object.keys(porMoneda).length === 0 && (
-            <span style={{ fontSize:12, color:T.dim }}>$ 0,00</span>
+            <span style={{ fontSize:12, color:T.dim }}>$ 0</span>
           )}
         </div>
       </div>
@@ -669,6 +750,7 @@ function GrupoBlock({ icon, label, cuentas, onCuentaClick }) {
 function ResumenMonedas({ cuentas }) {
   const porMoneda = {};
   for (const c of cuentas) {
+    if (esCuentaCredito(c)) continue;   // la deuda de tarjeta no es disponible en caja
     if (!porMoneda[c.moneda]) porMoneda[c.moneda] = 0;
     porMoneda[c.moneda] += Number(c.saldo) || 0;
   }
@@ -686,7 +768,7 @@ function ResumenMonedas({ cuentas }) {
             <span style={{ fontSize:10, fontWeight:800, color:T.muted,
               letterSpacing:".12em", textTransform:"uppercase" }}>Disponible {m}</span>
             <span style={{ fontSize:18, fontFamily:"var(--mono)", fontWeight:900,
-              color: saldo < 0 ? T.red : saldo === 0 ? T.dim : T.text }}>
+              color: saldo < 0 ? T.red : saldo === 0 ? T.dim : T.text, whiteSpace:"nowrap" }}>
               {fmtSaldo(saldo, m)}
             </span>
           </div>
@@ -778,8 +860,8 @@ function RowMenu({ onEditar, onEliminar }) {
           background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:8,
           boxShadow:"0 8px 24px rgba(0,0,0,.15)", minWidth:150, overflow:"hidden",
         }}>
-          {item("Editar",    onEditar ?? (() => {}))}
-          {<div style={{ height:1, background:T.cardBorder, margin:"3px 0" }} />}
+          {onEditar && item("Editar", onEditar)}
+          {onEditar && <div style={{ height:1, background:T.cardBorder, margin:"3px 0" }} />}
           {item("Eliminar",  onEliminar ?? (() => {}), T.red)}
         </div>
       )}
@@ -801,9 +883,9 @@ function TabMovimientos({ movimientos, cuentas, filtroCuenta, onLimpiarFiltro, o
     return m;
   }, [centrosCosto]);
 
-  const rows = filtroCuenta
+  const rows = (filtroCuenta
     ? movimientos.filter(m => m.cuenta_bancaria === filtroCuenta)
-    : movimientos;
+    : movimientos).filter(m => !esIgnorado(m));   // ocultar las líneas descartadas del ledger
 
   const sorted = useMemo(() => [...rows].sort((a, b) => {
     const fa = a.fecha ?? ""; const fb = b.fecha ?? "";
@@ -926,24 +1008,30 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
   const [drillDownItem,    setDrillDownItem]    = useState(null);
   const [showMovModal,     setShowMovModal]     = useState(false);
   const [showNuevoMov,     setShowNuevoMov]     = useState(false);
+  const [showPagarTjt,     setShowPagarTjt]     = useState(false);
   const [editingMov,       setEditingMov]       = useState(null);
   const [filtroCuenta,     setFiltroCuenta]     = useState(null);
   const [cuentasBancarias, setCuentasBancarias] = useState([]);
   const [cuentasContables, setCuentasContables] = useState([]);
   const [centrosCosto,     setCentrosCosto]     = useState(CENTROS_COSTO);
+  const [liqsSueldos,      setLiqsSueldos]      = useState([]);
+  const [financiaciones,   setFinanciaciones]   = useState([]);
+  const [franqData,        setFranqData]        = useState({ comps: {}, saldos: {}, franchises: [] });  // Franquicias (read-only)
 
   // ── Fetch all data ────────────────────────────────────────────────────────
   const cargarMovimientos = async () => {
     setLoading(true);
     setError(null);
     try {
-      const [movs, egs, ings, pcs, cbList, ctaList] = await Promise.all([
+      const [movs, egs, ings, pcs, cbList, ctaList, liqsS, fin] = await Promise.all([
         fetchMovTesoreria(sociedad),
         fetchEgresos(sociedad).catch(() => []),
         fetchIngresos(sociedad).catch(() => []),
         fetchPagosCobros(sociedad).catch(() => []),
         fetchCuentasBancarias().catch(() => []),
         fetchCuentas().catch(() => []),
+        fetchLiquidacionesCerradas().catch(() => []),
+        fetchFinanciaciones(sociedad).catch(() => []),
       ]);
       setMovimientos(Array.isArray(movs) ? movs : []);
       setEgresos(Array.isArray(egs) ? egs : []);
@@ -951,8 +1039,14 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
       setPagosCobros(Array.isArray(pcs) ? pcs : []);
       setCuentasBancarias(Array.isArray(cbList) ? cbList : []);
       setCuentasContables(Array.isArray(ctaList) ? ctaList : []);
+      setLiqsSueldos(Array.isArray(liqsS) ? liqsS : []);
+      setFinanciaciones(Array.isArray(fin) ? fin : []);
       fetchCentrosCosto().then(data => {
         if (Array.isArray(data) && data.length > 0) setCentrosCosto(data);
+      }).catch(() => {});
+      // Franquicias (read-only) — fuera del Promise.all para NO bloquear Tesorería si ese backend tarda.
+      fetchAll().then(franq => {
+        if (franq && franq.comps) setFranqData(franq);
       }).catch(() => {});
     } catch (e) {
       setError(e.message);
@@ -973,6 +1067,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
       .map(cuenta => {
         const movsCuenta = movimientos.filter(m =>
           m.cuenta_bancaria === cuenta.id &&
+          !esIgnorado(m) &&                                   // las líneas descartadas no cuentan
           (!fechaCorte || (m.fecha ?? "") <= fechaCorte)
         );
         const saldo = movsCuenta.reduce((s, m) => s + (Number(m.monto) || 0), 0);
@@ -1000,7 +1095,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
 
   const aCobrar = useMemo(() => {
     const corte  = fechaCorte || null;
-    const cobros = pagosCobros.filter(p => p.tipo === "COBRO_FC" && (!corte || (p.fecha ?? "") <= corte));
+    const cobros = pagosCobros.filter(p => p.tipo === "COBRO" && (!corte || (p.fecha ?? "") <= corte));
     const grouped = {};
     for (const ing of ingresos) {
       if (corte && (ing.fecha ?? "") > corte) continue;
@@ -1017,9 +1112,27 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
     return Object.values(grouped).sort((a, b) => b.saldo - a.saldo);
   }, [ingresos, pagosCobros, cuentaById, cuentaByNombre, fechaCorte, _resolveCuenta]);
 
+  // ── Saldos de franquiciados (Bigg Franquicias, read-only) ───────────────────
+  // Presentación BRUTA, sin netear (igual que Franquicias muestra DEBEN/DEBEMOS):
+  //   · saldo > 0 (nos deben)  → Activo "Franquiciados" (cuentas por cobrar)
+  //   · saldo < 0 (les debemos) → Pasivo "Franquiciados (saldo a favor)" = ingreso diferido,
+  //     misma naturaleza que un anticipo de cliente.
+  // computeSaldoReal = misma lógica que la app de Franquicias (facturado − cobrado, tope de pauta),
+  // scoping por empresa+moneda de la sociedad activa. OJO: hoy el cobro se lee de comprobantes;
+  // cuando se haga el switch (financieros solo en nb_movimientos) hay que reapuntar la fuente.
+  const franqCC = useMemo(() => {
+    const now = new Date();
+    return franquiciasSaldosCxC(franqData, sociedad, now.getFullYear(), now.getMonth());
+  }, [franqData, sociedad]);
+
+  const aCobrarFull = useMemo(
+    () => [...aCobrar, ...franqCC.activo].sort((a, b) => b.saldo - a.saldo),
+    [aCobrar, franqCC]
+  );
+
   const aPagar = useMemo(() => {
     const corte  = fechaCorte || null;
-    const pagos  = pagosCobros.filter(p => (p.tipo === "PAGO_FC" || p.tipo === "EGRESO_GASTO") && (!corte || (p.fecha ?? "") <= corte));
+    const pagos  = pagosCobros.filter(p => (p.tipo === "PAGO" || p.tipo === "EGRESO_GASTO") && (!corte || (p.fecha ?? "") <= corte));
     const pasivoLabel    = { proveedores:"Proveedores", sueldos:"Sueldos", impuestos:"Impuestos", financiero:"Financiero", ventas:"Ventas" };
     const grouped = {};
     for (const eg of egresos) {
@@ -1029,7 +1142,10 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
       if (saldo <= 0) continue;
       const cuentaDef = _resolveCuenta(cuentaById, cuentaByNombre, eg.cuentaId, eg.cuenta);
       const bucket    = (cuentaDef?.cuenta_pasivo ?? "").toLowerCase() || "proveedores";
-      const label     = pasivoLabel[bucket] ?? cuentaDef?.cuenta_pasivo ?? "Proveedores";
+      // Resumen de tarjeta: el pasivo agrupa como "Tarjeta de crédito" (contraparte ^Tarjeta),
+      // aunque las líneas tengan cuentas reales (Servicios, Software, impuestos…) para el P&L.
+      const label     = /^tarjeta/i.test(eg.proveedor ?? "") ? "Tarjeta de crédito"
+                        : (pasivoLabel[bucket] ?? cuentaDef?.cuenta_pasivo ?? "Proveedores");
       const key       = `${label}||${eg.moneda ?? "ARS"}`;
       if (!grouped[key]) grouped[key] = { label, moneda: eg.moneda ?? "ARS", saldo: 0, docs: [], headerColor:"#dc2626" };
       grouped[key].saldo += saldo;
@@ -1037,6 +1153,91 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
     }
     return Object.values(grouped).sort((a, b) => b.saldo - a.saldo);
   }, [egresos, pagosCobros, cuentaById, cuentaByNombre, fechaCorte, _resolveCuenta]);
+
+  // ── Pasivo de SUELDOS de esta sociedad (devengado − pagado) ──
+  // Los pagos de sueldo SON movimientos (origen "sueldos") — una sola tabla, sin fetch aparte.
+  const pagosSueldos = useMemo(
+    () => movimientos.filter(m => m.origen === "sueldos").map(parsePagoFromMov),
+    [movimientos]
+  );
+  // Deriva del netter único de la lib (mismo número que la pantalla "Sueldos por pagar"):
+  // toma los items de esta sociedad y los arma como docs para el Pasivo.
+  const sueldosPasivo = useMemo(() => {
+    const soc = normSoc(sociedad);
+    const docs = []; let total = 0;
+    for (const leg of pendienteSueldosPorLegajo(liqsSueldos, pagosSueldos)) {
+      for (const it of leg.items) {
+        if (normSoc(it.sociedad) !== soc) continue;
+        total += it.monto;
+        docs.push({ contraparte: leg.legajo, vto: `${String(it.mes).padStart(2, "0")}/${it.anio}`, saldo: it.monto, moneda: "ARS" });
+      }
+    }
+    docs.sort((a, b) => b.saldo - a.saldo);
+    return { total, docs };
+  }, [liqsSueldos, pagosSueldos, sociedad]);
+
+  // ── Pasivo de FINANCIACIONES (planes AFIP + créditos) ──
+  // Líneas PROPIAS, separadas de los comprobantes. Usa el helper compartido de numbersApi
+  // (misma clasificación/saldo que Reportes→Balance). "Planes de pago" (impuestos) / "Créditos".
+  const finPasivo = useMemo(() => {
+    const b = financiacionPasivoBuckets(financiaciones, sociedad);
+    const items = [];
+    const armar = (bucket, label) => {
+      for (const mon of ["ARS", "USD", "EUR"]) {
+        if (bucket.tot[mon] <= 0) continue;
+        const docs = bucket.docs.filter(d => d.moneda === mon)
+          .map(d => ({ contraparte: `${d.acreedor || "—"}${d.nro_plan ? " · " + d.nro_plan : ""}`, vto: d.prox_vto, saldo: d.saldo, moneda: mon }));
+        items.push({ label, moneda: mon, saldo: bucket.tot[mon], docs, headerColor: "#dc2626" });
+      }
+    };
+    armar(b.impuestos, "Planes de pago");
+    armar(b.financiero, "Créditos");
+    return items;
+  }, [financiaciones, sociedad]);
+
+  // ── Pasivo de ANTICIPOS de clientes (ingresos diferidos) — derivado de los movimientos ──
+  const anticiposPasivo = useMemo(() => {
+    const { tot, docs } = anticipoPasivo(agruparAnticipos(movimientos), sociedad);
+    const items = [];
+    for (const mon of ["ARS", "USD", "EUR"]) {
+      if (tot[mon] <= 0) continue;
+      const d = docs.filter(x => x.moneda === mon).map(x => ({ contraparte: x.cliente || "—", vto: x.fecha, saldo: x.saldo, moneda: mon }));
+      items.push({ label: "Anticipos de clientes", moneda: mon, saldo: tot[mon], docs: d, headerColor: "#dc2626" });
+    }
+    return items;
+  }, [movimientos, sociedad]);
+
+  // Deuda de tarjetas (saldo negativo de las cuentas-tarjeta) → como líneas del Pasivo.
+  // El detalle muestra los movimientos de la tarjeta (consumos +, pagos −) → suman el saldo.
+  const tarjetasPasivo = useMemo(() =>
+    cuentas.filter(c => esCuentaCredito(c) && (Number(c.saldo) || 0) < 0)
+      .map(c => {
+        const movsCard = movimientos.filter(m => m.cuenta_bancaria === c.id && !esIgnorado(m)
+          && (!fechaCorte || (m.fecha ?? "") <= fechaCorte));
+        const docs = movsCard.map(m => ({
+          contraparte: m.concepto || (Number(m.monto) < 0 ? "Consumo" : "Pago"),
+          vto: m.fecha, saldo: -(Number(m.monto) || 0), moneda: c.moneda,
+        }));
+        return { label: c.nombre, moneda: c.moneda, saldo: -(Number(c.saldo) || 0), docs, headerColor: "#dc2626" };
+      }),
+    [cuentas, movimientos, fechaCorte]);
+
+  // Pasivo combinado: cuentas a pagar (comprobantes) + sueldos pendientes + financiaciones + tarjetas.
+  // Sueldos se funde en su item si ya existe; financiaciones van como líneas propias.
+  const aPagarFull = useMemo(() => {
+    const out = aPagar.map(it => ({ ...it }));
+    if (sueldosPasivo.total > 0) {
+      const existente = out.find(it => it.label === "Sueldos" && it.moneda === "ARS");
+      if (existente) {
+        existente.saldo += sueldosPasivo.total;
+        existente.docs  = [...existente.docs, ...sueldosPasivo.docs];
+      } else {
+        out.push({ label: "Sueldos", moneda: "ARS", saldo: sueldosPasivo.total, docs: sueldosPasivo.docs, headerColor: "#dc2626" });
+      }
+    }
+    out.push(...finPasivo, ...anticiposPasivo, ...franqCC.pasivo, ...tarjetasPasivo);
+    return out.sort((a, b) => b.saldo - a.saldo);
+  }, [aPagar, sueldosPasivo, finPasivo, anticiposPasivo, franqCC, tarjetasPasivo]);
 
   // ── Guardar movimiento entre cuentas ──────────────────────────────────────
   const handleGuardarMovimiento = async (form) => {
@@ -1059,6 +1260,18 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
       await cargarMovimientos();
     } catch (e) {
       alert("Error al guardar: " + e.message);
+    }
+  };
+
+  const handlePagarTarjeta = async (form) => {
+    try {
+      await pagarTarjeta({
+        sociedad, fecha: form.fecha, monto: form.monto, moneda: form.moneda || "ARS",
+        cuenta_real: form.cuentaReal, tarjeta_id: form.tarjeta,
+      });
+      await cargarMovimientos();
+    } catch (e) {
+      alert("Error al pagar tarjeta: " + (e?.message || e));
     }
   };
 
@@ -1141,6 +1354,13 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
             }}>
               + Movimiento entre cuentas
             </button>
+            {cuentas.some(esCuentaCredito) && (
+              <button type="button" onClick={() => setShowPagarTjt(true)} style={{
+                ...tesoreriaActionBtn.base, background:"#dc2626", color:"#fff", border:"none",
+              }}>
+                💳 Pagar tarjeta
+              </button>
+            )}
           </div>
         )}
       />
@@ -1199,7 +1419,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
             const on = filtroMoneda === m;
             return (
               <button key={m} type="button" onClick={() => setFiltroMoneda(m)} style={{
-                background: on ? T.accentDark : "#f9fafb",
+                background: on ? T.accentDark : "#eceff3",
                 color: on ? T.accent : T.muted,
                 border: `1px solid ${on ? T.accentDark : T.cardBorder}`,
                 borderRadius: 999,
@@ -1222,7 +1442,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
           <button type="button" onClick={() => { datePickerRef.current?.showPicker?.(); datePickerRef.current?.click(); }}
             style={{
               border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "6px 12px",
-              fontSize: 12, fontFamily: T.font, background: "#f9fafb",
+              fontSize: 12, fontFamily: T.font, background: "#eceff3",
               color: fechaCorte ? T.text : T.dim, cursor: "pointer", whiteSpace: "nowrap",
               display: "inline-flex", alignItems: "center", gap: 6,
               minWidth: 124, justifyContent: "center", fontWeight: 600,
@@ -1284,8 +1504,8 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
           {activeTab === "saldos" && (
             <TabSaldos
               cuentas={cuentas}
-              aCobrar={aCobrar}
-              aPagar={aPagar}
+              aCobrar={aCobrarFull}
+              aPagar={aPagarFull}
               filtroMoneda={filtroMoneda}
               onCuentaClick={handleCuentaClick}
               onItemClick={setDrillDownItem}
@@ -1322,6 +1542,14 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
           centrosCosto={centrosCosto}
           onClose={() => setShowNuevoMov(false)}
           onSaved={async () => { setShowNuevoMov(false); await cargarMovimientos(); }}
+        />
+      )}
+      {showPagarTjt && (
+        <PagarTarjetaModal
+          sociedad={sociedad}
+          cuentas={cuentas}
+          onClose={() => setShowPagarTjt(false)}
+          onSave={handlePagarTarjeta}
         />
       )}
       {editingMov && (

@@ -178,7 +178,7 @@ export default function PantallaIntercompania({ sociedad }) {
 
       {/* ── Formulario inline ── */}
       {showForm && (
-        <div style={{ background:"#f9fafb", border:"1px solid #e5e7eb", borderRadius:12,
+        <div style={{ background:"#eceff3", border:"1px solid #e5e7eb", borderRadius:12,
           padding:"20px 24px", marginBottom:24 }}>
 
           {/* Grilla: fecha/TC | origen | → | destino */}
@@ -406,7 +406,7 @@ function TablaICP({ ops, ctaNombre, sociedad, handleEliminar, deleting, showSoci
 
           return (
             <tr key={op.id} style={{ borderBottom:`1px solid ${T.cardBorder}` }}
-              onMouseEnter={e => e.currentTarget.style.background = "#f9fafb"}
+              onMouseEnter={e => e.currentTarget.style.background = "#eceff3"}
               onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
               <td style={{ padding:"10px 12px", color:T.muted }}>{fmtDate(op.fecha)}</td>
               <td style={{ padding:"10px 12px" }}>

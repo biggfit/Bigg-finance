@@ -1,7 +1,10 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, PageHeader } from "./theme";
-import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas } from "../lib/numbersApi";
+import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo } from "../lib/numbersApi";
+import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, SALARY_BUCKETS, pagoTipoABucket, devengadoPorFormaYSociedad } from "../lib/sueldosApi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
+import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
+import { franquiciasIngresoPnLRows } from "../lib/franquiciasAdapter";
 
 const MESES    = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
 const CUR_YEAR = new Date().getFullYear();
@@ -54,6 +57,63 @@ function buildPnL(inRows, egRows, cuentaMap, ccFilter, year, moneda) {
   return cats;
 }
 
+// Adapter: nb_movimientos imputados que SON el hecho económico (gasto contado /
+// conciliación contabilizada) → mismo formato que las filas de nb_comprobantes.
+// Marcador único: documento_id empieza con "CONTAB-" (devengado-vía-movimiento).
+// Si una fila se reimputa como pago de una FC, su documento_id pasa al id_comp y
+// SALE del P&L automáticamente (el devengado lo aporta el comprobante de la FC).
+// total = |monto| (la categoría P&L de la cuenta/centro decide ingreso vs gasto).
+function movimientoToPnLRows(movs, sociedad) {
+  const soc = (sociedad ?? "").toLowerCase();
+  const out = [];
+  for (const m of (movs ?? [])) {
+    if (soc && (m.sociedad ?? "").toLowerCase() !== soc) continue;
+    if (!(m.cuenta_contable ?? "").trim()) continue;
+    // Entra al P&L: gasto contado/conciliado (CONTAB-) o retención sufrida (resultado negativo,
+    // como gasto). La retención lleva documento_id de la factura para netear la CxC, por eso
+    // se la reconoce por origen, no por el prefijo.
+    if (!String(m.documento_id ?? "").startsWith("CONTAB-") && m.origen !== "retencion") continue;
+    out.push({
+      fecha:           m.fecha,
+      sociedad:        m.sociedad,
+      centro_costo:    m.centro_costo ?? "",
+      cuenta_contable: m.cuenta_contable ?? "",
+      moneda:          m.moneda ?? "ARS",
+      total:           Math.abs(Number(m.monto) || 0),
+    });
+  }
+  return out;
+}
+
+// Adapter: financiaciones (planes AFIP + créditos) → filas P&L. Dos reconocimientos en
+// distinta línea de tiempo (sin partida doble; la caja vive aparte en nb_movimientos):
+//   · Capital del plan AFIP = el impuesto → 1 fila en el mes de consolidación (salvo apertura,
+//     que ya está en Contagram). El capital de un préstamo NO entra (es deuda, no gasto).
+//   · Interés financiero + IVA + sellos de cada cuota → en el mes de su VENCIMIENTO (devengo
+//     mes a mes, pagada o no). El resarcitorio solo si se pagó tardío (fecha_pago > vto).
+function financiacionToPnLRows(planes, sociedad) {
+  const soc = (sociedad ?? "").toLowerCase();
+  const out = [];
+  for (const p of (planes ?? [])) {
+    if (soc && (p.sociedad ?? "").toLowerCase() !== soc) continue;
+    if (p.tipo === "plan_afip" && !p.es_apertura && p.cuenta_capital) {
+      const capTot = (p.cuotas ?? []).reduce((s, c) => s + (Number(c.capital) || 0), 0);
+      if (capTot > 0) out.push({ fecha: p.fecha_consolidacion, sociedad: p.sociedad, centro_costo: p.centro_capital, cuenta_contable: p.cuenta_capital, moneda: p.moneda, total: capTot });
+    }
+    const base = { sociedad: p.sociedad, moneda: p.moneda };
+    const push = (cuenta, centro, total, fecha) => { if (total > 0 && cuenta) out.push({ ...base, fecha, centro_costo: centro, cuenta_contable: cuenta, total }); };
+    for (const c of (p.cuotas ?? [])) {
+      if (c.estado === "cancelada") continue;
+      push(p.cuenta_interes,   p.centro_interes,   c.interes,   c.vto);
+      push(p.cuenta_iva,       p.centro_iva,       c.iva,       c.vto);
+      push(p.cuenta_impuestos, p.centro_impuestos, c.impuestos, c.vto);
+      if (c.estado === "pagada" && c.fecha_pago && c.fecha_pago > c.vto)
+        push(p.cuenta_interes, p.centro_interes, c.interes_resarc, c.fecha_pago);   // resarcitorio (pago tardío)
+    }
+  }
+  return out;
+}
+
 const sumCat = (catObj) =>
   MESES.map((_, m) => Object.values(catObj).reduce((s, arr) => s + (arr[m] || 0), 0));
 
@@ -85,7 +145,7 @@ const fmtN   = n => !n ? "—" : Math.round(Math.abs(n)).toLocaleString("es-AR")
 const CTRL_H = 36;
 
 const selStyle = {
-  background: "#f9fafb", border: `1px solid ${T.cardBorder}`,
+  background: "#eceff3", border: `1px solid ${T.cardBorder}`,
   borderRadius: 8, padding: "0 12px", fontSize: 13, color: T.text,
   fontFamily: T.font, outline: "none", cursor: "pointer", height: CTRL_H,
   lineHeight: `${CTRL_H}px`,
@@ -579,13 +639,23 @@ const addVals = (a, b) => ({ ARS: a.ARS + b.ARS, USD: a.USD + b.USD, EUR: a.EUR 
 const subVals = (a, b) => ({ ARS: a.ARS - b.ARS, USD: a.USD - b.USD, EUR: a.EUR - b.EUR });
 const ZERO    = { ARS: 0, USD: 0, EUR: 0 };
 
-function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad }) {
+const SALARY_BUCKET_LABEL = { haberes: "Haberes", deposito: "Depósito", monotributo: "Monotributo", efectivo: "Efectivo" };
+
+// Pasivo de financiaciones por bucket (impuestos/financiero). Usa el helper compartido de
+// numbersApi → mismo número que Tesorería (una sola fuente de la clasificación).
+function financiacionPasivoRows(planes, sociedad) {
+  const b = financiacionPasivoBuckets(planes, sociedad);
+  return { impuestos: b.impuestos.tot, financiero: b.financiero.tot };
+}
+
+function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCerradas = [], pagosSueldos = [], rawFin = [] }) {
   const [activoOpen,  setActivoOpen]  = useState(true);
   const [pasivoOpen,  setPasivoOpen]  = useState(true);
   const [cajaOpen,    setCajaOpen]    = useState(true);
   const [bancosOpen,  setBancosOpen]  = useState(true);
   const [cxcOpen,     setCxcOpen]     = useState(true);
   const [cxpOpen,     setCxpOpen]     = useState(true);
+  const [cxpSldOpen,  setCxpSldOpen]  = useState(true);
 
   const saldos = useMemo(() => {
     const map = {};
@@ -604,14 +674,18 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad }) {
       (c.sociedad ?? "").toLowerCase() === sociedad.toLowerCase()),
     [cuentasBancarias, sociedad]);
 
-  const cajas  = useMemo(() => cuentasSoc.filter(c => (c.tipo ?? "").toLowerCase() === "caja"),  [cuentasSoc]);
-  const bancos = useMemo(() => cuentasSoc.filter(c => (c.tipo ?? "").toLowerCase() !== "caja"), [cuentasSoc]);
+  const cajas    = useMemo(() => cuentasSoc.filter(c => (c.tipo ?? "").toLowerCase() === "caja"),  [cuentasSoc]);
+  const tarjetas = useMemo(() => cuentasSoc.filter(esCuentaCredito), [cuentasSoc]);
+  const bancos   = useMemo(() => cuentasSoc.filter(c => (c.tipo ?? "").toLowerCase() !== "caja" && !esCuentaCredito(c)), [cuentasSoc]);
 
   const getBal = (id) => saldos[id] ?? { ...ZERO };
   const sumGrp = (grp) => grp.reduce((t, c) => addVals(t, getBal(c.id)), { ...ZERO });
 
   const cajaTot  = useMemo(() => sumGrp(cajas),  [cajas, saldos]);
   const bancoTot = useMemo(() => sumGrp(bancos), [bancos, saldos]);
+  // Deuda de tarjetas: saldo de las cuentas-tarjeta (negativo) → al pasivo como magnitud positiva.
+  const tarjetaDeuda = useMemo(() => subVals({ ...ZERO }, sumGrp(tarjetas)), [tarjetas, saldos]);
+  const hayTarjeta = (tarjetaDeuda.ARS + tarjetaDeuda.USD + tarjetaDeuda.EUR) !== 0;
 
   const cxcRows = useMemo(() =>
     rawIn.filter(r => (r.subtipo ?? "").toUpperCase() === "INGRESO" && r.estado !== "cobrado"),
@@ -623,8 +697,45 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad }) {
   const cxcTot = useMemo(() => sumMon(cxcRows, r => r.moneda ?? "ARS", r => Number(r.total) || 0), [cxcRows]);
   const cxpTot = useMemo(() => sumMon(cxpRows, r => r.moneda ?? "ARS", r => Number(r.total) || 0), [cxpRows]);
 
+  // Cuenta por pagar de sueldos = devengado (cerradas) − pagado (nb_movimientos origen sueldos), por balde de
+  // forma de pago (efectivo ≠ haberes), filtrado por la sociedad de cada forma. Solo ARS.
+  const sueldoSoc = (sociedad ?? "").toLowerCase();
+  const cxpSueldosBuckets = useMemo(() => {
+    const match = (s) => !sueldoSoc || (s ?? "").toLowerCase() === sueldoSoc;
+    const dev = {}, pag = {};
+    for (const { bucket } of SALARY_BUCKETS) { dev[bucket] = 0; pag[bucket] = 0; }
+    // Sociedad del devengado por (legajo, balde): la obligación de haberes es del legajo,
+    // no de la caja con la que se pagó. El pago se atribuye a esta sociedad, no a su origen.
+    const devSoc = new Map();
+    for (const liq of liqsCerradas)
+      for (const { bucket, sociedad, total } of devengadoPorFormaYSociedad(liq)) {
+        if (match(sociedad)) dev[bucket] += total;
+        const k = liq.legajo_id + "|" + bucket;
+        if (!devSoc.has(k)) devSoc.set(k, sociedad);
+      }
+    for (const p of pagosSueldos) {
+      const bucket = pagoTipoABucket(p.tipo_componente);
+      const soc = devSoc.get(p.legajo_id + "|" + bucket) ?? p.sociedad_id;  // devengado, no caja
+      if (match(soc)) pag[bucket] += Number(p.monto) || 0;
+    }
+    return SALARY_BUCKETS
+      .map(({ bucket }) => ({ bucket, pendiente: Math.max(0, dev[bucket] - pag[bucket]) }))
+      .filter(b => b.pendiente > 0);
+  }, [liqsCerradas, pagosSueldos, sueldoSoc]);
+  const cxpSueldosTot = { ...ZERO, ARS: cxpSueldosBuckets.reduce((s, b) => s + b.pendiente, 0) };
+
+  // Pasivo de financiaciones (planes AFIP → impuestos, créditos → financiero)
+  const [finOpen, setFinOpen] = useState(true);
+  const finPasivo    = useMemo(() => financiacionPasivoRows(rawFin, sociedad), [rawFin, sociedad]);
+  const finPasivoTot = useMemo(() => addVals(finPasivo.impuestos, finPasivo.financiero), [finPasivo]);
+  const hayFin = (finPasivoTot.ARS + finPasivoTot.USD + finPasivoTot.EUR) > 0;
+
+  // Pasivo de anticipos de clientes (ingresos diferidos), derivado de los movimientos
+  const antPasivo    = useMemo(() => anticipoPasivo(agruparAnticipos(rawMovs), sociedad).tot, [rawMovs, sociedad]);
+  const hayAnt = (antPasivo.ARS + antPasivo.USD + antPasivo.EUR) > 0;
+
   const activoTot  = addVals(addVals(cajaTot, bancoTot), cxcTot);
-  const pasivoTot  = cxpTot;
+  const pasivoTot  = addVals(addVals(addVals(addVals(cxpTot, cxpSueldosTot), finPasivoTot), antPasivo), tarjetaDeuda);
   const pnTot      = subVals(activoTot, pasivoTot);
 
   return (
@@ -661,6 +772,32 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad }) {
             <BGrpRow label="Cuentas a Pagar" expanded={cxpOpen} onToggle={() => setCxpOpen(o => !o)} />
             {cxpOpen && <BDRow label="Facturas pendientes de pago" vals={cxpTot} indent />}
             <BSubRow label="Total Cuentas a Pagar" vals={cxpTot} color={T.red} />
+
+            <BGrpRow label="Cuentas a Pagar — Sueldos" expanded={cxpSldOpen} onToggle={() => setCxpSldOpen(o => !o)} />
+            {cxpSldOpen && cxpSueldosBuckets.map(b => (
+              <BDRow key={b.bucket} label={SALARY_BUCKET_LABEL[b.bucket] ?? b.bucket} vals={{ ...ZERO, ARS: b.pendiente }} indent />
+            ))}
+            {cxpSldOpen && cxpSueldosBuckets.length === 0 && <BDRow label="(sin saldo de sueldos)" vals={ZERO} indent />}
+            <BSubRow label="Total Cuentas a Pagar — Sueldos" vals={cxpSueldosTot} color={T.red} />
+
+            {hayFin && <>
+              <BGrpRow label="Financiaciones (planes y créditos)" expanded={finOpen} onToggle={() => setFinOpen(o => !o)} />
+              {finOpen && (finPasivo.impuestos.ARS + finPasivo.impuestos.USD + finPasivo.impuestos.EUR) > 0 && <BDRow label="Planes de pago (impuestos)" vals={finPasivo.impuestos} indent />}
+              {finOpen && (finPasivo.financiero.ARS + finPasivo.financiero.USD + finPasivo.financiero.EUR) > 0 && <BDRow label="Créditos / préstamos" vals={finPasivo.financiero} indent />}
+              <BSubRow label="Total Financiaciones" vals={finPasivoTot} color={T.red} />
+            </>}
+
+            {hayAnt && <>
+              <BGrpRow label="Anticipos de clientes (ingresos diferidos)" expanded onToggle={() => {}} />
+              <BDRow label="Saldo de anticipos sin facturar" vals={antPasivo} indent />
+              <BSubRow label="Total Anticipos" vals={antPasivo} color={T.red} />
+            </>}
+
+            {hayTarjeta && <>
+              <BGrpRow label="Tarjetas de crédito" expanded onToggle={() => {}} />
+              <BDRow label="Saldo a pagar de tarjetas" vals={tarjetaDeuda} indent />
+              <BSubRow label="Total Tarjetas" vals={tarjetaDeuda} color={T.red} />
+            </>}
           </>}
           <BResRow label="TOTAL PASIVO" vals={pasivoTot} />
 
@@ -672,14 +809,17 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad }) {
 }
 
 // ─── Tab Cash Flow ────────────────────────────────────────────────────────────
-function TabCashFlow({ rawMovs, year, moneda }) {
+function TabCashFlow({ rawMovs, year, moneda, tarjetaIds }) {
 
   const movsFilt = useMemo(() => rawMovs.filter(m => {
     if (!m.fecha) return false;
+    if (esIgnorado(m)) return false;                 // líneas descartadas no entran al flujo
+    if (!m.cuenta_bancaria) return false;            // sin banco = no es caja (retención, consumo de anticipo, apertura)
+    if (tarjetaIds?.has(m.cuenta_bancaria)) return false;  // las cuentas-tarjeta no son caja: la salida real es el pago de la tarjeta
     if (m.fecha.slice(0, 4) !== String(year)) return false;
     if ((m.moneda ?? "ARS") !== moneda) return false;
     return true;
-  }), [rawMovs, year, moneda]);
+  }), [rawMovs, year, moneda, tarjetaIds]);
 
   const movsOp    = useMemo(() => movsFilt.filter(m => m.tipo !== "TRANSFERENCIA"), [movsFilt]);
   const movsTrans = useMemo(() => movsFilt.filter(m => m.tipo === "TRANSFERENCIA"), [movsFilt]);
@@ -689,7 +829,8 @@ function TabCashFlow({ rawMovs, year, moneda }) {
     for (const m of movsOp) {
       const mes   = parseInt(m.fecha.slice(5, 7), 10) - 1;
       const monto = Number(m.monto) || 0;
-      const cta   = (m.cuenta_contable ?? "").trim() || "Sin clasificar";
+      const cta   = (m.cuenta_contable ?? "").trim()
+        || (m.tipo === "PAGO_TARJETA" || m.origen === "pago_tarjeta" ? "Pago de tarjeta" : "Sin clasificar");
       if (monto > 0) {
         if (!e[cta]) e[cta] = new Array(12).fill(0);
         e[cta][mes] += monto;
@@ -962,6 +1103,10 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const [cuentasBancarias, setCuentasBancarias] = useState([]);
   const [cuentas,   setCuentas]   = useState([]);
   const [ccs,       setCcs]       = useState([]);
+  const [liqsCerradas, setLiqsCerradas] = useState([]);  // su_liquidaciones cerradas (devengado sueldos)
+  const [pagosSueldos, setPagosSueldos] = useState([]);  // pagos de sueldo (nb_movimientos origen sueldos)
+  const [rawFin,    setRawFin]    = useState([]);        // financiaciones (planes AFIP + créditos)
+  const [rawFranq,  setRawFranq]  = useState({});        // comprobantes de Franquicias (read-only)
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState(null);
   const [loadKey,   setLoadKey]   = useState(0);
@@ -984,13 +1129,16 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     const run = async () => {
       setLoading(true); setError(null);
       try {
-        const [eg, ing, movs, cbs, ccList, ctaList] = await Promise.all([
+        const [eg, ing, movs, cbs, ccList, ctaList, liqsC, pagosS, fin] = await Promise.all([
           fetchLineasEnriquecidas(sociedad, ["EGRESO", "GASTO"]).catch(() => []),
           fetchLineasEnriquecidas(sociedad, "INGRESO").catch(() => []),
           fetchMovTesoreria(sociedad).catch(() => []),
           fetchCuentasBancarias().catch(() => []),
           fetchCentrosCosto().catch(() => []),
           fetchCuentas().catch(() => []),
+          fetchLiquidacionesCerradas().catch(() => []),
+          fetchPagosAnio().catch(() => []),
+          fetchFinanciaciones(sociedad).catch(() => []),
         ]);
         if (cancelled) return;
         setRawEg(eg);
@@ -999,6 +1147,11 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         setCuentasBancarias(Array.isArray(cbs) ? cbs : []);
         setCcs(Array.isArray(ccList) ? ccList : []);
         setCuentas(Array.isArray(ctaList) ? ctaList : []);
+        setLiqsCerradas(Array.isArray(liqsC) ? liqsC : []);
+        setPagosSueldos(Array.isArray(pagosS) ? pagosS : []);
+        setRawFin(Array.isArray(fin) ? fin : []);
+        // Franquicias (read-only) — fuera del Promise.all para NO bloquear Reportes si ese backend tarda.
+        fetchComps().then(c => { if (!cancelled && c && typeof c === "object") setRawFranq(c); }).catch(() => {});
       } catch (e) {
         if (!cancelled) setError(e.message);
       } finally {
@@ -1046,13 +1199,48 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     return selectedSedeCCs;
   }, [selectedSedeCCs, sedeCCs]);
 
+  // P&L = UNA lógica de agregación (buildPnL/HQ) + TRES adaptadores ("normalizar y agregar"):
+  //   · nb_comprobantes → ya viene en formato {fecha,sociedad,centro_costo,cuenta_contable,total}
+  //   · su_liquidaciones → liquidacionToPnLRows lo adapta a ese mismo formato (cuenta "Sueldos")
+  //   · nb_movimientos imputados (gasto contado / conciliación contabilizada) → movimientoToPnLRows
+  // No es doble lógica: el P&L no sabe de qué libro vino la fila. Decisión: Opción A (su_liquidaciones
+  // es la única verdad del sueldo, sin partida doble en nb_comprobantes). Ver memoria project_pnl_sueldos.
+  // OJO: nunca sumar nb_movimientos SUELDO acá (eso es caja → Cash Flow; el devengado viene de liquidaciones).
+  // movimientoToPnLRows excluye sueldos, transferencias y pagos de factura (esos ya están vía comprobante).
+  const salaryRows = useMemo(() => {
+    const soc = (sociedad ?? "").toLowerCase();
+    return liqsCerradas
+      .flatMap(liquidacionToPnLRows)
+      .filter(r => !soc || (r.sociedad ?? "").toLowerCase() === soc);
+  }, [liqsCerradas, sociedad]);
+
+  const gastoMovRows = useMemo(() => movimientoToPnLRows(rawMovs, sociedad), [rawMovs, sociedad]);
+  // Cuentas-tarjeta (crédito): sus movimientos no son caja → se excluyen del Cash Flow (la salida real es el pago de la tarjeta).
+  const tarjetaIds = useMemo(() => new Set(cuentasBancarias.filter(esCuentaCredito).map(c => c.id)), [cuentasBancarias]);
+
+  // Financiaciones: capital del impuesto (plan AFIP) + interés/IVA/impuestos por cuota (mes a mes).
+  const finRows = useMemo(() => financiacionToPnLRows(rawFin, sociedad), [rawFin, sociedad]);
+
+  const egConSueldos = useMemo(() => [...rawEg, ...salaryRows, ...gastoMovRows, ...finRows], [rawEg, salaryRows, gastoMovRows, finRows]);
+
+  // Facturación a franquiciados (read-only) → ingreso del P&L HQ, en el centro HQ de Ventas.
+  const ventasCcId = useMemo(
+    () => ccs.find(c => (c.grupo ?? "").toLowerCase() === "hq" && normCat(c.categoria_pnl) === "ventas")?.id ?? "",
+    [ccs]
+  );
+  const franqRows = useMemo(
+    () => franquiciasIngresoPnLRows(rawFranq, sociedad, ventasCcId),
+    [rawFranq, sociedad, ventasCcId]
+  );
+  const inConFranq = useMemo(() => [...rawIn, ...franqRows], [rawIn, franqRows]);
+
   const pnlSede = useMemo(
-    () => buildPnL(rawIn, rawEg, cuentaMap, resolvedCCSede, year, monedaPL),
-    [rawIn, rawEg, cuentaMap, resolvedCCSede, year, monedaPL]
+    () => buildPnL(inConFranq, egConSueldos, cuentaMap, resolvedCCSede, year, monedaPL),
+    [inConFranq, egConSueldos, cuentaMap, resolvedCCSede, year, monedaPL]
   );
   const pnlHQ = useMemo(
-    () => buildPnLHQ(rawIn, rawEg, ccMap, year, monedaPL),
-    [rawIn, rawEg, ccMap, year, monedaPL]
+    () => buildPnLHQ(inConFranq, egConSueldos, ccMap, year, monedaPL),
+    [inConFranq, egConSueldos, ccMap, year, monedaPL]
   );
 
   const subSede = useMemo(() => computeSubtotals(pnlSede), [pnlSede]);
@@ -1122,21 +1310,20 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     <div style={{ padding: "28px 32px", maxWidth: 1400 }} className="fade">
 
       {/* ── Header ── */}
+      {/* ── Header + pill tabs (misma fila) ── */}
       <PageHeader
         title="Reportes"
-              />
-
-      {/* ── Pill tabs ── */}
-      <div
-        ref={tabsRef}
-        role="tablist"
-        aria-label="Reportes financieros"
-        onKeyDown={handleTabKeyDown}
-        style={{
-          display: "inline-flex", gap: 2, marginBottom: 20,
-          background: "#f3f4f6", borderRadius: 10, padding: 3,
-        }}
-      >
+        action={
+        <div
+          ref={tabsRef}
+          role="tablist"
+          aria-label="Reportes financieros"
+          onKeyDown={handleTabKeyDown}
+          style={{
+            display: "inline-flex", gap: 2,
+            background: "#f3f4f6", borderRadius: 10, padding: 3,
+          }}
+        >
         {TABS.map(tab => {
           const active = activeTab === tab.id;
           return (
@@ -1166,7 +1353,9 @@ export default function PantallaReportes({ sociedad = "nako" }) {
             </button>
           );
         })}
-      </div>
+        </div>
+        }
+      />
 
       {/* ── Toolbar / Filters ── */}
       <div style={{
@@ -1216,7 +1405,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Sedes</label>
             <button onClick={() => setSedeOpen(o => !o)} style={{
               ...selStyle, display: "flex", alignItems: "center", gap: 8, minWidth: 190,
-              background: sedeOpen ? "#f0f2f5" : "#f9fafb",
+              background: sedeOpen ? "#f0f2f5" : "#eceff3",
             }}>
               <span style={{ flex: 1, textAlign: "left" }}>
                 {selectedSedeCCs.length === 0 ? "Todas las Sedes" : `${selectedSedeCCs.length} sede${selectedSedeCCs.length > 1 ? "s" : ""}`}
@@ -1249,7 +1438,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
                       cursor: "pointer", userSelect: "none", color: T.text,
                       transition: "background .1s",
                     }}
-                      onMouseEnter={e => e.currentTarget.style.background = "#f9fafb"}
+                      onMouseEnter={e => e.currentTarget.style.background = "#eceff3"}
                       onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
                       <input type="checkbox" checked={checked}
                         onChange={() => toggleSedeCC(cc.id)} style={{ cursor: "pointer", accentColor: T.accentDark }} />
@@ -1276,7 +1465,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
       {/* ── Cash Flow ── */}
       {activeTab === "cf" && (
-        <TabCashFlow rawMovs={rawMovs} year={year} moneda={monedaCF} />
+        <TabCashFlow rawMovs={rawMovs} year={year} moneda={monedaCF} tarjetaIds={tarjetaIds} />
       )}
 
       {activeTab === "balance" && (
@@ -1286,6 +1475,9 @@ export default function PantallaReportes({ sociedad = "nako" }) {
           rawIn={rawIn}
           rawEg={rawEg}
           sociedad={sociedad}
+          liqsCerradas={liqsCerradas}
+          pagosSueldos={pagosSueldos}
+          rawFin={rawFin}
         />
       )}
 

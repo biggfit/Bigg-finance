@@ -68,6 +68,7 @@ export const TIPO_CUENTA = {
   banco:     { label:"Banco",    icon:"🏦", color:"#2563eb" },
   caja:      { label:"Caja",     icon:"💵", color:"#16a34a" },
   inversion: { label:"Inversión",icon:"📈", color:"#7c3aed" },
+  tarjeta:   { label:"Tarjeta",  icon:"💳", color:"#dc2626" },
 };
 
 export const MONEDA_SYM = {

@@ -105,8 +105,8 @@ export default function PantallaDashboard({ sociedad = "nako" }) {
         ]);
         if (cancelled) return;
 
-        const pagos  = (pcs ?? []).filter(p => p.tipo === "PAGO_FC" || p.tipo === "EGRESO_GASTO");
-        const cobros = (pcs ?? []).filter(p => p.tipo === "COBRO_FC");
+        const pagos  = (pcs ?? []).filter(p => p.tipo === "PAGO" || p.tipo === "EGRESO_GASTO");
+        const cobros = (pcs ?? []).filter(p => p.tipo === "COBRO");
 
         setEgresos((egs ?? []).map(doc => {
           const docPagos = pagos.filter(p => p.documento_id === doc.id);
@@ -237,7 +237,7 @@ export default function PantallaDashboard({ sociedad = "nako" }) {
             {saldosCuenta.map(c => {
               const icon = TIPO_CUENTA[(c.tipo ?? "").toLowerCase()]?.icon ?? "💳";
               return (
-                <div key={c.id} style={{ background:"#f9fafb", borderRadius:8,
+                <div key={c.id} style={{ background:"#eceff3", borderRadius:8,
                   padding:"10px 16px", border:`1px solid ${T.cardBorder}`, minWidth:150 }}>
                   <div style={{ fontSize:11, color:T.muted, marginBottom:5 }}>{icon} {c.nombre}</div>
                   <div style={{ fontSize:16, fontWeight:800, fontFamily:T.mono,

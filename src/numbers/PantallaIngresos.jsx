@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, ESTADO_INGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
-import { fetchIngresos, appendIngreso, deleteIngreso, appendCobro, fetchPagosCobros, calcSaldoPendiente, calcEstadoIngreso, fetchClientes, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, deleteMovTesoreria, updateMovTesoreria, shortId } from "../lib/numbersApi";
+import { fetchIngresos, appendIngreso, deleteIngreso, appendCobro, fetchPagosCobros, calcSaldoPendiente, calcEstadoIngreso, fetchClientes, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, deleteMovTesoreria, updateMovTesoreria, shortId, agruparAnticipos, cobrarContraAnticipo } from "../lib/numbersApi";
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 import { makeResolveCC, makeResolveCB } from "./formUtils";
 import NuevoIngresoModal from "./NuevoIngresoModal";
@@ -16,7 +16,7 @@ function CCDisplay({ lineas, resolveCC }) {
 }
 
 // ─── Modal: Registrar Cobro ───────────────────────────────────────────────────
-function RegistrarCobroModal({ ingreso, saldoPendiente, cuentas, onClose, onSave }) {
+function RegistrarCobroModal({ ingreso, saldoPendiente, cuentas, anticipos = [], onClose, onSave }) {
   const [form, setForm] = useState({
     fecha:      new Date().toISOString().slice(0, 10),
     monto:      String(saldoPendiente ?? ingreso.importe ?? ""),
@@ -27,12 +27,15 @@ function RegistrarCobroModal({ ingreso, saldoPendiente, cuentas, onClose, onSave
   const excede   = montoNum > (saldoPendiente ?? ingreso.importe ?? 0);
   const canSave  = form.fecha && form.monto && form.medioCobro && !excede;
 
-  const mediosCobro = cuentas
-    .filter(c => c.moneda === ingreso.moneda)
-    .map(c => ({
-      id:     c.id,
-      nombre: `${TIPO_CUENTA[c.tipo]?.icon ?? "💳"} ${c.nombre}`,
-    }));
+  const mediosCobro = [
+    ...cuentas
+      .filter(c => c.moneda === ingreso.moneda)
+      .map(c => ({ id: c.id, nombre: `${TIPO_CUENTA[c.tipo]?.icon ?? "💳"} ${c.nombre}` })),
+    // Anticipos del cliente con saldo (cobrar contra anticipo → no toca caja, baja el pasivo)
+    ...anticipos
+      .filter(a => (a.moneda || "ARS") === ingreso.moneda)
+      .map(a => ({ id: `ant:${a.id}`, nombre: `🎟 Anticipo · saldo ${fmtMoney(a.saldo, ingreso.moneda)}` })),
+  ];
 
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.5)", zIndex:500,
@@ -62,7 +65,7 @@ function RegistrarCobroModal({ ingreso, saldoPendiente, cuentas, onClose, onSave
             <div>
               <label style={{ fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:5 }}>Fecha</label>
               <input type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)}
-                style={{ width:"100%", background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+                style={{ width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`,
                   borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text,
                   fontFamily:T.font, outline:"none", boxSizing:"border-box" }} />
             </div>
@@ -71,7 +74,7 @@ function RegistrarCobroModal({ ingreso, saldoPendiente, cuentas, onClose, onSave
               <input type="number" value={form.monto}
                 min={0} max={saldoPendiente ?? ingreso.importe ?? undefined}
                 onChange={e => set("monto", e.target.value)}
-                style={{ width:"100%", background:"#f9fafb",
+                style={{ width:"100%", background:"#eceff3",
                   border:`1.5px solid ${excede ? "#dc2626" : T.cardBorder}`,
                   borderRadius:8, padding:"8px 12px", fontSize:13, color: excede ? "#dc2626" : T.text,
                   fontFamily:T.font, outline:"none", boxSizing:"border-box" }} />
@@ -94,7 +97,7 @@ function RegistrarCobroModal({ ingreso, saldoPendiente, cuentas, onClose, onSave
               )}
               {mediosCobro.map(m => (
                 <button key={m.id} onClick={() => set("medioCobro", m.id)} style={{
-                  background: form.medioCobro === m.id ? "#eff6ff" : "#f9fafb",
+                  background: form.medioCobro === m.id ? "#eff6ff" : "#eceff3",
                   border:`1.5px solid ${form.medioCobro === m.id ? "#2563eb" : T.cardBorder}`,
                   borderRadius:8, padding:"9px 14px", cursor:"pointer",
                   display:"flex", alignItems:"center", gap:10, textAlign:"left",
@@ -187,14 +190,14 @@ function EditarCobroModal({ cobro, sociedad, cuentasSoc, onClose, onSaved }) {
                 letterSpacing:".07em", display:"block", marginBottom:4 }}>Fecha</label>
               <input type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)}
                 style={{ width:"100%", padding:"8px 10px", fontSize:13, borderRadius:8, boxSizing:"border-box",
-                  border:`1px solid ${T.cardBorder}`, background:"#f9fafb", color:T.text, fontFamily:"inherit" }} />
+                  border:`1px solid ${T.cardBorder}`, background:"#eceff3", color:T.text, fontFamily:"inherit" }} />
             </div>
             <div>
               <label style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase",
                 letterSpacing:".07em", display:"block", marginBottom:4 }}>Monto</label>
               <input type="number" value={form.monto} onChange={e => set("monto", e.target.value)}
                 style={{ width:"100%", padding:"8px 10px", fontSize:13, borderRadius:8, boxSizing:"border-box",
-                  border:`1px solid ${T.cardBorder}`, background:"#f9fafb", color:T.text, fontFamily:"inherit" }} />
+                  border:`1px solid ${T.cardBorder}`, background:"#eceff3", color:T.text, fontFamily:"inherit" }} />
             </div>
           </div>
           <div>
@@ -202,7 +205,7 @@ function EditarCobroModal({ cobro, sociedad, cuentasSoc, onClose, onSaved }) {
               letterSpacing:".07em", display:"block", marginBottom:4 }}>Medio de cobro</label>
             <select value={form.cuenta_bancaria} onChange={e => set("cuenta_bancaria", e.target.value)}
               style={{ width:"100%", padding:"8px 10px", fontSize:13, borderRadius:8,
-                border:`1px solid ${T.cardBorder}`, background:"#f9fafb", color:T.text, fontFamily:"inherit" }}>
+                border:`1px solid ${T.cardBorder}`, background:"#eceff3", color:T.text, fontFamily:"inherit" }}>
               <option value="">— Seleccionar —</option>
               {cuentasOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
@@ -212,7 +215,7 @@ function EditarCobroModal({ cobro, sociedad, cuentasSoc, onClose, onSaved }) {
               letterSpacing:".07em", display:"block", marginBottom:4 }}>Nota</label>
             <textarea value={form.nota} onChange={e => set("nota", e.target.value)} rows={3}
               style={{ width:"100%", padding:"8px 10px", fontSize:13, borderRadius:8, boxSizing:"border-box",
-                border:`1px solid ${T.cardBorder}`, background:"#f9fafb", color:T.text,
+                border:`1px solid ${T.cardBorder}`, background:"#eceff3", color:T.text,
                 fontFamily:"inherit", resize:"vertical" }} />
           </div>
         </div>
@@ -685,6 +688,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
   const [filtroEstado, setFiltroEstado] = useState("todos");
   const filtroFecha = useFiltroFecha();
   const [ingresos, setIngresos]         = useState([]);
+  const [anticipos, setAnticipos]       = useState([]);   // anticipos de clientes con saldo (cobrar contra anticipo)
   const [loading, setLoading]           = useState(true);
   const [error, setError]               = useState(null);
   const [showCobro, setShowCobro]               = useState(null);
@@ -721,6 +725,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
                  pagosVinculados: docCobros, estado: calcEstadoIngreso(saldo, doc.total, doc.vto) };
       });
       setIngresos(enriched);
+      setAnticipos(agruparAnticipos(pagos).filter(a => a.saldo > 0.01));
     } catch (e) {
       setError(e.message);
     } finally {
@@ -790,18 +795,32 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
     const ingreso = ingresos.find(i => i.id === data.ingresoId);
     const ccHeredado = ingreso?.lineas?.find(l => l.cc)?.cc ?? "";
     try {
-      await appendCobro({
-        documento_id:    data.ingresoId,
-        sociedad,
-        fecha:           data.fecha,
-        monto:           Number(data.monto),
-        moneda:          ingreso?.moneda ?? "ARS",
-        cuenta_bancaria: data.medioCobro,
-        cuenta:          ingreso?.cuenta ?? "",
-        referencia:      data.referencia ?? "",
-        nota:            data.nota ?? "",
-        centro_costo:    ccHeredado,
-      });
+      if (String(data.medioCobro).startsWith("ant:")) {
+        // Cobrar CONTRA un anticipo: no toca caja, cierra la CxC y baja el saldo del anticipo.
+        await cobrarContraAnticipo({
+          factura_id:   data.ingresoId,
+          anticipo_id:  String(data.medioCobro).slice(4),
+          sociedad,
+          fecha:        data.fecha,
+          monto:        Number(data.monto),
+          moneda:       ingreso?.moneda ?? "ARS",
+          cliente_id:   ingreso?.clienteId ?? "",
+          cliente_nombre: ingreso?.cliente ?? "",
+        });
+      } else {
+        await appendCobro({
+          documento_id:    data.ingresoId,
+          sociedad,
+          fecha:           data.fecha,
+          monto:           Number(data.monto),
+          moneda:          ingreso?.moneda ?? "ARS",
+          cuenta_bancaria: data.medioCobro,
+          cuenta:          ingreso?.cuenta ?? "",
+          referencia:      data.referencia ?? "",
+          nota:            data.nota ?? "",
+          centro_costo:    ccHeredado,
+        });
+      }
       // Recargar con pagos para recalcular estado
       await cargarIngresos();
     } catch (e) {
@@ -849,7 +868,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
           onEditar={i => { setShowDetalle(null); setShowEditar(i); }}
           onEditarCobro={p => setEditingCobro(p)}
         />
-        {showCobro    && <RegistrarCobroModal ingreso={showCobro} saldoPendiente={showCobro.saldoPendiente ?? showCobro.importe} cuentas={cuentasSoc} onClose={() => setShowCobro(null)} onSave={handleCobro} />}
+        {showCobro    && <RegistrarCobroModal ingreso={showCobro} saldoPendiente={showCobro.saldoPendiente ?? showCobro.importe} cuentas={cuentasSoc} anticipos={anticipos.filter(a => String(a.cliente_id) === String(showCobro.clienteId))} onClose={() => setShowCobro(null)} onSave={handleCobro} />}
         {editingCobro && <EditarCobroModal    cobro={editingCobro} sociedad={sociedad} cuentasSoc={cuentasSoc} onClose={() => setEditingCobro(null)} onSaved={() => { setEditingCobro(null); cargarIngresos(); }} />}
       </>
     );
@@ -915,7 +934,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
         display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
         <input value={busqueda} onChange={e => setBusqueda(e.target.value)}
           placeholder="Buscar cliente, cuenta, CC..."
-          style={{ flex:1, minWidth:200, background:"#f9fafb", border:`1px solid ${T.cardBorder}`,
+          style={{ flex:1, minWidth:200, background:"#eceff3", border:`1px solid ${T.cardBorder}`,
             borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text, outline:"none", fontFamily:T.font }} />
         <FiltroFecha {...filtroFecha} />
         {["todos","cobrado","a_cobrar","vencido"].map(e => (
@@ -1004,7 +1023,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
       </div>
 
       {showEditar  && <NuevoIngresoModal   sociedad={sociedad} clientes={clientes} cuentas={cuentas} centrosCosto={centrosCosto} initialData={showEditar} onClose={() => setShowEditar(null)} onSave={handleSave} />}
-      {showCobro   && <RegistrarCobroModal ingreso={showCobro} saldoPendiente={showCobro.saldoPendiente ?? showCobro.importe} cuentas={cuentasSoc} onClose={() => setShowCobro(null)} onSave={handleCobro} />}
+      {showCobro   && <RegistrarCobroModal ingreso={showCobro} saldoPendiente={showCobro.saldoPendiente ?? showCobro.importe} cuentas={cuentasSoc} anticipos={anticipos.filter(a => String(a.cliente_id) === String(showCobro.clienteId))} onClose={() => setShowCobro(null)} onSave={handleCobro} />}
       {editingCobro && <EditarCobroModal  cobro={editingCobro} sociedad={sociedad} cuentasSoc={cuentasSoc} onClose={() => setEditingCobro(null)} onSaved={() => { setEditingCobro(null); cargarIngresos(); }} />}
       {showCtaCte  && <CtaCteModal         cliente={showCtaCte.cliente} documentos={showCtaCte.docs} onClose={() => setShowCtaCte(null)} />}
     </div>
