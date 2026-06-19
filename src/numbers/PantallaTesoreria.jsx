@@ -784,7 +784,6 @@ function TabSaldos({ cuentas, aCobrar, aPagar, filtroMoneda, onCuentaClick, onIt
   const bancos      = filtrar(cuentas.filter(c => c.tipo === "banco"));
   const cajas       = filtrar(cuentas.filter(c => c.tipo === "caja"));
   const inversiones = filtrar(cuentas.filter(c => c.tipo === "inversion"));
-  const tarjetas    = filtrar(cuentas.filter(c => c.tipo === "tarjeta"));
 
   const aCobrarFilt = filtroMoneda === "ALL" ? aCobrar : aCobrar.filter(i => i.moneda === filtroMoneda);
   const aPagarFilt  = filtroMoneda === "ALL" ? aPagar  : aPagar.filter(i => i.moneda === filtroMoneda);
@@ -803,7 +802,6 @@ function TabSaldos({ cuentas, aCobrar, aPagar, filtroMoneda, onCuentaClick, onIt
         <GrupoBlock icon="🏦" label="Bancos" cuentas={bancos} onCuentaClick={onCuentaClick} />
       </div>
       <GrupoBlock icon="📈" label="Inversiones" cuentas={inversiones} onCuentaClick={onCuentaClick} />
-      {tarjetas.length > 0 && <GrupoBlock icon="💳" label="Tarjetas (deuda)" cuentas={tarjetas} onCuentaClick={onCuentaClick} />}
     </div>
   );
 }
@@ -1209,7 +1207,13 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
     return items;
   }, [movimientos, sociedad]);
 
-  // Pasivo combinado: cuentas a pagar (comprobantes) + sueldos pendientes + financiaciones.
+  // Deuda de tarjetas (saldo negativo de las cuentas-tarjeta) → como líneas del Pasivo.
+  const tarjetasPasivo = useMemo(() =>
+    cuentas.filter(c => c.tipo === "tarjeta" && (Number(c.saldo) || 0) < 0)
+      .map(c => ({ label: c.nombre, moneda: c.moneda, saldo: -(Number(c.saldo) || 0), docs: [], headerColor: "#dc2626" })),
+    [cuentas]);
+
+  // Pasivo combinado: cuentas a pagar (comprobantes) + sueldos pendientes + financiaciones + tarjetas.
   // Sueldos se funde en su item si ya existe; financiaciones van como líneas propias.
   const aPagarFull = useMemo(() => {
     const out = aPagar.map(it => ({ ...it }));
@@ -1222,9 +1226,9 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
         out.push({ label: "Sueldos", moneda: "ARS", saldo: sueldosPasivo.total, docs: sueldosPasivo.docs, headerColor: "#dc2626" });
       }
     }
-    out.push(...finPasivo, ...anticiposPasivo, ...franqCC.pasivo);
+    out.push(...finPasivo, ...anticiposPasivo, ...franqCC.pasivo, ...tarjetasPasivo);
     return out.sort((a, b) => b.saldo - a.saldo);
-  }, [aPagar, sueldosPasivo, finPasivo, anticiposPasivo, franqCC]);
+  }, [aPagar, sueldosPasivo, finPasivo, anticiposPasivo, franqCC, tarjetasPasivo]);
 
   // ── Guardar movimiento entre cuentas ──────────────────────────────────────
   const handleGuardarMovimiento = async (form) => {
