@@ -829,7 +829,8 @@ function TabCashFlow({ rawMovs, year, moneda, tarjetaIds }) {
     for (const m of movsOp) {
       const mes   = parseInt(m.fecha.slice(5, 7), 10) - 1;
       const monto = Number(m.monto) || 0;
-      const cta   = (m.cuenta_contable ?? "").trim() || "Sin clasificar";
+      const cta   = (m.cuenta_contable ?? "").trim()
+        || (m.tipo === "PAGO_TARJETA" || m.origen === "pago_tarjeta" ? "Pago de tarjeta" : "Sin clasificar");
       if (monto > 0) {
         if (!e[cta]) e[cta] = new Array(12).fill(0);
         e[cta][mes] += monto;
