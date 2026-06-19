@@ -72,6 +72,13 @@ export default function PantallaResumenTarjeta({ sociedad }) {
     (c.tipo ?? "").toLowerCase() === "tarjeta" &&
     (c.sociedad ?? "").toLowerCase() === (sociedad ?? "").toLowerCase()), [cuentasBanc, sociedad]);
   const tarjetaIds = useMemo(() => new Set(tarjetas.map(c => c.id)), [tarjetas]);
+  // Una entrada por tarjeta (no por moneda): "Tarjeta Galicia Visa" en vez de ARS + USD por separado.
+  // El ruteo por moneda lo hace cardAccountFor al guardar.
+  const tarjetaFamilias = useMemo(() => {
+    const seen = new Map();
+    for (const c of tarjetas) { const b = baseTarjeta(c.nombre) || c.nombre; if (!seen.has(b)) seen.set(b, { id: c.id, nombre: b }); }
+    return [...seen.values()];
+  }, [tarjetas]);
 
   // Memoria + reconocimiento (cuando cambia la sociedad o las tarjetas):
   //  - histLineas: consumos directos previos en cuentas-tarjeta → autocompletar cuenta/centro.
@@ -232,9 +239,10 @@ export default function PantallaResumenTarjeta({ sociedad }) {
       <SectionCard title="Datos del resumen" cols="1.5fr 1fr 1fr 1fr">
         <Field label="Tarjeta *">
           <select value={h.tarjetaId} onChange={e => pickTarjeta(e.target.value)} style={inputStyle}>
-            <option value="">{tarjetas.length ? "— elegir tarjeta —" : "(sin tarjetas: alta una cuenta tipo \"tarjeta\" en Maestros)"}</option>
-            {tarjetas.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+            <option value="">{tarjetaFamilias.length ? "— elegir tarjeta —" : "(sin tarjetas: alta una cuenta tipo \"tarjeta\" en Maestros)"}</option>
+            {tarjetaFamilias.map(f => <option key={f.id} value={f.id}>{f.nombre}</option>)}
           </select>
+          <div style={{ fontSize: 10.5, color: T.muted, marginTop: 3 }}>Pesos y dólares se rutean a la cuenta de cada moneda automáticamente.</div>
         </Field>
         <Field label="Período"><input value={h.periodo} onChange={e => set("periodo", e.target.value)} placeholder="2026-06" style={inputStyle} /></Field>
         <Field label="Fecha de cierre *"><input type="date" value={h.fecha} onChange={e => set("fecha", e.target.value)} style={inputStyle} /></Field>
