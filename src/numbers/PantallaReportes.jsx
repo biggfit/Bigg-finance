@@ -674,14 +674,18 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCer
       (c.sociedad ?? "").toLowerCase() === sociedad.toLowerCase()),
     [cuentasBancarias, sociedad]);
 
-  const cajas  = useMemo(() => cuentasSoc.filter(c => (c.tipo ?? "").toLowerCase() === "caja"),  [cuentasSoc]);
-  const bancos = useMemo(() => cuentasSoc.filter(c => (c.tipo ?? "").toLowerCase() !== "caja"), [cuentasSoc]);
+  const cajas    = useMemo(() => cuentasSoc.filter(c => (c.tipo ?? "").toLowerCase() === "caja"),  [cuentasSoc]);
+  const tarjetas = useMemo(() => cuentasSoc.filter(c => (c.tipo ?? "").toLowerCase() === "tarjeta"), [cuentasSoc]);
+  const bancos   = useMemo(() => cuentasSoc.filter(c => { const t = (c.tipo ?? "").toLowerCase(); return t !== "caja" && t !== "tarjeta"; }), [cuentasSoc]);
 
   const getBal = (id) => saldos[id] ?? { ...ZERO };
   const sumGrp = (grp) => grp.reduce((t, c) => addVals(t, getBal(c.id)), { ...ZERO });
 
   const cajaTot  = useMemo(() => sumGrp(cajas),  [cajas, saldos]);
   const bancoTot = useMemo(() => sumGrp(bancos), [bancos, saldos]);
+  // Deuda de tarjetas: saldo de las cuentas-tarjeta (negativo) → al pasivo como magnitud positiva.
+  const tarjetaDeuda = useMemo(() => subVals({ ...ZERO }, sumGrp(tarjetas)), [tarjetas, saldos]);
+  const hayTarjeta = (tarjetaDeuda.ARS + tarjetaDeuda.USD + tarjetaDeuda.EUR) !== 0;
 
   const cxcRows = useMemo(() =>
     rawIn.filter(r => (r.subtipo ?? "").toUpperCase() === "INGRESO" && r.estado !== "cobrado"),
@@ -731,7 +735,7 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCer
   const hayAnt = (antPasivo.ARS + antPasivo.USD + antPasivo.EUR) > 0;
 
   const activoTot  = addVals(addVals(cajaTot, bancoTot), cxcTot);
-  const pasivoTot  = addVals(addVals(addVals(cxpTot, cxpSueldosTot), finPasivoTot), antPasivo);
+  const pasivoTot  = addVals(addVals(addVals(addVals(cxpTot, cxpSueldosTot), finPasivoTot), antPasivo), tarjetaDeuda);
   const pnTot      = subVals(activoTot, pasivoTot);
 
   return (
@@ -788,6 +792,12 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCer
               <BDRow label="Saldo de anticipos sin facturar" vals={antPasivo} indent />
               <BSubRow label="Total Anticipos" vals={antPasivo} color={T.red} />
             </>}
+
+            {hayTarjeta && <>
+              <BGrpRow label="Tarjetas de crédito" expanded onToggle={() => {}} />
+              <BDRow label="Saldo a pagar de tarjetas" vals={tarjetaDeuda} indent />
+              <BSubRow label="Total Tarjetas" vals={tarjetaDeuda} color={T.red} />
+            </>}
           </>}
           <BResRow label="TOTAL PASIVO" vals={pasivoTot} />
 
@@ -799,16 +809,17 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCer
 }
 
 // ─── Tab Cash Flow ────────────────────────────────────────────────────────────
-function TabCashFlow({ rawMovs, year, moneda }) {
+function TabCashFlow({ rawMovs, year, moneda, tarjetaIds }) {
 
   const movsFilt = useMemo(() => rawMovs.filter(m => {
     if (!m.fecha) return false;
     if (esIgnorado(m)) return false;                 // líneas descartadas no entran al flujo
     if (!m.cuenta_bancaria) return false;            // sin banco = no es caja (retención, consumo de anticipo, apertura)
+    if (tarjetaIds?.has(m.cuenta_bancaria)) return false;  // las cuentas-tarjeta no son caja: la salida real es el pago de la tarjeta
     if (m.fecha.slice(0, 4) !== String(year)) return false;
     if ((m.moneda ?? "ARS") !== moneda) return false;
     return true;
-  }), [rawMovs, year, moneda]);
+  }), [rawMovs, year, moneda, tarjetaIds]);
 
   const movsOp    = useMemo(() => movsFilt.filter(m => m.tipo !== "TRANSFERENCIA"), [movsFilt]);
   const movsTrans = useMemo(() => movsFilt.filter(m => m.tipo === "TRANSFERENCIA"), [movsFilt]);
@@ -1203,6 +1214,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   }, [liqsCerradas, sociedad]);
 
   const gastoMovRows = useMemo(() => movimientoToPnLRows(rawMovs, sociedad), [rawMovs, sociedad]);
+  // Cuentas-tarjeta (crédito): sus movimientos no son caja → se excluyen del Cash Flow (la salida real es el pago de la tarjeta).
+  const tarjetaIds = useMemo(() => new Set(cuentasBancarias.filter(c => (c.tipo ?? "").toLowerCase() === "tarjeta").map(c => c.id)), [cuentasBancarias]);
 
   // Financiaciones: capital del impuesto (plan AFIP) + interés/IVA/impuestos por cuota (mes a mes).
   const finRows = useMemo(() => financiacionToPnLRows(rawFin, sociedad), [rawFin, sociedad]);
@@ -1451,7 +1464,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
       {/* ── Cash Flow ── */}
       {activeTab === "cf" && (
-        <TabCashFlow rawMovs={rawMovs} year={year} moneda={monedaCF} />
+        <TabCashFlow rawMovs={rawMovs} year={year} moneda={monedaCF} tarjetaIds={tarjetaIds} />
       )}
 
       {activeTab === "balance" && (
