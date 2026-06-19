@@ -860,8 +860,8 @@ function RowMenu({ onEditar, onEliminar }) {
           background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:8,
           boxShadow:"0 8px 24px rgba(0,0,0,.15)", minWidth:150, overflow:"hidden",
         }}>
-          {item("Editar",    onEditar ?? (() => {}))}
-          {<div style={{ height:1, background:T.cardBorder, margin:"3px 0" }} />}
+          {onEditar && item("Editar", onEditar)}
+          {onEditar && <div style={{ height:1, background:T.cardBorder, margin:"3px 0" }} />}
           {item("Eliminar",  onEliminar ?? (() => {}), T.red)}
         </div>
       )}
