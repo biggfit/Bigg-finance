@@ -6,7 +6,7 @@ import {
   ignorarMovimiento, restaurarMovimiento, fetchMovimientosIgnorados, fetchPagosSueldos,
   fetchEgresos, fetchPagosCobros, calcSaldoPendiente, imputarPagoFC,
   appendBancoRegla, fetchIngresos, imputarCobroIngreso,
-  fetchFinanciaciones, imputarCuota, pagarTarjeta,
+  fetchFinanciaciones, imputarCuota, pagarTarjeta, esCuentaCredito,
 } from "../lib/numbersApi";
 import { BancoReglaModal } from "./PantallaMaestros";
 import { fetchAll } from "../lib/sheetsApi";
@@ -468,7 +468,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
   // 💳 El débito es el pago de la tarjeta: la fila del extracto es el lado real (caja baja) y se crea
   // el lado tarjeta (+) que reduce su deuda. No es transferencia. Requiere una cuenta-tarjeta de esa moneda.
   const pagarTarjetaDesdeExtracto = async (mov) => {
-    const card = cuentas.find(c => (c.tipo || "").toLowerCase() === "tarjeta" && c.moneda === (mov.moneda || "ARS"));
+    const card = cuentas.find(c => esCuentaCredito(c) && c.moneda === (mov.moneda || "ARS"));
     if (!card) { setMsg(`No hay una cuenta-tarjeta en ${mov.moneda || "ARS"} para esta sociedad. Creala en Maestros.`); return; }
     try {
       await pagarTarjeta({
@@ -947,7 +947,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                           {neg && !fr.es && !modoTransfer && !modoFC && !modoCuota && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFC: true, modoFranquicia: false, modoTransfer: false, noFranquicia: true }); setMenuFor(null); }}>🧾 Imputar a una factura…</button>
                           )}
-                          {neg && !fr.es && !modoTransfer && !modoFC && !modoCuota && !modoCobro && cuentas.some(c => (c.tipo || "").toLowerCase() === "tarjeta" && c.moneda === (m.moneda || "ARS")) && (
+                          {neg && !fr.es && !modoTransfer && !modoFC && !modoCuota && !modoCobro && cuentas.some(c => esCuentaCredito(c) && c.moneda === (m.moneda || "ARS")) && (
                             <button style={MENU_ITEM} onClick={() => { setMenuFor(null); pagarTarjetaDesdeExtracto(m); }}>💳 Es el pago de la tarjeta</button>
                           )}
                           {modoFC && (

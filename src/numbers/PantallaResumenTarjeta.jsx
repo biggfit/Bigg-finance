@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, Fragment } from "react";
 import { T, PageHeader, Btn, fmtMoney } from "./theme";
 import {
   fetchCuentas, fetchCentrosCosto, fetchCuentasBancarias,
-  appendGastoDirecto, fetchGastos, fetchMovTesoreria,
+  appendGastoDirecto, fetchGastos, fetchMovTesoreria, esCuentaCredito,
 } from "../lib/numbersApi";
 import { fetchLegajos } from "../lib/sueldosApi";
 import { parseTarjetaPdf } from "./parsers/tarjetaPdf";
@@ -45,8 +45,8 @@ const nuevaLinea = (over = {}) => ({ comercio: "", titular: "", cuenta: "", cuen
 // Nombre base de una tarjeta (sin el token de moneda) para emparejar las cuentas ARS/USD de una misma tarjeta.
 const baseTarjeta = s => String(s || "").replace(/\b(ARS|USD|EUR)\b|\$|u\$d|us\$/gi, "").replace(/\s+/g, " ").trim();
 
-// Resumen de tarjeta → un egreso por moneda. Cada línea: comercio + titular + cuenta + centro + moneda + monto.
-// Reusa la maquinaria de egresos (CxP / conciliación / P&L). La tarjeta es un proveedor "^Tarjeta".
+// Resumen de tarjeta. Al subir el PDF: reconoce las FCs ya pagadas con la tarjeta (no las recarga) y
+// carga los consumos sin factura como gasto directo contra la cuenta-tarjeta (una cuenta tipo "tarjeta") de su moneda.
 export default function PantallaResumenTarjeta({ sociedad }) {
   const [cuentasBanc, setCuentasBanc] = useState([]);   // cuentas bancarias (la tarjeta es una cuenta tipo "tarjeta")
   const [cuentas, setCuentas]         = useState([]);
@@ -69,7 +69,7 @@ export default function PantallaResumenTarjeta({ sociedad }) {
 
   // Tarjetas = cuentas bancarias tipo "tarjeta" de la sociedad.
   const tarjetas = useMemo(() => cuentasBanc.filter(c =>
-    (c.tipo ?? "").toLowerCase() === "tarjeta" &&
+    esCuentaCredito(c) &&
     (c.sociedad ?? "").toLowerCase() === (sociedad ?? "").toLowerCase()), [cuentasBanc, sociedad]);
   const tarjetaIds = useMemo(() => new Set(tarjetas.map(c => c.id)), [tarjetas]);
   // Una entrada por tarjeta (no por moneda): "Tarjeta Galicia Visa" en vez de ARS + USD por separado.
@@ -99,13 +99,13 @@ export default function PantallaResumenTarjeta({ sociedad }) {
 
   // De la memoria (consumos directos previos en la tarjeta): cuenta ← por comercio (=nota); centro ← por comercio.
   const memoria = useMemo(() => {
-    const porComercio = {}, centroPorComercio = {}, porTitular = {};
+    const porComercio = {}, centroPorComercio = {};
     for (const g of histLineas) {
       const com = normCom(g.nota);
       if (com && g.cuenta_contable) porComercio[com] = { cuenta: g.cuenta_contable, cuentaId: cuentaIdDe(g.cuenta_contable) };
       if (com && g.cc)              centroPorComercio[com] = g.cc;
     }
-    return { porComercio, centroPorComercio, porTitular };
+    return { porComercio, centroPorComercio };
   }, [histLineas, cuentas]);
 
   // Centro del legajo del titular (fallback cuando la memoria no encontró nada).

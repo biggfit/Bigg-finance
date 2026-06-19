@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, PageHeader } from "./theme";
-import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo } from "../lib/numbersApi";
+import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, SALARY_BUCKETS, pagoTipoABucket, devengadoPorFormaYSociedad } from "../lib/sueldosApi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
 import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
@@ -675,8 +675,8 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCer
     [cuentasBancarias, sociedad]);
 
   const cajas    = useMemo(() => cuentasSoc.filter(c => (c.tipo ?? "").toLowerCase() === "caja"),  [cuentasSoc]);
-  const tarjetas = useMemo(() => cuentasSoc.filter(c => (c.tipo ?? "").toLowerCase() === "tarjeta"), [cuentasSoc]);
-  const bancos   = useMemo(() => cuentasSoc.filter(c => { const t = (c.tipo ?? "").toLowerCase(); return t !== "caja" && t !== "tarjeta"; }), [cuentasSoc]);
+  const tarjetas = useMemo(() => cuentasSoc.filter(esCuentaCredito), [cuentasSoc]);
+  const bancos   = useMemo(() => cuentasSoc.filter(c => (c.tipo ?? "").toLowerCase() !== "caja" && !esCuentaCredito(c)), [cuentasSoc]);
 
   const getBal = (id) => saldos[id] ?? { ...ZERO };
   const sumGrp = (grp) => grp.reduce((t, c) => addVals(t, getBal(c.id)), { ...ZERO });
@@ -1216,7 +1216,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
   const gastoMovRows = useMemo(() => movimientoToPnLRows(rawMovs, sociedad), [rawMovs, sociedad]);
   // Cuentas-tarjeta (crédito): sus movimientos no son caja → se excluyen del Cash Flow (la salida real es el pago de la tarjeta).
-  const tarjetaIds = useMemo(() => new Set(cuentasBancarias.filter(c => (c.tipo ?? "").toLowerCase() === "tarjeta").map(c => c.id)), [cuentasBancarias]);
+  const tarjetaIds = useMemo(() => new Set(cuentasBancarias.filter(esCuentaCredito).map(c => c.id)), [cuentasBancarias]);
 
   // Financiaciones: capital del impuesto (plan AFIP) + interés/IVA/impuestos por cuota (mes a mes).
   const finRows = useMemo(() => financiacionToPnLRows(rawFin, sociedad), [rawFin, sociedad]);

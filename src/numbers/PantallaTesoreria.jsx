@@ -8,7 +8,7 @@ import {
   fetchMovTesoreria, appendMovTesoreria, deleteMovTesoreria, updateMovTesoreria,
   fetchEgresos, fetchIngresos, fetchPagosCobros, calcSaldoPendiente,
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto,
-  appendGastoDirecto, esIgnorado, fetchFinanciaciones, financiacionPasivoBuckets,
+  appendGastoDirecto, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets,
   agruparAnticipos, anticipoPasivo, pagarTarjeta,
 } from "../lib/numbersApi";
 import {
@@ -143,7 +143,7 @@ function MovimientoModal({ sociedad, cuentasBancarias, onClose, onSave }) {
 function PagarTarjetaModal({ sociedad, cuentas, onClose, onSave }) {
   const _soc = (sociedad ?? "").toLowerCase();
   const cuentasSoc = cuentas.filter(c => (c.sociedad ?? "").toLowerCase() === _soc);
-  const tarjetas   = cuentasSoc.filter(c => (c.tipo ?? "").toLowerCase() === "tarjeta");
+  const tarjetas   = cuentasSoc.filter(esCuentaCredito);
   const [form, setForm] = useState({
     fecha: new Date().toISOString().slice(0, 10), tarjeta: "", cuentaReal: "", monto: "",
   });
@@ -154,7 +154,7 @@ function PagarTarjetaModal({ sociedad, cuentas, onClose, onSave }) {
   const deuda      = tjt ? Math.abs(Number(tjt.saldo) || 0) : 0;
   // Cajas/bancos reales de la MISMA moneda que la tarjeta (no otra tarjeta).
   const realesOpts = cuentasSoc
-    .filter(c => (c.tipo ?? "").toLowerCase() !== "tarjeta" && (!monedaTjt || c.moneda === monedaTjt))
+    .filter(c => !esCuentaCredito(c) && (!monedaTjt || c.moneda === monedaTjt))
     .map(c => ({ value: c.id, label: `${TIPO_CUENTA[c.tipo]?.icon ?? "💳"} ${c.nombre} (${c.moneda})` }));
   const tjtOpts    = tarjetas.map(c => ({ value: c.id, label: `💳 ${c.nombre} (${c.moneda}) · debe ${fmtMoney(Math.abs(Number(c.saldo) || 0), c.moneda)}` }));
 
@@ -750,7 +750,7 @@ function GrupoBlock({ icon, label, cuentas, onCuentaClick }) {
 function ResumenMonedas({ cuentas }) {
   const porMoneda = {};
   for (const c of cuentas) {
-    if (c.tipo === "tarjeta") continue;   // la deuda de tarjeta no es disponible en caja
+    if (esCuentaCredito(c)) continue;   // la deuda de tarjeta no es disponible en caja
     if (!porMoneda[c.moneda]) porMoneda[c.moneda] = 0;
     porMoneda[c.moneda] += Number(c.saldo) || 0;
   }
@@ -1210,7 +1210,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
   // Deuda de tarjetas (saldo negativo de las cuentas-tarjeta) → como líneas del Pasivo.
   // El detalle muestra los movimientos de la tarjeta (consumos +, pagos −) → suman el saldo.
   const tarjetasPasivo = useMemo(() =>
-    cuentas.filter(c => c.tipo === "tarjeta" && (Number(c.saldo) || 0) < 0)
+    cuentas.filter(c => esCuentaCredito(c) && (Number(c.saldo) || 0) < 0)
       .map(c => {
         const movsCard = movimientos.filter(m => m.cuenta_bancaria === c.id && !esIgnorado(m)
           && (!fechaCorte || (m.fecha ?? "") <= fechaCorte));
@@ -1354,7 +1354,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
             }}>
               + Movimiento entre cuentas
             </button>
-            {cuentas.some(c => c.tipo === "tarjeta") && (
+            {cuentas.some(esCuentaCredito) && (
               <button type="button" onClick={() => setShowPagarTjt(true)} style={{
                 ...tesoreriaActionBtn.base, background:"#dc2626", color:"#fff", border:"none",
               }}>

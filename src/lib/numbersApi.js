@@ -628,6 +628,9 @@ export async function appendGastoDirecto({ sociedad, fecha, cuenta_contable, cue
 // el doble conteo, ej. el débito del pago de haberes que ya está en los movs origen=sueldos).
 export const esIgnorado = m => String(m?.documento_id || "").startsWith("IGN-");
 
+// Cuenta de crédito (tarjeta): saldo negativo = deuda. No es caja disponible; va al pasivo y se excluye del Cash Flow.
+export const esCuentaCredito = c => (c?.tipo ?? "").toLowerCase() === "tarjeta";
+
 // Ingesta: crea movimientos pendientes con dedupe (no duplica al re-subir).
 const _saldoDe = m => { const x = String(m.referencia || "").match(/saldo=([^;]*)/); return x ? x[1] : ""; };
 
