@@ -1208,10 +1208,19 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
   }, [movimientos, sociedad]);
 
   // Deuda de tarjetas (saldo negativo de las cuentas-tarjeta) → como líneas del Pasivo.
+  // El detalle muestra los movimientos de la tarjeta (consumos +, pagos −) → suman el saldo.
   const tarjetasPasivo = useMemo(() =>
     cuentas.filter(c => c.tipo === "tarjeta" && (Number(c.saldo) || 0) < 0)
-      .map(c => ({ label: c.nombre, moneda: c.moneda, saldo: -(Number(c.saldo) || 0), docs: [], headerColor: "#dc2626" })),
-    [cuentas]);
+      .map(c => {
+        const movsCard = movimientos.filter(m => m.cuenta_bancaria === c.id && !esIgnorado(m)
+          && (!fechaCorte || (m.fecha ?? "") <= fechaCorte));
+        const docs = movsCard.map(m => ({
+          contraparte: m.concepto || (Number(m.monto) < 0 ? "Consumo" : "Pago"),
+          vto: m.fecha, saldo: -(Number(m.monto) || 0), moneda: c.moneda,
+        }));
+        return { label: c.nombre, moneda: c.moneda, saldo: -(Number(c.saldo) || 0), docs, headerColor: "#dc2626" };
+      }),
+    [cuentas, movimientos, fechaCorte]);
 
   // Pasivo combinado: cuentas a pagar (comprobantes) + sueldos pendientes + financiaciones + tarjetas.
   // Sueldos se funde en su item si ya existe; financiaciones van como líneas propias.
