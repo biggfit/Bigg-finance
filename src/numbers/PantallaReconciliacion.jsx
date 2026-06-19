@@ -6,7 +6,7 @@ import {
   ignorarMovimiento, restaurarMovimiento, fetchMovimientosIgnorados, fetchPagosSueldos,
   fetchEgresos, fetchPagosCobros, calcSaldoPendiente, imputarPagoFC,
   appendBancoRegla, fetchIngresos, imputarCobroIngreso,
-  fetchFinanciaciones, imputarCuota,
+  fetchFinanciaciones, imputarCuota, pagarTarjeta,
 } from "../lib/numbersApi";
 import { BancoReglaModal } from "./PantallaMaestros";
 import { fetchAll } from "../lib/sheetsApi";
@@ -463,6 +463,21 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
   const aceptar = async (mov) => {
     if (!puedeAceptarMov(mov)) { setMsg("Completá la imputación antes de aceptar."); return; }
     try { await doAceptar(mov); } catch (e) { setMsg("Error al aceptar: " + e.message); }
+  };
+
+  // 💳 El débito es el pago de la tarjeta: la fila del extracto es el lado real (caja baja) y se crea
+  // el lado tarjeta (+) que reduce su deuda. No es transferencia. Requiere una cuenta-tarjeta de esa moneda.
+  const pagarTarjetaDesdeExtracto = async (mov) => {
+    const card = cuentas.find(c => (c.tipo || "").toLowerCase() === "tarjeta" && c.moneda === (mov.moneda || "ARS"));
+    if (!card) { setMsg(`No hay una cuenta-tarjeta en ${mov.moneda || "ARS"} para esta sociedad. Creala en Maestros.`); return; }
+    try {
+      await pagarTarjeta({
+        sociedad, fecha: mov.fecha, monto: Math.abs(Number(mov.monto) || 0), moneda: mov.moneda || "ARS",
+        cuenta_real: mov.cuenta_bancaria, tarjeta_id: card.id, mov_existente: mov,
+      });
+      setPendientes(prev => prev.filter(m => m.id !== mov.id));
+      setMsg(`✓ Registrado como pago de ${card.nombre}.`);
+    } catch (e) { setMsg("Error al registrar pago de tarjeta: " + e.message); }
   };
 
   // Aceptar masivo: todas las filas listas de la cuenta activa (resiliente).
@@ -931,6 +946,9 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                           )}
                           {neg && !fr.es && !modoTransfer && !modoFC && !modoCuota && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFC: true, modoFranquicia: false, modoTransfer: false, noFranquicia: true }); setMenuFor(null); }}>🧾 Imputar a una factura…</button>
+                          )}
+                          {neg && !fr.es && !modoTransfer && !modoFC && !modoCuota && !modoCobro && cuentas.some(c => (c.tipo || "").toLowerCase() === "tarjeta" && c.moneda === (m.moneda || "ARS")) && (
+                            <button style={MENU_ITEM} onClick={() => { setMenuFor(null); pagarTarjetaDesdeExtracto(m); }}>💳 Es el pago de la tarjeta</button>
                           )}
                           {modoFC && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFC: false, fc_id: undefined, noFranquicia: false }); setMenuFor(null); }}>↩ Volver a normal (no es pago de factura)</button>
