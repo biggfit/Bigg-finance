@@ -349,9 +349,14 @@ function fetchPdfBuffer(pdfUrl) {
  */
 function parseInvoiceLabel(label) {
   if (!label) return null;
-  const m = String(label).match(/^(FA|FB|NCA|NCB|NDA|NDB)\s*0*(\d+)-0*(\d+)$/);
-  if (!m) return null;
-  return { tipo: m[1], prefijo: m[2], numero: parseInt(m[3], 10) };
+  const s = String(label).trim();
+  // Formato completo: "FA 0004-00000089", "NCA 0100-00000001", etc.
+  let m = s.match(/^(FA|FB|NCA|NCB|NDA|NDB)\s*0*(\d+)-0*(\d+)$/i);
+  if (m) return { tipo: m[1].toUpperCase(), prefijo: m[2], numero: parseInt(m[3], 10) };
+  // Formato bare: "0004-00000089" o "00004-0000125" (sin prefijo — asume FA)
+  m = s.match(/^0*(\d+)-0*(\d+)$/);
+  if (m) return { tipo: 'FA', prefijo: m[1], numero: parseInt(m[2], 10) };
+  return null;
 }
 
 function escXml(str) {
@@ -601,8 +606,11 @@ export default async function handler(req, res) {
       }));
     }
 
-    // Esperar a que AFIP asigne el número secuencial real (necesario para CbteAsoc de futuras NC)
-    const afip = await pollAfipNumero(parsed.idComprobante, 5, 2000);
+    // Intentar obtener el número AFIP con timeout corto (3 intentos × 2s = 6s máx).
+    // Si no llega a tiempo, devolvemos ok=true sin afipNumero — el cliente queda en
+    // "NÚMERO AFIP PENDIENTE" y puede consultarlo después con la acción getNumero.
+    // Esto evita el HTTP 504 de Vercel por requests que duran >30s.
+    const afip = await pollAfipNumero(parsed.idComprobante, 3, 2000);
 
     return res.end(JSON.stringify({
       ok:             true,

@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import React from "react";
 import { COMP_TYPES, CURRENCIES } from "../lib/helpers";
 
@@ -291,9 +291,26 @@ export default function MaestrosModal({ franchises, franchisor, comps, tiposCamb
   const [sedeFilter,  setSedeFilter]  = useState("activas"); // "activas" | "inactivas" | "todas"
   const [tcBufs,         setTcBufs]         = useState({});
   const [tcYear,         setTcYear]         = useState(new Date().getFullYear());
-  const [tcSelectedMonth, setTcSelectedMonth] = useState(null);
+  const [tcSelectedMonth, setTcSelectedMonth] = useState(() => {
+    // Auto-selecciona el mes actual
+    return new Date().getMonth();
+  });
   const [tcFetching,     setTcFetching]     = useState(false);
   const toastTimer = useRef(null);
+
+  // Cuando llegan tiposCambio desde Sheets, saltar al último mes guardado del año actual
+  useEffect(() => {
+    const year = tcYear;
+    const savedMonths = Object.keys(tiposCambio)
+      .filter(ym => ym.startsWith(String(year)) && tiposCambio[ym]?.arsUSD > 0)
+      .map(ym => parseInt(ym.split("-")[1], 10) - 1) // 0-indexed
+      .sort((a, b) => b - a); // descendente → el más reciente primero
+    if (savedMonths.length > 0) {
+      setTcYear(year);
+      setTcSelectedMonth(savedMonths[0]);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tiposCambio]);
 
   const TC_MESES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
   const TC_FIELDS = [
@@ -762,10 +779,10 @@ export default function MaestrosModal({ franchises, franchisor, comps, tiposCamb
             {topSection === "tc" && (() => {
               const years = [2026, 2027];
 
-              const selYm = `${tcYear}-${String(tcSelectedMonth+1).padStart(2,"0")}`;
-              const buf   = getTcBuf(selYm);
-              const dirty = tcBufs[selYm] !== undefined;
-              const selLabel = `${TC_MESES[tcSelectedMonth]} ${tcYear}`;
+              const selYm    = tcSelectedMonth !== null ? `${tcYear}-${String(tcSelectedMonth+1).padStart(2,"0")}` : null;
+              const buf      = selYm ? getTcBuf(selYm) : {};
+              const dirty    = selYm ? tcBufs[selYm] !== undefined : false;
+              const selLabel = tcSelectedMonth !== null ? `${TC_MESES[tcSelectedMonth]} ${tcYear}` : "";
 
               return (
                 <div>
@@ -1147,6 +1164,17 @@ export default function MaestrosModal({ franchises, franchisor, comps, tiposCamb
                         letterSpacing:".06em",
                       }} title={buf.activa ? "Click para inactivar" : "Click para activar"}>
                         {buf.activa ? "● ACTIVA" : "○ INACTIVA"}
+                      </button>
+                    )}
+                    {!newMode && (
+                      <button onClick={() => setBuf(b => ({ ...b, paysFee: !b.paysFee }))}
+                        style={{
+                          padding:"2px 8px", borderRadius:20, fontSize:9, fontWeight:800, cursor:"pointer", border:"none",
+                          color:       buf.paysFee !== false ? "var(--cyan)" : "var(--muted)",
+                          background:  buf.paysFee !== false ? "rgba(34,211,238,.10)" : "rgba(255,255,255,.05)",
+                          letterSpacing:".06em",
+                        }} title={buf.paysFee !== false ? "Click para marcar como sede propia (sin fee)" : "Click para que pague fee"}>
+                        {buf.paysFee !== false ? "$ PAGA FEE" : "○ SIN FEE"}
                       </button>
                     )}
                   </div>

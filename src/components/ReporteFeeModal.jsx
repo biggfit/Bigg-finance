@@ -10,6 +10,11 @@ const fmtMoney = (n, cur = "ARS") => {
   const sym = cur === "USD" ? "U$D " : cur === "EUR" ? "€ " : "$ ";
   return sym + abs.toLocaleString("es-AR", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 };
+// Solo el número, sin símbolo de moneda (para filas de tabla)
+const fmtNum = (n) => {
+  if (!n && n !== 0) return "—";
+  return Math.abs(n).toLocaleString("es-AR", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+};
 
 function prevMonth(month, year) {
   return month === 0 ? { month: 11, year: year - 1 } : { month: month - 1, year };
@@ -77,6 +82,7 @@ function buildRows(franchises, comps, year, month, tiposCambio = {}) {
   const rows = [];
   for (const fr of franchises) {
     if (fr.activa === false) continue;
+    if (fr.paysFee === false) continue; // sedes propias — no pagan fee
     const frComps  = comps[fr.id] ?? [];
     const feeType  = makeType("FACTURA", "FEE");
     const feeComps = frComps.filter(c => c.type === feeType && c.month === month && c.year === year);
@@ -342,113 +348,125 @@ function SortFilterTh({ col, label, options, selected, onChange, sortCol, sortDi
 function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef }) {
   const mesLabel  = MONTHS[month];
   const prevLabel = MONTHS[prev.month];
-  const fmtU = n => n ? "U$D " + Math.round(n).toLocaleString("es-AR") : "—";
-  const fmtP = p => p == null ? "—" : (p >= 0 ? "+" : "") + p.toFixed(1) + "%";
+  const fmtU = n => n ? 'U$D ' + Math.round(n).toLocaleString('es-AR') : '—';
+  const fmtN = n => n ? Math.round(n).toLocaleString('es-AR') : '—'; // sin símbolo, para filas de tabla
+  const fmtP = p => p == null ? '—' : (p >= 0 ? '+' : '') + p.toFixed(1) + '%';
 
-  const EU_PAISES = ["España", "Portugal"];
+  const EU_PAISES = ['España', 'Portugal'];
+  const rowsARG   = rows.filter(r => r.pais === 'Argentina');
+  const rowsLATAM = rows.filter(r => r.pais !== 'Argentina' && !EU_PAISES.includes(r.pais));
+  const rowsEU    = rows.filter(r => EU_PAISES.includes(r.pais));
+
   const pagando  = rows.filter(r => r.hasOpened && !r.sinFeeMes);
   const abiertas = rows.filter(r => r.hasOpened);
   const totMes   = rows.reduce((s,r) => s + (r.feeMes_USD  || 0), 0);
   const totPrev  = rows.reduce((s,r) => s + (r.feePrev_USD || 0), 0);
-  const feeARG   = rows.filter(r => r.pais === "Argentina").reduce((s,r) => s + (r.feeMes_USD || 0), 0);
-  const feeLATAM = rows.filter(r => r.pais !== "Argentina" && !EU_PAISES.includes(r.pais)).reduce((s,r) => s + (r.feeMes_USD || 0), 0);
-  const feeEU    = rows.filter(r => EU_PAISES.includes(r.pais)).reduce((s,r) => s + (r.feeMes_USD || 0), 0);
   const varAgr   = totPrev > 0 ? ((totMes - totPrev) / totPrev) * 100 : null;
+  const varColor = varAgr == null ? '#ffffff' : varAgr > 0 ? '#10d97a' : '#ff5570';
   const promUSD  = pagando.length > 0 ? pagando.reduce((s,r) => s + (r.feeMes_USD || 0), 0) / pagando.length : 0;
   const ytdUSD   = rows.reduce((s,r) => s + (r.feeYTD_USD  || 0), 0);
-  const varColor = varAgr == null ? "#ffffff" : varAgr > 0 ? "#10d97a" : "#ff5570";
 
-  // TC reference strip
+  const regFee  = reg => reg.reduce((s,r) => s + (r.feeMes_USD  || 0), 0);
+  const regYTD  = reg => reg.reduce((s,r) => s + (r.feeYTD_USD  || 0), 0);
+  const regVar  = reg => {
+    const m = reg.reduce((s,r) => s + (r.feeMes_USD  || 0), 0);
+    const p = reg.reduce((s,r) => s + (r.feePrev_USD || 0), 0);
+    return p > 0 ? ((m - p) / p) * 100 : null;
+  };
+  const regProm = reg => {
+    const pag = reg.filter(r => !r.sinFeeMes && r.hasOpened);
+    return pag.length > 0 ? pag.reduce((s,r) => s + (r.feeMes_USD || 0), 0) / pag.length : null;
+  };
+  const regPag = reg =>
+    reg.filter(r => !r.sinFeeMes && r.hasOpened).length + ' / ' + reg.filter(r => r.hasOpened).length;
+
   const arsC = tcActual?.arsUSD  > 0 ? tcActual.arsUSD  : null;
   const arsP = tcPrevRef?.arsUSD > 0 ? tcPrevRef.arsUSD : null;
   const eurC = tcActual?.eurUSD  > 0 ? tcActual.eurUSD  : null;
   const eurP = tcPrevRef?.eurUSD > 0 ? tcPrevRef.eurUSD : null;
-  const tcParts = [];
-  if (arsC || arsP) tcParts.push(`ARS/USD: $${arsC ? Math.round(arsC).toLocaleString("es-AR") : "—"} (${mesLabel}) · $${arsP ? Math.round(arsP).toLocaleString("es-AR") : "—"} (${prevLabel})`);
-  if (eurC || eurP) tcParts.push(`EUR/USD: ${eurC ? eurC.toFixed(2) : "—"} (${mesLabel}) · ${eurP ? eurP.toFixed(2) : "—"} (${prevLabel})`);
+  const tcLine = [
+    (arsC || arsP) ? 'ARS/USD: $' + (arsC ? Math.round(arsC).toLocaleString('es-AR') : '—') + ' (' + mesLabel + ') · $' + (arsP ? Math.round(arsP).toLocaleString('es-AR') : '—') + ' (' + prevLabel + ')' : null,
+    (eurC || eurP) ? 'EUR/USD: ' + (eurC ? eurC.toFixed(2) : '—') + ' (' + mesLabel + ') · ' + (eurP ? eurP.toFixed(2) : '—') + ' (' + prevLabel + ')' : null,
+  ].filter(Boolean).join(' &nbsp;|&nbsp; ');
+
+  const bd = items => items.map(([l, v]) =>
+    '<tr><td style="font-size:11px;color:#666;padding:2px 4px;text-align:left;">' + l +
+    '</td><td style="font-size:11px;color:#aaa;font-family:monospace;padding:2px 4px;text-align:right;">' + v + '</td></tr>'
+  ).join('');
+
+  const kpi = (label, val, color, items, border) =>
+    '<td class="kpi-cell" style="text-align:center;padding:20px 12px;' + (border !== false ? 'border-right:1px solid #2a2a2a;' : '') + 'vertical-align:top;white-space:nowrap;">' +
+    '<div style="font-size:11px;color:#777;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;white-space:nowrap;">' + label + '</div>' +
+    '<div class="kpi-val" style="font-size:30px;font-weight:700;color:' + (color || '#fff') + ';font-family:monospace;margin-bottom:' + (items ? '10' : '0') + 'px;white-space:nowrap;line-height:1.1;">' + val + '</div>' +
+    (items ? '<table width="100%" cellpadding="0" cellspacing="0" style="margin:0 auto;">' + bd(items) + '</table>' : '') +
+    '</td>';
 
   const tableRows = rows.map((r, i) => {
-    const vl = r.feePrev === 0 && r.feeMes > 0 ? "Nuevo" : r.varPct == null ? "—" : fmtP(r.varPct);
-    const vc = vl === "Nuevo" ? "#adff19" : r.varPct == null ? "#666" : r.varPct > 0 ? "#10d97a" : r.varPct < 0 ? "#ff5570" : "#fff";
-    const bg = i % 2 === 0 ? "#161616" : "#1a1a1a";
-    return `<tr style="background:${bg};">
-      <td style="padding:7px 12px;font-size:12px;color:${r.hasOpened ? "#fff" : "#555"};font-weight:600;">${r.sede}</td>
-      <td style="padding:7px 12px;font-size:12px;color:#888;">${r.pais}</td>
-      <td style="padding:7px 12px;font-size:12px;color:${r.sinFeeMes ? "#555" : "#fff"};font-family:monospace;text-align:right;">${r.sinFeeMes ? "$ 0" : fmtU(r.feeMes_USD)}</td>
-      <td style="padding:7px 12px;font-size:12px;color:${vc};font-family:monospace;text-align:center;font-weight:700;">${vl}</td>
-      <td style="padding:7px 12px;font-size:12px;color:#888;font-family:monospace;text-align:right;">${r.feeYTD_USD ? fmtU(r.feeYTD_USD) : "—"}</td>
-    </tr>`;
-  }).join("");
+    const vl = r.feePrev === 0 && r.feeMes > 0 ? 'Nuevo' : r.varPct == null ? '—' : fmtP(r.varPct);
+    const vc = vl === 'Nuevo' ? '#adff19' : r.varPct == null ? '#666' : r.varPct > 0 ? '#10d97a' : r.varPct < 0 ? '#ff5570' : '#fff';
+    const bg = i % 2 === 0 ? '#161616' : '#1a1a1a';
+    return '<tr style="background:' + bg + ';">' +
+      '<td style="padding:7px 12px;font-size:12px;color:' + (r.hasOpened ? '#fff' : '#555') + ';font-weight:600;">' + r.sede + '</td>' +
+      '<td style="padding:7px 12px;font-size:12px;color:#888;">' + r.pais + '</td>' +
+      '<td style="padding:7px 12px;font-size:12px;color:' + (r.sinFeeMes ? '#555' : '#fff') + ';font-family:monospace;text-align:right;">' + (r.sinFeeMes ? '—' : fmtN(r.feeMes_USD)) + '</td>' +
+      '<td style="padding:7px 12px;font-size:12px;color:' + vc + ';font-family:monospace;text-align:center;font-weight:700;">' + vl + '</td>' +
+      '<td style="padding:7px 12px;font-size:12px;color:#888;font-family:monospace;text-align:right;">' + (r.feeYTD_USD ? fmtN(r.feeYTD_USD) : '—') + '</td>' +
+      '</tr>';
+  }).join('');
 
-  const kpiCell = (label, value, color) =>
-    `<td style="text-align:center;padding:14px 6px;border-right:1px solid #2a2a2a;">
-      <div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;">${label}</div>
-      <div style="font-size:17px;font-weight:700;color:${color || "#fff"};font-family:monospace;">${value}</div>
-    </td>`;
+  return '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<style>@media only screen and (max-width:600px){.kpi-cell{padding:6px 3px !important;}.kpi-val{font-size:12px !important;}table[class="kpi-row"] td{display:block;width:100% !important;border-right:none !important;border-bottom:1px solid #2a2a2a;}}</style>' +
+    '</head>' +
+    '<body style="margin:0;padding:0;background:#111111;font-family:Arial,sans-serif;">' +
+    '<table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:0;">' +
+    '<table width="100%" cellpadding="0" cellspacing="0" style="width:100%;">' +
 
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#f4f4f4;font-family:Arial,Helvetica,sans-serif;">
-<table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 16px;">
-<table width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;">
+    // Header
+    '<tr><td style="background:#111;padding:22px 32px;">' +
+    '<table width="100%" cellpadding="0" cellspacing="0"><tr>' +
+    '<td><div style="font-size:24px;font-weight:900;color:#adff19;letter-spacing:-1px;">BIGG</div>' +
+    '<div style="font-size:10px;color:#888;margin-top:3px;text-transform:uppercase;letter-spacing:.1em;">Reporte de Fee &mdash; ' + mesLabel + ' ' + year + '</div></td>' +
+    '<td align="right"><div style="font-size:10px;color:#555;">Distribución interna</div></td>' +
+    '</tr></table></td></tr>' +
 
-  <tr><td style="background:#111111;padding:24px 32px;border-radius:10px 10px 0 0;">
-    <table width="100%" cellpadding="0" cellspacing="0"><tr>
-      <td><div style="font-size:26px;font-weight:900;color:#adff19;letter-spacing:-1px;line-height:1;">BIGG</div>
-          <div style="font-size:11px;color:#888;margin-top:4px;text-transform:uppercase;letter-spacing:.1em;">Reporte de Fee &mdash; ${mesLabel} ${year}</div></td>
-      <td align="right"><div style="font-size:11px;color:#555;">Distribución interna</div></td>
-    </tr></table>
-  </td></tr>
+    // KPIs
+    '<tr><td style="background:#181818;border-bottom:1px solid #2a2a2a;">' +
+    '<table class="kpi-row" width="100%" cellpadding="0" cellspacing="0"><tr>' +
+    kpi('Pagan Fee', pagando.length + ' / ' + abiertas.length, '#fff',
+      [['ARG', regPag(rowsARG)], ['LATAM', regPag(rowsLATAM)], ['Europa', regPag(rowsEU)]]) +
+    kpi('Fee ' + mesLabel, fmtU(totMes), '#fff',
+      [['ARG', fmtU(regFee(rowsARG))], ['LATAM', fmtU(regFee(rowsLATAM))], ['Europa', fmtU(regFee(rowsEU))]]) +
+    kpi('Var % vs ' + prevLabel, fmtP(varAgr), varColor,
+      [['ARG', fmtP(regVar(rowsARG))], ['LATAM', fmtP(regVar(rowsLATAM))], ['Europa', fmtP(regVar(rowsEU))]]) +
+    kpi('Promedio / sede', fmtU(promUSD), '#fff',
+      [['ARG', regProm(rowsARG) != null ? fmtU(regProm(rowsARG)) : '—'],
+       ['LATAM', regProm(rowsLATAM) != null ? fmtU(regProm(rowsLATAM)) : '—'],
+       ['Europa', regProm(rowsEU) != null ? fmtU(regProm(rowsEU)) : '—']]) +
+    kpi('YTD Ene–' + mesLabel, fmtU(ytdUSD), '#fff',
+      [['ARG', fmtU(regYTD(rowsARG))], ['LATAM', fmtU(regYTD(rowsLATAM))], ['Europa', fmtU(regYTD(rowsEU))]], false) +
+    '</tr></table></td></tr>' +
 
-  <tr><td style="background:#181818;border-bottom:1px solid #2a2a2a;">
-    <table width="100%" cellpadding="0" cellspacing="0"><tr>
-      ${kpiCell(`Pagan Fee`, `${pagando.length} / ${abiertas.length}`, "#fff")}
-      <td style="text-align:center;padding:12px 6px;border-right:1px solid #2a2a2a;">
-        <div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;">Fee ${mesLabel}</div>
-        <div style="font-size:17px;font-weight:700;color:#fff;font-family:monospace;margin-bottom:8px;">${fmtU(totMes)}</div>
-        <table width="100%" cellpadding="0" cellspacing="0">
-          ${[["ARG", feeARG], ["LATAM", feeLATAM], ["Europa", feeEU]].map(([lbl, fee]) => `
-          <tr>
-            <td style="font-size:9px;color:#555;padding:1px 4px;text-align:left;">${lbl}</td>
-            <td style="font-size:9px;color:#888;font-family:monospace;padding:1px 4px;text-align:right;">${fmtU(fee)}</td>
-          </tr>`).join("")}
-        </table>
-      </td>
-      ${kpiCell(`Var % vs ${prevLabel}`, fmtP(varAgr), varColor)}
-      ${kpiCell("Promedio / sede", fmtU(promUSD), "#fff")}
-      <td style="text-align:center;padding:14px 6px;">
-        <div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;">YTD Ene&ndash;${mesLabel}</div>
-        <div style="font-size:17px;font-weight:700;color:#fff;font-family:monospace;">${fmtU(ytdUSD)}</div>
-      </td>
-    </tr></table>
-  </td></tr>
+    // Table
+    '<tr><td style="background:#111;">' +
+    '<table width="100%" cellpadding="0" cellspacing="0">' +
+    '<tr style="background:#0d0d0d;">' +
+    '<th style="padding:8px 12px;text-align:left;color:#888;font-size:10px;font-weight:600;border-bottom:2px solid #2a2a2a;">Sede</th>' +
+    '<th style="padding:8px 12px;text-align:left;color:#888;font-size:10px;font-weight:600;border-bottom:2px solid #2a2a2a;">País</th>' +
+    '<th style="padding:8px 12px;text-align:right;color:#888;font-size:10px;font-weight:600;border-bottom:2px solid #2a2a2a;">Fee ' + mesLabel + '<br><span style="font-size:8px;font-weight:400;color:#555;">U$D · ' + year + '</span></th>' +
+    '<th style="padding:8px 12px;text-align:center;color:#888;font-size:10px;font-weight:600;border-bottom:2px solid #2a2a2a;">Var %<br><span style="font-size:8px;font-weight:400;color:#555;">vs ' + prevLabel + '</span></th>' +
+    '<th style="padding:8px 12px;text-align:right;color:#888;font-size:10px;font-weight:600;border-bottom:2px solid #2a2a2a;">Fee YTD<br><span style="font-size:8px;font-weight:400;color:#555;">Ene–' + mesLabel + ' · U$D</span></th>' +
+    '</tr>' + tableRows + '</table></td></tr>' +
 
-  ${tcParts.length ? `<tr><td style="background:#141414;padding:8px 32px;border-bottom:1px solid #2a2a2a;">
-    <span style="font-size:9px;color:#555;text-transform:uppercase;letter-spacing:.08em;font-weight:700;">TC Ref.&nbsp;&nbsp;</span>
-    <span style="font-size:11px;color:#777;font-family:monospace;">${tcParts.join("&nbsp;&nbsp;|&nbsp;&nbsp;")}</span>
-  </td></tr>` : ""}
+    // Footer con TC
+    '<tr><td style="background:#0d0d0d;padding:16px 32px;border-top:1px solid #2a2a2a;">' +
+    (tcLine ? '<div style="font-size:10px;color:#555;font-family:monospace;margin-bottom:10px;"><span style="font-size:9px;font-weight:700;color:#444;text-transform:uppercase;letter-spacing:.06em;">TC Ref.&nbsp;&nbsp;</span>' + tcLine + '</div>' : '') +
+    '<div style="font-size:11px;color:#888;margin-bottom:6px;">Ante cualquier consulta, no dude en contactarse con <a href="mailto:lpini@bigg.fit" style="color:#adff19;text-decoration:none;font-weight:600;">lpini@bigg.fit</a>.</div>' +
+    '<div style="font-size:10px;color:#444;">Generado por BIGG Finance · ' + new Date().toLocaleDateString('es-AR') + '</div>' +
+    '</td></tr>' +
 
-  <tr><td style="background:#111111;">
-    <table width="100%" cellpadding="0" cellspacing="0">
-      <tr style="background:#0d0d0d;">
-        <th style="padding:8px 12px;text-align:left;color:#555;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;border-bottom:2px solid #2a2a2a;">Sede</th>
-        <th style="padding:8px 12px;text-align:left;color:#555;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;border-bottom:2px solid #2a2a2a;">País</th>
-        <th style="padding:8px 12px;text-align:right;color:#555;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;border-bottom:2px solid #2a2a2a;">Fee ${mesLabel}</th>
-        <th style="padding:8px 12px;text-align:center;color:#555;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;border-bottom:2px solid #2a2a2a;">Var %</th>
-        <th style="padding:8px 12px;text-align:right;color:#555;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;border-bottom:2px solid #2a2a2a;">Fee YTD</th>
-      </tr>
-      ${tableRows}
-    </table>
-  </td></tr>
-
-  <tr><td style="background:#0d0d0d;padding:16px 32px;border-radius:0 0 10px 10px;text-align:center;">
-    <div style="font-size:10px;color:#444;">Generado por BIGG Finance · ${new Date().toLocaleDateString("es-AR")}</div>
-  </td></tr>
-
-</table></td></tr></table>
-</body></html>`;
+    '</table></td></tr></table></body></html>';
 }
 
-// ─── COMPONENTE PRINCIPAL ─────────────────────────────────────────────────────
 export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, defaultMonth, defaultYear, onClose }) {
   const def = prevMonth(defaultMonth, defaultYear);
   const [month,        setMonth]        = useState(def.month);
@@ -625,15 +643,56 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
           const ytdUSD = rows.reduce((s,r) => s + (r.feeYTD_USD || 0), 0);
 
           const EU_PAISES_KPI = ["España", "Portugal"];
-          const feeARG_kpi   = rows.filter(r => r.pais === "Argentina").reduce((s,r) => s + (r.feeMes_USD || 0), 0);
-          const feeLATAM_kpi = rows.filter(r => r.pais !== "Argentina" && !EU_PAISES_KPI.includes(r.pais)).reduce((s,r) => s + (r.feeMes_USD || 0), 0);
-          const feeEU_kpi    = rows.filter(r => EU_PAISES_KPI.includes(r.pais)).reduce((s,r) => s + (r.feeMes_USD || 0), 0);
+          const rowsARG   = rows.filter(r => r.pais === "Argentina");
+          const rowsLATAM = rows.filter(r => r.pais !== "Argentina" && !EU_PAISES_KPI.includes(r.pais));
+          const rowsEU    = rows.filter(r => EU_PAISES_KPI.includes(r.pais));
+
+          const feeARG_kpi   = rowsARG.reduce((s,r)   => s + (r.feeMes_USD || 0), 0);
+          const feeLATAM_kpi = rowsLATAM.reduce((s,r) => s + (r.feeMes_USD || 0), 0);
+          const feeEU_kpi    = rowsEU.reduce((s,r)    => s + (r.feeMes_USD || 0), 0);
+
+          // Var % por región
+          const varReg = (regRows) => {
+            const m = regRows.reduce((s,r) => s + (r.feeMes_USD  || 0), 0);
+            const p = regRows.reduce((s,r) => s + (r.feePrev_USD || 0), 0);
+            if (!p) return null;
+            const v = ((m - p) / p) * 100;
+            return (v >= 0 ? "+" : "") + v.toFixed(1) + "%";
+          };
+
+          // Promedio por región (solo sedes que pagaron)
+          const promReg = (regRows) => {
+            const pag = regRows.filter(r => !r.sinFeeMes && r.hasOpened);
+            if (!pag.length) return null;
+            return pag.reduce((s,r) => s + (r.feeMes_USD || 0), 0) / pag.length;
+          };
+
+          // YTD por región
+          const ytdARG   = rowsARG.reduce((s,r)   => s + (r.feeYTD_USD || 0), 0);
+          const ytdLATAM = rowsLATAM.reduce((s,r) => s + (r.feeYTD_USD || 0), 0);
+          const ytdEU    = rowsEU.reduce((s,r)    => s + (r.feeYTD_USD || 0), 0);
+
+          // Pagan fee por región (pagando / total activas con historial)
+          const pagARG   = rowsARG.filter(r   => !r.sinFeeMes && r.hasOpened).length;
+          const pagLATAM = rowsLATAM.filter(r => !r.sinFeeMes && r.hasOpened).length;
+          const pagEU    = rowsEU.filter(r    => !r.sinFeeMes && r.hasOpened).length;
+          const totARG   = rowsARG.filter(r   => r.hasOpened).length;
+          const totLATAM = rowsLATAM.filter(r => r.hasOpened).length;
+          const totEU    = rowsEU.filter(r    => r.hasOpened).length;
+
+          const numMeses = month + 1; // Ene=0 → 1 mes, Mayo=4 → 5 meses
 
           const kpis = [
             {
               label: "Pagan fee",
               value: `${pagando.length} / ${abiertas.length}`,
               sub: null,
+              breakdown: [
+                ["ARG",    `${pagARG} / ${totARG}`],
+                ["LATAM",  `${pagLATAM} / ${totLATAM}`],
+                ["Europa", `${pagEU} / ${totEU}`],
+              ],
+              bdMono: false,
             },
             {
               label: `Fee ${MONTHS[month]}`,
@@ -646,34 +705,52 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
               value: varLabel,
               valueColor: varColor,
               sub: null,
+              breakdown: [
+                ["ARG",    varReg(rowsARG)],
+                ["LATAM",  varReg(rowsLATAM)],
+                ["Europa", varReg(rowsEU)],
+              ],
+              bdMono: false,
             },
             {
               label: "Promedio por sede",
               value: fmtMoney(promUSD, "USD"),
-              sub: `${pagando.length} sedes`,
+              sub: null,
+              breakdown: [
+                ["ARG",    promReg(rowsARG)   != null ? promReg(rowsARG)   : null],
+                ["LATAM",  promReg(rowsLATAM) != null ? promReg(rowsLATAM) : null],
+                ["Europa", promReg(rowsEU)    != null ? promReg(rowsEU)    : null],
+              ],
             },
             {
               label: `YTD Ene–${MONTHS[month]}`,
               value: fmtMoney(ytdUSD, "USD"),
               sub: null,
+              breakdown: [["ARG", ytdARG], ["LATAM", ytdLATAM], ["Europa", ytdEU]],
             },
           ];
 
           return (
             <div style={{ display: "flex", borderBottom: "1px solid var(--border)" }}>
-              {kpis.map(({ label, value, sub, valueColor, breakdown }) => (
+              {kpis.map(({ label, value, sub, valueColor, breakdown, bdMono }) => (
                 <div key={label} style={{ flex: 1, padding: "10px 14px", borderRight: "1px solid var(--border)", textAlign: "center" }}>
                   <div style={{ fontSize: 9, color: "var(--text2)", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</div>
                   <div style={{ fontSize: 13, fontWeight: 700, fontFamily: "monospace", color: valueColor ?? "var(--text)" }}>{value}</div>
                   {sub && <div style={{ fontSize: 10, color: "var(--text2)", marginTop: 2, fontFamily: "monospace" }}>{sub}</div>}
                   {breakdown && (
                     <div style={{ marginTop: 7, borderTop: "1px solid var(--border)", paddingTop: 5 }}>
-                      {breakdown.map(([lbl, fee]) => (
-                        <div key={lbl} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 2, padding: "0 2px" }}>
-                          <span style={{ fontSize: 9, color: "var(--text2)", opacity: .7 }}>{lbl}</span>
-                          <span style={{ fontSize: 10, fontFamily: "monospace", color: "var(--text2)" }}>{fmtMoney(fee, "USD")}</span>
-                        </div>
-                      ))}
+                      {breakdown.map(([lbl, val]) => {
+                        const display = val == null ? "—"
+                          : bdMono === false ? String(val)
+                          : typeof val === "number" ? fmtMoney(val, "USD")
+                          : String(val);
+                        return (
+                          <div key={lbl} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 2, padding: "0 2px" }}>
+                            <span style={{ fontSize: 9, color: "var(--text2)", opacity: .7 }}>{lbl}</span>
+                            <span style={{ fontSize: 10, fontFamily: "monospace", color: "var(--text2)" }}>{display}</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -769,14 +846,14 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
                         {!r.hasOpened
                           ? <span style={{ color: "var(--text2)", fontSize: 10 }}>Sin abrir</span>
                           : r.sinFeeMes
-                            ? <span style={{ color: "var(--text2)" }}>$ 0</span>
-                            : fmtMoney(r.feeMes_USD, "USD")}
+                            ? <span style={{ color: "var(--text2)" }}>0</span>
+                            : fmtNum(r.feeMes_USD)}
                       </td>
                       <td style={{ ...tdS, textAlign: "center", fontWeight: 600, color: varColor, fontFamily: "inherit" }}>
                         {varLabel}
                       </td>
                       <td style={{ ...tdS, color: "var(--text2)" }}>
-                        {r.feeYTD_USD ? fmtMoney(r.feeYTD_USD, "USD") : "—"}
+                        {r.feeYTD_USD ? fmtNum(r.feeYTD_USD) : "—"}
                       </td>
                     </tr>
                   );

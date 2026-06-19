@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
 import { useStore } from "../lib/context";
-import { makeType, MONTHS, AVAILABLE_YEARS, fmt, compCurrency, compEmpresa, CUENTAS, CUENTA_LABEL, COMPANIES } from "../lib/helpers";
+import { makeType, MONTHS, AVAILABLE_YEARS, fmt, compCurrency, compEmpresa, CUENTAS, CUENTA_LABEL, COMPANIES, uid } from "../lib/helpers";
 import { inPeriod, dateMonth, dateYear, todayDmy } from "../data/franchisor";
 import { sendMailFr } from "../lib/sheetsApi";
 
 // ── Pendientes panel ────────────────────────────────────────────────────────
-export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, onFetchAfipNumero }) {
+export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, onFetchAfipNumero, onAddComp }) {
   const { franchises, comps, editComp, deleteComp, activeCompany, recordatorios, addRecordatorioEntry } = useStore();
   const [showAfip,       setShowAfip]       = useState(false);
   const [showSinNumero,  setShowSinNumero]  = useState(false);
@@ -77,6 +77,49 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
   const [pagoBatchDate, setPagoBatchDate]         = useState(""); // yyyy-mm-dd
   const [pagoPreviewQueue, setPagoPreviewQueue]   = useState(null); // null = no preview, array = mostrando preview
   const [pagoPreviewEdits, setPagoPreviewEdits]   = useState({});   // { [comp.id]: { cuenta, concepto } }
+
+  // "Ya emitida" para PAGO_PAUTA — adjuntar nro. de factura existente en Facturante
+  const [pagoAdjuntando, setPagoAdjuntando] = useState({}); // { [compId]: true }
+  const [pagoAdjuntarVal, setPagoAdjuntarVal] = useState({}); // { [compId]: string }
+  const [pagoAdjuntarErr, setPagoAdjuntarErr] = useState({}); // { [compId]: string }
+  const [pagoAdjuntarSaving, setPagoAdjuntarSaving] = useState({});
+
+  const handlePagoAbrirAdjuntar = (compId) => {
+    setPagoAdjuntando(p => ({ ...p, [compId]: true }));
+    setPagoAdjuntarVal(p => ({ ...p, [compId]: "" }));
+    setPagoAdjuntarErr(p => { const n = { ...p }; delete n[compId]; return n; });
+  };
+  const handlePagoCerrarAdjuntar = (compId) => {
+    setPagoAdjuntando(p => { const n = { ...p }; delete n[compId]; return n; });
+  };
+  const handlePagoConfirmAdjuntar = async (fr, pagoComp) => {
+    const invoice = (pagoAdjuntarVal[pagoComp.id] ?? "").trim();
+    if (!invoice) { setPagoAdjuntarErr(p => ({ ...p, [pagoComp.id]: "Ingresá el número de factura" })); return; }
+    if (!onAddComp) { setPagoAdjuntarErr(p => ({ ...p, [pagoComp.id]: "No disponible" })); return; }
+    setPagoAdjuntarSaving(p => ({ ...p, [pagoComp.id]: true }));
+    try {
+      const applyIVA = !!(COMPANIES[activeCompany]?.applyIVA);
+      const total    = pagoComp.amount ?? 0;
+      const neto     = applyIVA ? Math.round(total / 1.21 * 100) / 100 : total;
+      const iva      = applyIVA ? Math.round((total - neto) * 100) / 100 : 0;
+      const m        = dateMonth(pagoComp.date);
+      const y        = dateYear(pagoComp.date);
+      const factComp = {
+        id: uid(), type: makeType("FACTURA", "PAUTA"),
+        amount: total, amountNeto: applyIVA ? neto : undefined, amountIVA: applyIVA ? iva : undefined,
+        date: pagoComp.date, month: m, year: y,
+        currency: pagoComp.currency ?? "ARS",
+        ref: `Pauta ${MONTHS[m]} ${y}`, nota: `Pauta ${MONTHS[m]} ${y}`,
+        invoice, contado: true,
+      };
+      await onAddComp(fr.id, factComp);
+      handlePagoCerrarAdjuntar(pagoComp.id);
+    } catch (err) {
+      setPagoAdjuntarErr(p => ({ ...p, [pagoComp.id]: err.message ?? "Error al guardar" }));
+    } finally {
+      setPagoAdjuntarSaving(p => { const n = { ...p }; delete n[pagoComp.id]; return n; });
+    }
+  };
 
   const initPreview = (queue) => {
     const edits = {};
@@ -366,18 +409,22 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
   const pagosSinFactura = useMemo(() => {
     return franchises.filter(f => f.activa !== false).flatMap(fr => {
       const frComps = comps[fr.id] ?? [];
-      return frComps
-        .filter(c => c.type === "PAGO_PAUTA" &&
-                     (!activeCompany || compEmpresa(c) === activeCompany))
-        .filter(c => {
-          const hasFact = frComps.some(f2 =>
-            f2.type === makeType("FACTURA","PAUTA") &&
-            inPeriod(f2, dateMonth(c.date), dateYear(c.date)) &&
-            (!activeCompany || compEmpresa(f2) === activeCompany)
-          );
-          return !hasFact;
-        })
-        .map(c => ({ fr, comp: c }));
+      const pagos = frComps.filter(c => c.type === "PAGO_PAUTA" &&
+                     (!activeCompany || compEmpresa(c) === activeCompany));
+      // Por período: mostrar solo los pagos que exceden la cantidad de facturas emitidas
+      return pagos.filter((c, _, arr) => {
+        const m = dateMonth(c.date);
+        const y = dateYear(c.date);
+        const countFacts = frComps.filter(f2 =>
+          f2.type === makeType("FACTURA","PAUTA") &&
+          inPeriod(f2, m, y) &&
+          (!activeCompany || compEmpresa(f2) === activeCompany)
+        ).length;
+        const periodPagos = arr.filter(p => dateMonth(p.date) === m && dateYear(p.date) === y);
+        // Solo mostrar los pagos "extras" que no tienen factura aún (por índice)
+        const idxInPeriod = periodPagos.findIndex(p => p.id === c.id);
+        return idxInPeriod >= countFacts;
+      }).map(c => ({ fr, comp: c }));
     });
   }, [franchises, comps, activeCompany]);
 
@@ -399,6 +446,14 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
   // ── Emitir individual ──
   const handleEmitAfip = async (fr, comp) => {
     if (emitting[comp.id] || batchRunning) return;
+    // NCA sin refInvoice → mostrar modal de referencia antes de emitir
+    const isNC     = String(comp.type ?? "").startsWith("NC");
+    const isAR_IVA = fr.applyIVA === true;
+    if (isNC && isAR_IVA && !comp.refInvoice) {
+      const ultima = fasPerFr[String(fr.id)]?.[0];
+      setNcRefModal([{ fr, comp, refInvoice: ultima?.invoice ?? "", refDate: ultima?.date ?? "" }]);
+      return;
+    }
     setEmitting(p => ({ ...p, [comp.id]: true }));
     setErrors(p => { const n = { ...p }; delete n[comp.id]; return n; });
     try {
@@ -441,7 +496,25 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
 
   const handleConfirmNcRefs = async () => {
     if (!ncRefModal) return;
-    // Guardar refInvoice en Sheets para cada NC y actualizar el comp local
+    // Si el modal vino de un click individual (1 NC), emitir solo esa
+    const isIndividual = ncRefModal.length === 1 && !toEmit.find(e => e.comp.id === ncRefModal[0].comp.id);
+    if (isIndividual) {
+      const row = ncRefModal[0];
+      editComp(row.fr.id, row.comp.id, { refInvoice: row.refInvoice, refDate: row.refDate });
+      const updatedComp = { ...row.comp, refInvoice: row.refInvoice, refDate: row.refDate };
+      setNcRefModal(null);
+      setEmitting(p => ({ ...p, [row.comp.id]: true }));
+      try {
+        const dateOverride = batchDate ? toAR(batchDate) : null;
+        await onEmitirAfip(row.fr, updatedComp, dateOverride);
+      } catch (err) {
+        setErrors(p => ({ ...p, [row.comp.id]: err.message ?? "Error AFIP" }));
+      } finally {
+        setEmitting(p => { const n = { ...p }; delete n[row.comp.id]; return n; });
+      }
+      return;
+    }
+    // Batch: guardar refInvoice en Sheets para cada NC y actualizar el comp local
     const updatedToEmit = toEmit.map(({ fr, comp }) => {
       const row = ncRefModal.find(r => r.comp.id === comp.id);
       if (!row) return { fr, comp };
@@ -809,6 +882,14 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                       )}
                       <button
                         className="ghost"
+                        title="Ya existe en Facturante — adjuntar número de factura sin re-emitir"
+                        style={{ fontSize: 10, padding: "2px 8px", color: openAdj ? "var(--muted)" : "var(--cyan)", whiteSpace: "nowrap", opacity: busy ? 0.4 : 1 }}
+                        onClick={() => openAdj ? handleCerrarAdjuntar(comp.id) : handleAbrirAdjuntar(comp.id)}
+                      >
+                        {openAdj ? "Cancelar" : "Ya emitida →"}
+                      </button>
+                      <button
+                        className="ghost"
                         title="Editar descripción"
                         style={{ fontSize: 11, padding: "2px 6px", color: editConcepto ? "var(--cyan)" : "var(--muted)", opacity: busy ? 0.4 : 1 }}
                         onClick={() => {
@@ -841,13 +922,13 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                     {/* Input adjuntar inline */}
                     {openAdj && (
                       <div style={{ background: "rgba(34,211,238,.05)", border: "1px solid rgba(34,211,238,.2)", borderTop: "none", borderRadius: adjErr ? 0 : "0 0 7px 7px", padding: "8px 12px", display: "flex", gap: 8, alignItems: "center" }}>
-                        <span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>Nro. factura franquiciado:</span>
+                        <span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>Nro. de factura AFIP:</span>
                         <input
                           autoFocus
                           value={adjuntarVal[comp.id] ?? ""}
                           onChange={e => setAdjuntarVal(p => ({ ...p, [comp.id]: e.target.value }))}
                           onKeyDown={e => { if (e.key === "Enter") handleConfirmAdjuntar(fr, comp); if (e.key === "Escape") handleCerrarAdjuntar(comp.id); }}
-                          placeholder="Nro. de factura del franquiciado"
+                          placeholder="Ej: FA 0004-00000089 o 0004-00000089"
                           style={{ flex: 1, background: "var(--bg)", border: "1px solid var(--border2)", borderRadius: 5, padding: "4px 8px", fontSize: 12, color: "var(--text)", fontFamily: "var(--font)" }}
                         />
                         <button
@@ -1106,6 +1187,18 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                 ↺ Reintentar {pagoBatchProgress.errors.length} fallido{pagoBatchProgress.errors.length !== 1 ? "s" : ""}
               </button>
             )}
+            {pagoBatchProgress && !pagoBatchRunning && pagoBatchProgress.errors.length > 0 && (
+              <button
+                className="ghost"
+                style={{ fontSize: 10, padding: "3px 10px", color: "var(--muted)" }}
+                onClick={() => {
+                  const lines = pagoBatchProgress.errors.map(e => `${e.fr.name}: ${e.msg}`).join('\n');
+                  alert(lines);
+                }}
+              >
+                Ver errores
+              </button>
+            )}
             {pagoBatchProgress && !pagoBatchRunning && (
               <button className="ghost" style={{ fontSize: 10, padding: "3px 10px" }} onClick={() => { setPagoBatchProgress(null); setSelectedPagoIds(new Set()); }}>✕ Cerrar</button>
             )}
@@ -1197,8 +1290,13 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                   </span>
                 </div>
               )}
-              {pagosSinFactura.map(({ fr, comp }, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, background: "var(--bg2)", borderRadius: 7, padding: "8px 12px", opacity: pagoBatchRunning ? 0.6 : 1 }}>
+              {pagosSinFactura.map(({ fr, comp }, i) => {
+                const openPagoAdj = !!pagoAdjuntando[comp.id];
+                const pagoAdjErr  = pagoAdjuntarErr[comp.id];
+                const pagoSaving  = !!pagoAdjuntarSaving[comp.id];
+                return (
+                <div key={i}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, background: "var(--bg2)", borderRadius: openPagoAdj || pagoAdjErr ? "7px 7px 0 0" : 7, padding: "8px 12px", opacity: pagoBatchRunning ? 0.6 : 1 }}>
                   {!pagoBatchRunning && (
                     <input
                       type="checkbox"
@@ -1219,6 +1317,17 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                   >
                     Emitir factura →
                   </button>
+                  {onAddComp && (
+                    <button
+                      className="ghost"
+                      title="La factura ya existe en Facturante — adjuntar número sin re-emitir"
+                      style={{ fontSize: 10, padding: "2px 8px", color: openPagoAdj ? "var(--muted)" : "var(--cyan)", whiteSpace: "nowrap" }}
+                      disabled={pagoBatchRunning}
+                      onClick={() => openPagoAdj ? handlePagoCerrarAdjuntar(comp.id) : handlePagoAbrirAdjuntar(comp.id)}
+                    >
+                      {openPagoAdj ? "Cancelar" : "Ya emitida →"}
+                    </button>
+                  )}
                   <button
                     className="ghost"
                     style={{ fontSize: 11, padding: "0 5px", color: "var(--text2)" }}
@@ -1226,8 +1335,35 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                     disabled={pagoBatchRunning}
                     onClick={() => deleteComp(fr.id, comp.id)}
                   >✕</button>
-                </div>
-              ))}
+                  </div>
+                  {openPagoAdj && (
+                    <div style={{ background: "rgba(34,211,238,.05)", border: "1px solid rgba(34,211,238,.2)", borderTop: "none", borderRadius: pagoAdjErr ? 0 : "0 0 7px 7px", padding: "8px 12px", display: "flex", gap: 8, alignItems: "center" }}>
+                      <span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>Nro. factura AFIP:</span>
+                      <input
+                        autoFocus
+                        value={pagoAdjuntarVal[comp.id] ?? ""}
+                        onChange={e => setPagoAdjuntarVal(p => ({ ...p, [comp.id]: e.target.value }))}
+                        onKeyDown={e => { if (e.key === "Enter") handlePagoConfirmAdjuntar(fr, comp); if (e.key === "Escape") handlePagoCerrarAdjuntar(comp.id); }}
+                        placeholder="Ej: FA 0004-00000108 o 0004-00000108"
+                        style={{ flex: 1, background: "var(--bg)", border: "1px solid var(--border2)", borderRadius: 5, padding: "4px 8px", fontSize: 12, color: "var(--text)", fontFamily: "var(--font)" }}
+                      />
+                      <button
+                        className="btn"
+                        style={{ fontSize: 11, padding: "3px 12px", background: "rgba(34,211,238,.15)", color: "var(--cyan)", border: "1px solid rgba(34,211,238,.3)", opacity: pagoSaving ? 0.5 : 1 }}
+                        disabled={pagoSaving}
+                        onClick={() => handlePagoConfirmAdjuntar(fr, comp)}
+                      >
+                        {pagoSaving ? "Guardando…" : "Guardar"}
+                      </button>
+                    </div>
+                  )}
+                  {pagoAdjErr && (
+                    <div style={{ background: "rgba(255,107,122,.08)", border: "1px solid rgba(255,107,122,.2)", borderTop: "none", borderRadius: "0 0 7px 7px", padding: "6px 12px", fontSize: 11, color: "var(--red)" }}>
+                      ✕ {pagoAdjErr}
+                    </div>
+                  )}
+                </div>);
+              })}
             </div>
           )}
         </div>

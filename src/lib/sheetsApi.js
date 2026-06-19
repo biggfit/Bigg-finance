@@ -81,6 +81,7 @@ function parseFranchise(f) {
     id:          Number(f.id),
     activa:      f.activa === true || f.activa === "TRUE" || f.activa === "true",
     applyIVA:    f.applyIVA === true || f.applyIVA === "TRUE" || f.applyIVA === "true",
+    paysFee:     f.paysFee === false || f.paysFee === "FALSE" || f.paysFee === "false" ? false : true,
     taxExempt:   f.taxExempt === true || f.taxExempt === "TRUE" || f.taxExempt === "true",
     biggEyeId:   f.biggEyeId != null && String(f.biggEyeId).trim() !== "" && Number(f.biggEyeId) > 0 ? Number(f.biggEyeId) : null,
     currencies:  deriveCurrencies(f),

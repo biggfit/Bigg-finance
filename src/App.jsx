@@ -298,6 +298,9 @@ export default function App({ onVolverNumbers } = {}) {
 
         setRecordatorios(recordatorios ?? {});
         setTiposCambio(tc ?? {});
+        console.log('[fetchAll] tiposCambio desde Sheets:', tc);
+        console.log('[fetchAll] saldos desde Sheets:', saldos);
+        console.log('[fetchAll] comps keys:', Object.keys(comps).length, '— muestra primer fr:', Object.entries(comps)[0]);
         setSheetsReady(true);
       })
       .catch(err => {

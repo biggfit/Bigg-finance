@@ -2126,6 +2126,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
         month: monthFinal, year: yearFinal,
         currency: pagoComp.currency ?? "ARS",
         ref: conceptoFinal, nota: conceptoFinal,
+        contado: true,
       };
       if (fr.country === "Argentina" && factComp.currency === "ARS") {
         const result = await emitirComprobante({
@@ -2166,7 +2167,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
     <>
     <div className="fade">
       {/* Pendientes */}
-      <PendientesPanel onEmitir={handleEmitirDesde} onEmitirAfip={handleEmitirAfip} onEmitirPago={handleEmitirPago} onFetchAfipNumero={handleFetchAfipNumero} franchisor={franchisor} />
+      <PendientesPanel onEmitir={handleEmitirDesde} onEmitirAfip={handleEmitirAfip} onEmitirPago={handleEmitirPago} onFetchAfipNumero={handleFetchAfipNumero} onAddComp={addCompWithEmpresa} franchisor={franchisor} />
 
       {/* Selector de modo */}
       {mode === EMIT_MODE.SELECT ? (

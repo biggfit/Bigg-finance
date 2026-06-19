@@ -17,7 +17,8 @@
 │          ┌─────────────────────┐                                    │
 │          │   facturanteApi.js  │                                    │
 │          │  emitirComprobante()│                                    │
-│          │  downloadPdfBlob() │                                    │
+│          │  downloadFacturantePdfBlob│                            │
+│          │  fetchAfipNumero()  │                                    │
 │          │  formatInvoiceLabel│                                    │
 │          └─────────┬──────────┘                                    │
 └────────────────────┼────────────────────────────────────────────────┘
@@ -35,7 +36,9 @@
 │                                                                     │
 │   Acciones:                                                         │
 │   ├── action: "emitir"  → SOAP CrearComprobante / CrearFull / SinImp│
-│   └── action: "getPdf"  → SOAP DetalleComprobanteFull → fetch PDF   │
+│   ├── action: "getPdf"  → SOAP DetalleComprobanteFull → fetch PDF  │
+│   ├── action: "getNumero" → SOAP DetalleComprobanteFull (nº/pref) │
+│   └── action: "anular"  → 501 (no implementado)                   │
 └─────────────────────┬───────────────────────────────────────────────┘
                       │ SOAP/XML (15s timeout)
                       ▼
@@ -94,7 +97,8 @@ Usuario completa form
                 ▼
 ┌───────────────────────────────┐
 │  Polling: DetalleComprobante  │
-│  8 intentos × 2.5s           │
+│  5 intentos, 2s entre cada una │
+│  (tras el 1.er intento)       │
 │  Espera número AFIP           │
 └───────────────┬───────────────┘
                 ▼
@@ -251,20 +255,30 @@ FechaVtoPago = día 10 del mes siguiente
 
 ## Manejo de Errores
 
-| Etapa | Retry | Acción si falla |
-|-------|-------|-----------------|
-| SOAP a Facturante | No | Error inmediato al usuario |
-| Polling AFIP número | 8×2.5s | Retorna `afipNumero: null`, emisión OK |
-| Descarga PDF | No | Fallback a HTML generado |
-| Emisión masiva | No por item | Continúa con siguiente, loguea error |
+
+| Etapa               | Retry                                      | Acción si falla                                                              |
+| ------------------- | ------------------------------------------ | ---------------------------------------------------------------------------- |
+| SOAP a Facturante   | No                                         | Error inmediato al usuario                                                   |
+| Polling AFIP número | 5×2s (código: `pollAfipNumero(id,5,2000)`) | Retorna `afipNumero: null`, emisión OK; UI puede reconsultar con `getNumero` |
+| Descarga PDF        | No                                         | Fallback a HTML generado                                                     |
+| Emisión masiva      | No por item                                | Continúa con siguiente, loguea error                                         |
+
 
 ---
 
 ## Variables de Entorno
 
-| Variable | Descripción | Ejemplo |
-|----------|-------------|---------|
-| `FACTURANTE_EMPRESA` | ID empresa en Facturante | `12345` |
-| `FACTURANTE_HASH` | Hash de autenticación | `abc123...` |
-| `FACTURANTE_USUARIO` | Usuario/email | `user@empresa.com` |
-| `FACTURANTE_ENDPOINT` | URL del servicio SOAP | `https://facturante.com/api/comprobantes.svc` |
+
+| Variable              | Descripción              | Ejemplo                                       |
+| --------------------- | ------------------------ | --------------------------------------------- |
+| `FACTURANTE_EMPRESA`  | ID empresa en Facturante | `12345`                                       |
+| `FACTURANTE_HASH`     | Hash de autenticación    | `abc123...`                                   |
+| `FACTURANTE_USUARIO`  | Usuario/email            | `user@empresa.com`                            |
+| `FACTURANTE_ENDPOINT` | URL del servicio SOAP    | `https://facturante.com/api/comprobantes.svc` |
+
+
+---
+
+## Documento de homologación (Facturante / auditoría)
+
+Mapeo completo BFF–SOAP, tablas de campos, seguridad, alcance y límites: [facturante-homologacion.md](facturante-homologacion.md).

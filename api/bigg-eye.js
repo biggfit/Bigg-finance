@@ -13,13 +13,12 @@
 //   { error: string }   — si algo falla
 
 const BIGG_EYE_API = "https://api.bigg.fit";
-const TOKEN        = process.env.BIGG_EYE_TOKEN;
 
-async function fetchJson(url) {
+async function fetchJson(url, token) {
   const res = await fetch(url, {
     headers: {
       Accept:        "application/json",
-      Authorization: `Bearer ${TOKEN}`,
+      Authorization: `Bearer ${token}`,
     },
   });
   if (!res.ok) {
@@ -34,8 +33,8 @@ async function fetchJson(url) {
  * Asume que la respuesta tiene { data: [], next_page_url: string|null }
  * o bien devuelve un array directamente (no paginado).
  */
-async function fetchAllPages(baseUrl) {
-  const first = await fetchJson(baseUrl);
+async function fetchAllPages(baseUrl, token) {
+  const first = await fetchJson(baseUrl, token);
 
   // Si la respuesta es un array plano → no pagina
   if (Array.isArray(first)) return first;
@@ -44,7 +43,7 @@ async function fetchAllPages(baseUrl) {
   const rows = [...(first.data ?? [])];
   let nextUrl = first.next_page_url ?? null;
   while (nextUrl) {
-    const page = await fetchJson(nextUrl);
+    const page = await fetchJson(nextUrl, token);
     rows.push(...(page.data ?? []));
     nextUrl = page.next_page_url ?? null;
   }
@@ -54,6 +53,9 @@ async function fetchAllPages(baseUrl) {
 export default async function handler(req, res) {
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Access-Control-Allow-Origin", "*");
+
+  // Leer el token en cada request (no a nivel de módulo) para evitar caching
+  const TOKEN = process.env.BIGG_EYE_TOKEN;
 
   const { location_id, month, year } = req.query;
 
@@ -89,8 +91,8 @@ export default async function handler(req, res) {
   try {
     // Llamadas en paralelo: ventas y credit notes (con soporte de paginación)
     const [salesRows, creditsRows] = await Promise.all([
-      fetchAllPages(`${BIGG_EYE_API}/sales?${qs}`),
-      fetchAllPages(`${BIGG_EYE_API}/credit_notes?${qs}`),
+      fetchAllPages(`${BIGG_EYE_API}/sales?${qs}`, TOKEN),
+      fetchAllPages(`${BIGG_EYE_API}/credit_notes?${qs}`, TOKEN),
     ]);
 
     // /sales → sumar campo `total` (precio final después de descuentos)
