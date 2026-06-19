@@ -387,6 +387,29 @@ export async function deleteMovTesoreria(id) {
   return post({ action: "del", sheet: "nb_movimientos", id });
 }
 
+/**
+ * Pago de tarjeta (saldo corriente, admite parciales). Par de movimientos:
+ *  - lado real: la caja/banco baja (−monto) → es la salida real de caja.
+ *  - lado tarjeta: la cuenta-tarjeta sube (+monto) → baja la deuda.
+ * tipo "PAGO_TARJETA" (no TRANSFERENCIA: el Cash Flow no lo filtra; el lado tarjeta se excluye por ser cuenta tipo tarjeta).
+ * Si `mov_existente` viene (caso conciliación: la fila del extracto ya es el lado real), se edita esa fila
+ * como lado real y solo se crea el lado tarjeta.
+ */
+export async function pagarTarjeta({ sociedad, fecha, monto, moneda, cuenta_real, tarjeta_id, nota = "", mov_existente = null }) {
+  const m    = Math.abs(Number(monto) || 0);
+  const pair = newId("PTJ");
+  const concepto = nota || "Pago de tarjeta";
+  if (mov_existente) {
+    await updateMovTesoreria(mov_existente.id, {
+      tipo: "PAGO_TARJETA", origen: "pago_tarjeta", documento_id: pair, concepto,
+    });
+  } else {
+    await appendMovTesoreria({ sociedad, fecha, tipo: "PAGO_TARJETA", cuenta_bancaria: cuenta_real, moneda, monto: -m, concepto, origen: "pago_tarjeta", origen_id: pair });
+  }
+  await appendMovTesoreria({ sociedad, fecha, tipo: "PAGO_TARJETA", cuenta_bancaria: tarjeta_id, moneda, monto: m, concepto, origen: "pago_tarjeta", origen_id: pair });
+  return { ok: true, pair };
+}
+
 export async function updateMovTesoreria(id, patch) {
   return post({ action: "edit", sheet: "nb_movimientos", id, patch });
 }

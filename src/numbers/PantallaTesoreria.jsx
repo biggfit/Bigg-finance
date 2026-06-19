@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import { T, Btn, Input, Select, PageHeader, fmtDate } from "./theme";
+import { T, Btn, Input, Select, PageHeader, fmtDate, fmtMoney } from "./theme";
 import {
   TIPO_CUENTA, MONEDA_SYM,
 } from "../data/tesoreriaData";
@@ -9,7 +9,7 @@ import {
   fetchEgresos, fetchIngresos, fetchPagosCobros, calcSaldoPendiente,
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto,
   appendGastoDirecto, esIgnorado, fetchFinanciaciones, financiacionPasivoBuckets,
-  agruparAnticipos, anticipoPasivo,
+  agruparAnticipos, anticipoPasivo, pagarTarjeta,
 } from "../lib/numbersApi";
 import {
   fetchLiquidacionesCerradas, parsePagoFromMov, normSoc, pendienteSueldosPorLegajo,
@@ -130,6 +130,72 @@ function MovimientoModal({ sociedad, cuentasBancarias, onClose, onSave }) {
               background: canSave ? "#16a34a" : "#9ca3af", border:"none", borderRadius:8,
               padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff",
               cursor: canSave ? "pointer" : "default", fontFamily:T.font }}>Crear ✓</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Modal: Pagar tarjeta ─────────────────────────────────────────────────────
+// Paga el saldo de una cuenta-tarjeta (total o parcial) desde una caja/banco real.
+// Genera el par PAGO_TARJETA: la caja real baja (salida real) y la cuenta-tarjeta sube (baja la deuda).
+function PagarTarjetaModal({ sociedad, cuentas, onClose, onSave }) {
+  const _soc = (sociedad ?? "").toLowerCase();
+  const cuentasSoc = cuentas.filter(c => (c.sociedad ?? "").toLowerCase() === _soc);
+  const tarjetas   = cuentasSoc.filter(c => (c.tipo ?? "").toLowerCase() === "tarjeta");
+  const [form, setForm] = useState({
+    fecha: new Date().toISOString().slice(0, 10), tarjeta: "", cuentaReal: "", monto: "",
+  });
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const tjt        = tarjetas.find(c => c.id === form.tarjeta);
+  const monedaTjt  = tjt?.moneda ?? null;
+  const deuda      = tjt ? Math.abs(Number(tjt.saldo) || 0) : 0;
+  // Cajas/bancos reales de la MISMA moneda que la tarjeta (no otra tarjeta).
+  const realesOpts = cuentasSoc
+    .filter(c => (c.tipo ?? "").toLowerCase() !== "tarjeta" && (!monedaTjt || c.moneda === monedaTjt))
+    .map(c => ({ value: c.id, label: `${TIPO_CUENTA[c.tipo]?.icon ?? "💳"} ${c.nombre} (${c.moneda})` }));
+  const tjtOpts    = tarjetas.map(c => ({ value: c.id, label: `💳 ${c.nombre} (${c.moneda}) · debe ${fmtMoney(Math.abs(Number(c.saldo) || 0), c.moneda)}` }));
+
+  const monto    = Number(form.monto) || 0;
+  const canSave  = form.fecha && form.tarjeta && form.cuentaReal && monto > 0;
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.45)", zIndex:500,
+      display:"flex", alignItems:"center", justifyContent:"center", padding:16 }} onClick={onClose}>
+      <div className="fade" style={{ background:T.card, borderRadius:10, width:520, maxWidth:"97vw",
+        boxShadow:"0 20px 60px rgba(0,0,0,.25)", overflow:"hidden" }} onClick={e => e.stopPropagation()}>
+        <div style={{ background:"#dc2626", padding:"14px 22px", display:"flex",
+          justifyContent:"space-between", alignItems:"center" }}>
+          <span style={{ fontSize:15, fontWeight:800, color:"#fff" }}>Pagar Tarjeta</span>
+          <button onClick={onClose} style={{ background:"transparent", border:"none",
+            color:"rgba(255,255,255,.6)", fontSize:20, cursor:"pointer", lineHeight:1 }}>✕</button>
+        </div>
+        <div style={{ padding:24, display:"flex", flexDirection:"column", gap:14 }}>
+          <Select label="Tarjeta a pagar" required value={form.tarjeta}
+            onChange={v => { const t = tarjetas.find(c => c.id === v); set("tarjeta", v); set("cuentaReal", ""); set("monto", t ? String(Math.abs(Number(t.saldo) || 0)) : ""); }}
+            options={tjtOpts} />
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            <Input label="Fecha" required type="date" value={form.fecha} onChange={v => set("fecha", v)} />
+            <Input label={`Importe${monedaTjt ? " ("+monedaTjt+")" : ""}`} required type="number" value={form.monto} onChange={v => set("monto", v)} placeholder="0,00" />
+          </div>
+          {tjt && monto > deuda + 0.01 && (
+            <div style={{ fontSize:11, color:"#b45309" }}>El importe supera la deuda ({fmtMoney(deuda, monedaTjt)}). ¿Seguro?</div>
+          )}
+          <Select label="Pagar desde (caja/banco)" required value={form.cuentaReal} onChange={v => set("cuentaReal", v)} options={realesOpts} />
+          {monedaTjt === "USD" && (
+            <div style={{ fontSize:11, color:T.muted }}>
+              Para pagar en pesos: primero comprá los USD en <strong>Cambio de moneda</strong> (al TC de la tarjeta) y pagá desde la caja USD.
+            </div>
+          )}
+          <div style={{ display:"flex", justifyContent:"flex-end", gap:10 }}>
+            <button onClick={onClose} style={{ background:"#6b7280", border:"none", borderRadius:8,
+              padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff", cursor:"pointer", fontFamily:T.font }}>Cancelar</button>
+            <button onClick={() => { onSave({ ...form, moneda: monedaTjt }); onClose(); }} disabled={!canSave} style={{
+              background: canSave ? "#16a34a" : "#9ca3af", border:"none", borderRadius:8,
+              padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff",
+              cursor: canSave ? "pointer" : "default", fontFamily:T.font }}>Pagar ✓</button>
           </div>
         </div>
       </div>
@@ -944,6 +1010,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
   const [drillDownItem,    setDrillDownItem]    = useState(null);
   const [showMovModal,     setShowMovModal]     = useState(false);
   const [showNuevoMov,     setShowNuevoMov]     = useState(false);
+  const [showPagarTjt,     setShowPagarTjt]     = useState(false);
   const [editingMov,       setEditingMov]       = useState(null);
   const [filtroCuenta,     setFiltroCuenta]     = useState(null);
   const [cuentasBancarias, setCuentasBancarias] = useState([]);
@@ -1183,6 +1250,18 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
     }
   };
 
+  const handlePagarTarjeta = async (form) => {
+    try {
+      await pagarTarjeta({
+        sociedad, fecha: form.fecha, monto: form.monto, moneda: form.moneda || "ARS",
+        cuenta_real: form.cuentaReal, tarjeta_id: form.tarjeta,
+      });
+      await cargarMovimientos();
+    } catch (e) {
+      alert("Error al pagar tarjeta: " + (e?.message || e));
+    }
+  };
+
   // ── Editar movimiento manual (solo campos básicos, para TRANSFERENCIA) ───────
   const handleEditarMovManual = async (form) => {
     if (!editingMov) return;
@@ -1262,6 +1341,13 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
             }}>
               + Movimiento entre cuentas
             </button>
+            {cuentas.some(c => c.tipo === "tarjeta") && (
+              <button type="button" onClick={() => setShowPagarTjt(true)} style={{
+                ...tesoreriaActionBtn.base, background:"#dc2626", color:"#fff", border:"none",
+              }}>
+                💳 Pagar tarjeta
+              </button>
+            )}
           </div>
         )}
       />
@@ -1443,6 +1529,14 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
           centrosCosto={centrosCosto}
           onClose={() => setShowNuevoMov(false)}
           onSaved={async () => { setShowNuevoMov(false); await cargarMovimientos(); }}
+        />
+      )}
+      {showPagarTjt && (
+        <PagarTarjetaModal
+          sociedad={sociedad}
+          cuentas={cuentas}
+          onClose={() => setShowPagarTjt(false)}
+          onSave={handlePagarTarjeta}
         />
       )}
       {editingMov && (
