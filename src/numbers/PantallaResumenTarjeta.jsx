@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, Fragment } from "react";
 import { T, PageHeader, Btn, fmtMoney } from "./theme";
 import {
-  fetchProveedores, fetchCuentas, fetchCentrosCosto, appendResumenTarjeta, fetchEgresos,
+  fetchCuentas, fetchCentrosCosto, fetchCuentasBancarias,
+  appendGastoDirecto, fetchGastos, fetchMovTesoreria,
 } from "../lib/numbersApi";
 import { fetchLegajos } from "../lib/sueldosApi";
 import { parseTarjetaPdf } from "./parsers/tarjetaPdf";
@@ -40,53 +41,65 @@ const normCom = s => String(s || "").toUpperCase().replace(/\s+/g, " ").trim();
 const normNom = s => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
 const overlapNom = (a, b) => { const wb = new Set(b.split(" ").filter(w => w.length > 2)); return a.split(" ").filter(w => w.length > 2 && wb.has(w)).length; };
 const nameScore = (a, b) => a === b ? 4 : (a.includes(b) || b.includes(a)) ? 2 : overlapNom(a, b) >= 2 ? 1.5 : 0;
-const nuevaLinea = (over = {}) => ({ comercio: "", titular: "", cuenta: "", cuentaId: "", cc: "", pesos: "", dolares: "", ...over });
+const nuevaLinea = (over = {}) => ({ comercio: "", titular: "", cuenta: "", cuentaId: "", cc: "", pesos: "", dolares: "", yaContab: false, fcDoc: "", ...over });
+// Nombre base de una tarjeta (sin el token de moneda) para emparejar las cuentas ARS/USD de una misma tarjeta.
+const baseTarjeta = s => String(s || "").replace(/\b(ARS|USD|EUR)\b|\$|u\$d|us\$/gi, "").replace(/\s+/g, " ").trim();
 
 // Resumen de tarjeta → un egreso por moneda. Cada línea: comercio + titular + cuenta + centro + moneda + monto.
 // Reusa la maquinaria de egresos (CxP / conciliación / P&L). La tarjeta es un proveedor "^Tarjeta".
 export default function PantallaResumenTarjeta({ sociedad }) {
-  const [proveedores, setProveedores] = useState([]);
+  const [cuentasBanc, setCuentasBanc] = useState([]);   // cuentas bancarias (la tarjeta es una cuenta tipo "tarjeta")
   const [cuentas, setCuentas]         = useState([]);
   const [centros, setCentros]         = useState([]);
   const [h, setH] = useState({ tarjetaId: "", tarjeta: "", periodo: "", fecha: new Date().toISOString().slice(0, 10), vto: "" });
   const [lineas, setLineas] = useState([nuevaLinea()]);
-  const [histLineas, setHistLineas] = useState([]);   // líneas de resúmenes TC anteriores (memoria)
+  const [histLineas, setHistLineas] = useState([]);   // consumos de tarjeta anteriores (memoria)
+  const [cardPagosFC, setCardPagosFC] = useState([]); // FCs ya pagadas con la tarjeta (para reconocer en el resumen)
   const [legajos, setLegajos] = useState([]);          // para sugerir el centro del legajo del titular
   const [busy, setBusy]     = useState(false);
   const [pdfMsg, setPdfMsg] = useState("");
   const [okMsg, setOkMsg]   = useState("");
 
   useEffect(() => {
-    fetchProveedores().then(p => setProveedores(Array.isArray(p) ? p : [])).catch(() => {});
+    fetchCuentasBancarias().then(c => setCuentasBanc(Array.isArray(c) ? c : [])).catch(() => {});
     fetchCuentas().then(c => setCuentas(Array.isArray(c) ? c : [])).catch(() => {});
     fetchCentrosCosto().then(c => setCentros(Array.isArray(c) ? c : [])).catch(() => {});
     fetchLegajos().then(l => setLegajos(Array.isArray(l) ? l : [])).catch(() => {});
   }, []);
 
-  // Memoria: líneas de resúmenes de tarjeta ya cargados (proveedor "^Tarjeta") → autocompletar cuenta/centro.
-  useEffect(() => {
-    fetchEgresos(sociedad)
-      .then(egs => setHistLineas((Array.isArray(egs) ? egs : [])
-        .filter(e => /^tarjeta/i.test(e.proveedor || ""))
-        .flatMap(e => e.lineas || [])))
-      .catch(() => {});
-  }, [sociedad]);
+  // Tarjetas = cuentas bancarias tipo "tarjeta" de la sociedad.
+  const tarjetas = useMemo(() => cuentasBanc.filter(c =>
+    (c.tipo ?? "").toLowerCase() === "tarjeta" &&
+    (c.sociedad ?? "").toLowerCase() === (sociedad ?? "").toLowerCase()), [cuentasBanc, sociedad]);
+  const tarjetaIds = useMemo(() => new Set(tarjetas.map(c => c.id)), [tarjetas]);
 
-  const tarjetas  = useMemo(() => proveedores.filter(p => /^tarjeta/i.test(p.nombre || "") && p.activo !== false), [proveedores]);
+  // Memoria + reconocimiento (cuando cambia la sociedad o las tarjetas):
+  //  - histLineas: consumos directos previos en cuentas-tarjeta → autocompletar cuenta/centro.
+  //  - cardPagosFC: pagos de FC hechos con la tarjeta (PAGO con documento_id) → reconocer en el resumen.
+  useEffect(() => {
+    if (!tarjetas.length) { setHistLineas([]); setCardPagosFC([]); return; }
+    fetchGastos(sociedad)
+      .then(gs => setHistLineas((Array.isArray(gs) ? gs : []).filter(g => tarjetaIds.has(g.cuentaBancaria))))
+      .catch(() => {});
+    fetchMovTesoreria(sociedad)
+      .then(ms => setCardPagosFC((Array.isArray(ms) ? ms : [])
+        .filter(m => tarjetaIds.has(m.cuenta_bancaria) && m.tipo === "PAGO" && m.documento_id && !String(m.referencia || "").includes("res="))))
+      .catch(() => {});
+  }, [sociedad, tarjetas, tarjetaIds]);
+
   const cuentaOpts = useMemo(() => cuentas.map(c => c.nombre).filter(Boolean), [cuentas]);
   const cuentaIdDe = (nombre) => cuentas.find(c => c.nombre === nombre)?.id ?? "";
 
-  // De la memoria: cuenta ← por comercio; centro ← por comercio y, en su defecto, por titular. El último uso gana.
+  // De la memoria (consumos directos previos en la tarjeta): cuenta ← por comercio (=nota); centro ← por comercio.
   const memoria = useMemo(() => {
     const porComercio = {}, centroPorComercio = {}, porTitular = {};
-    for (const l of histLineas) {
-      const com = normCom(l.comercio), tit = normCom(l.titular);
-      if (com && l.cuenta) porComercio[com] = { cuenta: l.cuenta, cuentaId: l.cuentaId || "" };
-      if (com && l.cc)     centroPorComercio[com] = l.cc;
-      if (tit && l.cc)     porTitular[tit] = l.cc;
+    for (const g of histLineas) {
+      const com = normCom(g.nota);
+      if (com && g.cuenta_contable) porComercio[com] = { cuenta: g.cuenta_contable, cuentaId: cuentaIdDe(g.cuenta_contable) };
+      if (com && g.cc)              centroPorComercio[com] = g.cc;
     }
     return { porComercio, centroPorComercio, porTitular };
-  }, [histLineas]);
+  }, [histLineas, cuentas]);
 
   // Centro del legajo del titular (fallback cuando la memoria no encontró nada).
   const legajosNorm = useMemo(() => legajos.map(l => ({ sede_id: l.sede_id, _norm: normNom(l.nombre) })).filter(l => l.sede_id && l._norm), [legajos]);
@@ -107,7 +120,15 @@ export default function PantallaResumenTarjeta({ sociedad }) {
   };
 
   const set = (k, v) => setH(s => ({ ...s, [k]: v }));
-  const pickTarjeta = (id) => { const p = proveedores.find(x => String(x.id) === String(id)); setH(s => ({ ...s, tarjetaId: id, tarjeta: p?.nombre || "" })); };
+  const pickTarjeta = (id) => { const c = tarjetas.find(x => String(x.id) === String(id)); setH(s => ({ ...s, tarjetaId: id, tarjeta: c?.nombre || "" })); };
+  // Cuenta-tarjeta de la moneda pedida, dentro de la misma "familia" que la seleccionada (ej. Visa ARS / Visa USD).
+  const cardAccountFor = (moneda) => {
+    const sel = tarjetas.find(c => c.id === h.tarjetaId);
+    if (sel && sel.moneda === moneda) return sel;
+    const base = baseTarjeta(sel?.nombre);
+    return tarjetas.find(c => c.moneda === moneda && baseTarjeta(c.nombre) === base)
+        || tarjetas.find(c => c.moneda === moneda) || null;
+  };
 
   const updLinea = (i, k, v) => setLineas(ls => ls.map((l, idx) => idx !== i ? l : (k === "cuenta" ? { ...l, cuenta: v, cuentaId: cuentaIdDe(v) } : { ...l, [k]: v })));
   const addLinea = () => setLineas(ls => [...ls, nuevaLinea()]);
@@ -119,10 +140,19 @@ export default function PantallaResumenTarjeta({ sociedad }) {
     try {
       const r = await parseTarjetaPdf(file);
       if (!r.lineas.length) { setPdfMsg("No pude leer líneas del PDF — cargalas a mano."); return; }
-      let conMemoria = 0;
+      let conMemoria = 0, reconocidas = 0;
+      // Pool de pagos de FC ya hechos con la tarjeta, para reconocer (cada uno matchea una sola línea).
+      const pool = cardPagosFC.map(m => ({ monto: Math.abs(Number(m.monto) || 0), doc: m.documento_id, used: false }));
       const nuevas = r.lineas.map(x => {
+        const monto = Math.abs(Number(x.monto) || 0);
+        const hit = pool.find(p => !p.used && Math.abs(p.monto - monto) <= 0.5);
+        if (hit) {  // ya está contabilizada (FC pagada con la tarjeta) → no se recarga
+          hit.used = true; reconocidas++;
+          return nuevaLinea({ comercio: x.comercio, titular: x.titular || "", yaContab: true, fcDoc: hit.doc,
+            [x.moneda === "USD" ? "dolares" : "pesos"]: x.monto });
+        }
         const c  = memoria.porComercio[normCom(x.comercio)];
-        const cc = memoria.centroPorComercio[normCom(x.comercio)] || memoria.porTitular[normCom(x.titular)] || centroDeLegajo(x.titular) || "";
+        const cc = memoria.centroPorComercio[normCom(x.comercio)] || centroDeLegajo(x.titular) || "";
         if (c || cc) conMemoria++;
         return nuevaLinea({
           comercio: x.comercio, titular: x.titular || "",
@@ -140,9 +170,10 @@ export default function PantallaResumenTarjeta({ sociedad }) {
         if (hd.vto) hdMsg.push(`vto ${hd.vto}`);
       }
       setPdfMsg(`✓ ${r.lineas.length} líneas leídas`
-        + (conMemoria ? ` · ${conMemoria} con cuenta/centro precargados de meses anteriores` : "")
+        + (reconocidas ? ` · ${reconocidas} ya contabilizadas (pago de FC con tarjeta) → no se recargan` : "")
+        + (conMemoria ? ` · ${conMemoria} con cuenta/centro precargados` : "")
         + (hdMsg.length ? ` · cabecera: ${hdMsg.join(", ")}` : "")
-        + ". Revisá montos y completá lo que falte.");
+        + ". Revisá y completá lo que falte.");
     } catch (e) { setPdfMsg("Error al leer el PDF: " + (e?.message || e)); }
   }
 
@@ -159,7 +190,8 @@ export default function PantallaResumenTarjeta({ sociedad }) {
     });
   }, [lineas]);
 
-  const lineasOk = lineas.filter(l => (num(l.pesos) !== 0 || num(l.dolares) !== 0) && l.cuenta);
+  // Líneas a GUARDAR = consumos sin factura (no reconocidos) con monto + cuenta. Las "ya contabilizadas" se saltean.
+  const lineasOk = lineas.filter(l => !l.yaContab && (num(l.pesos) !== 0 || num(l.dolares) !== 0) && l.cuenta);
   // Totales de TODAS las líneas cargadas (no solo las ya imputadas) → para cruzar contra el resumen.
   const totPesos   = useMemo(() => lineas.reduce((s, l) => s + num(l.pesos), 0), [lineas]);
   const totDolares = useMemo(() => lineas.reduce((s, l) => s + num(l.dolares), 0), [lineas]);
@@ -169,13 +201,25 @@ export default function PantallaResumenTarjeta({ sociedad }) {
     if (!canSave) return;
     setBusy(true); setOkMsg("");
     try {
-      // El importe va en la columna Pesos o Dólares → la moneda sale de cuál tiene valor.
-      const payload = lineasOk.map(l => ({
-        cuenta: l.cuenta, cuentaId: l.cuentaId, cc: l.cc, titular: l.titular, comercio: l.comercio,
-        moneda: num(l.dolares) ? "USD" : "ARS", monto: num(l.dolares) || num(l.pesos),
-      }));
-      const r = await appendResumenTarjeta({ sociedad, tarjetaId: h.tarjetaId, tarjeta: h.tarjeta, periodo: h.periodo, fecha: h.fecha, vto: h.vto, lineas: payload });
-      setOkMsg(`✓ Resumen guardado (${r.ids.map(x => x.moneda).join(" + ")}). Aparece en Egresos → Compras como CxP "Tarjeta de crédito".`);
+      // Cada consumo sin factura = un gasto directo contra la cuenta-tarjeta de su moneda (sube la deuda de la tarjeta).
+      let n = 0, faltaCuenta = "";
+      for (const l of lineasOk) {
+        const moneda = num(l.dolares) ? "USD" : "ARS";
+        const monto  = num(l.dolares) || num(l.pesos);
+        const card   = cardAccountFor(moneda);
+        if (!card) { faltaCuenta = moneda; continue; }
+        await appendGastoDirecto({
+          sociedad, fecha: h.fecha, cuenta_bancaria: card.id,
+          cuenta_contable: l.cuenta, cuenta_contable_id: l.cuentaId, cc: l.cc,
+          moneda, subtotal: monto, ivaRate: 0,
+          nota: [l.comercio, l.titular].filter(Boolean).join(" · "),
+          referencia: `tc=${h.tarjeta} ${h.periodo}`.trim(),
+        });
+        n++;
+      }
+      setOkMsg(`✓ ${n} consumo(s) cargados como gasto en la tarjeta.`
+        + (faltaCuenta ? ` ⚠️ Faltó la cuenta-tarjeta en ${faltaCuenta} (creala en Maestros).` : "")
+        + ` Las líneas ya contabilizadas (pagos de FC) no se recargaron.`);
       setLineas([nuevaLinea()]); setH(s => ({ ...s, periodo: "" }));
     } catch (e) { alert("Error al guardar: " + (e?.message || e)); }
     setBusy(false);
@@ -183,12 +227,12 @@ export default function PantallaResumenTarjeta({ sociedad }) {
 
   return (
     <div className="fade" style={{ padding: "28px 32px" }}>
-      <PageHeader title="Resumen de tarjeta" subtitle="Cargá el resumen de la TC: una línea por consumo, con su cuenta, centro, titular y moneda. Se contabiliza como compra (CxP) por moneda." />
+      <PageHeader title="Resumen de tarjeta" subtitle="Subí el PDF: las FCs ya pagadas con la tarjeta se reconocen y no se recargan; los consumos sin factura se cargan como gasto contra la cuenta-tarjeta." />
 
       <SectionCard title="Datos del resumen" cols="1.5fr 1fr 1fr 1fr">
         <Field label="Tarjeta *">
           <select value={h.tarjetaId} onChange={e => pickTarjeta(e.target.value)} style={inputStyle}>
-            <option value="">{tarjetas.length ? "— elegir tarjeta —" : "(sin tarjetas: alta como proveedor \"Tarjeta …\")"}</option>
+            <option value="">{tarjetas.length ? "— elegir tarjeta —" : "(sin tarjetas: alta una cuenta tipo \"tarjeta\" en Maestros)"}</option>
             {tarjetas.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
           </select>
         </Field>
@@ -227,9 +271,14 @@ export default function PantallaResumenTarjeta({ sociedad }) {
                   const l = lineas[i];
                   const esP = num(l.pesos) !== 0, esD = num(l.dolares) !== 0;   // moneda activa de la línea
                   return (
-                  <tr key={i} style={{ borderTop: `1px solid ${T.cardBorder}` }}>
+                  <tr key={i} style={{ borderTop: `1px solid ${T.cardBorder}`, background: l.yaContab ? "#f0fdf4" : undefined, opacity: l.yaContab ? 0.85 : 1 }}>
                     <td style={{ padding: "4px 8px" }}><input value={l.comercio} onChange={e => updLinea(i, "comercio", e.target.value)} style={{ ...cellStyle, minWidth: 230 }} /></td>
                     <td style={{ padding: "4px 8px" }}><input value={l.titular} onChange={e => updLinea(i, "titular", e.target.value)} style={{ ...cellStyle, minWidth: 150 }} /></td>
+                    {l.yaContab ? (
+                      <td colSpan={2} style={{ padding: "4px 8px", fontSize: 11.5, color: T.green, fontWeight: 700 }}>
+                        ✓ Ya contabilizada (pago de FC con tarjeta) — no se recarga
+                      </td>
+                    ) : (<>
                     <td style={{ padding: "4px 8px" }}>
                       <select value={l.cuenta} onChange={e => updLinea(i, "cuenta", e.target.value)} style={{ ...cellStyle, width: 150, minWidth: 150, maxWidth: 150, color: l.cuenta ? T.text : T.red }}>
                         <option value="">— cuenta —</option>
@@ -242,6 +291,7 @@ export default function PantallaResumenTarjeta({ sociedad }) {
                         {centros.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                       </select>
                     </td>
+                    </>)}
                     <td style={{ padding: "4px 3px", width: 108, minWidth: 108, maxWidth: 108 }}><MoneyCell value={l.pesos} onChange={v => updLinea(i, "pesos", v)} placeholder={esD ? "" : "$"} muted={esD} /></td>
                     <td style={{ padding: "4px 3px", width: 108, minWidth: 108, maxWidth: 108 }}><MoneyCell value={l.dolares} onChange={v => updLinea(i, "dolares", v)} placeholder={esP ? "" : "U$D"} muted={esP} /></td>
                     <td style={{ padding: "4px 8px", textAlign: "center" }}>
