@@ -684,6 +684,7 @@ function GrupoBlock({ icon, label, cuentas, onCuentaClick }) {
 function ResumenMonedas({ cuentas }) {
   const porMoneda = {};
   for (const c of cuentas) {
+    if (c.tipo === "tarjeta") continue;   // la deuda de tarjeta no es disponible en caja
     if (!porMoneda[c.moneda]) porMoneda[c.moneda] = 0;
     porMoneda[c.moneda] += Number(c.saldo) || 0;
   }
@@ -717,6 +718,7 @@ function TabSaldos({ cuentas, aCobrar, aPagar, filtroMoneda, onCuentaClick, onIt
   const bancos      = filtrar(cuentas.filter(c => c.tipo === "banco"));
   const cajas       = filtrar(cuentas.filter(c => c.tipo === "caja"));
   const inversiones = filtrar(cuentas.filter(c => c.tipo === "inversion"));
+  const tarjetas    = filtrar(cuentas.filter(c => c.tipo === "tarjeta"));
 
   const aCobrarFilt = filtroMoneda === "ALL" ? aCobrar : aCobrar.filter(i => i.moneda === filtroMoneda);
   const aPagarFilt  = filtroMoneda === "ALL" ? aPagar  : aPagar.filter(i => i.moneda === filtroMoneda);
@@ -735,6 +737,7 @@ function TabSaldos({ cuentas, aCobrar, aPagar, filtroMoneda, onCuentaClick, onIt
         <GrupoBlock icon="🏦" label="Bancos" cuentas={bancos} onCuentaClick={onCuentaClick} />
       </div>
       <GrupoBlock icon="📈" label="Inversiones" cuentas={inversiones} onCuentaClick={onCuentaClick} />
+      {tarjetas.length > 0 && <GrupoBlock icon="💳" label="Tarjetas (deuda)" cuentas={tarjetas} onCuentaClick={onCuentaClick} />}
     </div>
   );
 }
