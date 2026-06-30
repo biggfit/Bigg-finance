@@ -143,12 +143,13 @@ function SaldosTable({ title, data, accentColor, bgColor, borderColor, onOpenFr,
           return { data: await blobToBase64(blob), mimeType: "application/pdf", name: `Invoice_${label}_${frSlug}.pdf` };
         }));
 
-        await sendMailFr({
+        const mailRes = await sendMailFr({
           to,
           subject: `Estado de Cuenta ${d.fr.name} — ${MONTHS[month]} ${year}`,
           htmlBody: ccHtml,
           attachments: factAdjs,
         });
+        if (!mailRes?.ok) throw new Error(mailRes?.error ?? "El servidor no confirmó el envío");
         const hoy = todayDmy();
         addRecordatorioEntry(d.fr.id, { frName: d.fr.name, tipo: "cc", fecha: hoy, ccMes: month + 1, ccAnio: year, to, empresa: activeCompany, currency: curLabel });
         ok.push(d.fr.name);

@@ -1,6 +1,6 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
-import { MONTHS, AVAILABLE_YEARS, makeType } from "../lib/helpers";
+import { MONTHS, AVAILABLE_YEARS, makeType, computeSaldoReal } from "../lib/helpers";
 import { sendMailFr } from "../lib/sheetsApi";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -73,7 +73,7 @@ function computeYTD_USD(frComps, year, upToMonth, feeCurrency, tiposCambio) {
 }
 
 // ─── lógica del reporte ──────────────────────────────────────────────────────
-function buildRows(franchises, comps, year, month, tiposCambio = {}) {
+function buildRows(franchises, comps, year, month, tiposCambio = {}, saldoInicial = {}) {
   const prev = prevMonth(month, year);
 
   const tc  = mergeTc(tcFor(tiposCambio, year, month));
@@ -97,10 +97,19 @@ function buildRows(franchises, comps, year, month, tiposCambio = {}) {
     const feeYTD_USD  = computeYTD_USD(frComps, year, month, feeCurrency, tiposCambio);
     const varPct      = feePrev_USD > 0 ? ((feeMes_USD - feePrev_USD) / feePrev_USD) * 100 : null;
 
+    // ── DSO nominal en meses: Deuda total (ÑAKO + BIGG FIT) / Promedio mensual YTD ──
+    const saldoNako = computeSaldoReal(fr.id, year, month, comps, saldoInicial, feeCurrency, null, "ÑAKO SRL");
+    const saldoBigg = computeSaldoReal(fr.id, year, month, comps, saldoInicial, feeCurrency, null, "BIGG FIT LLC");
+    const deuda_USD = Math.max(0, feeToUSD(saldoNako + saldoBigg, feeCurrency, tc));
+    const mesesYTD      = month + 1; // Ene=0 → 1 mes, May=4 → 5 meses
+    const feePromedio   = feeYTD_USD > 0 ? feeYTD_USD / mesesYTD : feePrev_USD;
+    const saludRatio    = feePromedio > 0 ? deuda_USD / feePromedio : null;
+
     rows.push({
       sede: fr.name, sociedad: fr.sociedad ?? "—", pais: fr.country ?? "—",
       moneda: feeCurrency, feeMes, feePrev,
       feeMes_USD, feePrev_USD, feeYTD_USD, varPct,
+      deuda_USD, saludRatio,
       sinFeeMes: feeMes === 0,
       hasOpened: frComps.length > 0,
       tcFound: tc !== null,
@@ -251,7 +260,7 @@ function SortTh({ col, children, sortCol, sortDir, onSort, align = "right" }) {
     <th
       onClick={() => onSort(col)}
       style={{
-        padding: "7px 10px", fontSize: 10, fontWeight: 600,
+        padding: "7px 10px", fontSize: 12, fontWeight: 600,
         borderBottom: "2px solid var(--border)", whiteSpace: "nowrap",
         background: "var(--bg)", textAlign: align,
         cursor: "pointer", userSelect: "none",
@@ -286,7 +295,7 @@ function SortFilterTh({ col, label, options, selected, onChange, sortCol, sortDi
 
   return (
     <th style={{
-      padding: "7px 10px", fontSize: 10, fontWeight: 600,
+      padding: "7px 10px", fontSize: 12, fontWeight: 600,
       borderBottom: "2px solid var(--border)", whiteSpace: "nowrap",
       background: "var(--bg)", textAlign: align, userSelect: "none",
       color: active ? "var(--text)" : "var(--text2)",
@@ -401,73 +410,134 @@ function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef }) {
     (items ? '<table width="100%" cellpadding="0" cellspacing="0" style="margin:0 auto;">' + bd(items) + '</table>' : '') +
     '</td>';
 
+  // Colores: light mode por defecto, dark mode via media query
+  const C = {
+    bodyBg:   '#f4f4f4',
+    kpiBg:    '#ffffff', kpiBorder: '#e0e0e0',
+    kpiLabel: '#666666', kpiVal:    '#111111', kpiSub: '#888888',
+    tableBg:  '#ffffff',
+    thBg:     '#f0f0f0', thText:    '#444444', thBorder: '#cccccc',
+    rowEven:  '#ffffff', rowOdd:    '#f7f7f7', rowBorder: '#eeeeee',
+    tdMain:   '#111111', tdSec:     '#555555', tdMuted: '#999999',
+    green:    '#16a34a', red:       '#dc2626', orange:  '#d97706',
+    footerBg: '#f0f0f0', footerText:'#666666', footerMuted:'#999999',
+  };
+
   const tableRows = rows.map((r, i) => {
     const vl = r.feePrev === 0 && r.feeMes > 0 ? 'Nuevo' : r.varPct == null ? '—' : fmtP(r.varPct);
-    const vc = vl === 'Nuevo' ? '#adff19' : r.varPct == null ? '#666' : r.varPct > 0 ? '#10d97a' : r.varPct < 0 ? '#ff5570' : '#fff';
-    const bg = i % 2 === 0 ? '#161616' : '#1a1a1a';
-    return '<tr style="background:' + bg + ';">' +
-      '<td style="padding:7px 12px;font-size:12px;color:' + (r.hasOpened ? '#fff' : '#555') + ';font-weight:600;">' + r.sede + '</td>' +
-      '<td style="padding:7px 12px;font-size:12px;color:#888;">' + r.pais + '</td>' +
-      '<td style="padding:7px 12px;font-size:12px;color:' + (r.sinFeeMes ? '#555' : '#fff') + ';font-family:monospace;text-align:right;">' + (r.sinFeeMes ? '—' : fmtN(r.feeMes_USD)) + '</td>' +
-      '<td style="padding:7px 12px;font-size:12px;color:' + vc + ';font-family:monospace;text-align:center;font-weight:700;">' + vl + '</td>' +
-      '<td style="padding:7px 12px;font-size:12px;color:#888;font-family:monospace;text-align:right;">' + (r.feeYTD_USD ? fmtN(r.feeYTD_USD) : '—') + '</td>' +
+    const vc = vl === 'Nuevo' ? '#65a30d' : r.varPct == null ? C.tdMuted : r.varPct > 0 ? C.green : r.varPct < 0 ? C.red : C.tdMain;
+    const bg = i % 2 === 0 ? C.rowEven : C.rowOdd;
+    const dsoColor = !r.hasOpened || r.deuda_USD === 0 ? C.green
+      : r.saludRatio < 1  ? C.green
+      : r.saludRatio < 3  ? C.orange
+      : C.red;
+    const dsoLabel = !r.hasOpened || r.deuda_USD === 0
+      ? '✓'
+      : 'U$D ' + fmtN(r.deuda_USD) + (r.saludRatio != null ? ' (' + (r.saludRatio < 1 ? '&lt;1' : r.saludRatio.toFixed(1)) + ')' : '');
+    return '<tr class="em-row" style="background:' + bg + ';border-bottom:1px solid ' + C.rowBorder + ';">' +
+      '<td style="padding:8px 12px;font-size:13px;color:' + (r.hasOpened ? C.tdMain : C.tdMuted) + ';font-weight:600;">' + r.sede + '</td>' +
+      '<td style="padding:8px 12px;font-size:13px;color:' + C.tdSec + ';">' + r.pais + '</td>' +
+      '<td style="padding:8px 12px;font-size:13px;color:' + (r.sinFeeMes ? C.tdMuted : C.tdMain) + ';font-family:monospace;text-align:right;">' + (r.sinFeeMes ? '—' : fmtN(r.feeMes_USD)) + '</td>' +
+      '<td style="padding:8px 12px;font-size:13px;color:' + vc + ';font-family:monospace;text-align:center;font-weight:700;">' + vl + '</td>' +
+      '<td style="padding:8px 12px;font-size:13px;color:' + C.tdMain + ';font-family:monospace;text-align:right;font-weight:700;">' + (r.feeYTD_USD ? fmtN(r.feeYTD_USD) : '—') + '</td>' +
+      '<td style="padding:8px 12px;font-size:13px;color:' + dsoColor + ';font-family:monospace;text-align:center;font-weight:700;">' + dsoLabel + '</td>' +
       '</tr>';
   }).join('');
 
+  const darkStyle =
+    '@media (prefers-color-scheme:dark){' +
+    '.em-wrap{background:#111111 !important;}' +
+    '.em-kpi{background:#181818 !important;border-color:#2a2a2a !important;}' +
+    '.em-kpi-cell{border-color:#2a2a2a !important;}' +
+    '.em-kpi-label{color:#777 !important;}' +
+    '.em-kpi-val{color:#ffffff !important;}' +
+    '.em-kpi-sub{color:#aaa !important;}' +
+    '.em-table-wrap{background:#111 !important;}' +
+    '.em-th{background:#0d0d0d !important;color:#888 !important;border-color:#2a2a2a !important;}' +
+    '.em-row{background:#161616 !important;}' +
+    '.em-row:nth-child(even){background:#1a1a1a !important;}' +
+    '.em-td-main{color:#ffffff !important;}' +
+    '.em-td-sec{color:#888888 !important;}' +
+    '.em-footer{background:#0d0d0d !important;border-color:#2a2a2a !important;}' +
+    '.em-footer-text{color:#888 !important;}' +
+    '.em-footer-muted{color:#444 !important;}' +
+    '}';
+
+  const mobileStyle =
+    '@media only screen and (max-width:600px){' +
+    '.kpi-cell{padding:8px 4px !important;}' +
+    '.kpi-val{font-size:16px !important;}' +
+    '}';
+
+  const kpiL = (label, val, color, items, border) =>
+    '<td class="kpi-cell em-kpi-cell" style="text-align:center;padding:20px 12px;' + (border !== false ? 'border-right:1px solid ' + C.kpiBorder + ';' : '') + 'vertical-align:top;white-space:nowrap;">' +
+    '<div class="em-kpi-label" style="font-size:11px;color:' + C.kpiLabel + ';text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">' + label + '</div>' +
+    '<div class="kpi-val em-kpi-val" style="font-size:30px;font-weight:700;color:' + (color === '#fff' ? C.kpiVal : color) + ';font-family:monospace;margin-bottom:' + (items ? '10' : '0') + 'px;white-space:nowrap;line-height:1.1;">' + val + '</div>' +
+    (items ? '<table width="100%" cellpadding="0" cellspacing="0" style="margin:0 auto;">' +
+      items.map(([l, v]) =>
+        '<tr><td class="em-kpi-sub" style="font-size:11px;color:' + C.kpiSub + ';padding:2px 4px;text-align:left;">' + l +
+        '</td><td class="em-kpi-sub" style="font-size:11px;color:' + C.kpiSub + ';font-family:monospace;padding:2px 4px;text-align:right;">' + v + '</td></tr>'
+      ).join('') + '</table>' : '') +
+    '</td>';
+
   return '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
-    '<style>@media only screen and (max-width:600px){.kpi-cell{padding:6px 3px !important;}.kpi-val{font-size:12px !important;}table[class="kpi-row"] td{display:block;width:100% !important;border-right:none !important;border-bottom:1px solid #2a2a2a;}}</style>' +
+    '<style>' + darkStyle + mobileStyle + '</style>' +
     '</head>' +
-    '<body style="margin:0;padding:0;background:#111111;font-family:Arial,sans-serif;">' +
-    '<table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:0;">' +
+    '<body class="em-wrap" style="margin:0;padding:0;background:' + C.bodyBg + ';font-family:Arial,sans-serif;">' +
+    '<table width="100%" cellpadding="0" cellspacing="0" bgcolor="' + C.bodyBg + '"><tr><td style="padding:0;">' +
     '<table width="100%" cellpadding="0" cellspacing="0" style="width:100%;">' +
 
-    // Header
-    '<tr><td style="background:#111;padding:22px 32px;">' +
+    // Header — siempre oscuro (logo BIGG)
+    '<tr><td bgcolor="#111111" style="background:#111111;">' +
+    '<table width="100%" cellpadding="0" cellspacing="0" bgcolor="#111111" style="background:#111111;"><tr>' +
+    '<td bgcolor="#111111" style="background:#111111;padding:22px 32px;">' +
     '<table width="100%" cellpadding="0" cellspacing="0"><tr>' +
     '<td><div style="font-size:24px;font-weight:900;color:#adff19;letter-spacing:-1px;">BIGG</div>' +
-    '<div style="font-size:10px;color:#888;margin-top:3px;text-transform:uppercase;letter-spacing:.1em;">Reporte de Fee &mdash; ' + mesLabel + ' ' + year + '</div></td>' +
-    '<td align="right"><div style="font-size:10px;color:#555;">Distribución interna</div></td>' +
-    '</tr></table></td></tr>' +
+    '<div style="font-size:10px;color:#888888;margin-top:3px;text-transform:uppercase;letter-spacing:.1em;">Reporte de Fee &mdash; ' + mesLabel + ' ' + year + '</div></td>' +
+    '<td align="right"><div style="font-size:10px;color:#666666;">Distribución interna</div></td>' +
+    '</tr></table>' +
+    '</td></tr></table></td></tr>' +
 
     // KPIs
-    '<tr><td style="background:#181818;border-bottom:1px solid #2a2a2a;">' +
+    '<tr><td class="em-kpi" style="background:' + C.kpiBg + ';border-bottom:1px solid ' + C.kpiBorder + ';">' +
     '<table class="kpi-row" width="100%" cellpadding="0" cellspacing="0"><tr>' +
-    kpi('Pagan Fee', pagando.length + ' / ' + abiertas.length, '#fff',
+    kpiL('Pagan Fee', pagando.length + ' / ' + abiertas.length, '#fff',
       [['ARG', regPag(rowsARG)], ['LATAM', regPag(rowsLATAM)], ['Europa', regPag(rowsEU)]]) +
-    kpi('Fee ' + mesLabel, fmtU(totMes), '#fff',
+    kpiL('Fee ' + mesLabel, fmtU(totMes), '#fff',
       [['ARG', fmtU(regFee(rowsARG))], ['LATAM', fmtU(regFee(rowsLATAM))], ['Europa', fmtU(regFee(rowsEU))]]) +
-    kpi('Var % vs ' + prevLabel, fmtP(varAgr), varColor,
+    kpiL('Var % vs ' + prevLabel, fmtP(varAgr), varColor === '#10d97a' ? C.green : varColor === '#ff5570' ? C.red : C.kpiVal,
       [['ARG', fmtP(regVar(rowsARG))], ['LATAM', fmtP(regVar(rowsLATAM))], ['Europa', fmtP(regVar(rowsEU))]]) +
-    kpi('Promedio / sede', fmtU(promUSD), '#fff',
+    kpiL('Promedio / sede', fmtU(promUSD), '#fff',
       [['ARG', regProm(rowsARG) != null ? fmtU(regProm(rowsARG)) : '—'],
        ['LATAM', regProm(rowsLATAM) != null ? fmtU(regProm(rowsLATAM)) : '—'],
        ['Europa', regProm(rowsEU) != null ? fmtU(regProm(rowsEU)) : '—']]) +
-    kpi('YTD Ene–' + mesLabel, fmtU(ytdUSD), '#fff',
+    kpiL('YTD Ene–' + mesLabel, fmtU(ytdUSD), '#fff',
       [['ARG', fmtU(regYTD(rowsARG))], ['LATAM', fmtU(regYTD(rowsLATAM))], ['Europa', fmtU(regYTD(rowsEU))]], false) +
     '</tr></table></td></tr>' +
 
     // Table
-    '<tr><td style="background:#111;">' +
+    '<tr><td class="em-table-wrap" style="background:' + C.tableBg + ';">' +
     '<table width="100%" cellpadding="0" cellspacing="0">' +
-    '<tr style="background:#0d0d0d;">' +
-    '<th style="padding:8px 12px;text-align:left;color:#888;font-size:10px;font-weight:600;border-bottom:2px solid #2a2a2a;">Sede</th>' +
-    '<th style="padding:8px 12px;text-align:left;color:#888;font-size:10px;font-weight:600;border-bottom:2px solid #2a2a2a;">País</th>' +
-    '<th style="padding:8px 12px;text-align:right;color:#888;font-size:10px;font-weight:600;border-bottom:2px solid #2a2a2a;">Fee ' + mesLabel + '<br><span style="font-size:8px;font-weight:400;color:#555;">U$D · ' + year + '</span></th>' +
-    '<th style="padding:8px 12px;text-align:center;color:#888;font-size:10px;font-weight:600;border-bottom:2px solid #2a2a2a;">Var %<br><span style="font-size:8px;font-weight:400;color:#555;">vs ' + prevLabel + '</span></th>' +
-    '<th style="padding:8px 12px;text-align:right;color:#888;font-size:10px;font-weight:600;border-bottom:2px solid #2a2a2a;">Fee YTD<br><span style="font-size:8px;font-weight:400;color:#555;">Ene–' + mesLabel + ' · U$D</span></th>' +
+    '<tr>' +
+    '<th class="em-th" style="padding:8px 12px;text-align:left;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">Sede</th>' +
+    '<th class="em-th" style="padding:8px 12px;text-align:left;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">País</th>' +
+    '<th class="em-th" style="padding:8px 12px;text-align:right;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">Fee ' + mesLabel + '<br><span style="font-size:9px;font-weight:400;color:' + C.tdMuted + ';">U$D · ' + year + '</span></th>' +
+    '<th class="em-th" style="padding:8px 12px;text-align:center;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">Var %<br><span style="font-size:9px;font-weight:400;color:' + C.tdMuted + ';">vs ' + prevLabel + '</span></th>' +
+    '<th class="em-th" style="padding:8px 12px;text-align:right;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">Fee YTD<br><span style="font-size:9px;font-weight:400;color:' + C.tdMuted + ';">Ene–' + mesLabel + ' · U$D</span></th>' +
+    '<th class="em-th" style="padding:8px 12px;text-align:center;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">Deuda (DSO)</th>' +
     '</tr>' + tableRows + '</table></td></tr>' +
 
-    // Footer con TC
-    '<tr><td style="background:#0d0d0d;padding:16px 32px;border-top:1px solid #2a2a2a;">' +
-    (tcLine ? '<div style="font-size:10px;color:#555;font-family:monospace;margin-bottom:10px;"><span style="font-size:9px;font-weight:700;color:#444;text-transform:uppercase;letter-spacing:.06em;">TC Ref.&nbsp;&nbsp;</span>' + tcLine + '</div>' : '') +
-    '<div style="font-size:11px;color:#888;margin-bottom:6px;">Ante cualquier consulta, no dude en contactarse con <a href="mailto:lpini@bigg.fit" style="color:#adff19;text-decoration:none;font-weight:600;">lpini@bigg.fit</a>.</div>' +
-    '<div style="font-size:10px;color:#444;">Generado por BIGG Finance · ' + new Date().toLocaleDateString('es-AR') + '</div>' +
+    // Footer
+    '<tr><td class="em-footer" style="background:' + C.footerBg + ';padding:16px 32px;border-top:1px solid ' + C.kpiBorder + ';">' +
+    (tcLine ? '<div class="em-footer-muted" style="font-size:10px;color:' + C.footerMuted + ';font-family:monospace;margin-bottom:10px;"><span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;">TC Ref.&nbsp;&nbsp;</span>' + tcLine + '</div>' : '') +
+    '<div class="em-footer-text" style="font-size:11px;color:' + C.footerText + ';margin-bottom:6px;">Ante cualquier consulta, no dude en contactarse con <a href="mailto:lpini@bigg.fit" style="color:#16a34a;text-decoration:none;font-weight:600;">lpini@bigg.fit</a>.</div>' +
+    '<div class="em-footer-muted" style="font-size:10px;color:' + C.footerMuted + ';">Generado por BIGG Finance · ' + new Date().toLocaleDateString('es-AR') + '</div>' +
     '</td></tr>' +
 
     '</table></td></tr></table></body></html>';
 }
 
-export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, defaultMonth, defaultYear, onClose }) {
+export default function ReporteFeeModal({ franchises, comps, saldoInicial = {}, tiposCambio = {}, defaultMonth, defaultYear, onClose }) {
   const def = prevMonth(defaultMonth, defaultYear);
   const [month,        setMonth]        = useState(def.month);
   const [year,         setYear]         = useState(def.year);
@@ -478,6 +548,7 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
   const [showSendPanel, setShowSendPanel] = useState(false);
   const [sendEmails,    setSendEmails]    = useState(() => { try { return localStorage.getItem("bigg_feeReportEmails") || ""; } catch { return ""; } });
   const [sendState,     setSendState]     = useState("idle"); // "idle"|"sending"|"sent"|"error"
+  const reportRef = useRef(null);
 
   const prev = prevMonth(month, year);
 
@@ -489,8 +560,8 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
   const tcMissing = !tcActual || !(tcActual.arsUSD > 0);
 
   const baseRows = useMemo(
-    () => buildRows(franchises, comps, year, month, tiposCambio),
-    [franchises, comps, year, month, tiposCambio]
+    () => buildRows(franchises, comps, year, month, tiposCambio, saldoInicial),
+    [franchises, comps, year, month, tiposCambio, saldoInicial]
   );
 
   const allSedes  = useMemo(() => [...new Set(baseRows.map(r => r.sede))].sort((a,b) => a.localeCompare(b)), [baseRows]);
@@ -511,6 +582,7 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
         else if (sortCol === "feeMesUSD") cmp = a.feeMes_USD - b.feeMes_USD;
         else if (sortCol === "varPct")    cmp = (a.varPct ?? -Infinity) - (b.varPct ?? -Infinity);
         else if (sortCol === "feeYTD")    cmp = a.feeYTD_USD - b.feeYTD_USD;
+        else if (sortCol === "saludRatio") cmp = (a.saludRatio ?? -Infinity) - (b.saludRatio ?? -Infinity);
         return cmp * dir;
       });
   }, [baseRows, filterSedes, filterPaises, sortCol, sortDir]);
@@ -534,7 +606,8 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
         htmlBody: html,
       });
       setSendState("sent");
-    } catch {
+    } catch (e) {
+      console.error("Error enviando reporte:", e);
       setSendState("error");
     }
   };
@@ -823,6 +896,9 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
                     Fee YTD<br/>
                     <span style={{ fontWeight: 400, fontSize: 9 }}>Ene–{MONTHS[month]} · ARS→U$D</span>
                   </SortTh>
+                  <SortTh col="saludRatio" align="center" {...sortProps}>
+                    Deuda (DSO)
+                  </SortTh>
                 </tr>
               </thead>
               <tbody>
@@ -855,6 +931,28 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
                       <td style={{ ...tdS, color: "var(--text2)" }}>
                         {r.feeYTD_USD ? fmtNum(r.feeYTD_USD) : "—"}
                       </td>
+                      <td style={{ ...tdS, textAlign: "center" }}>
+                        {!r.hasOpened ? (
+                          <span style={{ color: "var(--text2)" }}>—</span>
+                        ) : r.deuda_USD === 0 && r.saludRatio === null ? (
+                          <span style={{ color: "var(--green)", fontWeight: 700 }}>✓</span>
+                        ) : (() => {
+                          const dsoColor = r.saludRatio === null ? "var(--text2)"
+                            : r.saludRatio < 1  ? "var(--green)"
+                            : r.saludRatio < 3  ? "var(--orange)"
+                            : "var(--red)";
+                          return (
+                            <span style={{ fontWeight: 700, color: dsoColor, fontSize: 11 }}>
+                              {r.deuda_USD > 0 ? `U$D ${fmtNum(r.deuda_USD)}` : "✓"}
+                              {r.saludRatio !== null && r.deuda_USD > 0 && (
+                                <span style={{ fontWeight: 400, fontSize: 9, opacity: 0.85, marginLeft: 4 }}>
+                                  ({r.saludRatio < 1 ? "<1" : r.saludRatio.toFixed(1)})
+                                </span>
+                              )}
+                            </span>
+                          );
+                        })()}
+                      </td>
                     </tr>
                   );
                 })}
@@ -862,7 +960,6 @@ export default function ReporteFeeModal({ franchises, comps, tiposCambio = {}, d
             </table>
           )}
         </div>
-
       </div>
     </div>
   );

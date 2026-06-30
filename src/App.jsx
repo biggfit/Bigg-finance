@@ -345,6 +345,7 @@ export default function App({ onVolverNumbers } = {}) {
         <ReporteFeeModal
           franchises={franchises}
           comps={comps}
+          saldoInicial={saldoInicial}
           tiposCambio={tiposCambio}
           defaultMonth={month}
           defaultYear={year}
