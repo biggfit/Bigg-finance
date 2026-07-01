@@ -74,8 +74,13 @@ async function post(body) {
 
 const pad  = (n, l = 5) => String(n).padStart(l, "0");
 
+// Contador de sesión: garantiza unicidad aunque se generen varios ids en el mismo
+// milisegundo (ej. loop de ingesta de 285 líneas) o al re-subir. El componente de
+// tiempo agrega entropía entre sesiones; el `_seq` asegura que NUNCA se repita dentro
+// de una. (Antes: solo Date.now()%100000 → colisionaba y dejaba filas con id duplicado.)
+let _seq = 0;
 function newId(prefix) {
-  return `${prefix}-${pad(Date.now() % 100000)}`;
+  return `${prefix}-${pad(Date.now() % 100000)}-${_seq++}`;
 }
 
 /**
@@ -561,7 +566,8 @@ export async function deleteCentroCosto(id) {
 // ─── REGLAS DE BANCO (motor de conciliación) ─────────────────────────────────
 // Tabla de customizaciones: cada fila es una regla que clasifica una línea del
 // extracto. match_tipo ∈ codigo|glosa|cuenta_servicio|cuit|alias ; scope por banco/sociedad/pais.
-export async function fetchBancoReglas() {
+export async function fetchBancoReglas({ fresh = false } = {}) {
+  if (fresh) _invalidate("nb_banco_reglas");   // ignora el cache de 30s → trae lo último editado
   return get("nb_banco_reglas");
 }
 
@@ -634,7 +640,7 @@ export const esCuentaCredito = c => (c?.tipo ?? "").toLowerCase() === "tarjeta";
 // Ingesta: crea movimientos pendientes con dedupe (no duplica al re-subir).
 const _saldoDe = m => { const x = String(m.referencia || "").match(/saldo=([^;]*)/); return x ? x[1] : ""; };
 
-export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "ARS", lineas = [] }) {
+export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "ARS", lineas = [], onProgress } = {}) {
   const todos = await get("nb_movimientos", { sociedad });
   // dedupe contra TODOS los movimientos de la cuenta (pendientes, aceptados, splits de franquicia).
   // Clave por SALDO del extracto (running balance, único por línea) → robusta a edición de
@@ -642,9 +648,10 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
   const keyOf = (fecha, monto, saldo) => saldo ? `${fecha}|${saldo}` : `${fecha}|${Number(monto) || 0}`;
   const existentes = todos.filter(m => String(m.cuenta_bancaria) === String(cuenta_bancaria));
   const seen = new Set(existentes.map(m => keyOf(m.fecha, m.monto, _saldoDe(m))));
-  let creados = 0, dups = 0;
+  let creados = 0, dups = 0, i = 0;
   const fallidas = [];   // líneas cuyo POST falló → se devuelven para reintentar solo esas
   for (const l of lineas) {
+    if (onProgress) onProgress(++i, lineas.length);
     const k = keyOf(l.fecha, l.monto, l.saldo);
     if (seen.has(k)) { dups++; continue; }
     const p = l.propuesta || {};
@@ -659,7 +666,7 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
         moneda, monto: Number(l.monto) || 0, documento_id: "",
         concepto: l.descripcion || "",
         contraparte_id: "", contraparte_nombre: l.ley1 || l.contraparte || "",   // razón social del banco (Leyenda 1)
-        referencia: `cod=${l.codigoConcepto || ""};tipo=${p.tipo || ""};regla=${p.regla_id || ""};prov=${p.proveedor_id || ""};fr=${p.franquicia_id || ""};frops=${(p.franquicia_opciones || []).join("|")};cuit=${l.ley2 || l.cuit || ""};saldo=${l.saldo || ""}`,
+        referencia: `cod=${l.codigoConcepto || ""};tipo=${p.tipo || ""};regla=${p.regla_id || ""};prov=${p.proveedor_id || ""};fr=${p.franquicia_id || ""};frops=${(p.franquicia_opciones || []).join("|")};plan=${p.plan_id || ""};pcuota=${p.cuota_row_id || ""};cuit=${l.ley2 || l.cuit || ""};saldo=${l.saldo || ""}`,
         origen: "extracto",
         created_at: new Date().toISOString(),
       }});

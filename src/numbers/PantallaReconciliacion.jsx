@@ -12,14 +12,35 @@ import { BancoReglaModal } from "./PantallaMaestros";
 import { fetchAll } from "../lib/sheetsApi";
 import { computeSaldoReal } from "../lib/helpers";
 import { parseGalicia } from "./parsers/galicia";
+import { parseInterAudi } from "./parsers/interaudi";
 import { clasificarLineas, clasificarLinea, reconocerCuota } from "./reconciliacion/ruleEngine";
 
 const TIPO_LABEL = {
-  impuesto: "Impuesto", comision: "Comisión", interes: "Interés", servicio: "Servicio",
+  impuesto: "Impuesto", comision: "Comisiones", interes: "Interés", servicio: "Servicio",
   transferencia_interna: "Transf. interna", ingreso: "Ingreso", financiacion: "Financiación",
   pago_proveedor: "Pago proveedor", cobro_franquicia: "Cobro franquicia",
-  cuota_financiacion: "Cuota de financiación", sin_clasificar: "Sin clasificar",
+  cuota_financiacion: "Cuota de plan", sin_clasificar: "Sin clasificar",
 };
+// Agrupación por GLOSA del banco (el tipo de transacción, no el reconocimiento). Es el
+// bucket del dropdown. `fc`: si por defecto se imputa a factura (proveedor) o no (AFIP =
+// impuesto, Tarjeta = pago de tarjeta a mano). La imputación real sigue por proveedor
+// reconocido (no se pierde la preselección). Glosas de Galicia — extensible por banco.
+// Se testea contra glosa + contraparte (la tarjeta a veces viene con glosa genérica
+// "Pago De Servicios" y se reconoce por la contraparte VISA/AMEX). La tarjeta va PRIMERO
+// para ganarle a "Servicios".
+const GLOSA_GRUPO = [
+  { re: /foreign\s+currency\s+(purchase|sale)|cambio\s+de\s+moneda/i, grupo: "Cambio de moneda", fc: false },
+  { re: /transf\.?\s*afip/i,                                       grupo: "AFIP",            fc: false },
+  { re: /pago\s*tarjeta|\b(visa|amex|american\s*express|mastercard)\b/i, grupo: "Pago de tarjeta", fc: false },
+  { re: /deb\.?\s*autom.*serv|pago\s*de\s*servicios/i,             grupo: "Servicios",       fc: true  },
+  { re: /trf\s*inmed\s*proveed/i,                                   grupo: "Proveedores",     fc: true  },
+];
+const grupoGlosa = (mov) => {
+  const t = `${mov?.concepto || ""} ${mov?.contraparte_nombre || ""}`;
+  return GLOSA_GRUPO.find(x => x.re.test(t)) || null;
+};
+// Tipos "débiles": no clasificados por una regla explícita → elegibles para glosa/cobranza.
+const TIPOS_DEBILES = ["pago_proveedor", "servicio", "sin_clasificar", ""];
 // fr_tipo según monto vs deuda viva del franquiciado. Crédito que matchea la deuda → PAGO de CC;
 // si no hay deuda que lo respalde → PAGO_PAUTA (a cuenta). Débito → PAGO_ENVIADO.
 const sugerirFrTipo = (monto, deuda) => {
@@ -62,6 +83,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
   const [financiaciones, setFinanciaciones] = useState([]); // planes AFIP + créditos (para imputar cuotas)
   const [ignorados,  setIgnorados]  = useState([]);    // líneas del extracto ya descartadas
   const [erroresIngesta, setErroresIngesta] = useState(null); // { lineas, cuenta_bancaria, moneda } que fallaron al subir
+  const [progreso,   setProgreso]   = useState(null); // { done, total } mientras sube el extracto
   const [filtroTipo, setFiltroTipo] = useState("");   // filtro por grupo de Propuesta (para aprobar por grupos)
   const [verIgnorados,setVerIgnorados]= useState(false);
   const [reglaModal, setReglaModal] = useState(null);  // {prefill} para crear regla desde una línea
@@ -193,6 +215,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
     facturasPendientes.forEach(f => { if (!m.has(String(f.proveedorId))) m.set(String(f.proveedorId), f.proveedor || "Sin proveedor"); });
     return [...m.entries()].map(([id, nombre]) => ({ id, nombre })).sort((a, b) => a.nombre.localeCompare(b.nombre));
   }, [facturasPendientes]);
+  // Opciones del selector de proveedor en modo FC: TODOS los activos (para que el
+  // reconocido aparezca y se preseleccione aunque todavía no tenga factura cargada).
+  const provOpciones = useMemo(
+    () => (proveedores || []).filter(p => p.activo !== false && String(p.activo) !== "false")
+      .map(p => ({ id: String(p.id), nombre: p.nombre || p.id }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre)),
+    [proveedores]);
   const fcsDeProv = (provId) => facturasPendientes
     .filter(f => String(f.proveedorId) === String(provId))
     .sort((a, b) => String(a.vto || "").localeCompare(String(b.vto || "")));
@@ -200,7 +229,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
   // Proveedor efectivo de una línea en modo FC: el editado, o el reconocido si tiene pendientes.
   const fcProvDe = (mov) => {
     const ed = edits[mov.id] || {}, meta = parseMeta(mov.referencia);
-    return ed.fc_prov ?? ((meta.prov && provConPendientes.some(p => p.id === String(meta.prov))) ? String(meta.prov) : "");
+    return ed.fc_prov ?? (meta.prov ? String(meta.prov) : "");   // preselecciona SIEMPRE el proveedor reconocido
   };
   // FC efectiva: la editada, o la única del proveedor si hay exactamente una.
   const fcIdDe = (mov) => {
@@ -225,9 +254,16 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
   const ventasDeCliente = (cliId) => ventasPendientes
     .filter(v => String(v.clienteId) === String(cliId))
     .sort((a, b) => String(a.vto || "").localeCompare(String(b.vto || "")));
+  // Todos los clientes (de cualquier factura de venta) → para elegir en el cobro aunque no
+  // tenga pendientes; se pre-selecciona el reconocido. (Espeja el selector de proveedor.)
+  const clienteOpciones = useMemo(() => {
+    const m = new Map();
+    ingresos.forEach(v => { const id = String(v.clienteId || ""); if (id && !m.has(id)) m.set(id, v.cliente || v.clienteId); });
+    return [...m.entries()].map(([id, nombre]) => ({ id, nombre })).sort((a, b) => a.nombre.localeCompare(b.nombre));
+  }, [ingresos]);
   const cobClienteDe = (mov) => {
     const ed = edits[mov.id] || {};
-    return ed.cob_cli ?? "";
+    return ed.cob_cli ?? reconocerClienteCobro(mov);   // auto: cliente reconocido por contraparte
   };
   const cobIdDe = (mov) => {
     const ed = edits[mov.id] || {};
@@ -254,6 +290,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
     return [...m.values()];
   }, [cuotasPendientes]);
   const cuotasDePlan = (planId) => cuotasPendientes.filter(c => String(c.plan_id) === String(planId)).sort((a, b) => a.nro_cuota - b.nro_cuota);
+  // Total de cuotas por plan (nº de cuota más alto) → para mostrar "cuota X/N".
+  const totalCuotasPorPlan = useMemo(() => {
+    const m = new Map();
+    for (const p of financiaciones) m.set(p.plan_id, (p.cuotas || []).reduce((mx, c) => Math.max(mx, Number(c.nro_cuota) || 0), 0));
+    return m;
+  }, [financiaciones]);
+  const cuotaLabel = (c) => `cuota ${c.nro_cuota}/${totalCuotasPorPlan.get(c.plan_id) || "?"}`;
 
   // Cuenta contable por defecto para retenciones sufridas (si existe una en el plan).
   const cuentaRetencionDefault = useMemo(
@@ -270,17 +313,20 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
     if (!file || !cuentaTab) return;
     setUploading(true); setMsg("");
     try {
-      const data = await parseGalicia(file);
       const cta = cuentas.find(c => c.id === cuentaTab);
+      // Elegir parser según el banco: InterAudi = CSV propio; el resto = Galicia (.xlsx).
+      const data = /interaudi/i.test(String(cta?.banco || "")) ? await parseInterAudi(file) : await parseGalicia(file);
       const ctx = { banco: cta?.banco, sociedad, pais: "", franquicias, sociedades, cuentas: cuentasAll, moneda: cta?.moneda || "ARS", cuotasPendientes };
       const lineas = clasificarLineas(data.lineas, reglas, proveedores, ctx);
       const moneda = cta?.moneda || "ARS";
-      const { creados, dups, errores, fallidas } = await ingestarExtracto({ sociedad, cuenta_bancaria: cuentaTab, moneda, lineas });
+      setProgreso({ done: 0, total: lineas.length });
+      const { creados, dups, errores, fallidas } = await ingestarExtracto({ sociedad, cuenta_bancaria: cuentaTab, moneda, lineas,
+        onProgress: (done, total) => setProgreso({ done, total }) });
       setMsg(`✓ ${creados} nuevos${dups ? ` · ${dups} duplicados` : ""}${errores ? ` · ⚠ ${errores} con error` : ""}.`);
       setErroresIngesta(errores ? { lineas: fallidas, cuenta_bancaria: cuentaTab, moneda } : null);
       await recargar();
     } catch (e) { setMsg("Error: " + e.message); }
-    finally { setUploading(false); if (fileRef.current) fileRef.current.value = ""; }
+    finally { setUploading(false); setProgreso(null); if (fileRef.current) fileRef.current.value = ""; }
   };
 
   // Reintenta SOLO las líneas que fallaron en la última carga (no hace falta re-subir el archivo).
@@ -288,12 +334,14 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
     if (!erroresIngesta?.lineas?.length) return;
     setUploading(true); setMsg("");
     try {
-      const { creados, dups, errores, fallidas } = await ingestarExtracto({ sociedad, ...erroresIngesta });
+      setProgreso({ done: 0, total: erroresIngesta.lineas.length });
+      const { creados, dups, errores, fallidas } = await ingestarExtracto({ sociedad, ...erroresIngesta,
+        onProgress: (done, total) => setProgreso({ done, total }) });
       setMsg(`✓ ${creados} reintentadas${dups ? ` · ${dups} ya estaban` : ""}${errores ? ` · ⚠ ${errores} siguen con error` : ""}.`);
       setErroresIngesta(errores ? { ...erroresIngesta, lineas: fallidas } : null);
       await recargar();
     } catch (e) { setMsg("Error: " + e.message); }
-    finally { setUploading(false); }
+    finally { setUploading(false); setProgreso(null); }
   };
 
   // Estado de "modo franquicia" de una fila (auto por reconocimiento, o manual).
@@ -326,10 +374,27 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
   };
 
   const destinoDe = (mov) => (edits[mov.id]?.cuenta_destino) ?? mov.cuenta_destino ?? "";
+  // Normaliza nombres para comparar (mayúsculas, sin acentos/Ñ ni no-alfanuméricos).
+  const normS = (s) => String(s || "").toUpperCase().normalize("NFD").replace(/[^A-Z0-9]/g, "");
+  // Transferencia entre cuentas propias: la contraparte del banco es el nombre de la sociedad
+  // activa (ej. Ñako → "NAKO NAKO"). Coelsa rotula todo igual; lo que distingue es la contraparte.
+  const esTransferPropia = (mov) => {
+    const soc = normS(sociedad);
+    return soc.length >= 3 && normS(mov.contraparte_nombre).includes(soc);
+  };
+  // Reconoce el cliente de un cobro (crédito) por nombre de contraparte vs clientes con facturas
+  // de venta pendientes. Sin match → "" (no carga nada; queda en Cobranza para revisar/asociar).
+  const reconocerClienteCobro = (mov) => {
+    if ((Number(mov.monto) || 0) <= 0) return "";
+    const cp = normS(mov.contraparte_nombre);
+    if (cp.length < 4) return "";
+    const hit = clientesConPendientes.find(c => { const n = normS(c.nombre); return n.length >= 4 && (cp.includes(n) || n.includes(cp)); });
+    return hit ? hit.id : "";
+  };
   const esTransferMov = (mov) => {
     const meta = parseMeta(mov.referencia);
     const tipo = meta.tipo || (Number(mov.monto) > 0 ? "ingreso" : "");
-    return tipo === "transferencia_interna" || !!edits[mov.id]?.modoTransfer;
+    return tipo === "transferencia_interna" || !!edits[mov.id]?.modoTransfer || esTransferPropia(mov);
   };
   const esInterco = (mov) => {
     const d = destinoDe(mov); if (!d) return false;
@@ -351,6 +416,10 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
       auto = reconocerCuota(
         { monto: Number(mov.monto) || 0, descripcion: mov.concepto || "", ley1: mov.contraparte_nombre || "", ley2: meta.cuit || "", cuit: meta.cuit || "" },
         cuotasPendientes, monedaCuenta);
+      // Fallback: el plan que el motor identificó al INGERIR (por la leyenda con el Nº de
+      // plan, que no se almacena) queda empacado en `referencia` → lo usamos aunque el
+      // re-match en vivo falle (ej. cuotas de monto decreciente que no pegan exacto).
+      if (!auto && meta.plan) auto = { plan_id: meta.plan, cuota_row_id: meta.pcuota || "" };
       if (!auto) return { es: false };
     }
     const planSel = ed.cuota_plan ?? auto?.plan_id ?? "";
@@ -362,6 +431,34 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
     return { es: true, manual, planSel, cuotaSel: cuotaSel || "" };
   };
 
+  // Pago a proveedor / servicio → por defecto se IMPUTA a una factura (el débito es el
+  // pago de una FC ya devengada, no un gasto nuevo → evita doble conteo). El gasto directo
+  // queda como opción explícita en el ⋯. Fuente única del modo-FC efectivo (render +
+  // puedeAceptar + doAceptar leen de acá → nunca se desincronizan).
+  const esProvServ = (mov) => ["pago_proveedor", "servicio"].includes(parseMeta(mov.referencia).tipo);
+  // ¿La fila ya está en otro modo (transfer/franquicia/cuota) o lo detectamos? → FC y cobro ceden.
+  const otroModoActivo = (mov) => {
+    const ed = edits[mov.id] || {};
+    return ed.modoTransfer || ed.modoFranquicia || ed.modoCuota || esTransferMov(mov) || frState(mov).es || cuotaState(mov).es;
+  };
+  const modoFCde = (mov) => {
+    const ed = edits[mov.id] || {};
+    if (otroModoActivo(mov) || ed.modoCobro) return false;
+    if ((Number(mov.monto) || 0) > 0) return false;   // "pago de factura" es pagar a un proveedor = débito; un crédito es cobranza
+    const gg = grupoGlosa(mov);   // AFIP/Tarjeta → no FC; Servicios/Proveedores → FC
+    return ed.modoFC ?? (gg ? gg.fc : esProvServ(mov));   // default; el ⋯ lo apaga (gasto directo)
+  };
+  // Modo cobro de venta efectivo: crédito con cliente reconocido → auto (fuente única render +
+  // puedeAceptar + doAceptar). Cede a transfer/franquicia/cuota. Sin cliente → no auto (queda Cobranza).
+  const modoCobroDe = (mov) => {
+    const ed = edits[mov.id] || {};
+    if (otroModoActivo(mov) || ed.modoFC) return false;
+    if ((Number(mov.monto) || 0) <= 0) return false;   // cobro = crédito
+    if (grupoGlosa(mov)) return false;   // FX/AFIP/Tarjeta por glosa → no es cobro de venta
+    return ed.modoCobro ?? true;   // todo crédito (cobranza) arranca como cobro: cliente + factura. El cliente
+    // reconocido viene pre-seleccionado; el ⋯ permite volver a normal si no es un cobro de venta.
+  };
+
   // ¿La fila está lista para aceptar? (imputación completa).
   const puedeAceptarMov = (mov) => {
     if (esTransferMov(mov)) return !!destinoDe(mov);
@@ -371,8 +468,8 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
       if (fr.split) { const sum = fr.split.reduce((s, p) => s + (Number(p.monto) || 0), 0); return fr.split.every(p => p.franquicia_id) && Math.abs(sum - total) <= 0.01; }
       return !!fr.franquiciaSel && !!fr.frTipoSel;
     }
-    if (edits[mov.id]?.modoFC) return !!fcIdDe(mov);
-    if (edits[mov.id]?.modoCobro) {
+    if (modoFCde(mov)) return !!fcIdDe(mov);
+    if (modoCobroDe(mov)) {
       if (!cobIdDe(mov)) return false;
       const rets = edits[mov.id]?.rets || [];
       if (rets.some(r => (Number(r.monto) || 0) > 0 && !r.cuenta)) return false;   // falta cuenta en una retención
@@ -395,7 +492,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
       setPendientes(prev => prev.filter(m => m.id !== mov.id));
       return;
     }
-    const fcId = (edits[mov.id]?.modoFC) ? fcIdDe(mov) : "";
+    const fcId = modoFCde(mov) ? fcIdDe(mov) : "";
     if (fcId) {
       const fc = facturasPendientes.find(f => String(f.id) === String(fcId));
       await imputarPagoFC(mov, {
@@ -410,7 +507,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
       setPendientes(prev => prev.filter(m => m.id !== mov.id));
       return;
     }
-    const cobId = (edits[mov.id]?.modoCobro) ? cobIdDe(mov) : "";
+    const cobId = modoCobroDe(mov) ? cobIdDe(mov) : "";
     if (cobId) {
       const ing = ventasPendientes.find(v => String(v.id) === String(cobId));
       const ed = edits[mov.id] || {};
@@ -568,10 +665,26 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
   const grupoDe = (m) => {
     if (esTransferMov(m)) return esInterco(m) ? "Transferencia interco" : "Transferencia propia";
     if (frState(m).es) return "Cobro franquicia";
-    if (cuotaState(m).es) return "Cuota de financiación";
+    const csG = cuotaState(m);
+    if (csG.es) {   // la cuota va al bucket de su acreedor: AFIP con el resto de AFIP; el crédito bancario aparte
+      const plan = financiaciones.find(p => String(p.plan_id) === String(csG.planSel));
+      const acr = plan?.acreedor_nombre || "";
+      if (/afip/i.test(acr) || plan?.tipo === "plan_afip") return "AFIP";
+      if (/galicia|banco|pr[eé]stamo/i.test(acr) || plan?.tipo === "prestamo") return "Cuota préstamos";
+      return "Cuota de plan";
+    }
     if (haberesMatch(m)) return "Pago de haberes";
     const meta = parseMeta(m.referencia);
     const tipo = meta.tipo || (Number(m.monto) > 0 ? "ingreso" : "");
+    // Agrupación por glosa+contraparte (Cambio de moneda / AFIP / Tarjeta / Servicios /
+    // Proveedores) — solo sobre lo no clasificado por una regla explícita. Va ANTES que
+    // "Cobranza" para que un FX en crédito no caiga como cobranza.
+    if (TIPOS_DEBILES.includes(tipo)) {
+      const gg = grupoGlosa(m);
+      if (gg) return gg.grupo;
+    }
+    // Un CRÉDITO (entra plata) que no matcheó nada no puede ser un "pago" → es cobranza.
+    if ((Number(m.monto) || 0) > 0 && [...TIPOS_DEBILES, "ingreso"].includes(tipo)) return "Cobranza";
     return TIPO_LABEL[tipo] || tipo || "Sin clasificar";
   };
   const pendCuenta = useMemo(
@@ -581,10 +694,10 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
   const gruposDisp = useMemo(() => {
     const o = {}; pendCuenta.forEach(m => { const g = grupoDe(m); o[g] = (o[g] || 0) + 1; });
     return Object.entries(o).sort((a, b) => b[1] - a[1]);
-  }, [pendCuenta, franquicias, pagosSueldos, edits]);
+  }, [pendCuenta, franquicias, pagosSueldos, cuotasPendientes, edits]);
   const filtered = useMemo(
     () => filtroTipo ? pendCuenta.filter(m => grupoDe(m) === filtroTipo) : pendCuenta,
-    [pendCuenta, filtroTipo, franquicias, pagosSueldos, edits]);
+    [pendCuenta, filtroTipo, franquicias, pagosSueldos, cuotasPendientes, edits]);
   const countByCuenta = useMemo(() => {
     const o = {}; pendientes.forEach(m => { o[m.cuenta_bancaria] = (o[m.cuenta_bancaria] || 0) + 1; }); return o;
   }, [pendientes]);
@@ -594,7 +707,11 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
   // Re-evaluar las reglas actuales sobre los pendientes de la cuenta (sin re-subir ni escribir):
   // reconstruye la línea desde el movimiento, la clasifica y pre-carga la propuesta en `edits`.
   // El usuario revisa y acepta (las reglas escala/auto caen como propuesta, no se contabilizan solas).
-  const reEvaluar = () => {
+  const reEvaluar = async () => {
+    // Trae las reglas FRESCAS de la hoja (salta el cache) → toma cambios recién editados
+    // en Maestros sin necesidad de recargar la página.
+    const reglasFrescas = await fetchBancoReglas({ fresh: true }).catch(() => reglas);
+    setReglas(reglasFrescas || []);
     const cta = cuentas.find(c => c.id === cuentaTab);
     const ctx = { banco: cta?.banco, sociedad, pais: "", franquicias, sociedades, cuentas: cuentasAll, moneda: cta?.moneda || "ARS", cuotasPendientes };
     const lineaDeMov = (m) => {
@@ -607,7 +724,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
     setEdits(prev => {
       const next = { ...prev };
       for (const m of pendCuenta) {
-        const p = clasificarLinea(lineaDeMov(m), reglas, proveedores, ctx);
+        const p = clasificarLinea(lineaDeMov(m), reglasFrescas, proveedores, ctx);
         if (!p || p.tipo === "sin_clasificar") continue;
         if (p.tipo === "transferencia_interna") {
           next[m.id] = { ...next[m.id], modoTransfer: true, modoFranquicia: false, modoFC: false, modoCobro: false, noFranquicia: true, cuenta_destino: p.cuenta_destino || next[m.id]?.cuenta_destino };
@@ -644,7 +761,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
               ↻ Re-evaluar reglas
             </button>
           )}
-          <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }}
+          <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }}
             onChange={e => onFile(e.target.files[0])} />
           <button onClick={() => fileRef.current?.click()} disabled={!cuentaTab || uploading}
             style={{ background: T.accent, border: "none", borderRadius: 8, padding: "9px 18px",
@@ -654,6 +771,20 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
           </button>
         </div>
       </div>
+
+      {/* Barra de progreso del upload — no cambies de sociedad mientras sube */}
+      {progreso && progreso.total > 0 && (
+        <div style={{ margin: "0 0 12px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 700, color: T.muted, marginBottom: 5 }}>
+            <span>Subiendo… no cambies de sociedad</span>
+            <span>{progreso.done} / {progreso.total}</span>
+          </div>
+          <div style={{ height: 8, background: T.cardBorder, borderRadius: 999, overflow: "hidden" }}>
+            <div style={{ height: "100%", width: `${Math.round((progreso.done / progreso.total) * 100)}%`,
+              background: T.accent, borderRadius: 999, transition: "width .15s ease" }} />
+          </div>
+        </div>
+      )}
 
       {/* Pestañas por cuenta bancaria */}
       <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
@@ -729,7 +860,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                 const meta = parseMeta(m.referencia);
                 const tipo = meta.tipo || (Number(m.monto) > 0 ? "ingreso" : "");
                 const esTransf = tipo === "transferencia_interna";
-                const modoTransfer = esTransf || !!edits[m.id]?.modoTransfer;
+                const modoTransfer = esTransf || !!edits[m.id]?.modoTransfer || esTransferPropia(m);
                 const destinoSel = (edits[m.id]?.cuenta_destino) ?? m.cuenta_destino ?? "";
                 const interco = !!destinoSel && (cuentasAll.find(c => String(c.id) === String(destinoSel))?.sociedad ?? sociedad) !== sociedad;
                 const fr = frState(m);
@@ -745,14 +876,14 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                 const splitSum = fr.split ? fr.split.reduce((s, p) => s + (Number(p.monto) || 0), 0) : 0;
                 const splitOk = fr.split ? (fr.split.every(p => p.franquicia_id) && Math.abs(splitSum - total) <= 0.01) : false;
                 const puedeAceptar = puedeAceptarMov(m);
-                const modoFC = !fr.es && !modoTransfer && !!edits[m.id]?.modoFC;
+                const modoFC = modoFCde(m);
                 // Caja 1 = proveedor (default: el reconocido si tiene pendientes). Caja 2 = sus facturas.
                 const fcProvSel = fcProvDe(m);
                 const fcDelProv = modoFC && fcProvSel ? fcsDeProv(fcProvSel) : [];
                 const fcSel = modoFC ? fcIdDe(m) : "";
                 const fcSelObj = fcSel ? facturasPendientes.find(f => String(f.id) === String(fcSel)) : null;
                 // Modo cobro de venta (créditos): cliente → su factura de venta + retención opcional.
-                const modoCobro = !fr.es && !modoTransfer && !modoFC && !!edits[m.id]?.modoCobro;
+                const modoCobro = !fr.es && !modoTransfer && !modoFC && modoCobroDe(m);
                 const cobCliSel = cobClienteDe(m);
                 const venDelCli = modoCobro && cobCliSel ? ventasDeCliente(cobCliSel) : [];
                 const cobSel = modoCobro ? cobIdDe(m) : "";
@@ -765,18 +896,18 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                 const cuotaSelObj = modoCuota && cuotaSt.cuotaSel ? cuotasPendientes.find(c => String(c.row_id) === String(cuotaSt.cuotaSel)) : null;
                 const hMatch = (!fr.es && !modoTransfer && !modoFC && !modoCobro && !modoCuota) ? haberesMatch(m) : null;   // débito que coincide con un lote de haberes
                 return (
-                  <Fragment key={m.id}>
+                  <Fragment key={`${m.id}-${i}`}>
                   <tr style={{ borderBottom: fr.split ? "none" : "1px solid #cbd5e1", background: bg }}>
                     <td style={{ padding: "8px 12px", color: T.muted, whiteSpace: "nowrap" }}>{m.fecha}</td>
                     <td style={{ padding: "8px 12px", maxWidth: 220 }}>
                       <div style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.concepto}</div>
                       {m.contraparte_nombre && <div style={{ fontSize: 10, color: T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={m.contraparte_nombre}>{m.contraparte_nombre}</div>}
                     </td>
-                    <td style={{ padding: "8px 12px", fontWeight: 700, textAlign: "right", whiteSpace: "nowrap", color: "#16a34a" }}>
-                      {Number(m.monto) > 0 ? fmt(total) : ""}
-                    </td>
                     <td style={{ padding: "8px 12px", fontWeight: 700, textAlign: "right", whiteSpace: "nowrap", color: "#dc2626" }}>
                       {neg ? fmt(total) : ""}
+                    </td>
+                    <td style={{ padding: "8px 12px", fontWeight: 700, textAlign: "right", whiteSpace: "nowrap", color: "#16a34a" }}>
+                      {Number(m.monto) > 0 ? fmt(total) : ""}
                     </td>
                     <td style={{ padding: "8px 12px" }}>
                       {fr.es ? (
@@ -793,7 +924,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                             ? <div style={{ fontSize: 10, color: total + 0.01 < fcSelObj.saldo ? "#b45309" : T.muted }}>
                                 {fcSelObj.proveedor} · {total + 0.01 < fcSelObj.saldo ? `parcial: $${fmt(total)} de $${fmt(fcSelObj.saldo)} (queda $${fmt(fcSelObj.saldo - total)})` : `saldo $${fmt(fcSelObj.saldo)}`}
                               </div>
-                            : <div style={{ fontSize: 10, color: "#b45309" }}>{!provConPendientes.length ? "sin facturas pendientes" : !fcProvSel ? "elegí proveedor" : "elegí factura"}</div>}
+                            : <div style={{ fontSize: 10, color: "#b45309" }}>{!fcProvSel ? "elegí proveedor" : fcDelProv.length ? "elegí factura" : "sin factura cargada — cargala o gasto directo (⋯)"}</div>}
                         </div>
                       ) : modoCobro ? (
                         <div>
@@ -802,13 +933,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                             ? <div style={{ fontSize: 10, color: cobDiff > 0.01 ? "#b45309" : T.muted }}>
                                 {cobSelObj.cliente} · {cobDiff > 0.01 ? `dep $${fmt(total)}${cobRetSum > 0 ? ` + ret $${fmt(cobRetSum)}` : ""} de $${fmt(cobSelObj.saldo)}` : `saldo $${fmt(cobSelObj.saldo)}`}
                               </div>
-                            : <div style={{ fontSize: 10, color: "#b45309" }}>{!clientesConPendientes.length ? "sin facturas de venta pendientes" : !cobCliSel ? "elegí cliente" : "elegí factura"}</div>}
+                            : <div style={{ fontSize: 10, color: "#b45309" }}>{!cobCliSel ? "elegí cliente" : venDelCli.length ? "elegí factura" : "sin factura de venta — cargala o volvé a normal (⋯)"}</div>}
                         </div>
                       ) : modoCuota ? (
                         <div>
-                          <span style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed" }}>Cuota de financiación</span>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed" }}>Cuota de plan</span>
                           {cuotaSelObj
-                            ? <div style={{ fontSize: 10, color: T.muted }}>{cuotaSelObj.acreedor_nombre || cuotaSelObj.nro_plan || "plan"} · cuota {cuotaSelObj.nro_cuota}{Math.abs(total - (cuotaSelObj.total_tardio || 0)) < Math.abs(total - cuotaSelObj.total) ? " (tardío)" : ""}</div>
+                            ? <div style={{ fontSize: 10, color: T.muted }}>{cuotaSelObj.acreedor_nombre || cuotaSelObj.nro_plan || "plan"} · {cuotaLabel(cuotaSelObj)}{Math.abs(total - (cuotaSelObj.total_tardio || 0)) < Math.abs(total - cuotaSelObj.total) ? " (tardío)" : ""}</div>
                             : <div style={{ fontSize: 10, color: "#b45309" }}>{planesVigentes.length ? "elegí financiación/cuota" : "sin cuotas pendientes"}</div>}
                         </div>
                       ) : hMatch ? (
@@ -830,7 +961,12 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                           <span style={{ fontSize: 11, color: T.muted }}>→</span>
                           <select value={destinoSel} onChange={e => setEdit(m.id, "cuenta_destino", e.target.value)} style={fld(!!destinoSel)}>
                             <option value="">— cuenta destino —</option>
-                            {cuentasAll.filter(c => String(c.id) !== String(m.cuenta_bancaria)).map(c => (
+                            {cuentasAll
+                              .filter(c => String(c.id) !== String(m.cuenta_bancaria))
+                              // Transferencia propia (misma sociedad, contraparte = tu nombre): solo tus cuentas.
+                              // Transferencia manual (⋯): todas, para permitir intercompañía a otra sociedad.
+                              .filter(c => !esTransferPropia(m) || String(c.sociedad ?? "").toLowerCase() === String(sociedad ?? "").toLowerCase())
+                              .map(c => (
                               <option key={c.id} value={c.id}>{c.nombre}{c.sociedad !== sociedad ? ` · ${c.sociedad}` : ""}</option>
                             ))}
                           </select>
@@ -854,24 +990,24 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                         )
                       ) : modoFC ? (
                         <div key="fc" style={{ display: "flex", gap: 6, justifyContent: "center" }}>
-                          <select value={fcProvSel} disabled={!provConPendientes.length} onChange={e => setModo(m.id, { fc_prov: e.target.value, fc_id: "" })} style={fld(!!fcProvSel, 160)}>
-                            <option value="">{provConPendientes.length ? "— proveedor —" : "sin facturas pendientes"}</option>
-                            {provConPendientes.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                          <select value={fcProvSel} onChange={e => setModo(m.id, { fc_prov: e.target.value, fc_id: "" })} style={fld(!!fcProvSel, 160)}>
+                            <option value="">— proveedor —</option>
+                            {provOpciones.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
                           </select>
                           <select value={fcSel} onChange={e => setEdit(m.id, "fc_id", e.target.value)} disabled={!fcProvSel} style={fld(!!fcSel, 200)}>
-                            <option value="">{fcProvSel ? "— factura —" : "elegí proveedor"}</option>
+                            <option value="">{!fcProvSel ? "elegí proveedor" : fcDelProv.length ? "— factura —" : "sin facturas cargadas"}</option>
                             {fcDelProv.map(f => <option key={f.id} value={String(f.id)}>{fcLabel(f)}</option>)}
                           </select>
                         </div>
                       ) : modoCobro ? (
                         <div key="cob" style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
                           <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
-                            <select value={cobCliSel} disabled={!clientesConPendientes.length} onChange={e => setModo(m.id, { cob_cli: e.target.value, cob_id: "" })} style={fld(!!cobCliSel, 160)}>
-                              <option value="">{clientesConPendientes.length ? "— cliente —" : "sin facturas de venta"}</option>
-                              {clientesConPendientes.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                            <select value={cobCliSel} onChange={e => setModo(m.id, { cob_cli: e.target.value, cob_id: "" })} style={fld(!!cobCliSel, 160)}>
+                              <option value="">— cliente —</option>
+                              {clienteOpciones.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                             </select>
                             <select value={cobSel} onChange={e => setEdit(m.id, "cob_id", e.target.value)} disabled={!cobCliSel} style={fld(!!cobSel, 200)}>
-                              <option value="">{cobCliSel ? "— factura —" : "elegí cliente"}</option>
+                              <option value="">{!cobCliSel ? "elegí cliente" : venDelCli.length ? "— factura —" : "sin facturas de venta"}</option>
                               {venDelCli.map(v => <option key={v.id} value={String(v.id)}>{fcLabel(v)}</option>)}
                             </select>
                           </div>
@@ -904,7 +1040,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                           </select>
                           <select value={cuotaSt.cuotaSel} onChange={e => setEdit(m.id, "cuota_row", e.target.value)} disabled={!cuotaSt.planSel} style={fld(!!cuotaSt.cuotaSel, 190)}>
                             <option value="">{cuotaSt.planSel ? "— cuota —" : "elegí financiación"}</option>
-                            {cuotasDePlan(cuotaSt.planSel).map(c => <option key={c.row_id} value={String(c.row_id)}>Cuota {c.nro_cuota} · {fmt(c.total)}{c.vto ? ` · ${c.vto}` : ""}</option>)}
+                            {cuotasDePlan(cuotaSt.planSel).map(c => <option key={c.row_id} value={String(c.row_id)}>Cuota {c.nro_cuota}/{totalCuotasPorPlan.get(c.plan_id) || "?"} · {fmt(c.total)}{c.vto ? ` · ${c.vto}` : ""}</option>)}
                           </select>
                         </div>
                       ) : (
@@ -951,7 +1087,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                             <button style={MENU_ITEM} onClick={() => { setMenuFor(null); pagarTarjetaDesdeExtracto(m); }}>💳 Es el pago de la tarjeta</button>
                           )}
                           {modoFC && (
-                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFC: false, fc_id: undefined, noFranquicia: false }); setMenuFor(null); }}>↩ Volver a normal (no es pago de factura)</button>
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFC: false, fc_id: undefined, noFranquicia: false }); setMenuFor(null); }}>{esProvServ(m) ? "🧾✗ Contabilizar como gasto directo (sin factura)" : "↩ Volver a normal (no es pago de factura)"}</button>
                           )}
                           {neg && !fr.es && !modoTransfer && !modoFC && !modoCobro && !modoCuota && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCuota: true, noCuota: false, modoFranquicia: false, modoTransfer: false, modoFC: false, modoCobro: false, noFranquicia: true }); setMenuFor(null); }}>💳 Imputar a cuota de financiación…</button>

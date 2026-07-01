@@ -42,25 +42,60 @@ export function franquiciasIngresoPnLRows(compsByFr, sociedad, ventasCcId) {
   return out;
 }
 
+// Cobro/pago de franquicia anotado en nb_movimientos (Numbers) → fila con shape de
+// comprobante financiero, para que computeSaldoReal lo cuente igual que un movimiento
+// del "cuaderno viejo" de Franquicias. fr_tipo = PAGO | PAGO_PAUTA | PAGO_ENVIADO.
+const FR_TIPO_DEFAULT = { COBRO: "PAGO", EGRESO: "PAGO_ENVIADO" };
+export function movimientoToCompRow(mov) {
+  const fecha = String(mov.fecha || "");                                  // ISO YYYY-MM-DD
+  const date  = fecha.includes("-") ? fecha.split("-").reverse().join("/") : fecha;  // → DD/MM/YYYY
+  return {
+    frId:     String(mov.contraparte_id || ""),
+    type:     mov.fr_tipo || FR_TIPO_DEFAULT[mov.tipo] || "PAGO",
+    amount:   Math.abs(Number(mov.monto) || 0),
+    currency: mov.moneda || "ARS",
+    empresa:  SOCIEDAD_EMPRESA[(mov.sociedad || "").toLowerCase()] || null,
+    date,
+  };
+}
+
 // Saldos de franquiciados → { activo, pasivo } (presentación BRUTA, sin netear):
 //   saldo > 0 (nos deben)  → Activo "Franquiciados"
 //   saldo < 0 (les debemos) → Pasivo "Franquiciados (saldo a favor)" (ingreso diferido)
 // Por moneda — una empresa puede facturar en varias (ej. Bigg Fit en USD y EUR).
-export function franquiciasSaldosCxC({ comps, saldos, franchises }, sociedad, year, month) {
+// DOS FUENTES, una CC: los cobros viejos viven en `comps` (Franquicias); los nuevos,
+// anotados por Conciliación, llegan en `movimientos` (nb_movimientos) y se unen acá
+// sin mudar datos. Mientras no haya cobros de franquicia en Numbers, el saldo da igual.
+export function franquiciasSaldosCxC({ comps, saldos, franchises }, sociedad, year, month, movimientos = []) {
   const empresa = SOCIEDAD_EMPRESA[(sociedad ?? "").toLowerCase()];
   if (!empresa) return { activo: [], pasivo: [] };
+
+  // Unir los cobros/pagos de franquicia de nb_movimientos al cuaderno de Franquicias.
+  let compsCC = comps;
+  const movsFr = (movimientos ?? []).filter(m =>
+    m.origen === "franquicias" && m.contraparte_id &&
+    !String(m.documento_id || "").startsWith("IGN-"));
+  if (movsFr.length) {
+    compsCC = { ...comps };
+    for (const m of movsFr) {
+      const row = movimientoToCompRow(m);
+      if (!row.frId) continue;
+      compsCC[row.frId] = [...(compsCC[row.frId] ?? []), row];
+    }
+  }
+
   const activo = [], pasivo = [];
   for (const moneda of MONEDAS) {
     const deben = [], debemos = [];
     let totA = 0, totP = 0;
     for (const fr of (franchises ?? [])) {
       if (fr.activa === false) continue;
-      const saldo = computeSaldoReal(fr.id, year, month, comps, saldos, null, moneda, empresa);
+      const saldo = computeSaldoReal(fr.id, year, month, compsCC, saldos, null, moneda, empresa);
       if (saldo > 0.01)       { deben.push({ contraparte: fr.name, vto: "", saldo, moneda }); totA += saldo; }
       else if (saldo < -0.01) { debemos.push({ contraparte: fr.name, vto: "", saldo: -saldo, moneda }); totP += -saldo; }
     }
     if (totA > 0.01) { deben.sort((a, b) => b.saldo - a.saldo);   activo.push({ label: "Franquiciados", moneda, saldo: totA, docs: deben, headerColor: "#16a34a" }); }
-    if (totP > 0.01) { debemos.sort((a, b) => b.saldo - a.saldo); pasivo.push({ label: "Franquiciados (saldo a favor)", moneda, saldo: totP, docs: debemos, headerColor: "#dc2626" }); }
+    if (totP > 0.01) { debemos.sort((a, b) => b.saldo - a.saldo); pasivo.push({ label: "Franquiciados (les debemos)", moneda, saldo: totP, docs: debemos, headerColor: "#dc2626" }); }
   }
   return { activo, pasivo };
 }

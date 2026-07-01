@@ -121,6 +121,16 @@ function doPost(e) {
     return nbErr("sheet inválida — debe empezar con 'nb_'");
   }
 
+  // ── LOCK: serializa TODAS las escrituras del Numbers GAS ──────────────────
+  // Conciliación (Fede), Sueldos (Santi, vía BASE_NB) y Franquicias (Lucía)
+  // escriben nb_movimientos por ESTE mismo script → un lock acá los serializa.
+  // Sin esto, escrituras concurrentes se pisan (add_batch usa getLastRow+setValues)
+  // o borran la fila equivocada (del/del_comp por índice), en silencio.
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); }          // espera su turno hasta 30s
+  catch (err) { return nbErr("ocupado — reintentá (lock no disponible en 30s)"); }
+
+  try {
   const ss = SpreadsheetApp.openById(NUMBERS_SHEET_ID);
   const sh = ss.getSheetByName(sheetName);
   if (!sh) return nbErr("Sheet desconocida: " + sheetName);
@@ -220,6 +230,10 @@ function doPost(e) {
   }
 
   return nbErr("acción desconocida: " + body.action);
+  } finally {
+    SpreadsheetApp.flush();   // confirma la escritura ANTES de soltar el lock
+    lock.releaseLock();
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

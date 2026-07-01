@@ -80,9 +80,37 @@ export function reconocerCuota(linea, cuotasPendientes, moneda) {
     const dT   = Math.abs(monto - (Number(c.total) || 0));
     const dTT  = (Number(c.total_tardio) || 0) > 0 ? Math.abs(monto - Number(c.total_tardio)) : Infinity;
     const diff = Math.min(dT, dTT);
-    if (!byPlan && diff > tol) continue;             // por CUIT exigimos ventana de monto
+    // Ventana de monto: por CUIT es estricta; por Nº de plan es amplia (cuotas variables de
+    // crédito) pero NO ilimitada → un débito de $31k con nº de plan en la glosa NO se pega a
+    // una cuota de $2,5M (era un impuesto IIBB con "Cuota N°18" en el texto).
+    const maxDiff = byPlan ? Math.max(tol, monto * 0.5) : tol;
+    if (diff > maxDiff) continue;
     const score = (byPlan ? 0 : 1e9) + diff;         // prioriza match por nº de plan
     if (!best || score < best.score) best = { c, esTardio: dTT < dT, byPlan, score };
+  }
+  // Fallback por MONTO EXACTO: los débitos automáticos AFIP de Galicia no traen ni el
+  // Nº de plan en la glosa ni el CUIT en la leyenda → nunca llegan al match de arriba.
+  // Pero las cuotas de AFIP tienen montos distintos y fijos, así que el importe exacto
+  // identifica el plan. Solo si matchea UN ÚNICO plan (si dos planes tuvieran la misma
+  // cuota es ambiguo → no adivina). accion "escala" → siempre lo confirma el humano.
+  if (!best) {
+    const hits = cuotasPendientes.filter(c =>
+      (!moneda || !c.moneda || c.moneda === moneda) &&
+      (Math.abs(monto - (Number(c.total) || 0)) <= 1 ||
+       ((Number(c.total_tardio) || 0) > 0 && Math.abs(monto - Number(c.total_tardio)) <= 1)));
+    const planes = [...new Set(hits.map(c => c.plan_id))];
+    if (planes.length === 1 && hits.length) {
+      const c = hits.slice().sort((a, b) => (Number(a.nro_cuota) || 0) - (Number(b.nro_cuota) || 0))[0];
+      const esTardio = (Number(c.total_tardio) || 0) > 0 && Math.abs(monto - Number(c.total_tardio)) < Math.abs(monto - (Number(c.total) || 0));
+      return {
+        regla_id: "", tipo: "cuota_financiacion",
+        cuenta_contable: "", centro_costo: "", cuenta_destino: "", proveedor_id: "",
+        plan_id: c.plan_id, nro_cuota: c.nro_cuota, cuota_row_id: c.row_id, esTardio,
+        accion: "escala",
+        motivo: `Cuota ${c.nro_cuota} · ${c.acreedor_nombre || c.nro_plan || "plan"} (por monto)`,
+        confianza: "media",
+      };
+    }
   }
   if (!best) return null;
   const { c, esTardio, byPlan } = best;

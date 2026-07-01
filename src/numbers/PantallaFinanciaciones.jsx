@@ -158,8 +158,8 @@ export default function PantallaFinanciaciones({ sociedad }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: T.tableHead, color: T.tableHeadText }}>
-                {["Estado", "Acreedor", "Nº Plan", "Capital", "Pagado", "Saldo", "Próx. vto", "Cuotas", ""].map((h, i) => (
-                  <th key={i} style={{ padding: "9px 12px", textAlign: i >= 3 && i <= 5 ? "right" : "left", fontSize: 11, fontWeight: 700, letterSpacing: ".04em", whiteSpace: "nowrap" }}>{h}</th>
+                {["Estado", "Acreedor", "Nº Plan", "Cuenta capital", "Capital", "Pagado", "Saldo", "Próx. vto", "Cuotas", ""].map((h, i) => (
+                  <th key={i} style={{ padding: "9px 12px", textAlign: "center", fontSize: 11, fontWeight: 700, letterSpacing: ".04em", whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -169,14 +169,15 @@ export default function PantallaFinanciaciones({ sociedad }) {
                   onClick={() => setView({ mode: "detalle", plan: p })}
                   onMouseEnter={e => e.currentTarget.style.background = "#fafafa"}
                   onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                  <td style={{ padding: "9px 12px" }}><Badge estado={p.estado} cfg={ESTADO_FIN} /></td>
-                  <td style={{ padding: "9px 12px", fontWeight: 600, color: T.text }}>{p.acreedor_nombre || "—"}</td>
-                  <td style={{ padding: "9px 12px", color: T.muted, fontFamily: T.mono, fontSize: 12 }}>{p.nro_plan || "—"}</td>
+                  <td style={{ padding: "9px 12px", textAlign: "center" }}><Badge estado={p.estado} cfg={ESTADO_FIN} /></td>
+                  <td style={{ padding: "9px 12px", textAlign: "center", fontWeight: 600, color: T.text }}>{p.acreedor_nombre || "—"}</td>
+                  <td style={{ padding: "9px 12px", textAlign: "center", color: T.muted, fontFamily: T.mono, fontSize: 12 }}>{p.nro_plan || "—"}</td>
+                  <td style={{ padding: "9px 12px", textAlign: "center", color: T.muted, fontSize: 12 }}>{String(p.cuenta_capital || "").replace(/^CUENTA_/, "") || "—"}</td>
                   <td style={{ padding: "9px 12px", textAlign: "right", fontFamily: T.mono, color: T.text, fontWeight: 600 }}>{fmtMoney(p.capital_total, p.moneda)}</td>
                   <td style={{ padding: "9px 12px", textAlign: "right", fontFamily: T.mono, color: T.green }}>{fmtMoney(p.capital_pagado, p.moneda)}</td>
                   <td style={{ padding: "9px 12px", textAlign: "right", fontFamily: T.mono, fontWeight: 700, color: p.saldo > 0 ? T.red : T.green }}>{fmtMoney(p.saldo, p.moneda)}</td>
-                  <td style={{ padding: "9px 12px", color: T.muted }}>{fmtDate(p.prox_vto)}</td>
-                  <td style={{ padding: "9px 12px", color: T.muted }}>{p.n_pagadas}/{p.n_cuotas}</td>
+                  <td style={{ padding: "9px 12px", textAlign: "center", color: T.muted }}>{fmtDate(p.prox_vto)}</td>
+                  <td style={{ padding: "9px 12px", textAlign: "center", color: T.muted }}>{p.n_pagadas}/{p.n_cuotas}</td>
                   <td style={{ padding: "9px 12px", color: T.dim, textAlign: "right" }}>›</td>
                 </tr>
               ))}
@@ -653,15 +654,23 @@ function DetalleFinanciacion({ plan, bancos, onBack, onChanged }) {
     catch (e) { alert("Error: " + (e?.message || e)); setBusy(false); }
   }
 
+  const cuentaCapital = String(plan.cuenta_capital || "").replace(/^CUENTA_/, "");
+
   return (
     <div className="fade" style={{ padding: "28px 32px" }}>
       <button onClick={onBack} style={{ background: "none", border: "none", color: T.muted, fontSize: 13, cursor: "pointer", marginBottom: 12, fontFamily: T.font }}>‹ Volver</button>
       <PageHeader title={plan.acreedor_nombre || "Financiación"}
-        subtitle={`${TIPOS[plan.tipo]?.label || ""} · Nº ${plan.nro_plan || "—"} · consolidado ${fmtDate(plan.fecha_consolidacion)}${plan.es_apertura ? " · apertura" : ""}`}
+        subtitle={`${TIPOS[plan.tipo]?.label || ""} · Nº ${plan.nro_plan || "—"} · consolidado ${fmtDate(plan.fecha_consolidacion)}${plan.es_apertura ? " · apertura" : ""}${cuentaCapital ? ` · Capital → ${cuentaCapital}` : ""}`}
         action={<div style={{ display: "flex", gap: 8 }}>
           <Btn variant="ghost" onClick={doCancelar} disabled={busy}>Cancelar cuotas</Btn>
           <Btn variant="danger" onClick={doEliminar} disabled={busy}>Eliminar</Btn>
         </div>} />
+
+      {plan.nota && (
+        <div style={{ marginBottom: 16, padding: "10px 14px", background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, fontSize: 13, color: T.muted }}>
+          <span style={{ fontWeight: 700, color: T.text }}>Nota: </span>{plan.nota}
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
         <CompactCard label="Capital total" value={fmtMoney(plan.capital_total, plan.moneda)} />

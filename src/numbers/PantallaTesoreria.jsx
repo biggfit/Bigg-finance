@@ -26,6 +26,10 @@ const fmtSaldo = (n, moneda) => {
   return `${neg ? "-" : ""}${sym} ${abs.toLocaleString("es-AR", { maximumFractionDigits: 0 })}`;
 };
 
+// Orden de Activo/Pasivo: Franquiciados arriba (alineado entre ambos lados), luego por monto.
+const _esFranq = it => (it.label ?? "").startsWith("Franquiciados");
+const _franqFirst = (a, b) => (_esFranq(b) ? 1 : 0) - (_esFranq(a) ? 1 : 0) || b.saldo - a.saldo;
+
 const TIPO_CFG = {
   PAGO_FC:       { bg:"#fff7ed", color:"#f97316", label:"Pago FC"     },
   COBRO_FC:      { bg:"#f0f9ff", color:"#0ea5e9", label:"Cobro FC"    },
@@ -1122,11 +1126,11 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
   // cuando se haga el switch (financieros solo en nb_movimientos) hay que reapuntar la fuente.
   const franqCC = useMemo(() => {
     const now = new Date();
-    return franquiciasSaldosCxC(franqData, sociedad, now.getFullYear(), now.getMonth());
-  }, [franqData, sociedad]);
+    return franquiciasSaldosCxC(franqData, sociedad, now.getFullYear(), now.getMonth(), movimientos);
+  }, [franqData, sociedad, movimientos]);
 
   const aCobrarFull = useMemo(
-    () => [...aCobrar, ...franqCC.activo].sort((a, b) => b.saldo - a.saldo),
+    () => [...aCobrar, ...franqCC.activo].sort(_franqFirst),
     [aCobrar, franqCC]
   );
 
@@ -1236,7 +1240,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
       }
     }
     out.push(...finPasivo, ...anticiposPasivo, ...franqCC.pasivo, ...tarjetasPasivo);
-    return out.sort((a, b) => b.saldo - a.saldo);
+    return out.sort(_franqFirst);
   }, [aPagar, sueldosPasivo, finPasivo, anticiposPasivo, franqCC, tarjetasPasivo]);
 
   // ── Guardar movimiento entre cuentas ──────────────────────────────────────
