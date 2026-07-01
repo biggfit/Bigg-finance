@@ -260,8 +260,8 @@ export function buildCuentaCorriente(frId, comps, saldoInicial, frCurrency = nul
 
 /**
  * Calcula cuánto falta facturar de pagos a cuenta (PAGO_PAUTA).
- * Trabaja periodo a periodo: por cada mes, pendiente = max(0, cobros_mes - facts_mes).
- * Así un PAGO_PAUTA de abril no queda anulado por una FACTURA|PAUTA de enero.
+ * Matching por importe exacto: cada PAGO_PAUTA necesita una FACTURA|PAUTA del mismo monto.
+ * Una FACTURA|PAUTA de distinto importe (ej. emitida contra saldo acumulado) no cancela el pago.
  */
 export function computePautaPendiente(frId, comps, upToYear, upToMonth, frCurrency = null, filterCurrency = null, empresa = null) {
   const key = String(frId);
@@ -269,22 +269,19 @@ export function computePautaPendiente(frId, comps, upToYear, upToMonth, frCurren
   const matchCur = c => filterCurrency === null || compCurrency(c) === filterCurrency;
   const matchEmp = c => empresa === null || compEmpresa(c) === empresa;
 
-  // Recolectar todos los periodos únicos con movimientos PAGO_PAUTA o FACTURA|PAUTA
-  const periodos = new Set();
-  for (const c of all) {
-    if (c.type !== "PAGO_PAUTA" && c.type !== makeType("FACTURA", "PAUTA")) continue;
-    if (!upToPeriod(c, upToYear, upToMonth)) continue;
-    if (!matchCur(c) || !matchEmp(c)) continue;
-    periodos.add(`${dateYear(c.date)}-${dateMonth(c.date)}`);
-  }
+  const pagos = all
+    .filter(c => c.type === "PAGO_PAUTA" && upToPeriod(c, upToYear, upToMonth) && matchCur(c) && matchEmp(c))
+    .sort((a, b) => cmpDate(a.date, b.date));
+
+  const factsPool = all
+    .filter(c => c.type === makeType("FACTURA", "PAUTA") && upToPeriod(c, upToYear, upToMonth) && matchCur(c) && matchEmp(c))
+    .map(c => ({ ...c, _used: false }));
 
   let total = 0;
-  for (const periodo of periodos) {
-    const [y, m] = periodo.split("-").map(Number);
-    const base = c => dateYear(c.date) === y && dateMonth(c.date) === m && matchCur(c) && matchEmp(c);
-    const cobros = all.filter(c => c.type === "PAGO_PAUTA"                 && base(c)).reduce((a, c) => a + c.amount, 0);
-    const facts  = all.filter(c => c.type === makeType("FACTURA", "PAUTA") && base(c)).reduce((a, c) => a + c.amount, 0);
-    total += Math.max(0, cobros - facts);
+  for (const pago of pagos) {
+    const match = factsPool.find(f => !f._used && Math.abs(f.amount - pago.amount) < 0.01);
+    if (match) { match._used = true; }
+    else { total += pago.amount; }
   }
   return total;
 }

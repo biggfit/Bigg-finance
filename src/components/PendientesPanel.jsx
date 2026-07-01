@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useStore } from "../lib/context";
-import { makeType, MONTHS, AVAILABLE_YEARS, fmt, compCurrency, compEmpresa, CUENTAS, CUENTA_LABEL, COMPANIES, uid } from "../lib/helpers";
+import { makeType, MONTHS, AVAILABLE_YEARS, fmt, compCurrency, compEmpresa, CUENTAS, CUENTA_LABEL, COMPANIES, uid, cmpDate } from "../lib/helpers";
 import { inPeriod, dateMonth, dateYear, todayDmy } from "../data/franchisor";
 import { sendMailFr } from "../lib/sheetsApi";
 
@@ -406,24 +406,21 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
   }, [franchises, comps, activeCompany]);
 
   // 3. Pagos a cuenta sin factura de pauta
+  // Matching por importe exacto: cada PAGO_PAUTA necesita una FACTURA|PAUTA del mismo monto.
+  // Una FACTURA|PAUTA de distinto importe (ej. contra saldo acumulado) no cancela el pago.
   const pagosSinFactura = useMemo(() => {
     return franchises.filter(f => f.activa !== false).flatMap(fr => {
       const frComps = comps[fr.id] ?? [];
-      const pagos = frComps.filter(c => c.type === "PAGO_PAUTA" &&
-                     (!activeCompany || compEmpresa(c) === activeCompany));
-      // Por período: mostrar solo los pagos que exceden la cantidad de facturas emitidas
-      return pagos.filter((c, _, arr) => {
-        const m = dateMonth(c.date);
-        const y = dateYear(c.date);
-        const countFacts = frComps.filter(f2 =>
-          f2.type === makeType("FACTURA","PAUTA") &&
-          inPeriod(f2, m, y) &&
-          (!activeCompany || compEmpresa(f2) === activeCompany)
-        ).length;
-        const periodPagos = arr.filter(p => dateMonth(p.date) === m && dateYear(p.date) === y);
-        // Solo mostrar los pagos "extras" que no tienen factura aún (por índice)
-        const idxInPeriod = periodPagos.findIndex(p => p.id === c.id);
-        return idxInPeriod >= countFacts;
+      const pagos = frComps
+        .filter(c => c.type === "PAGO_PAUTA" && (!activeCompany || compEmpresa(c) === activeCompany))
+        .sort((a, b) => cmpDate(a.date, b.date));
+      const factsPool = frComps
+        .filter(c => c.type === makeType("FACTURA","PAUTA") && (!activeCompany || compEmpresa(c) === activeCompany))
+        .map(c => ({ ...c, _used: false }));
+      return pagos.filter(pago => {
+        const match = factsPool.find(f => !f._used && Math.abs(f.amount - pago.amount) < 0.01);
+        if (match) { match._used = true; return false; }
+        return true;
       }).map(c => ({ fr, comp: c }));
     });
   }, [franchises, comps, activeCompany]);
