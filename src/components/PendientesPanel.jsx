@@ -740,6 +740,24 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                   style={{ background: "var(--bg)", border: `1px solid ${batchDate ? "var(--green)" : "var(--red)"}`, color: "var(--text)", borderRadius: 6, padding: "3px 8px", fontSize: 11, fontFamily: "var(--font)" }} />
               </div>
 
+              {/* Botón borrar comprobantes en $0 */}
+              {!batchRunning && (() => {
+                const ceroRows = sinAfipAll.filter(({ comp }) => (comp.amount ?? 0) === 0);
+                if (ceroRows.length === 0) return null;
+                return (
+                  <button
+                    className="ghost"
+                    style={{ fontSize: 11, padding: "4px 12px", color: "var(--muted)", border: "1px solid var(--border2)", whiteSpace: "nowrap" }}
+                    onClick={() => {
+                      if (!window.confirm(`¿Borrar ${ceroRows.length} comprobante${ceroRows.length !== 1 ? "s" : ""} en $0? Esta acción no se puede deshacer.`)) return;
+                      ceroRows.forEach(({ fr, comp }) => deleteComp(fr.id, comp.id));
+                    }}
+                  >
+                    🗑 Borrar $0 ({ceroRows.length})
+                  </button>
+                );
+              })()}
+
               {/* Botón emisión masiva */}
               {!batchRunning && !batchDone && toEmit.length > 0 && (
                 <button
