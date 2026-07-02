@@ -13,6 +13,7 @@ import PantallaIntercompania    from "./numbers/PantallaIntercompania";
 import PantallaGastos           from "./numbers/PantallaGastos";
 import PantallaReconciliacion   from "./numbers/PantallaReconciliacion";
 import PantallaFinanciaciones   from "./numbers/PantallaFinanciaciones";
+import PantallaSocios            from "./numbers/PantallaSocios";
 import PantallaResumenTarjeta   from "./numbers/PantallaResumenTarjeta";
 import { SOCIEDADES as SOC_FALLBACK } from "./data/tesoreriaData";
 import { fetchSociedades, fetchMovimientosPendientes } from "./lib/numbersApi";
@@ -44,13 +45,11 @@ const MAESTROS_TABS = [
 ];
 
 const SECTIONS = [
-  { id:"dashboard", label:"Dashboard", icon:"◈", component: PantallaDashboard },
+  { id:"tesoreria", label:"Tesorería", icon:"⬡", component: PantallaTesoreria },
   { id:"ingresos",  label:"Ingresos",  icon:"↑", component: PantallaIngresos  },
   { id:"egresos",   label:"Egresos",   icon:"↓", component: PantallaEgresos   },
-  { id:"tesoreria", label:"Tesorería", icon:"⬡", component: PantallaTesoreria },
   { id:"financiaciones", label:"Financiaciones", icon:"%", component: PantallaFinanciaciones },
   { id:"reconciliacion", label:"Conciliación", icon:"≡", component: PantallaReconciliacion },
-  { id:"reportes",  label:"Reportes",  icon:"▦", component: PantallaReportes  },
 ];
 
 function Placeholder({ section }) {
@@ -81,11 +80,13 @@ function Placeholder({ section }) {
 }
 
 export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
-  const [activeId,       setActiveId]       = useState("dashboard");
+  const [activeId,       setActiveId]       = useState("tesoreria");
   const [egresoSubView,  setEgresoSubView]  = useState(null);
   const [ingresoSubView, setIngresoSubView] = useState(null);
   const [egresoOpen,     setEgresoOpen]     = useState(false);
   const [ingresoOpen,    setIngresoOpen]    = useState(false);
+  const [finOpen,        setFinOpen]        = useState(false);
+  const [finTab,         setFinTab]         = useState("plan_afip");   // plan_afip | prestamo | anticipo
   const [sociedades,     setSociedades]     = useState(SOC_FALLBACK);
   const [socIdx,         setSocIdx]         = useState(0);
   const [showSocDrop,    setShowSocDrop]    = useState(false);
@@ -256,7 +257,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
 
           {/* ── Nav items ── */}
           <nav aria-label="Navegación principal" style={{ flex:1, display:"flex", flexDirection:"column", gap:1, padding:"8px 0", overflowY:"auto" }}>
-            <div style={{ padding:"4px 16px 6px", fontSize:10, fontWeight:700, letterSpacing:".1em", color:T.sidebarMuted, textTransform:"uppercase" }}>Navegación</div>
+            <div style={{ padding:"4px 16px 6px", fontSize:10, fontWeight:700, letterSpacing:".1em", color:T.sidebarMuted, textTransform:"uppercase" }}>Navegación por sociedad</div>
             {SECTIONS.map(s => {
               const active = activeId === s.id && !showMaestros;
 
@@ -374,6 +375,42 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
                 );
               }
 
+              // ── Financiaciones: sub-items (Planes / Préstamos / Anticipos) ──
+              if (s.id === "financiaciones") {
+                return (
+                  <div key={s.id}>
+                    <button onClick={() => { setFinOpen(o => !o); setEgresoOpen(false); setIngresoOpen(false); }}
+                      aria-expanded={finOpen}
+                      style={navBtnStyle(active)} {...navBtnHover(active)}>
+                      <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>{s.icon}</span>
+                      <span style={{ flex:1 }}>{s.label}</span>
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink:0, transform: finOpen ? "rotate(180deg)" : "rotate(0deg)", transition:"transform .2s", opacity:.5 }}>
+                        <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </button>
+                    {finOpen && [["plan_afip","Planes"],["prestamo","Préstamos"],["anticipo","Anticipos"]].map(([k, label]) => {
+                      const subActive = activeId === "financiaciones" && finTab === k && !showMaestros && !activeSpecial;
+                      return (
+                        <div key={k} style={{ display:"flex", alignItems:"center", margin:"1px 6px", borderRadius:8,
+                          background: subActive ? "rgba(173,255,25,.08)" : "rgba(0,0,0,.35)", transition:"background .12s" }}
+                          onMouseEnter={e=>{ if(!subActive) e.currentTarget.style.background="rgba(0,0,0,.5)"; }}
+                          onMouseLeave={e=>{ if(!subActive) e.currentTarget.style.background="rgba(0,0,0,.35)"; }}>
+                          <button
+                            onClick={() => { setActiveId("financiaciones"); setFinTab(k); setFinOpen(true); setEgresoSubView(null); setIngresoSubView(null); setActiveMaestrosTab(null); setActiveSpecial(null); }}
+                            aria-current={subActive ? "page" : undefined}
+                            style={{ flex:1, background:"transparent", border:"none", borderRadius:8,
+                              color: subActive ? T.accent : "rgba(255,255,255,.45)", textAlign:"left",
+                              padding:"7px 8px 7px 38px", fontSize:12, fontFamily:T.font, cursor:"pointer",
+                              fontWeight: subActive ? 700 : 400 }}>
+                            {label}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              }
+
               // ── Resto de secciones (sin sub-items) ────────────────────────────
               return (
                 <button key={s.id} onClick={() => { setActiveId(s.id); setEgresoSubView(null); setIngresoSubView(null); setActiveMaestrosTab(null); setActiveSpecial(null); }}
@@ -388,14 +425,15 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
                 </button>
               );
             })}
-          </nav>
 
           {/* ── Módulos especiales ── */}
           <div style={{ borderTop:"1px solid rgba(255,255,255,.07)", padding:"8px 0 4px" }}>
-            <div style={{ padding:"4px 16px 6px", fontSize:10, fontWeight:700, letterSpacing:".1em", color:T.sidebarMuted, textTransform:"uppercase" }}>Especiales</div>
+            <div style={{ padding:"4px 16px 6px", fontSize:10, fontWeight:700, letterSpacing:".1em", color:T.sidebarMuted, textTransform:"uppercase" }}>Navegación consolidada</div>
             {[
+              { id:"reportes",        icon:"▦", label:"Reportes",          soon:false, onClick: () => { setActiveSpecial("reportes"); } },
               { id:"intercompania",   icon:"⇄", label:"Intercompañía",     soon:false, onClick: () => { setActiveSpecial("intercompania"); } },
               { id:"cambio",          icon:"$", label:"Cambio de moneda",   soon:false, onClick: () => { setActiveSpecial("cambio"); } },
+              { id:"socios",          icon:"◎", label:"Socios",             soon:false, onClick: () => { setActiveSpecial("socios"); } },
             ].map(item => {
               const active = !item.soon && activeSpecial === item.id;
               return (
@@ -411,20 +449,11 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
                 </button>
               );
             })}
-            <button onClick={onGoToFranquicias} style={{
-              display:"flex", alignItems:"center", gap:10,
-              width:"calc(100% - 12px)", margin:"0 6px",
-              padding:"9px 10px", borderRadius:8,
-              background:"transparent", border:"none",
-              color:"rgba(255,255,255,.4)",
-              fontFamily:T.font, fontSize:13, fontWeight:500,
-              cursor:"pointer", textAlign:"left", transition:"background .15s",
-            }}
-            onMouseEnter={e=>e.currentTarget.style.background=T.sidebarHover}
-            onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-              <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>→</span>
-              Bigg Franquicias
-            </button>
+          </div>
+
+          {/* ── Otras apps BIGG (saltos fuera de Numbers) ── */}
+          <div style={{ borderTop:"1px solid rgba(255,255,255,.07)", padding:"8px 0 4px" }}>
+            <div style={{ padding:"4px 16px 6px", fontSize:10, fontWeight:700, letterSpacing:".1em", color:T.sidebarMuted, textTransform:"uppercase" }}>Otras apps</div>
             {onGoToSueldos && (
               <button onClick={onGoToSueldos} style={{
                 display:"flex", alignItems:"center", gap:10,
@@ -441,6 +470,20 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
                 BIGG Sueldos
               </button>
             )}
+            <button onClick={onGoToFranquicias} style={{
+              display:"flex", alignItems:"center", gap:10,
+              width:"calc(100% - 12px)", margin:"0 6px",
+              padding:"9px 10px", borderRadius:8,
+              background:"transparent", border:"none",
+              color:"rgba(255,255,255,.4)",
+              fontFamily:T.font, fontSize:13, fontWeight:500,
+              cursor:"pointer", textAlign:"left", transition:"background .15s",
+            }}
+            onMouseEnter={e=>e.currentTarget.style.background=T.sidebarHover}
+            onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+              <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>→</span>
+              BIGG Franquicias
+            </button>
           </div>
 
           {/* ── Pie: Maestros ── */}
@@ -452,6 +495,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
               Maestros
             </button>
           </div>
+          </nav>
 
         </div>
       )}
@@ -463,22 +507,27 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
           flexShrink:0, boxShadow:"0 1px 3px rgba(0,0,0,.06)" }}>
           <span style={{ fontSize:12, fontWeight:700, color:T.muted,
             letterSpacing:".08em", textTransform:"uppercase" }}>BIGG Numbers</span>
-          <span style={{ fontSize:12, color:T.dim }}>›</span>
-          <span style={{ fontSize:12, fontWeight:700, color:T.text }}>
-            {showMaestros
+          {String(
+            showMaestros
               ? `Maestros › ${MAESTROS_TABS.find(t => t.id === activeMaestrosTab)?.label ?? ""}`
+              : activeSpecial === "reportes"       ? "Reportes"
               : activeSpecial === "intercompania"  ? "Intercompañía"
               : activeSpecial === "cambio"         ? "Cambio de moneda"
+              : activeSpecial === "socios"         ? "Socios"
               : activeSpecial === "reconciliacion" ? "Conciliación bancaria"
               : egresoSubView  === "new-compra" ? "Egresos › Nueva Compra"
               : egresoSubView  === "new-gasto"  ? "Gastos › Nuevo Gasto"
               : egresoSubView  === "gastos"     ? "Gastos"
               : egresoSubView  === "new-resumen-tc" ? "Egresos › Resumen de tarjeta"
               : ingresoSubView === "new-venta"  ? "Ingresos › Nueva Venta"
-              : section?.label}
-          </span>
+              : activeId === "financiaciones"   ? `Financiaciones › ${finTab === "prestamo" ? "Préstamos" : finTab === "anticipo" ? "Anticipos" : "Planes"}`
+              : section?.label ?? ""
+          ).split(" › ").flatMap((part, i) => [
+            <span key={`sep${i}`} style={{ fontSize:12, color:T.dim }}>›</span>,
+            <span key={`crumb${i}`} style={{ fontSize:12, fontWeight:700, color:T.text }}>{part}</span>,
+          ])}
           {/* Badge sociedad activa — oculto en módulos transversales */}
-          {!showMaestros && (
+          {!showMaestros && activeSpecial !== "socios" && (
             <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6,
               background:"#f0f9ff", border:"1px solid #bae6fd", borderRadius:999,
               padding:"3px 10px", fontSize:11, fontWeight:700, color:"#0369a1" }}>
@@ -498,6 +547,10 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
             ? <PantallaIntercompania sociedad={activeSoc.id} />
             : activeSpecial === "cambio"
             ? <PantallaCambioMoneda sociedad={activeSoc.id} />
+            : activeSpecial === "socios"
+            ? <PantallaSocios />
+            : activeSpecial === "reportes"
+            ? <PantallaReportes sociedad={activeSoc.id} />
             : activeSpecial === "reconciliacion"
             ? <PantallaReconciliacion sociedad={activeSoc.id} />
             : section?.component
@@ -509,6 +562,8 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
               ? <PantallaEgresos  sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView} />
               : section.id === "ingresos"
               ? <PantallaIngresos sociedad={activeSoc.id} subView={ingresoSubView} onSubViewChange={setIngresoSubView} />
+              : section.id === "financiaciones"
+              ? <PantallaFinanciaciones sociedad={activeSoc.id} tab={finTab} onTabChange={setFinTab} />
               : section.id === "reconciliacion"
               ? <PantallaReconciliacion sociedad={activeSoc.id} onPendientes={setPendConcil} />
               : <section.component sociedad={activeSoc.id} />

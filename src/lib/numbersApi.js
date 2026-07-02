@@ -1427,6 +1427,159 @@ export async function deleteFinanciacion(plan_id) {
   for (const id of ids) await post({ action: "del", sheet: "nb_financiaciones", id });
 }
 
+// ─── SOCIOS (cuenta corriente: dividendos + préstamos) ─────────────────────────
+//
+// Módulo especial group-level (transversal a las sociedades). Un socio ES un franquiciado:
+// contraparte bidireccional cuyo saldo neto puede ser deudor (nos debe → Activo) o acreedor
+// (le debemos → Pasivo). NUNCA toca el P&L — dividendos y préstamos a socios son balance puro
+// (reparto de patrimonio / cuenta particular), no gasto ni ingreso.
+//
+// DOS fuentes que netean (como franquiciados):
+//   · CAJA  → nb_movimientos (origen="socios", contraparte_id=socio, socio_tipo, sociedad = la
+//     que manda/recibe la plata). Autoridad del efectivo → Tesorería/Cash Flow lo ven.
+//   · DEVENGO no-cash → nb_socios_cc (dividendo declarado + saldos de apertura). Sin caja.
+// Maestro: nb_socios (group-level, con participacion % para el reparto del dividendo).
+//
+// socio_tipo (nb_movimientos): prestamo | devolucion | aporte | dividendo_pago
+// tipo (nb_socios_cc):         dividendo_declarado | apertura
+//
+// Convención de signo del SALDO por socio (óptica de la empresa): + nos debe / − le debemos.
+//   prestamo +  · devolucion −  · aporte −  · dividendo_pago +  · dividendo_declarado −
+//   apertura = monto firmado (+ deudor / − acreedor)
+
+export const SOCIO_SIGNO_CAJA = { prestamo: +1, devolucion: -1, aporte: -1, dividendo_pago: +1 };
+
+export async function fetchSocios() {
+  return get("nb_socios");
+}
+export async function appendSocio(socio) {
+  return post({ action: "add", sheet: "nb_socios", row: { id: newId("SOC"), ...socio, activo: true, created_at: new Date().toISOString() } });
+}
+export async function updateSocio(id, patch) {
+  return post({ action: "edit", sheet: "nb_socios", id, patch });
+}
+export async function deleteSocio(id) {
+  return post({ action: "del", sheet: "nb_socios", id });
+}
+
+/** Filas no-cash del CC de socios (dividendos declarados + aperturas). */
+export async function fetchSociosCC() {
+  return get("nb_socios_cc");
+}
+/** Movimientos de caja de socios (nb_movimientos origen="socios", todas las sociedades). */
+export async function fetchMovSocios() {
+  const rows = await get("nb_movimientos", {});
+  return rows.filter(m => m.origen === "socios");
+}
+
+// Reparte un total entre socios según participacion (%). Devuelve [{socio_id,socio_nombre,monto}].
+// La última fila absorbe el redondeo → Σ === total exacto. Socios sin participacion → 0.
+export function repartirDividendo(total, socios = []) {
+  const activos = (socios || []).filter(s => s.activo !== false && (Number(s.participacion) || 0) > 0);
+  const t = Math.abs(Number(total) || 0);
+  let acum = 0;
+  return activos.map((s, i) => {
+    const monto = i === activos.length - 1
+      ? round2(t - acum)
+      : round2(t * (Number(s.participacion) || 0) / 100);
+    acum = round2(acum + monto);
+    return { socio_id: s.id, socio_nombre: s.nombre, monto };
+  });
+}
+
+// Escribe una fila de caja de socio en nb_movimientos (préstamo/devolución/aporte/pago-dividendo).
+// La cuenta origen ya definió sociedad+moneda en la UI. monto firmado por el tipo de mov de caja
+// (préstamo/pago-dividendo salen → EGRESO; devolución/aporte entran → INGRESO). Sin cuenta_contable
+// (no P&L). Devuelve el id.
+export async function appendMovSocio({ socio_id, socio_nombre, socio_tipo, sociedad, cuenta_bancaria, moneda = "ARS", monto, fecha, nota = "" }) {
+  const id  = newId("SOC");
+  const m   = Math.abs(Number(monto) || 0);
+  const esSalida = socio_tipo === "prestamo" || socio_tipo === "dividendo_pago";
+  await post({ action: "add", sheet: "nb_movimientos", row: {
+    id, sociedad, fecha, tipo: esSalida ? "EGRESO" : "INGRESO",
+    cuenta_bancaria, cuenta_destino: "", cuenta_contable: "", centro_costo: "",
+    moneda, monto: esSalida ? -m : m, documento_id: "",
+    concepto: nota || `Socio: ${socio_nombre} (${socio_tipo})`,
+    contraparte_id: String(socio_id || ""), contraparte_nombre: socio_nombre || "",
+    socio_tipo, referencia: "", origen: "socios", created_at: new Date().toISOString(),
+  }});
+  return id;
+}
+
+// Declara un dividendo (NO cash) → N filas nb_socios_cc (una por socio con monto>0). Baja PN,
+// sube el pasivo con cada socio (le debemos). La sociedad que distribuye es POR FILA
+// (l.sociedad); `sociedad` es solo el default si una fila no la trae.
+// lineas: [{socio_id, socio_nombre, sociedad, monto}].
+export async function declararDividendo({ sociedad = "", moneda = "ARS", fecha, nota = "", lineas = [] }) {
+  const created_at = new Date().toISOString();
+  const rows = (lineas || [])
+    .filter(l => (Number(l.monto) || 0) > 0)
+    .map((l, i) => ({
+      id: `${newId("SCC")}-${i}`, socio_id: l.socio_id, socio_nombre: l.socio_nombre,
+      sociedad: l.sociedad || sociedad, fecha, tipo: "dividendo_declarado", moneda,
+      monto: -Math.abs(Number(l.monto) || 0),   // − = le debemos
+      nota, created_at,
+    }));
+  if (!rows.length) return { ok: true, n: 0 };
+  await post({ action: "add_batch", sheet: "nb_socios_cc", rows });
+  return { ok: true, n: rows.length };
+}
+
+// Saldo de apertura pre go-live (NO cash): 1 fila nb_socios_cc. direccion: "deudor" (nos debe →
+// +) | "acreedor" (le debemos → −).
+export async function aperturaSocio({ socio_id, socio_nombre, sociedad, moneda = "ARS", monto, direccion, fecha, nota = "" }) {
+  const m    = Math.abs(Number(monto) || 0);
+  const signo = direccion === "acreedor" ? -1 : +1;
+  return post({ action: "add", sheet: "nb_socios_cc", row: {
+    id: newId("SCC"), socio_id, socio_nombre, sociedad, fecha,
+    tipo: "apertura", moneda, monto: signo * m,
+    nota: nota || `Apertura pre go-live (${direccion})`, created_at: new Date().toISOString(),
+  }});
+}
+
+// Saldos por socio → { activo:[], pasivo:[] } (presentación bruta, como franquiciados):
+//   neto > 0 (nos debe)  → Activo "Socios"
+//   neto < 0 (le debemos) → Pasivo "Socios (les debemos)"
+// Une nb_socios_cc (no-cash) + nb_movimientos origen="socios" (caja), por socio y moneda.
+// Si `sociedad` viene → filtra a esa (slice del Balance por sociedad); si null → group-level.
+export function sociosSaldos(socios = [], ccRows = [], movs = [], { sociedad = null, soloMoneda = null } = {}) {
+  const soc = sociedad ? String(sociedad).toLowerCase() : null;
+  const nombreDe = id => (socios.find(s => String(s.id) === String(id))?.nombre) || id;
+  // acc[socio_id][moneda] = neto (+ nos debe / − le debemos)
+  const acc = {};
+  const add = (sid, moneda, delta) => {
+    if (!sid) return;
+    (acc[sid] ??= {});
+    acc[sid][moneda] = (acc[sid][moneda] || 0) + delta;
+  };
+  for (const r of (ccRows || [])) {
+    if (soc && String(r.sociedad ?? "").toLowerCase() !== soc) continue;
+    add(r.socio_id, r.moneda || "ARS", toNum(r.monto));   // ya viene firmado
+  }
+  for (const m of (movs || [])) {
+    if (m.origen !== "socios") continue;
+    if (soc && String(m.sociedad ?? "").toLowerCase() !== soc) continue;
+    const signo = SOCIO_SIGNO_CAJA[m.socio_tipo] ?? 0;
+    if (!signo) continue;
+    add(m.contraparte_id, m.moneda || "ARS", signo * Math.abs(toNum(m.monto)));
+  }
+  const MON = ["ARS", "USD", "EUR"];
+  const activo = [], pasivo = [];
+  for (const moneda of MON) {
+    if (soloMoneda && moneda !== soloMoneda) continue;
+    const deben = [], debemos = [];
+    let totA = 0, totP = 0;
+    for (const [sid, porMon] of Object.entries(acc)) {
+      const neto = porMon[moneda] || 0;
+      if (neto > 0.01)       { deben.push({ contraparte: nombreDe(sid), vto: "", saldo: neto, moneda });    totA += neto; }
+      else if (neto < -0.01) { debemos.push({ contraparte: nombreDe(sid), vto: "", saldo: -neto, moneda }); totP += -neto; }
+    }
+    if (totA > 0.01) { deben.sort((a, b) => b.saldo - a.saldo);   activo.push({ label: "Socios", moneda, saldo: totA, docs: deben, headerColor: "#7c3aed" }); }
+    if (totP > 0.01) { debemos.sort((a, b) => b.saldo - a.saldo); pasivo.push({ label: "Socios (les debemos)", moneda, saldo: totP, docs: debemos, headerColor: "#7c3aed" }); }
+  }
+  return { activo, pasivo };
+}
+
 // ─── ANTICIPOS DE CLIENTES ────────────────────────────────────────────────────
 //
 // Cobro adelantado de un cliente: entra plata (caja) pero NO es ingreso → pasivo

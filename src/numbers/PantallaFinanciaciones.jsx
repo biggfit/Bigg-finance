@@ -79,8 +79,10 @@ const inputStyle = {
   fontFamily: T.font, outline: "none", boxSizing: "border-box",
 };
 
-export default function PantallaFinanciaciones({ sociedad }) {
-  const [tab, setTab]         = useState("plan_afip");
+export default function PantallaFinanciaciones({ sociedad, tab: tabProp, onTabChange }) {
+  const [tabLocal, setTabLocal] = useState("plan_afip");
+  const tab    = tabProp ?? tabLocal;              // controlado por el sidebar si viene onTabChange
+  const setTab = onTabChange ?? setTabLocal;
   const [planes, setPlanes]   = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView]       = useState({ mode: "list" });   // list | alta | detalle
@@ -88,6 +90,7 @@ export default function PantallaFinanciaciones({ sociedad }) {
   const [centros, setCentros] = useState([]);
   const [bancos,  setBancos]  = useState([]);
   const [proveedores, setProveedores] = useState([]);
+  const [antAlta, setAntAlta] = useState(false);   // alta de anticipo, disparada desde el header
 
   function reload() {
     setLoading(true);
@@ -100,6 +103,8 @@ export default function PantallaFinanciaciones({ sociedad }) {
     fetchCuentasBancarias().then(setBancos).catch(() => {});
     fetchProveedores().then(setProveedores).catch(() => {});
   }, []);
+  // Al cambiar de sub-tab (pills o sidebar) volvemos a la lista y cerramos el alta de anticipo.
+  useEffect(() => { setView({ mode: "list" }); setAntAlta(false); }, [tab]);
 
   const planesTab = useMemo(() => planes.filter(p => p.tipo === tab), [planes, tab]);
   const bancosSoc = useMemo(() => bancos.filter(b => !b.sociedad || b.sociedad === sociedad), [bancos, sociedad]);
@@ -117,28 +122,36 @@ export default function PantallaFinanciaciones({ sociedad }) {
   }
 
   const PILLS = [["plan_afip", "Planes"], ["prestamo", "Préstamos"], ["anticipo", "Anticipos"]];
+  const HEAD = {
+    plan_afip: { title: "Planes de pago", sub: "Planes de facilidades AFIP / ARCA en cuotas", nuevo: "+ Nuevo plan" },
+    prestamo:  { title: "Préstamos",      sub: "Créditos tomados",                            nuevo: "+ Nuevo crédito" },
+    anticipo:  { title: "Anticipos",      sub: "Anticipos de clientes (cobro adelantado)",     nuevo: "+ Nuevo anticipo" },
+  };
+  const head = HEAD[tab] || HEAD.plan_afip;
 
   return (
     <div className="fade" style={{ padding: "28px 32px" }}>
-      <PageHeader title="Financiaciones" subtitle="Planes de pago AFIP, créditos tomados y anticipos de clientes"
-        action={tab !== "anticipo" ? <Btn variant="accent" onClick={() => setView({ mode: "alta" })}>+ {tab === "plan_afip" ? "Nuevo plan" : "Nuevo crédito"}</Btn> : null} />
+      <PageHeader title={head.title} subtitle={head.sub}
+        action={<Btn variant="accent" onClick={() => tab === "anticipo" ? setAntAlta(true) : setView({ mode: "alta" })}>{head.nuevo}</Btn>} />
 
-      {/* Sub-tabs Planes / Préstamos / Anticipos */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
-        {PILLS.map(([k, label]) => {
-          const active = tab === k;
-          return (
-            <button key={k} onClick={() => { setTab(k); setView({ mode: "list" }); }} style={{
-              border: "none", borderRadius: 999, padding: "7px 18px", cursor: "pointer",
-              fontFamily: T.font, fontSize: 13, fontWeight: 700,
-              background: active ? T.accentDark : "#fff", color: active ? T.accent : T.muted,
-              boxShadow: active ? "none" : `inset 0 0 0 1px ${T.cardBorder}`,
-            }}>{label}</button>
-          );
-        })}
-      </div>
+      {/* Sub-tabs Planes / Préstamos / Anticipos — ocultos si el sidebar controla el tab */}
+      {!onTabChange && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+          {PILLS.map(([k, label]) => {
+            const active = tab === k;
+            return (
+              <button key={k} onClick={() => { setTab(k); setView({ mode: "list" }); }} style={{
+                border: "none", borderRadius: 999, padding: "7px 18px", cursor: "pointer",
+                fontFamily: T.font, fontSize: 13, fontWeight: 700,
+                background: active ? T.accentDark : "#fff", color: active ? T.accent : T.muted,
+                boxShadow: active ? "none" : `inset 0 0 0 1px ${T.cardBorder}`,
+              }}>{label}</button>
+            );
+          })}
+        </div>
+      )}
 
-      {tab === "anticipo" ? <TabAnticipos sociedad={sociedad} bancos={bancosSoc} /> : <>
+      {tab === "anticipo" ? <TabAnticipos sociedad={sociedad} bancos={bancosSoc} alta={antAlta} setAlta={setAntAlta} /> : <>
 
       <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
         {(deudaMon.length ? deudaMon : [["ARS", 0]]).map(([m, v]) => (
@@ -193,12 +206,11 @@ export default function PantallaFinanciaciones({ sociedad }) {
 // ════════════════════════════════════════════════════════════════════════════
 // ANTICIPOS DE CLIENTES — alta + lista + detalle (consumos vs FCs)
 // ════════════════════════════════════════════════════════════════════════════
-function TabAnticipos({ sociedad, bancos }) {
+function TabAnticipos({ sociedad, bancos, alta, setAlta }) {
   const [anticipos, setAnticipos] = useState([]);
   const [clientes, setClientes]   = useState([]);
   const [ingresos, setIngresos]   = useState([]);
   const [loading, setLoading]     = useState(true);
-  const [alta, setAlta]           = useState(false);
   const [detalle, setDetalle]     = useState(null);
 
   function reload() {
@@ -218,7 +230,6 @@ function TabAnticipos({ sociedad, bancos }) {
           <CompactCard key={m} label={`Saldo disponible${saldoMon.length > 1 ? " " + m : ""}`} value={fmtMoney(v, m)} color={T.blue} />
         ))}
         <CompactCard label="Anticipos" value={String(anticipos.length)} />
-        <div style={{ marginLeft: "auto" }}><Btn variant="accent" onClick={() => setAlta(true)}>+ Nuevo anticipo</Btn></div>
       </div>
 
       {loading ? (

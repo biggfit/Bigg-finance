@@ -9,7 +9,7 @@ import {
   fetchEgresos, fetchIngresos, fetchPagosCobros, calcSaldoPendiente,
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto,
   appendGastoDirecto, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets,
-  agruparAnticipos, anticipoPasivo, pagarTarjeta,
+  agruparAnticipos, anticipoPasivo, pagarTarjeta, fetchSocios, fetchSociosCC, sociosSaldos,
 } from "../lib/numbersApi";
 import {
   fetchLiquidacionesCerradas, parsePagoFromMov, normSoc, pendienteSueldosPorLegajo,
@@ -629,10 +629,10 @@ function BalanceBlock({ title, items, headerColor, onItemClick }) {
             <span style={{ fontSize:13, color:T.text, flex:1, overflow:"hidden",
               textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{item.label}</span>
             <span style={{ fontSize:11, background:"#f3f4f6", color:T.dim, borderRadius:4,
-              padding:"1px 6px", fontWeight:600, marginLeft:8, flexShrink:0,
+              padding:"2px 7px", fontWeight:700, marginLeft:8, flexShrink:0,
               width:36, textAlign:"center" }}>{item.moneda}</span>
             <span style={{ fontSize:13, fontFamily:"var(--mono)", fontWeight:700,
-              color: headerColor, flexShrink:0, textAlign:"right", whiteSpace:"nowrap" }}>
+              color: headerColor, flexShrink:0, minWidth:110, textAlign:"right", whiteSpace:"nowrap" }}>
               {fmtSaldo(item.saldo, item.moneda)}
             </span>
           </div>
@@ -1020,6 +1020,8 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
   const [centrosCosto,     setCentrosCosto]     = useState(CENTROS_COSTO);
   const [liqsSueldos,      setLiqsSueldos]      = useState([]);
   const [financiaciones,   setFinanciaciones]   = useState([]);
+  const [socios,           setSocios]           = useState([]);   // maestro de socios (group-level)
+  const [sociosCC,         setSociosCC]         = useState([]);   // cuenta corriente de socios no-cash
   const [franqData,        setFranqData]        = useState({ comps: {}, saldos: {}, franchises: [] });  // Franquicias (read-only)
 
   // ── Fetch all data ────────────────────────────────────────────────────────
@@ -1027,7 +1029,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
     setLoading(true);
     setError(null);
     try {
-      const [movs, egs, ings, pcs, cbList, ctaList, liqsS, fin] = await Promise.all([
+      const [movs, egs, ings, pcs, cbList, ctaList, liqsS, fin, socs, socsCC] = await Promise.all([
         fetchMovTesoreria(sociedad),
         fetchEgresos(sociedad).catch(() => []),
         fetchIngresos(sociedad).catch(() => []),
@@ -1036,6 +1038,8 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
         fetchCuentas().catch(() => []),
         fetchLiquidacionesCerradas().catch(() => []),
         fetchFinanciaciones(sociedad).catch(() => []),
+        fetchSocios().catch(() => []),
+        fetchSociosCC().catch(() => []),
       ]);
       setMovimientos(Array.isArray(movs) ? movs : []);
       setEgresos(Array.isArray(egs) ? egs : []);
@@ -1045,6 +1049,8 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
       setCuentasContables(Array.isArray(ctaList) ? ctaList : []);
       setLiqsSueldos(Array.isArray(liqsS) ? liqsS : []);
       setFinanciaciones(Array.isArray(fin) ? fin : []);
+      setSocios(Array.isArray(socs) ? socs : []);
+      setSociosCC(Array.isArray(socsCC) ? socsCC : []);
       fetchCentrosCosto().then(data => {
         if (Array.isArray(data) && data.length > 0) setCentrosCosto(data);
       }).catch(() => {});
@@ -1129,9 +1135,17 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
     return franquiciasSaldosCxC(franqData, sociedad, now.getFullYear(), now.getMonth(), movimientos);
   }, [franqData, sociedad, movimientos]);
 
+  // ── Saldos de SOCIOS (cuenta corriente: dividendos + préstamos) ──
+  // Slice de esta sociedad. Balance puro (no P&L). saldo > 0 = nos deben (Activo);
+  // saldo < 0 = les debemos (Pasivo). Une nb_socios_cc (no-cash) + movs origen="socios".
+  const sociosCCsld = useMemo(
+    () => sociosSaldos(socios, sociosCC, movimientos, { sociedad }),
+    [socios, sociosCC, movimientos, sociedad]
+  );
+
   const aCobrarFull = useMemo(
-    () => [...aCobrar, ...franqCC.activo].sort(_franqFirst),
-    [aCobrar, franqCC]
+    () => [...aCobrar, ...franqCC.activo, ...sociosCCsld.activo].sort(_franqFirst),
+    [aCobrar, franqCC, sociosCCsld]
   );
 
   const aPagar = useMemo(() => {
@@ -1239,9 +1253,9 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
         out.push({ label: "Sueldos", moneda: "ARS", saldo: sueldosPasivo.total, docs: sueldosPasivo.docs, headerColor: "#dc2626" });
       }
     }
-    out.push(...finPasivo, ...anticiposPasivo, ...franqCC.pasivo, ...tarjetasPasivo);
+    out.push(...finPasivo, ...anticiposPasivo, ...franqCC.pasivo, ...tarjetasPasivo, ...sociosCCsld.pasivo);
     return out.sort(_franqFirst);
-  }, [aPagar, sueldosPasivo, finPasivo, anticiposPasivo, franqCC, tarjetasPasivo]);
+  }, [aPagar, sueldosPasivo, finPasivo, anticiposPasivo, franqCC, tarjetasPasivo, sociosCCsld]);
 
   // ── Guardar movimiento entre cuentas ──────────────────────────────────────
   const handleGuardarMovimiento = async (form) => {
@@ -1344,68 +1358,49 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
         }
       `}</style>
 
-      <PageHeader
-        title="Tesorería"
-        action={(
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "flex-end" }}>
-            <button type="button" onClick={() => setShowNuevoMov(true)} style={{
-              ...tesoreriaActionBtn.base, ...tesoreriaActionBtn.gasto,
-            }}>
-              + Gasto directo
-            </button>
-            <button type="button" onClick={() => setShowMovModal(true)} style={{
-              ...tesoreriaActionBtn.base, ...tesoreriaActionBtn.transfer,
-            }}>
-              + Movimiento entre cuentas
-            </button>
-            {cuentas.some(esCuentaCredito) && (
-              <button type="button" onClick={() => setShowPagarTjt(true)} style={{
-                ...tesoreriaActionBtn.base, background:"#dc2626", color:"#fff", border:"none",
-              }}>
-                💳 Pagar tarjeta
-              </button>
-            )}
+      {/* Header: título + pestañas a la misma altura, acciones a la derecha */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+        gap: 16, flexWrap: "wrap", marginBottom: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+          <h1 style={{ fontSize: 24, fontWeight: 900, color: T.text, margin: 0, letterSpacing: "-.02em" }}>Tesorería</h1>
+          <div role="tablist" aria-label="Vista de tesorería"
+            style={{ display: "inline-flex", gap: 2, background: "#f3f4f6", borderRadius: 10, padding: 3 }}>
+            {TESORERIA_TABS.map(tab => {
+              const active = activeTab === tab.id;
+              return (
+                <button key={tab.id} type="button" role="tab" aria-selected={active}
+                  onClick={() => setActiveTab(tab.id)}
+                  style={{
+                    background: active ? T.accentDark : "transparent",
+                    border: "none", borderRadius: 8,
+                    color: active ? T.accent : T.muted,
+                    fontFamily: T.font, fontSize: 13,
+                    fontWeight: active ? 800 : 500,
+                    padding: "7px 18px", cursor: "pointer",
+                    transition: "all .15s ease", outline: "none",
+                    boxShadow: active ? T.shadow : "none",
+                  }}
+                  onMouseEnter={e => { if (!active) e.currentTarget.style.background = "#e5e7eb"; }}
+                  onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}>
+                  {tab.label}
+                </button>
+              );
+            })}
           </div>
-        )}
-      />
-
-
-      {/* Pestañas píldora — igual que Reportes */}
-      <div
-        role="tablist"
-        aria-label="Vista de tesorería"
-        style={{
-          display: "inline-flex", gap: 2, marginBottom: 20,
-          background: "#f3f4f6", borderRadius: 10, padding: 3,
-        }}
-      >
-        {TESORERIA_TABS.map(tab => {
-          const active = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => setActiveTab(tab.id)}
-              style={{
-                background: active ? T.accentDark : "transparent",
-                border: "none", borderRadius: 8,
-                color: active ? T.accent : T.muted,
-                fontFamily: T.font, fontSize: 13,
-                fontWeight: active ? 800 : 500,
-                padding: "7px 18px", cursor: "pointer",
-                transition: "all .15s ease",
-                outline: "none",
-                boxShadow: active ? T.shadow : "none",
-              }}
-              onMouseEnter={e => { if (!active) e.currentTarget.style.background = "#e5e7eb"; }}
-              onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}
-            >
-              {tab.label}
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "flex-end" }}>
+          <button type="button" onClick={() => setShowNuevoMov(true)} style={{ ...tesoreriaActionBtn.base, ...tesoreriaActionBtn.gasto }}>
+            + Gasto directo
+          </button>
+          <button type="button" onClick={() => setShowMovModal(true)} style={{ ...tesoreriaActionBtn.base, ...tesoreriaActionBtn.transfer }}>
+            + Movimiento entre cuentas
+          </button>
+          {cuentas.some(esCuentaCredito) && (
+            <button type="button" onClick={() => setShowPagarTjt(true)} style={{ ...tesoreriaActionBtn.base, background:"#dc2626", color:"#fff", border:"none" }}>
+              💳 Pagar tarjeta
             </button>
-          );
-        })}
+          )}
+        </div>
       </div>
 
       {/* Barra de filtros — tarjeta como toolbar de Reportes */}

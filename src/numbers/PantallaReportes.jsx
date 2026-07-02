@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, PageHeader } from "./theme";
-import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo } from "../lib/numbersApi";
+import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, SALARY_BUCKETS, pagoTipoABucket, devengadoPorFormaYSociedad } from "../lib/sueldosApi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
 import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
@@ -648,7 +648,7 @@ function financiacionPasivoRows(planes, sociedad) {
   return { impuestos: b.impuestos.tot, financiero: b.financiero.tot };
 }
 
-function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCerradas = [], pagosSueldos = [], rawFin = [] }) {
+function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCerradas = [], pagosSueldos = [], rawFin = [], socios = [], sociosCC = [] }) {
   const [activoOpen,  setActivoOpen]  = useState(true);
   const [pasivoOpen,  setPasivoOpen]  = useState(true);
   const [cajaOpen,    setCajaOpen]    = useState(true);
@@ -734,8 +734,16 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCer
   const antPasivo    = useMemo(() => anticipoPasivo(agruparAnticipos(rawMovs), sociedad).tot, [rawMovs, sociedad]);
   const hayAnt = (antPasivo.ARS + antPasivo.USD + antPasivo.EUR) > 0;
 
-  const activoTot  = addVals(addVals(cajaTot, bancoTot), cxcTot);
-  const pasivoTot  = addVals(addVals(addVals(addVals(cxpTot, cxpSueldosTot), finPasivoTot), antPasivo), tarjetaDeuda);
+  // Socios: slice de esta sociedad (activo = nos deben / pasivo = les debemos). Balance puro,
+  // ya devengado fuera del P&L. Los movs de caja de socios viven en rawMovs (origen="socios").
+  const sociosSld = useMemo(() => sociosSaldos(socios, sociosCC, rawMovs, { sociedad }), [socios, sociosCC, rawMovs, sociedad]);
+  const sociosActivoTot = useMemo(() => sumMon(sociosSld.activo, r => r.moneda, r => r.saldo), [sociosSld]);
+  const sociosPasivoTot = useMemo(() => sumMon(sociosSld.pasivo, r => r.moneda, r => r.saldo), [sociosSld]);
+  const haySocA = (sociosActivoTot.ARS + sociosActivoTot.USD + sociosActivoTot.EUR) > 0;
+  const haySocP = (sociosPasivoTot.ARS + sociosPasivoTot.USD + sociosPasivoTot.EUR) > 0;
+
+  const activoTot  = addVals(addVals(addVals(cajaTot, bancoTot), cxcTot), sociosActivoTot);
+  const pasivoTot  = addVals(addVals(addVals(addVals(addVals(cxpTot, cxpSueldosTot), finPasivoTot), antPasivo), tarjetaDeuda), sociosPasivoTot);
   const pnTot      = subVals(activoTot, pasivoTot);
 
   return (
@@ -764,6 +772,12 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCer
             <BGrpRow label="Cuentas a Cobrar" expanded={cxcOpen} onToggle={() => setCxcOpen(o => !o)} />
             {cxcOpen && <BDRow label="Facturas pendientes de cobro" vals={cxcTot} indent />}
             <BSubRow label="Total Cuentas a Cobrar" vals={cxcTot} color={T.green} />
+
+            {haySocA && <>
+              <BGrpRow label="Socios (nos deben)" expanded onToggle={() => {}} />
+              <BDRow label="Préstamos / adelantos a socios" vals={sociosActivoTot} indent />
+              <BSubRow label="Total Socios" vals={sociosActivoTot} color={T.green} />
+            </>}
           </>}
           <BResRow label="TOTAL ACTIVO" vals={activoTot} />
 
@@ -797,6 +811,12 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCer
               <BGrpRow label="Tarjetas de crédito" expanded onToggle={() => {}} />
               <BDRow label="Saldo a pagar de tarjetas" vals={tarjetaDeuda} indent />
               <BSubRow label="Total Tarjetas" vals={tarjetaDeuda} color={T.red} />
+            </>}
+
+            {haySocP && <>
+              <BGrpRow label="Socios (les debemos)" expanded onToggle={() => {}} />
+              <BDRow label="Dividendos a pagar / aportes de socios" vals={sociosPasivoTot} indent />
+              <BSubRow label="Total Socios" vals={sociosPasivoTot} color={T.red} />
             </>}
           </>}
           <BResRow label="TOTAL PASIVO" vals={pasivoTot} />
@@ -1106,6 +1126,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const [liqsCerradas, setLiqsCerradas] = useState([]);  // su_liquidaciones cerradas (devengado sueldos)
   const [pagosSueldos, setPagosSueldos] = useState([]);  // pagos de sueldo (nb_movimientos origen sueldos)
   const [rawFin,    setRawFin]    = useState([]);        // financiaciones (planes AFIP + créditos)
+  const [socios,    setSocios]    = useState([]);        // maestro de socios (group-level)
+  const [sociosCC,  setSociosCC]  = useState([]);        // cuenta corriente de socios no-cash (dividendos + apertura)
   const [rawFranq,  setRawFranq]  = useState({});        // comprobantes de Franquicias (read-only)
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState(null);
@@ -1129,7 +1151,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     const run = async () => {
       setLoading(true); setError(null);
       try {
-        const [eg, ing, movs, cbs, ccList, ctaList, liqsC, pagosS, fin] = await Promise.all([
+        const [eg, ing, movs, cbs, ccList, ctaList, liqsC, pagosS, fin, socs, socsCC] = await Promise.all([
           fetchLineasEnriquecidas(sociedad, ["EGRESO", "GASTO"]).catch(() => []),
           fetchLineasEnriquecidas(sociedad, "INGRESO").catch(() => []),
           fetchMovTesoreria(sociedad).catch(() => []),
@@ -1139,6 +1161,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
           fetchLiquidacionesCerradas().catch(() => []),
           fetchPagosAnio().catch(() => []),
           fetchFinanciaciones(sociedad).catch(() => []),
+          fetchSocios().catch(() => []),
+          fetchSociosCC().catch(() => []),
         ]);
         if (cancelled) return;
         setRawEg(eg);
@@ -1150,6 +1174,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         setLiqsCerradas(Array.isArray(liqsC) ? liqsC : []);
         setPagosSueldos(Array.isArray(pagosS) ? pagosS : []);
         setRawFin(Array.isArray(fin) ? fin : []);
+        setSocios(Array.isArray(socs) ? socs : []);
+        setSociosCC(Array.isArray(socsCC) ? socsCC : []);
         // Franquicias (read-only) — fuera del Promise.all para NO bloquear Reportes si ese backend tarda.
         fetchComps().then(c => { if (!cancelled && c && typeof c === "object") setRawFranq(c); }).catch(() => {});
       } catch (e) {
@@ -1478,6 +1504,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
           liqsCerradas={liqsCerradas}
           pagosSueldos={pagosSueldos}
           rawFin={rawFin}
+          socios={socios}
+          sociosCC={sociosCC}
         />
       )}
 
