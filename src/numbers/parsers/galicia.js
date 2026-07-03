@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 // Convierte serial de fecha Excel a YYYY-MM-DD (UTC-safe).
 // El banco exporta fecha-sola pero con fracción horaria (ej. 46145.9994 = 23:59:08,
 // ~52s antes de medianoche) → redondeamos al día para no caer al día anterior.
-function excelDateToISO(serial) {
+export function excelDateToISO(serial) {
   const d = new Date((Math.round(serial) - 25569) * 86400 * 1000);
   return [
     d.getUTCFullYear(),
@@ -15,7 +15,7 @@ function excelDateToISO(serial) {
 // Normaliza una fecha del extracto a YYYY-MM-DD.
 // El crudo del banco la trae como TEXTO "M/D/AA" (ej "5/31/26"); los procesados
 // a veces como serial Excel. Maneja ambos.
-function toISO(v) {
+export function toISO(v) {
   if (v === null || v === undefined || v === "") return "";
   if (typeof v === "number") return excelDateToISO(v);
   const s = String(v).trim();

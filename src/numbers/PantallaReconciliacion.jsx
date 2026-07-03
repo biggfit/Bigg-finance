@@ -6,13 +6,14 @@ import {
   ignorarMovimiento, restaurarMovimiento, fetchMovimientosIgnorados, fetchPagosSueldos,
   fetchEgresos, fetchPagosCobros, calcSaldoPendiente, imputarPagoFC,
   appendBancoRegla, fetchIngresos, imputarCobroIngreso,
-  fetchFinanciaciones, imputarCuota, pagarTarjeta, esCuentaCredito,
+  fetchFinanciaciones, imputarCuota, pagarTarjeta, esCuentaCredito, fetchMovTesoreria,
 } from "../lib/numbersApi";
 import { BancoReglaModal } from "./PantallaMaestros";
 import { fetchAll } from "../lib/sheetsApi";
 import { computeSaldoReal } from "../lib/helpers";
 import { parseGalicia } from "./parsers/galicia";
 import { parseInterAudi } from "./parsers/interaudi";
+import { parseMercadoPago } from "./parsers/mercadopago";
 import { clasificarLineas, clasificarLinea, reconocerCuota } from "./reconciliacion/ruleEngine";
 
 const TIPO_LABEL = {
@@ -20,6 +21,7 @@ const TIPO_LABEL = {
   transferencia_interna: "Transf. interna", ingreso: "Ingreso", financiacion: "Financiación",
   pago_proveedor: "Pago proveedor", cobro_franquicia: "Cobro franquicia",
   cuota_financiacion: "Cuota de plan", sin_clasificar: "Sin clasificar",
+  venta: "Ventas", compra: "Compras",   // Mercado Pago (archivo depurado)
 };
 // Agrupación por GLOSA del banco (el tipo de transacción, no el reconocimiento). Es el
 // bucket del dropdown. `fc`: si por defecto se imputa a factura (proveedor) o no (AFIP =
@@ -82,6 +84,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
   const [pagosCobros,setPagosCobros]= useState([]);    // pagos/cobros (para saldo pendiente de cada FC)
   const [financiaciones, setFinanciaciones] = useState([]); // planes AFIP + créditos (para imputar cuotas)
   const [ignorados,  setIgnorados]  = useState([]);    // líneas del extracto ya descartadas
+  const [movsCuenta, setMovsCuenta] = useState([]);    // movimientos ya contabilizados (para detectar transferencias duplicadas)
   const [erroresIngesta, setErroresIngesta] = useState(null); // { lineas, cuenta_bancaria, moneda } que fallaron al subir
   const [progreso,   setProgreso]   = useState(null); // { done, total } mientras sube el extracto
   const [filtroTipo, setFiltroTipo] = useState("");   // filtro por grupo de Propuesta (para aprobar por grupos)
@@ -108,8 +111,12 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
   const recargar = async () => {
     setLoading(true);
     try {
-      const pend = await fetchMovimientosPendientes(sociedad);
+      const [pend, movs] = await Promise.all([
+        fetchMovimientosPendientes(sociedad),
+        fetchMovTesoreria(sociedad).catch(() => []),
+      ]);
       setPendientes(Array.isArray(pend) ? pend : []);
+      setMovsCuenta(Array.isArray(movs) ? movs : []);
     } catch (e) { setMsg("Error al cargar pendientes: " + e.message); }
     finally { setLoading(false); }
   };
@@ -176,6 +183,29 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
   const centrosId = useMemo(() => new Set(centros.map(c => String(c.id))), [centros]);
   const cuentaValida = (id) => !!id && cuentasId.has(String(id));
   const ccValido     = (id) => !!id && centrosId.has(String(id));
+  // ¿La cuenta bancaria de la fila es de Mercado Pago? En MP el crédito típico es una venta
+  // directa (ingreso rápido), no un cobro B2B → arranca pidiendo cuenta+centro, no factura.
+  // Set memoizado (se consulta por fila en cada render) en vez de un .find sobre todas las cuentas.
+  const mpCuentaIds = useMemo(
+    () => new Set(cuentasAll.filter(c => /mercado\s*pago/i.test(String(c.banco || ""))).map(c => String(c.id))),
+    [cuentasAll]);
+  const esCuentaMP = (cuentaId) => mpCuentaIds.has(String(cuentaId));
+
+  // Resolución nombre→id para el importador de Mercado Pago (el archivo depurado trae nombres
+  // legibles; el módulo matchea cuenta por id-nombre y centro por id).
+  const cuentaIdPorNombre = useMemo(() => {
+    const m = new Map();
+    planCuentas.forEach(c => m.set(String(c.nombre || "").trim().toLowerCase(), String(c.id)));
+    return name => m.get(String(name || "").trim().toLowerCase()) || "";
+  }, [planCuentas]);
+  // Centro: normaliza (saca prefijo "NN - ", tildes y no-alfanuméricos) → "Recoleta"/"01 - Recoleta"
+  // /"Belgrano" caen todos al mismo id. Match exacto normalizado (no substring) para no colisionar.
+  const centroIdPorNombre = useMemo(() => {
+    const norm = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/^\s*\d+\s*-\s*/, "").replace(/[^a-z0-9]/g, "");
+    const m = new Map();
+    centros.forEach(c => m.set(norm(c.nombre), String(c.id)));
+    return name => m.get(norm(name)) || "";
+  }, [centros]);
 
   // ── Pago de haberes: el débito del banco ya está en los movs origen=sueldos (doble conteo).
   // Agrupamos esos movs por lote_pago (un lote = una tanda de pago) → matcheamos el débito
@@ -201,6 +231,21 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
     const t = Math.abs(Number(mov.monto) || 0);
     return lotesHaberes.find(L => Math.abs(L.total - t) <= Math.max(500, L.total * 0.01)) || null;
   };
+
+  // ── Transferencia ya contabilizada: cuando MP entra DESPUÉS de Galicia, la pata del movimiento
+  // entre cuentas ya existe (creada al conciliar el otro banco). Clave por fecha|monto de los
+  // movimientos-transferencia YA aceptados de la cuenta activa → para avisar "posible duplicado".
+  const transferKeys = useMemo(() => {
+    const s = new Set();
+    for (const m of movsCuenta) {
+      if (String(m.cuenta_bancaria) !== String(cuentaTab)) continue;
+      const esTrf = ["transferencia", "intercompania"].includes(m.origen) || /^(TRF|INT)-/.test(String(m.documento_id || ""));
+      if (!esTrf) continue;
+      s.add(`${m.fecha}|${Math.round(Math.abs(Number(m.monto) || 0))}`);
+    }
+    return s;
+  }, [movsCuenta, cuentaTab]);
+  const dupTransfer = (mov) => transferKeys.has(`${mov.fecha}|${Math.round(Math.abs(Number(mov.monto) || 0))}`);
 
   // ── Imputar a factura: facturas de proveedor con saldo pendiente, de la moneda de la cuenta.
   const facturasPendientes = useMemo(() => {
@@ -314,11 +359,33 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
     setUploading(true); setMsg("");
     try {
       const cta = cuentas.find(c => c.id === cuentaTab);
-      // Elegir parser según el banco: InterAudi = CSV propio; el resto = Galicia (.xlsx).
-      const data = /interaudi/i.test(String(cta?.banco || "")) ? await parseInterAudi(file) : await parseGalicia(file);
-      const ctx = { banco: cta?.banco, sociedad, pais: "", franquicias, sociedades, cuentas: cuentasAll, moneda: cta?.moneda || "ARS", cuotasPendientes };
-      const lineas = clasificarLineas(data.lineas, reglas, proveedores, ctx);
+      const banco = String(cta?.banco || "");
       const moneda = cta?.moneda || "ARS";
+      let lineas;
+      if (/mercado\s*pago/i.test(banco)) {
+        // Mercado Pago: el archivo depurado ya viene clasificado (tipo/cuenta/centro por columna).
+        // No hay reglas de banco: la propuesta sale del propio archivo, resolviendo nombre→id
+        // contra los maestros vivos. Transferencias → modo transferencia interna (manual).
+        const data = await parseMercadoPago(file);
+        lineas = data.lineas.map((l) => {
+          const esTransfer = l.tipo === "transferencia";
+          // Clave de dedup estable y única por fila. Incluye tipo+cuenta+centro+operación+monto:
+          // en MP una MISMA operación (mismo nº) trae la venta Y su comisión/impuesto → sin el tipo
+          // se pisarían entre sí. Sin índice → idempotente: re-subir el mismo archivo solo completa
+          // lo que falta (no duplica).
+          const dedupKey = `${l.tipo}|${l.cuentaNombre}|${l.centroNombre}|${l.nro_operacion || ""}|${l.monto}`;
+          return { ...l, saldo: dedupKey, propuesta: {
+            tipo:            esTransfer ? "transferencia_interna" : l.tipo,
+            cuenta_contable: esTransfer ? "" : cuentaIdPorNombre(l.cuentaNombre),
+            centro_costo:    esTransfer ? "" : centroIdPorNombre(l.centroNombre),
+          } };
+        });
+      } else {
+        // Extracto crudo: InterAudi = CSV propio; el resto = Galicia (.xlsx). Clasifica por reglas.
+        const data = /interaudi/i.test(banco) ? await parseInterAudi(file) : await parseGalicia(file);
+        const ctx = { banco: cta?.banco, sociedad, pais: "", franquicias, sociedades, cuentas: cuentasAll, moneda, cuotasPendientes };
+        lineas = clasificarLineas(data.lineas, reglas, proveedores, ctx);
+      }
       setProgreso({ done: 0, total: lineas.length });
       const { creados, dups, errores, fallidas } = await ingestarExtracto({ sociedad, cuenta_bancaria: cuentaTab, moneda, lineas,
         onProgress: (done, total) => setProgreso({ done, total }) });
@@ -392,6 +459,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
     return hit ? hit.id : "";
   };
   const esTransferMov = (mov) => {
+    if (edits[mov.id]?.noTransfer) return false;   // override: "volver a normal" apaga el modo transferencia bakeado
     const meta = parseMeta(mov.referencia);
     const tipo = meta.tipo || (Number(mov.monto) > 0 ? "ingreso" : "");
     return tipo === "transferencia_interna" || !!edits[mov.id]?.modoTransfer || esTransferPropia(mov);
@@ -455,8 +523,14 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
     if (otroModoActivo(mov) || ed.modoFC) return false;
     if ((Number(mov.monto) || 0) <= 0) return false;   // cobro = crédito
     if (grupoGlosa(mov)) return false;   // FX/AFIP/Tarjeta por glosa → no es cobro de venta
-    return ed.modoCobro ?? true;   // todo crédito (cobranza) arranca como cobro: cliente + factura. El cliente
-    // reconocido viene pre-seleccionado; el ⋯ permite volver a normal si no es un cobro de venta.
+    if (ed.modoCobro !== undefined) return ed.modoCobro;   // toggle explícito del ⋯ (forzar cobro / volver a normal)
+    // Mercado Pago: el crédito es venta directa → ingreso rápido (elegí cuenta+centro), no cobro.
+    if (esCuentaMP(mov.cuenta_bancaria)) return false;
+    // Otros bancos: si YA viene con propuesta (cuenta+centro) es ingreso rápido; sin propuesta,
+    // un crédito arranca como cobro-contra-factura (cobranza B2B).
+    const cuentaProp = mov.cuenta_contable ?? "";
+    const ccProp     = mov.centro_costo   ?? "";
+    return !(cuentaValida(cuentaProp) && ccValido(ccProp));
   };
 
   // ¿La fila está lista para aceptar? (imputación completa).
@@ -860,7 +934,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                 const meta = parseMeta(m.referencia);
                 const tipo = meta.tipo || (Number(m.monto) > 0 ? "ingreso" : "");
                 const esTransf = tipo === "transferencia_interna";
-                const modoTransfer = esTransf || !!edits[m.id]?.modoTransfer || esTransferPropia(m);
+                const modoTransfer = !edits[m.id]?.noTransfer && (esTransf || !!edits[m.id]?.modoTransfer || esTransferPropia(m));
                 const destinoSel = (edits[m.id]?.cuenta_destino) ?? m.cuenta_destino ?? "";
                 const interco = !!destinoSel && (cuentasAll.find(c => String(c.id) === String(destinoSel))?.sociedad ?? sociedad) !== sociedad;
                 const fr = frState(m);
@@ -947,10 +1021,19 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                           <span style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed" }}>Pago de haberes</span>
                           <div style={{ fontSize: 10, color: T.muted }}>{hMatch.fecha} · {hMatch.count} pers · ${fmt(hMatch.total)} · ya en Sueldos</div>
                         </div>
+                      ) : modoTransfer ? (
+                        <div>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: T.text }}>{interco ? "Transferencia interco" : "Transferencia"}</span>
+                          {meta.op && <span style={{ fontSize: 9, color: T.dim, marginLeft: 5 }}>op {meta.op}</span>}
+                          {dupTransfer(m)
+                            ? <div style={{ fontSize: 10, color: "#b45309" }}>⚠ posible duplicado — ya está en la caja (ignorá con ⋯)</div>
+                            : <div style={{ fontSize: 10, color: T.muted }}>{destinoSel ? "→ destino elegido" : "elegí destino o ignorá (⋯)"}</div>}
+                        </div>
                       ) : (
                         <>
                           <span style={{ fontSize: 11, fontWeight: 700, color: T.text }}>{TIPO_LABEL[tipo] || tipo || "—"}</span>
                           {meta.regla && <span style={{ fontSize: 9, color: T.dim, marginLeft: 5 }}>({meta.regla})</span>}
+                          {meta.op && <div style={{ fontSize: 10, color: T.muted }}>op {meta.op}</div>}
                         </>
                       )}
                     </td>
@@ -1065,11 +1148,9 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                             fontSize: 11, fontWeight: 700, color: "#fff", cursor: puedeAceptar ? "pointer" : "default", fontFamily: T.font }}>
                           Aceptar ✓
                         </button>
-                        {!esTransf && (
-                          <button onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === m.id ? null : m.id); }} title="Más acciones"
-                            style={{ background: menuFor === m.id ? T.accent : T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "4px 8px",
-                              fontSize: 12, fontWeight: 800, color: T.text, cursor: "pointer", lineHeight: 1 }}>⋯</button>
-                        )}
+                        <button onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === m.id ? null : m.id); }} title="Más acciones"
+                          style={{ background: menuFor === m.id ? T.accent : T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "4px 8px",
+                            fontSize: 12, fontWeight: 800, color: T.text, cursor: "pointer", lineHeight: 1 }}>⋯</button>
                       </div>
                       {menuFor === m.id && (
                         <div onClick={(e) => e.stopPropagation()} style={{ position: "absolute", right: 6, top: "calc(100% - 2px)", zIndex: 30,
@@ -1078,7 +1159,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFranquicia: true, noFranquicia: false, modoTransfer: false }); setMenuFor(null); }}>↪ Convertir a {Number(m.monto) < 0 ? "transferencia a franquicia" : "cobro de franquicia"}</button>
                           )}
                           {!fr.es && !modoTransfer && (
-                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoTransfer: true, modoFranquicia: false, noFranquicia: true }); setMenuFor(null); }}>⇄ Convertir a transferencia entre cuentas</button>
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoTransfer: true, noTransfer: false, modoFranquicia: false, noFranquicia: true }); setMenuFor(null); }}>⇄ Convertir a transferencia entre cuentas</button>
                           )}
                           {neg && !fr.es && !modoTransfer && !modoFC && !modoCuota && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFC: true, modoFranquicia: false, modoTransfer: false, noFranquicia: true }); setMenuFor(null); }}>🧾 Imputar a una factura…</button>
@@ -1105,7 +1186,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFranquicia: false, noFranquicia: true, modoTransfer: false, split: null }); setMenuFor(null); }}>↩ No es franquicia (volver a normal)</button>
                           )}
                           {!fr.es && modoTransfer && (
-                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoTransfer: false, noFranquicia: false, cuenta_destino: undefined }); setMenuFor(null); }}>↩ Volver a normal (no es transferencia)</button>
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { noTransfer: true, modoTransfer: false, noFranquicia: false, cuenta_destino: undefined }); setMenuFor(null); }}>↩ Volver a normal (no es transferencia)</button>
                           )}
                           {fr.es && fr.opciones.length > 1 && !fr.split && (
                             <button style={MENU_ITEM} onClick={() => { toggleSplit(m); setMenuFor(null); }}>Dividir entre franquicias</button>

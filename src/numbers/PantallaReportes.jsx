@@ -62,24 +62,38 @@ function buildPnL(inRows, egRows, cuentaMap, ccFilter, year, moneda) {
 // Marcador único: documento_id empieza con "CONTAB-" (devengado-vía-movimiento).
 // Si una fila se reimputa como pago de una FC, su documento_id pasa al id_comp y
 // SALE del P&L automáticamente (el devengado lo aporta el comprobante de la FC).
-// total = |monto| (la categoría P&L de la cuenta/centro decide ingreso vs gasto).
-function movimientoToPnLRows(movs, sociedad) {
+// El SIGNO del movimiento importa (no |monto|): el aporte al P&L depende de si el movimiento va
+// en la dirección natural de su cuenta o es una reversión.
+//   · Cuenta de INGRESO (categoría "ventas"): crédito (+) suma / débito (−) resta → devolución neta.
+//   · Cuenta de resultado NEGATIVO (costo/gasto/impuesto/financiero): débito (−) suma como costo /
+//     crédito (+) resta (reintegro, ej. Intereses Ganados en "Financieros" → mejora el resultado).
+//   · Retención sufrida: siempre costo (se guarda con monto +) → valor absoluto.
+// Requiere cuentaMap (nombre→cuenta) para leer la categoría de la cuenta.
+function movimientoToPnLRows(movs, sociedad, cuentaMap) {
   const soc = (sociedad ?? "").toLowerCase();
   const out = [];
   for (const m of (movs ?? [])) {
     if (soc && (m.sociedad ?? "").toLowerCase() !== soc) continue;
-    if (!(m.cuenta_contable ?? "").trim()) continue;
-    // Entra al P&L: gasto contado/conciliado (CONTAB-) o retención sufrida (resultado negativo,
-    // como gasto). La retención lleva documento_id de la factura para netear la CxC, por eso
-    // se la reconoce por origen, no por el prefijo.
+    const nombre = (m.cuenta_contable ?? "").trim();
+    if (!nombre) continue;
+    // Entra al P&L: gasto/ingreso contado-conciliado (CONTAB-) o retención sufrida. La retención
+    // lleva documento_id de la factura (netea la CxC), por eso se la reconoce por origen.
     if (!String(m.documento_id ?? "").startsWith("CONTAB-") && m.origen !== "retencion") continue;
+    const monto = Number(m.monto) || 0;
+    let total;
+    if (m.origen === "retencion") {
+      total = Math.abs(monto);
+    } else {
+      const esIngreso = normCat(cuentaMap?.get(nombre)?.categoria_pnl) === "ventas";
+      total = esIngreso ? monto : -monto;
+    }
     out.push({
       fecha:           m.fecha,
       sociedad:        m.sociedad,
       centro_costo:    m.centro_costo ?? "",
       cuenta_contable: m.cuenta_contable ?? "",
       moneda:          m.moneda ?? "ARS",
-      total:           Math.abs(Number(m.monto) || 0),
+      total,
     });
   }
   return out;
@@ -1240,7 +1254,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       .filter(r => !soc || (r.sociedad ?? "").toLowerCase() === soc);
   }, [liqsCerradas, sociedad]);
 
-  const gastoMovRows = useMemo(() => movimientoToPnLRows(rawMovs, sociedad), [rawMovs, sociedad]);
+  const gastoMovRows = useMemo(() => movimientoToPnLRows(rawMovs, sociedad, cuentaMap), [rawMovs, sociedad, cuentaMap]);
   // Cuentas-tarjeta (crédito): sus movimientos no son caja → se excluyen del Cash Flow (la salida real es el pago de la tarjeta).
   const tarjetaIds = useMemo(() => new Set(cuentasBancarias.filter(esCuentaCredito).map(c => c.id)), [cuentasBancarias]);
 

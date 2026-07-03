@@ -648,33 +648,43 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
   const keyOf = (fecha, monto, saldo) => saldo ? `${fecha}|${saldo}` : `${fecha}|${Number(monto) || 0}`;
   const existentes = todos.filter(m => String(m.cuenta_bancaria) === String(cuenta_bancaria));
   const seen = new Set(existentes.map(m => keyOf(m.fecha, m.monto, _saldoDe(m))));
-  let creados = 0, dups = 0, i = 0;
-  const fallidas = [];   // líneas cuyo POST falló → se devuelven para reintentar solo esas
+  let dups = 0;
+  // 1) Dedup del lado cliente + armado de filas. 2) Escritura en LOTE (add_batch, un viaje por
+  // chunk) en vez de 1 POST por fila: mucho más rápido y resiliente — un extracto grande no se
+  // corta a la mitad si el GAS se pone lento o la pestaña pasa a segundo plano. El dedup por clave
+  // estable hace la operación idempotente: reintentar/re-subir solo completa lo que falta.
+  const nuevas = [];
   for (const l of lineas) {
-    if (onProgress) onProgress(++i, lineas.length);
     const k = keyOf(l.fecha, l.monto, l.saldo);
     if (seen.has(k)) { dups++; continue; }
+    seen.add(k);   // evita duplicar filas repetidas DENTRO del mismo archivo
     const p = l.propuesta || {};
+    nuevas.push({ linea: l, row: {
+      id: newId("EXT"), sociedad, fecha: l.fecha,
+      tipo: (Number(l.monto) || 0) > 0 ? "INGRESO" : "EGRESO",
+      cuenta_bancaria, cuenta_destino: p.cuenta_destino || "",
+      cuenta_contable: p.cuenta_contable || "", centro_costo: p.centro_costo || "",
+      moneda, monto: Number(l.monto) || 0, documento_id: "",
+      iva_rate: Number(l.iva_rate) || 0, iva_monto: Number(l.iva_monto) || 0,
+      concepto: l.descripcion || "",
+      contraparte_id: "", contraparte_nombre: l.ley1 || l.contraparte || "",   // razón social del banco (Leyenda 1)
+      referencia: `cod=${l.codigoConcepto || ""};tipo=${p.tipo || ""};regla=${p.regla_id || ""};prov=${p.proveedor_id || ""};fr=${p.franquicia_id || ""};frops=${(p.franquicia_opciones || []).join("|")};plan=${p.plan_id || ""};pcuota=${p.cuota_row_id || ""};op=${l.nro_operacion || ""};cuit=${l.ley2 || l.cuit || ""};saldo=${l.saldo || ""}`,
+      origen: "extracto",
+      created_at: new Date().toISOString(),
+    }});
+  }
+  let creados = 0;
+  const fallidas = [];   // líneas cuyo lote falló → se devuelven para reintentar solo esas
+  const CHUNK = 100;
+  for (let i = 0; i < nuevas.length; i += CHUNK) {
+    const grupo = nuevas.slice(i, i + CHUNK);
     try {
-      // Resiliente: si un POST falla (GAS lento/timeout), no aborta el lote — sigue con los demás.
-      // No marcamos `seen` hasta confirmar; así un re-upload reintenta solo los que faltaron.
-      await post({ action: "add", sheet: "nb_movimientos", row: {
-        id: newId("EXT"), sociedad, fecha: l.fecha,
-        tipo: (Number(l.monto) || 0) > 0 ? "INGRESO" : "EGRESO",
-        cuenta_bancaria, cuenta_destino: p.cuenta_destino || "",
-        cuenta_contable: p.cuenta_contable || "", centro_costo: p.centro_costo || "",
-        moneda, monto: Number(l.monto) || 0, documento_id: "",
-        concepto: l.descripcion || "",
-        contraparte_id: "", contraparte_nombre: l.ley1 || l.contraparte || "",   // razón social del banco (Leyenda 1)
-        referencia: `cod=${l.codigoConcepto || ""};tipo=${p.tipo || ""};regla=${p.regla_id || ""};prov=${p.proveedor_id || ""};fr=${p.franquicia_id || ""};frops=${(p.franquicia_opciones || []).join("|")};plan=${p.plan_id || ""};pcuota=${p.cuota_row_id || ""};cuit=${l.ley2 || l.cuit || ""};saldo=${l.saldo || ""}`,
-        origen: "extracto",
-        created_at: new Date().toISOString(),
-      }});
-      seen.add(k);
-      creados++;
+      await post({ action: "add_batch", sheet: "nb_movimientos", rows: grupo.map(g => g.row) });
+      creados += grupo.length;
     } catch (e) {
-      fallidas.push(l);
+      grupo.forEach(g => fallidas.push(g.linea));
     }
+    if (onProgress) onProgress(Math.min(i + CHUNK, nuevas.length), nuevas.length);
   }
   return { creados, dups, errores: fallidas.length, fallidas };
 }
