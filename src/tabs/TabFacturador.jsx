@@ -135,9 +135,10 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
 
   const fmtBig = (v) => v.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  const frForCompany = activeFr.filter(f =>
-    getFranchiseCurrencies(f).some(c => allowedCurrencies.includes(c))
-  );
+  // Movimientos (pagos) pueden venir en cualquier moneda — no filtrar por moneda de la sede
+  const frForCompany = wizType === "movimiento"
+    ? activeFr
+    : activeFr.filter(f => getFranchiseCurrencies(f).some(c => allowedCurrencies.includes(c)));
   const filteredFr = frForCompany.filter(f =>
     !frSearch.trim() || f.name.toLowerCase().includes(frSearch.toLowerCase())
   );
