@@ -426,7 +426,9 @@ export async function fetchProveedores() {
 }
 
 export async function appendProveedor(prov) {
-  return post({ action: "add", sheet: "nb_proveedores", row: { id: newId("PRV"), ...prov, activo: true, created_at: new Date().toISOString() } });
+  const id = newId("PRV");
+  const res = await post({ action: "add", sheet: "nb_proveedores", row: { id, ...prov, activo: true, created_at: new Date().toISOString() } });
+  return { id, ...res };
 }
 
 export async function updateProveedor(id, patch) {
@@ -497,7 +499,9 @@ export async function fetchCuentas() {
 }
 
 export async function appendCuenta(cuenta) {
-  return post({ action: "add", sheet: "nb_cuentas", row: { id: newId("CTA"), ...cuenta, activo: true, created_at: new Date().toISOString() } });
+  const id = newId("CTA");
+  const res = await post({ action: "add", sheet: "nb_cuentas", row: { id, ...cuenta, activo: true, created_at: new Date().toISOString() } });
+  return { id, ...res };
 }
 
 export async function updateCuenta(id, patch) {
@@ -515,7 +519,9 @@ export async function fetchClientes() {
 }
 
 export async function appendCliente(cli) {
-  return post({ action: "add", sheet: "nb_clientes", row: { id: newId("CLI"), ...cli, activo: true, created_at: new Date().toISOString() } });
+  const id = newId("CLI");
+  const res = await post({ action: "add", sheet: "nb_clientes", row: { id, ...cli, activo: true, created_at: new Date().toISOString() } });
+  return { id, ...res };
 }
 
 export async function updateCliente(id, patch) {
@@ -815,6 +821,28 @@ export async function imputarCobroIngreso(mov, { documento_id, cuenta_contable =
       origen: "retencion", created_at: new Date().toISOString(),
     }});
   }
+}
+
+// Registra retenciones sufridas sobre una factura de venta SIN cobro de caja (ej. al recibir la
+// orden de pago, antes de cobrar, o como saldo de apertura). Cada retención = fila nb_movimientos
+// origen="retencion" (tipo COBRO, sin cuenta_bancaria) que netea la CxC por documento_id y entra al
+// P&L como costo. Misma forma de fila que imputarCobroIngreso, pero standalone (sin mov de banco).
+export async function appendRetenciones({ sociedad, documento_id, fecha, moneda = "ARS", cliente_id = "", cliente_nombre = "", retenciones = [] }) {
+  const rows = (retenciones || [])
+    .filter(r => Math.abs(Number(r?.monto) || 0) > 0.01 && r?.cuenta)
+    .map(r => ({
+      id: newId("RET"), sociedad, fecha,
+      tipo: "COBRO", cuenta_bancaria: "", cuenta_destino: "",
+      cuenta_contable: String(r.cuenta).replace(/^CUENTA_/, ""),
+      centro_costo: r.centro || "", moneda,
+      monto: Math.abs(Number(r.monto) || 0), documento_id,
+      concepto: `Retención s/ ${documento_id}`,
+      contraparte_id: cliente_id, contraparte_nombre: cliente_nombre || "",
+      origen: "retencion", created_at: new Date().toISOString(),
+    }));
+  if (!rows.length) return { ok: true, n: 0 };
+  await post({ action: "add_batch", sheet: "nb_movimientos", rows });
+  return { ok: true, n: rows.length };
 }
 
 // Ignora una línea del extracto: la descarta sin contabilizar. Soft-mark (no borra):

@@ -83,6 +83,10 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
   const [activeId,       setActiveId]       = useState("tesoreria");
   const [egresoSubView,  setEgresoSubView]  = useState(null);
   const [ingresoSubView, setIngresoSubView] = useState(null);
+  // Pulso de navegación: se incrementa al tocar un ítem del sidebar. Las pantallas lo observan
+  // para volver a la lista (cerrar un detalle abierto) aunque el subView no cambie de valor.
+  const [navPulse,       setNavPulse]       = useState(0);
+  const bumpNav = () => setNavPulse(p => p + 1);
   const [egresoOpen,     setEgresoOpen]     = useState(false);
   const [ingresoOpen,    setIngresoOpen]    = useState(false);
   const [finOpen,        setFinOpen]        = useState(false);
@@ -291,7 +295,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
                           onMouseEnter={e=>{ if(!subActive) e.currentTarget.style.background="rgba(0,0,0,.5)"; }}
                           onMouseLeave={e=>{ if(!subActive) e.currentTarget.style.background=subActive?"rgba(173,255,25,.08)":"rgba(0,0,0,.35)"; }}>
                           <button
-                            onClick={() => { setActiveId("egresos"); setEgresoSubView(sub.listId); setEgresoOpen(true); setActiveMaestrosTab(null); setActiveSpecial(null); }}
+                            onClick={() => { setActiveId("egresos"); setEgresoSubView(sub.listId); setEgresoOpen(true); setActiveMaestrosTab(null); setActiveSpecial(null); bumpNav(); }}
                             aria-current={subActive ? "page" : undefined}
                             style={{
                               flex:1, background:"transparent", border:"none", borderRadius:8,
@@ -303,7 +307,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
                             {sub.label}
                           </button>
                           <button
-                            onClick={() => { setActiveId("egresos"); setEgresoSubView(sub.id); setEgresoOpen(true); setActiveMaestrosTab(null); }}
+                            onClick={() => { setActiveId("egresos"); setEgresoSubView(sub.id); setEgresoOpen(true); setActiveMaestrosTab(null); bumpNav(); }}
                             aria-label={sub.ariaAdd}
                             title={sub.ariaAdd}
                             style={{
@@ -344,7 +348,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
                         onMouseEnter={e=>{ if(ingresoSubView !== "new-venta") e.currentTarget.style.background="rgba(0,0,0,.5)"; }}
                         onMouseLeave={e=>{ if(ingresoSubView !== "new-venta") e.currentTarget.style.background=ingresoSubView==="new-venta"?"rgba(173,255,25,.08)":"rgba(0,0,0,.35)"; }}>
                         <button
-                          onClick={() => { setActiveId("ingresos"); setIngresoSubView(null); setIngresoOpen(true); setActiveMaestrosTab(null); setActiveSpecial(null); }}
+                          onClick={() => { setActiveId("ingresos"); setIngresoSubView(null); setIngresoOpen(true); setActiveMaestrosTab(null); setActiveSpecial(null); bumpNav(); }}
                           aria-current={ingresoSubView === "new-venta" ? "page" : undefined}
                           style={{
                             flex:1, background:"transparent", border:"none", borderRadius:8,
@@ -356,7 +360,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
                           Ventas
                         </button>
                         <button
-                          onClick={() => { setActiveId("ingresos"); setIngresoSubView("new-venta"); setIngresoOpen(true); setActiveMaestrosTab(null); }}
+                          onClick={() => { setActiveId("ingresos"); setIngresoSubView("new-venta"); setIngresoOpen(true); setActiveMaestrosTab(null); bumpNav(); }}
                           aria-label="Agregar venta"
                           title="Agregar venta"
                           style={{
@@ -557,11 +561,11 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
             ? section.id === "egresos" && egresoSubView === "new-resumen-tc"
               ? <PantallaResumenTarjeta sociedad={activeSoc.id} />
               : section.id === "egresos" && (egresoSubView === "gastos" || egresoSubView === "new-gasto")
-              ? <PantallaGastos   sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView} />
+              ? <PantallaGastos   sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView} navPulse={navPulse} />
               : section.id === "egresos"
-              ? <PantallaEgresos  sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView} />
+              ? <PantallaEgresos  sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView} navPulse={navPulse} />
               : section.id === "ingresos"
-              ? <PantallaIngresos sociedad={activeSoc.id} subView={ingresoSubView} onSubViewChange={setIngresoSubView} />
+              ? <PantallaIngresos sociedad={activeSoc.id} subView={ingresoSubView} onSubViewChange={setIngresoSubView} navPulse={navPulse} />
               : section.id === "financiaciones"
               ? <PantallaFinanciaciones sociedad={activeSoc.id} tab={finTab} onTabChange={setFinTab} />
               : section.id === "reconciliacion"

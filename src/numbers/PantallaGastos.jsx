@@ -284,7 +284,7 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
 }
 
 // ─── Pantalla: Lista de Gastos ────────────────────────────────────────────────
-export default function PantallaGastos({ sociedad = "nako", subView = null, onSubViewChange }) {
+export default function PantallaGastos({ sociedad = "nako", subView = null, onSubViewChange, navPulse = 0 }) {
   const [gastos, setGastos]                     = useState([]);
   const [loading, setLoading]                   = useState(true);
   const [error, setError]                       = useState(null);
@@ -295,6 +295,9 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
   const [proveedores, setProveedores]           = useState([]);
   const [busqueda, setBusqueda]                 = useState("");
   const [editingGasto, setEditingGasto]         = useState(null);
+
+  // Tocar un ítem del sidebar (Gastos / +) cierra el gasto en edición y vuelve a la lista.
+  useEffect(() => { setEditingGasto(null); }, [navPulse]); // eslint-disable-line
 
   const resolveCC = useMemo(() => makeResolveCC(centrosCosto), [centrosCosto]);
   const resolveCB = useMemo(() => makeResolveCB(cuentasBancarias), [cuentasBancarias]);

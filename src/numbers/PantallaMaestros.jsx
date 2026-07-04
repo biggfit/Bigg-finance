@@ -76,14 +76,14 @@ const FORMA_PAGO_OPTS = [
   { value:"libre",             label:"Sin regla — ingresar manualmente"        },
 ];
 
-function ProveedorModal({ initial, onClose, onSave, cuentas = [], centrosCosto = [] }) {
+export function ProveedorModal({ initial, onClose, onSave, cuentas = [], centrosCosto = [] }) {
   const [form, setForm] = useState(initial ?? {
     nombre:"", cuit:"", condIVA:"Responsable Inscripto",
     monedaDefault:"ARS", cuentaDefault:"", ccDefault:"",
     formaPago:"libre", diasPago:"", nota:"",
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const cuentasGasto = useMemo(() => cuentas.filter(c => { const t = (c.tipo ?? "").toLowerCase(); return t === "gasto" || t === "gastos" || t === "financiero"; }), [cuentas]);
+  const cuentasGasto = useMemo(() => cuentas.filter(c => { const t = (c.tipo ?? "").toLowerCase(); return t === "gasto" || t === "gastos" || t === "financiero" || t === "financieros"; }), [cuentas]);
   const canSave = !!form.nombre.trim();
 
   const handleSubmit = () => {
@@ -205,14 +205,14 @@ function ProveedorModal({ initial, onClose, onSave, cuentas = [], centrosCosto =
 }
 
 // ─── Modal: Cliente ───────────────────────────────────────────────────────────
-function ClienteModal({ initial, onClose, onSave, cuentas = [], centrosCosto = [] }) {
+export function ClienteModal({ initial, onClose, onSave, cuentas = [], centrosCosto = [] }) {
   const [form, setForm] = useState(initial ?? {
     nombre:"", cuit:"", condIVA:"Responsable Inscripto",
     monedaDefault:"ARS", cuentaDefault:"", ccDefault:"",
     formaPago:"libre", diasPago:"", nota:"",
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const cuentasIngreso = useMemo(() => cuentas.filter(c => { const t = (c.tipo ?? "").toLowerCase(); return t === "ingreso" || t === "ingresos"; }), [cuentas]);
+  const cuentasIngreso = useMemo(() => cuentas.filter(c => { const t = (c.tipo ?? "").toLowerCase(); return t === "venta" || t === "ventas" || t === "ingreso" || t === "ingresos"; }), [cuentas]);
   const canSave = !!form.nombre.trim();
 
   const handleSubmit = () => {
@@ -671,7 +671,7 @@ function PasivoChip({ value }) {
 }
 
 // ─── Modal: Cuenta contable ───────────────────────────────────────────────────
-function CuentaModal({ initial, onClose, onSave }) {
+export function CuentaModal({ initial, onClose, onSave }) {
   const blank = { nombre:"", tipo:"gasto", categoria_pnl:"", cuenta_pasivo:"" };
   const [form, setForm] = useState(initial ?? blank);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));

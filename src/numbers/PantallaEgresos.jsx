@@ -1,9 +1,9 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, ESTADO_EGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
-import { fetchEgresos, appendEgreso, deleteEgreso, appendPago, fetchPagosCobros, calcSaldoPendiente, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, deleteMovTesoreria, updateMovTesoreria, shortId } from "../lib/numbersApi";
+import { fetchEgresos, appendEgreso, deleteEgreso, appendPago, fetchPagosCobros, calcSaldoPendiente, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, deleteMovTesoreria, updateMovTesoreria, shortId, appendProveedor, appendCuenta } from "../lib/numbersApi";
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
-import { makeResolveCC, makeResolveCB, inputStyle, CCSelectOptions } from "./formUtils";
+import { makeResolveCC, makeResolveCB, inputStyle, CCSelectOptions, makeCrearMaestro, stripForDuplicate } from "./formUtils";
 import NuevoEgresoModal from "./NuevoEgresoModal";
 import FiltroFecha, { useFiltroFecha } from "./FiltroFecha";
 
@@ -627,7 +627,7 @@ function CtaCteModal({ proveedor, documentos, onClose }) {
 }
 
 // ─── Dropdown de acciones por fila ────────────────────────────────────────────
-function RowMenu({ egreso, onPago, onDetalle, onEditar, onCtaCte, onEliminar }) {
+function RowMenu({ egreso, onPago, onDetalle, onEditar, onDuplicar, onCtaCte, onEliminar }) {
   const [open, setOpen] = useState(false);
   const [pos,  setPos]  = useState({ top:0, left:0 });
   const btnRef = useRef(null);
@@ -684,6 +684,7 @@ function RowMenu({ egreso, onPago, onDetalle, onEditar, onCtaCte, onEliminar }) 
         }}>
           {item("Ver Detalle",   onDetalle)}
           {item("Editar",        onEditar)}
+          {item("Duplicar",      onDuplicar)}
           {divider}
           {item("Agregar Pago",  onPago, "#0e7490")}
           {item("Cta. Cte.",     onCtaCte)}
@@ -696,7 +697,7 @@ function RowMenu({ egreso, onPago, onDetalle, onEditar, onCtaCte, onEliminar }) 
 }
 
 // ─── Pantalla principal ───────────────────────────────────────────────────────
-export default function PantallaEgresos({ sociedad = "nako", subView = null, onSubViewChange }) {
+export default function PantallaEgresos({ sociedad = "nako", subView = null, onSubViewChange, navPulse = 0 }) {
   const [busqueda, setBusqueda]         = useState("");
   const [filtroEstado, setFiltroEstado] = useState("todos");
   const filtroFecha = useFiltroFecha();
@@ -787,6 +788,15 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
     if (updated) setShowDetalle(updated);
   }, [egresos]); // eslint-disable-line
 
+  // Tocar un ítem del sidebar (Compras / +) cierra el detalle abierto y vuelve a la lista.
+  useEffect(() => { setShowDetalle(null); }, [navPulse]); // eslint-disable-line
+
+  // Alta rápida de proveedor/cuenta desde los selects de la factura (append → refetch → preselecciona).
+  const crearProveedor = makeCrearMaestro(appendProveedor, fetchProveedores, setProveedores);
+  const crearCuenta    = makeCrearMaestro(appendCuenta,    fetchCuentas,     setCuentas);
+  // Duplicar: form de alta precargado igual, pero fecha/vto/nº en blanco y como factura NUEVA.
+  const duplicarEgreso = (e) => setShowEditar(stripForDuplicate(e));
+
   const handleSave = async (egreso) => {
     try {
       if (egreso._isEdit) {
@@ -855,7 +865,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
 
   // ── Páginas de alta: no esperan el loading de la lista ───────────────────────
   // ── Detalle como página ──────────────────────────────────────────────────────
-  if (showDetalle) {
+  if (showDetalle && subView !== "new-compra") {
     return (
       <>
         <DetalleModal
@@ -884,6 +894,8 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
         centrosCosto={centrosCosto}
         onClose={() => onSubViewChange?.(null)}
         onSave={handleSave}
+        onCrearProveedor={crearProveedor}
+        onCrearCuenta={crearCuenta}
       />
     );
   }
@@ -980,6 +992,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
                       onPago={()     => setShowPago(e)}
                       onDetalle={()  => setShowDetalle(e)}
                       onEditar={()   => setShowEditar(e)}
+                      onDuplicar={() => duplicarEgreso(e)}
                       onCtaCte={()   => setShowCtaCte({ proveedor: e.proveedor, docs: egresos.filter(x => x.proveedor === e.proveedor) })}
                       onEliminar={() => handleEliminar(e.id)}
                     />
@@ -1026,7 +1039,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
       </div>
 
       {/* Modales */}
-      {showEditar  && <NuevoEgresoModal  sociedad={sociedad} proveedores={proveedores} cuentas={cuentas} centrosCosto={centrosCosto} initialData={showEditar} onClose={() => setShowEditar(null)} onSave={handleSave} />}
+      {showEditar  && <NuevoEgresoModal  sociedad={sociedad} proveedores={proveedores} cuentas={cuentas} centrosCosto={centrosCosto} initialData={showEditar} onClose={() => setShowEditar(null)} onSave={handleSave} onCrearProveedor={crearProveedor} onCrearCuenta={crearCuenta} />}
       {showPago    && <AgregarPagoModal  egreso={showPago} saldoPendiente={showPago.saldoPendiente ?? showPago.importe} cuentas={cuentasSoc} onClose={() => setShowPago(null)} onSave={handlePago} />}
       {editingPago && <EditarPagoModal   pago={editingPago} sociedad={sociedad} cuentasSoc={cuentasSoc} onClose={() => setEditingPago(null)} onSaved={() => { setEditingPago(null); cargarEgresos(); }} />}
       {showCtaCte  && <CtaCteModal       proveedor={showCtaCte.proveedor} documentos={showCtaCte.docs} onClose={() => setShowCtaCte(null)} />}

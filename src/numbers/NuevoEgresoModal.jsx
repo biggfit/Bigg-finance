@@ -9,13 +9,17 @@ import {
   useDeferredEntityLookup, makeFacturaPartyChangeHandler, FACTURA_TOP_FIELDS_GRID,
   FacturaMaestroCuentaFields, FacturaFormChrome,
 } from "./formUtils";
+import { ProveedorModal, CuentaModal } from "./PantallaMaestros";
 import { useLineas } from "./useLineas";
 import { checkDuplicateComp } from "../lib/numbersApi";
 
 const EGRESO_SECONDARY_OUTLINE = "#0e7490";
 
-export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedores = [], cuentas = [], centrosCosto, initialData, asPage = false }) {
-  const isEdit = !!initialData;
+export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedores = [], cuentas = [], centrosCosto, initialData, asPage = false, onCrearProveedor, onCrearCuenta }) {
+  const [crearProvOpen, setCrearProvOpen] = useState(false);
+  const [crearCuentaOpen, setCrearCuentaOpen] = useState(false);
+  // _duplicate: precarga la data de otra factura pero como NUEVA (id nuevo, sin borrar la original).
+  const isEdit = !!initialData && !initialData._duplicate;
   const CC_LIST = useMemo(() => centrosCosto ?? [], [centrosCosto]);
   const CUENTAS_GASTO = useMemo(() => {
     return cuentas.filter(c => {
@@ -116,10 +120,12 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
           maestros={proveedores}
           emptyOption="— Seleccionar proveedor —"
           emptyListHint="Sin proveedores — cargá uno en Maestros"
+          onCrearMaestro={onCrearProveedor ? () => setCrearProvOpen(true) : undefined}
           cuentaLabel="Cuenta contable"
           cuentaValue={cuentaId}
           onCuentaChange={setCuentaId}
           cuentasFiltradas={CUENTAS_GASTO}
+          onCrearCuenta={onCrearCuenta ? () => setCrearCuentaOpen(true) : undefined}
         />
         <SoftField label="Fecha de emisión" required>
           <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={dateStyle} />
@@ -197,16 +203,27 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
   const subtitleModal = isEdit ? `Editando ${initialData.id}` : "Completá los datos y las líneas de imputación";
 
   return (
-    <FacturaFormChrome
-      asPage={asPage}
-      onClose={onClose}
-      headerBg={T.accentDark}
-      titleColor={T.accent}
-      title={title}
-      subtitlePage={subtitlePage}
-      subtitleModal={subtitleModal}
-      formBody={formBody}
-      footer={footerBtns}
-    />
+    <>
+      <FacturaFormChrome
+        asPage={asPage}
+        onClose={onClose}
+        headerBg={T.accentDark}
+        titleColor={T.accent}
+        title={title}
+        subtitlePage={subtitlePage}
+        subtitleModal={subtitleModal}
+        formBody={formBody}
+        footer={footerBtns}
+      />
+      {crearProvOpen && (
+        <ProveedorModal cuentas={cuentas} centrosCosto={centrosCosto}
+          onClose={() => setCrearProvOpen(false)}
+          onSave={async (form) => { const id = await onCrearProveedor?.(form); if (id) setProvId(id); }} />
+      )}
+      {crearCuentaOpen && (
+        <CuentaModal onClose={() => setCrearCuentaOpen(false)}
+          onSave={async (form) => { const id = await onCrearCuenta?.(form); if (id) setCuentaId(id); }} />
+      )}
+    </>
   );
 }

@@ -1,9 +1,9 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, ESTADO_INGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
-import { fetchIngresos, appendIngreso, deleteIngreso, appendCobro, fetchPagosCobros, calcSaldoPendiente, calcEstadoIngreso, fetchClientes, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, deleteMovTesoreria, updateMovTesoreria, shortId, agruparAnticipos, cobrarContraAnticipo } from "../lib/numbersApi";
+import { fetchIngresos, appendIngreso, deleteIngreso, appendCobro, fetchPagosCobros, calcSaldoPendiente, calcEstadoIngreso, fetchClientes, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, deleteMovTesoreria, updateMovTesoreria, shortId, agruparAnticipos, cobrarContraAnticipo, appendRetenciones, appendCliente, appendCuenta } from "../lib/numbersApi";
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
-import { makeResolveCC, makeResolveCB } from "./formUtils";
+import { makeResolveCC, makeResolveCB, byNombre, makeCrearMaestro, stripForDuplicate } from "./formUtils";
 import NuevoIngresoModal from "./NuevoIngresoModal";
 import FiltroFecha, { useFiltroFecha } from "./FiltroFecha";
 
@@ -128,18 +128,111 @@ function RegistrarCobroModal({ ingreso, saldoPendiente, cuentas, anticipos = [],
   );
 }
 
+// ─── Modal: Registrar Retención ───────────────────────────────────────────────
+// Retención sufrida sobre la factura, SIN caja: se elige cuenta contable + centro de costo (no un
+// medio de cobro). Baja la CxC (netea por documento_id) y asienta el costo del impuesto retenido.
+// Se puede registrar en la orden de pago (antes del cobro) o como saldo de apertura.
+function RegistrarRetencionModal({ ingreso, saldoPendiente, cuentasContables = [], centros = [], onClose, onSave }) {
+  const centroImpuestos = useMemo(
+    () => (centros.find(c => (c.grupo ?? "").toLowerCase() === "hq" && /impuesto/i.test(c.nombre)) || centros.find(c => /impuesto/i.test(c.nombre)))?.id || "",
+    [centros]);
+  const cuentasOrd = useMemo(() => [...cuentasContables].sort(byNombre), [cuentasContables]);
+  const [fecha, setFecha]   = useState(new Date().toISOString().slice(0, 10));
+  const [centro, setCentro] = useState("");
+  const [lineas, setLineas] = useState([{ cuenta: "", monto: "" }]);
+  const centroSel = centro || centroImpuestos;
+  const saldo  = saldoPendiente ?? ingreso.importe ?? 0;
+  const total  = lineas.reduce((s, l) => s + (Number(l.monto) || 0), 0);
+  const excede = total > saldo + 0.01;
+  const canSave = fecha && centroSel && lineas.some(l => l.cuenta && Number(l.monto) > 0) && !excede;
+  const upd = (i, k, v) => setLineas(ls => ls.map((l, idx) => idx === i ? { ...l, [k]: v } : l));
+
+  const inp = { width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`, borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text, fontFamily:T.font, outline:"none", boxSizing:"border-box" };
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.5)", zIndex:500,
+      display:"flex", alignItems:"center", justifyContent:"center", padding:16 }} onClick={onClose}>
+      <div className="fade" style={{ background:T.card, borderRadius:10, width:520, maxWidth:"97vw",
+        boxShadow:"0 20px 60px rgba(0,0,0,.3)", overflow:"hidden" }} onClick={e => e.stopPropagation()}>
+
+        <div style={{ background:"#5b21b6", padding:"14px 22px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <div>
+            <div style={{ fontSize:15, fontWeight:800, color:"#ddd6fe" }}>Registrar Retención</div>
+            <div style={{ fontSize:11, color:"rgba(221,214,254,.55)", marginTop:2 }}>{ingreso.cliente} · Total: {fmtMoney(ingreso.importe, ingreso.moneda)}</div>
+            <div style={{ fontSize:11, color:"#c4b5fd", marginTop:2, fontWeight:700 }}>Saldo pendiente: {fmtMoney(saldo, ingreso.moneda)}</div>
+          </div>
+          <button onClick={onClose} style={{ background:"transparent", border:"none", color:"rgba(255,255,255,.5)", fontSize:20, cursor:"pointer", lineHeight:1 }}>✕</button>
+        </div>
+
+        <div style={{ padding:24, display:"flex", flexDirection:"column", gap:14 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1.4fr", gap:14 }}>
+            <div>
+              <label style={{ fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:5 }}>Fecha</label>
+              <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={inp} />
+            </div>
+            <div>
+              <label style={{ fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:5 }}>Centro de costo <span style={{ color:T.red }}>*</span></label>
+              <select value={centroSel} onChange={e => setCentro(e.target.value)} style={inp}>
+                <option value="">— centro —</option>
+                {centros.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label style={{ fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:8 }}>Retenciones <span style={{ color:T.red }}>*</span></label>
+            <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+              {lineas.map((l, i) => (
+                <div key={i} style={{ display:"flex", gap:8, alignItems:"center" }}>
+                  <select value={l.cuenta} onChange={e => upd(i, "cuenta", e.target.value)} style={{ ...inp, flex:1 }}>
+                    <option value="">— cuenta (IIBB, Ganancias, IVA…) —</option>
+                    {cuentasOrd.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                  </select>
+                  <input type="number" value={l.monto} onChange={e => upd(i, "monto", e.target.value)} placeholder="monto"
+                    style={{ ...inp, width:120, textAlign:"right" }} />
+                  {lineas.length > 1 && <button onClick={() => setLineas(ls => ls.filter((_, idx) => idx !== i))} title="Quitar"
+                    style={{ border:"none", background:"transparent", color:T.muted, cursor:"pointer", fontSize:14 }}>✕</button>}
+                </div>
+              ))}
+              <button onClick={() => setLineas(ls => [...ls, { cuenta:"", monto:"" }])}
+                style={{ alignSelf:"flex-start", fontSize:12, border:"none", background:"transparent", color:"#7c3aed", cursor:"pointer", fontWeight:700 }}>+ otra retención</button>
+            </div>
+            <div style={{ fontSize:11, marginTop:6, fontWeight:700, color: excede ? "#dc2626" : T.muted }}>
+              Total retención: {fmtMoney(total, ingreso.moneda)}{excede ? " — supera el saldo pendiente" : ""}
+            </div>
+          </div>
+
+          <div style={{ display:"flex", justifyContent:"flex-end", gap:10, paddingTop:4 }}>
+            <button onClick={onClose} style={{ background:"#dc2626", border:"none", borderRadius:8, padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff", cursor:"pointer", fontFamily:T.font }}>Cancelar ✕</button>
+            <button disabled={!canSave} onClick={() => { onSave({
+                ingresoId: ingreso.id, fecha, moneda: ingreso.moneda,
+                cliente_id: ingreso.clienteId, cliente_nombre: ingreso.cliente,
+                retenciones: lineas.filter(l => l.cuenta && Number(l.monto) > 0).map(l => ({ cuenta:l.cuenta, monto:Number(l.monto), centro:centroSel })),
+              }); onClose(); }}
+              style={{ background: canSave ? "#7c3aed" : "#9ca3af", border:"none", borderRadius:8, padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff", cursor: canSave ? "pointer" : "default", fontFamily:T.font }}>Guardar ✓</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Modal: Editar Cobro ──────────────────────────────────────────────────────
-function EditarCobroModal({ cobro, sociedad, cuentasSoc, onClose, onSaved }) {
+function EditarCobroModal({ cobro, sociedad, cuentasSoc, cuentasContables = [], centros = [], onClose, onSaved }) {
+  const esRet = cobro.origen === "retencion";   // una retención se edita por cuenta+centro, no por medio de cobro
+  const cuentasOrd = useMemo(() => [...cuentasContables].sort(byNombre), [cuentasContables]);
   const [form, setForm] = useState({
     fecha:           cobro.fecha ?? new Date().toISOString().slice(0, 10),
     monto:           String(Math.abs(Number(cobro.monto) || 0)),
     cuenta_bancaria: cobro.cuenta_bancaria ?? "",
+    cuenta_contable: cobro.cuenta_contable ?? "",
+    centro_costo:    cobro.centro_costo ?? "",
     nota:            cobro.nota ?? "",
   });
   const [saving,   setSaving]   = useState(false);
   const [deleting, setDeleting] = useState(false);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const canSave = form.fecha && form.monto && Number(form.monto) > 0;
+  const canSave = form.fecha && form.monto && Number(form.monto) > 0 && (!esRet || (form.cuenta_contable && form.centro_costo));
 
   const _savingRef = useRef(false);
   const handleGuardar = async () => {
@@ -148,14 +241,17 @@ function EditarCobroModal({ cobro, sociedad, cuentasSoc, onClose, onSaved }) {
     setSaving(true);
     try {
       const monto = Number(form.monto);
-      await updateMovTesoreria(cobro.id, { fecha: form.fecha, monto, cuenta_bancaria: form.cuenta_bancaria, nota: form.nota });
+      const patch = esRet
+        ? { fecha: form.fecha, monto, cuenta_contable: form.cuenta_contable, centro_costo: form.centro_costo, nota: form.nota }
+        : { fecha: form.fecha, monto, cuenta_bancaria: form.cuenta_bancaria, nota: form.nota };
+      await updateMovTesoreria(cobro.id, patch);
       onSaved();
     } catch (e) { alert("Error: " + e.message); }
     finally { _savingRef.current = false; setSaving(false); }
   };
 
   const handleBorrar = async () => {
-    if (!window.confirm("¿Eliminar este cobro? Esta acción no se puede deshacer.")) return;
+    if (!window.confirm(`¿Eliminar esta ${esRet ? "retención" : "cobro"}? Esta acción no se puede deshacer.`)) return;
     setDeleting(true);
     try {
       await deleteMovTesoreria(cobro.id);
@@ -176,9 +272,9 @@ function EditarCobroModal({ cobro, sociedad, cuentasSoc, onClose, onSaved }) {
         boxShadow:"0 20px 60px rgba(0,0,0,.35)", overflow:"hidden" }}
         onClick={e => e.stopPropagation()}>
 
-        <div style={{ background:"#16a34a", padding:"13px 20px",
+        <div style={{ background: esRet ? "#5b21b6" : "#16a34a", padding:"13px 20px",
           display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-          <span style={{ fontSize:15, fontWeight:800, color:"#fff" }}>Editar Cobro</span>
+          <span style={{ fontSize:15, fontWeight:800, color:"#fff" }}>{esRet ? "Editar Retención" : "Editar Cobro"}</span>
           <button onClick={onClose} style={{ background:"transparent", border:"none",
             color:"rgba(255,255,255,.7)", fontSize:20, cursor:"pointer", lineHeight:1 }}>✕</button>
         </div>
@@ -200,6 +296,30 @@ function EditarCobroModal({ cobro, sociedad, cuentasSoc, onClose, onSaved }) {
                   border:`1px solid ${T.cardBorder}`, background:"#eceff3", color:T.text, fontFamily:"inherit" }} />
             </div>
           </div>
+          {esRet ? (
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+              <div>
+                <label style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase",
+                  letterSpacing:".07em", display:"block", marginBottom:4 }}>Cuenta</label>
+                <select value={form.cuenta_contable} onChange={e => set("cuenta_contable", e.target.value)}
+                  style={{ width:"100%", padding:"8px 10px", fontSize:13, borderRadius:8, boxSizing:"border-box",
+                    border:`1px solid ${T.cardBorder}`, background:"#eceff3", color:T.text, fontFamily:"inherit" }}>
+                  <option value="">— cuenta —</option>
+                  {cuentasOrd.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase",
+                  letterSpacing:".07em", display:"block", marginBottom:4 }}>Centro de costo</label>
+                <select value={form.centro_costo} onChange={e => set("centro_costo", e.target.value)}
+                  style={{ width:"100%", padding:"8px 10px", fontSize:13, borderRadius:8, boxSizing:"border-box",
+                    border:`1px solid ${T.cardBorder}`, background:"#eceff3", color:T.text, fontFamily:"inherit" }}>
+                  <option value="">— centro —</option>
+                  {centros.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                </select>
+              </div>
+            </div>
+          ) : (
           <div>
             <label style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase",
               letterSpacing:".07em", display:"block", marginBottom:4 }}>Medio de cobro</label>
@@ -210,6 +330,7 @@ function EditarCobroModal({ cobro, sociedad, cuentasSoc, onClose, onSaved }) {
               {cuentasOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </div>
+          )}
           <div>
             <label style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase",
               letterSpacing:".07em", display:"block", marginBottom:4 }}>Nota</label>
@@ -246,7 +367,7 @@ function EditarCobroModal({ cobro, sociedad, cuentasSoc, onClose, onSaved }) {
 }
 
 // ─── Modal: Ver Detalle (estilo Contagram) ───────────────────────────────────
-function DetalleModal({ ingreso, cuentasBancarias = [], centrosCosto = [], onClose, onAgregarCobro, onEditar, onEditarCobro, asPage = false }) {
+function DetalleModal({ ingreso, cuentasBancarias = [], centrosCosto = [], onClose, onAgregarCobro, onAgregarRetencion, onEditar, onEditarCobro, asPage = false }) {
   const resolveCB = makeResolveCB(cuentasBancarias);
   const resolveCC = makeResolveCC(centrosCosto);
   const cobrado    = ingreso.pagosVinculados?.reduce((s,p) => s + (Number(p.monto)||0), 0) ?? 0;
@@ -273,7 +394,7 @@ function DetalleModal({ ingreso, cuentasBancarias = [], centrosCosto = [], onClo
   return (
     <div
       style={asPage
-        ? { padding:"28px 32px", maxWidth:920 }
+        ? { padding:"28px 32px" }
         : { position:"fixed", inset:0, background:"rgba(0,0,0,.5)", zIndex:500,
             display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
       onClick={asPage ? undefined : onClose}>
@@ -354,7 +475,7 @@ function DetalleModal({ ingreso, cuentasBancarias = [], centrosCosto = [], onClo
                         <td style={{ padding:"8px 14px", fontSize:11, color:"#666",
                           fontFamily:"var(--mono)" }}>{p.id}</td>
                         <td style={{ padding:"8px 14px", fontSize:13, color:"#1a1a1a" }}>{fmtDate(p.fecha)}</td>
-                        <td style={{ padding:"8px 14px", fontSize:13, color:"#333" }}>{resolveCB(p.cuenta_bancaria)}</td>
+                        <td style={{ padding:"8px 14px", fontSize:13, color:"#333" }}>{p.origen === "retencion" ? `Retención · ${p.cuenta_contable || ""}` : resolveCB(p.cuenta_bancaria)}</td>
                         <td style={{ padding:"8px 14px", fontSize:13, fontFamily:"var(--mono)",
                           fontWeight:700, color:T.green, textAlign:"right" }}>
                           {fmtMoney(Number(p.monto), ingreso.moneda)}
@@ -370,12 +491,17 @@ function DetalleModal({ ingreso, cuentasBancarias = [], centrosCosto = [], onClo
                   }
                 </tbody>
               </table>
-              <div style={{ padding:"10px 14px", borderTop:`1px solid ${T.cardBorder}` }}>
+              <div style={{ padding:"10px 14px", borderTop:`1px solid ${T.cardBorder}`, display:"flex", gap:10 }}>
                 <button onClick={() => { if (!asPage) onClose?.(); onAgregarCobro(ingreso); }} style={{
                   background:"transparent", border:`1.5px dashed ${T.cardBorder}`,
                   borderRadius:7, padding:"6px 16px", fontSize:12, color:"#1e3a5f",
                   cursor:"pointer", fontFamily:T.font, fontWeight:700,
                   display:"flex", alignItems:"center", gap:6 }}>+ Agregar Cobro</button>
+                <button onClick={() => { if (!asPage) onClose?.(); onAgregarRetencion?.(ingreso); }} style={{
+                  background:"transparent", border:`1.5px dashed ${T.cardBorder}`,
+                  borderRadius:7, padding:"6px 16px", fontSize:12, color:"#7c3aed",
+                  cursor:"pointer", fontFamily:T.font, fontWeight:700,
+                  display:"flex", alignItems:"center", gap:6 }}>+ Agregar Retención</button>
               </div>
             </div>
           </div>
@@ -614,7 +740,7 @@ function CtaCteModal({ cliente, documentos, onClose }) {
 }
 
 // ─── Dropdown de acciones por fila ────────────────────────────────────────────
-function RowMenu({ ingreso, onCobro, onDetalle, onEditar, onCtaCte, onEliminar }) {
+function RowMenu({ ingreso, onCobro, onRetencion, onDetalle, onEditar, onDuplicar, onCtaCte, onEliminar }) {
   const [open, setOpen] = useState(false);
   const [pos,  setPos]  = useState({ top:0, left:0 });
   const btnRef  = useRef(null);
@@ -671,8 +797,10 @@ function RowMenu({ ingreso, onCobro, onDetalle, onEditar, onCtaCte, onEliminar }
         }}>
           {item("Ver Detalle",       onDetalle)}
           {item("Editar",            onEditar)}
+          {item("Duplicar",          onDuplicar)}
           {divider}
           {item("Registrar Cobro",   onCobro, "#1e3a5f")}
+          {item("Registrar retención", onRetencion, "#7c3aed")}
           {item("Cta. Cte.",         onCtaCte)}
           {divider}
           {item("Eliminar",          onEliminar, T.red)}
@@ -683,7 +811,7 @@ function RowMenu({ ingreso, onCobro, onDetalle, onEditar, onCtaCte, onEliminar }
 }
 
 // ─── Pantalla principal ───────────────────────────────────────────────────────
-export default function PantallaIngresos({ sociedad = "nako", subView = null, onSubViewChange }) {
+export default function PantallaIngresos({ sociedad = "nako", subView = null, onSubViewChange, navPulse = 0 }) {
   const [busqueda, setBusqueda]         = useState("");
   const [filtroEstado, setFiltroEstado] = useState("todos");
   const filtroFecha = useFiltroFecha();
@@ -692,6 +820,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
   const [loading, setLoading]           = useState(true);
   const [error, setError]               = useState(null);
   const [showCobro, setShowCobro]               = useState(null);
+  const [showRetencion, setShowRetencion]       = useState(null);
   const [showDetalle, setShowDetalle]           = useState(null);
   const [showEditar, setShowEditar]             = useState(null);
   const [editingCobro, setEditingCobro]         = useState(null);
@@ -749,6 +878,10 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
     const updated = ingresos.find(i => i.id === showDetalle.id);
     if (updated) setShowDetalle(updated);
   }, [ingresos]); // eslint-disable-line
+
+  // Tocar un ítem del sidebar (Ventas / +) cierra el detalle abierto y vuelve a la lista, aunque
+  // el subView no cambie de valor. El "+" además muestra el modal (subView="new-venta").
+  useEffect(() => { setShowDetalle(null); }, [navPulse]); // eslint-disable-line
 
   const handleSave = async (ingreso) => {
     try {
@@ -828,6 +961,30 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
     }
   };
 
+  // Alta rápida de cliente/cuenta desde los selects de la factura (append → refetch → preselecciona).
+  const crearCliente = makeCrearMaestro(appendCliente, fetchClientes, setClientes);
+  const crearCuenta  = makeCrearMaestro(appendCuenta,  fetchCuentas,  setCuentas);
+  // Duplicar: abre el form de alta precargado igual, pero fecha/vto/nº en blanco y como factura NUEVA.
+  const duplicarIngreso = (e) => setShowEditar(stripForDuplicate(e));
+
+  // Registrar retención sobre una factura (sin caja): baja la CxC + asienta el costo del impuesto.
+  const handleRetencion = async (data) => {
+    try {
+      await appendRetenciones({
+        sociedad,
+        documento_id:   data.ingresoId,
+        fecha:          data.fecha,
+        moneda:         data.moneda ?? "ARS",
+        cliente_id:     data.cliente_id ?? "",
+        cliente_nombre: data.cliente_nombre ?? "",
+        retenciones:    data.retenciones,
+      });
+      await cargarIngresos();
+    } catch (e) {
+      alert("Error al registrar retención: " + e.message);
+    }
+  };
+
   const resolveCC = useMemo(() => makeResolveCC(centrosCosto), [centrosCosto]);
   const resolveCB = useMemo(() => makeResolveCB(cuentasBancarias), [cuentasBancarias]);
 
@@ -855,7 +1012,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
   }, [ingresos, filtroFecha.inRange]);
 
   // ── Detalle como página ──────────────────────────────────────────────────────
-  if (showDetalle) {
+  if (showDetalle && subView !== "new-venta") {
     return (
       <>
         <DetalleModal
@@ -865,11 +1022,13 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
           centrosCosto={centrosCosto}
           onClose={() => setShowDetalle(null)}
           onAgregarCobro={i => setShowCobro(i)}
+          onAgregarRetencion={i => setShowRetencion(i)}
           onEditar={i => { setShowDetalle(null); setShowEditar(i); }}
           onEditarCobro={p => setEditingCobro(p)}
         />
         {showCobro    && <RegistrarCobroModal ingreso={showCobro} saldoPendiente={showCobro.saldoPendiente ?? showCobro.importe} cuentas={cuentasSoc} anticipos={anticipos.filter(a => String(a.cliente_id) === String(showCobro.clienteId))} onClose={() => setShowCobro(null)} onSave={handleCobro} />}
-        {editingCobro && <EditarCobroModal    cobro={editingCobro} sociedad={sociedad} cuentasSoc={cuentasSoc} onClose={() => setEditingCobro(null)} onSaved={() => { setEditingCobro(null); cargarIngresos(); }} />}
+        {showRetencion && <RegistrarRetencionModal ingreso={showRetencion} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentasContables={cuentas} centros={centrosCosto} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
+        {editingCobro && <EditarCobroModal    cobro={editingCobro} sociedad={sociedad} cuentasSoc={cuentasSoc} cuentasContables={cuentas} centros={centrosCosto} onClose={() => setEditingCobro(null)} onSaved={() => { setEditingCobro(null); cargarIngresos(); }} />}
       </>
     );
   }
@@ -884,6 +1043,8 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
         centrosCosto={centrosCosto}
         onClose={() => onSubViewChange?.(null)}
         onSave={handleSave}
+        onCrearCliente={crearCliente}
+        onCrearCuenta={crearCuenta}
       />
     );
   }
@@ -975,8 +1136,10 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
                     <RowMenu
                       ingreso={e}
                       onCobro={()    => setShowCobro(e)}
+                      onRetencion={() => setShowRetencion(e)}
                       onDetalle={()  => setShowDetalle(e)}
                       onEditar={()   => setShowEditar(e)}
+                      onDuplicar={() => duplicarIngreso(e)}
                       onCtaCte={()   => setShowCtaCte({ cliente: e.cliente, docs: ingresos.filter(x => x.cliente === e.cliente) })}
                       onEliminar={() => handleEliminar(e.id)}
                     />
@@ -1022,9 +1185,10 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
         </table>
       </div>
 
-      {showEditar  && <NuevoIngresoModal   sociedad={sociedad} clientes={clientes} cuentas={cuentas} centrosCosto={centrosCosto} initialData={showEditar} onClose={() => setShowEditar(null)} onSave={handleSave} />}
+      {showEditar  && <NuevoIngresoModal   sociedad={sociedad} clientes={clientes} cuentas={cuentas} centrosCosto={centrosCosto} initialData={showEditar} onClose={() => setShowEditar(null)} onSave={handleSave} onCrearCliente={crearCliente} onCrearCuenta={crearCuenta} />}
       {showCobro   && <RegistrarCobroModal ingreso={showCobro} saldoPendiente={showCobro.saldoPendiente ?? showCobro.importe} cuentas={cuentasSoc} anticipos={anticipos.filter(a => String(a.cliente_id) === String(showCobro.clienteId))} onClose={() => setShowCobro(null)} onSave={handleCobro} />}
-      {editingCobro && <EditarCobroModal  cobro={editingCobro} sociedad={sociedad} cuentasSoc={cuentasSoc} onClose={() => setEditingCobro(null)} onSaved={() => { setEditingCobro(null); cargarIngresos(); }} />}
+      {showRetencion && <RegistrarRetencionModal ingreso={showRetencion} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentasContables={cuentas} centros={centrosCosto} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
+      {editingCobro && <EditarCobroModal  cobro={editingCobro} sociedad={sociedad} cuentasSoc={cuentasSoc} cuentasContables={cuentas} centros={centrosCosto} onClose={() => setEditingCobro(null)} onSaved={() => { setEditingCobro(null); cargarIngresos(); }} />}
       {showCtaCte  && <CtaCteModal         cliente={showCtaCte.cliente} documentos={showCtaCte.docs} onClose={() => setShowCtaCte(null)} />}
     </div>
   );

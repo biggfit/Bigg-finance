@@ -5,6 +5,27 @@ import { newLinea } from "./useLineas";
 // ─── Normalizador ─────────────────────────────────────────────────────────────
 export const norm = s => (s ?? "").trim().toLowerCase();
 
+// Comparador alfabético por `nombre` (locale es, sin distinguir acentos/mayúsculas). Un solo
+// Collator a nivel módulo (reusar es mucho más barato que localeCompare con opciones por llamada).
+const _collator = new Intl.Collator("es", { sensitivity: "base" });
+export const byNombre = (a, b) => _collator.compare(String(a?.nombre ?? ""), String(b?.nombre ?? ""));
+
+// Alta rápida de un maestro (cliente/proveedor/cuenta) desde un select: append → refetch → set →
+// devuelve el id nuevo para preseleccionar. Mismo patrón en Ingresos y Egresos.
+export const makeCrearMaestro = (appendFn, fetchFn, setFn) => async (form) => {
+  const { id } = await appendFn(form);
+  const fresh = await fetchFn();
+  if (Array.isArray(fresh) && fresh.length) setFn(fresh);
+  return id;
+};
+
+// Prepara un documento (factura) para DUPLICAR: saca id/fechas/nº comprobante/estado/pagos y marca
+// _duplicate → el form lo abre precargado como NUEVO. Conocimiento de la forma de la factura en un lugar.
+export const stripForDuplicate = (doc) => {
+  const { id, fecha, vto, nroComp, estado, saldoPendiente, pagosVinculados, _isEdit, ...rest } = doc;
+  return { ...rest, _duplicate: true };
+};
+
 // ─── Estilos base ─────────────────────────────────────────────────────────────
 export const inputStyle = {
   width: "100%", background: "#ffffff", border: "1px solid #c5cad4",
@@ -212,21 +233,29 @@ export function FacturaMaestroCuentaFields({
   maestros,
   emptyOption,
   emptyListHint,
+  onCrearMaestro,   // opcional: si viene, agrega una opción "➕ Crear …" que la dispara
   cuentaLabel,
   cuentaValue,
   onCuentaChange,
   cuentasFiltradas,
+  onCrearCuenta,   // opcional: agrega "➕ Crear cuenta…" al select de cuenta contable
 }) {
+  // Ordenar una sola vez por cambio de lista (no en cada tecla de la factura, que re-renderiza esto).
+  const maestrosOrd = useMemo(() => [...maestros].sort(byNombre), [maestros]);
+  const cuentasOrd   = useMemo(() => [...cuentasFiltradas].sort(byNombre), [cuentasFiltradas]);
   return (
     <>
       <div style={{ gridColumn: "1 / 3" }}>
         <SoftField label={maestroLabel} required>
-          <select value={maestroValue} onChange={e => onMaestroChange(e.target.value)} style={inputStyle}>
+          <select value={maestroValue}
+            onChange={e => { if (e.target.value === "__crear__") { onCrearMaestro?.(); } else { onMaestroChange(e.target.value); } }}
+            style={inputStyle}>
             <option value="">{emptyOption}</option>
+            {onCrearMaestro && <option value="__crear__">➕ Crear {String(maestroLabel).toLowerCase()} nuevo…</option>}
             {maestros.length === 0 && (
               <option disabled>{emptyListHint}</option>
             )}
-            {maestros.map(c => (
+            {maestrosOrd.map(c => (
               <option key={c.id} value={c.id}>{c.nombre}{c.cuit ? ` · ${c.cuit}` : ""}</option>
             ))}
           </select>
@@ -234,9 +263,12 @@ export function FacturaMaestroCuentaFields({
       </div>
       <div style={{ gridColumn: "3 / 5" }}>
         <SoftField label={cuentaLabel} required>
-          <select value={cuentaValue} onChange={e => onCuentaChange(e.target.value)} style={inputStyle}>
+          <select value={cuentaValue}
+            onChange={e => { if (e.target.value === "__crear__") { onCrearCuenta?.(); } else { onCuentaChange(e.target.value); } }}
+            style={inputStyle}>
             <option value="">— Seleccionar cuenta —</option>
-            {cuentasFiltradas.map(c => (
+            {onCrearCuenta && <option value="__crear__">➕ Crear cuenta nueva…</option>}
+            {cuentasOrd.map(c => (
               <option key={c.id} value={c.id}>{c.nombre}</option>
             ))}
           </select>
