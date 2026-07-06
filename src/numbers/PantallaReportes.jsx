@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, PageHeader } from "./theme";
-import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos } from "../lib/numbersApi";
+import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, SALARY_BUCKETS, pagoTipoABucket, devengadoPorFormaYSociedad } from "../lib/sueldosApi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
 import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
@@ -1121,7 +1121,52 @@ const TABS = [
   { id: "cf",      label: "Cash Flow" },
   { id: "balance", label: "Patrimonio Neto" },
   { id: "evpn",    label: "Evolución PN" },
+  { id: "interco", label: "Intercompañía" },
 ];
+
+// ─── Tab Intercompañía (resumen de posiciones por anillo — LECTURA) ─────────────
+function TabInterco({ data, sociedades }) {
+  const socMap  = useMemo(() => new Map((sociedades || []).map(s => [String(s.id), s])), [sociedades]);
+  const nombre  = id => socMap.get(String(id))?.nombre || id;
+  const anilloDe = id => socMap.get(String(id))?.anillo || "Sin anillo";
+  // Cada relación una sola vez: neto>0 → `sociedad` es ACREEDOR (le deben) de `contraparte`.
+  const pos = useMemo(() => lecturaInterco(data).filter(p => p.neto > 0.01), [data]);
+  const grupos = {};
+  for (const p of pos) (grupos[anilloDe(p.contraparte)] ??= []).push(p);
+  const anillos = Object.keys(grupos).sort();
+  const money = (n, mon) => `${MONEDA_SYM[mon] ?? mon} ${fmtN(n)}`;
+
+  return (
+    <div className="fade" style={{ padding: "8px 0" }}>
+      <PageHeader title="Posiciones Intercompañía" subtitle="Quién le debe a quién, por anillo (lectura). El que manda la plata queda como acreedor." />
+      {pos.length === 0 ? (
+        <div style={{ color: T.muted, fontSize: 13, padding: "24px 4px" }}>No hay posiciones intercompañía registradas todavía.</div>
+      ) : anillos.map(a => (
+        <div key={a} style={{ marginBottom: 20, background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, overflow: "hidden", boxShadow: T.shadow }}>
+          <div style={{ background: T.tableHead, color: T.tableHeadText, padding: "8px 14px", fontSize: 12, fontWeight: 800, letterSpacing: ".05em", textTransform: "uppercase" }}>{a}</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ fontSize: 11, color: T.muted, textTransform: "uppercase", letterSpacing: ".04em" }}>
+                <th style={{ textAlign: "left", padding: "8px 14px" }}>Acreedor (le deben)</th>
+                <th style={{ textAlign: "left", padding: "8px 14px" }}>Deudor (debe)</th>
+                <th style={{ textAlign: "right", padding: "8px 14px" }}>Saldo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {grupos[a].sort((x, y) => y.neto - x.neto).map((p, i) => (
+                <tr key={i} style={{ borderTop: `1px solid ${T.cardBorder}` }}>
+                  <td style={{ padding: "9px 14px", fontSize: 13, fontWeight: 600, color: T.text }}>{nombre(p.sociedad)}</td>
+                  <td style={{ padding: "9px 14px", fontSize: 13, color: T.text }}>{nombre(p.contraparte)}</td>
+                  <td style={{ padding: "9px 14px", fontSize: 13, fontWeight: 700, textAlign: "right", fontFamily: T.mono, color: T.green }}>{money(p.neto, p.moneda)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 // ─── Pantalla principal ───────────────────────────────────────────────────────
 export default function PantallaReportes({ sociedad = "nako" }) {
@@ -1143,6 +1188,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const [socios,    setSocios]    = useState([]);        // maestro de socios (group-level)
   const [sociosCC,  setSociosCC]  = useState([]);        // cuenta corriente de socios no-cash (dividendos + apertura)
   const [rawFranq,  setRawFranq]  = useState({});        // comprobantes de Franquicias (read-only)
+  const [intercoData,  setIntercoData]  = useState({ movs: [], comps: [], centros: [] });  // fuentes interco (read-only, todas las sociedades)
+  const [sociedades,   setSociedades]   = useState([]);  // maestro sociedades (id→nombre/anillo)
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState(null);
   const [loadKey,   setLoadKey]   = useState(0);
@@ -1192,6 +1239,13 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         setSociosCC(Array.isArray(socsCC) ? socsCC : []);
         // Franquicias (read-only) — fuera del Promise.all para NO bloquear Reportes si ese backend tarda.
         fetchComps().then(c => { if (!cancelled && c && typeof c === "object") setRawFranq(c); }).catch(() => {});
+        // Intercompañía (read-only) — todas las fuentes (fondeo + transfers) + maestro sociedades (anillo).
+        // `fetchIntercoData` ya trae `sociedades`, así que no hace falta un fetch aparte.
+        fetchIntercoData().then(d => {
+          if (cancelled || !d) return;
+          setIntercoData(d);
+          if (Array.isArray(d.sociedades)) setSociedades(d.sociedades);
+        }).catch(() => {});
       } catch (e) {
         if (!cancelled) setError(e.message);
       } finally {
@@ -1532,6 +1586,10 @@ export default function PantallaReportes({ sociedad = "nako" }) {
           sociedad={sociedad}
           year={year}
         />
+      )}
+
+      {activeTab === "interco" && (
+        <TabInterco data={intercoData} sociedades={sociedades} />
       )}
 
     </div>

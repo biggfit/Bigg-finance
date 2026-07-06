@@ -3,6 +3,8 @@
 // Backend: Google Apps Script → Google Sheet "BIGG Sueldos"
 // Proxy local/Vercel: /api/sueldos
 
+import { stamp } from "./auth";
+
 const BASE    = "/api/sueldos";
 const TOKEN   = import.meta.env.VITE_SHEETS_TOKEN ?? "";
 const BASE_NB = "/api/numbers"; // para crear movimientos en Tesorería de Numbers
@@ -58,6 +60,9 @@ async function post(payload, base = BASE, { retries = 2, retryDelayMs = 1200 } =
   for (const k of _cache.keys()) {
     if (k.includes(`resource=${sheet}`) || k.includes(`/${sheet}`)) _cache.delete(k);
   }
+
+  // Sello de autoría: firma cada asiento nuevo con el usuario logueado (ver auth.js).
+  stamp(payload);
 
   for (let attempt = 0; ; attempt++) {
     const res  = await fetch(base, {

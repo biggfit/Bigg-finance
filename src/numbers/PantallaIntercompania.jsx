@@ -302,32 +302,6 @@ export default function PantallaIntercompania({ sociedad }) {
           handleEliminar={handleEliminar} deleting={deleting} />
       )}
 
-      {/* ── Otras sociedades ── */}
-      {!loading && otras.length > 0 && (
-        <div style={{ marginTop:"auto", paddingTop:48 }}>
-          <button onClick={() => setOtrasOpen(o => !o)} style={{
-            display:"flex", alignItems:"center", gap:8,
-            background:"none", border:"none", cursor:"pointer",
-            padding:"4px 0 12px", fontFamily:T.font,
-          }}>
-            <span style={{ fontSize:11, fontWeight:700, color:T.dim, letterSpacing:".1em", textTransform:"uppercase" }}>
-              Otras sociedades
-            </span>
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"
-              style={{ transform: otrasOpen ? "rotate(180deg)" : "rotate(0deg)", transition:"transform .2s" }}>
-              <path d="M3 4.5L6 7.5L9 4.5" stroke={T.dim} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-          </button>
-
-          {otrasOpen && (
-            <div style={{ background:"#fff", borderRadius:12, padding:"4px 16px 16px",
-              border:`1px solid ${T.cardBorder}`, boxShadow:"0 1px 4px rgba(0,0,0,.06)", overflowX:"auto" }}>
-              <TablaICP ops={otras} ctaNombre={ctaNombre} sociedad={null}
-                handleEliminar={handleEliminar} deleting={deleting} showSociedad />
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }

@@ -14,9 +14,11 @@ import PantallaGastos           from "./numbers/PantallaGastos";
 import PantallaReconciliacion   from "./numbers/PantallaReconciliacion";
 import PantallaFinanciaciones   from "./numbers/PantallaFinanciaciones";
 import PantallaSocios            from "./numbers/PantallaSocios";
+import PantallaUsuarios          from "./numbers/PantallaUsuarios";
 import PantallaResumenTarjeta   from "./numbers/PantallaResumenTarjeta";
 import { SOCIEDADES as SOC_FALLBACK } from "./data/tesoreriaData";
 import { fetchSociedades, fetchMovimientosPendientes } from "./lib/numbersApi";
+import { inicial } from "./lib/auth";
 
 // ─── Nav button style helpers ─────────────────────────────────────────────────
 const navBtnStyle = (active) => ({
@@ -49,7 +51,7 @@ const SECTIONS = [
   { id:"ingresos",  label:"Ingresos",  icon:"↑", component: PantallaIngresos  },
   { id:"egresos",   label:"Egresos",   icon:"↓", component: PantallaEgresos   },
   { id:"financiaciones", label:"Financiaciones", icon:"%", component: PantallaFinanciaciones },
-  { id:"reconciliacion", label:"Conciliación", icon:"≡", component: PantallaReconciliacion },
+  { id:"reconciliacion", label:"Conciliaciones", icon:"≡", component: PantallaReconciliacion },
 ];
 
 function Placeholder({ section }) {
@@ -79,7 +81,7 @@ function Placeholder({ section }) {
   );
 }
 
-export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
+export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, onCerrarSesion }) {
   const [activeId,       setActiveId]       = useState("tesoreria");
   const [egresoSubView,  setEgresoSubView]  = useState(null);
   const [ingresoSubView, setIngresoSubView] = useState(null);
@@ -90,6 +92,9 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
   const [egresoOpen,     setEgresoOpen]     = useState(false);
   const [ingresoOpen,    setIngresoOpen]    = useState(false);
   const [finOpen,        setFinOpen]        = useState(false);
+  const [tesoreriaOpen,  setTesoreriaOpen]  = useState(false);
+  const [concilOpen,     setConcilOpen]     = useState(false);
+  const [concilMundo,    setConcilMundo]    = useState("banco");  // Banco | Interco (dropdown en el sidebar)
   const [finTab,         setFinTab]         = useState("plan_afip");   // plan_afip | prestamo | anticipo
   const [sociedades,     setSociedades]     = useState(SOC_FALLBACK);
   const [socIdx,         setSocIdx]         = useState(0);
@@ -265,11 +270,52 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
             {SECTIONS.map(s => {
               const active = activeId === s.id && !showMaestros;
 
+              // ── Tesorería: sub-items (Intercompañía / Cambio de moneda) ───────
+              if (s.id === "tesoreria") {
+                const parentActive = activeId === "tesoreria" && !activeSpecial && !showMaestros;
+                const subs = [
+                  { id:"intercompania", label:"Intercompañía" },
+                  { id:"cambio",        label:"Cambio de moneda" },
+                ];
+                return (
+                  <div key={s.id}>
+                    <button onClick={() => { setActiveId("tesoreria"); setActiveSpecial(null); setActiveMaestrosTab(null); setEgresoSubView(null); setIngresoSubView(null); setTesoreriaOpen(o => !o); }}
+                      aria-expanded={tesoreriaOpen}
+                      style={navBtnStyle(parentActive)} {...navBtnHover(parentActive)}>
+                      <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>{s.icon}</span>
+                      <span style={{ flex:1 }}>{s.label}</span>
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink:0, transform: tesoreriaOpen ? "rotate(180deg)" : "rotate(0deg)", transition:"transform .2s", opacity:.5 }}>
+                        <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </button>
+                    {tesoreriaOpen && subs.map(sub => {
+                      const subActive = activeSpecial === sub.id;
+                      return (
+                        <div key={sub.id} style={{ display:"flex", alignItems:"center", minHeight:32, margin:"1px 6px", borderRadius:8,
+                          background: subActive ? "rgba(173,255,25,.08)" : "rgba(0,0,0,.35)", transition:"background .12s" }}
+                          onMouseEnter={e=>{ if(!subActive) e.currentTarget.style.background="rgba(0,0,0,.5)"; }}
+                          onMouseLeave={e=>{ if(!subActive) e.currentTarget.style.background="rgba(0,0,0,.35)"; }}>
+                          <button
+                            onClick={() => { setActiveId("tesoreria"); setActiveSpecial(sub.id); setTesoreriaOpen(true); setEgresoSubView(null); setIngresoSubView(null); setActiveMaestrosTab(null); }}
+                            aria-current={subActive ? "page" : undefined}
+                            style={{ flex:1, background:"transparent", border:"none", borderRadius:8,
+                              color: subActive ? T.accent : "rgba(255,255,255,.45)", textAlign:"left",
+                              padding:"7px 8px 7px 38px", fontSize:12, fontFamily:T.font, cursor:"pointer",
+                              fontWeight: subActive ? 700 : 400 }}>
+                            {sub.label}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              }
+
               // ── Egresos: tiene sub-items ──────────────────────────────────────
               if (s.id === "egresos") {
                 return (
                   <div key={s.id}>
-                    <button onClick={() => { setEgresoOpen(o => !o); setIngresoOpen(false); }}
+                    <button onClick={() => { setEgresoOpen(o => !o); }}
                     aria-expanded={egresoOpen}
                     style={navBtnStyle(active)} {...navBtnHover(active)}>
                       <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>{s.icon}</span>
@@ -284,9 +330,10 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
                       { id:"new-gasto",  label:"Gastos",  listId:"gastos",  ariaAdd:"Agregar gasto"  },
                       { id:"new-resumen-tc", label:"Tarjetas", listId:"new-resumen-tc", ariaAdd:"Cargar resumen de tarjeta" },
                     ].map(sub => {
-                      const subActive = sub.listId === null
-                        ? (egresoSubView === null || egresoSubView === "new-compra")
-                        : (egresoSubView === sub.listId || egresoSubView === sub.id);
+                      const subActive = activeId === "egresos" && !activeSpecial && !showMaestros && (
+                        sub.listId === null
+                          ? (egresoSubView === null || egresoSubView === "new-compra")
+                          : (egresoSubView === sub.listId || egresoSubView === sub.id));
                       return (
                         <div key={sub.id} style={{ display:"flex", alignItems:"center",
                           margin:"1px 6px", borderRadius:8,
@@ -329,9 +376,10 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
 
               // ── Ingresos: tiene sub-items ───────────────────────────────────
               if (s.id === "ingresos") {
+                const ingSel = activeId === "ingresos" && !activeSpecial && !showMaestros;
                 return (
                   <div key={s.id}>
-                    <button onClick={() => { setIngresoOpen(o => !o); setEgresoOpen(false); }}
+                    <button onClick={() => { setIngresoOpen(o => !o); }}
                     aria-expanded={ingresoOpen}
                     style={navBtnStyle(active)} {...navBtnHover(active)}>
                       <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>{s.icon}</span>
@@ -341,21 +389,21 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
                       </svg>
                     </button>
                     {ingresoOpen && (
-                      <div style={{ display:"flex", alignItems:"center",
+                      <div style={{ display:"flex", alignItems:"center", minHeight:32,
                         margin:"1px 6px", borderRadius:8,
-                        background: ingresoSubView === "new-venta" ? "rgba(173,255,25,.08)" : "rgba(0,0,0,.35)",
+                        background: ingSel ? "rgba(173,255,25,.08)" : "rgba(0,0,0,.35)",
                         transition:"background .12s" }}
-                        onMouseEnter={e=>{ if(ingresoSubView !== "new-venta") e.currentTarget.style.background="rgba(0,0,0,.5)"; }}
-                        onMouseLeave={e=>{ if(ingresoSubView !== "new-venta") e.currentTarget.style.background=ingresoSubView==="new-venta"?"rgba(173,255,25,.08)":"rgba(0,0,0,.35)"; }}>
+                        onMouseEnter={e=>{ if(!ingSel) e.currentTarget.style.background="rgba(0,0,0,.5)"; }}
+                        onMouseLeave={e=>{ if(!ingSel) e.currentTarget.style.background="rgba(0,0,0,.35)"; }}>
                         <button
                           onClick={() => { setActiveId("ingresos"); setIngresoSubView(null); setIngresoOpen(true); setActiveMaestrosTab(null); setActiveSpecial(null); bumpNav(); }}
-                          aria-current={ingresoSubView === "new-venta" ? "page" : undefined}
+                          aria-current={ingSel ? "page" : undefined}
                           style={{
                             flex:1, background:"transparent", border:"none", borderRadius:8,
-                            color: ingresoSubView === "new-venta" ? T.accent : "rgba(255,255,255,.45)",
+                            color: ingSel ? T.accent : "rgba(255,255,255,.45)",
                             textAlign:"left", padding:"7px 8px 7px 38px",
                             fontSize:12, fontFamily:T.font, cursor:"pointer",
-                            fontWeight: ingresoSubView === "new-venta" ? 700 : 400,
+                            fontWeight: ingSel ? 700 : 400,
                           }}>
                           Ventas
                         </button>
@@ -383,7 +431,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
               if (s.id === "financiaciones") {
                 return (
                   <div key={s.id}>
-                    <button onClick={() => { setFinOpen(o => !o); setEgresoOpen(false); setIngresoOpen(false); }}
+                    <button onClick={() => { setFinOpen(o => !o); }}
                       aria-expanded={finOpen}
                       style={navBtnStyle(active)} {...navBtnHover(active)}>
                       <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>{s.icon}</span>
@@ -395,7 +443,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
                     {finOpen && [["plan_afip","Planes"],["prestamo","Préstamos"],["anticipo","Anticipos"]].map(([k, label]) => {
                       const subActive = activeId === "financiaciones" && finTab === k && !showMaestros && !activeSpecial;
                       return (
-                        <div key={k} style={{ display:"flex", alignItems:"center", margin:"1px 6px", borderRadius:8,
+                        <div key={k} style={{ display:"flex", alignItems:"center", minHeight:32, margin:"1px 6px", borderRadius:8,
                           background: subActive ? "rgba(173,255,25,.08)" : "rgba(0,0,0,.35)", transition:"background .12s" }}
                           onMouseEnter={e=>{ if(!subActive) e.currentTarget.style.background="rgba(0,0,0,.5)"; }}
                           onMouseLeave={e=>{ if(!subActive) e.currentTarget.style.background="rgba(0,0,0,.35)"; }}>
@@ -407,6 +455,50 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
                               padding:"7px 8px 7px 38px", fontSize:12, fontFamily:T.font, cursor:"pointer",
                               fontWeight: subActive ? 700 : 400 }}>
                             {label}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              }
+
+              // ── Conciliación: sub-items (Banco / Interco) ─────────────────────
+              if (s.id === "reconciliacion") {
+                const parentActive = activeId === "reconciliacion" && !showMaestros;
+                const subs = [
+                  { id:"banco",   label:"Banco" },
+                  { id:"interco", label:"Interco" },
+                ];
+                return (
+                  <div key={s.id}>
+                    <button onClick={() => { setActiveId("reconciliacion"); setActiveSpecial(null); setActiveMaestrosTab(null); setEgresoSubView(null); setIngresoSubView(null); setConcilOpen(o => !o); }}
+                      aria-expanded={concilOpen}
+                      style={navBtnStyle(parentActive)} {...navBtnHover(parentActive)}>
+                      <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>{s.icon}</span>
+                      <span style={{ flex:1 }}>{s.label}</span>
+                      {pendConcil > 0 && (
+                        <span style={{ fontSize:10, fontWeight:800, padding:"1px 7px", borderRadius:999, background:"#dc2626", color:"#fff", flexShrink:0, marginRight:6 }}>{pendConcil}</span>
+                      )}
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink:0, transform: concilOpen ? "rotate(180deg)" : "rotate(0deg)", transition:"transform .2s", opacity:.5 }}>
+                        <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </button>
+                    {concilOpen && subs.map(sub => {
+                      const subActive = activeId === "reconciliacion" && concilMundo === sub.id && !showMaestros;
+                      return (
+                        <div key={sub.id} style={{ display:"flex", alignItems:"center", minHeight:32, margin:"1px 6px", borderRadius:8,
+                          background: subActive ? "rgba(173,255,25,.08)" : "rgba(0,0,0,.35)", transition:"background .12s" }}
+                          onMouseEnter={e=>{ if(!subActive) e.currentTarget.style.background="rgba(0,0,0,.5)"; }}
+                          onMouseLeave={e=>{ if(!subActive) e.currentTarget.style.background="rgba(0,0,0,.35)"; }}>
+                          <button
+                            onClick={() => { setActiveId("reconciliacion"); setActiveSpecial(null); setActiveMaestrosTab(null); setConcilMundo(sub.id); setConcilOpen(true); }}
+                            aria-current={subActive ? "page" : undefined}
+                            style={{ flex:1, background:"transparent", border:"none", borderRadius:8,
+                              color: subActive ? T.accent : "rgba(255,255,255,.45)", textAlign:"left",
+                              padding:"7px 8px 7px 38px", fontSize:12, fontFamily:T.font, cursor:"pointer",
+                              fontWeight: subActive ? 700 : 400 }}>
+                            {sub.label}
                           </button>
                         </div>
                       );
@@ -435,8 +527,6 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
             <div style={{ padding:"4px 16px 6px", fontSize:10, fontWeight:700, letterSpacing:".1em", color:T.sidebarMuted, textTransform:"uppercase" }}>Navegación consolidada</div>
             {[
               { id:"reportes",        icon:"▦", label:"Reportes",          soon:false, onClick: () => { setActiveSpecial("reportes"); } },
-              { id:"intercompania",   icon:"⇄", label:"Intercompañía",     soon:false, onClick: () => { setActiveSpecial("intercompania"); } },
-              { id:"cambio",          icon:"$", label:"Cambio de moneda",   soon:false, onClick: () => { setActiveSpecial("cambio"); } },
               { id:"socios",          icon:"◎", label:"Socios",             soon:false, onClick: () => { setActiveSpecial("socios"); } },
             ].map(item => {
               const active = !item.soon && activeSpecial === item.id;
@@ -501,6 +591,30 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
           </div>
           </nav>
 
+          {/* ── Pie: usuario logueado (fijo al fondo del sidebar) ── */}
+          {sesion && (
+            <div style={{ borderTop:"1px solid rgba(255,255,255,.07)", padding:"8px 10px",
+              display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
+              <div style={{ width:30, height:30, borderRadius:"50%", background:T.accent, color:T.accentDark,
+                display:"flex", alignItems:"center", justifyContent:"center", fontWeight:800, fontSize:13, flexShrink:0 }}>
+                {inicial(sesion.nombre)}
+              </div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:12.5, fontWeight:700, color:"rgba(255,255,255,.85)",
+                  whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{sesion.nombre}</div>
+                {sesion.rol && <div style={{ fontSize:10.5, color:"rgba(255,255,255,.4)",
+                  whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{sesion.rol}</div>}
+              </div>
+              <button onClick={() => { setActiveMaestrosTab(null); setActiveSpecial("usuarios"); }}
+                title="Usuarios del sistema"
+                aria-current={activeSpecial === "usuarios" ? "page" : undefined}
+                style={{ background:"transparent", border:"none", cursor:"pointer", padding:4, borderRadius:6, flexShrink:0,
+                  color: activeSpecial === "usuarios" ? T.accent : "rgba(255,255,255,.5)", fontSize:16 }}
+                onMouseEnter={e=>e.currentTarget.style.background=T.sidebarHover}
+                onMouseLeave={e=>e.currentTarget.style.background="transparent"}>⚙</button>
+            </div>
+          )}
+
         </div>
       )}
 
@@ -518,7 +632,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
               : activeSpecial === "intercompania"  ? "Intercompañía"
               : activeSpecial === "cambio"         ? "Cambio de moneda"
               : activeSpecial === "socios"         ? "Socios"
-              : activeSpecial === "reconciliacion" ? "Conciliación bancaria"
+              : activeSpecial === "usuarios"       ? "Usuarios del sistema"
               : egresoSubView  === "new-compra" ? "Egresos › Nueva Compra"
               : egresoSubView  === "new-gasto"  ? "Gastos › Nuevo Gasto"
               : egresoSubView  === "gastos"     ? "Gastos"
@@ -531,7 +645,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
             <span key={`crumb${i}`} style={{ fontSize:12, fontWeight:700, color:T.text }}>{part}</span>,
           ])}
           {/* Badge sociedad activa — oculto en módulos transversales */}
-          {!showMaestros && activeSpecial !== "socios" && (
+          {!showMaestros && activeSpecial !== "socios" && activeSpecial !== "usuarios" && (
             <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6,
               background:"#f0f9ff", border:"1px solid #bae6fd", borderRadius:999,
               padding:"3px 10px", fontSize:11, fontWeight:700, color:"#0369a1" }}>
@@ -553,10 +667,10 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
             ? <PantallaCambioMoneda sociedad={activeSoc.id} />
             : activeSpecial === "socios"
             ? <PantallaSocios />
+            : activeSpecial === "usuarios"
+            ? <PantallaUsuarios sesion={sesion} onCerrarSesion={onCerrarSesion} />
             : activeSpecial === "reportes"
             ? <PantallaReportes sociedad={activeSoc.id} />
-            : activeSpecial === "reconciliacion"
-            ? <PantallaReconciliacion sociedad={activeSoc.id} />
             : section?.component
             ? section.id === "egresos" && egresoSubView === "new-resumen-tc"
               ? <PantallaResumenTarjeta sociedad={activeSoc.id} />
@@ -569,7 +683,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos }) {
               : section.id === "financiaciones"
               ? <PantallaFinanciaciones sociedad={activeSoc.id} tab={finTab} onTabChange={setFinTab} />
               : section.id === "reconciliacion"
-              ? <PantallaReconciliacion sociedad={activeSoc.id} onPendientes={setPendConcil} />
+              ? <PantallaReconciliacion sociedad={activeSoc.id} onPendientes={setPendConcil} mundo={concilMundo} />
               : <section.component sociedad={activeSoc.id} />
             : section?.placeholder
             ? <Placeholder section={section} />

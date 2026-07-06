@@ -3,6 +3,8 @@
 // Configurar en .env.local:
 //   VITE_NUMBERS_API_URL=https://script.google.com/macros/s/.../exec
 
+import { stamp, firma } from "./auth";
+
 const CONFIGURED = !!import.meta.env.VITE_NUMBERS_API_URL;
 const TOKEN      = import.meta.env.VITE_SHEETS_TOKEN;   // mismo token
 const BASE       = "/api/numbers";
@@ -57,6 +59,10 @@ async function get(resource, params = {}) {
 
 async function post(body) {
   if (!CONFIGURED) throw new Error("VITE_NUMBERS_API_URL no configurada");
+  // Sello de autoría: estampa `registrado_por` en cada asiento nuevo (add/add_batch)
+  // sin tocar los ~20 writers. GAS descarta la columna en las hojas sin ese header,
+  // así que los maestros no se ven afectados. No pisa un valor explícito.
+  stamp(body);
   const res = await fetch(BASE, {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
@@ -439,6 +445,28 @@ export async function deleteProveedor(id) {
   return post({ action: "del", sheet: "nb_proveedores", id });
 }
 
+// ─── USUARIOS DEL SISTEMA ────────────────────────────────────────────────────
+// Maestro group-level para login + sello de autoría. `password_hash` = SHA-256
+// (nunca plaintext); vacío = cuenta sin reclamar (el 1er login setea la clave).
+
+export async function fetchUsuarios() {
+  return get("nb_usuarios");
+}
+
+export async function appendUsuario(usuario) {
+  const id = newId("USR");
+  const res = await post({ action: "add", sheet: "nb_usuarios", row: { id, ...usuario, activo: true, created_at: new Date().toISOString() } });
+  return { id, ...res };
+}
+
+export async function updateUsuario(id, patch) {
+  return post({ action: "edit", sheet: "nb_usuarios", id, patch });
+}
+
+export async function deleteUsuario(id) {
+  return post({ action: "del", sheet: "nb_usuarios", id });
+}
+
 // ─── CUENTAS BANCARIAS / CAJAS ───────────────────────────────────────────────
 
 export async function fetchCuentasBancarias() {
@@ -719,6 +747,7 @@ export async function aceptarMovimiento(mov, prop = {}) {
     const sharedId = newId(interco ? "INTERCOMPANY" : "TRF");
     await post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
       tipo: tipoMov, cuenta_destino: destino, documento_id: sharedId, referencia: "1",
+      ...firma(),   // firma de quién contabilizó la línea del extracto
     }});
     await post({ action: "add", sheet: "nb_movimientos", row: {
       id: `${sharedId}-E`, sociedad: prop.destino_sociedad || mov.sociedad, fecha: mov.fecha,
@@ -741,6 +770,7 @@ export async function aceptarMovimiento(mov, prop = {}) {
     contraparte_id:     prop.proveedor_id || "",
     contraparte_nombre: prop.proveedor_nombre || mov.contraparte_nombre || "",
     documento_id:       "CONTAB-" + mov.id,
+    ...firma(),
   }});
 }
 
@@ -759,6 +789,7 @@ export async function aceptarCobroFranquicia(mov, partes = []) {
     contraparte_id: String(p0.franquicia_id || ""), contraparte_nombre: p0.franquicia_nombre || "",
     monto: signo * Math.abs(Number(p0.monto) || 0),
     cuenta_contable: "", centro_costo: "",
+    ...firma(),
   }});
   for (const p of resto) {
     await post({ action: "add", sheet: "nb_movimientos", row: {
@@ -786,6 +817,7 @@ export async function imputarPagoFC(mov, { documento_id, cuenta_contable = "", c
     contraparte_nombre: proveedor_nombre || mov.contraparte_nombre || "",
     documento_id,                                       // id de la FC → netea CxP en Tesorería
     concepto:           mov.concepto || `Pago ${documento_id}`,
+    ...firma(),
   }});
 }
 
@@ -806,6 +838,7 @@ export async function imputarCobroIngreso(mov, { documento_id, cuenta_contable =
     contraparte_nombre: cliente_nombre || mov.contraparte_nombre || "",
     documento_id,
     concepto:           mov.concepto || `Cobro ${documento_id}`,
+    ...firma(),
   }});
   for (const r of retenciones) {
     const ret = Math.abs(Number(r?.monto) || 0);
@@ -853,6 +886,7 @@ export async function ignorarMovimiento(mov, motivo = "") {
   return post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
     documento_id: "IGN-" + mov.id,
     referencia: `${ref};ign=${motivo || "1"}`,
+    ...firma(),
   }});
 }
 
@@ -1121,6 +1155,136 @@ export async function appendIntercompania({ fecha, tipoOp = "prestamo", socOrige
 }
 
 export const deleteIntercompania = _deleteMovRows;
+
+// ── LECTURA intercompañía (el corazón del módulo — LECTURA, no escribe) ──────────
+// Trae TODO lo necesario para leer lo intercompany (todas las sociedades).
+export async function fetchIntercoData() {
+  const [movs, comps, centros, clientes, sociedades] = await Promise.all([
+    get("nb_movimientos", {}).catch(() => []),
+    get("nb_comprobantes", {}).catch(() => []),
+    get("nb_centros_costo", {}).catch(() => []),
+    get("nb_clientes", {}).catch(() => []),
+    get("nb_sociedades", {}).catch(() => []),
+  ]);
+  return {
+    movs:       Array.isArray(movs) ? movs : [],
+    comps:      Array.isArray(comps) ? comps : [],
+    centros:    Array.isArray(centros) ? centros : [],
+    clientes:   Array.isArray(clientes) ? clientes : [],
+    sociedades: Array.isArray(sociedades) ? sociedades : [],
+  };
+}
+
+// Normaliza CUIT a solo dígitos sin ceros a la izquierda (para matchear). Reutilizable.
+export const normCuit = s => String(s ?? "").replace(/\D/g, "").replace(/^0+/, "");
+
+// PENDIENTES de la mirada Interco (carril de Conciliaciones): ventas que OTRA sociedad
+// registró con MI sociedad como cliente (match por CUIT), que yo todavía NO reconocí con mi
+// compra. Reconocer crea una compra en mi sociedad con nota "interco_ref=<id_comp de la venta>".
+// Fuente: comprobantes INGRESO (ventas) de otras sociedades cuyo cliente tiene MI CUIT.
+export function pendientesInterco({ comps = [], clientes = [], sociedades = [] } = {}, { sociedad } = {}) {
+  const miCuit = normCuit((sociedades.find(s => String(s.id) === String(sociedad)) || {}).cuit);
+  if (!miCuit) return [];  // sin CUIT propio no puedo saber quién me vendió
+  const cliById = new Map(clientes.map(c => [String(c.id), c]));
+  const socNombre = id => (sociedades.find(s => String(s.id) === String(id))?.nombre) || id;
+  // Ya reconocidas: compras en MI sociedad con nota interco_ref=<id_comp>
+  const reconocidos = new Set();
+  for (const c of comps) {
+    if (String(c.sociedad) !== String(sociedad)) continue;
+    const m = String(c.nota || "").match(/interco_ref=([^\s;|]+)/);
+    if (m) reconocidos.add(m[1]);
+  }
+  // Ventas interco hacia mí, agrupadas por id_comp (una venta = varias líneas)
+  const ventas = new Map();
+  for (const c of comps) {
+    if (String(c.subtipo || "").toUpperCase() !== "INGRESO") continue;
+    if (String(c.sociedad) === String(sociedad)) continue;             // no mis propias ventas
+    const cuit = normCuit(cliById.get(String(c.contraparte_id))?.cuit);
+    if (!cuit || cuit !== miCuit) continue;                            // el cliente NO soy yo
+    const key = c.id_comp || c.id;
+    if (!ventas.has(key)) ventas.set(key, {
+      id_comp: key, vendedor: c.sociedad, vendedorNombre: socNombre(c.sociedad),
+      fecha: c.fecha, nroComp: c.nro_comp, moneda: c.moneda || "ARS", total: 0,
+    });
+    ventas.get(key).total += toNum(c.total);
+  }
+  return [...ventas.values()].filter(v => !reconocidos.has(v.id_comp))
+    .sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+}
+
+// Reconocer una venta interco = registrar MI compra (factura de proveedor / CxP) en mi sociedad,
+// con MIS cuenta+centro, contraparte = la sociedad vendedora, y link `interco_ref=<id_comp venta>`
+// (así el pendiente desaparece y no se re-crea). Queda como FC por pagar (EGRESO sin pago).
+export async function reconocerVentaInterco({ sociedad, ventaIdComp, vendedorId = "", vendedorNombre = "", cuenta_contable, centro_costo = "", total, moneda = "ARS", fecha, nroComp = "" }) {
+  const id_comp = newId("EG");
+  const t = toNum(total);
+  await post({ action: "add", sheet: "nb_comprobantes", row: {
+    id: `${id_comp}-L1`, id_comp, sociedad, fecha,
+    subtipo: "EGRESO",
+    contraparte_id: vendedorId, contraparte_nombre: vendedorNombre,
+    cuenta_contable: String(cuenta_contable || "").replace(/^CUENTA_/, ""),
+    centro_costo, subtotal: t, iva_rate: 0, iva_monto: 0, total: t,
+    moneda, nro_comp: nroComp, nota: `interco_ref=${ventaIdComp}`,
+    created_at: new Date().toISOString(),
+  }});
+  return { ok: true, id_comp };
+}
+
+// Deriva las posiciones intercompañía por (sociedad, contraparte, moneda) leyendo TODAS
+// las fuentes (no solo transferencias). Convención: quien PONE la plata queda ACREEDOR
+// (le deben → neto +); quien la recibe queda DEUDOR (debe → neto −).
+// Fuentes:
+//   1. FONDEO (principal): un gasto de la sociedad A imputado a un centro cuya `empresa`
+//      es la sociedad B (A ≠ B) → A le puso plata a B. (comprobantes de gasto + gastos
+//      directos / conciliación contabilizada en nb_movimientos)
+//   2. Préstamos/transferencias del núcleo (pares INTERCOMPANIA).
+// Si `sociedad` viene → solo las posiciones de esa sociedad (mirada propia).
+export function lecturaInterco({ movs = [], comps = [], centros = [] } = {}, { sociedad = null } = {}) {
+  const empresaDe = new Map((centros || []).map(c => [String(c.id), c.empresa]));
+  const acc = {};  // acc[sociedad][contraparte][moneda] = neto
+  const add = (s, c, moneda, delta) => {
+    s = String(s || ""); c = String(c || "");
+    if (!s || !c || s === c) return;
+    ((acc[s] ??= {})[c] ??= {});
+    acc[s][c][moneda] = (acc[s][c][moneda] || 0) + delta;
+  };
+  const fondeo = (A, centroId, moneda, monto) => {
+    const B = empresaDe.get(String(centroId || ""));
+    if (!A || !B || String(A) === String(B)) return;
+    const m = Math.abs(toNum(monto));
+    if (m < 0.01) return;
+    add(A, B, moneda || "ARS", +m);   // A acreedor (le puso plata a B)
+    add(B, A, moneda || "ARS", -m);   // B deudor
+  };
+  // 1a. Fondeo vía comprobantes de gasto
+  for (const r of comps) {
+    const sub = String(r.subtipo || "").toUpperCase();
+    if (sub !== "EGRESO" && sub !== "GASTO" && sub !== "EGRESO_FC") continue;
+    fondeo(r.sociedad, r.centro_costo, r.moneda, r.total);
+  }
+  // 1b. Fondeo vía gastos directos / conciliación contabilizada (nb_movimientos)
+  for (const m of movs) {
+    if (esIgnorado(m)) continue;
+    const esGasto = m.origen === "gasto_directo" || String(m.documento_id || "").startsWith("CONTAB-");
+    if (!esGasto) continue;
+    fondeo(m.sociedad, m.centro_costo, m.moneda, m.monto);
+  }
+  // 2. Préstamos / transferencias del núcleo (pares INTERCOMPANIA)
+  for (const { salida, entrada } of _pairMovs(movs, "INTERCOMPANIA")) {
+    if (!salida || !entrada) continue;
+    add(salida.sociedad,  entrada.sociedad, salida.moneda  || "ARS", +Math.abs(toNum(salida.monto)));
+    add(entrada.sociedad, salida.sociedad,  entrada.moneda || "ARS", -Math.abs(toNum(entrada.monto)));
+  }
+  const soc = sociedad ? String(sociedad).toLowerCase() : null;
+  const out = [];
+  for (const [s, porC] of Object.entries(acc)) {
+    if (soc && s.toLowerCase() !== soc) continue;
+    for (const [c, porMon] of Object.entries(porC))
+      for (const [moneda, neto] of Object.entries(porMon))
+        if (Math.abs(neto) >= 0.01) out.push({ sociedad: s, contraparte: c, moneda, neto });
+  }
+  return out;
+}
 
 // ── Validación de duplicados ──────────────────────────────────────────────────
 

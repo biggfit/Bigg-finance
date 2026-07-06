@@ -7,6 +7,7 @@ import {
   fetchEgresos, fetchPagosCobros, calcSaldoPendiente, imputarPagoFC,
   appendBancoRegla, fetchIngresos, imputarCobroIngreso,
   fetchFinanciaciones, imputarCuota, pagarTarjeta, esCuentaCredito, fetchMovTesoreria,
+  fetchIntercoData, pendientesInterco, reconocerVentaInterco, normCuit,
 } from "../lib/numbersApi";
 import { BancoReglaModal } from "./PantallaMaestros";
 import { fetchAll } from "../lib/sheetsApi";
@@ -54,7 +55,6 @@ const FR_TIPO_LABEL = { PAGO: "Pago de CC", PAGO_PAUTA: "Pago a cuenta", PAGO_EN
 // Etiqueta legible del saldo de CC (positivo = debe, negativo = a favor).
 const deudaLabel = (d) => Math.abs(Number(d) || 0) < 1 ? "al día" : (Number(d) > 0 ? `debe ${fmt(d)}` : `a favor ${fmt(-d)}`);
 const fmt = n => (Number(n) || 0).toLocaleString("es-AR", { minimumFractionDigits: 2 });
-const normCuit = s => String(s ?? "").replace(/\D/g, "").replace(/^0+/, "");
 // Dedup por id: el master de centros/cuentas tiene ids repetidos (ej. cc-2026-chueca) que
 // rompen la reconciliación de React (claves duplicadas) y filtran opciones de un select a otro.
 const dedupById = arr => { const seen = new Set(); return (arr || []).filter(x => x && !seen.has(x.id) && seen.add(x.id)); };
@@ -65,7 +65,71 @@ const sel = { fontSize: 11, padding: "4px 6px", border: "1px solid #94a3b8", bor
 const fld = (lleno, w = 150) => ({ fontSize: 11, padding: "4px 6px", borderRadius: 6, fontFamily: T.font, color: "#111827", width: w, boxSizing: "border-box",
   background: lleno ? "#dcfce7" : "#fff7ed", border: `1px solid ${lleno ? "#4ade80" : "#fb923c"}` });
 
-export default function PantallaReconciliacion({ sociedad, onPendientes }) {
+// Modal para RECONOCER una venta interco: registra mi compra (con mis cuenta+centro) → FC por pagar.
+function ReconocerIntercoModal({ pend, sociedad, cuentas = [], centros = [], onClose, onDone }) {
+  const [cuenta, setCuenta] = useState("");
+  const [centro, setCentro] = useState("");
+  const [total, setTotal]   = useState(String(pend?.total ?? ""));
+  const [fecha, setFecha]   = useState(new Date().toISOString().slice(0, 10));
+  const [busy, setBusy]     = useState(false);
+  const cuentasGasto = (cuentas || []).filter(c => !/^(venta|ventas|ingreso|ingresos)$/i.test(String(c.tipo || "")))
+    .sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
+  const centrosOrd = (centros || []).slice().sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
+  const canSave = cuenta && Number(total) > 0 && !busy;
+
+  const guardar = async () => {
+    if (!canSave) return;
+    setBusy(true);
+    try {
+      await reconocerVentaInterco({
+        sociedad, ventaIdComp: pend.id_comp, vendedorId: pend.vendedor, vendedorNombre: pend.vendedorNombre,
+        cuenta_contable: cuenta, centro_costo: centro, total: Number(total), moneda: pend.moneda, fecha, nroComp: pend.nroComp,
+      });
+      await onDone();
+    } catch (e) { setBusy(false); alert("No se pudo reconocer: " + (e?.message || e)); }
+  };
+
+  const inp = { width: "100%", background: "#eceff3", border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "9px 12px", fontSize: 13, color: T.text, fontFamily: T.font, outline: "none", boxSizing: "border-box" };
+  const lbl = { fontSize: 12, color: T.muted, fontWeight: 600, display: "block", marginBottom: 5 };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#f1f5f9", borderRadius: 16, width: 480, maxWidth: "97vw", overflow: "hidden", boxShadow: T.shadowMd }}>
+        <div style={{ background: T.accentDark, padding: "16px 22px" }}>
+          <div style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>Reconocer compra</div>
+          <div style={{ fontSize: 12, color: "rgba(255,255,255,.6)", marginTop: 2 }}>
+            {pend?.vendedorNombre} te vendió {pend?.moneda} {Math.round(pend?.total || 0).toLocaleString("es-AR")}{pend?.nroComp ? ` · ${pend.nroComp}` : ""}
+          </div>
+        </div>
+        <div style={{ padding: 22, display: "flex", flexDirection: "column", gap: 14 }}>
+          <div><label style={lbl}>Cuenta contable *</label>
+            <select value={cuenta} onChange={e => setCuenta(e.target.value)} style={inp}>
+              <option value="">— Elegí la cuenta —</option>
+              {cuentasGasto.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
+            </select></div>
+          <div><label style={lbl}>Centro de costo</label>
+            <select value={centro} onChange={e => setCentro(e.target.value)} style={inp}>
+              <option value="">— Sin centro —</option>
+              {centrosOrd.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+            </select></div>
+          <div style={{ display: "flex", gap: 12 }}>
+            <div style={{ flex: 1 }}><label style={lbl}>Importe *</label>
+              <input value={total} onChange={e => setTotal(e.target.value)} style={inp} /></div>
+            <div style={{ flex: 1 }}><label style={lbl}>Fecha</label>
+              <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={inp} /></div>
+          </div>
+          <div style={{ fontSize: 11.5, color: T.muted }}>Se registra como compra en tu sociedad → queda como <b>factura por pagar</b> a {pend?.vendedorNombre}.</div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+            <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${T.cardBorder}`, borderRadius: 999, padding: "8px 18px", fontSize: 13, fontWeight: 700, color: T.muted, cursor: "pointer", fontFamily: T.font }}>Cancelar</button>
+            <button onClick={guardar} disabled={!canSave} style={{ background: T.accent, border: "none", borderRadius: 999, padding: "8px 20px", fontSize: 13, fontWeight: 800, color: "#000", cursor: canSave ? "pointer" : "default", opacity: canSave ? 1 : .5, fontFamily: T.font }}>{busy ? "Guardando…" : "Reconocer y registrar compra"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function PantallaReconciliacion({ sociedad, onPendientes, mundo = "banco" }) {
   const [cuentas,    setCuentas]    = useState([]);
   const [cuentasAll, setCuentasAll] = useState([]); // todas las cuentas bancarias (todas las sociedades) para destino de transferencia
   const [cuentaTab,  setCuentaTab]  = useState("");
@@ -107,6 +171,17 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
 
   // Avisa al sidebar el conteo de pendientes (badge en vivo)
   useEffect(() => { onPendientes?.(pendientes.length); }, [pendientes, onPendientes]);
+
+  const [intercoData, setIntercoData] = useState({ movs: [], comps: [], centros: [], clientes: [], sociedades: [] });  // fuentes interco (read-only)
+  const [reconocerFor, setReconocerFor] = useState(null);  // pendiente interco que se está reconociendo
+  // `mundo` (banco | interco) viene por prop desde el sidebar (dropdown en Conciliación).
+  // Carga on-demand: fetchIntercoData trae TODAS las sociedades (payload pesado), así que solo se
+  // dispara cuando el usuario entra al carril Interco (no en cada montaje del Banco).
+  useEffect(() => {
+    if (mundo !== "interco") return;
+    fetchIntercoData().then(d => d && setIntercoData(d)).catch(console.error);
+  }, [mundo]);
+  const pendInterco = useMemo(() => pendientesInterco(intercoData, { sociedad }), [intercoData, sociedad]);
 
   const recargar = async () => {
     setLoading(true);
@@ -815,10 +890,15 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: "20px 28px", boxSizing: "border-box" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
-        <h2 style={{ fontSize: 20, fontWeight: 900, color: T.text, margin: 0 }}>Conciliación</h2>
-        <span style={{ fontSize: 12, color: T.muted }}>
-          {pendientes.length} movimientos sin conciliar
-        </span>
+        <h2 style={{ fontSize: 20, fontWeight: 900, color: T.text, margin: 0 }}>
+          Conciliaciones <span style={{ fontSize: 13, fontWeight: 700, color: T.muted }}>· {mundo === "interco" ? "Intercompañía" : "Banco"}</span>
+        </h2>
+        {mundo === "banco" && (
+          <span style={{ fontSize: 12, color: T.muted }}>
+            {pendientes.length} movimientos sin conciliar
+          </span>
+        )}
+        {mundo === "banco" && (
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
           {listosCount > 0 && (
             <button onClick={aceptarTodos} disabled={uploading}
@@ -844,7 +924,42 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
             {uploading ? "Subiendo…" : "⬆ Subir extracto"}
           </button>
         </div>
+        )}
       </div>
+
+      {/* ── MUNDO INTERCOMPAÑÍA — posiciones de esta sociedad (read-only) ── */}
+      {mundo === "interco" && (() => {
+        const pend = pendInterco;
+        const money = (n, mon) => `${mon} ${Math.round(Math.abs(n)).toLocaleString("es-AR")}`;
+        return (
+          <div className="fade" style={{ overflow: "auto" }}>
+            <div style={{ fontSize: 12, color: T.muted, marginBottom: 12 }}>
+              Ventas que otra sociedad registró con vos como cliente y todavía no reconociste. <b>Reconocer</b> = cargás tu compra (con tus cuentas) → te queda la factura por pagar.
+            </div>
+            {pend.length === 0 ? (
+              <div style={{ color: T.muted, fontSize: 13, padding: "24px 4px" }}>No hay ventas de otras sociedades pendientes de reconocer.</div>
+            ) : (
+              <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10, overflow: "hidden", boxShadow: T.shadow, maxWidth: 720 }}>
+                {pend.map((p, i) => (
+                  <div key={p.id_comp} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", borderTop: i ? `1px solid ${T.cardBorder}` : "none", fontSize: 13 }}>
+                    <div style={{ flex: 1 }}>
+                      <b>{p.vendedorNombre}</b> te vendió <b style={{ color: "#16a34a", fontFamily: T.mono }}>{money(p.total, p.moneda)}</b>
+                      <span style={{ color: T.muted }}>{p.nroComp ? ` · ${p.nroComp}` : ""}{p.fecha ? ` · ${p.fecha}` : ""}</span>
+                    </div>
+                    <button onClick={() => setReconocerFor(p)}
+                      style={{ background: T.accent, border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 12.5, fontWeight: 800, color: "#000", cursor: "pointer", fontFamily: T.font }}>
+                      Reconocer
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* ── MUNDO BANCO — extracto + bandeja ── */}
+      {mundo === "banco" && (<>
 
       {/* Barra de progreso del upload — no cambies de sociedad mientras sube */}
       {progreso && progreso.total > 0 && (
@@ -1293,6 +1408,18 @@ export default function PantallaReconciliacion({ sociedad, onPendientes }) {
           prefill={reglaModal.prefill}
           cuentas={planCuentas} centros={centros} cuentasBancarias={cuentasAll} proveedores={proveedores}
           onClose={() => setReglaModal(null)} onSave={handleSaveRegla} />
+      )}
+      </>)}
+
+      {reconocerFor && (
+        <ReconocerIntercoModal
+          pend={reconocerFor}
+          sociedad={sociedad}
+          cuentas={planCuentas}
+          centros={centros}
+          onClose={() => setReconocerFor(null)}
+          onDone={async () => { setReconocerFor(null); try { const d = await fetchIntercoData(); setIntercoData(d); } catch {} }}
+        />
       )}
     </div>
   );
