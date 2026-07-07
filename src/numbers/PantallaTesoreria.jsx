@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { T, Btn, Input, Select, PageHeader, fmtDate, fmtMoney } from "./theme";
 import {
   TIPO_CUENTA, MONEDA_SYM,
@@ -6,16 +6,14 @@ import {
 import { CENTROS_COSTO } from "../data/numbersData";
 import {
   fetchMovTesoreria, appendMovTesoreria, deleteMovTesoreria, updateMovTesoreria,
-  fetchEgresos, fetchIngresos, fetchPagosCobros, calcSaldoPendiente,
+  fetchEgresos, fetchIngresos, fetchPagosCobros,
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto,
-  appendGastoDirecto, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets,
-  agruparAnticipos, anticipoPasivo, pagarTarjeta, fetchSocios, fetchSociosCC, sociosSaldos,
+  appendGastoDirecto, esIgnorado, esCuentaCredito, fetchFinanciaciones,
+  pagarTarjeta, fetchSocios, fetchSociosCC, fetchIntercoData,
 } from "../lib/numbersApi";
-import {
-  fetchLiquidacionesCerradas, parsePagoFromMov, normSoc, pendienteSueldosPorLegajo,
-} from "../lib/sueldosApi";
+import { fetchLiquidacionesCerradas } from "../lib/sueldosApi";
 import { fetchAll } from "../lib/sheetsApi";        // Franquicias (read-only)
-import { franquiciasSaldosCxC } from "../lib/franquiciasAdapter";
+import { derivarSaldos, sociedadNombreMap } from "./tesoreriaDerive";  // saldos + activo/pasivo (compartido con Reportes)
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 // Tesorería muestra montos SIN decimales (pesos enteros). Local: no toca fmtSaldo global (pdf.js).
@@ -25,10 +23,6 @@ const fmtSaldo = (n, moneda) => {
   const neg = Number(n) < 0;
   return `${neg ? "-" : ""}${sym} ${abs.toLocaleString("es-AR", { maximumFractionDigits: 0 })}`;
 };
-
-// Orden de Activo/Pasivo: Franquiciados arriba (alineado entre ambos lados), luego por monto.
-const _esFranq = it => (it.label ?? "").startsWith("Franquiciados");
-const _franqFirst = (a, b) => (_esFranq(b) ? 1 : 0) - (_esFranq(a) ? 1 : 0) || b.saldo - a.saldo;
 
 const TIPO_CFG = {
   PAGO_FC:       { bg:"#fff7ed", color:"#f97316", label:"Pago FC"     },
@@ -484,7 +478,7 @@ function EditarMovModal({ mov, cuentasBancarias, onClose, onSave }) {
 
 // ─── Bloque A Cobrar / A Pagar ────────────────────────────────────────────────
 // ─── Modal de aging por contraparte ──────────────────────────────────────────
-function PaginaAging({ item, fechaCorte, headerColor, onBack }) {
+export function PaginaAging({ item, fechaCorte, headerColor, onBack }) {
   const hoy = fechaCorte ? new Date(fechaCorte + "T00:00:00") : new Date();
 
   const grouped = {};
@@ -783,7 +777,7 @@ function ResumenMonedas({ cuentas }) {
 }
 
 // ─── Tab: Saldos ─────────────────────────────────────────────────────────────
-function TabSaldos({ cuentas, aCobrar, aPagar, filtroMoneda, onCuentaClick, onItemClick }) {
+export function TabSaldos({ cuentas, aCobrar, aPagar, filtroMoneda, onCuentaClick, onItemClick }) {
   const filtrar = arr => filtroMoneda === "ALL" ? arr : arr.filter(c => c.moneda === filtroMoneda);
   const bancos      = filtrar(cuentas.filter(c => c.tipo === "banco"));
   const cajas       = filtrar(cuentas.filter(c => c.tipo === "caja"));
@@ -874,7 +868,7 @@ function RowMenu({ onEditar, onEliminar }) {
 }
 
 // ─── Tab: Movimientos ─────────────────────────────────────────────────────────
-function TabMovimientos({ movimientos, cuentas, filtroCuenta, onLimpiarFiltro, onEliminar, onEditar, onNuevoMov, centrosCosto = [] }) {
+export function TabMovimientos({ movimientos, cuentas, filtroCuenta, onLimpiarFiltro, onEliminar, onEditar, onNuevoMov, centrosCosto = [] }) {
   const cuentaMap = useMemo(() => {
     const m = {};
     for (const c of cuentas) m[c.id] = c.nombre;
@@ -963,10 +957,12 @@ function TabMovimientos({ movimientos, cuentas, filtroCuenta, onLimpiarFiltro, o
                 <tr key={m.id ?? i} style={{ borderBottom:`1px solid ${T.cardBorder}`,
                   background: i % 2 === 0 ? T.card : "#fafbfc" }}>
                   <td style={{ padding:"8px 6px 8px 10px", verticalAlign:"middle" }}>
-                    <RowMenu
-                      onEditar={m.origen === "manual" ? () => onEditar?.(m) : undefined}
-                      onEliminar={() => onEliminar?.(m)}
-                    />
+                    {(onEditar || onEliminar) && (
+                      <RowMenu
+                        onEditar={m.origen === "manual" ? () => onEditar?.(m) : undefined}
+                        onEliminar={() => onEliminar?.(m)}
+                      />
+                    )}
                   </td>
                   <td style={{ padding:"10px 14px" }}>
                     <span style={{ display:"inline-block", padding:"2px 9px", borderRadius:999,
@@ -1023,6 +1019,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
   const [socios,           setSocios]           = useState([]);   // maestro de socios (group-level)
   const [sociosCC,         setSociosCC]         = useState([]);   // cuenta corriente de socios no-cash
   const [franqData,        setFranqData]        = useState({ comps: {}, saldos: {}, franchises: [] });  // Franquicias (read-only)
+  const [intercoData,      setIntercoData]      = useState(null);   // interco (movs+comps+centros+sociedades)
 
   // ── Fetch all data ────────────────────────────────────────────────────────
   const cargarMovimientos = async () => {
@@ -1058,6 +1055,8 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
       fetchAll().then(franq => {
         if (franq && franq.comps) setFranqData(franq);
       }).catch(() => {});
+      // Intercompañía (read-only) — posiciones para el Activo/Pasivo.
+      fetchIntercoData().then(d => { if (d) setIntercoData(d); }).catch(() => {});
     } catch (e) {
       setError(e.message);
     } finally {
@@ -1070,192 +1069,25 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
     cargarMovimientos();
   }, [sociedad]);
 
-  // ── Cuentas con saldo calculado desde movimientos ─────────────────────────
-  const cuentas = useMemo(() => {
-    return cuentasBancarias
-      .filter(c => (c.sociedad ?? "").toLowerCase() === (sociedad ?? "").toLowerCase())
-      .map(cuenta => {
-        const movsCuenta = movimientos.filter(m =>
-          m.cuenta_bancaria === cuenta.id &&
-          !esIgnorado(m) &&                                   // las líneas descartadas no cuentan
-          (!fechaCorte || (m.fecha ?? "") <= fechaCorte)
-        );
-        const saldo = movsCuenta.reduce((s, m) => s + (Number(m.monto) || 0), 0);
-        return { ...cuenta, tipo: (cuenta.tipo ?? "").toLowerCase(), saldo };
-      });
-  }, [sociedad, movimientos, cuentasBancarias, fechaCorte]);
+  const sociedadesMap = useMemo(() => sociedadNombreMap(intercoData?.sociedades ?? []), [intercoData]);
+
+  // ── Saldos + Activo/Pasivo (derivación compartida con Reportes › Consolidado) ──
+  const { cuentas, aCobrar: aCobrarFull, aPagar: aPagarFull } = useMemo(
+    () => derivarSaldos({
+      sociedad, fechaCorte,
+      movimientos, egresos, ingresos, pagosCobros,
+      cuentasBancarias, cuentasContables,
+      liqsSueldos, financiaciones, socios, sociosCC, franqData,
+      intercoData, sociedadesMap,
+    }),
+    [sociedad, fechaCorte, movimientos, egresos, ingresos, pagosCobros,
+      cuentasBancarias, cuentasContables, liqsSueldos, financiaciones, socios, sociosCC, franqData,
+      intercoData, sociedadesMap]
+  );
 
   const monedas = useMemo(() => [...new Set(cuentas.map(c => c.moneda))], [cuentas]);
   const subtitle = `${cuentas.length} cuenta${cuentas.length !== 1 ? "s" : ""}`
     + (monedas.length ? ` · ${monedas.join(", ")}` : "");
-
-  // ── Cuentas a cobrar / a pagar (agrupadas por cuenta + moneda) ─────────────
-  const cuentaById     = useMemo(() => new Map(cuentasContables.map(c => [c.id, c])),     [cuentasContables]);
-  const cuentaByNombre = useMemo(() => new Map(cuentasContables.map(c => [(c.nombre ?? "").toLowerCase(), c])), [cuentasContables]);
-
-  // Helper: busca en nb_cuentas por id, nombre exacto, o nombre normalizado (guiones→espacios)
-  const _resolveCuenta = useCallback((cuentaById, cuentaByNombre, id, nombre) => {
-    const norm = s => (s ?? "").toLowerCase().replace(/_/g, " ").trim();
-    return cuentaById.get(id ?? "")
-      || cuentaByNombre.get((nombre ?? "").toLowerCase())
-      || cuentaByNombre.get(norm(id))
-      || cuentaByNombre.get(norm(nombre))
-      || null;
-  }, []);
-
-  const aCobrar = useMemo(() => {
-    const corte  = fechaCorte || null;
-    const cobros = pagosCobros.filter(p => p.tipo === "COBRO" && (!corte || (p.fecha ?? "") <= corte));
-    const grouped = {};
-    for (const ing of ingresos) {
-      if (corte && (ing.fecha ?? "") > corte) continue;
-      const pagosDoc = cobros.filter(c => c.documento_id === ing.id);
-      const saldo    = calcSaldoPendiente(ing.importe, pagosDoc);
-      if (saldo <= 0) continue;
-      const cuentaDef = _resolveCuenta(cuentaById, cuentaByNombre, ing.cuentaId, ing.cuenta);
-      const label     = cuentaDef?.cuenta_pasivo || ing.cuenta || "Sin cuenta";
-      const key       = `${label}||${ing.moneda ?? "ARS"}`;
-      if (!grouped[key]) grouped[key] = { label, moneda: ing.moneda ?? "ARS", saldo: 0, docs: [], headerColor:"#16a34a" };
-      grouped[key].saldo += saldo;
-      grouped[key].docs.push({ contraparte: ing.cliente || ing.proveedor || "Sin nombre", vto: ing.vto, saldo, moneda: ing.moneda ?? "ARS" });
-    }
-    return Object.values(grouped).sort((a, b) => b.saldo - a.saldo);
-  }, [ingresos, pagosCobros, cuentaById, cuentaByNombre, fechaCorte, _resolveCuenta]);
-
-  // ── Saldos de franquiciados (Bigg Franquicias, read-only) ───────────────────
-  // Presentación BRUTA, sin netear (igual que Franquicias muestra DEBEN/DEBEMOS):
-  //   · saldo > 0 (nos deben)  → Activo "Franquiciados" (cuentas por cobrar)
-  //   · saldo < 0 (les debemos) → Pasivo "Franquiciados (saldo a favor)" = ingreso diferido,
-  //     misma naturaleza que un anticipo de cliente.
-  // computeSaldoReal = misma lógica que la app de Franquicias (facturado − cobrado, tope de pauta),
-  // scoping por empresa+moneda de la sociedad activa. OJO: hoy el cobro se lee de comprobantes;
-  // cuando se haga el switch (financieros solo en nb_movimientos) hay que reapuntar la fuente.
-  const franqCC = useMemo(() => {
-    const now = new Date();
-    return franquiciasSaldosCxC(franqData, sociedad, now.getFullYear(), now.getMonth(), movimientos);
-  }, [franqData, sociedad, movimientos]);
-
-  // ── Saldos de SOCIOS (cuenta corriente: dividendos + préstamos) ──
-  // Slice de esta sociedad. Balance puro (no P&L). saldo > 0 = nos deben (Activo);
-  // saldo < 0 = les debemos (Pasivo). Une nb_socios_cc (no-cash) + movs origen="socios".
-  const sociosCCsld = useMemo(
-    () => sociosSaldos(socios, sociosCC, movimientos, { sociedad }),
-    [socios, sociosCC, movimientos, sociedad]
-  );
-
-  const aCobrarFull = useMemo(
-    () => [...aCobrar, ...franqCC.activo, ...sociosCCsld.activo].sort(_franqFirst),
-    [aCobrar, franqCC, sociosCCsld]
-  );
-
-  const aPagar = useMemo(() => {
-    const corte  = fechaCorte || null;
-    const pagos  = pagosCobros.filter(p => (p.tipo === "PAGO" || p.tipo === "EGRESO_GASTO") && (!corte || (p.fecha ?? "") <= corte));
-    const pasivoLabel    = { proveedores:"Proveedores", sueldos:"Sueldos", impuestos:"Impuestos", financiero:"Financiero", ventas:"Ventas" };
-    const grouped = {};
-    for (const eg of egresos) {
-      if (corte && (eg.fecha ?? "") > corte) continue;
-      const pagosDoc = pagos.filter(p => p.documento_id === eg.id);
-      const saldo    = calcSaldoPendiente(eg.importe, pagosDoc);
-      if (saldo <= 0) continue;
-      const cuentaDef = _resolveCuenta(cuentaById, cuentaByNombre, eg.cuentaId, eg.cuenta);
-      const bucket    = (cuentaDef?.cuenta_pasivo ?? "").toLowerCase() || "proveedores";
-      // Resumen de tarjeta: el pasivo agrupa como "Tarjeta de crédito" (contraparte ^Tarjeta),
-      // aunque las líneas tengan cuentas reales (Servicios, Software, impuestos…) para el P&L.
-      const label     = /^tarjeta/i.test(eg.proveedor ?? "") ? "Tarjeta de crédito"
-                        : (pasivoLabel[bucket] ?? cuentaDef?.cuenta_pasivo ?? "Proveedores");
-      const key       = `${label}||${eg.moneda ?? "ARS"}`;
-      if (!grouped[key]) grouped[key] = { label, moneda: eg.moneda ?? "ARS", saldo: 0, docs: [], headerColor:"#dc2626" };
-      grouped[key].saldo += saldo;
-      grouped[key].docs.push({ contraparte: eg.proveedor || "Sin proveedor", vto: eg.vto, saldo, moneda: eg.moneda ?? "ARS" });
-    }
-    return Object.values(grouped).sort((a, b) => b.saldo - a.saldo);
-  }, [egresos, pagosCobros, cuentaById, cuentaByNombre, fechaCorte, _resolveCuenta]);
-
-  // ── Pasivo de SUELDOS de esta sociedad (devengado − pagado) ──
-  // Los pagos de sueldo SON movimientos (origen "sueldos") — una sola tabla, sin fetch aparte.
-  const pagosSueldos = useMemo(
-    () => movimientos.filter(m => m.origen === "sueldos").map(parsePagoFromMov),
-    [movimientos]
-  );
-  // Deriva del netter único de la lib (mismo número que la pantalla "Sueldos por pagar"):
-  // toma los items de esta sociedad y los arma como docs para el Pasivo.
-  const sueldosPasivo = useMemo(() => {
-    const soc = normSoc(sociedad);
-    const docs = []; let total = 0;
-    for (const leg of pendienteSueldosPorLegajo(liqsSueldos, pagosSueldos)) {
-      for (const it of leg.items) {
-        if (normSoc(it.sociedad) !== soc) continue;
-        total += it.monto;
-        docs.push({ contraparte: leg.legajo, vto: `${String(it.mes).padStart(2, "0")}/${it.anio}`, saldo: it.monto, moneda: "ARS" });
-      }
-    }
-    docs.sort((a, b) => b.saldo - a.saldo);
-    return { total, docs };
-  }, [liqsSueldos, pagosSueldos, sociedad]);
-
-  // ── Pasivo de FINANCIACIONES (planes AFIP + créditos) ──
-  // Líneas PROPIAS, separadas de los comprobantes. Usa el helper compartido de numbersApi
-  // (misma clasificación/saldo que Reportes→Balance). "Planes de pago" (impuestos) / "Créditos".
-  const finPasivo = useMemo(() => {
-    const b = financiacionPasivoBuckets(financiaciones, sociedad);
-    const items = [];
-    const armar = (bucket, label) => {
-      for (const mon of ["ARS", "USD", "EUR"]) {
-        if (bucket.tot[mon] <= 0) continue;
-        const docs = bucket.docs.filter(d => d.moneda === mon)
-          .map(d => ({ contraparte: `${d.acreedor || "—"}${d.nro_plan ? " · " + d.nro_plan : ""}`, vto: d.prox_vto, saldo: d.saldo, moneda: mon }));
-        items.push({ label, moneda: mon, saldo: bucket.tot[mon], docs, headerColor: "#dc2626" });
-      }
-    };
-    armar(b.impuestos, "Planes de pago");
-    armar(b.financiero, "Créditos");
-    return items;
-  }, [financiaciones, sociedad]);
-
-  // ── Pasivo de ANTICIPOS de clientes (ingresos diferidos) — derivado de los movimientos ──
-  const anticiposPasivo = useMemo(() => {
-    const { tot, docs } = anticipoPasivo(agruparAnticipos(movimientos), sociedad);
-    const items = [];
-    for (const mon of ["ARS", "USD", "EUR"]) {
-      if (tot[mon] <= 0) continue;
-      const d = docs.filter(x => x.moneda === mon).map(x => ({ contraparte: x.cliente || "—", vto: x.fecha, saldo: x.saldo, moneda: mon }));
-      items.push({ label: "Anticipos de clientes", moneda: mon, saldo: tot[mon], docs: d, headerColor: "#dc2626" });
-    }
-    return items;
-  }, [movimientos, sociedad]);
-
-  // Deuda de tarjetas (saldo negativo de las cuentas-tarjeta) → como líneas del Pasivo.
-  // El detalle muestra los movimientos de la tarjeta (consumos +, pagos −) → suman el saldo.
-  const tarjetasPasivo = useMemo(() =>
-    cuentas.filter(c => esCuentaCredito(c) && (Number(c.saldo) || 0) < 0)
-      .map(c => {
-        const movsCard = movimientos.filter(m => m.cuenta_bancaria === c.id && !esIgnorado(m)
-          && (!fechaCorte || (m.fecha ?? "") <= fechaCorte));
-        const docs = movsCard.map(m => ({
-          contraparte: m.concepto || (Number(m.monto) < 0 ? "Consumo" : "Pago"),
-          vto: m.fecha, saldo: -(Number(m.monto) || 0), moneda: c.moneda,
-        }));
-        return { label: c.nombre, moneda: c.moneda, saldo: -(Number(c.saldo) || 0), docs, headerColor: "#dc2626" };
-      }),
-    [cuentas, movimientos, fechaCorte]);
-
-  // Pasivo combinado: cuentas a pagar (comprobantes) + sueldos pendientes + financiaciones + tarjetas.
-  // Sueldos se funde en su item si ya existe; financiaciones van como líneas propias.
-  const aPagarFull = useMemo(() => {
-    const out = aPagar.map(it => ({ ...it }));
-    if (sueldosPasivo.total > 0) {
-      const existente = out.find(it => it.label === "Sueldos" && it.moneda === "ARS");
-      if (existente) {
-        existente.saldo += sueldosPasivo.total;
-        existente.docs  = [...existente.docs, ...sueldosPasivo.docs];
-      } else {
-        out.push({ label: "Sueldos", moneda: "ARS", saldo: sueldosPasivo.total, docs: sueldosPasivo.docs, headerColor: "#dc2626" });
-      }
-    }
-    out.push(...finPasivo, ...anticiposPasivo, ...franqCC.pasivo, ...tarjetasPasivo, ...sociosCCsld.pasivo);
-    return out.sort(_franqFirst);
-  }, [aPagar, sueldosPasivo, finPasivo, anticiposPasivo, franqCC, tarjetasPasivo, sociosCCsld]);
 
   // ── Guardar movimiento entre cuentas ──────────────────────────────────────
   const handleGuardarMovimiento = async (form) => {

@@ -5,6 +5,7 @@ import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, SALAR
 import { MONEDA_SYM } from "../data/tesoreriaData";
 import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
 import { franquiciasIngresoPnLRows } from "../lib/franquiciasAdapter";
+import TabTesoreriaConsolidada from "./reportes/TabTesoreriaConsolidada";
 
 const MESES    = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
 const CUR_YEAR = new Date().getFullYear();
@@ -1122,6 +1123,7 @@ const TABS = [
   { id: "balance", label: "Patrimonio Neto" },
   { id: "evpn",    label: "Evolución PN" },
   { id: "interco", label: "Intercompañía" },
+  { id: "consolidado", label: "Tesorería consolidada" },
 ];
 
 // ─── Tab Intercompañía (resumen de posiciones por anillo — LECTURA) ─────────────
@@ -1451,7 +1453,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         }
       />
 
-      {/* ── Toolbar / Filters ── */}
+      {/* ── Toolbar / Filters (Consolidado trae la suya propia) ── */}
+      {activeTab !== "consolidado" && (
       <div style={{
         display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap", alignItems: "flex-end",
         background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
@@ -1545,6 +1548,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
           </div>
         )}
       </div>
+      )}
 
       {/* ── P&L Sedes ── */}
       {activeTab === "pl_sede" && (
@@ -1590,6 +1594,10 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
       {activeTab === "interco" && (
         <TabInterco data={intercoData} sociedades={sociedades} />
+      )}
+
+      {activeTab === "consolidado" && (
+        <TabTesoreriaConsolidada />
       )}
 
     </div>

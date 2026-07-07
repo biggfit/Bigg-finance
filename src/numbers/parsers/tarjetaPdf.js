@@ -11,7 +11,9 @@ import { extractLines } from "./planPdf";
 
 const arNum = s => { const n = parseFloat(String(s).replace(/\./g, "").replace(",", ".")); return isNaN(n) ? 0 : n; };
 const DATE  = /^(\d{2}-\d{2}-\d{2})\b/;
-const AMT   = /-?\d{1,3}(?:\.\d{3})*,\d{2}/g;
+// Importe es-AR: parte entera con separadores de miles (1.234) o corrida de dígitos (1234),
+// + coma decimal + 2 decimales. La 2ª alternativa evita truncar "5867,00" → "867,00".
+const AMT   = /-?(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2}/g;
 
 // Fechas del ciclo de facturación: mes ALFABÉTICO ("08-Jun-26"). Los consumos usan
 // mes numérico ("05-05-26") → este formato es único de la cabecera, sin ambigüedad.
@@ -37,12 +39,24 @@ export async function parseTarjetaPdf(file) {
   const out = [];
   let pending = [];
   let inDetalle = false;
+  const controles = [];   // por titular: subtotal del PDF vs lo parseado (control de integridad)
+  const gsum = (arr, usd) => arr.reduce((s, l) => s + ((l.moneda === "USD") === usd ? Math.abs(l.monto) : 0), 0);
   const flush = (titular) => { for (const l of pending) l.titular = titular; out.push(...pending); pending = []; };
 
   for (const ln of lines) {
     if (/DETALLE DEL CONSUMO/i.test(ln)) { inDetalle = true; continue; }
-    const tot = ln.match(/Total Consumos de (.+?)\s+-?[\d.]+,\d{2}/i);
-    if (tot) { flush(tot[1].trim()); continue; }
+    if (/Total Consumos de /i.test(ln)) {
+      const nom = (ln.match(/Total Consumos de (.+?)\s+-?[\d.]+,\d{2}/i) || [, ""])[1].trim();
+      const amts = (ln.match(AMT) || []).map(arNum);            // los 2 últimos = pesos y dólares del grupo
+      controles.push({
+        titular: nom,
+        pdfARS: amts.length >= 2 ? amts[amts.length - 2] : (amts[0] || 0),
+        pdfUSD: amts.length >= 2 ? amts[amts.length - 1] : 0,
+        parsedARS: gsum(pending, false), parsedUSD: gsum(pending, true),
+      });
+      flush(nom);
+      continue;
+    }
     if (!inDetalle) continue;
 
     const dm = ln.match(DATE);
@@ -65,6 +79,6 @@ export async function parseTarjetaPdf(file) {
 
     pending.push({ fecha: dm[1], comercio: desc.slice(0, 60), monto, moneda });
   }
-  flush("");                                             // grupo final sin "Total Consumos"
-  return { lineas: out, header };
+  flush("");                                             // grupo final sin "Total Consumos" (impuestos)
+  return { lineas: out, header, controles };
 }

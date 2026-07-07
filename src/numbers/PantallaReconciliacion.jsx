@@ -10,6 +10,7 @@ import {
   fetchIntercoData, pendientesInterco, reconocerVentaInterco, normCuit,
 } from "../lib/numbersApi";
 import { BancoReglaModal } from "./PantallaMaestros";
+import MundoTarjeta from "./reconciliacion/MundoTarjeta";
 import { fetchAll } from "../lib/sheetsApi";
 import { computeSaldoReal } from "../lib/helpers";
 import { parseGalicia } from "./parsers/galicia";
@@ -202,7 +203,8 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       setCuentasAll(all || []);
       const soc = (all || []).filter(c => c.sociedad === sociedad);
       setCuentas(soc);
-      setCuentaTab(soc[0]?.id || "");
+      // Pestaña inicial = primera cuenta real (las tarjeta se concilian en el mundo Tarjeta).
+      setCuentaTab((soc.find(c => !esCuentaCredito(c)) || soc[0])?.id || "");
     }).catch(console.error);
     fetchCuentas().then(c => setPlanCuentas(dedupById(c))).catch(console.error);
     fetchCentrosCosto().then(c => setCentros(dedupById(c))).catch(console.error);
@@ -889,7 +891,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: "20px 28px", boxSizing: "border-box" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
+      {mundo !== "tarjeta" && (<div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
         <h2 style={{ fontSize: 20, fontWeight: 900, color: T.text, margin: 0 }}>
           Conciliaciones <span style={{ fontSize: 13, fontWeight: 700, color: T.muted }}>· {mundo === "interco" ? "Intercompañía" : "Banco"}</span>
         </h2>
@@ -925,7 +927,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
           </button>
         </div>
         )}
-      </div>
+      </div>)}
 
       {/* ── MUNDO INTERCOMPAÑÍA — posiciones de esta sociedad (read-only) ── */}
       {mundo === "interco" && (() => {
@@ -958,6 +960,9 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         );
       })()}
 
+      {/* ── MUNDO TARJETA — resumen como bandeja de consumos a autorizar ── */}
+      {mundo === "tarjeta" && <MundoTarjeta sociedad={sociedad} />}
+
       {/* ── MUNDO BANCO — extracto + bandeja ── */}
       {mundo === "banco" && (<>
 
@@ -975,9 +980,9 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         </div>
       )}
 
-      {/* Pestañas por cuenta bancaria */}
+      {/* Pestañas por cuenta bancaria (las cuentas-tarjeta viven en el mundo Tarjeta, no acá) */}
       <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
-        {cuentas.map(c => {
+        {cuentas.filter(c => !esCuentaCredito(c)).map(c => {
           const active = c.id === cuentaTab;
           const n = countByCuenta[c.id] || 0;
           return (

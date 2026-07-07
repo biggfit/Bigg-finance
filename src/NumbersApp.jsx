@@ -15,7 +15,6 @@ import PantallaReconciliacion   from "./numbers/PantallaReconciliacion";
 import PantallaFinanciaciones   from "./numbers/PantallaFinanciaciones";
 import PantallaSocios            from "./numbers/PantallaSocios";
 import PantallaUsuarios          from "./numbers/PantallaUsuarios";
-import PantallaResumenTarjeta   from "./numbers/PantallaResumenTarjeta";
 import { SOCIEDADES as SOC_FALLBACK } from "./data/tesoreriaData";
 import { fetchSociedades, fetchMovimientosPendientes } from "./lib/numbersApi";
 import { inicial } from "./lib/auth";
@@ -101,6 +100,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
   const [showSocDrop,    setShowSocDrop]    = useState(false);
   const [socReady,       setSocReady]       = useState(false);
   const [activeSpecial,  setActiveSpecial]  = useState(null);
+  const [nuevaOpTarget,  setNuevaOpTarget]  = useState(null);  // "+" del sidebar → abre modal del especial
   const [pendConcil,     setPendConcil]     = useState(0);
   // null = main app; string = maestros active tab
   const [activeMaestrosTab, setActiveMaestrosTab] = useState(null);
@@ -290,19 +290,33 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
                     </button>
                     {tesoreriaOpen && subs.map(sub => {
                       const subActive = activeSpecial === sub.id;
+                      const irA = () => { setActiveId("tesoreria"); setActiveSpecial(sub.id); setTesoreriaOpen(true); setEgresoSubView(null); setIngresoSubView(null); setActiveMaestrosTab(null); };
                       return (
                         <div key={sub.id} style={{ display:"flex", alignItems:"center", minHeight:32, margin:"1px 6px", borderRadius:8,
                           background: subActive ? "rgba(173,255,25,.08)" : "rgba(0,0,0,.35)", transition:"background .12s" }}
                           onMouseEnter={e=>{ if(!subActive) e.currentTarget.style.background="rgba(0,0,0,.5)"; }}
                           onMouseLeave={e=>{ if(!subActive) e.currentTarget.style.background="rgba(0,0,0,.35)"; }}>
                           <button
-                            onClick={() => { setActiveId("tesoreria"); setActiveSpecial(sub.id); setTesoreriaOpen(true); setEgresoSubView(null); setIngresoSubView(null); setActiveMaestrosTab(null); }}
+                            onClick={irA}
                             aria-current={subActive ? "page" : undefined}
                             style={{ flex:1, background:"transparent", border:"none", borderRadius:8,
                               color: subActive ? T.accent : "rgba(255,255,255,.45)", textAlign:"left",
-                              padding:"7px 8px 7px 38px", fontSize:12, fontFamily:T.font, cursor:"pointer",
-                              fontWeight: subActive ? 700 : 400 }}>
+                              padding:"7px 4px 7px 38px", fontSize:11.5, fontFamily:T.font, cursor:"pointer",
+                              fontWeight: subActive ? 700 : 400, whiteSpace:"nowrap",
+                              overflow:"hidden", textOverflow:"ellipsis" }}>
                             {sub.label}
+                          </button>
+                          <button
+                            onClick={() => { irA(); setNuevaOpTarget(sub.id); }}
+                            aria-label={`Nueva operación · ${sub.label}`}
+                            title={`Nueva operación · ${sub.label}`}
+                            style={{ background:"transparent", border:"none", borderRadius:6, flexShrink:0,
+                              color:T.accent, fontSize:16, lineHeight:1, minWidth:32, minHeight:32,
+                              display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer",
+                              fontFamily:T.font, transition:"background .12s" }}
+                            onMouseEnter={e=>e.currentTarget.style.background="rgba(173,255,25,.12)"}
+                            onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                            +
                           </button>
                         </div>
                       );
@@ -328,7 +342,6 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
                     {egresoOpen && [
                       { id:"new-compra", label:"Compras", listId:null,      ariaAdd:"Agregar compra" },
                       { id:"new-gasto",  label:"Gastos",  listId:"gastos",  ariaAdd:"Agregar gasto"  },
-                      { id:"new-resumen-tc", label:"Tarjetas", listId:"new-resumen-tc", ariaAdd:"Cargar resumen de tarjeta" },
                     ].map(sub => {
                       const subActive = activeId === "egresos" && !activeSpecial && !showMaestros && (
                         sub.listId === null
@@ -469,6 +482,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
                 const subs = [
                   { id:"banco",   label:"Banco" },
                   { id:"interco", label:"Interco" },
+                  { id:"tarjeta", label:"Tarjeta" },
                 ];
                 return (
                   <div key={s.id}>
@@ -636,7 +650,6 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
               : egresoSubView  === "new-compra" ? "Egresos › Nueva Compra"
               : egresoSubView  === "new-gasto"  ? "Gastos › Nuevo Gasto"
               : egresoSubView  === "gastos"     ? "Gastos"
-              : egresoSubView  === "new-resumen-tc" ? "Egresos › Resumen de tarjeta"
               : ingresoSubView === "new-venta"  ? "Ingresos › Nueva Venta"
               : activeId === "financiaciones"   ? `Financiaciones › ${finTab === "prestamo" ? "Préstamos" : finTab === "anticipo" ? "Anticipos" : "Planes"}`
               : section?.label ?? ""
@@ -662,9 +675,9 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
             : showMaestros
             ? <PantallaMaestros activeTab={activeMaestrosTab} />
             : activeSpecial === "intercompania"
-            ? <PantallaIntercompania sociedad={activeSoc.id} />
+            ? <PantallaIntercompania sociedad={activeSoc.id} openNew={nuevaOpTarget === "intercompania"} onOpenNewConsumed={() => setNuevaOpTarget(null)} />
             : activeSpecial === "cambio"
-            ? <PantallaCambioMoneda sociedad={activeSoc.id} />
+            ? <PantallaCambioMoneda sociedad={activeSoc.id} openNew={nuevaOpTarget === "cambio"} onOpenNewConsumed={() => setNuevaOpTarget(null)} />
             : activeSpecial === "socios"
             ? <PantallaSocios />
             : activeSpecial === "usuarios"
@@ -672,9 +685,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
             : activeSpecial === "reportes"
             ? <PantallaReportes sociedad={activeSoc.id} />
             : section?.component
-            ? section.id === "egresos" && egresoSubView === "new-resumen-tc"
-              ? <PantallaResumenTarjeta sociedad={activeSoc.id} />
-              : section.id === "egresos" && (egresoSubView === "gastos" || egresoSubView === "new-gasto")
+            ? section.id === "egresos" && (egresoSubView === "gastos" || egresoSubView === "new-gasto")
               ? <PantallaGastos   sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView} navPulse={navPulse} />
               : section.id === "egresos"
               ? <PantallaEgresos  sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView} navPulse={navPulse} />

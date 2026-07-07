@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { T, Btn, PageHeader, fmtDate, fmtMoney } from "./theme";
+import { T, Btn, Input, Select, PageHeader, fmtDate, fmtMoney } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
 import { fetchCambios, appendCambio, deleteCambio, fetchCuentasBancarias } from "../lib/numbersApi";
 
@@ -14,14 +14,8 @@ const FORM_VACÍO = {
   nota:            "",
 };
 
-const inputStyle = {
-  width:"100%", padding:"8px 10px", borderRadius:8, border:"1px solid #e5e7eb",
-  fontSize:13, fontFamily:T.font, background:"#fff", color:T.text, outline:"none",
-  boxSizing:"border-box",
-};
-const labelStyle = { fontSize:11, fontWeight:700, color:T.muted, marginBottom:4, display:"block" };
 
-export default function PantallaCambioMoneda({ sociedad }) {
+export default function PantallaCambioMoneda({ sociedad, openNew, onOpenNewConsumed }) {
   const [todosCambios, setTodosCambios] = useState([]);
   const [loading,      setLoading]      = useState(true);
   const [showForm,     setShowForm]     = useState(false);
@@ -29,20 +23,20 @@ export default function PantallaCambioMoneda({ sociedad }) {
   const [allCuentas,   setAllCuentas]   = useState([]);
   const [form,         setForm]         = useState(FORM_VACÍO);
   const [deleting,     setDeleting]     = useState(null);
-  const [otrasOpen,    setOtrasOpen]    = useState(true);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  // Abrir el modal desde el "+" del sidebar (una sola vez por click).
+  useEffect(() => {
+    if (openNew) { setForm(FORM_VACÍO); setShowForm(true); onOpenNewConsumed?.(); }
+  }, [openNew]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const cuentas = useMemo(() =>
     allCuentas.filter(c => (c.sociedad ?? "").toLowerCase() === (sociedad ?? "").toLowerCase()),
     [allCuentas, sociedad]
   );
 
-  const cambios      = useMemo(() => todosCambios.filter(c => (c.sociedad ?? "").toLowerCase() === (sociedad ?? "").toLowerCase()), [todosCambios, sociedad]);
-  const cambiosOtros = useMemo(() =>
-    todosCambios.filter(c => (c.sociedad ?? "").toLowerCase() !== (sociedad ?? "").toLowerCase()),
-    [todosCambios, sociedad]
-  );
+  const cambios = useMemo(() => todosCambios.filter(c => (c.sociedad ?? "").toLowerCase() === (sociedad ?? "").toLowerCase()), [todosCambios, sociedad]);
 
   async function cargar() {
     setLoading(true);
@@ -141,114 +135,72 @@ export default function PantallaCambioMoneda({ sociedad }) {
       <PageHeader
         title="Cambio de moneda"
         action={
-          <Btn onClick={() => { setShowForm(v => !v); setForm(FORM_VACÍO); }}
-            style={{ background: showForm ? "#f3f4f6" : T.accent,
-              color: showForm ? T.muted : "#000", border:"none" }}>
-            {showForm ? "Cancelar" : "+ Nueva operación"}
+          <Btn onClick={() => { setForm(FORM_VACÍO); setShowForm(true); }}
+            style={{ background: T.accent, color:"#000", border:"none" }}>
+            + Nueva operación
           </Btn>
         }
       />
 
-      {/* ── Formulario inline ── */}
+      {/* ── Modal: nueva operación ── */}
       {showForm && (
-        <div style={{ background:"#eceff3", border:"1px solid #e5e7eb", borderRadius:12,
-          padding:"20px 24px", marginBottom:24 }}>
-          {/* Grilla unificada: fecha/TC | origen | → | destino */}
-          <div style={{ display:"grid", gridTemplateColumns:"150px 1fr 40px 1fr", gap:12, alignItems:"end", marginBottom:16 }}>
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.45)", zIndex:500,
+          display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
+          onClick={() => { setShowForm(false); setForm(FORM_VACÍO); }}>
+        <div className="fade" style={{ background:T.card, borderRadius:10, width:520, maxWidth:"97vw",
+          boxShadow:"0 20px 60px rgba(0,0,0,.25)", overflow:"hidden" }} onClick={e => e.stopPropagation()}>
+          <div style={{ background:"#0e7490", padding:"14px 22px", display:"flex",
+            justifyContent:"space-between", alignItems:"center" }}>
+            <span style={{ fontSize:15, fontWeight:800, color:"#fff" }}>Nueva operación de cambio</span>
+            <button onClick={() => { setShowForm(false); setForm(FORM_VACÍO); }}
+              style={{ background:"transparent", border:"none", color:"rgba(255,255,255,.6)",
+                fontSize:20, cursor:"pointer", lineHeight:1 }}>✕</button>
+          </div>
+          <div style={{ padding:24, display:"flex", flexDirection:"column", gap:14 }}>
+            <Input label="Fecha" required type="date" value={form.fecha} onChange={v => set("fecha", v)} />
 
-            {/* Fecha */}
-            <div>
-              <label style={labelStyle}>Fecha</label>
-              <input type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)}
-                style={inputStyle} />
-            </div>
+            <Select label="Entregás — cuenta de salida" required value={form.cuentaOrigenId}
+              onChange={v => set("cuentaOrigenId", v)}
+              options={cuentas.map(c => ({ value: c.id, label: ctaLabel(c) }))} />
+            <Input label={`Monto que entregás${monedaOrigen ? ` (${monedaOrigen})` : ""}`} required type="number"
+              value={form.montoOrigen} onChange={v => set("montoOrigen", v)} placeholder="0,00" />
 
-            {/* Cuenta origen */}
-            <div>
-              <label style={labelStyle}>Entregás — cuenta origen</label>
-              <select value={form.cuentaOrigenId} onChange={e => set("cuentaOrigenId", e.target.value)}
-                style={inputStyle}>
-                <option value="">Seleccionar cuenta…</option>
-                {cuentas.map(c => (
-                  <option key={c.id} value={c.id}>{ctaLabel(c)}</option>
-                ))}
-              </select>
-            </div>
+            <Select label="Recibís — cuenta de entrada" required value={form.cuentaDestinoId}
+              onChange={v => set("cuentaDestinoId", v)}
+              options={cuentas.filter(c => c.id !== form.cuentaOrigenId).map(c => ({ value: c.id, label: ctaLabel(c) }))} />
+            <Input label={`Monto que recibís${monedaDestino ? ` (${monedaDestino})` : ""}`} required type="number"
+              value={form.montoDestino} onChange={v => set("montoDestino", v)} placeholder="0,00" />
 
-            {/* Flecha fila 1 */}
-            <div style={{ textAlign:"center", paddingBottom:2, fontSize:18, color:T.muted }}>→</div>
-
-            {/* Cuenta destino */}
-            <div>
-              <label style={labelStyle}>Recibís — cuenta destino</label>
-              <select value={form.cuentaDestinoId} onChange={e => set("cuentaDestinoId", e.target.value)}
-                style={inputStyle}>
-                <option value="">Seleccionar cuenta…</option>
-                {cuentas
-                  .filter(c => c.id !== form.cuentaOrigenId)
-                  .map(c => (
-                    <option key={c.id} value={c.id}>{ctaLabel(c)}</option>
-                  ))}
-              </select>
-            </div>
-
-            {/* TC — debajo de Fecha */}
-            <div>
-              <label style={labelStyle}>Tipo de cambio</label>
-              <div style={{ ...inputStyle, background:"#f3f4f6", color:T.muted,
-                display:"flex", alignItems:"center", gap:6, height:36, whiteSpace:"nowrap", padding:"6px 8px" }}>
-                {tcLineA
-                  ? <><span style={{ fontSize:11, fontWeight:600 }}>{tcLineA}</span>
-                      <span style={{ color:T.dim, fontSize:10 }}>·</span>
-                      <span style={{ fontSize:10, color:T.dim }}>{tcLineB}</span></>
-                  : <span>—</span>}
+            {tcLineA && (
+              <div style={{ background:"#f0f9ff", border:"1px solid #bae6fd", borderRadius:8,
+                padding:"8px 12px", fontSize:12, color:"#0369a1", display:"flex", gap:8, alignItems:"center" }}>
+                <span style={{ fontWeight:700 }}>{tcLineA}</span>
+                <span style={{ color:T.dim }}>·</span>
+                <span style={{ color:T.muted }}>{tcLineB}</span>
               </div>
-            </div>
+            )}
 
-            {/* Monto entregado — debajo de cuenta origen */}
             <div>
-              <label style={labelStyle}>
-                Monto{monedaOrigen ? ` (${monedaOrigen})` : ""}
-              </label>
-              <input type="number" min="0" step="any" placeholder="0"
-                value={form.montoOrigen} onChange={e => set("montoOrigen", e.target.value)}
-                style={inputStyle} />
+              <label style={{ fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:5 }}>Observación</label>
+              <textarea value={form.nota} onChange={e => set("nota", e.target.value)}
+                placeholder="Ej: Western Union, banco, efectivo…"
+                style={{ width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`,
+                  borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text,
+                  fontFamily:T.font, outline:"none", resize:"vertical", minHeight:60, boxSizing:"border-box" }} />
             </div>
 
-            {/* Flecha fila 2 */}
-            <div style={{ textAlign:"center", paddingBottom:2, fontSize:18, color:T.muted }}>→</div>
-
-            {/* Monto recibido — debajo de cuenta destino */}
-            <div>
-              <label style={labelStyle}>
-                Monto{monedaDestino ? ` (${monedaDestino})` : ""}
-              </label>
-              <input type="number" min="0" step="any" placeholder="0"
-                value={form.montoDestino} onChange={e => set("montoDestino", e.target.value)}
-                style={inputStyle} />
+            <div style={{ display:"flex", justifyContent:"flex-end", gap:10 }}>
+              <button onClick={() => { setShowForm(false); setForm(FORM_VACÍO); }} style={{
+                background:"#dc2626", border:"none", borderRadius:8, padding:"9px 20px",
+                fontSize:13, fontWeight:700, color:"#fff", cursor:"pointer", fontFamily:T.font }}>Cancelar ✕</button>
+              <button onClick={handleGuardar} disabled={!canSave || saving} style={{
+                background: canSave && !saving ? "#16a34a" : "#9ca3af", border:"none", borderRadius:8,
+                padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff",
+                cursor: canSave && !saving ? "pointer" : "default", fontFamily:T.font }}>
+                {saving ? "Guardando…" : "Crear ✓"}</button>
             </div>
           </div>
-
-          {/* Nota */}
-          <div style={{ marginBottom:16 }}>
-            <label style={labelStyle}>Nota (opcional)</label>
-            <input type="text" placeholder="Ej: Western Union, banco, efectivo…"
-              value={form.nota} onChange={e => set("nota", e.target.value)}
-              style={inputStyle} />
-          </div>
-
-          <div style={{ display:"flex", gap:8, justifyContent:"flex-end" }}>
-            <Btn onClick={() => { setShowForm(false); setForm(FORM_VACÍO); }}
-              style={{ background:"#f3f4f6", color:T.muted, border:"none" }}>
-              Cancelar
-            </Btn>
-            <Btn onClick={handleGuardar} disabled={!canSave || saving}
-              style={{ background: canSave ? T.accent : "#e5e7eb",
-                color: canSave ? "#000" : T.dim, border:"none",
-                opacity: saving ? .6 : 1 }}>
-              {saving ? "Guardando…" : "Guardar"}
-            </Btn>
-          </div>
+        </div>
         </div>
       )}
 

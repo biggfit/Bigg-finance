@@ -128,7 +128,7 @@ export function shortId(id) {
  * Devuelve documentos agrupados (un objeto con array `lineas`).
  */
 export async function fetchEgresos(sociedad) {
-  const rows = await get("nb_comprobantes", { sociedad });
+  const rows = await get("nb_comprobantes", sociedad ? { sociedad } : {});
   const egRows = rows.filter(r => (r.subtipo ?? "").toUpperCase() === "EGRESO");
   return _agruparPorComp(egRows, "EGRESO");
 }
@@ -218,7 +218,7 @@ export async function deleteEgreso(id_comp) {
 // ─── INGRESOS ────────────────────────────────────────────────────────────────
 
 export async function fetchIngresos(sociedad) {
-  const rows = await get("nb_comprobantes", { sociedad });
+  const rows = await get("nb_comprobantes", sociedad ? { sociedad } : {});
   const inRows = rows.filter(r => (r.subtipo ?? "").toUpperCase() === "INGRESO");
   return _agruparPorComp(inRows, "INGRESO");
 }
@@ -279,7 +279,7 @@ export async function deleteIngreso(id_comp) {
 
 /** Trae todos los pagos/cobros de una sociedad (filtra nb_movimientos por tipo). */
 export async function fetchPagosCobros(sociedad) {
-  const movs = await get("nb_movimientos", { sociedad });
+  const movs = await get("nb_movimientos", sociedad ? { sociedad } : {});
   return movs.filter(m => m.tipo === "PAGO" || m.tipo === "COBRO" || m.tipo === "EGRESO_GASTO");
 }
 
@@ -370,7 +370,7 @@ export function calcEstadoIngreso(saldo, totalDoc, vtoStr) {
 export async function fetchMovTesoreria(sociedad) {
   // Excluye en la FUENTE las líneas ignoradas (IGN-): así Tesorería, Reportes (Balance/Cash
   // Flow/PN) y Dashboard nunca las cuentan, sin tener que filtrar reporte por reporte.
-  const rows = await get("nb_movimientos", { sociedad });
+  const rows = await get("nb_movimientos", sociedad ? { sociedad } : {});
   return rows.filter(m => !esIgnorado(m));
 }
 
@@ -728,6 +728,70 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
 export async function fetchMovimientosPendientes(sociedad) {
   const rows = await get("nb_movimientos", { sociedad });
   return rows.filter(m => m.origen === "extracto" && !m.documento_id);
+}
+
+// ── RESUMEN DE TARJETA → bandeja (mundo Tarjeta de Conciliaciones) ───────────────
+// El resumen es "un extracto más": precarga cada consumo como PENDIENTE en nb_movimientos
+// (origen "tarjeta"), contra la cuenta-tarjeta de su moneda, con la propuesta (cuenta/centro)
+// ya puesta. NO toca caja real ni P&L hasta que se AUTORIZA la línea (aceptarMovimiento →
+// gasto contra la tarjeta, o imputarPagoFC → pago de una FC).
+// REEMPLAZO idempotente: al subir, borra lo PENDIENTE de ese resumen (mismas cuentas-tarjeta +
+// período, sin autorizar) y reingiere → "subir de nuevo" refleja el último parseo. NO dedup por
+// contenido: un resumen tiene consumos repetidos legítimos (varios "OPENAI 20,00" en el mes) que
+// NO se deben colapsar. Los ya AUTORIZADOS de ese período no se re-crean (se saltean por match).
+const _normCom = s => String(s || "").toUpperCase().replace(/\s+/g, " ").trim();
+// Lee un valor del blob `referencia` con formato "k=v;k2=v2;…" (ej. metaVal(ref,"per")). Reutilizable.
+export const metaVal = (ref, k) => { const x = String(ref || "").match(new RegExp(`${k}=([^;]*)`)); return x ? x[1] : ""; };
+
+export async function ingestarResumenTarjeta({ sociedad, tarjeta = "", periodo = "", fecha, lineas = [] } = {}) {
+  const todos = await get("nb_movimientos", { sociedad });
+  const cardIds = new Set(lineas.map(l => String(l.cuenta_bancaria)).filter(Boolean));
+  const delMismoResumen = m => m.origen === "tarjeta" && cardIds.has(String(m.cuenta_bancaria))
+    && (!periodo || metaVal(m.referencia, "per") === String(periodo));
+
+  // 1) Borrar los PENDIENTES de este resumen (reemplazo). Los autorizados se conservan.
+  let borradas = 0;
+  for (const m of todos.filter(m => delMismoResumen(m) && !m.documento_id)) {
+    await post({ action: "del", sheet: "nb_movimientos", id: m.id }); borradas++;
+  }
+  // 2) No re-crear consumos ya AUTORIZADOS de este período (pool por comercio|monto|moneda).
+  const pool = todos.filter(m => delMismoResumen(m) && m.documento_id)
+    .map(m => ({ k: `${metaVal(m.referencia, "com")}|${Math.abs(Number(m.monto) || 0)}|${m.moneda}`, used: false }));
+
+  const nuevas = [];
+  let yaAutorizadas = 0;
+  for (const l of lineas) {
+    const monto = Math.abs(Number(l.monto) || 0);
+    if (!monto || !l.cuenta_bancaria) continue;
+    const mon = l.moneda || "ARS";
+    const hit = pool.find(p => !p.used && p.k === `${_normCom(l.comercio)}|${monto}|${mon}`);
+    if (hit) { hit.used = true; yaAutorizadas++; continue; }
+    nuevas.push({
+      id: newId("TAR"), sociedad, fecha: l.fecha || fecha,
+      tipo: "EGRESO", cuenta_bancaria: l.cuenta_bancaria, cuenta_destino: "",
+      cuenta_contable: String(l.cuenta_contable || "").replace(/^CUENTA_/, ""),
+      centro_costo: l.centro_costo || "",
+      moneda: mon, monto: -monto, documento_id: "",
+      iva_rate: 0, iva_monto: 0,
+      concepto: l.comercio || "",
+      contraparte_id: "", contraparte_nombre: l.comercio || "",
+      referencia: `tc=${tarjeta};per=${periodo};com=${_normCom(l.comercio)};tit=${l.titular || ""}`,
+      origen: "tarjeta", created_at: new Date().toISOString(),
+    });
+  }
+  let creados = 0;
+  const CHUNK = 100;
+  for (let i = 0; i < nuevas.length; i += CHUNK) {
+    await post({ action: "add_batch", sheet: "nb_movimientos", rows: nuevas.slice(i, i + CHUNK) });
+    creados += Math.min(CHUNK, nuevas.length - i);
+  }
+  return { creados, borradas, yaAutorizadas };
+}
+
+// Consumos del resumen que faltan autorizar (bandeja del mundo Tarjeta).
+export async function fetchPendientesTarjeta(sociedad) {
+  const rows = await get("nb_movimientos", { sociedad });
+  return rows.filter(m => m.origen === "tarjeta" && !m.documento_id);
 }
 
 // Acepta un movimiento pendiente: lo IMPUTA in-place y lo deja conciliado.
@@ -1109,7 +1173,9 @@ export const deleteCambio = _deleteMovRows;
 // ── Intercompañía ─────────────────────────────────────────────────────────────
 
 export async function fetchIntercompania() {
-  const movs = await get("nb_movimientos", {});
+  // Excluye las aperturas (origen interco_apertura): son de UNA pata y sin caja → no son
+  // transferencias. Viven solo en el mapa de posiciones (Reportes › Intercompañía, lecturaInterco).
+  const movs = (await get("nb_movimientos", {})).filter(m => m.origen !== "interco_apertura");
   return _pairMovs(movs, "INTERCOMPANIA").map(({ salida, entrada, _ids }) => {
     const notaRaw = salida?.concepto ?? "";
     return {
@@ -1155,6 +1221,11 @@ export async function appendIntercompania({ fecha, tipoOp = "prestamo", socOrige
 }
 
 export const deleteIntercompania = _deleteMovRows;
+
+// Saldos de APERTURA interco (go-live): filas `origen="interco_apertura"` en nb_movimientos,
+// cargadas una vez a mano/por script y editables desde la hoja. Sin caja ni P&L
+// (cuenta_bancaria y cuenta_contable vacías). monto firmado desde la tenedora
+// (+ = nos deben / − = les debemos). Las levanta lecturaInterco (fuente 3, abajo).
 
 // ── LECTURA intercompañía (el corazón del módulo — LECTURA, no escribe) ──────────
 // Trae TODO lo necesario para leer lo intercompany (todas las sociedades).
@@ -1269,11 +1340,20 @@ export function lecturaInterco({ movs = [], comps = [], centros = [] } = {}, { s
     if (!esGasto) continue;
     fondeo(m.sociedad, m.centro_costo, m.moneda, m.monto);
   }
-  // 2. Préstamos / transferencias del núcleo (pares INTERCOMPANIA)
+  // 2. Préstamos / transferencias del núcleo (pares INTERCOMPANIA). Las aperturas son de UNA
+  //    pata (documento_id único) → caen como singleton y el guard !salida||!entrada las saltea.
   for (const { salida, entrada } of _pairMovs(movs, "INTERCOMPANIA")) {
     if (!salida || !entrada) continue;
     add(salida.sociedad,  entrada.sociedad, salida.moneda  || "ARS", +Math.abs(toNum(salida.monto)));
     add(entrada.sociedad, salida.sociedad,  entrada.moneda || "ARS", -Math.abs(toNum(entrada.monto)));
+  }
+  // 3. Saldos de APERTURA interco (go-live, sin caja) — una fila por posición, monto firmado.
+  for (const m of movs) {
+    if (m.origen !== "interco_apertura" || esIgnorado(m)) continue;
+    const A = m.sociedad, B = m.contraparte_id, mm = toNum(m.monto);
+    if (!A || !B || String(A) === String(B) || Math.abs(mm) < 0.01) continue;
+    add(A, B, m.moneda || "ARS", mm);
+    add(B, A, m.moneda || "ARS", -mm);
   }
   const soc = sociedad ? String(sociedad).toLowerCase() : null;
   const out = [];

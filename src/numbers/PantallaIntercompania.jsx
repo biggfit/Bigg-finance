@@ -1,16 +1,17 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { T, Btn, PageHeader, fmtDate, fmtMoney } from "./theme";
+import { T, Btn, Input, Select, PageHeader, fmtDate, fmtMoney } from "./theme";
 import { TIPO_CUENTA, SOCIEDADES } from "../data/tesoreriaData";
-import { fetchIntercompania, appendIntercompania, deleteIntercompania, fetchCuentasBancarias } from "../lib/numbersApi";
+import { fetchIntercompania, appendIntercompania, deleteIntercompania, fetchCuentasBancarias,
+  fetchIntercoData, lecturaInterco } from "../lib/numbersApi";
+import { sociedadNombreMap } from "./tesoreriaDerive";
 
 const HOY = new Date().toISOString().slice(0, 10);
 
 const FORM_VACÍO = {
   fecha:         HOY,
   ctaOrigenId:   "",
-  montoOrigen:   "",
   ctaDestinoId:  "",
-  montoDestino:  "",
+  monto:         "",
   tipoOp:        "prestamo",
   nota:          "",
 };
@@ -20,17 +21,10 @@ const TIPO_OP_CFG = {
   fondeo:   { label: "Fondeo / Inv.",   bg: "#ffedd5", color: "#c2410c" },
 };
 
-const inputStyle = {
-  width:"100%", padding:"8px 10px", borderRadius:8, border:"1px solid #e5e7eb",
-  fontSize:13, fontFamily:T.font, background:"#fff", color:T.text, outline:"none",
-  boxSizing:"border-box",
-};
-const labelStyle = { fontSize:11, fontWeight:700, color:T.muted, marginBottom:4, display:"block" };
-
 // Nombre corto de sociedad
 const socNombre = (id) => SOCIEDADES.find(s => s.id === id)?.nombre ?? id;
 
-export default function PantallaIntercompania({ sociedad }) {
+export default function PantallaIntercompania({ sociedad, openNew, onOpenNewConsumed }) {
   const [todos,      setTodos]      = useState([]);
   const [allCuentas, setAllCuentas] = useState([]);
   const [loading,    setLoading]    = useState(true);
@@ -38,16 +32,24 @@ export default function PantallaIntercompania({ sociedad }) {
   const [saving,     setSaving]     = useState(false);
   const [form,       setForm]       = useState(FORM_VACÍO);
   const [deleting,   setDeleting]   = useState(null);
-  const [otrasOpen,  setOtrasOpen]  = useState(false);
+  const [intercoData, setIntercoData] = useState(null);   // para las posiciones (nos deben / les debemos)
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  // Abrir el modal desde el "+" del sidebar (una sola vez por click).
+  useEffect(() => {
+    if (openNew) { setForm(FORM_VACÍO); setShowForm(true); onOpenNewConsumed?.(); }
+  }, [openNew]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function cargar() {
     setLoading(true);
     try {
-      const [ops, cbs] = await Promise.all([fetchIntercompania(), fetchCuentasBancarias()]);
+      const [ops, cbs, ic] = await Promise.all([
+        fetchIntercompania(), fetchCuentasBancarias(), fetchIntercoData().catch(() => null),
+      ]);
       setTodos(ops);
       setAllCuentas(cbs ?? []);
+      setIntercoData(ic);
     } finally {
       setLoading(false);
     }
@@ -55,37 +57,24 @@ export default function PantallaIntercompania({ sociedad }) {
 
   useEffect(() => { cargar(); }, [sociedad]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const { mias, otras } = useMemo(() => {
-    const m = [], o = [];
-    for (const op of todos) {
-      (op.socOrigen === sociedad || op.socDestino === sociedad ? m : o).push(op);
-    }
-    return { mias: m, otras: o };
-  }, [todos, sociedad]);
+  const mias = useMemo(
+    () => todos.filter(op => op.socOrigen === sociedad || op.socDestino === sociedad),
+    [todos, sociedad]
+  );
 
-  // Cuenta seleccionada como origen
+  // Cuenta seleccionada como origen. La transferencia interco es SIEMPRE en la MISMA moneda
+  // (mando USD → reciben USD): si hay que convertir pesos↔USD, eso es un Cambio de moneda aparte.
   const ctaOrigen  = allCuentas.find(c => c.id === form.ctaOrigenId);
   const ctaDestino = allCuentas.find(c => c.id === form.ctaDestinoId);
-  const monedaOrigen  = ctaOrigen?.moneda  ?? "";
-  const monedaDestino = ctaDestino?.moneda ?? "";
-
-  // TC calculado para mostrar
-  const montoOrigenN  = Number(form.montoOrigen)  || 0;
-  const montoDestinoN = Number(form.montoDestino) || 0;
-  let tcLineA = null, tcLineB = null;
-  if (montoOrigenN > 0 && montoDestinoN > 0 && monedaOrigen && monedaDestino && monedaOrigen !== monedaDestino) {
-    const fwd = montoDestinoN / montoOrigenN;
-    tcLineA = `1 ${monedaOrigen} = ${fwd.toFixed(2)} ${monedaDestino}`;
-    tcLineB = `1 ${monedaDestino} = ${(1 / fwd).toFixed(4)} ${monedaOrigen}`;
-  }
+  const moneda     = ctaOrigen?.moneda ?? "";
+  const montoN     = Number(form.monto) || 0;
 
   const canSave =
     form.fecha &&
     form.ctaOrigenId &&
     form.ctaDestinoId &&
     form.ctaOrigenId !== form.ctaDestinoId &&
-    montoOrigenN > 0 &&
-    montoDestinoN > 0;
+    montoN > 0;
 
   const _savingRef = useRef(false);
   async function handleGuardar() {
@@ -98,12 +87,12 @@ export default function PantallaIntercompania({ sociedad }) {
         tipoOp:        form.tipoOp,
         socOrigen:     ctaOrigen.sociedad,
         ctaOrigen:     form.ctaOrigenId,
-        monedaOrigen,
-        montoOrigen:   montoOrigenN,
+        monedaOrigen:  moneda,
+        montoOrigen:   montoN,
         socDestino:    ctaDestino.sociedad,
         ctaDestino:    form.ctaDestinoId,
-        monedaDestino,
-        montoDestino:  montoDestinoN,
+        monedaDestino: moneda,   // misma moneda en ambas patas
+        montoDestino:  montoN,
         nota:          form.nota,
       });
       setForm(FORM_VACÍO);
@@ -137,30 +126,21 @@ export default function PantallaIntercompania({ sociedad }) {
     return c ? c.nombre : id;
   };
 
-  // Saldos netos por contraparte y moneda, separados por tipo_op
-  const saldos = useMemo(() => {
-    const map = {}; // key: `${contraparte}|${moneda}|${tipo_op}`
-    for (const op of mias) {
-      const contraparte = op.socOrigen === sociedad ? op.socDestino : op.socOrigen;
-      const [moneda, monto] = op.socOrigen === sociedad
-        ? [op.monedaOrigen,  -op.montoOrigen]   // yo envié
-        : [op.monedaDestino,  op.montoDestino];  // yo recibí
-      const key = `${contraparte}|${moneda}|${op.tipo_op}`;
-      map[key] = (map[key] ?? 0) + monto;
-    }
-    return Object.entries(map)
-      .filter(([, v]) => Math.abs(v) > 0.001)
-      .map(([key, neto]) => {
-        const [contraparte, moneda, tipo_op] = key.split("|");
-        return { contraparte, moneda, tipo_op, neto };
-      })
-      .sort((a, b) => a.tipo_op.localeCompare(b.tipo_op) || a.contraparte.localeCompare(b.contraparte));
-  }, [mias, sociedad]);
 
-  // Cuentas disponibles para destino (diferente sociedad al origen)
+  // Cuentas destino: OTRA sociedad y MISMA moneda que el origen (la transferencia no convierte).
   const cuentasDestino = useMemo(() =>
-    allCuentas.filter(c => c.sociedad !== ctaOrigen?.sociedad),
-    [allCuentas, ctaOrigen]
+    allCuentas.filter(c => c.sociedad !== ctaOrigen?.sociedad && (!moneda || c.moneda === moneda)),
+    [allCuentas, ctaOrigen, moneda]
+  );
+
+  // Posiciones interco de ESTA sociedad (nos deben / les debemos) — la misma lectura que Reportes.
+  const nombreSoc = useMemo(() => {
+    const m = sociedadNombreMap(intercoData?.sociedades ?? []);
+    return id => m.get(String(id)) || socNombre(id);
+  }, [intercoData]);
+  const posiciones = useMemo(
+    () => (intercoData ? lecturaInterco(intercoData, { sociedad }) : []).filter(p => Math.abs(p.neto) > 0.01),
+    [intercoData, sociedad]
   );
 
   return (
@@ -168,269 +148,231 @@ export default function PantallaIntercompania({ sociedad }) {
       <PageHeader
         title="Transferencias Intercompañía"
         action={
-          <Btn onClick={() => { setShowForm(v => !v); setForm(FORM_VACÍO); }}
-            style={{ background: showForm ? "#f3f4f6" : T.accent,
-              color: showForm ? T.muted : "#000", border:"none" }}>
-            {showForm ? "Cancelar" : "+ Nueva operación"}
+          <Btn onClick={() => { setForm(FORM_VACÍO); setShowForm(true); }}
+            style={{ background: T.accent, color:"#000", border:"none" }}>
+            + Nueva operación
           </Btn>
         }
       />
 
-      {/* ── Formulario inline ── */}
+      {/* ── Modal: nueva operación ── */}
       {showForm && (
-        <div style={{ background:"#eceff3", border:"1px solid #e5e7eb", borderRadius:12,
-          padding:"20px 24px", marginBottom:24 }}>
-
-          {/* Grilla: fecha/TC | origen | → | destino */}
-          <div style={{ display:"grid", gridTemplateColumns:"150px 1fr 40px 1fr", gap:12, alignItems:"end", marginBottom:16 }}>
-
-            {/* Fecha */}
-            <div>
-              <label style={labelStyle}>Fecha</label>
-              <input type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)}
-                style={inputStyle} />
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.45)", zIndex:500,
+          display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
+          onClick={() => { setShowForm(false); setForm(FORM_VACÍO); }}>
+        <div className="fade" style={{ background:T.card, borderRadius:10, width:520, maxWidth:"97vw",
+          boxShadow:"0 20px 60px rgba(0,0,0,.25)", overflow:"hidden" }} onClick={e => e.stopPropagation()}>
+          <div style={{ background:"#0e7490", padding:"14px 22px", display:"flex",
+            justifyContent:"space-between", alignItems:"center" }}>
+            <span style={{ fontSize:15, fontWeight:800, color:"#fff" }}>Nueva operación intercompañía</span>
+            <button onClick={() => { setShowForm(false); setForm(FORM_VACÍO); }}
+              style={{ background:"transparent", border:"none", color:"rgba(255,255,255,.6)",
+                fontSize:20, cursor:"pointer", lineHeight:1 }}>✕</button>
+          </div>
+          <div style={{ padding:24, display:"flex", flexDirection:"column", gap:14 }}>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+              <Input label="Fecha" required type="date" value={form.fecha} onChange={v => set("fecha", v)} />
+              <Input label={`Monto${moneda ? ` (${moneda})` : ""}`} required type="number"
+                value={form.monto} onChange={v => set("monto", v)} placeholder="0,00" />
             </div>
-
-            {/* Cuenta origen */}
-            <div>
-              <label style={labelStyle}>Financia — cuenta origen</label>
-              <select value={form.ctaOrigenId} onChange={e => { set("ctaOrigenId", e.target.value); set("ctaDestinoId", ""); }}
-                style={inputStyle}>
-                <option value="">Seleccionar cuenta…</option>
-                {allCuentas.map(c => (
-                  <option key={c.id} value={c.id}>{ctaLabel(c)}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Flecha fila 1 */}
-            <div style={{ textAlign:"center", paddingBottom:2, fontSize:18, color:T.muted }}>→</div>
-
-            {/* Cuenta destino */}
-            <div>
-              <label style={labelStyle}>Recibe — cuenta destino</label>
-              <select value={form.ctaDestinoId} onChange={e => set("ctaDestinoId", e.target.value)}
-                style={inputStyle}>
-                <option value="">Seleccionar cuenta…</option>
-                {cuentasDestino.map(c => (
-                  <option key={c.id} value={c.id}>{ctaLabel(c)}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* TC read-only — debajo de Fecha */}
-            <div>
-              <label style={labelStyle}>Tipo de cambio</label>
-              <div style={{ ...inputStyle, background:"#f3f4f6", color:T.muted,
-                display:"flex", alignItems:"center", gap:6, height:36, whiteSpace:"nowrap", padding:"6px 8px" }}>
-                {tcLineA
-                  ? <><span style={{ fontSize:11, fontWeight:600 }}>{tcLineA}</span>
-                      <span style={{ color:T.dim, fontSize:10 }}>·</span>
-                      <span style={{ fontSize:10, color:T.dim }}>{tcLineB}</span></>
-                  : <span style={{ fontSize:12, color:T.dim }}>
-                      {monedaOrigen && monedaDestino && monedaOrigen === monedaDestino ? "Misma moneda" : "—"}
-                    </span>}
+            <Select label="Financia — cuenta de salida" required value={form.ctaOrigenId}
+              onChange={v => { set("ctaOrigenId", v); set("ctaDestinoId", ""); }}
+              options={allCuentas.map(c => ({ value: c.id, label: ctaLabel(c) }))} />
+            {form.ctaOrigenId && (
+              <div style={{ fontSize:11, color:T.muted, marginTop:-8 }}>
+                Solo se muestran cuentas en <strong>{moneda}</strong> para la entrada
               </div>
-            </div>
-
-            {/* Monto origen */}
+            )}
+            <Select label="Recibe — cuenta de entrada" required value={form.ctaDestinoId}
+              onChange={v => set("ctaDestinoId", v)}
+              options={cuentasDestino.map(c => ({ value: c.id, label: ctaLabel(c) }))} />
+            <Select label="Tipo de operación" value={form.tipoOp} onChange={v => set("tipoOp", v)}
+              options={[{ value:"prestamo", label:"Préstamo" }, { value:"fondeo", label:"Fondeo / Inversión" }]} />
             <div>
-              <label style={labelStyle}>Monto{monedaOrigen ? ` (${monedaOrigen})` : ""}</label>
-              <input type="number" min="0" step="any" placeholder="0"
-                value={form.montoOrigen} onChange={e => set("montoOrigen", e.target.value)}
-                style={inputStyle} />
+              <label style={{ fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:5 }}>Observación</label>
+              <textarea value={form.nota} onChange={e => set("nota", e.target.value)}
+                placeholder="Ej: cobertura de nómina, apertura Colombia…"
+                style={{ width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`,
+                  borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text,
+                  fontFamily:T.font, outline:"none", resize:"vertical", minHeight:60, boxSizing:"border-box" }} />
             </div>
-
-            {/* Flecha fila 2 */}
-            <div style={{ textAlign:"center", paddingBottom:2, fontSize:18, color:T.muted }}>→</div>
-
-            {/* Monto destino */}
-            <div>
-              <label style={labelStyle}>Monto{monedaDestino ? ` (${monedaDestino})` : ""}</label>
-              <input type="number" min="0" step="any" placeholder="0"
-                value={form.montoDestino} onChange={e => set("montoDestino", e.target.value)}
-                style={inputStyle} />
+            <div style={{ display:"flex", justifyContent:"flex-end", gap:10 }}>
+              <button onClick={() => { setShowForm(false); setForm(FORM_VACÍO); }} style={{
+                background:"#dc2626", border:"none", borderRadius:8, padding:"9px 20px",
+                fontSize:13, fontWeight:700, color:"#fff", cursor:"pointer", fontFamily:T.font }}>Cancelar ✕</button>
+              <button onClick={handleGuardar} disabled={!canSave || saving} style={{
+                background: canSave && !saving ? "#16a34a" : "#9ca3af", border:"none", borderRadius:8,
+                padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff",
+                cursor: canSave && !saving ? "pointer" : "default", fontFamily:T.font }}>
+                {saving ? "Guardando…" : "Crear ✓"}</button>
             </div>
           </div>
-
-          {/* Tipo + Nota */}
-          <div style={{ display:"grid", gridTemplateColumns:"200px 1fr", gap:12, marginBottom:16 }}>
-            <div>
-              <label style={labelStyle}>Tipo de operación</label>
-              <select value={form.tipoOp} onChange={e => set("tipoOp", e.target.value)} style={inputStyle}>
-                <option value="prestamo">Préstamo</option>
-                <option value="fondeo">Fondeo / Inversión</option>
-              </select>
-            </div>
-            <div>
-              <label style={labelStyle}>Nota (opcional)</label>
-              <input type="text" placeholder="Ej: cobertura de nómina, apertura Colombia…"
-                value={form.nota} onChange={e => set("nota", e.target.value)}
-                style={inputStyle} />
-            </div>
-          </div>
-
-          <div style={{ display:"flex", gap:8, justifyContent:"flex-end" }}>
-            <Btn onClick={() => { setShowForm(false); setForm(FORM_VACÍO); }}
-              style={{ background:"#f3f4f6", color:T.muted, border:"none" }}>
-              Cancelar
-            </Btn>
-            <Btn onClick={handleGuardar} disabled={!canSave || saving}
-              style={{ background: canSave ? T.accent : "#e5e7eb",
-                color: canSave ? "#000" : T.dim, border:"none",
-                opacity: saving ? .6 : 1 }}>
-              {saving ? "Guardando…" : "Guardar"}
-            </Btn>
-          </div>
+        </div>
         </div>
       )}
 
-      {/* ── Saldos netos ── */}
-      {!loading && saldos.length > 0 && (
-        <ResumenSaldos saldos={saldos} />
-      )}
-
-      {/* ── Tabla sociedad activa ── */}
       {loading ? (
         <div style={{ color:T.muted, fontSize:13, padding:"40px 0", textAlign:"center" }}>Cargando…</div>
-      ) : mias.length === 0 ? (
+      ) : (posiciones.length === 0 && mias.length === 0) ? (
         <div style={{ color:T.dim, fontSize:13, padding:"20px 0" }}>
-          No hay operaciones intercompañía registradas para esta sociedad.
+          No hay saldos ni operaciones intercompañía para esta sociedad.
         </div>
       ) : (
-        <TablaICP ops={mias} ctaNombre={ctaNombre} sociedad={sociedad}
-          handleEliminar={handleEliminar} deleting={deleting} />
+        <>
+          {/* ── Posiciones (saldo neto: nos deben / les debemos) ── */}
+          {posiciones.length > 0 && (
+            <div style={{ marginBottom: 24 }}>
+              <div style={{ fontSize:11, fontWeight:800, color:T.muted, letterSpacing:".06em",
+                textTransform:"uppercase", marginBottom:8 }}>Posiciones</div>
+              <TablaPosiciones posiciones={posiciones} nombreSoc={nombreSoc} />
+            </div>
+          )}
+
+          {/* ── Operaciones (transferencias / préstamos registrados) ── */}
+          {mias.length > 0 && (
+            <div>
+              <div style={{ fontSize:11, fontWeight:800, color:T.muted, letterSpacing:".06em",
+                textTransform:"uppercase", marginBottom:8 }}>Operaciones</div>
+              <TablaICP ops={mias} ctaNombre={ctaNombre} sociedad={sociedad}
+                handleEliminar={handleEliminar} deleting={deleting} />
+            </div>
+          )}
+        </>
       )}
 
     </div>
   );
 }
 
-function SaldoChip({ s }) {
-  const positivo = s.neto > 0;
+// Tabla de posiciones netas (estilo Ingresos/Egresos). saldo>0 = nos deben, <0 = les debemos.
+function TablaPosiciones({ posiciones, nombreSoc }) {
   return (
-    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between",
-      padding:"6px 12px", borderRadius:8,
-      background: positivo ? "#f0fdf4" : "#fff7f7",
-      border: `1px solid ${positivo ? "#bbf7d0" : "#fecaca"}` }}>
-      <span style={{ fontSize:12, fontWeight:600, color:T.text }}>{socNombre(s.contraparte)}</span>
-      <span style={{ fontSize:13, fontWeight:700, color: positivo ? "#16a34a" : "#dc2626", marginLeft:16 }}>
-        {positivo ? "+" : ""}{fmtMoney(Math.abs(s.neto), s.moneda)}
-        <span style={{ fontSize:10, fontWeight:400, color:T.muted, marginLeft:4 }}>
-          {positivo ? "me deben" : "les debo"}
-        </span>
-      </span>
+    <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`,
+      borderRadius:T.radius, boxShadow:T.shadow, overflow:"hidden" }}>
+      <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+        <thead>
+          <tr style={{ background:T.tableHead }}>
+            {[{ h:"Contraparte", a:"left" }, { h:"Moneda", a:"left" }, { h:"Saldo", a:"right" }, { h:"Situación", a:"left" }].map((c, i) => (
+              <th key={i} style={{ padding:"9px 14px", textAlign:c.a, fontSize:11, fontWeight:700,
+                color:T.tableHeadText, textTransform:"uppercase", letterSpacing:".07em", whiteSpace:"nowrap" }}>{c.h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {posiciones.map((p, idx) => {
+            const nosDeben = p.neto > 0;
+            return (
+              <tr key={idx} style={{ borderBottom:`1px solid ${T.cardBorder}`,
+                background: idx % 2 === 0 ? T.card : "#fafbfc" }}
+                onMouseEnter={e => e.currentTarget.style.background = "#eceff3"}
+                onMouseLeave={e => e.currentTarget.style.background = idx % 2 === 0 ? T.card : "#fafbfc"}>
+                <td style={{ padding:"10px 14px", fontWeight:600, color:T.text }}>{nombreSoc(p.contraparte)}</td>
+                <td style={{ padding:"10px 14px", color:T.dim, fontWeight:600 }}>{p.moneda}</td>
+                <td style={{ padding:"10px 14px", textAlign:"right", whiteSpace:"nowrap",
+                  fontFamily:"var(--mono)", fontWeight:700, color: nosDeben ? "#16a34a" : "#dc2626" }}>
+                  {fmtMoney(Math.abs(p.neto), p.moneda)}
+                </td>
+                <td style={{ padding:"10px 14px" }}>
+                  <span style={{ fontSize:11, fontWeight:700, borderRadius:4, padding:"2px 8px",
+                    background: nosDeben ? "#dcfce7" : "#fee2e2", color: nosDeben ? "#16a34a" : "#dc2626" }}>
+                    {nosDeben ? "nos deben" : "les debemos"}
+                  </span>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-function ResumenSaldos({ saldos }) {
-  const prestamos = saldos.filter(s => s.tipo_op === "prestamo");
-  const fondeos   = saldos.filter(s => s.tipo_op === "fondeo");
+
+function TablaICP({ ops, ctaNombre, sociedad, handleEliminar, deleting }) {
+  // Alineación por columna: los montos a la derecha (header + celda), el resto a la izquierda.
+  const cols = [
+    { h:"Fecha", align:"left" }, { h:"Tipo", align:"left" },
+    { h:"Financió", align:"left" }, { h:"Monto", align:"right" },
+    { h:"Recibió", align:"left" }, { h:"Monto", align:"right" },
+    { h:"TC", align:"left" }, { h:"Nota", align:"left" }, { h:"", align:"center" },
+  ];
 
   return (
-    <div style={{ display:"grid", gridTemplateColumns: fondeos.length > 0 ? "1fr 1fr" : "1fr",
-      gap:16, marginBottom:24 }}>
-      {prestamos.length > 0 && (
-        <div style={{ background:"#fff", border:`1px solid ${T.cardBorder}`, borderRadius:12, padding:"14px 16px" }}>
-          <div style={{ fontSize:10, fontWeight:700, color:"#1d4ed8", letterSpacing:".08em",
-            textTransform:"uppercase", marginBottom:10 }}>Préstamos</div>
-          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-            {prestamos.map((s,i) => <SaldoChip key={i} s={s} />)}
-          </div>
-        </div>
-      )}
-      {fondeos.length > 0 && (
-        <div style={{ background:"#fff", border:`1px solid ${T.cardBorder}`, borderRadius:12, padding:"14px 16px" }}>
-          <div style={{ fontSize:10, fontWeight:700, color:"#c2410c", letterSpacing:".08em",
-            textTransform:"uppercase", marginBottom:10 }}>Fondeos / Inversiones</div>
-          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-            {fondeos.map((s,i) => <SaldoChip key={i} s={s} />)}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
+    <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`,
+      borderRadius:T.radius, boxShadow:T.shadow, overflow:"hidden" }}>
+      <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+        <thead>
+          <tr style={{ background:T.tableHead }}>
+            {cols.map((c, i) => (
+              <th key={i} style={{ padding:"9px 14px", textAlign:c.align,
+                fontSize:11, fontWeight:700, color:T.tableHeadText, textTransform:"uppercase",
+                letterSpacing:".07em", whiteSpace:"nowrap" }}>{c.h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {ops.map((op, idx) => {
+            const esOrigen  = op.socOrigen  === sociedad;
+            const esDestino = op.socDestino === sociedad;
+            const tcNum = Number(op.tc);
+            const tcStr = tcNum > 0 && op.monedaOrigen !== op.monedaDestino
+              ? `1 ${op.monedaOrigen} = ${tcNum.toFixed(2)} ${op.monedaDestino}`
+              : "—";
+            const cfg = TIPO_OP_CFG[op.tipo_op] ?? TIPO_OP_CFG.prestamo;
 
-function TablaICP({ ops, ctaNombre, sociedad, handleEliminar, deleting, showSociedad = false }) {
-  const headers = ["Fecha", "Tipo", "Financió →", "Monto", "→ Recibió", "Monto", "TC", "Nota", ""];
-
-  return (
-    <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
-      <thead>
-        <tr style={{ borderBottom:`2px solid ${T.cardBorder}` }}>
-          {headers.map((h, i) => (
-            <th key={i} style={{ padding:"8px 12px", textAlign: i === headers.length - 1 ? "center" : "left",
-              fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".06em" }}>
-              {h}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {ops.map(op => {
-          const esOrigen  = op.socOrigen  === sociedad;
-          const esDestino = op.socDestino === sociedad;
-          const tcNum = Number(op.tc);
-          const tcStr = tcNum > 0 && op.monedaOrigen !== op.monedaDestino
-            ? `1 ${op.monedaOrigen} = ${tcNum.toFixed(2)} ${op.monedaDestino}`
-            : "—";
-          const cfg = TIPO_OP_CFG[op.tipo_op] ?? TIPO_OP_CFG.prestamo;
-
-          return (
-            <tr key={op.id} style={{ borderBottom:`1px solid ${T.cardBorder}` }}
-              onMouseEnter={e => e.currentTarget.style.background = "#eceff3"}
-              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-              <td style={{ padding:"10px 12px", color:T.muted }}>{fmtDate(op.fecha)}</td>
-              <td style={{ padding:"10px 12px" }}>
-                <span style={{ fontSize:11, fontWeight:700, color:cfg.color,
-                  background:cfg.bg, borderRadius:4, padding:"2px 7px" }}>
-                  {cfg.label}
-                </span>
-              </td>
-              <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>
-                <span style={{ fontWeight:600, color: esOrigen ? "#dc2626" : T.text }}>
-                  {socNombre(op.socOrigen)}
-                </span>
-                <span style={{ fontSize:11, color:T.dim, marginLeft:6 }}>{ctaNombre(op.ctaOrigen)}</span>
-              </td>
-              <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>
-                <span style={{ fontWeight:700, color: esOrigen ? "#dc2626" : T.muted }}>
+            return (
+              <tr key={op.id} style={{ borderBottom:`1px solid ${T.cardBorder}`,
+                background: idx % 2 === 0 ? T.card : "#fafbfc" }}
+                onMouseEnter={e => e.currentTarget.style.background = "#eceff3"}
+                onMouseLeave={e => e.currentTarget.style.background = idx % 2 === 0 ? T.card : "#fafbfc"}>
+                <td style={{ padding:"10px 14px", color:T.muted, whiteSpace:"nowrap" }}>{fmtDate(op.fecha)}</td>
+                <td style={{ padding:"10px 14px" }}>
+                  <span style={{ fontSize:11, fontWeight:700, color:cfg.color,
+                    background:cfg.bg, borderRadius:4, padding:"2px 7px", whiteSpace:"nowrap" }}>
+                    {cfg.label}
+                  </span>
+                </td>
+                <td style={{ padding:"10px 14px", whiteSpace:"nowrap" }}>
+                  <span style={{ fontWeight:600, color: esOrigen ? "#dc2626" : T.text }}>
+                    {socNombre(op.socOrigen)}
+                  </span>
+                  <span style={{ fontSize:11, color:T.dim, marginLeft:6 }}>{ctaNombre(op.ctaOrigen)}</span>
+                </td>
+                <td style={{ padding:"10px 14px", textAlign:"right", whiteSpace:"nowrap",
+                  fontFamily:"var(--mono)", fontWeight:700, color: esOrigen ? "#dc2626" : T.muted }}>
                   {esOrigen ? "− " : ""}{fmtMoney(op.montoOrigen, op.monedaOrigen)}
-                </span>
-              </td>
-              <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>
-                <span style={{ fontWeight:600, color: esDestino ? "#16a34a" : T.text }}>
-                  {socNombre(op.socDestino)}
-                </span>
-                <span style={{ fontSize:11, color:T.dim, marginLeft:6 }}>{ctaNombre(op.ctaDestino)}</span>
-              </td>
-              <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>
-                <span style={{ fontWeight:700, color: esDestino ? "#16a34a" : T.muted }}>
+                </td>
+                <td style={{ padding:"10px 14px", whiteSpace:"nowrap" }}>
+                  <span style={{ fontWeight:600, color: esDestino ? "#16a34a" : T.text }}>
+                    {socNombre(op.socDestino)}
+                  </span>
+                  <span style={{ fontSize:11, color:T.dim, marginLeft:6 }}>{ctaNombre(op.ctaDestino)}</span>
+                </td>
+                <td style={{ padding:"10px 14px", textAlign:"right", whiteSpace:"nowrap",
+                  fontFamily:"var(--mono)", fontWeight:700, color: esDestino ? "#16a34a" : T.muted }}>
                   {esDestino ? "+ " : ""}{fmtMoney(op.montoDestino, op.monedaDestino)}
-                </span>
-              </td>
-              <td style={{ padding:"10px 12px", color:T.muted, fontSize:12 }}>{tcStr}</td>
-              <td style={{ padding:"10px 12px", color:T.dim, fontSize:12, maxWidth:180,
-                overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                {op.nota || "—"}
-              </td>
-              <td style={{ padding:"10px 12px", textAlign:"center" }}>
-                <button
-                  onClick={() => handleEliminar(op)}
-                  disabled={deleting === op.id}
-                  title="Eliminar operación"
-                  style={{ background:"transparent", border:"none", cursor:"pointer",
-                    color:"#ef4444", fontSize:15, padding:"2px 6px", borderRadius:6,
-                    opacity: deleting === op.id ? .4 : 1 }}>
-                  🗑
-                </button>
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+                </td>
+                <td style={{ padding:"10px 14px", color:T.muted, fontSize:12, whiteSpace:"nowrap" }}>{tcStr}</td>
+                <td style={{ padding:"10px 14px", color:T.dim, fontSize:12, maxWidth:180,
+                  overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                  {op.nota || "—"}
+                </td>
+                <td style={{ padding:"10px 14px", textAlign:"center" }}>
+                  <button
+                    onClick={() => handleEliminar(op)}
+                    disabled={deleting === op.id}
+                    title="Eliminar operación"
+                    style={{ background:"transparent", border:"none", cursor:"pointer",
+                      color:"#ef4444", fontSize:15, padding:"2px 6px", borderRadius:6,
+                      opacity: deleting === op.id ? .4 : 1 }}>
+                    🗑
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
