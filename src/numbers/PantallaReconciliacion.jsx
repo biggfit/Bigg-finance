@@ -818,7 +818,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   // Grupo de "Propuesta" de una fila → para filtrar y aprobar por grupos.
   const grupoDe = (m) => {
     if (esTransferMov(m)) return esInterco(m) ? "Transferencia interco" : "Transferencia propia";
-    if (frState(m).es) return "Cobro franquicia";
+    if (frState(m).es) return "Franquicia";
     const csG = cuotaState(m);
     if (csG.es) {   // la cuota va al bucket de su acreedor: AFIP con el resto de AFIP; el crédito bancario aparte
       const plan = financiaciones.find(p => String(p.plan_id) === String(csG.planSel));
@@ -1109,7 +1109,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                     <td style={{ padding: "8px 12px" }}>
                       {fr.es ? (
                         <div>
-                          <span style={{ fontSize: 11, fontWeight: 700, color: T.text }}>Cobro franquicia</span>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: T.text }}>{neg ? "Transferencia a franquicia" : "Cobro franquicia"}</span>
                           {fr.franquiciaSel
                             ? <div style={{ fontSize: 10, color: T.muted }}>{frNombre(fr.franquiciaSel)} · {deudaLabel(fr.deuda)}</div>
                             : <div style={{ fontSize: 10, color: "#b45309" }}>{fr.manual ? "elegí franquicia" : "varias con ese CUIT"}</div>}
