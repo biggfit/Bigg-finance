@@ -7,7 +7,7 @@ import {
   InvoiceLineasTable, InvoiceNotaYTotales, InvoiceFormFooter,
   useCcGroups, initialFacturaLineas, facturaCanSave, runSaveThenMaybeClose,
   useDeferredEntityLookup, makeFacturaPartyChangeHandler, FACTURA_TOP_FIELDS_GRID,
-  FacturaMaestroCuentaFields, FacturaFormChrome,
+  FacturaMaestroCuentaFields, FacturaFormChrome, formatNroComp,
 } from "./formUtils";
 import { ProveedorModal, CuentaModal } from "./PantallaMaestros";
 import { useLineas } from "./useLineas";
@@ -96,14 +96,21 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
     };
   };
 
-  const handleSave = async () => {
+  // Duplicado = ADVERTENCIA, no bloqueo: la 1ª vez muestra el aviso; si el usuario vuelve a
+  // Guardar (sin cambiar N°/proveedor, que limpian el aviso) se carga igual. Un mismo proveedor
+  // puede facturar dos veces el mismo N° por error suyo, o querer cargarla a propósito.
+  const guardConDuplicado = async () => {
+    if (dupError) return true;   // ya avisado → dejar guardar
     const dup = await checkDuplicateComp(sociedad, "EGRESO", nroComp, provId, isEdit ? initialData.id : null);
-    if (dup) { setDupError(dup); return; }
+    if (dup) { setDupError(dup); return false; }
+    return true;
+  };
+  const handleSave = async () => {
+    if (!(await guardConDuplicado())) return;
     runSaveThenMaybeClose(onSave, buildPayload(), asPage, onClose);
   };
   const handleSaveAndPay = async () => {
-    const dup = await checkDuplicateComp(sociedad, "EGRESO", nroComp, provId, isEdit ? initialData.id : null);
-    if (dup) { setDupError(dup); return; }
+    if (!(await guardConDuplicado())) return;
     runSaveThenMaybeClose(onSave, buildPayload({ _saveAndPay: true }), asPage, onClose);
   };
 
@@ -146,7 +153,7 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
           </select>
         </SoftField>
         <SoftField label="N° comprobante">
-          <input value={nroComp} onChange={e => setNroComp(e.target.value)}
+          <input value={nroComp} onChange={e => setNroComp(formatNroComp(e.target.value))}
             placeholder="FC-A 0001-00001234"
             style={{ ...inputStyle, ...(dupError ? { borderColor: "#dc2626", background: "#fef2f2" } : {}) }} />
           {dupError && (
@@ -154,7 +161,7 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
               background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 6,
               padding: "5px 10px", lineHeight: 1.4 }}>
               ⚠️ Ya existe una FC con este número para este proveedor ({dupError}).
-              Verificá si es un duplicado o cambiá el N° de comprobante.
+              Si es correcto, tocá Guardar de nuevo para cargarla igual; si no, cambiá el N°.
             </div>
           )}
         </SoftField>

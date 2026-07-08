@@ -34,6 +34,20 @@ export const inputStyle = {
 };
 export const dateStyle = { ...inputStyle, appearance: "auto", WebkitAppearance: "auto" };
 
+// Carga asistida del N° de comprobante AFIP → "TIPO-CLASE PtoVenta-Número" (ej. "FC-A 0001-00001234").
+// Separa letras y dígitos: formatea el tipo solo si matchea un patrón AFIP conocido (para no
+// mancillar textos libres) y agrupa los dígitos como PtoVenta(4)-Número(hasta 8). Asistivo, no
+// estricto: si no encaja, deja las letras como vinieron.
+export function formatNroComp(raw) {
+  const up      = String(raw ?? "").toUpperCase();
+  const letras  = (up.match(/[A-Z]/g) || []).join("");
+  const digitos = (up.match(/\d/g) || []).join("");
+  const m       = letras.match(/^(FC|NC|ND|FA|RE|TK|TQ)([ABCEMT])$/);
+  const prefijo = m ? `${m[1]}-${m[2]}` : letras;
+  const num     = digitos.length > 4 ? `${digitos.slice(0, 4)}-${digitos.slice(4, 12)}` : digitos;
+  return [prefijo, num].filter(Boolean).join(" ");
+}
+
 // ─── Lookup: busca primero por ID, luego por nombre ───────────────────────────
 export const lookupId = (list, idKey, nameKey, data) => {
   if (!data) return "";
