@@ -958,6 +958,19 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, onLimpiarFi
     return fb.localeCompare(fa);
   }), [rows]);
 
+  // Saldo corriente por cuenta (acumulado en orden cronológico ascendente; `sorted` es descendente).
+  // La última fila cronológica de una cuenta = su saldo total (coincide con la pestaña Saldos).
+  const saldoByRow = useMemo(() => {
+    const acc = {}, map = new Map();
+    for (let i = sorted.length - 1; i >= 0; i--) {
+      const m = sorted[i];
+      const k = m.cuenta_bancaria || "";
+      acc[k] = (acc[k] ?? 0) + (Number(m.monto) || 0);
+      map.set(m, acc[k]);
+    }
+    return map;
+  }, [sorted]);
+
   const cuentaNombre = filtroCuenta ? (cuentaMap[filtroCuenta] ?? filtroCuenta) : null;
 
   if (rows.length === 0) {
@@ -1009,10 +1022,10 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, onLimpiarFi
           <thead>
             <tr style={{ background:T.tableHead }}>
               <th style={{ width:36 }} />
-              {["Tipo","Fecha","Cuenta","Concepto","Cta. Contable","C. Costo","Moneda","Importe"].map(h => (
+              {["Tipo","Fecha","Cuenta","Concepto","Cta. Contable","C. Costo","Moneda","Importe","Saldo"].map(h => (
                 <th key={h} style={{ padding:"10px 14px", fontSize:11, fontWeight:700,
                   letterSpacing:".08em", textTransform:"uppercase", color:T.tableHeadText,
-                  textAlign: h === "Importe" ? "right" : "left" }}>{h}</th>
+                  textAlign: (h === "Importe" || h === "Saldo") ? "right" : "left" }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -1050,6 +1063,10 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, onLimpiarFi
                   <td style={{ padding:"10px 14px", fontSize:13, fontFamily:"var(--mono)", fontWeight:700,
                     color: monto < 0 ? T.red : T.green, textAlign:"right", whiteSpace:"nowrap" }}>
                     {fmtSaldo(monto, m.moneda)}
+                  </td>
+                  <td style={{ padding:"10px 14px", fontSize:13, fontFamily:"var(--mono)", fontWeight:700,
+                    color: (saldoByRow.get(m) ?? 0) < 0 ? T.red : T.text, textAlign:"right", whiteSpace:"nowrap" }}>
+                    {fmtSaldo(saldoByRow.get(m) ?? 0, m.moneda)}
                   </td>
                 </tr>
               );
