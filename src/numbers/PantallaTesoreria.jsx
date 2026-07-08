@@ -1187,8 +1187,8 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
       await appendTransferencia({
         sociedad, fecha: form.fecha, moneda: form.moneda, monto: form.monto,
         cuentaSalida: form.cuentaSalida, cuentaEntrada: form.cuentaEntrada,
-        conceptoSalida:  `Transferencia → ${nombreCta(form.cuentaEntrada)}`,
-        conceptoEntrada: `Transferencia ← ${nombreCta(form.cuentaSalida)}`,
+        conceptoSalida:  `Trf Cta Propia → ${nombreCta(form.cuentaEntrada)}`,
+        conceptoEntrada: `Trf Cta Propia ← ${nombreCta(form.cuentaSalida)}`,
       });
       await cargarMovimientos();
     } catch (e) {
