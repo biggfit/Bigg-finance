@@ -48,15 +48,38 @@ export function franquiciasIngresoPnLRows(compsByFr, sociedad, ventasCcId) {
 const FR_TIPO_DEFAULT = { COBRO: "PAGO", EGRESO: "PAGO_ENVIADO" };
 export function movimientoToCompRow(mov) {
   const fecha = String(mov.fecha || "");                                  // ISO YYYY-MM-DD
+  const [yyyy, mm] = fecha.split("-");                                     // para month/year (como parseComps)
   const date  = fecha.includes("-") ? fecha.split("-").reverse().join("/") : fecha;  // → DD/MM/YYYY
   return {
+    id:       String(mov.id || ""),   // id de nb_movimientos → para poder borrar/editar
+    _numbers: true,                    // marca: esta fila vive en nb_movimientos, no en comprobantes
     frId:     String(mov.contraparte_id || ""),
     type:     mov.fr_tipo || FR_TIPO_DEFAULT[mov.tipo] || "PAGO",
     amount:   Math.abs(Number(mov.monto) || 0),
     currency: mov.moneda || "ARS",
     empresa:  SOCIEDAD_EMPRESA[(mov.sociedad || "").toLowerCase()] || null,
     date,
+    // month (0-11) / year — igual que parseComps, para computePautaPendiente/upToPeriod.
+    month:    mm ? Number(mm) - 1 : undefined,
+    year:     yyyy ? Number(yyyy) : undefined,
   };
+}
+
+// Une los movimientos financieros de franquicia de nb_movimientos al cuaderno `comps`
+// (mapa {frId: [filas]}). No muda datos: devuelve una copia enriquecida. Fuente única del
+// merge — la usan franquiciasSaldosCxC (Numbers) y App.jsx (app Franquicias).
+export function enriquecerCompsConMovs(comps, movimientos = []) {
+  const movsFr = (movimientos ?? []).filter(m =>
+    m.origen === "franquicias" && m.contraparte_id &&
+    !String(m.documento_id || "").startsWith("IGN-"));
+  if (!movsFr.length) return comps;
+  const out = { ...comps };
+  for (const m of movsFr) {
+    const row = movimientoToCompRow(m);
+    if (!row.frId) continue;
+    out[row.frId] = [...(out[row.frId] ?? []), row];
+  }
+  return out;
 }
 
 // Saldos de franquiciados → { activo, pasivo } (presentación BRUTA, sin netear):
@@ -71,18 +94,7 @@ export function franquiciasSaldosCxC({ comps, saldos, franchises }, sociedad, ye
   if (!empresa) return { activo: [], pasivo: [] };
 
   // Unir los cobros/pagos de franquicia de nb_movimientos al cuaderno de Franquicias.
-  let compsCC = comps;
-  const movsFr = (movimientos ?? []).filter(m =>
-    m.origen === "franquicias" && m.contraparte_id &&
-    !String(m.documento_id || "").startsWith("IGN-"));
-  if (movsFr.length) {
-    compsCC = { ...comps };
-    for (const m of movsFr) {
-      const row = movimientoToCompRow(m);
-      if (!row.frId) continue;
-      compsCC[row.frId] = [...(compsCC[row.frId] ?? []), row];
-    }
-  }
+  const compsCC = enriquecerCompsConMovs(comps, movimientos);
 
   const activo = [], pasivo = [];
   for (const moneda of MONEDAS) {

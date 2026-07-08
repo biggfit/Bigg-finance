@@ -118,7 +118,7 @@ export function derivarSaldos({
   // ── Socios (dividendos + préstamos): slice de esta sociedad, balance puro ──
   const sociosCCsld = sociosSaldos(socios, sociosCC, movimientos, { sociedad });
 
-  const aCobrar = [...aCobrarComp, ...franqCC.activo, ...sociosCCsld.activo, ...intercoAct].sort(franqFirst);
+  const aCobrar = [...aCobrarComp, ...franqCC.activo, ...sociosCCsld.activo].sort(franqFirst);
 
   // ── A pagar (comprobantes de egreso pendientes) ──
   const pagos = pagosCobros.filter(p => (p.tipo === "PAGO" || p.tipo === "EGRESO_GASTO") && (!corte || (p.fecha ?? "") <= corte));
@@ -210,9 +210,12 @@ export function derivarSaldos({
         out.push({ label: "Sueldos", moneda: "ARS", saldo: sueldosPasivo.total, docs: sueldosPasivo.docs, headerColor: "#dc2626" });
       }
     }
-    out.push(...finPasivo, ...anticiposPasivo, ...franqCC.pasivo, ...tarjetasPasivo, ...sociosCCsld.pasivo, ...intercoPas);
+    out.push(...finPasivo, ...anticiposPasivo, ...franqCC.pasivo, ...tarjetasPasivo, ...sociosCCsld.pasivo);
     return out.sort(franqFirst);
   })();
 
-  return { cuentas, aCobrar, aPagar };
+  // Interco = bloque propio (abajo de Inversiones), NO mezclado en Activo/Pasivo.
+  const interco = [...intercoAct, ...intercoPas];
+
+  return { cuentas, aCobrar, aPagar, interco };
 }

@@ -108,7 +108,7 @@ export default function TabTesoreriaConsolidada() {
   );
 
   // ── Derivar por sociedad y consolidar ──
-  const { cuentas, aCobrar, aPagar, movimientos } = useMemo(() => {
+  const { cuentas, aCobrar, aPagar, interco, movimientos } = useMemo(() => {
     const idsSel = new Set(socsIncluidas.map(s => (s.id ?? "").toLowerCase()));
     const perSoc = socsIncluidas.map(s => derivarSaldos({ ...data, sociedad: s.id, fechaCorte }));
     // Interco NETEADO a nivel consolidado (núcleo↔núcleo interno se elimina; el resto se muestra).
@@ -117,8 +117,9 @@ export default function TabTesoreriaConsolidada() {
       : { activo: [], pasivo: [] };
     return {
       cuentas:  perSoc.flatMap(r => r.cuentas),
-      aCobrar:  [...mergeItems(perSoc.map(r => r.aCobrar)), ...ic.activo].sort(franqFirst),
-      aPagar:   [...mergeItems(perSoc.map(r => r.aPagar)), ...ic.pasivo].sort(franqFirst),
+      aCobrar:  mergeItems(perSoc.map(r => r.aCobrar)),
+      aPagar:   mergeItems(perSoc.map(r => r.aPagar)),
+      interco:  [...ic.activo, ...ic.pasivo],   // bloque propio abajo de Inversiones
       movimientos: data.movimientos.filter(m => idsSel.has((m.sociedad ?? "").toLowerCase())),
     };
   }, [data, socsIncluidas, fechaCorte, intercoData, sociedades]);
@@ -269,7 +270,7 @@ export default function TabTesoreriaConsolidada() {
       )}
 
       {!loading && !error && activeTab === "saldos" && (
-        <TabSaldos cuentas={cuentas} aCobrar={aCobrar} aPagar={aPagar}
+        <TabSaldos cuentas={cuentas} aCobrar={aCobrar} aPagar={aPagar} interco={interco}
           filtroMoneda={filtroMoneda} onCuentaClick={c => { setFiltroCuenta(c.id); setActiveTab("movimientos"); }}
           onItemClick={setDrillDownItem} />
       )}

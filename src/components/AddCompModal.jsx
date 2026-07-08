@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Modal } from "./atoms";
 import { useStore } from "../lib/context";
+import { fetchCuentasBancarias } from "../lib/numbersApi";       // cuentas de Numbers (destino de la plata)
+import { SOCIEDAD_EMPRESA } from "../lib/franquiciasAdapter";
 import {
   CURRENCIES, DOCS, CUENTAS, CUENTA_LABEL, COMP_TYPES,
   SYM, uid, makeType, COMPANIES, MONTHS, TIPOS_MOVIMIENTO,
@@ -84,6 +86,11 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
   const [movImpRaw,  setMovImpRaw]  = useState("");
   const [movFecha,   setMovFecha]   = useState(todayIso());
   const [movConcepto,setMovConcepto]= useState("");
+  const [movCuenta,  setMovCuenta]  = useState("");   // cuenta bancaria Numbers (define la sociedad)
+  const [cuentasNum, setCuentasNum] = useState([]);   // nb_cuentas_bancarias
+  useEffect(() => { fetchCuentasBancarias().then(cs => setCuentasNum(Array.isArray(cs) ? cs : [])).catch(() => {}); }, []);
+  const cuentasMov = cuentasNum.filter(c => (c.moneda || "ARS") === movCurrency);
+  const cuentaSel  = cuentasNum.find(c => c.id === movCuenta);
 
   // ── estado de emisión (comprobante) ──
   const [preview,   setPreview]   = useState(null);
@@ -533,7 +540,7 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
                   {CURRENCIES.map(cur => {
                     const allowed = allowedCurrencies.includes(cur);
                     return (
-                      <button key={cur} onClick={() => allowed && setMovCurrency(cur)} style={{
+                      <button key={cur} onClick={() => { if (allowed) { setMovCurrency(cur); setMovCuenta(""); } }} style={{
                         padding: "8px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700,
                         cursor: allowed ? "pointer" : "not-allowed", border: "none", fontFamily: "var(--font)",
                         background: movCurrency === cur ? "var(--accent)" : "var(--bg)",
@@ -559,6 +566,18 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
           </div>
         </div>
 
+        {/* Cuenta bancaria (Numbers) — dónde entra/sale la plata; define la sociedad */}
+        <div style={{ marginBottom: 16 }}>
+          <label style={labelS}>CUENTA (BANCO / CAJA)</label>
+          <select value={movCuenta} onChange={e => setMovCuenta(e.target.value)} style={inputS}>
+            <option value="">— Elegí la cuenta —</option>
+            {cuentasMov.map(c => (
+              <option key={c.id} value={c.id}>{c.nombre} ({c.moneda})</option>
+            ))}
+          </select>
+          {cuentasMov.length === 0 && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>No hay cuentas {movCurrency} en Numbers.</div>}
+        </div>
+
         {/* Referencia */}
         <div style={{ marginBottom: 16 }}>
           <label style={labelS}>REFERENCIA <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>— editable</span></label>
@@ -576,15 +595,20 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
         <div style={{ display: "flex", gap: 10, marginBottom: 4 }}>
           <button className="ghost" style={{ flex: 1, height: 44, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}>Cancelar</button>
           <button className="btn" style={{ flex: 3, height: 44, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center" }}
-            disabled={movImporte <= 0}
+            disabled={movImporte <= 0 || !movCuenta}
             onClick={() => {
-              if (movImporte <= 0) return;
+              if (movImporte <= 0 || !cuentaSel) return;
               const nota = movConcepto || autoMovConcepto;
+              // Financiero de franquicia → nb_movimientos (numbersApi). La sociedad y la caja
+              // salen de la cuenta elegida; empresa (para la CC) se deriva de esa sociedad.
               onAdd(selectedFr?.id, {
                 id: uid(), type: movTipo, date: inputDateToDmy(movFecha),
                 amount: movImporte, ref: nota, nota,
                 month: mesMovComp, year: anioMovComp,
-                currency: movCurrency, empresa: activeCompany,
+                currency: movCurrency,
+                sociedad: cuentaSel.sociedad,
+                cuenta_bancaria: cuentaSel.id,
+                empresa: SOCIEDAD_EMPRESA[(cuentaSel.sociedad || "").toLowerCase()] || activeCompany,
               });
               onClose();
             }}>

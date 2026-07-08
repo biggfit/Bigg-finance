@@ -9,6 +9,8 @@ import { buildFacturaPDF, downloadTextAsPDF } from "../lib/pdf";
 import { downloadInvoicePdf, downloadBatchInvoicePdf } from "../lib/invoicePdf";
 import { emitirComprobante, formatInvoiceLabel, invoiceFromResult, fetchAfipNumero, downloadFacturantePdfBlob, afipSaveFailedMsg } from "../lib/facturanteApi";
 import { getNextInvoiceNum } from "../lib/sheetsApi";
+import { fetchCuentasBancarias } from "../lib/numbersApi";       // cuentas de Numbers (destino de la plata)
+import { SOCIEDAD_EMPRESA } from "../lib/franquiciasAdapter";
 
 // ─── TAB: EMISIÓN DE COMPROBANTES ────────────────────────────────────────────
 const EMIT_MODE  = { SELECT: "select", MANUAL: "manual", CRM: "crm", EXCEL: "excel" };
@@ -102,6 +104,11 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
   const [movFecha,   setMovFecha]  = useState(todayIso);
   const [currency,    setCurrency]    = useState(activeCurrency);
   const [movCurrency, setMovCurrency] = useState(activeCurrency);
+  const [movCuenta,   setMovCuenta]   = useState("");   // cuenta bancaria Numbers (define la sociedad)
+  const [cuentasNum,  setCuentasNum]  = useState([]);
+  useEffect(() => { fetchCuentasBancarias().then(cs => setCuentasNum(Array.isArray(cs) ? cs : [])).catch(() => {}); }, []);
+  const cuentasMov = cuentasNum.filter(c => (c.moneda || "ARS") === movCurrency);
+  const cuentaSel  = cuentasNum.find(c => c.id === movCuenta);
 
   // ── Reset sede cuando cambia la sociedad activa (no en el mount inicial) ──
   const prevCompanyRef = useRef(activeCompany);
@@ -613,7 +620,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
                   {CURRENCIES.map(cur => {
                     const allowed = allowedCurrencies.includes(cur);
                     return (
-                      <button key={cur} onClick={() => { if (allowed) setMovCurrency(cur); }} style={{
+                      <button key={cur} onClick={() => { if (allowed) { setMovCurrency(cur); setMovCuenta(""); } }} style={{
                         padding: "8px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700,
                         cursor: allowed ? "pointer" : "not-allowed", border: "none", fontFamily: "var(--font)",
                         background: movCurrency === cur ? "var(--accent)" : "var(--bg)",
@@ -639,6 +646,18 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
           </div>
         </div>
 
+        {/* Cuenta bancaria (Numbers) — dónde entra/sale la plata; define la sociedad */}
+        <div style={{ marginBottom: 16 }}>
+          <label style={labelS}>CUENTA (BANCO / CAJA)</label>
+          <select value={movCuenta} onChange={e => setMovCuenta(e.target.value)} style={inputS}>
+            <option value="">— Elegí la cuenta —</option>
+            {cuentasMov.map(c => (
+              <option key={c.id} value={c.id}>{c.nombre} ({c.moneda})</option>
+            ))}
+          </select>
+          {cuentasMov.length === 0 && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>No hay cuentas {movCurrency} en Numbers.</div>}
+        </div>
+
         {/* Fila 3: Referencia */}
         <div style={{ marginBottom: 20 }}>
           <label style={labelS}>REFERENCIA <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>— editable</span></label>
@@ -649,16 +668,19 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
             style={inputS} />
         </div>
 
-        <button className="btn" style={{ width: "100%", height: 48, fontSize: 15 }} disabled={movImporte <= 0}
+        <button className="btn" style={{ width: "100%", height: 48, fontSize: 15 }} disabled={movImporte <= 0 || !movCuenta}
           onClick={() => {
-            if (movImporte <= 0) return;
+            if (movImporte <= 0 || !cuentaSel) return;
             const nota = movConcepto || autoMovConcepto;
+            // Financiero de franquicia → nb_movimientos (App.addComp lo rutea). Sociedad y caja de la cuenta elegida.
             const comp = {
               id: uid(), type: movTipo, date: inputDateToDmy(movFecha),
               amount: movImporte, ref: nota, nota,
               month: mesMovComp, year: anioMovComp,
               currency: movCurrency,
-              empresa: activeCompany,
+              sociedad: cuentaSel.sociedad,
+              cuenta_bancaria: cuentaSel.id,
+              empresa: SOCIEDAD_EMPRESA[(cuentaSel.sociedad || "").toLowerCase()] || activeCompany,
             };
             onAddComp(fr.id, comp);
             setDone(true);
@@ -2206,15 +2228,8 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
                 bg: "rgba(222,251,151,.06)",
                 border: "rgba(222,251,151,.2)",
               },
-              {
-                mode: "_extracto",
-                icon: "🏦",
-                title: "Extracto Banco Galicia",
-                desc: "Importá el extracto mensual del Banco Galicia. Clasificación inteligente de pagos recibidos y enviados.",
-                color: "var(--cyan)",
-                bg: "rgba(34,211,238,.06)",
-                border: "rgba(34,211,238,.2)",
-              },
+              // El extracto Galicia se importa SIEMPRE desde Numbers Conciliación (evita cargar
+              // el mismo cobro por dos lados). Acceso retirado de Franquicias.
             ].map(opt => (
               <div key={opt.mode}
                 onClick={() => opt.mode === "_extracto" ? onStartImport?.() : setMode(opt.mode)}

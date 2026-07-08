@@ -8,6 +8,8 @@ import { fetchAll,
          fetchRecordatorios, saveRecordatorio,
          tryDecrementInvoiceSeq,
          saveTipoCambio } from "./lib/sheetsApi";
+import { fetchMovTesoreria, appendMovFranquicia, deleteMovTesoreria, updateMovTesoreria } from "./lib/numbersApi";   // fuente financiera única (nb_movimientos)
+import { enriquecerCompsConMovs } from "./lib/franquiciasAdapter";
 import { CURRENCIES, MONTHS, AVAILABLE_YEARS, computeSaldo, computeSaldoPrevMes, downloadCSV } from "./lib/helpers";
 import "./lib/styles";
 import FrDetail from "./components/FrDetail";
@@ -182,10 +184,22 @@ export default function App({ onVolverNumbers } = {}) {
   // Stable mutation handlers — IDs are normalised to strings here, once
   const addComp = useCallback((frId, comp) => {
     const key = String(frId);
-    setComps(prev => ({ ...prev, [key]: [...(prev[key] ?? []), comp] }));
-    // Inyectar frName para que quede persistido en el Sheet
+    setComps(prev => ({ ...prev, [key]: [...(prev[key] ?? []), comp] }));   // optimista (misma forma de comp para la CC)
     const fr = franchises.find(f => f.id === Number(frId) || String(f.id) === String(frId));
-    const enriched = fr ? { ...comp, frName: fr.name } : comp;
+    // Movimientos financieros (PAGO/PAGO_PAUTA/PAGO_ENVIADO) → nb_movimientos (Numbers, fuente única).
+    // Facturas/NC/FC recibidas → comprobantes (Franquicias), como siempre.
+    if (["PAGO", "PAGO_PAUTA", "PAGO_ENVIADO"].includes(comp.type)) {
+      // La fila optimista se marca _numbers (vive en nb_movimientos) y usa el MISMO id que se
+      // persiste → borrar/editar desde la CC apuntan al backend correcto (mismo id post-reload).
+      setComps(prev => ({ ...prev, [key]: (prev[key] ?? []).map(c => c.id === comp.id ? { ...c, _numbers: true } : c) }));
+      return queueWrite(() => appendMovFranquicia({
+        id: comp.id, sociedad: comp.sociedad, fecha: dmyToIso(comp.date), fr_tipo: comp.type,
+        franquicia_id: frId, franquicia_nombre: fr?.name || "",
+        monto: comp.amount, moneda: comp.currency, cuenta_bancaria: comp.cuenta_bancaria,
+        concepto: comp.nota || comp.ref || "",
+      }));
+    }
+    const enriched = fr ? { ...comp, frName: fr.name } : comp;   // frName para persistir en el Sheet
     return queueWrite(() => appendComp(frId, enriched));
   }, [franchises, queueWrite]);
 
@@ -193,6 +207,11 @@ export default function App({ onVolverNumbers } = {}) {
     const key = String(frId);
     const comp = (compsRef.current[key] ?? []).find(c => c.id === String(compId));
     setComps(prev => ({ ...prev, [key]: (prev[key] ?? []).filter(c => c.id !== String(compId)) }));
+    // Movimientos financieros de franquicia viven en nb_movimientos → borrar del backend correcto.
+    if (comp?._numbers || ["PAGO", "PAGO_PAUTA", "PAGO_ENVIADO"].includes(comp?.type)) {
+      deleteMovTesoreria(compId).catch(err => console.error('Numbers deleteMov:', err));
+      return;
+    }
     removeComp(frId, compId).catch(err => console.error('Sheets removeComp:', err));
     // Si era una invoice USA/ESP, decrementar el correlativo solo si era la última emitida
     const seqNum = comp?.invoice ? Number(comp.invoice.split('-').pop()) : NaN;
@@ -203,10 +222,23 @@ export default function App({ onVolverNumbers } = {}) {
 
   const editComp = useCallback((frId, compId, patch) => {
     const key = String(frId);
+    const comp = (compsRef.current[key] ?? []).find(c => c.id === String(compId));
     setComps(prev => ({
       ...prev,
       [key]: (prev[key] ?? []).map(c => c.id === String(compId) ? { ...c, ...patch } : c),
     }));
+    // Movimientos financieros viven en nb_movimientos → editar el backend correcto (traduce a sus columnas).
+    if (comp?._numbers || ["PAGO", "PAGO_PAUTA", "PAGO_ENVIADO"].includes(comp?.type)) {
+      const m = { ...comp, ...patch };
+      const signo = m.type === "PAGO_ENVIADO" ? -1 : 1;
+      updateMovTesoreria(compId, {
+        tipo: m.type === "PAGO_ENVIADO" ? "EGRESO" : "COBRO", fr_tipo: m.type,
+        monto: signo * Math.abs(Number(m.amount) || 0),
+        moneda: m.currency, fecha: dmyToIso(m.date),
+        concepto: m.nota || m.ref || "",
+      }).catch(err => console.error('Numbers updateMov:', err));
+      return;
+    }
     updateComp(frId, compId, patch).catch(err => console.error('Sheets updateComp:', err));
   }, []);
 
@@ -278,10 +310,14 @@ export default function App({ onVolverNumbers } = {}) {
 
   // if (!user) return <Login onLogin={setUser} />; // deshabilitado para testing
 
-  // Cargar datos de Google Sheets al montar — un solo request "all"
+  // Cargar datos de Google Sheets al montar — un solo request "all".
+  // Además traemos nb_movimientos (Numbers) en paralelo: los movimientos financieros de
+  // franquicia (origen "franquicias", desde el 1/7) se inyectan en `comps` en ESTE único punto
+  // → todos los reportes de CC leen las dos hojas sin tocarse. (Lo histórico ≤30/6 sigue en comprobantes.)
   useEffect(() => {
-    fetchAll()
-      .then(({ comps, saldos, franchises, franchisor: rawFranchisor, recordatorios, tiposCambio: tc }) => {
+    Promise.all([fetchAll(), fetchMovTesoreria().catch(() => [])])
+      .then(([{ comps: compsRaw, saldos, franchises, franchisor: rawFranchisor, recordatorios, tiposCambio: tc }, movsNumbers]) => {
+        const comps = enriquecerCompsConMovs(compsRaw, movsNumbers);
         setComps(comps);
         setSaldoInicial(saldos);
         setFranchises(franchises);

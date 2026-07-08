@@ -777,7 +777,7 @@ function ResumenMonedas({ cuentas }) {
 }
 
 // ─── Tab: Saldos ─────────────────────────────────────────────────────────────
-export function TabSaldos({ cuentas, aCobrar, aPagar, filtroMoneda, onCuentaClick, onItemClick }) {
+export function TabSaldos({ cuentas, aCobrar, aPagar, interco = [], filtroMoneda, onCuentaClick, onItemClick }) {
   const filtrar = arr => filtroMoneda === "ALL" ? arr : arr.filter(c => c.moneda === filtroMoneda);
   const bancos      = filtrar(cuentas.filter(c => c.tipo === "banco"));
   const cajas       = filtrar(cuentas.filter(c => c.tipo === "caja"));
@@ -785,6 +785,7 @@ export function TabSaldos({ cuentas, aCobrar, aPagar, filtroMoneda, onCuentaClic
 
   const aCobrarFilt = filtroMoneda === "ALL" ? aCobrar : aCobrar.filter(i => i.moneda === filtroMoneda);
   const aPagarFilt  = filtroMoneda === "ALL" ? aPagar  : aPagar.filter(i => i.moneda === filtroMoneda);
+  const intercoFilt = filtroMoneda === "ALL" ? interco : interco.filter(i => i.moneda === filtroMoneda);
 
   return (
     <div>
@@ -799,7 +800,74 @@ export function TabSaldos({ cuentas, aCobrar, aPagar, filtroMoneda, onCuentaClic
         <GrupoBlock icon="💵" label="Caja"   cuentas={cajas}  onCuentaClick={onCuentaClick} />
         <GrupoBlock icon="🏦" label="Bancos" cuentas={bancos} onCuentaClick={onCuentaClick} />
       </div>
-      <GrupoBlock icon="📈" label="Inversiones" cuentas={inversiones} onCuentaClick={onCuentaClick} />
+      <div style={{ marginBottom:16 }}>
+        <GrupoBlock icon="📈" label="Inversiones" cuentas={inversiones} onCuentaClick={onCuentaClick} />
+      </div>
+
+      {/* Intercompañía — bloque propio abajo de Inversiones (nos deben / les debemos) */}
+      {intercoFilt.length > 0 && <IntercoBlock items={intercoFilt} onItemClick={onItemClick} />}
+    </div>
+  );
+}
+
+// ─── Bloque Intercompañía (posiciones netas: nos deben verde / les debemos rojo) ─────────────
+function IntercoBlock({ items, onItemClick }) {
+  const porMoneda = {};
+  for (const it of items) {
+    const signed = it.headerColor === "#16a34a" ? it.saldo : -it.saldo;   // + nos deben / − les debemos
+    porMoneda[it.moneda] = (porMoneda[it.moneda] ?? 0) + signed;
+  }
+  return (
+    <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:T.radius,
+      boxShadow:T.shadow, overflow:"hidden", display:"flex", flexDirection:"column" }}>
+      <div style={{ padding:"9px 18px", background:T.tableHead, display:"flex",
+        justifyContent:"space-between", alignItems:"center", borderBottom:`1px solid ${T.cardBorder}` }}>
+        <span style={{ fontSize:11, fontWeight:800, color:T.tableHeadText, letterSpacing:".10em",
+          textTransform:"uppercase" }}>🔗 Intercompañía</span>
+        <span style={{ fontSize:11, color:T.dim, fontStyle:"italic" }}>
+          {items.length} posici{items.length !== 1 ? "ones" : "ón"}
+        </span>
+      </div>
+      <div style={{ flex:1 }}>
+        {items.map((it, i) => {
+          const nosDeben = it.headerColor === "#16a34a";
+          const nombre = (it.label ?? "").replace(/^Intercompañía · /, "");
+          return (
+            <div key={i} onClick={onItemClick ? () => onItemClick(it) : undefined}
+              style={{ display:"flex", alignItems:"center", justifyContent:"space-between",
+                padding:"10px 18px", borderBottom:`1px solid ${T.cardBorder}`,
+                cursor: onItemClick ? "pointer" : "default", transition:"background .1s" }}
+              onMouseEnter={e => { if (onItemClick) e.currentTarget.style.background="#eceff3"; }}
+              onMouseLeave={e => { e.currentTarget.style.background=""; }}>
+              <span style={{ fontSize:13, color:T.text, flex:1, overflow:"hidden",
+                textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{nombre}</span>
+              <span style={{ fontSize:11, background:"#f3f4f6", color:T.dim, borderRadius:4,
+                padding:"2px 7px", fontWeight:700, marginLeft:8, flexShrink:0, width:36, textAlign:"center" }}>{it.moneda}</span>
+              <span style={{ fontSize:13, fontFamily:"var(--mono)", fontWeight:700,
+                color: nosDeben ? "#16a34a" : "#dc2626", flexShrink:0, minWidth:120, textAlign:"right", whiteSpace:"nowrap" }}>
+                {fmtSaldo(it.saldo, it.moneda)}
+                <span style={{ fontSize:10, fontWeight:400, color:T.muted, marginLeft:5 }}>
+                  {nosDeben ? "nos deben" : "les debemos"}
+                </span>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ padding:"9px 18px", background:"#fafbfc", borderTop:`2px solid ${T.cardBorder}`,
+        display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"nowrap", gap:8 }}>
+        <span style={{ fontSize:12, fontWeight:700, color:T.muted, flexShrink:0 }}>Neto intercompañía</span>
+        <div style={{ display:"flex", gap:8, flexShrink:0 }}>
+          {Object.entries(porMoneda).map(([mon, tot]) => (
+            <div key={mon} style={{ display:"flex", alignItems:"center", gap:5, background:"#f3f4f6",
+              border:`1px solid ${T.cardBorder}`, borderRadius:6, padding:"2px 8px" }}>
+              <span style={{ fontSize:10, fontWeight:800, color:T.dim, letterSpacing:".04em" }}>{mon}</span>
+              <span style={{ fontSize:12, fontFamily:"var(--mono)", fontWeight:700,
+                color: tot < 0 ? T.red : T.text, whiteSpace:"nowrap" }}>{fmtSaldo(tot, mon)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1072,7 +1140,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
   const sociedadesMap = useMemo(() => sociedadNombreMap(intercoData?.sociedades ?? []), [intercoData]);
 
   // ── Saldos + Activo/Pasivo (derivación compartida con Reportes › Consolidado) ──
-  const { cuentas, aCobrar: aCobrarFull, aPagar: aPagarFull } = useMemo(
+  const { cuentas, aCobrar: aCobrarFull, aPagar: aPagarFull, interco: intercoItems } = useMemo(
     () => derivarSaldos({
       sociedad, fechaCorte,
       movimientos, egresos, ingresos, pagosCobros,
@@ -1337,6 +1405,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
               cuentas={cuentas}
               aCobrar={aCobrarFull}
               aPagar={aPagarFull}
+              interco={intercoItems}
               filtroMoneda={filtroMoneda}
               onCuentaClick={handleCuentaClick}
               onItemClick={setDrillDownItem}

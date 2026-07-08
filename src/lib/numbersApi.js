@@ -868,6 +868,24 @@ export async function aceptarCobroFranquicia(mov, partes = []) {
   }
 }
 
+// Alta MANUAL de un movimiento financiero de franquicia (desde la app Franquicias) → una fila
+// en nb_movimientos, mismo shape que aceptarCobroFranquicia. Cutover: desde el 1/7 los pagos /
+// pagos a cuenta / transferencias de franquicia se escriben ACÁ, no en `comprobantes`.
+// PAGO/PAGO_PAUTA = COBRO (+) ; PAGO_ENVIADO = EGRESO (−). Sin documento_id (caja, no devengado).
+export async function appendMovFranquicia({ id, sociedad, fecha, fr_tipo, franquicia_id, franquicia_nombre = "", monto, moneda = "ARS", cuenta_bancaria = "", concepto = "" }) {
+  const signo = fr_tipo === "PAGO_ENVIADO" ? -1 : 1;
+  const tipo  = fr_tipo === "PAGO_ENVIADO" ? "EGRESO" : "COBRO";
+  return post({ action: "add", sheet: "nb_movimientos", row: {
+    id: id || newId("FRQ"), sociedad, fecha,
+    tipo, cuenta_bancaria, cuenta_destino: "",
+    cuenta_contable: "", centro_costo: "", moneda,
+    monto: signo * Math.abs(Number(monto) || 0), documento_id: "",
+    concepto, contraparte_id: String(franquicia_id || ""), contraparte_nombre: franquicia_nombre,
+    fr_tipo, referencia: "", origen: "franquicias",
+    created_at: new Date().toISOString(),
+  }});
+}
+
 // Imputa una línea del extracto a una factura de proveedor existente: la convierte en un
 // PAGO linkeado a esa FC. Tesorería netea la CxP (match por documento_id); el P&L la excluye
 // (no es "CONTAB-": el devengado ya está en el comprobante). Pago parcial = si |monto| < saldo

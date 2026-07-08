@@ -501,17 +501,15 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       : [];
     const es = !ed.noFranquicia && (meta.tipo === "cobro_franquicia" || porCuit.length > 0 || !!ed.modoFranquicia);
     if (!es) return { es: false };
-    let opciones;
-    if (ed.modoFranquicia) opciones = franquiciasManual;    // manual → activas de la moneda de la cuenta
-    else if (porCuit.length) opciones = porCuit;            // vivo → las del CUIT
-    else {                                                   // baked → las del CUIT empacado
-      const ids = (meta.frops || "").split("|").filter(Boolean);
-      opciones = ids.length ? franquicias.filter(f => ids.includes(String(f.id)))
-               : (meta.fr ? franquicias.filter(f => String(f.id) === String(meta.fr)) : franquiciasManual);
-      if (!opciones.length) opciones = franquiciasManual;
-    }
-    opciones = [...opciones].sort(byName);                   // siempre alfabético
-    const franquiciaSel = ed.franquicia_id ?? (opciones.length === 1 ? String(opciones[0].id) : (meta.fr || ""));
+    // Dropdown SIEMPRE con TODAS las franquicias activas (para corregir un match errado); se
+    // PRESELECCIONA la reconocida (CUIT con match único, o la empacada). Si el CUIT mapea a varias,
+    // sin default → el usuario elige.
+    const bakedIds = (meta.frops || "").split("|").filter(Boolean);
+    const recomendada = (porCuit.length === 1 ? String(porCuit[0].id) : "")
+                      || (bakedIds.length === 1 ? bakedIds[0] : "")
+                      || (meta.fr ? String(meta.fr) : "");
+    const opciones = franquiciasManual;                      // todas las activas (alfabético, con sufijo de moneda)
+    const franquiciaSel = ed.franquicia_id ?? recomendada;
     const deuda = franquiciaSel ? deudaFr(franquiciaSel) : 0;
     const frTipoSel = ed.fr_tipo ?? sugerirFrTipo(mov.monto, deuda);
     return { es: true, manual: !!ed.modoFranquicia, opciones, franquiciaSel, deuda, frTipoSel, split: ed.split || null };
