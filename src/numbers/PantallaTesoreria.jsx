@@ -953,10 +953,14 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, onLimpiarFi
     ? movimientos.filter(m => m.cuenta_bancaria === filtroCuenta)
     : movimientos).filter(m => !esIgnorado(m));   // ocultar las líneas descartadas del ledger
 
-  const sorted = useMemo(() => [...rows].sort((a, b) => {
-    const fa = a.fecha ?? ""; const fb = b.fecha ?? "";
-    return fb.localeCompare(fa);
-  }), [rows]);
+  // Orden: fecha descendente; a igual fecha, el último cargado primero (el orden de `rows` = orden
+  // de la hoja = orden de alta, así que desempatamos por índice descendente).
+  const sorted = useMemo(() =>
+    rows
+      .map((m, i) => [m, i])
+      .sort((a, b) => (b[0].fecha ?? "").localeCompare(a[0].fecha ?? "") || b[1] - a[1])
+      .map(([m]) => m)
+  , [rows]);
 
   // Saldo corriente por cuenta (acumulado en orden cronológico ascendente; `sorted` es descendente).
   // La última fila cronológica de una cuenta = su saldo total (coincide con la pestaña Saldos).
