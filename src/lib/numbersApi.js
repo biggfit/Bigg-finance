@@ -1000,7 +1000,11 @@ export async function fetchPagosSueldos(sociedad) {
 export async function fetchGastos(sociedad) {
   const movRows = await get("nb_movimientos", { sociedad });
   return movRows
-    .filter(m => m.origen === "gasto_directo")
+    // Gasto contado = alta manual (origen gasto_directo) O contabilizado desde Conciliación
+    // (documento_id "CONTAB-…"). En ambos es una fila autocontenida imputada. Excluye INGRESO
+    // (los créditos contabilizados no son gastos) y las ignoradas.
+    .filter(m => !esIgnorado(m) && m.tipo !== "INGRESO" &&
+      (m.origen === "gasto_directo" || String(m.documento_id || "").startsWith("CONTAB-")))
     .map(m => {
       const total = Math.abs(toNum(m.monto));
       const iva   = toNum(m.iva_monto);
