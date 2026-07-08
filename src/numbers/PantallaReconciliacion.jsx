@@ -698,9 +698,14 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       const ed = edits[mov.id] || {};
       const meta = parseMeta(mov.referencia);
       const tipo = meta.tipo || (Number(mov.monto) > 0 ? "ingreso" : "");
+      // Resolver el NOMBRE del proveedor de la regla (ej. impuesto→AFIP, comisión Galicia→Banco Galicia)
+      // para que quede como contraparte (y no la glosa del banco).
+      const provId  = ed.proveedor_id || meta.prov || "";
+      const provNom = provId ? (proveedores.find(p => String(p.id) === String(provId))?.nombre || "") : "";
       await aceptarMovimiento(mov, {
         tipo, cuenta_contable: ed.cuenta_contable || mov.cuenta_contable || "",
-        centro_costo: ed.centro_costo || mov.centro_costo || "", proveedor_id: meta.prov || "",
+        centro_costo: ed.centro_costo || mov.centro_costo || "",
+        proveedor_id: provId, proveedor_nombre: provNom,
       });
     }
     setPendientes(prev => prev.filter(m => m.id !== mov.id));
@@ -878,7 +883,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         if (p.tipo === "transferencia_interna") {
           next[m.id] = { ...next[m.id], modoTransfer: true, modoFranquicia: false, modoFC: false, modoCobro: false, noFranquicia: true, cuenta_destino: p.cuenta_destino || next[m.id]?.cuenta_destino };
         } else if (p.cuenta_contable) {
-          next[m.id] = { ...next[m.id], cuenta_contable: p.cuenta_contable, centro_costo: p.centro_costo || next[m.id]?.centro_costo };
+          next[m.id] = { ...next[m.id], cuenta_contable: p.cuenta_contable, centro_costo: p.centro_costo || next[m.id]?.centro_costo, proveedor_id: p.proveedor_id || next[m.id]?.proveedor_id };
         } else continue;
         n++;
       }
