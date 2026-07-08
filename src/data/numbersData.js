@@ -119,4 +119,4 @@ export const addDays = (iso, n) => {
   const d = new Date(iso); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10);
 };
 
-export const fmtNum = n => Number(n || 0).toLocaleString("es-AR", { minimumFractionDigits: 2 });
+export const fmtNum = n => Number(n || 0).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
