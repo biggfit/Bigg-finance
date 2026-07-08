@@ -881,6 +881,14 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
   const handleMigrar = async (nuevaSociedad) => {
     const egreso = showMigrar;
     if (!egreso) return;
+    // Reaseguro: nunca migrar un comprobante con pagos (su caja pertenece a la sociedad vieja).
+    // Se relee del estado fresco por si se registró un pago mientras el modal estaba abierto.
+    const fresco = egresos.find(e => e.id === egreso.id) ?? egreso;
+    if (fresco.pagosVinculados?.length > 0) {
+      alert("Esta compra tiene pagos registrados. Eliminá los pagos antes de cambiarla de sociedad.");
+      setShowMigrar(null);
+      return;
+    }
     try {
       await migrarComprobanteSociedad(egreso, nuevaSociedad);
       setShowMigrar(null);
