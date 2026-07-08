@@ -412,6 +412,24 @@ export async function deleteMovTesoreria(id) {
 }
 
 /**
+ * Transferencia entre cuentas propias de la MISMA sociedad: par de movimientos con signo opuesto,
+ * `documento_id` compartido y `tipo:"TRANSFERENCIA"` en ambas patas. Es la ÚNICA forma correcta de
+ * escribir un movimiento entre cuentas: el Cash Flow excluye `tipo==="TRANSFERENCIA"` para no contar
+ * la plata que solo se mueve entre cajas (un par EGRESO/INGRESO SÍ se colaría como salida/entrada).
+ */
+export async function appendTransferencia({ sociedad, fecha, moneda = "ARS", monto, cuentaSalida, cuentaEntrada, conceptoSalida = "", conceptoEntrada = "" }) {
+  const abs = Math.abs(Number(monto) || 0);
+  const sharedId = newId("TRF");
+  const base = { sociedad, fecha, tipo: "TRANSFERENCIA", cuenta_contable: "", centro_costo: "",
+    moneda, documento_id: sharedId, referencia: "1", origen: "transferencia",
+    created_at: new Date().toISOString() };
+  return post({ action: "add_batch", sheet: "nb_movimientos", rows: [
+    { ...base, id: `${sharedId}-E`, cuenta_bancaria: cuentaSalida,  cuenta_destino: cuentaEntrada, monto: -abs, concepto: conceptoSalida },
+    { ...base, id: `${sharedId}-I`, cuenta_bancaria: cuentaEntrada, cuenta_destino: cuentaSalida,  monto:  abs, concepto: conceptoEntrada },
+  ]});
+}
+
+/**
  * Pago de tarjeta (saldo corriente, admite parciales). Par de movimientos:
  *  - lado real: la caja/banco baja (−monto) → es la salida real de caja.
  *  - lado tarjeta: la cuenta-tarjeta sube (+monto) → baja la deuda.

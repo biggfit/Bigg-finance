@@ -5,7 +5,7 @@ import {
 } from "../data/tesoreriaData";
 import { CENTROS_COSTO } from "../data/numbersData";
 import {
-  fetchMovTesoreria, appendMovTesoreria, deleteMovTesoreria, updateMovTesoreria,
+  fetchMovTesoreria, appendMovTesoreria, appendTransferencia, deleteMovTesoreria, updateMovTesoreria,
   fetchEgresos, fetchIngresos, fetchPagosCobros,
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto,
   appendGastoDirecto, esIgnorado, esCuentaCredito, fetchFinanciaciones,
@@ -1022,7 +1022,8 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, onLimpiarFi
 
       <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`,
         borderRadius:T.radius, boxShadow:T.shadow, overflow:"hidden" }}>
-        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+        <div style={{ overflowX:"auto" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", minWidth:860 }}>
           <thead>
             <tr style={{ background:T.tableHead }}>
               <th style={{ width:36 }} />
@@ -1077,6 +1078,7 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, onLimpiarFi
             })}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );
@@ -1181,21 +1183,13 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
   // ── Guardar movimiento entre cuentas ──────────────────────────────────────
   const handleGuardarMovimiento = async (form) => {
     try {
-      const monto = Math.abs(Number(form.monto));
-      await Promise.all([
-        appendMovTesoreria({
-          sociedad, fecha: form.fecha, tipo: "EGRESO",
-          cuenta_bancaria: form.cuentaSalida,
-          concepto: `Transferencia → ${cuentasBancarias.find(c => c.id === form.cuentaEntrada)?.nombre ?? form.cuentaEntrada}`,
-          moneda: form.moneda, monto: -monto, origen: "manual",
-        }),
-        appendMovTesoreria({
-          sociedad, fecha: form.fecha, tipo: "INGRESO",
-          cuenta_bancaria: form.cuentaEntrada,
-          concepto: `Transferencia ← ${cuentasBancarias.find(c => c.id === form.cuentaSalida)?.nombre ?? form.cuentaSalida}`,
-          moneda: form.moneda, monto, origen: "manual",
-        }),
-      ]);
+      const nombreCta = id => cuentasBancarias.find(c => c.id === id)?.nombre ?? id;
+      await appendTransferencia({
+        sociedad, fecha: form.fecha, moneda: form.moneda, monto: form.monto,
+        cuentaSalida: form.cuentaSalida, cuentaEntrada: form.cuentaEntrada,
+        conceptoSalida:  `Transferencia → ${nombreCta(form.cuentaEntrada)}`,
+        conceptoEntrada: `Transferencia ← ${nombreCta(form.cuentaSalida)}`,
+      });
       await cargarMovimientos();
     } catch (e) {
       alert("Error al guardar: " + e.message);
