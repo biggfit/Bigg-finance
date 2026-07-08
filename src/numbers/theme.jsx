@@ -53,7 +53,7 @@ export const fmtDate = (str) => {
 
 export const fmtMoney = (n, cur = "ARS") => {
   const sym = cur === "USD" ? "U$D" : cur === "EUR" ? "€" : "$";
-  return `${sym} ${Math.abs(n).toLocaleString("es-AR", { minimumFractionDigits: 2 })}`;
+  return `${sym} ${Math.abs(n).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 
 export function Badge({ estado, cfg }) {

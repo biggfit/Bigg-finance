@@ -89,8 +89,8 @@ export async function fetchLogoDataUrl(url) {
 export function buildCCHtml(frName, frRazonSocial, lines, currency, ccMonth, ccYear, logoDataUrl = null, empresa = null) {
   const SYM = { ARS: "$", USD: "U$D", EUR: "€" };
   const sym = SYM[currency] ?? "$";
-  const fmtImporte = v => `${v >= 0 ? "" : "-"}${sym}\u202f${Math.abs(v).toLocaleString("es-AR", { minimumFractionDigits: 2 })}`;
-  const fmtSaldo   = v => `${v >= 0 ? "+" : "-"}${sym}\u202f${Math.abs(v).toLocaleString("es-AR", { minimumFractionDigits: 2 })}`;
+  const fmtImporte = v => `${v >= 0 ? "" : "-"}${sym}\u202f${Math.abs(v).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const fmtSaldo   = v => `${v >= 0 ? "+" : "-"}${sym}\u202f${Math.abs(v).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   // ── Separar apertura de movimientos del mes ──
   const apertura = lines.find(l => l.type === "apertura");

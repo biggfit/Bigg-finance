@@ -211,7 +211,7 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
                     <td style={{ padding:"6px 12px", fontFamily:"var(--mono)", fontSize:12,
                       fontWeight:700, color: total > 0 ? "#111" : T.dim,
                       textAlign:"right", whiteSpace:"nowrap" }}>
-                      {total > 0 ? `${sym} ${total.toLocaleString("es-AR", { minimumFractionDigits:2 })}` : "—"}
+                      {total > 0 ? `${sym} ${total.toLocaleString("es-AR", { minimumFractionDigits:2, maximumFractionDigits:2 })}` : "—"}
                     </td>
 
                     <td style={{ padding:"6px 8px" }}>

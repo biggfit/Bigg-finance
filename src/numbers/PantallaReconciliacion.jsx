@@ -55,7 +55,7 @@ const sugerirFrTipo = (monto, deuda) => {
 const FR_TIPO_LABEL = { PAGO: "Pago de CC", PAGO_PAUTA: "Pago a cuenta", PAGO_ENVIADO: "Transf. enviada" };
 // Etiqueta legible del saldo de CC (positivo = debe, negativo = a favor).
 const deudaLabel = (d) => Math.abs(Number(d) || 0) < 1 ? "al día" : (Number(d) > 0 ? `debe ${fmt(d)}` : `a favor ${fmt(-d)}`);
-const fmt = n => (Number(n) || 0).toLocaleString("es-AR", { minimumFractionDigits: 2 });
+const fmt = n => (Number(n) || 0).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 // Dedup por id: el master de centros/cuentas tiene ids repetidos (ej. cc-2026-chueca) que
 // rompen la reconciliación de React (claves duplicadas) y filtran opciones de un select a otro.
 const dedupById = arr => { const seen = new Set(); return (arr || []).filter(x => x && !seen.has(x.id) && seen.add(x.id)); };

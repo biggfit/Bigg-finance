@@ -82,5 +82,5 @@ export const fmtSaldo = (n, moneda) => {
   const sym  = MONEDA_SYM[moneda] ?? moneda;
   const abs  = Math.abs(Number(n) || 0);
   const neg  = Number(n) < 0;
-  return `${neg ? "-" : ""}${sym} ${abs.toLocaleString("es-AR", { minimumFractionDigits: 2 })}`;
+  return `${neg ? "-" : ""}${sym} ${abs.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
