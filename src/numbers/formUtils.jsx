@@ -76,13 +76,15 @@ export const makeResolveCB = (list) => (id) =>
 
 // ─── Totales de líneas ────────────────────────────────────────────────────────
 export function calcLineasTotals(lineas) {
+  const round2 = n => Math.round((Number(n) || 0) * 100) / 100;   // a centavos, sin residuos de milésimas
   let totalSub = 0, totalIva = 0;
   lineas.forEach(l => {
-    const sub = Number(l.subtotal) || 0;
+    const sub = round2(Number(l.subtotal) || 0);
     totalSub += sub;
-    totalIva += sub * (Number(l.ivaRate) / 100);
+    totalIva += round2(sub * (Number(l.ivaRate) / 100));
   });
-  return { totalSub, totalIva, totalFinal: totalSub + totalIva };
+  totalSub = round2(totalSub); totalIva = round2(totalIva);
+  return { totalSub, totalIva, totalFinal: round2(totalSub + totalIva) };
 }
 
 /** Agrupa centros de costo como en facturas ingreso/egreso; `rest` en O(n). */

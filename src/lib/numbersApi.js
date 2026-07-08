@@ -103,6 +103,11 @@ function toNum(v) {
   return Number(s) || 0;
 }
 
+/** Redondeo a centavos (2 decimales). Los montos monetarios se guardan y comparan redondeados
+ *  para que no queden residuos de milésimas (ej. subtotal×1,21 = …,5814) que dejan una factura
+ *  colgada en "A Pagar $0,00" y nunca cierran. */
+export const round2 = n => Math.round((Number(n) || 0) * 100) / 100;
+
 /** Formatea un ID largo para mostrar en tabla (últimos 5 dígitos del número) */
 export function shortId(id) {
   if (!id) return "—";
@@ -144,8 +149,8 @@ export async function appendEgreso(egreso) {
 
   for (let i = 0; i < lineas.length; i++) {
     const l   = lineas[i];
-    const sub = Number(l.subtotal) || 0;
-    const iva = sub * ((Number(l.ivaRate) || 0) / 100);
+    const sub = round2(Number(l.subtotal) || 0);
+    const iva = round2(sub * ((Number(l.ivaRate) || 0) / 100));
     await post({
       action: "add",
       sheet:  "nb_comprobantes",
@@ -165,7 +170,7 @@ export async function appendEgreso(egreso) {
         subtotal:            sub,
         iva_rate:            Number(l.ivaRate) || 0,
         iva_monto:           iva,
-        total:               sub + iva,
+        total:               round2(sub + iva),
         nro_comp:            header.nroComp ?? "",
         nota:                header.nota    ?? "",
         created_at,
@@ -243,8 +248,8 @@ export async function appendIngreso(ingreso) {
 
   for (let i = 0; i < lineas.length; i++) {
     const l   = lineas[i];
-    const sub = Number(l.subtotal) || 0;
-    const iva = sub * ((Number(l.ivaRate) || 0) / 100);
+    const sub = round2(Number(l.subtotal) || 0);
+    const iva = round2(sub * ((Number(l.ivaRate) || 0) / 100));
     await post({
       action: "add",
       sheet:  "nb_comprobantes",
@@ -264,7 +269,7 @@ export async function appendIngreso(ingreso) {
         subtotal:            sub,
         iva_rate:            Number(l.ivaRate) || 0,
         iva_monto:           iva,
-        total:               sub + iva,
+        total:               round2(sub + iva),
         nro_comp:            header.nroComp ?? "",
         nota:                header.nota    ?? "",
         created_at,
@@ -348,7 +353,9 @@ export async function appendCobro({ documento_id, sociedad, fecha, monto, moneda
 /** Saldo pendiente de un documento. Usa Math.abs porque PAGOs tienen monto negativo. */
 export function calcSaldoPendiente(totalDoc, pagos = []) {
   const totalPagado = pagos.reduce((s, p) => s + Math.abs(Number(p.monto) || 0), 0);
-  return Math.max(0, totalDoc - totalPagado);
+  // Redondeo a centavos: evita que un residuo de milésimas (total ×1,21 con float) deje la
+  // factura colgada en "A Pagar $0,00" y nunca cierre.
+  return Math.max(0, round2(round2(totalDoc) - round2(totalPagado)));
 }
 
 function _hoy() {
@@ -1515,8 +1522,6 @@ export async function reabrirPeriodo(id) {
 //   cuenta_impuestos | centro_impuestos | cuenta_bancaria | nro_cuota | vto |
 //   vto_tardio | capital | interes | iva | impuestos | interes_resarc | total | total_tardio |
 //   estado(pendiente|pagada|cancelada) | movimiento_id | fecha_pago | nota | created_at
-
-const round2 = n => Math.round((Number(n) || 0) * 100) / 100;
 
 function _finRowToCuota(r) {
   return {
