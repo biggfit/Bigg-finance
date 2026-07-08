@@ -215,6 +215,19 @@ export async function deleteEgreso(id_comp) {
   return post({ action: "del_comp", sheet: "nb_comprobantes", id_comp });
 }
 
+/**
+ * Migra un comprobante (egreso o ingreso) a otra sociedad: cambia el campo `sociedad` en todas
+ * sus líneas. La cuenta contable y el centro de costo son maestros group-level, así que siguen
+ * válidos. `comp.lineas[].id` ya trae la clave de fila (ver _agruparPorComp), así que no hace
+ * falta releer la hoja. Pensado para el caso "lo cargué en la sociedad equivocada" → sin pagos.
+ */
+export async function migrarComprobanteSociedad(comp, nuevaSociedad) {
+  const ids = (comp?.lineas || []).map(l => l.id).filter(Boolean);
+  await Promise.all(ids.map(id =>
+    post({ action: "edit", sheet: "nb_comprobantes", id, patch: { sociedad: nuevaSociedad } })));
+  return { ok: true, migradas: ids.length };
+}
+
 // ─── INGRESOS ────────────────────────────────────────────────────────────────
 
 export async function fetchIngresos(sociedad) {

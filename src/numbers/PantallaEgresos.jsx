@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, ESTADO_EGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
-import { fetchEgresos, appendEgreso, deleteEgreso, appendPago, fetchPagosCobros, calcSaldoPendiente, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, deleteMovTesoreria, updateMovTesoreria, shortId, appendProveedor, appendCuenta } from "../lib/numbersApi";
+import { fetchEgresos, appendEgreso, deleteEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, deleteMovTesoreria, updateMovTesoreria, shortId, appendProveedor, appendCuenta } from "../lib/numbersApi";
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 import { makeResolveCC, makeResolveCB, inputStyle, CCSelectOptions, makeCrearMaestro, stripForDuplicate } from "./formUtils";
 import NuevoEgresoModal from "./NuevoEgresoModal";
@@ -627,7 +627,7 @@ function CtaCteModal({ proveedor, documentos, onClose }) {
 }
 
 // ─── Dropdown de acciones por fila ────────────────────────────────────────────
-function RowMenu({ egreso, onPago, onDetalle, onEditar, onDuplicar, onCtaCte, onEliminar }) {
+function RowMenu({ egreso, onPago, onDetalle, onEditar, onDuplicar, onCtaCte, onMigrar, onEliminar }) {
   const [open, setOpen] = useState(false);
   const [pos,  setPos]  = useState({ top:0, left:0 });
   const btnRef = useRef(null);
@@ -685,6 +685,7 @@ function RowMenu({ egreso, onPago, onDetalle, onEditar, onDuplicar, onCtaCte, on
           {item("Ver Detalle",   onDetalle)}
           {item("Editar",        onEditar)}
           {item("Duplicar",      onDuplicar)}
+          {onMigrar && item("Cambiar de sociedad", onMigrar)}
           {divider}
           {item("Agregar Pago",  onPago, "#0e7490")}
           {item("Cta. Cte.",     onCtaCte)}
@@ -693,6 +694,40 @@ function RowMenu({ egreso, onPago, onDetalle, onEditar, onDuplicar, onCtaCte, on
         </div>
       )}
     </>
+  );
+}
+
+// ─── Modal: Cambiar de sociedad ───────────────────────────────────────────────
+function MigrarSociedadModal({ egreso, sociedades, actual, onClose, onConfirm }) {
+  const [destino, setDestino] = useState("");
+  const opciones = sociedades
+    .filter(s => s.id !== actual && s.activo !== false)
+    .sort((a, b) => String(a.nombre ?? a.id).localeCompare(String(b.nombre ?? b.id)));
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.5)", zIndex:600,
+      display:"flex", alignItems:"center", justifyContent:"center", padding:16 }} onClick={onClose}>
+      <div className="fade" style={{ background:"#fff", borderRadius:12, width:420, maxWidth:"97vw",
+        boxShadow:"0 24px 64px rgba(0,0,0,.3)", overflow:"hidden" }} onClick={e => e.stopPropagation()}>
+        <div style={{ background:T.accentDark, padding:"13px 22px", color:"#fff", fontWeight:700, fontSize:15 }}>
+          Cambiar de sociedad
+        </div>
+        <div style={{ padding:"20px 22px" }}>
+          <div style={{ fontSize:13, color:T.muted, marginBottom:14 }}>
+            {egreso.proveedor || "Comprobante"} · {shortId(egreso.id)} · {fmtMoney(egreso.importe, egreso.moneda)}
+            <div style={{ marginTop:4 }}>La compra pasa a la sociedad elegida (la cuenta contable y el centro de costo no cambian).</div>
+          </div>
+          <label style={{ fontSize:12, fontWeight:600, color:T.text }}>Sociedad destino</label>
+          <select value={destino} onChange={e => setDestino(e.target.value)} style={{ ...inputStyle, marginTop:6 }}>
+            <option value="">— Elegir sociedad —</option>
+            {opciones.map(s => <option key={s.id} value={s.id}>{s.nombre ?? s.id}</option>)}
+          </select>
+          <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:22 }}>
+            <Btn variant="ghost" onClick={onClose}>Cancelar</Btn>
+            <Btn variant="accent" disabled={!destino} onClick={() => onConfirm(destino)}>Migrar</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -709,6 +744,8 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
   const [showEditar, setShowEditar]         = useState(null);
   const [editingPago, setEditingPago]       = useState(null);
   const [showCtaCte, setShowCtaCte]         = useState(null); // { proveedor, docs }
+  const [showMigrar, setShowMigrar]         = useState(null); // egreso a migrar de sociedad
+  const [sociedades, setSociedades]         = useState([]);
   const [proveedores, setProveedores]       = useState([]);
   const [centrosCosto, setCentrosCosto]     = useState(CENTROS_COSTO_STATIC);
   const [cuentasBancarias, setCuentasBancarias] = useState([]);
@@ -753,6 +790,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
     fetchCuentas().then(data => {
       if (Array.isArray(data) && data.length > 0) setCuentas(data);
     }).catch(()=>{});
+    fetchSociedades().then(data => setSociedades(Array.isArray(data) ? data : [])).catch(()=>{});
   }, [sociedad]);
 
   const resolveCC = useMemo(() => makeResolveCC(centrosCosto), [centrosCosto]);
@@ -837,6 +875,19 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
       setEgresos(prev => prev.filter(e => e.id !== id_comp));
     } catch (e) {
       alert("Error al eliminar: " + e.message);
+    }
+  };
+
+  const handleMigrar = async (nuevaSociedad) => {
+    const egreso = showMigrar;
+    if (!egreso) return;
+    try {
+      await migrarComprobanteSociedad(egreso, nuevaSociedad);
+      setShowMigrar(null);
+      // Al cambiar de sociedad la compra ya no pertenece a la vista actual → sale de la lista.
+      setEgresos(prev => prev.filter(e => e.id !== egreso.id));
+    } catch (e) {
+      alert("Error al migrar de sociedad: " + e.message);
     }
   };
 
@@ -994,6 +1045,10 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
                       onEditar={()   => setShowEditar(e)}
                       onDuplicar={() => duplicarEgreso(e)}
                       onCtaCte={()   => setShowCtaCte({ proveedor: e.proveedor, docs: egresos.filter(x => x.proveedor === e.proveedor) })}
+                      onMigrar={()   => {
+                        if (e.pagosVinculados?.length > 0) { alert("Esta compra tiene pagos registrados. Eliminá los pagos antes de cambiarla de sociedad."); return; }
+                        setShowMigrar(e);
+                      }}
                       onEliminar={() => handleEliminar(e.id)}
                     />
                   </td>
@@ -1043,6 +1098,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
       {showPago    && <AgregarPagoModal  egreso={showPago} saldoPendiente={showPago.saldoPendiente ?? showPago.importe} cuentas={cuentasSoc} onClose={() => setShowPago(null)} onSave={handlePago} />}
       {editingPago && <EditarPagoModal   pago={editingPago} sociedad={sociedad} cuentasSoc={cuentasSoc} onClose={() => setEditingPago(null)} onSaved={() => { setEditingPago(null); cargarEgresos(); }} />}
       {showCtaCte  && <CtaCteModal       proveedor={showCtaCte.proveedor} documentos={showCtaCte.docs} onClose={() => setShowCtaCte(null)} />}
+      {showMigrar  && <MigrarSociedadModal egreso={showMigrar} sociedades={sociedades} actual={sociedad} onClose={() => setShowMigrar(null)} onConfirm={handleMigrar} />}
     </div>
   );
 }
