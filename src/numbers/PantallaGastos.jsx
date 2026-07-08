@@ -378,7 +378,7 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
   );
 
   return (
-    <div style={{ padding:"28px 32px", maxWidth:1100 }} className="fade">
+    <div style={{ padding:"28px 32px" }} className="fade">
       <PageHeader
         title="Gastos Directos"
         subtitle="Pagados en el momento · afectan P&L y Tesorería"
