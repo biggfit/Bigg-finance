@@ -280,7 +280,7 @@ function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClos
   return (
     <div
       style={asPage
-        ? { padding:"28px 32px", maxWidth:920 }
+        ? { padding:"28px 32px" }
         : { position:"fixed", inset:0, background:"rgba(0,0,0,.5)", zIndex:500,
             display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
       onClick={asPage ? undefined : onClose}>
