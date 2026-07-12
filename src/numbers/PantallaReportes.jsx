@@ -229,8 +229,7 @@ function DataRow({ label, values, activeMonths, color }) {
     <tr style={{ borderBottom: `1px solid ${T.cardBorder}`, background: T.card }}
       onMouseEnter={e => { e.currentTarget.style.background = "#f0f9ff"; }}
       onMouseLeave={e => { e.currentTarget.style.background = T.card; }}>
-      <td style={{ padding: "7px 28px", fontSize: 13, color: T.text, whiteSpace: "nowrap",
-        maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis",
+      <td style={{ padding: "7px 16px 7px 44px", fontSize: 13, color: T.text, whiteSpace: "nowrap",
         ...stickyCol, background: "inherit" }}>{label}</td>
       {activeMonths.map(m => (
         <td key={m} style={{ padding: "7px 12px", fontSize: 13, textAlign: "right",
@@ -398,10 +397,10 @@ function PnLTableSede({ pnl, sub, year, moneda, label }) {
     <>
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
       boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
-      <table style={{ width: "100%", minWidth: 280 + activeMonths.length * 110, borderCollapse: "collapse" }}>
+      <table style={{ width: "100%", minWidth: 180 + activeMonths.length * 110, borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            <th style={{ ...thStyle, textAlign: "left", minWidth: 260, ...stickyCol, background: T.tableHead, zIndex: 4 }}>Cuenta</th>
+            <th style={{ ...thStyle, textAlign: "left", width: 1, whiteSpace: "nowrap", ...stickyCol, background: T.tableHead, zIndex: 4 }}>Cuenta</th>
             {activeMonths.map(m => <th key={m} style={thStyle}>{MESES[m]}</th>)}
             <th style={{ ...thStyle, borderLeft: "1px solid rgba(255,255,255,.12)" }}>TOTAL</th>
           </tr>
