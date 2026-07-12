@@ -1126,6 +1126,15 @@ const TABS = [
   { id: "consolidado", label: "Tesorería consolidada" },
 ];
 
+// ─── Lentes (3 miradas por stakeholder; cada una agrupa un subconjunto de solapas) ──
+// Por sociedad = estados de la entidad legal (scoped) · Operaciones = management del negocio
+// (sedes) · BIGG HQ = mirada consolidada/corporativa.
+const LENTES = [
+  { id: "sociedad",    label: "Por sociedad",       tabs: ["balance", "cf", "evpn"] },
+  { id: "operaciones", label: "Operaciones (sedes)", tabs: ["pl_sede"] },
+  { id: "bigg",        label: "BIGG HQ",            tabs: ["pl_bigg", "interco", "consolidado"] },
+];
+
 // ─── Tab Intercompañía (resumen de posiciones por anillo — LECTURA) ─────────────
 function TabInterco({ data, sociedades }) {
   const socMap  = useMemo(() => new Map((sociedades || []).map(s => [String(s.id), s])), [sociedades]);
@@ -1172,7 +1181,8 @@ function TabInterco({ data, sociedades }) {
 
 // ─── Pantalla principal ───────────────────────────────────────────────────────
 export default function PantallaReportes({ sociedad = "nako" }) {
-  const [activeTab,      setActiveTab]      = useState("pl_sede");
+  const [activeLente,    setActiveLente]    = useState("sociedad");
+  const [activeTab,      setActiveTab]      = useState("balance");
   const [year,           setYear]           = useState(CUR_YEAR);
   const [selectedSedeCCs, setSelectedSedeCCs] = useState([]);
   const [sedeOpen,        setSedeOpen]        = useState(false);
@@ -1259,25 +1269,34 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   }, [sociedad, loadKey]);
 
   // Keyboard navigation for tabs
+  // Lente activa → solapas visibles (las pills de abajo se acotan al subconjunto de la lente).
+  const lente       = LENTES.find(l => l.id === activeLente) ?? LENTES[0];
+  const visibleTabs = TABS.filter(t => lente.tabs.includes(t.id));
+  const cambiarLente = (id) => {
+    const l = LENTES.find(x => x.id === id) ?? LENTES[0];
+    setActiveLente(id);
+    if (!l.tabs.includes(activeTab)) setActiveTab(l.tabs[0]);   // saltar a la 1ª solapa de la lente
+  };
+
   const handleTabKeyDown = (e) => {
-    const idx = TABS.findIndex(t => t.id === activeTab);
+    const idx = visibleTabs.findIndex(t => t.id === activeTab);
     let next = idx;
     if (e.key === "ArrowRight" || e.key === "ArrowDown") {
       e.preventDefault();
-      next = (idx + 1) % TABS.length;
+      next = (idx + 1) % visibleTabs.length;
     } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
       e.preventDefault();
-      next = (idx - 1 + TABS.length) % TABS.length;
+      next = (idx - 1 + visibleTabs.length) % visibleTabs.length;
     } else if (e.key === "Home") {
       e.preventDefault();
       next = 0;
     } else if (e.key === "End") {
       e.preventDefault();
-      next = TABS.length - 1;
+      next = visibleTabs.length - 1;
     } else {
       return;
     }
-    setActiveTab(TABS[next].id);
+    setActiveTab(visibleTabs[next].id);
     tabsRef.current?.querySelectorAll('[role="tab"]')[next]?.focus();
   };
 
@@ -1405,7 +1424,36 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   return (
     <div style={{ padding: "28px 32px", maxWidth: 1400 }} className="fade">
 
-      {/* ── Header ── */}
+      {/* ── Selector de LENTE (nivel superior: por sociedad / operaciones / consolidado) ── */}
+      <div role="tablist" aria-label="Lente de reportes" style={{
+        display: "inline-flex", gap: 4, marginBottom: 18,
+        background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 12, padding: 4,
+        boxShadow: "0 1px 3px rgba(0,0,0,.04)",
+      }}>
+        {LENTES.map(l => {
+          const active = activeLente === l.id;
+          return (
+            <button
+              key={l.id}
+              role="tab"
+              aria-selected={active}
+              onClick={() => cambiarLente(l.id)}
+              style={{
+                background: active ? T.accent : "transparent",
+                border: "none", borderRadius: 9,
+                color: active ? "#0b1220" : T.muted,
+                fontFamily: T.font, fontSize: 14, fontWeight: active ? 800 : 600,
+                padding: "9px 22px", cursor: "pointer", transition: "all .15s ease",
+              }}
+              onMouseEnter={e => { if (!active) e.currentTarget.style.background = "#eef1f5"; }}
+              onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}
+            >
+              {l.label}
+            </button>
+          );
+        })}
+      </div>
+
       {/* ── Header + pill tabs (misma fila) ── */}
       <PageHeader
         title="Reportes"
@@ -1420,7 +1468,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
             background: "#f3f4f6", borderRadius: 10, padding: 3,
           }}
         >
-        {TABS.map(tab => {
+        {visibleTabs.map(tab => {
           const active = activeTab === tab.id;
           return (
             <button
