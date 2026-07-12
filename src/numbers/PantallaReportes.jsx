@@ -299,6 +299,156 @@ function ResultadoRow({ label, values, activeMonths }) {
   );
 }
 
+// ─── P&L SEDES: estructura fija (waterfall estable) + mapeo cuenta→línea (curado) ──
+// El "qué cuenta va en cada línea" vive acá a propósito: es el P&L de management de la sede,
+// curado. Cuentas fuera de este mapeo con movimientos → bloque "Sin clasificar" al pie
+// (control de fugas: líneas mapeadas + sin clasificar = todo, nada se esconde).
+const SEDE_GRUPOS = [
+  { key: "vta_cf",    label: "Ventas consumidor final",  color: T.green,  cuentas: ["Ventas Mercado Pago", "Depositos", "Ventas en Efectivo", "Otros Ingresos"] },
+  { key: "int_bigg",  label: "Interusos red BIGG",       color: T.green,  cuentas: ["Interusos"] },
+  { key: "int_corp",  label: "Interusos corporativos",   color: T.green,  cuentas: ["Coorporativos"] },
+  { key: "cvar",      label: "Costos Variables",         color: "#f97316", cuentas: ["Fee Facturación", "Aranceles y Otros Financieros", "IIBB", "Imp. Cred. y Deb."] },
+  { key: "gp_pers",   label: "Personal",                 color: T.red,    cuentas: ["Sueldos", "Comisiones", "Aguinaldos", "Costos Salariales"] },
+  { key: "gp_ocup",   label: "Ocupación",                color: T.red,    cuentas: ["Alquiler", "Expensas y ABL", "Servicios"] },
+  { key: "gp_mkt",    label: "Mkt y Pauta",              color: T.red,    cuentas: ["Acciones de Mkt"] },
+  { key: "gp_otros",  label: "Otros Gastos de la Sede",  color: T.red,    cuentas: ["Honorarios Profesionales", "Equipamiento y Mantenimiento", "Limpieza", "Otros Gastos del Centro"] },
+  { key: "com_res",   label: "Comisión por resultados",  color: "#8b5cf6", cuentas: ["Comision S/Resultado"] },
+  { key: "inv_no_op", label: "Inversiones no operativas", color: "#8b5cf6", cuentas: ["Inversiones / Gastos no Operativos"] },
+];
+const _nkSede = s => (s ?? "").trim().toLowerCase();
+const SEDE_CUENTA_A_GRUPO = (() => {
+  const m = new Map();
+  for (const g of SEDE_GRUPOS) for (const c of g.cuentas) m.set(_nkSede(c), g.key);
+  return m;
+})();
+const grupoSede = (key) => SEDE_GRUPOS.find(g => g.key === key);
+
+function buildPnLSede(inRows, egRows, ccFilter, year, moneda) {
+  // Pre-poblar cada grupo con sus cuentas configuradas en 0 → se muestran aunque no tengan monto.
+  const grupos = {};
+  for (const g of SEDE_GRUPOS) { grupos[g.key] = {}; for (const c of g.cuentas) grupos[g.key][c] = new Array(12).fill(0); }
+  const sinClasificar = {};
+  const add = (rows) => {
+    for (const row of rows) {
+      if (!row.fecha || row.fecha.slice(0,4) !== String(year)) continue;
+      if ((row.moneda ?? "ARS") !== moneda) continue;
+      if (ccFilter !== "todos") {
+        const cc = row.centro_costo ?? "";
+        if (Array.isArray(ccFilter) ? !ccFilter.includes(cc) : cc !== ccFilter) continue;
+      }
+      const m = parseInt(row.fecha.slice(5,7), 10) - 1;
+      if (m < 0 || m > 11) continue;
+      const nombre = (row.cuenta_contable ?? "").trim() || "Sin cuenta";
+      const gkey   = SEDE_CUENTA_A_GRUPO.get(_nkSede(nombre));
+      const bucket = gkey ? grupos[gkey] : sinClasificar;
+      if (!bucket[nombre]) bucket[nombre] = new Array(12).fill(0);
+      bucket[nombre][m] += Number(row.total) || 0;
+    }
+  };
+  add(inRows); add(egRows);
+  return { grupos, sinClasificar };
+}
+
+const sumGrupoSede = (g) => MESES.map((_, m) => Object.values(g).reduce((s, arr) => s + (arr[m] || 0), 0));
+
+function computeSubtotalsSede(pnl) {
+  const { grupos, sinClasificar } = pnl;
+  const st = {};
+  for (const g of SEDE_GRUPOS) st[g.key] = sumGrupoSede(grupos[g.key]);
+  const totIngresos   = MESES.map((_, m) => st.vta_cf[m] + st.int_bigg[m] + st.int_corp[m]);
+  const margenContrib = MESES.map((_, m) => totIngresos[m] - st.cvar[m]);
+  const totGastosOp   = MESES.map((_, m) => st.gp_pers[m] + st.gp_ocup[m] + st.gp_mkt[m] + st.gp_otros[m]);
+  const resOp         = MESES.map((_, m) => margenContrib[m] - totGastosOp[m]);
+  const resFinal      = MESES.map((_, m) => resOp[m] - st.com_res[m] - st.inv_no_op[m]);
+  const months = new Set();
+  const curMonth = new Date().getMonth();
+  for (let i = 0; i <= curMonth; i++) months.add(i);
+  const scan = (obj) => Object.values(obj).forEach(arr => arr.forEach((v,i) => { if (v) months.add(i); }));
+  Object.values(grupos).forEach(scan); scan(sinClasificar);
+  return { st, totIngresos, margenContrib, totGastosOp, resOp, resFinal,
+           activeMonths: [...months].sort((a,b) => a-b) };
+}
+
+// Banda de sección (INGRESOS / GASTOS OPERATIVOS) — separador visual, no colapsable.
+function BandaRow({ label, span }) {
+  return (
+    <tr style={{ background: T.tableHead }}>
+      <td colSpan={span} style={{ padding: "6px 16px", fontSize: 10, fontWeight: 800,
+        color: T.tableHeadText, letterSpacing: ".12em", textTransform: "uppercase",
+        ...stickyCol, background: T.tableHead }}>{label}</td>
+    </tr>
+  );
+}
+
+function PnLTableSede({ pnl, sub, year, moneda, label }) {
+  const { st, totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths } = sub;
+  const ncols = activeMonths.length + 2;
+  const grp = (key) => <PnlSection sub label={grupoSede(key).label} accounts={pnl.grupos[key]}
+    order={grupoSede(key).cuentas} color={grupoSede(key).color} activeMonths={activeMonths} ncols={ncols} />;
+  const sinCls = Object.keys(pnl.sinClasificar).length > 0;
+
+  if (activeMonths.length === 0) return (
+    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
+      padding: "60px 24px", textAlign: "center", boxShadow: T.shadow }}>
+      <div style={{ fontSize: 14, color: T.muted }}>Sin datos para {year} en {moneda}{label ? ` · ${label}` : ""}.</div>
+    </div>
+  );
+
+  return (
+    <>
+    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
+      boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
+      <table style={{ width: "100%", minWidth: 280 + activeMonths.length * 110, borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={{ ...thStyle, textAlign: "left", minWidth: 260, ...stickyCol, background: T.tableHead, zIndex: 4 }}>Cuenta</th>
+            {activeMonths.map(m => <th key={m} style={thStyle}>{MESES[m]}</th>)}
+            <th style={{ ...thStyle, borderLeft: "1px solid rgba(255,255,255,.12)" }}>TOTAL</th>
+          </tr>
+        </thead>
+        <tbody>
+          <BandaRow label="Ingresos" span={ncols} />
+          {grp("vta_cf")}
+          {grp("int_bigg")}
+          {grp("int_corp")}
+          <SubtotalRow label="Total Ingresos" values={totIngresos} activeMonths={activeMonths} color={T.green} />
+
+          {grp("cvar")}
+          <ResultadoRow label="Margen de Contribución" values={margenContrib} activeMonths={activeMonths} />
+
+          <BandaRow label="Gastos Operativos" span={ncols} />
+          {grp("gp_pers")}
+          {grp("gp_ocup")}
+          {grp("gp_mkt")}
+          {grp("gp_otros")}
+          <SubtotalRow label="Total Gastos Operativos" values={totGastosOp} activeMonths={activeMonths} color={T.red} />
+          <ResultadoRow label="Resultado Operativo" values={resOp} activeMonths={activeMonths} />
+
+          {grp("com_res")}
+          {grp("inv_no_op")}
+          <ResultadoRow label="Resultado Final" values={resFinal} activeMonths={activeMonths} />
+        </tbody>
+      </table>
+    </div>
+    {sinCls && (
+      <div style={{ marginTop: 16, background: T.card, border: "1px solid #fcd34d",
+        borderRadius: T.radius, boxShadow: T.shadow, overflowX: "auto" }}>
+        <table style={{ width: "100%", minWidth: 280 + activeMonths.length * 110, borderCollapse: "collapse" }}>
+          <tbody>
+            <PnlSection label="Sin clasificar (fuera del P&L de la sede)" accounts={pnl.sinClasificar}
+              activeMonths={activeMonths} color="#f59e0b" ncols={ncols} />
+          </tbody>
+        </table>
+        <div style={{ padding: "8px 16px", fontSize: 11, color: "#92400e", background: "#fffbeb" }}>
+          Estas cuentas tienen movimientos en la sede pero no están asignadas a ninguna línea del P&L.
+          Revisá si corresponde re-imputarlas o agregarlas a la estructura.
+        </div>
+      </div>
+    )}
+    </>
+  );
+}
+
 // ─── PnLTable ─────────────────────────────────────────────────────────────────
 function PnLTable({ pnl, sub, year, moneda, label }) {
   const { ventasTot, costoTot, opexTot, finTot, impTot,
@@ -373,9 +523,14 @@ function PnLTable({ pnl, sub, year, moneda, label }) {
 }
 
 // ─── PnlSection ───────────────────────────────────────────────────────────────
-function PnlSection({ label, accounts, activeMonths, color, ncols, sub }) {
+function PnlSection({ label, accounts, activeMonths, color, ncols, sub, order }) {
   const [expanded, setExpanded] = useState(true);
-  const rows = Object.entries(accounts).sort(([a],[b]) => a.localeCompare(b));
+  // `order` (opcional) = orden explícito de cuentas; sin él, alfabético (comportamiento previo).
+  const rows = Object.entries(accounts).sort(([a],[b]) => {
+    if (order) { const ia = order.indexOf(a), ib = order.indexOf(b);
+      return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib) || a.localeCompare(b); }
+    return a.localeCompare(b);
+  });
   const subTotals = MESES.map((_,m) => rows.reduce((s,[,v]) => s + (v[m] || 0), 0));
   const toggle = () => setExpanded(e => !e);
   return (
@@ -1350,15 +1505,15 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const inConFranq = useMemo(() => [...rawIn, ...franqRows], [rawIn, franqRows]);
 
   const pnlSede = useMemo(
-    () => buildPnL(inConFranq, egConSueldos, cuentaMap, resolvedCCSede, year, monedaPL),
-    [inConFranq, egConSueldos, cuentaMap, resolvedCCSede, year, monedaPL]
+    () => buildPnLSede(inConFranq, egConSueldos, resolvedCCSede, year, monedaPL),
+    [inConFranq, egConSueldos, resolvedCCSede, year, monedaPL]
   );
   const pnlHQ = useMemo(
     () => buildPnLHQ(inConFranq, egConSueldos, ccMap, year, monedaPL),
     [inConFranq, egConSueldos, ccMap, year, monedaPL]
   );
 
-  const subSede = useMemo(() => computeSubtotals(pnlSede), [pnlSede]);
+  const subSede = useMemo(() => computeSubtotalsSede(pnlSede), [pnlSede]);
   const subHQ   = useMemo(() => computeSubtotalsHQ(pnlHQ), [pnlHQ]);
 
   const toggleSedeCC = (id) => {
@@ -1600,7 +1755,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
       {/* ── P&L Sedes ── */}
       {activeTab === "pl_sede" && (
-        <PnLTable pnl={pnlSede} sub={subSede} year={year} moneda={monedaPL}
+        <PnLTableSede pnl={pnlSede} sub={subSede} year={year} moneda={monedaPL}
           label={selectedSedeCCs.length === 0 ? "Todas las Sedes" : `${selectedSedeCCs.length} seleccionada${selectedSedeCCs.length > 1 ? "s" : ""}`} />
       )}
 
