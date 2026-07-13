@@ -974,129 +974,6 @@ function SubSectionRow({ label, values, activeMonths, color, expanded, onToggle 
   );
 }
 
-// ─── P&L HQ: agrupa por centro_costo usando cc.categoria_pnl ─────────────────
-// Categorías de ingreso HQ que se abren por CUENTA contable en vez de por centro:
-// todo el ingreso HQ vive en un solo centro ("10 - HQ"), así que la dimensión útil es la cuenta
-// (Fee / Interusos / Pauta / Sponsor / Licencia / Gympass / Otros). Los gastos siguen por centro.
-const HQ_POR_CUENTA = new Set(["ventas"]);
-function buildPnLHQ(rawIn, rawEg, ccMap, year, moneda) {
-  const cats = { ventas:{}, costo_venta:{}, r_y_d:{}, sales_marketing:{}, g_and_a:{}, gastos_financieros:{}, impuestos:{}, sin_categoria:{} };
-  const add = (rows) => {
-    for (const row of rows) {
-      if (!row.fecha || row.fecha.slice(0,4) !== String(year)) continue;
-      if ((row.moneda ?? "ARS") !== moneda) continue;
-      const cc = ccMap.get(row.centro_costo ?? "");
-      if (!cc || (cc.grupo ?? "").toLowerCase() !== "hq") continue;
-      const m = parseInt(row.fecha.slice(5,7), 10) - 1;
-      if (m < 0 || m > 11) continue;
-      const cat    = normCat(cc.categoria_pnl);
-      const key    = HQ_POR_CUENTA.has(cat) ? (String(row.cuenta_contable ?? "").trim() || "Otros Ingresos") : cc.nombre;
-      const bucket = cats[cat] ?? cats.sin_categoria;
-      if (!bucket[key]) bucket[key] = new Array(12).fill(0);
-      bucket[key][m] += Number(row.total) || 0;
-    }
-  };
-  add(rawIn); add(rawEg);
-  for (const cc of ccMap.values()) {
-    if ((cc.grupo ?? "").toLowerCase() !== "hq") continue;
-    const cat = normCat(cc.categoria_pnl);
-    if (!cat || HQ_POR_CUENTA.has(cat)) continue;   // ingreso: no sembrar el centro como fila vacía (las cuentas aparecen si tienen dato)
-    const bucket = cats[cat] ?? cats.sin_categoria;
-    if (!bucket[cc.nombre]) bucket[cc.nombre] = new Array(12).fill(0);
-  }
-  return cats;
-}
-
-function computeSubtotalsHQ(pnl) {
-  const ventasTot = sumCat(pnl.ventas);
-  const costoTot  = sumCat(pnl.costo_venta);
-  const rydTot    = sumCat(pnl.r_y_d);
-  const smTot     = sumCat(pnl.sales_marketing);
-  const gaTot     = sumCat(pnl.g_and_a);
-  const opexTot   = MESES.map((_,m) => rydTot[m] + smTot[m] + gaTot[m]);
-  const finTot    = sumCat(pnl.gastos_financieros);
-  const impTot    = sumCat(pnl.impuestos);
-  const margenBruto   = MESES.map((_,m) => ventasTot[m] - costoTot[m]);
-  const resOp         = MESES.map((_,m) => margenBruto[m] - opexTot[m]);
-  const resAntesImp   = MESES.map((_,m) => resOp[m] - finTot[m]);
-  const resNeto       = MESES.map((_,m) => resAntesImp[m] - impTot[m]);
-  const months = new Set();
-  const curMonth = new Date().getMonth();
-  for (let i = 0; i <= curMonth; i++) months.add(i);
-  Object.values(pnl).forEach(cat =>
-    Object.values(cat).forEach(arr => arr.forEach((v,i) => { if (v) months.add(i); }))
-  );
-  return { ventasTot, costoTot, rydTot, smTot, gaTot, opexTot, finTot, impTot,
-           margenBruto, resOp, resAntesImp, resNeto,
-           activeMonths: [...months].sort((a,b) => a-b) };
-}
-
-function PnLTableHQ({ pnl, sub, year, moneda }) {
-  const { ventasTot, costoTot, rydTot, smTot, gaTot, opexTot, finTot, impTot,
-          margenBruto, resOp, resAntesImp, resNeto, activeMonths } = sub;
-  const ncols = activeMonths.length + 2;
-  const [opexExpanded, setOpexExpanded] = useState(true);
-  return (
-    <>
-    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
-      boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
-      <table style={{ width: "100%", minWidth: 280 + activeMonths.length * 110, borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th style={{ ...thStyle, textAlign: "left", minWidth: 240,
-              ...stickyCol, background: T.tableHead, zIndex: 4 }}>Centro de Costo</th>
-            {activeMonths.map(m => <th key={m} style={thStyle}>{MESES[m]}</th>)}
-            <th style={{ ...thStyle, borderLeft: "1px solid rgba(255,255,255,.12)" }}>TOTAL</th>
-          </tr>
-        </thead>
-        <tbody>
-          <PnlSection label="Ventas" accounts={pnl.ventas}
-            order={["Fee de Gestion y Adm", "Interusos", "Pauta", "Sponsor", "Otros Ingresos"]}
-            activeMonths={activeMonths} color={T.green} ncols={ncols} />
-          <SubtotalRow label="Total Ventas" values={ventasTot}
-            activeMonths={activeMonths} color={T.green} />
-
-          <PnlSection label="Costo por Venta" accounts={pnl.costo_venta}
-            activeMonths={activeMonths} color="#f97316" ncols={ncols} />
-          <ResultadoRow label="Margen Bruto" values={margenBruto} activeMonths={activeMonths} />
-
-          <SectionRow label="Gastos Operativos" values={opexTot}
-            activeMonths={activeMonths} expanded={opexExpanded}
-            onToggle={() => setOpexExpanded(e => !e)} />
-          {opexExpanded && <>
-            <PnlSection label="R&D" accounts={pnl.r_y_d}
-              activeMonths={activeMonths} color={T.red} ncols={ncols} sub />
-            <PnlSection label="Sales & Marketing" accounts={pnl.sales_marketing}
-              activeMonths={activeMonths} color={T.red} ncols={ncols} sub />
-            <PnlSection label="G&A" accounts={pnl.g_and_a}
-              activeMonths={activeMonths} color={T.red} ncols={ncols} sub />
-          </>}
-          <ResultadoRow label="Resultado Operativo" values={resOp} activeMonths={activeMonths} />
-
-          <PnlSection label="Gastos Financieros" accounts={pnl.gastos_financieros}
-            activeMonths={activeMonths} color="#8b5cf6" ncols={ncols} />
-          <ResultadoRow label="Resultado antes de Impuestos" values={resAntesImp} activeMonths={activeMonths} />
-
-          <PnlSection label="Impuestos" accounts={pnl.impuestos}
-            activeMonths={activeMonths} color="#64748b" ncols={ncols} />
-          <ResultadoRow label="Resultado Neto" values={resNeto} activeMonths={activeMonths} />
-        </tbody>
-      </table>
-    </div>
-    {pnl.sin_categoria && Object.keys(pnl.sin_categoria).length > 0 && (
-      <div style={{ marginTop: 16, background: T.card, border: `1px solid #fcd34d`,
-        borderRadius: T.radius, boxShadow: T.shadow, overflowX: "auto" }}>
-        <table style={{ width: "100%", minWidth: 280 + activeMonths.length * 110, borderCollapse: "collapse" }}>
-          <tbody>
-            <PnlSection label="Sin Categoría P&L" accounts={pnl.sin_categoria}
-              activeMonths={activeMonths} color="#f59e0b" ncols={ncols} />
-          </tbody>
-        </table>
-      </div>
-    )}
-    </>
-  );
-}
 
 // ─── Tab Balance / Posición Financiera ───────────────────────────────────────
 const MON_COLS = [
@@ -1951,10 +1828,6 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     () => buildPnLSede(inConFranq, egConSueldos, resolvedCCSede, year, monedaPL),
     [inConFranq, egConSueldos, resolvedCCSede, year, monedaPL]
   );
-  const pnlHQ = useMemo(
-    () => buildPnLHQ(inConFranq, egConSueldos, ccMap, year, monedaPL),
-    [inConFranq, egConSueldos, ccMap, year, monedaPL]
-  );
 
   // Año anterior (mismos arrays, filtrados a year-1) → comparativas Mensual/YTD sin fetch extra.
   const pnlSedePrev = useMemo(
@@ -1963,7 +1836,6 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   );
   const subSede     = useMemo(() => computeSubtotalsSede(pnlSede), [pnlSede]);
   const subSedePrev = useMemo(() => computeSubtotalsSede(pnlSedePrev), [pnlSedePrev]);
-  const subHQ   = useMemo(() => computeSubtotalsHQ(pnlHQ), [pnlHQ]);
   // P&L BIGG consolidado (Núcleo/anillo 1) — sedes propias + HQ + franquicias, hasta Margen Bruto.
   // anillo "Núcleo" (con o sin acento) → contiene "cleo" en minúsculas. Robusto sin manejar diacríticos.
   const nucleoEmpresas = useMemo(() => new Set(
