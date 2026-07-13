@@ -174,11 +174,15 @@ export default function App({ onVolverNumbers } = {}) {
     [...franchises].sort((a, b) => a.name.localeCompare(b.name, "es"))
   , [franchises]);
 
-  // Cola serial de escrituras — evita saturar Apps Script con writes simultáneos
+  // Cola serial de escrituras — evita saturar Apps Script con writes simultáneos.
+  // Un write que falla no debe frenar los siguientes (por eso el catch de acá abajo),
+  // pero el que llamó a ESE write puntual tiene que poder enterarse — antes el error
+  // se perdía en un console.error y quien facturaba veía "todo OK" siempre.
   const writeQueueRef = useRef(Promise.resolve());
   const queueWrite = useCallback((fn) => {
-    writeQueueRef.current = writeQueueRef.current.then(() => fn().catch(err => console.error('Sheets write:', err)));
-    return writeQueueRef.current;
+    const result = writeQueueRef.current.then(() => fn());
+    writeQueueRef.current = result.catch(err => { console.error('Sheets write:', err); });
+    return result;
   }, []);
 
   // Stable mutation handlers — IDs are normalised to strings here, once
@@ -188,6 +192,8 @@ export default function App({ onVolverNumbers } = {}) {
     const fr = franchises.find(f => f.id === Number(frId) || String(f.id) === String(frId));
     // Movimientos financieros (PAGO/PAGO_PAUTA/PAGO_ENVIADO) → nb_movimientos (Numbers, fuente única).
     // Facturas/NC/FC recibidas → comprobantes (Franquicias), como siempre.
+    // Ninguna de las dos rechaza (no rompe a los callers que no la esperan): devuelven
+    // { ok, error } para que quien necesite confirmar la escritura real pueda chequearlo.
     if (["PAGO", "PAGO_PAUTA", "PAGO_ENVIADO"].includes(comp.type)) {
       // La fila optimista se marca _numbers (vive en nb_movimientos) y usa el MISMO id que se
       // persiste → borrar/editar desde la CC apuntan al backend correcto (mismo id post-reload).
@@ -197,10 +203,14 @@ export default function App({ onVolverNumbers } = {}) {
         franquicia_id: frId, franquicia_nombre: fr?.name || "",
         monto: comp.amount, moneda: comp.currency, cuenta_bancaria: comp.cuenta_bancaria,
         concepto: comp.nota || comp.ref || "",
-      }));
+      }))
+        .then(() => ({ ok: true }))
+        .catch(err => ({ ok: false, error: err }));
     }
     const enriched = fr ? { ...comp, frName: fr.name } : comp;   // frName para persistir en el Sheet
-    return queueWrite(() => appendComp(frId, enriched));
+    return queueWrite(() => appendComp(frId, enriched))
+      .then(() => ({ ok: true }))
+      .catch(err => ({ ok: false, error: err }));
   }, [franchises, queueWrite]);
 
   const delComp = useCallback((frId, compId) => {
