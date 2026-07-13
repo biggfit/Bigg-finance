@@ -1382,21 +1382,27 @@ function ReportCard({ icon, title, desc, onClick }) {
   );
 }
 
-function ReportesMenu({ onPick }) {
+function ReportesMenu({ onPick, operaciones = [], onPickOperacion }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 26 }}>
-      {LENTES.map(lente => (
-        <div key={lente.id}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: T.muted, letterSpacing: ".1em",
-            textTransform: "uppercase", marginBottom: 10 }}>{lente.label}</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
-            {lente.tabs.map(tid => {
-              const t = TABS.find(x => x.id === tid);
-              return <ReportCard key={tid} icon={t.icon} title={t.label} desc={t.desc} onClick={() => onPick(tid)} />;
-            })}
+      {LENTES.map(lente => {
+        // La lente "operaciones" muestra una tarjeta por operación (data-driven desde nb_centros_costo).
+        const cards = lente.id === "operaciones"
+          ? operaciones.map(op => ({ key: "op:" + op.id, icon: "🏬", title: op.label,
+              desc: `P&L operativo · ${op.label}`, onClick: () => onPickOperacion(op.id) }))
+          : lente.tabs.map(tid => { const t = TABS.find(x => x.id === tid);
+              return { key: tid, icon: t.icon, title: t.label, desc: t.desc, onClick: () => onPick(tid) }; });
+        if (cards.length === 0) return null;
+        return (
+          <div key={lente.id}>
+            <div style={{ fontSize: 11, fontWeight: 800, color: T.muted, letterSpacing: ".1em",
+              textTransform: "uppercase", marginBottom: 10 }}>{lente.label}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
+              {cards.map(c => <ReportCard key={c.key} icon={c.icon} title={c.title} desc={c.desc} onClick={c.onClick} />)}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -1404,6 +1410,7 @@ function ReportesMenu({ onPick }) {
 // ─── Pantalla principal ───────────────────────────────────────────────────────
 export default function PantallaReportes({ sociedad = "nako" }) {
   const [activeTab,      setActiveTab]      = useState(null);   // null = menú-landing de reportes
+  const [selectedOperacion, setSelectedOperacion] = useState(null);   // operación elegida para P&L Sedes
   const [year,           setYear]           = useState(CUR_YEAR);
   const [selectedSedeCCs, setSelectedSedeCCs] = useState([]);
   const [sedeOpen,        setSedeOpen]        = useState(false);
@@ -1501,10 +1508,29 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
   const ccMap = useMemo(() => new Map(ccs.map(c => [c.id, c])), [ccs]);
 
+  // Operaciones = valores distintos de `operacion` en los centros de sede (lo carga el usuario en
+  // nb_centros_costo). Cada valor genera una tarjeta en el menú. Centros sin `operacion` → "(Sin asignar)".
+  const OP_SIN = "__sin__";
+  const operaciones = useMemo(() => {
+    const seen = [];
+    for (const c of sedeCCs) { const v = (c.operacion ?? "").trim(); if (v && !seen.includes(v)) seen.push(v); }
+    const list = seen.map(v => ({ id: v, label: v }));
+    if (sedeCCs.some(c => !(c.operacion ?? "").trim())) list.push({ id: OP_SIN, label: "(Sin operación asignada)" });
+    return list;
+  }, [sedeCCs]);
+
+  const abrirOperacion = (opId) => { setSelectedOperacion(opId); setActiveTab("pl_sede"); };
+
   const resolvedCCSede = useMemo(() => {
+    // Prioridad: la operación elegida desde el menú. Si no, la multiselección de sedes (o todas).
+    if (selectedOperacion) {
+      return sedeCCs
+        .filter(c => selectedOperacion === OP_SIN ? !(c.operacion ?? "").trim() : (c.operacion ?? "").trim() === selectedOperacion)
+        .map(c => c.id);
+    }
     if (selectedSedeCCs.length === 0) return sedeCCs.map(c => c.id);
     return selectedSedeCCs;
-  }, [selectedSedeCCs, sedeCCs]);
+  }, [selectedOperacion, selectedSedeCCs, sedeCCs]);
 
   // P&L = UNA lógica de agregación (buildPnL/HQ) + TRES adaptadores ("normalizar y agregar"):
   //   · nb_comprobantes → ya viene en formato {fecha,sociedad,centro_costo,cuenta_contable,total}
@@ -1611,13 +1637,15 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
   const showMonedaPL = activeTab === "pl_sede" || activeTab === "pl_bigg";
   const showMonedaCF = activeTab === "cf";
-  const showSedes    = activeTab === "pl_sede" && sedeCCs.length > 0;
+  // El multiselect de Sedes solo aplica si NO se entró por una operación (esa ya define los centros).
+  const showSedes    = activeTab === "pl_sede" && !selectedOperacion && sedeCCs.length > 0;
+  const opLabel      = operaciones.find(o => o.id === selectedOperacion)?.label;
 
-  // Menú-landing: sin reporte elegido → tarjetas agrupadas por lente.
+  // Menú-landing: sin reporte elegido → tarjetas agrupadas por lente (Operaciones = 1 tarjeta x operación).
   if (!activeTab) return (
     <div style={{ padding: "28px 32px", maxWidth: 1400 }} className="fade">
       <PageHeader title="Reportes" subtitle="Elegí un reporte" />
-      <ReportesMenu onPick={setActiveTab} />
+      <ReportesMenu onPick={setActiveTab} operaciones={operaciones} onPickOperacion={abrirOperacion} />
     </div>
   );
 
@@ -1626,10 +1654,10 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
       {/* ── Header del reporte + volver al menú ── */}
       <PageHeader
-        title={curTab?.label ?? "Reporte"}
-        subtitle={curLente?.label}
+        title={selectedOperacion ? (opLabel ?? "P&L Sedes") : (curTab?.label ?? "Reporte")}
+        subtitle={selectedOperacion ? "Operaciones (sedes)" : curLente?.label}
         action={
-          <button onClick={() => setActiveTab(null)} style={{
+          <button onClick={() => { setActiveTab(null); setSelectedOperacion(null); }} style={{
             display: "inline-flex", alignItems: "center", gap: 6,
             background: "#f3f4f6", border: `1px solid ${T.cardBorder}`, borderRadius: 8,
             color: T.text, fontFamily: T.font, fontSize: 13, fontWeight: 700,
