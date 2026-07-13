@@ -660,7 +660,11 @@ function familiaCentro(cc) {
 }
 const FAM_A_ING = { gerenciamiento: "ger", wre: "wre", hq: "hq" };   // familia → subgrupo de ingreso (salvo propios)
 
-function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, year, moneda) {
+// Consolida SOLO anillo 1 (Núcleo): la operación propia + los fees que gana el núcleo operando lo de
+// otros. Las fondeadas (anillo 2: España/Colombia/Puertos) y administradas (anillo 3: Rosedal) NO se
+// consolidan línea por línea — su P&L es de esa sociedad; al núcleo solo le entra el fee (cargado en
+// una sociedad núcleo). Un centro sin `empresa` (HQ/transversal) cuenta como núcleo.
+function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, moneda) {
   const grupos = {}; for (const g of BIGG_GRUPOS) grupos[g.key] = {};
   const sinClasificar = {};
   const add = (rows, forcedSide) => {
@@ -670,6 +674,8 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, year, moneda) {
       const m = parseInt(row.fecha.slice(5, 7), 10) - 1;
       if (m < 0 || m > 11) continue;
       const cc = ccMap.get(row.centro_costo ?? "");
+      const emp = (cc?.empresa ?? "").trim();
+      if (emp && !nucleoEmpresas.has(emp)) continue;   // fuera del núcleo (anillo 2/3) → no consolida
       const fam = familiaCentro(cc);
       const cuenta = (row.cuenta_contable ?? "").trim() || "Sin cuenta";
       const meta = cuentaMap?.get(cuenta);
@@ -1901,10 +1907,16 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const subSede     = useMemo(() => computeSubtotalsSede(pnlSede), [pnlSede]);
   const subSedePrev = useMemo(() => computeSubtotalsSede(pnlSedePrev), [pnlSedePrev]);
   const subHQ   = useMemo(() => computeSubtotalsHQ(pnlHQ), [pnlHQ]);
-  // P&L BIGG consolidado (sedes propias + HQ + franquicias) — Etapa 1 hasta Margen Bruto.
+  // P&L BIGG consolidado (Núcleo/anillo 1) — sedes propias + HQ + franquicias, hasta Margen Bruto.
+  // anillo "Núcleo" (con o sin acento) → contiene "cleo" en minúsculas. Robusto sin manejar diacríticos.
+  const nucleoEmpresas = useMemo(() => new Set(
+    (sociedades ?? [])
+      .filter(s => (s.anillo ?? "").toLowerCase().includes("cleo"))
+      .map(s => s.id)
+  ), [sociedades]);
   const pnlBigg = useMemo(
-    () => buildPnLBigg(inConFranq, egConSueldos, ccMap, cuentaMap, year, monedaPL),
-    [inConFranq, egConSueldos, ccMap, cuentaMap, year, monedaPL]
+    () => buildPnLBigg(inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL),
+    [inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL]
   );
   const subBigg = useMemo(() => computeSubtotalsBigg(pnlBigg), [pnlBigg]);
 
