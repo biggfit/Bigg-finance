@@ -645,6 +645,11 @@ const BIGG_GRUPOS = [
   { key: "wre",    label: "Ingreso Wellness Real Estate" },
   { key: "hq",     label: "Ingreso HQ" },
   { key: "gpv",    label: "Gastos por Ventas" },
+  // Debajo de Margen Bruto (Etapa 2): gastos por CENTRO de costo, seccionados por categoría de la cuenta.
+  { key: "gsp",    label: "Gastos Sedes Propias" },   // opex de sedes propias, una sola línea
+  { key: "ghq",    label: "Gastos HQ" },               // filas = centros HQ (Sport, Tecnología, …)
+  { key: "fin",    label: "Financieros" },             // Intereses Ganados − Pérdidas Financieras
+  { key: "imp",    label: "Impuestos" },               // IVA, Ganancias, Plan AFIP…
 ];
 const BIGG_ING = ["vta_sp", "int_sp", "ger", "wre", "hq"];   // subgrupos de ingreso (suman a Total Ingresos)
 const grupoBigg = (key) => BIGG_GRUPOS.find(g => g.key === key);
@@ -689,20 +694,28 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
       const cuenta = (row.cuenta_contable ?? "").trim() || "Sin cuenta";
       const meta = cuentaMap?.get(cuenta);
       const catPnl  = normCat(meta?.categoria_pnl);                            // "ventas" | "costo_venta" | …
+      const catRaw  = (meta?.categoria_pnl ?? "").toLowerCase();               // crudo, para financieros/impuestos
       const catSede = (meta?.categoria_pnl_sede ?? "").trim().toLowerCase();   // "ventas" | "otros ingresos" | "costo por venta"
       let gkey = null, rowKey = cuenta, val = Number(row.total) || 0;
       if (fam === "propios") {
-        // Sede propia: se clasifica por categoria_pnl_sede — venta / otros ingresos (=interuso, contra) / costo.
+        // Sede propia: por categoria_pnl_sede. Ingreso/interuso/costo arriba de margen; el opex (sin
+        // categoria_pnl_sede) va a una única línea "Gastos Sedes Propias" (debajo de margen).
         if (catSede === "ventas") gkey = "vta_sp";
         else if (catSede === "otros ingresos") gkey = "int_sp";
         else if (catSede === "costo por venta") gkey = "gpv";
-        // sin categoria_pnl_sede (opex de sede) → Sin clasificar (Etapa 2)
+        else { gkey = "gsp"; rowKey = "Gastos Sedes Propias"; }
       } else if (catPnl === "costo_venta") {
         gkey = "gpv";                                     // costo que pega en el margen (aplica aunque venga de franquicias)
         if (forcedSide === "ingreso") val = -val;         // contra-ingreso (franquicias, signo ingreso) → costo positivo
       } else if (forcedSide === "ingreso" || catPnl === "ventas") {
         if (fam) { gkey = FAM_A_ING[fam]; if (gkey === "wre") rowKey = cc?.nombre ?? cuenta; }   // ingreso HQ/ger/wre
-      }                                                    // costo no-costo_venta (opex/fin/imp) → Sin clasificar (Etapa 2)
+      } else {
+        // Gasto debajo de Margen Bruto: fila = CENTRO; sección por categoría de la cuenta.
+        if (catRaw.includes("financ")) gkey = "fin";
+        else if (catRaw.includes("impuesto")) gkey = "imp";
+        else gkey = "ghq";                                // gastos operativos (r_y_d/sales_marketing/g_and_a…)
+        rowKey = cc?.nombre ?? cuenta;
+      }
       const bucket = gkey ? grupos[gkey] : sinClasificar;
       if (!bucket[rowKey]) bucket[rowKey] = new Array(12).fill(0);
       bucket[rowKey][m] += val;
@@ -719,26 +732,38 @@ function computeSubtotalsBigg(pnl) {
   const totIngresos = MESES.map((_, m) => BIGG_ING.reduce((s, k) => s + st[k][m], 0));
   const totGastosVta = st.gpv;
   const margenBruto = MESES.map((_, m) => totIngresos[m] - totGastosVta[m]);
+  // Debajo de Margen Bruto (por centro): Gastos (sedes propias + HQ) → Res. Operativo; Financieros →
+  // Res. antes de Impuestos; Impuestos → Resultado. Los gastos ya vienen firmados en + (costo) por los
+  // adaptadores, así que se restan; Intereses Ganados viene en − dentro de Financieros y suma solo.
+  const totGastosOp   = MESES.map((_, m) => st.gsp[m] + st.ghq[m]);
+  const resOp         = MESES.map((_, m) => margenBruto[m] - totGastosOp[m]);
+  const resAntesImp   = MESES.map((_, m) => resOp[m] - st.fin[m]);
+  const resultado     = MESES.map((_, m) => resAntesImp[m] - st.imp[m]);
   const months = new Set();
   const curMonth = new Date().getMonth();
   for (let i = 0; i <= curMonth; i++) months.add(i);
   const scan = (obj) => Object.values(obj).forEach(arr => arr.forEach((v, i) => { if (v) months.add(i); }));
   Object.values(grupos).forEach(scan); scan(sinClasificar);
-  return { st, totIngresos, totGastosVta, margenBruto, activeMonths: [...months].sort((a, b) => a - b) };
+  return { st, totIngresos, totGastosVta, margenBruto, totGastosOp, resOp, resAntesImp, resultado,
+           activeMonths: [...months].sort((a, b) => a - b) };
 }
 
+// Orden de los centros dentro de "Gastos HQ" (display).
+const BIGG_ORDEN_GHQ = ["HQ - Sport", "HQ - Tecnologia", "HQ - Ventas y Operaciones", "17 - Huergo",
+  "HQ - Marketing", "HQ - BI", "HQ - Design", "HQ - Gerencia General", "HQ - Administracion",
+  "HQ - Recursos Humanos", "HQ - Infraestructura IT"];
 function PnLTableBigg({ pnl, sub, year, moneda }) {
-  const { totIngresos, totGastosVta, margenBruto, activeMonths } = sub;
+  const { totIngresos, totGastosVta, margenBruto, totGastosOp, resOp, resAntesImp, resultado, activeMonths } = sub;
   const ncols = activeMonths.length + 2;
-  const ALLKEYS = ["sec_ing", ...BIGG_GRUPOS.map(g => g.key)];
+  const ALLKEYS = ["sec_ing", "sec_gas", ...BIGG_GRUPOS.map(g => g.key)];
   const [collapsed, setCollapsed] = useState({});
   const isCol  = k => !!collapsed[k];
   const toggle = k => setCollapsed(c => ({ ...c, [k]: !c[k] }));
   const allCol = ALLKEYS.every(k => collapsed[k]);
   const toggleAll = () => setCollapsed(allCol ? {} : Object.fromEntries(ALLKEYS.map(k => [k, true])));
 
-  const grp = (key) => <PnlSection sub label={grupoBigg(key).label} accounts={pnl.grupos[key]}
-    order={BIGG_ORDEN} color={SEDE_HDR} activeMonths={activeMonths} ncols={ncols}
+  const grp = (key, order = BIGG_ORDEN) => <PnlSection sub label={grupoBigg(key).label} accounts={pnl.grupos[key]}
+    order={order} color={SEDE_HDR} activeMonths={activeMonths} ncols={ncols}
     expanded={!isCol(key)} onToggle={() => toggle(key)} />;
   const sinCls = Object.keys(pnl.sinClasificar).length > 0;
 
@@ -778,6 +803,21 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
 
           {grp("gpv")}
           <ResultadoRow strong label="Margen Bruto" values={margenBruto} activeMonths={activeMonths} />
+
+          {/* ── Debajo de Margen Bruto (por centro de costo) ── */}
+          <BandaRow label="Gastos" span={ncols} expanded={!isCol("sec_gas")} onToggle={() => toggle("sec_gas")} />
+          {!isCol("sec_gas") && <>
+            <DataRow label="Gastos Sedes Propias" values={sub.st.gsp} activeMonths={activeMonths} color={SEDE_HDR} />
+            {grp("ghq", BIGG_ORDEN_GHQ)}
+          </>}
+          <SubtotalRow label="Total Gastos" values={totGastosOp} activeMonths={activeMonths} color={SEDE_HDR} />
+          <ResultadoRow strong label="Resultado Operativo" values={resOp} activeMonths={activeMonths} />
+
+          {grp("fin")}
+          <ResultadoRow label="Resultado antes de Impuestos" values={resAntesImp} activeMonths={activeMonths} />
+
+          {grp("imp")}
+          <ResultadoRow strong label="Resultado" values={resultado} activeMonths={activeMonths} />
         </tbody>
       </table>
     </div>
