@@ -709,11 +709,12 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
         if (forcedSide === "ingreso") val = -val;         // contra-ingreso (franquicias, signo ingreso) → costo positivo
       } else if (forcedSide === "ingreso" || catPnl === "ventas") {
         if (fam) { gkey = FAM_A_ING[fam]; if (gkey === "wre") rowKey = cc?.nombre ?? cuenta; }   // ingreso HQ/ger/wre
+      } else if (catRaw.includes("financ")) {
+        gkey = "fin";                                     // Financieros: filas = CUENTA (Intereses Ganados / Pérdidas Fin.)
+      } else if (catRaw.includes("impuesto")) {
+        gkey = "imp";                                     // Impuestos: filas = CUENTA (IVA / Ganancias / Plan AFIP…)
       } else {
-        // Gasto debajo de Margen Bruto: fila = CENTRO; sección por categoría de la cuenta.
-        if (catRaw.includes("financ")) gkey = "fin";
-        else if (catRaw.includes("impuesto")) gkey = "imp";
-        else gkey = "ghq";                                // gastos operativos (r_y_d/sales_marketing/g_and_a…)
+        gkey = "ghq";                                     // Gastos HQ (operativos): filas = CENTRO
         rowKey = cc?.nombre ?? cuenta;
       }
       const bucket = gkey ? grupos[gkey] : sinClasificar;
@@ -752,6 +753,8 @@ function computeSubtotalsBigg(pnl) {
 const BIGG_ORDEN_GHQ = ["HQ - Sport", "HQ - Tecnologia", "HQ - Ventas y Operaciones", "17 - Huergo",
   "HQ - Marketing", "HQ - BI", "HQ - Design", "HQ - Gerencia General", "HQ - Administracion",
   "HQ - Recursos Humanos", "HQ - Infraestructura IT"];
+const BIGG_ORDEN_FIN = ["Intereses Ganados", "Perdidas Financieras"];
+const BIGG_ORDEN_IMP = ["Plan Facilidades AFIP", "IVA", "IVA Inversiones", "IVA Compra", "Ganancias", "Otros Impuestos"];
 function PnLTableBigg({ pnl, sub, year, moneda }) {
   const { totIngresos, totGastosVta, margenBruto, totGastosOp, resOp, resAntesImp, resultado, activeMonths } = sub;
   const ncols = activeMonths.length + 2;
@@ -813,10 +816,10 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
           <SubtotalRow label="Total Gastos" values={totGastosOp} activeMonths={activeMonths} color={SEDE_HDR} />
           <ResultadoRow strong label="Resultado Operativo" values={resOp} activeMonths={activeMonths} />
 
-          {grp("fin")}
+          {grp("fin", BIGG_ORDEN_FIN)}
           <ResultadoRow label="Resultado antes de Impuestos" values={resAntesImp} activeMonths={activeMonths} />
 
-          {grp("imp")}
+          {grp("imp", BIGG_ORDEN_IMP)}
           <ResultadoRow strong label="Resultado" values={resultado} activeMonths={activeMonths} />
         </tbody>
       </table>
