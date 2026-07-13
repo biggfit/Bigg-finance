@@ -1382,27 +1382,21 @@ function ReportCard({ icon, title, desc, onClick }) {
   );
 }
 
-function ReportesMenu({ onPick, operaciones = [], onPickOperacion }) {
+function ReportesMenu({ onPick }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 26 }}>
-      {LENTES.map(lente => {
-        // La lente "operaciones" muestra una tarjeta por operación (data-driven desde nb_centros_costo).
-        const cards = lente.id === "operaciones"
-          ? operaciones.map(op => ({ key: "op:" + op.id, icon: "🏬", title: op.label,
-              desc: `P&L operativo · ${op.label}`, onClick: () => onPickOperacion(op.id) }))
-          : lente.tabs.map(tid => { const t = TABS.find(x => x.id === tid);
-              return { key: tid, icon: t.icon, title: t.label, desc: t.desc, onClick: () => onPick(tid) }; });
-        if (cards.length === 0) return null;
-        return (
-          <div key={lente.id}>
-            <div style={{ fontSize: 11, fontWeight: 800, color: T.muted, letterSpacing: ".1em",
-              textTransform: "uppercase", marginBottom: 10 }}>{lente.label}</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
-              {cards.map(c => <ReportCard key={c.key} icon={c.icon} title={c.title} desc={c.desc} onClick={c.onClick} />)}
-            </div>
+      {LENTES.map(lente => (
+        <div key={lente.id}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: T.muted, letterSpacing: ".1em",
+            textTransform: "uppercase", marginBottom: 10 }}>{lente.label}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
+            {lente.tabs.map(tid => {
+              const t = TABS.find(x => x.id === tid);
+              return <ReportCard key={tid} icon={t.icon} title={t.label} desc={t.desc} onClick={() => onPick(tid)} />;
+            })}
           </div>
-        );
-      })}
+        </div>
+      ))}
     </div>
   );
 }
@@ -1518,8 +1512,6 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     if (sedeCCs.some(c => !(c.operacion ?? "").trim())) list.push({ id: OP_SIN, label: "(Sin operación asignada)" });
     return list;
   }, [sedeCCs]);
-
-  const abrirOperacion = (opId) => { setSelectedOperacion(opId); setActiveTab("pl_sede"); };
 
   const resolvedCCSede = useMemo(() => {
     // Prioridad: la operación elegida desde el menú. Si no, la multiselección de sedes (o todas).
@@ -1639,13 +1631,12 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const showMonedaCF = activeTab === "cf";
   // El multiselect de Sedes solo aplica si NO se entró por una operación (esa ya define los centros).
   const showSedes    = activeTab === "pl_sede" && !selectedOperacion && sedeCCs.length > 0;
-  const opLabel      = operaciones.find(o => o.id === selectedOperacion)?.label;
 
   // Menú-landing: sin reporte elegido → tarjetas agrupadas por lente (Operaciones = 1 tarjeta x operación).
   if (!activeTab) return (
     <div style={{ padding: "28px 32px", maxWidth: 1400 }} className="fade">
       <PageHeader title="Reportes" subtitle="Elegí un reporte" />
-      <ReportesMenu onPick={setActiveTab} operaciones={operaciones} onPickOperacion={abrirOperacion} />
+      <ReportesMenu onPick={setActiveTab} />
     </div>
   );
 
@@ -1654,8 +1645,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
       {/* ── Header del reporte + volver al menú ── */}
       <PageHeader
-        title={selectedOperacion ? (opLabel ?? "P&L Sedes") : (curTab?.label ?? "Reporte")}
-        subtitle={selectedOperacion ? "Operaciones (sedes)" : curLente?.label}
+        title={curTab?.label ?? "Reporte"}
+        subtitle={curLente?.label}
         action={
           <button onClick={() => { setActiveTab(null); setSelectedOperacion(null); }} style={{
             display: "inline-flex", alignItems: "center", gap: 6,
@@ -1707,6 +1698,18 @@ export default function PantallaReportes({ sociedad = "nako" }) {
               {Object.entries(MONEDA_SYM).map(([k, v]) => (
                 <option key={k} value={k}>{v} {k}</option>
               ))}
+            </select>
+          </div>
+        )}
+
+        {/* Operación — filtra las sedes por unidad (Argentina, Colombia, …) */}
+        {activeTab === "pl_sede" && operaciones.length > 0 && (
+          <div>
+            <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
+              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Operación</label>
+            <select value={selectedOperacion ?? ""} onChange={e => setSelectedOperacion(e.target.value || null)} style={selStyle}>
+              <option value="">Todas las operaciones</option>
+              {operaciones.map(op => <option key={op.id} value={op.id}>{op.label}</option>)}
             </select>
           </div>
         )}
