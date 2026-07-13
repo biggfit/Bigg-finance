@@ -258,6 +258,9 @@ function SubtotalRow({ label, values, activeMonths, color, strong }) {
     <tr style={{ background: bg, borderTop: `${strong ? 3 : 2}px solid ${color ?? T.cardBorder}`, borderBottom: `2px solid ${T.cardBorder}` }}>
       <td style={{ padding: "12px 16px", fontSize: strong ? 15 : 14, fontWeight: 900,
         color: color ?? T.text, letterSpacing: ".02em",
+        // Repetir el borde en la celda sticky: su background la repinta y taparía la línea del <tr>.
+        borderTop: `${strong ? 3 : 2}px solid ${color ?? T.cardBorder}`,
+        borderBottom: `2px solid ${T.cardBorder}`,
         ...stickyCol, background: bg }}>{label}</td>
       {activeMonths.map(m => (
         <td key={m} style={{ padding: "12px 12px", fontSize: 14, textAlign: "right",
@@ -285,6 +288,9 @@ function ResultadoRow({ label, values, activeMonths, strong }) {
       borderBottom: strong ? `2px solid ${total >= 0 ? T.green : T.red}` : "none" }}>
       <td style={{ padding: "12px 16px", fontSize: strong ? 15 : 14, fontWeight: 900,
         color, letterSpacing: ".02em",
+        // Repetir el borde en la celda sticky: su background la repinta y taparía la línea del <tr>.
+        borderTop: `${strong ? 3 : 2}px solid ${color}`,
+        borderBottom: strong ? `2px solid ${color}` : "none",
         ...stickyCol, background: bg }}>{label}</td>
       {activeMonths.map(m => (
         <td key={m} style={{ padding: "12px 12px", fontSize: 14, textAlign: "right",
