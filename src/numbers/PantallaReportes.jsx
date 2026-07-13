@@ -685,19 +685,24 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
       const fam = familiaCentro(cc);
       const cuenta = (row.cuenta_contable ?? "").trim() || "Sin cuenta";
       const meta = cuentaMap?.get(cuenta);
-      const catPnl = normCat(meta?.categoria_pnl);                            // "ventas" | "costo_venta" | …
-      const side = forcedSide ?? (catPnl === "ventas" ? "ingreso" : "costo"); // inRows siempre ingreso
-      let gkey = null, rowKey = cuenta;
-      if (side === "ingreso") {
-        if (fam === "propios")
-          gkey = (meta?.categoria_pnl_sede ?? "").trim().toLowerCase() === "otros ingresos" ? "int_sp" : "vta_sp";
-        else if (fam) { gkey = FAM_A_ING[fam]; if (gkey === "wre") rowKey = cc?.nombre ?? cuenta; }
+      const catPnl  = normCat(meta?.categoria_pnl);                            // "ventas" | "costo_venta" | …
+      const catSede = (meta?.categoria_pnl_sede ?? "").trim().toLowerCase();   // "ventas" | "otros ingresos" | "costo por venta"
+      let gkey = null, rowKey = cuenta, val = Number(row.total) || 0;
+      if (fam === "propios") {
+        // Sede propia: se clasifica por categoria_pnl_sede — venta / otros ingresos (=interuso, contra) / costo.
+        if (catSede === "ventas") gkey = "vta_sp";
+        else if (catSede === "otros ingresos") gkey = "int_sp";
+        else if (catSede === "costo por venta") gkey = "gpv";
+        // sin categoria_pnl_sede (opex de sede) → Sin clasificar (Etapa 2)
       } else if (catPnl === "costo_venta") {
-        gkey = "gpv";                                                        // costo que pega en el margen
-      }                                                                       // resto de costos → debajo de MB (Etapa 2) → sinClasificar
+        gkey = "gpv";                                     // costo que pega en el margen (aplica aunque venga de franquicias)
+        if (forcedSide === "ingreso") val = -val;         // contra-ingreso (franquicias, signo ingreso) → costo positivo
+      } else if (forcedSide === "ingreso" || catPnl === "ventas") {
+        if (fam) { gkey = FAM_A_ING[fam]; if (gkey === "wre") rowKey = cc?.nombre ?? cuenta; }   // ingreso HQ/ger/wre
+      }                                                    // costo no-costo_venta (opex/fin/imp) → Sin clasificar (Etapa 2)
       const bucket = gkey ? grupos[gkey] : sinClasificar;
       if (!bucket[rowKey]) bucket[rowKey] = new Array(12).fill(0);
-      bucket[rowKey][m] += Number(row.total) || 0;
+      bucket[rowKey][m] += val;
     }
   };
   add(inRows, "ingreso"); add(egRows, null);
