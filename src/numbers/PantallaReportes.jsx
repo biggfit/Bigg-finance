@@ -1640,7 +1640,9 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     };
     run();
     return () => { cancelled = true; };
-  }, [sociedad, loadKey]);
+    // Sin `sociedad`: la carga es group-level (todas las sociedades). El re-scope por
+    // sociedad de la lente "Por sociedad" es client-side (rawMovsSoc), no re-fetchea.
+  }, [loadKey]);
 
   const curTab   = TABS.find(t => t.id === activeTab);
   const curLente = LENTES.find(l => l.tabs.includes(activeTab));
