@@ -626,6 +626,157 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
   );
 }
 
+// ─── P&L BIGG CONSOLIDADO (sedes propias + HQ + franquicias) — Etapa 1: hasta Margen Bruto ──
+// Reusa el motor de subgrupos del P&L Sedes. Diferencia clave: el subgrupo sale de la FAMILIA del
+// centro (operacion/grupo) × cuenta × lado (ingreso/egreso), no solo de la cuenta. Config hardcodeada
+// (como SEDE_GRUPOS); futuro data-driven vía columnas de nb_cuentas (franq_cat + categoria_pnl).
+// familia: "propios" (operacion empieza "Propios") · "gerenciamiento" (operacion="Sedes Administradas")
+//          · "wre" (operacion="Wellness Real Estate" ó grupo=inversiones) · "hq" (grupo="HQ")
+//          · "any" (matchea por cuenta sin importar el centro — para Gastos por Ventas).
+// side: "ingreso" (filas de ingreso) | "costo" (filas de egreso). rowBy: "cuenta" | "centro".
+const BIGG_GRUPOS = [
+  { key: "vta_sp",  label: "Venta Sedes Propias",         familia: "propios",         side: "ingreso", rowBy: "cuenta", cuentas: ["Ventas Mercado Pago", "Depositos", "Ventas en Efectivo", "Otros Gastos del Centro"] },
+  { key: "int_sp",  label: "Interusos Sedes Propias",     familia: "propios",         side: "ingreso", rowBy: "cuenta", cuentas: ["Interusos", "Coorporativos"] },
+  { key: "ger",     label: "Ingreso Gerenciamiento Sedes", familia: "gerenciamiento", side: "ingreso", rowBy: "cuenta", cuentas: ["Fee de Gestion y Adm"] },
+  { key: "wre",     label: "Ingreso Wellness Real Estate", familia: "wre",            side: "ingreso", rowBy: "centro", cuentas: null },
+  { key: "hq",      label: "Ingreso HQ",                  familia: "hq",              side: "ingreso", rowBy: "cuenta", cuentas: ["Regalias s/Ventas", "Licencia Uso de Marca", "Equipamientos", "Coorporativos (Gympass)", "Coorporativos", "APP (Gympass)", "Sponsor", "Acciones de Mkt", "Ingresos A", "Otros Ingresos"] },
+  { key: "gpv",     label: "Gastos por Ventas",           familia: "any",             side: "costo",   rowBy: "cuenta", cuentas: ["Acciones de Mkt", "Otros Egresos", "Coorporativos (Gympass)", "Coorporativos", "Aranceles y Otros Financieros", "IIBB", "Imp. Cred. y Deb."] },
+];
+const BIGG_ING = ["vta_sp", "int_sp", "ger", "wre", "hq"];   // subgrupos de ingreso (suman a Total Ingresos)
+const grupoBigg = (key) => BIGG_GRUPOS.find(g => g.key === key);
+
+// Familia del centro (dimensión que separa los subgrupos). Devuelve null si no clasifica.
+function familiaCentro(cc) {
+  if (!cc) return null;
+  const grupo = (cc.grupo ?? "").toLowerCase();
+  const op    = (cc.operacion ?? "").trim();
+  if (grupo === "hq") return "hq";
+  if (grupo === "inversiones") return "wre";           // Puertos (hasta que tenga operacion propia)
+  if (/^propios/i.test(op)) return "propios";
+  if (op === "Sedes Administradas") return "gerenciamiento";
+  if (op === "Wellness Real Estate") return "wre";
+  return null;
+}
+
+function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, year, moneda) {
+  const grupos = {};
+  for (const g of BIGG_GRUPOS) { grupos[g.key] = {}; if (g.cuentas) for (const c of g.cuentas) grupos[g.key][c] = new Array(12).fill(0); }
+  const sinClasificar = {};
+  // El lado (ingreso/costo) NO es el array: la venta de sede llega firmada como ingreso dentro de
+  // egRows (movimientoToPnLRows firma las cuentas "ventas" en +). Por eso: las filas de ingreso
+  // (inRows) siempre son ingreso; las de egRows son ingreso solo si la cuenta es categoría "ventas".
+  const add = (rows, forcedSide) => {
+    for (const row of rows) {
+      if (!row.fecha || row.fecha.slice(0, 4) !== String(year)) continue;
+      if ((row.moneda ?? "ARS") !== moneda) continue;
+      const m = parseInt(row.fecha.slice(5, 7), 10) - 1;
+      if (m < 0 || m > 11) continue;
+      const cc = ccMap.get(row.centro_costo ?? "");
+      const fam = familiaCentro(cc);
+      const cuenta = (row.cuenta_contable ?? "").trim() || "Sin cuenta";
+      const side = forcedSide ?? (normCat(cuentaMap?.get(cuenta)?.categoria_pnl) === "ventas" ? "ingreso" : "costo");
+      // Buscar el subgrupo: side + (familia matchea o "any") + (cuentas incluye la cuenta o acepta todo).
+      const g = BIGG_GRUPOS.find(g =>
+        g.side === side &&
+        (g.familia === "any" || g.familia === fam) &&
+        (g.cuentas === null || g.cuentas.includes(cuenta)));
+      const key = g ? (g.rowBy === "centro" ? (cc?.nombre ?? cuenta) : cuenta) : cuenta;
+      const bucket = g ? grupos[g.key] : sinClasificar;
+      if (!bucket[key]) bucket[key] = new Array(12).fill(0);
+      bucket[key][m] += Number(row.total) || 0;
+    }
+  };
+  add(inRows, "ingreso"); add(egRows, null);
+  return { grupos, sinClasificar };
+}
+
+function computeSubtotalsBigg(pnl) {
+  const { grupos, sinClasificar } = pnl;
+  const st = {};
+  for (const g of BIGG_GRUPOS) st[g.key] = sumGrupoSede(grupos[g.key]);
+  const totIngresos = MESES.map((_, m) => BIGG_ING.reduce((s, k) => s + st[k][m], 0));
+  const totGastosVta = st.gpv;
+  const margenBruto = MESES.map((_, m) => totIngresos[m] - totGastosVta[m]);
+  const months = new Set();
+  const curMonth = new Date().getMonth();
+  for (let i = 0; i <= curMonth; i++) months.add(i);
+  const scan = (obj) => Object.values(obj).forEach(arr => arr.forEach((v, i) => { if (v) months.add(i); }));
+  Object.values(grupos).forEach(scan); scan(sinClasificar);
+  return { st, totIngresos, totGastosVta, margenBruto, activeMonths: [...months].sort((a, b) => a - b) };
+}
+
+function PnLTableBigg({ pnl, sub, year, moneda }) {
+  const { totIngresos, totGastosVta, margenBruto, activeMonths } = sub;
+  const ncols = activeMonths.length + 2;
+  const ALLKEYS = ["sec_ing", ...BIGG_GRUPOS.map(g => g.key)];
+  const [collapsed, setCollapsed] = useState({});
+  const isCol  = k => !!collapsed[k];
+  const toggle = k => setCollapsed(c => ({ ...c, [k]: !c[k] }));
+  const allCol = ALLKEYS.every(k => collapsed[k]);
+  const toggleAll = () => setCollapsed(allCol ? {} : Object.fromEntries(ALLKEYS.map(k => [k, true])));
+
+  const grp = (key) => <PnlSection sub label={grupoBigg(key).label} accounts={pnl.grupos[key]}
+    order={grupoBigg(key).cuentas ?? undefined} color={SEDE_HDR} activeMonths={activeMonths} ncols={ncols}
+    expanded={!isCol(key)} onToggle={() => toggle(key)} />;
+  const sinCls = Object.keys(pnl.sinClasificar).length > 0;
+
+  if (activeMonths.length === 0) return (
+    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
+      padding: "60px 24px", textAlign: "center", boxShadow: T.shadow }}>
+      <div style={{ fontSize: 14, color: T.muted }}>Sin datos para {year} en {moneda}.</div>
+    </div>
+  );
+
+  return (
+    <>
+    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
+      boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
+      <table style={{ width: "100%", minWidth: 180 + activeMonths.length * 110, borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th onClick={toggleAll} title="Contraer / expandir todo"
+              style={{ ...thStyle, textAlign: "left", width: 1, whiteSpace: "nowrap", cursor: "pointer",
+                userSelect: "none", ...stickyCol, background: T.tableHead, zIndex: 4 }}>
+              <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{allCol ? "▶" : "▼"}</span>Cuenta
+            </th>
+            {activeMonths.map(m => <th key={m} style={thStyle}>{MESES[m]}</th>)}
+            <th style={{ ...thStyle, borderLeft: "1px solid rgba(255,255,255,.12)" }}>TOTAL</th>
+          </tr>
+        </thead>
+        <tbody>
+          <BandaRow label="Ingresos" span={ncols} expanded={!isCol("sec_ing")} onToggle={() => toggle("sec_ing")} />
+          {!isCol("sec_ing") && <>
+            {grp("vta_sp")}
+            {grp("int_sp")}
+            {grp("ger")}
+            {grp("wre")}
+            {grp("hq")}
+          </>}
+          <SubtotalRow strong label="Total Ingresos" values={totIngresos} activeMonths={activeMonths} color={SEDE_HDR} />
+
+          {grp("gpv")}
+          <ResultadoRow strong label="Margen Bruto" values={margenBruto} activeMonths={activeMonths} />
+        </tbody>
+      </table>
+    </div>
+    {sinCls && (
+      <div style={{ marginTop: 16, background: T.card, border: "1px solid #fcd34d",
+        borderRadius: T.radius, boxShadow: T.shadow, overflowX: "auto" }}>
+        <table style={{ width: "100%", minWidth: 280 + activeMonths.length * 110, borderCollapse: "collapse" }}>
+          <tbody>
+            <PnlSection label="Sin clasificar (fuera del P&L consolidado)" accounts={pnl.sinClasificar}
+              activeMonths={activeMonths} color="#f59e0b" ncols={ncols} />
+          </tbody>
+        </table>
+        <div style={{ padding: "8px 16px", fontSize: 11, color: "#92400e", background: "#fffbeb" }}>
+          Estas cuentas/centros tienen movimientos pero no están asignados a ningún subgrupo del P&L consolidado.
+        </div>
+      </div>
+    )}
+    </>
+  );
+}
+
 // ─── PnLTable ─────────────────────────────────────────────────────────────────
 function PnLTable({ pnl, sub, year, moneda, label }) {
   const { ventasTot, costoTot, opexTot, finTot, impTot,
@@ -1748,6 +1899,12 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const subSede     = useMemo(() => computeSubtotalsSede(pnlSede), [pnlSede]);
   const subSedePrev = useMemo(() => computeSubtotalsSede(pnlSedePrev), [pnlSedePrev]);
   const subHQ   = useMemo(() => computeSubtotalsHQ(pnlHQ), [pnlHQ]);
+  // P&L BIGG consolidado (sedes propias + HQ + franquicias) — Etapa 1 hasta Margen Bruto.
+  const pnlBigg = useMemo(
+    () => buildPnLBigg(inConFranq, egConSueldos, ccMap, cuentaMap, year, monedaPL),
+    [inConFranq, egConSueldos, ccMap, cuentaMap, year, monedaPL]
+  );
+  const subBigg = useMemo(() => computeSubtotalsBigg(pnlBigg), [pnlBigg]);
 
   const toggleSedeCC = (id) => {
     setSelectedSedeCCs(prev => {
@@ -1974,9 +2131,9 @@ export default function PantallaReportes({ sociedad = "nako" }) {
             : `${selectedSedeCCs.length} seleccionada${selectedSedeCCs.length > 1 ? "s" : ""}`} />
       )}
 
-      {/* ── P&L BIGG ── */}
+      {/* ── P&L BIGG consolidado (subgrupos, hasta Margen Bruto) ── */}
       {activeTab === "pl_bigg" && (
-        <PnLTableHQ pnl={pnlHQ} sub={subHQ} year={year} moneda={monedaPL} />
+        <PnLTableBigg pnl={pnlBigg} sub={subBigg} year={year} moneda={monedaPL} />
       )}
 
       {/* ── Cash Flow ── */}

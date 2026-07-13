@@ -17,8 +17,10 @@ export const SOCIEDAD_EMPRESA = {
 };
 const EMPRESA_SOCIEDAD = Object.fromEntries(Object.entries(SOCIEDAD_EMPRESA).map(([k, v]) => [v, k]));
 
-// Sufijo del tipo de comprobante → cuenta contable de ingreso en Numbers (categoría Ventas).
-const FRANQ_CUENTA = { FEE: "Fee de Gestion y Adm", INTERUSOS: "Interusos", PAUTA: "Pauta", SPONSORS: "Sponsor", SPONSOR: "Sponsor", OTROS: "Otros Ingresos" };
+// Sufijo del tipo de comprobante (franquicias) → cuenta contable en el chart consolidado de Numbers.
+// Confirmado con el usuario (13/7): FEE es "Regalias s/Ventas"; PAUTA es "Acciones de Mkt" (BIGG le
+// vende pauta a los franquiciados); INTERUSOS es costo que pega en margen; SPONSORS/OTROS directo.
+const FRANQ_CUENTA = { FEE: "Regalias s/Ventas", INTERUSOS: "Interusos", PAUTA: "Acciones de Mkt", SPONSORS: "Sponsor", SPONSOR: "Sponsor", OTROS: "Otros Ingresos" };
 const MONEDAS = ["ARS", "USD", "EUR"];
 
 // Facturación a franquiciados → filas P&L de ingreso. Solo FACTURA|* (+) y NC|* (−);
