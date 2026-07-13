@@ -389,7 +389,77 @@ function BandaRow({ label, span, expanded, onToggle }) {
   );
 }
 
-function PnLTableSede({ pnl, sub, year, moneda, label }) {
+// ─── Vistas de tiempo del P&L Sedes (mismas filas, distinto bloque de columnas) ─────
+const VISTAS_SEDE = [
+  { id: "evolucion", label: "Evolución mensual" },
+  { id: "mensual",   label: "Mensual" },
+  { id: "ytd",       label: "YTD" },
+];
+function VistaToggle({ value, onChange }) {
+  return (
+    <div style={{ display: "inline-flex", gap: 2, background: "#f3f4f6", borderRadius: 9, padding: 3 }}>
+      {VISTAS_SEDE.map(v => {
+        const active = value === v.id;
+        return (
+          <button key={v.id} onClick={() => onChange(v.id)} style={{
+            background: active ? T.accentDark : "transparent", border: "none", borderRadius: 7,
+            color: active ? T.accent : T.muted, fontFamily: T.font, fontSize: 12.5,
+            fontWeight: active ? 800 : 600, padding: "6px 14px", cursor: "pointer", transition: "all .15s ease" }}
+            onMouseEnter={e => { if (!active) e.currentTarget.style.background = "#e5e7eb"; }}
+            onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}>
+            {v.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const ZERO12 = new Array(12).fill(0);
+const sumTo = (arr, m) => { let s = 0; for (let i = 0; i <= m && i < 12; i++) s += Number(arr?.[i]) || 0; return s; };
+const primaryVal = (vista, arr, mes) =>
+  vista === "ytd" ? sumTo(arr, mes)
+  : vista === "mensual" ? (Number(arr?.[mes]) || 0)
+  : (arr || []).reduce((s, v) => s + (Number(v) || 0), 0);
+
+// Columnas de las vistas comparativas (mensual / ytd). Cada col: {header, kind:"val"|"var", get|a,b}.
+function colsSedeVista(vista, mes, year) {
+  const m1 = (c, p) => mes > 0 ? (Number(c[mes - 1]) || 0) : (Number(p?.[11]) || 0);   // M-1 (enero → dic año ant.)
+  if (vista === "ytd") return [
+    { header: `YTD ${year}`,     kind: "val", get: c => sumTo(c, mes) },
+    { header: `YTD ${year - 1}`, kind: "val", get: (c, p) => sumTo(p, mes) },
+    { header: "Var%",            kind: "var", a: c => sumTo(c, mes), b: (c, p) => sumTo(p, mes) },
+  ];
+  return [   // mensual
+    { header: MESES[mes],       kind: "val", get: c => Number(c[mes]) || 0 },
+    { header: "Mes ant.",       kind: "val", get: (c, p) => m1(c, p) },
+    { header: "Var%",           kind: "var", a: c => Number(c[mes]) || 0, b: (c, p) => m1(c, p) },
+    { header: `${MESES[mes]} ${year - 1}`, kind: "val", get: (c, p) => Number(p?.[mes]) || 0 },
+    { header: "Var%",           kind: "var", a: c => Number(c[mes]) || 0, b: (c, p) => Number(p?.[mes]) || 0 },
+  ];
+}
+
+// Celdas de una fila para las vistas comparativas. o = estilo base de la fila.
+function celdasSede(cols, cur, prev, pol, o) {
+  return cols.map((col, i) => {
+    if (col.kind === "var") {
+      const a = col.a(cur, prev), b = col.b(cur, prev), d = a - b;
+      const pct = b ? d / b * 100 : null;
+      // flecha por signo crudo; color por MEJORA (polaridad: ingresos/resultados +1, costos −1).
+      const color = pct == null ? T.dim : (d * pol > 0 ? T.green : d * pol < 0 ? T.red : T.dim);
+      return <td key={i} style={{ padding: o.pad, fontSize: (o.fs || 13) - 1, textAlign: "right",
+        fontFamily: "var(--mono)", fontWeight: 700, color, whiteSpace: "nowrap" }}>
+        {pct == null ? "—" : `${d > 0 ? "↑" : d < 0 ? "↓" : ""}${Math.abs(pct).toFixed(1)}%`}</td>;
+    }
+    const v = col.get(cur, prev);
+    const color = o.bySign ? (v > 0 ? T.green : v < 0 ? T.red : T.dim) : (v ? (o.color || T.text) : T.dim);
+    return <td key={i} style={{ padding: o.pad, fontSize: o.fs || 13, textAlign: "right",
+      fontFamily: "var(--mono)", fontWeight: o.fw || 400, color, whiteSpace: "nowrap" }}>
+      {v ? fmtN(v) : "—"}</td>;
+  });
+}
+
+function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista = "evolucion", mes = 0 }) {
   const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths } = sub;
   const ncols = activeMonths.length + 2;
 
@@ -412,6 +482,86 @@ function PnLTableSede({ pnl, sub, year, moneda, label }) {
       <div style={{ fontSize: 14, color: T.muted }}>Sin datos para {year} en {moneda}{label ? ` · ${label}` : ""}.</div>
     </div>
   );
+
+  // ── Vistas comparativas (Mensual / YTD): mismas filas, distinto bloque de columnas ──
+  if (vista !== "evolucion") {
+    const cols = colsSedeVista(vista, mes, year);
+    const Pg = pnlPrev?.grupos || {};
+    const stP = k => (subPrev?.st?.[k]) || ZERO12;
+    const filas = [];
+    const pushGrupo = (gk, pol) => {
+      filas.push({ kind: "grupo", key: gk, label: grupoSede(gk).label, cur: sub.st[gk], prev: stP(gk), pol });
+      if (!isCol(gk)) for (const name of grupoSede(gk).cuentas)
+        filas.push({ kind: "cuenta", label: name, cur: pnl.grupos[gk][name], prev: (Pg[gk]?.[name] || ZERO12), pol });
+    };
+    filas.push({ kind: "banda", key: "sec_ing", label: "Ingresos" });
+    if (!isCol("sec_ing")) { pushGrupo("vta_cf", 1); pushGrupo("int_bigg", 1); pushGrupo("int_corp", 1); }
+    filas.push({ kind: "subtotal", label: "Total Ingresos", cur: totIngresos, prev: subPrev.totIngresos, pol: 1, strong: true });
+    pushGrupo("cvar", -1);
+    filas.push({ kind: "result", label: "Margen de Contribución", cur: margenContrib, prev: subPrev.margenContrib, pol: 1 });
+    filas.push({ kind: "banda", key: "sec_gop", label: "Gastos Operativos" });
+    if (!isCol("sec_gop")) { pushGrupo("gp_pers", -1); pushGrupo("gp_ocup", -1); pushGrupo("gp_mkt", -1); pushGrupo("gp_otros", -1); }
+    filas.push({ kind: "subtotal", label: "Total Gastos Operativos", cur: totGastosOp, prev: subPrev.totGastosOp, pol: -1 });
+    filas.push({ kind: "result", label: "Resultado Operativo", cur: resOp, prev: subPrev.resOp, pol: 1 });
+    pushGrupo("com_res", -1);
+    pushGrupo("inv_no_op", -1);
+    filas.push({ kind: "result", label: "Resultado Final", cur: resFinal, prev: subPrev.resFinal, pol: 1 });
+
+    return (
+      <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
+        boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
+        <table style={{ width: "100%", minWidth: 260 + cols.length * 120, borderCollapse: "collapse" }}>
+          <thead><tr>
+            <th onClick={toggleAll} title="Contraer / expandir todo" style={{ ...thStyle, textAlign: "left",
+              width: 1, whiteSpace: "nowrap", cursor: "pointer", userSelect: "none", ...stickyCol,
+              background: T.tableHead, zIndex: 4 }}>
+              <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{allCol ? "▶" : "▼"}</span>Cuenta
+            </th>
+            {cols.map((c, i) => <th key={i} style={thStyle}>{c.header}</th>)}
+          </tr></thead>
+          <tbody>
+            {filas.map((f, idx) => {
+              if (f.kind === "banda")
+                return <BandaRow key={idx} label={f.label} span={cols.length + 1} expanded={!isCol(f.key)} onToggle={() => toggle(f.key)} />;
+              if (f.kind === "grupo") return (
+                <tr key={idx} onClick={() => toggle(f.key)} style={{ background: "#f1f5f9", borderTop: `1px solid ${T.cardBorder}`, cursor: "pointer" }}>
+                  <td style={{ padding: "7px 14px", fontSize: 10.5, fontWeight: 800, color: T.muted, textTransform: "uppercase",
+                    letterSpacing: ".06em", userSelect: "none", ...stickyCol, background: "#f1f5f9" }}>
+                    <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{isCol(f.key) ? "▶" : "▼"}</span>{f.label}
+                  </td>
+                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "7px 12px", fs: 12, fw: 800, color: SEDE_HDR })}
+                </tr>
+              );
+              if (f.kind === "cuenta") return (
+                <tr key={idx} style={{ borderBottom: `1px solid ${T.cardBorder}`, background: T.card }}
+                  onMouseEnter={e => { e.currentTarget.style.background = "#f0f9ff"; e.currentTarget.firstChild.style.background = "#f0f9ff"; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = T.card; e.currentTarget.firstChild.style.background = T.card; }}>
+                  <td style={{ padding: "6px 14px 6px 32px", fontSize: 13, color: T.text, whiteSpace: "nowrap", ...stickyCol, background: T.card }}>{f.label}</td>
+                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "6px 12px", fs: 13, fw: 400, color: SEDE_HDR })}
+                </tr>
+              );
+              if (f.kind === "subtotal") {
+                const bg = f.strong ? "#cbd5e1" : "#f3f4f6";
+                return (
+                  <tr key={idx} style={{ background: bg, borderTop: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, borderBottom: `2px solid ${T.cardBorder}` }}>
+                    <td style={{ padding: "12px 14px", fontSize: f.strong ? 15 : 14, fontWeight: 900, color: SEDE_HDR, ...stickyCol, background: bg }}>{f.label}</td>
+                    {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: f.strong ? 15 : 14, fw: 900, color: SEDE_HDR })}
+                  </tr>
+                );
+              }
+              const pv = primaryVal(vista, f.cur, mes), col = pv >= 0 ? T.green : T.red, bg = pv >= 0 ? "#bbf7d0" : "#fecaca";
+              return (
+                <tr key={idx} style={{ background: bg, borderTop: `3px solid ${col}`, borderBottom: `2px solid ${col}` }}>
+                  <td style={{ padding: "12px 14px", fontSize: 15, fontWeight: 900, color: col, ...stickyCol, background: bg }}>{f.label}</td>
+                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: 15, fw: 900, bySign: true })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -1404,6 +1554,8 @@ function ReportesMenu({ onPick }) {
 // ─── Pantalla principal ───────────────────────────────────────────────────────
 export default function PantallaReportes({ sociedad = "nako" }) {
   const [activeTab,      setActiveTab]      = useState(null);   // null = menú-landing de reportes
+  const [vistaPnl,       setVistaPnl]       = useState("evolucion");   // P&L Sedes: evolucion | mensual | ytd
+  const [mesSel,         setMesSel]         = useState(new Date().getMonth());   // mes para vistas mensual/ytd
   const [year,           setYear]           = useState(CUR_YEAR);
   const [selectedSedeCCs, setSelectedSedeCCs] = useState(null);   // null = todas · [] = ninguna · [ids] = subconjunto
   const [sedeOpen,        setSedeOpen]        = useState(false);
@@ -1577,7 +1729,13 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     [inConFranq, egConSueldos, ccMap, year, monedaPL]
   );
 
-  const subSede = useMemo(() => computeSubtotalsSede(pnlSede), [pnlSede]);
+  // Año anterior (mismos arrays, filtrados a year-1) → comparativas Mensual/YTD sin fetch extra.
+  const pnlSedePrev = useMemo(
+    () => buildPnLSede(inConFranq, egConSueldos, resolvedCCSede, year - 1, monedaPL),
+    [inConFranq, egConSueldos, resolvedCCSede, year, monedaPL]
+  );
+  const subSede     = useMemo(() => computeSubtotalsSede(pnlSede), [pnlSede]);
+  const subSedePrev = useMemo(() => computeSubtotalsSede(pnlSedePrev), [pnlSedePrev]);
   const subHQ   = useMemo(() => computeSubtotalsHQ(pnlHQ), [pnlHQ]);
 
   const toggleSedeCC = (id) => {
@@ -1651,17 +1809,20 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       {/* ── Header del reporte + volver al menú ── */}
       <PageHeader
         title={curTab?.label ?? "Reporte"}
-        subtitle={curLente?.label}
+        subtitle={activeTab === "pl_sede" ? undefined : curLente?.label}
         action={
-          <button onClick={() => setActiveTab(null)} style={{
-            display: "inline-flex", alignItems: "center", gap: 6,
-            background: "#f3f4f6", border: `1px solid ${T.cardBorder}`, borderRadius: 8,
-            color: T.text, fontFamily: T.font, fontSize: 13, fontWeight: 700,
-            padding: "8px 16px", cursor: "pointer" }}
-            onMouseEnter={e => e.currentTarget.style.background = "#e5e7eb"}
-            onMouseLeave={e => e.currentTarget.style.background = "#f3f4f6"}>
-            ← Reportes
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {activeTab === "pl_sede" && <VistaToggle value={vistaPnl} onChange={setVistaPnl} />}
+            <button onClick={() => setActiveTab(null)} style={{
+              display: "inline-flex", alignItems: "center", gap: 6,
+              background: "#f3f4f6", border: `1px solid ${T.cardBorder}`, borderRadius: 8,
+              color: T.text, fontFamily: T.font, fontSize: 13, fontWeight: 700,
+              padding: "8px 16px", cursor: "pointer" }}
+              onMouseEnter={e => e.currentTarget.style.background = "#e5e7eb"}
+              onMouseLeave={e => e.currentTarget.style.background = "#f3f4f6"}>
+              ← Reportes
+            </button>
+          </div>
         }
       />
 
@@ -1703,6 +1864,17 @@ export default function PantallaReportes({ sociedad = "nako" }) {
               {Object.entries(MONEDA_SYM).map(([k, v]) => (
                 <option key={k} value={k}>{v} {k}</option>
               ))}
+            </select>
+          </div>
+        )}
+
+        {/* Mes — solo para vistas comparativas (Mensual / YTD) */}
+        {activeTab === "pl_sede" && vistaPnl !== "evolucion" && (
+          <div>
+            <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
+              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Mes</label>
+            <select value={mesSel} onChange={e => setMesSel(Number(e.target.value))} style={selStyle}>
+              {MESES.map((m, i) => <option key={i} value={i}>{m}</option>)}
             </select>
           </div>
         )}
@@ -1784,7 +1956,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
       {/* ── P&L Sedes ── */}
       {activeTab === "pl_sede" && (
-        <PnLTableSede pnl={pnlSede} sub={subSede} year={year} moneda={monedaPL}
+        <PnLTableSede pnl={pnlSede} sub={subSede} pnlPrev={pnlSedePrev} subPrev={subSedePrev}
+          vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL}
           label={selectedSedeCCs === null ? "Todas las Sedes"
             : selectedSedeCCs.length === 0 ? "Ninguna sede"
             : `${selectedSedeCCs.length} seleccionada${selectedSedeCCs.length > 1 ? "s" : ""}`} />
