@@ -1405,7 +1405,7 @@ function ReportesMenu({ onPick }) {
 export default function PantallaReportes({ sociedad = "nako" }) {
   const [activeTab,      setActiveTab]      = useState(null);   // null = menú-landing de reportes
   const [year,           setYear]           = useState(CUR_YEAR);
-  const [selectedSedeCCs, setSelectedSedeCCs] = useState([]);
+  const [selectedSedeCCs, setSelectedSedeCCs] = useState(null);   // null = todas · [] = ninguna · [ids] = subconjunto
   const [sedeOpen,        setSedeOpen]        = useState(false);
   const [monedaPL,       setMonedaPL]       = useState("ARS");
   const [monedaCF,       setMonedaCF]       = useState("ARS");
@@ -1514,21 +1514,22 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     return [...map.values()];
   }, [sedeCCs]);
 
-  const resolvedCCSede = useMemo(() => {
-    if (selectedSedeCCs.length === 0) return sedeCCs.map(c => c.id);
-    return selectedSedeCCs;
-  }, [selectedSedeCCs, sedeCCs]);
+  // null = todas · [] = ninguna · [ids] = subconjunto. resolvedCCSede: null → todas las sedes.
+  const resolvedCCSede = useMemo(
+    () => (selectedSedeCCs === null ? sedeCCs.map(c => c.id) : selectedSedeCCs),
+    [selectedSedeCCs, sedeCCs]
+  );
 
   // Toggle de un grupo (operación) entero: agrega/saca todas sus sedes de la selección.
   const toggleGrupoSede = (opId) => {
     const ids = (gruposSede.find(g => g.id === opId)?.sedes ?? []).map(c => c.id);
     setSelectedSedeCCs(prev => {
       const allIds = sedeCCs.map(c => c.id);
-      const sel = new Set(prev.length === 0 ? allIds : prev);
+      const sel = new Set(prev === null ? allIds : prev);
       const allIn = ids.every(id => sel.has(id));
       ids.forEach(id => allIn ? sel.delete(id) : sel.add(id));
       const next = [...sel];
-      return next.length === allIds.length ? [] : next;
+      return next.length === allIds.length ? null : next;   // completo → null (todas)
     });
   };
 
@@ -1582,13 +1583,9 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const toggleSedeCC = (id) => {
     setSelectedSedeCCs(prev => {
       const allIds = sedeCCs.map(c => c.id);
-      if (prev.length === 0) return allIds.filter(x => x !== id);
-      if (prev.includes(id)) {
-        const next = prev.filter(x => x !== id);
-        return next.length === 0 ? [] : next;
-      }
-      const next = [...prev, id];
-      return next.length === allIds.length ? [] : next;
+      const cur = prev === null ? allIds : prev;
+      const next = cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id];
+      return next.length === allIds.length ? null : next;   // completo → null (todas); [] queda como "ninguna"
     });
   };
 
@@ -1720,7 +1717,9 @@ export default function PantallaReportes({ sociedad = "nako" }) {
               background: sedeOpen ? "#f0f2f5" : "#eceff3",
             }}>
               <span style={{ flex: 1, textAlign: "left" }}>
-                {selectedSedeCCs.length === 0 ? "Todas las Sedes" : `${selectedSedeCCs.length} sede${selectedSedeCCs.length > 1 ? "s" : ""}`}
+                {selectedSedeCCs === null ? "Todas las Sedes"
+                  : selectedSedeCCs.length === 0 ? "Ninguna sede"
+                  : `${selectedSedeCCs.length} sede${selectedSedeCCs.length > 1 ? "s" : ""}`}
               </span>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={T.muted} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transition: "transform .15s", transform: sedeOpen ? "rotate(180deg)" : "rotate(0)" }}>
                 <path d="M6 9l6 6 6-6"/>
@@ -1733,18 +1732,18 @@ export default function PantallaReportes({ sociedad = "nako" }) {
                 boxShadow: T.shadowMd, minWidth: 220, fontSize: 13,
                 color: T.text, padding: "4px 0", maxHeight: 280, overflowY: "auto",
               }}>
-                <div onClick={() => setSelectedSedeCCs([])} style={{
+                <div onClick={() => setSelectedSedeCCs(prev => prev === null ? [] : null)} style={{
                   display: "flex", alignItems: "center", gap: 8, padding: "8px 14px",
                   borderBottom: `1px solid ${T.cardBorder}`, cursor: "pointer",
                   userSelect: "none", fontWeight: 600, color: T.text,
                 }}>
-                  <input type="checkbox" checked={selectedSedeCCs.length === 0} readOnly
+                  <input type="checkbox" checked={selectedSedeCCs === null} readOnly
                     style={{ pointerEvents: "none", accentColor: T.accentDark }} />
                   Todas
                 </div>
                 {gruposSede.map(g => {
                   const ids = g.sedes.map(c => c.id);
-                  const grpChecked = selectedSedeCCs.length === 0 || ids.every(id => selectedSedeCCs.includes(id));
+                  const grpChecked = selectedSedeCCs === null || ids.every(id => selectedSedeCCs.includes(id));
                   return (
                     <div key={g.id}>
                       {/* Operación = agrupador (seleccionar toda la operación) */}
@@ -1759,7 +1758,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
                         {g.label}
                       </div>
                       {g.sedes.map(cc => {
-                        const checked = selectedSedeCCs.length === 0 || selectedSedeCCs.includes(cc.id);
+                        const checked = selectedSedeCCs === null || selectedSedeCCs.includes(cc.id);
                         return (
                           <div key={cc.id} onClick={() => toggleSedeCC(cc.id)} style={{
                             display: "flex", alignItems: "center", gap: 8, padding: "6px 14px 6px 32px",
@@ -1786,7 +1785,9 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       {/* ── P&L Sedes ── */}
       {activeTab === "pl_sede" && (
         <PnLTableSede pnl={pnlSede} sub={subSede} year={year} moneda={monedaPL}
-          label={selectedSedeCCs.length === 0 ? "Todas las Sedes" : `${selectedSedeCCs.length} seleccionada${selectedSedeCCs.length > 1 ? "s" : ""}`} />
+          label={selectedSedeCCs === null ? "Todas las Sedes"
+            : selectedSedeCCs.length === 0 ? "Ninguna sede"
+            : `${selectedSedeCCs.length} seleccionada${selectedSedeCCs.length > 1 ? "s" : ""}`} />
       )}
 
       {/* ── P&L BIGG ── */}
