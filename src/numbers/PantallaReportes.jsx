@@ -227,10 +227,11 @@ function DataRow({ label, values, activeMonths, color }) {
   const total = rowSum(values);
   return (
     <tr style={{ borderBottom: `1px solid ${T.cardBorder}`, background: T.card }}
-      onMouseEnter={e => { e.currentTarget.style.background = "#f0f9ff"; }}
-      onMouseLeave={e => { e.currentTarget.style.background = T.card; }}>
+      onMouseEnter={e => { e.currentTarget.style.background = "#f0f9ff"; e.currentTarget.firstChild.style.background = "#f0f9ff"; }}
+      onMouseLeave={e => { e.currentTarget.style.background = T.card; e.currentTarget.firstChild.style.background = T.card; }}>
+      {/* fondo explícito (no "inherit"): evita que la celda sticky no repinte y "aparezca" al hover */}
       <td style={{ padding: "7px 16px 7px 44px", fontSize: 13, color: T.text, whiteSpace: "nowrap",
-        ...stickyCol, background: "inherit" }}>{label}</td>
+        ...stickyCol, background: T.card }}>{label}</td>
       {activeMonths.map(m => (
         <td key={m} style={{ padding: "7px 12px", fontSize: 13, textAlign: "right",
           fontFamily: "var(--mono)", color: values[m] ? (color ?? T.text) : T.dim,
@@ -303,17 +304,20 @@ function ResultadoRow({ label, values, activeMonths, strong }) {
 // El "qué cuenta va en cada línea" vive acá a propósito: es el P&L de management de la sede,
 // curado. Cuentas fuera de este mapeo con movimientos → bloque "Sin clasificar" al pie
 // (control de fugas: líneas mapeadas + sin clasificar = todo, nada se esconde).
+// Paleta sobria: los subgrupos van todos en gris pizarra neutro; el color con significado
+// (verde/rojo) se reserva para las líneas de resultado. Las bandas de sección aportan la estructura.
+const SEDE_HDR = "#475569";   // slate — encabezados de subgrupo y montos de cuenta
 const SEDE_GRUPOS = [
-  { key: "vta_cf",    label: "Ventas consumidor final",  color: T.green,  cuentas: ["Ventas Mercado Pago", "Depositos", "Ventas en Efectivo", "Otros Ingresos"] },
-  { key: "int_bigg",  label: "Interusos red BIGG",       color: T.green,  cuentas: ["Interusos"] },
-  { key: "int_corp",  label: "Interusos corporativos",   color: T.green,  cuentas: ["Coorporativos"] },
-  { key: "cvar",      label: "Costos Variables",         color: "#f97316", cuentas: ["Fee Facturación", "Aranceles y Otros Financieros", "IIBB", "Imp. Cred. y Deb."] },
-  { key: "gp_pers",   label: "Personal",                 color: T.red,    cuentas: ["Sueldos", "Comisiones", "Aguinaldos", "Costos Salariales"] },
-  { key: "gp_ocup",   label: "Ocupación",                color: T.red,    cuentas: ["Alquiler", "Expensas y ABL", "Servicios"] },
-  { key: "gp_mkt",    label: "Mkt y Pauta",              color: T.red,    cuentas: ["Acciones de Mkt"] },
-  { key: "gp_otros",  label: "Otros Gastos de la Sede",  color: T.red,    cuentas: ["Honorarios Profesionales", "Equipamiento y Mantenimiento", "Limpieza", "Otros Gastos del Centro"] },
-  { key: "com_res",   label: "Comisión por resultados",  color: "#8b5cf6", cuentas: ["Comision S/Resultado"] },
-  { key: "inv_no_op", label: "Inversiones no operativas", color: "#8b5cf6", cuentas: ["Inversiones / Gastos no Operativos"] },
+  { key: "vta_cf",    label: "Ventas consumidor final",  color: SEDE_HDR, cuentas: ["Ventas Mercado Pago", "Depositos", "Ventas en Efectivo", "Otros Ingresos"] },
+  { key: "int_bigg",  label: "Interusos red BIGG",       color: SEDE_HDR, cuentas: ["Interusos"] },
+  { key: "int_corp",  label: "Interusos corporativos",   color: SEDE_HDR, cuentas: ["Coorporativos"] },
+  { key: "cvar",      label: "Costos Variables",         color: SEDE_HDR, cuentas: ["Fee Facturación", "Aranceles y Otros Financieros", "IIBB", "Imp. Cred. y Deb."] },
+  { key: "gp_pers",   label: "Personal",                 color: SEDE_HDR, cuentas: ["Sueldos", "Comisiones", "Aguinaldos", "Costos Salariales"] },
+  { key: "gp_ocup",   label: "Ocupación",                color: SEDE_HDR, cuentas: ["Alquiler", "Expensas y ABL", "Servicios"] },
+  { key: "gp_mkt",    label: "Mkt y Pauta",              color: SEDE_HDR, cuentas: ["Acciones de Mkt"] },
+  { key: "gp_otros",  label: "Otros Gastos de la Sede",  color: SEDE_HDR, cuentas: ["Honorarios Profesionales", "Equipamiento y Mantenimiento", "Limpieza", "Otros Gastos del Centro"] },
+  { key: "com_res",   label: "Comisión por resultados",  color: SEDE_HDR, cuentas: ["Comision S/Resultado"] },
+  { key: "inv_no_op", label: "Inversiones no operativas", color: SEDE_HDR, cuentas: ["Inversiones / Gastos no Operativos"] },
 ];
 const _nkSede = s => (s ?? "").trim().toLowerCase();
 const SEDE_CUENTA_A_GRUPO = (() => {
@@ -432,7 +436,7 @@ function PnLTableSede({ pnl, sub, year, moneda, label }) {
             {grp("int_bigg")}
             {grp("int_corp")}
           </>}
-          <SubtotalRow strong label="Total Ingresos" values={totIngresos} activeMonths={activeMonths} color={T.green} />
+          <SubtotalRow strong label="Total Ingresos" values={totIngresos} activeMonths={activeMonths} color={SEDE_HDR} />
 
           {grp("cvar")}
           <ResultadoRow strong label="Margen de Contribución" values={margenContrib} activeMonths={activeMonths} />
@@ -444,7 +448,7 @@ function PnLTableSede({ pnl, sub, year, moneda, label }) {
             {grp("gp_mkt")}
             {grp("gp_otros")}
           </>}
-          <SubtotalRow label="Total Gastos Operativos" values={totGastosOp} activeMonths={activeMonths} color={T.red} />
+          <SubtotalRow label="Total Gastos Operativos" values={totGastosOp} activeMonths={activeMonths} color={SEDE_HDR} />
           <ResultadoRow strong label="Resultado Operativo" values={resOp} activeMonths={activeMonths} />
 
           {grp("com_res")}
