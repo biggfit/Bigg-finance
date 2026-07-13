@@ -645,6 +645,12 @@ const BIGG_GRUPOS = [
 ];
 const BIGG_ING = ["vta_sp", "int_sp", "ger", "wre", "hq"];   // subgrupos de ingreso (suman a Total Ingresos)
 const grupoBigg = (key) => BIGG_GRUPOS.find(g => g.key === key);
+// Orden de las cuentas dentro de cada subgrupo (display; las que no figuran van al final, alfabéticas).
+// Hardcodeado a propósito: es presentación, bajo riesgo (un nombre que no matchea solo se ordena último).
+const BIGG_ORDEN = [
+  "Regalias s/Ventas", "Licencia Uso de Marca", "Equipamientos", "Coorporativos (Gympass)",
+  "APP (Gympass)", "Sponsor", "Acciones de Mkt", "Otros Ingresos",
+];
 
 // Familia del centro (dimensión que separa los subgrupos). Devuelve null si no clasifica.
 function familiaCentro(cc) {
@@ -724,7 +730,7 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
   const toggleAll = () => setCollapsed(allCol ? {} : Object.fromEntries(ALLKEYS.map(k => [k, true])));
 
   const grp = (key) => <PnlSection sub label={grupoBigg(key).label} accounts={pnl.grupos[key]}
-    order={grupoBigg(key).cuentas ?? undefined} color={SEDE_HDR} activeMonths={activeMonths} ncols={ncols}
+    order={BIGG_ORDEN} color={SEDE_HDR} activeMonths={activeMonths} ncols={ncols}
     expanded={!isCol(key)} onToggle={() => toggle(key)} />;
   const sinCls = Object.keys(pnl.sinClasificar).length > 0;
 
