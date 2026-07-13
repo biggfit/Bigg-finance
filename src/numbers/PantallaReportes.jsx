@@ -1302,13 +1302,13 @@ function TabEvolucionPN({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, yea
 
 // ─── Tab config ───────────────────────────────────────────────────────────────
 const TABS = [
-  { id: "pl_sede", label: "P&L Sedes" },
-  { id: "pl_bigg", label: "P&L BIGG" },
-  { id: "cf",      label: "Cash Flow" },
-  { id: "balance", label: "Patrimonio Neto" },
-  { id: "evpn",    label: "Evolución PN" },
-  { id: "interco", label: "Intercompañía" },
-  { id: "consolidado", label: "Tesorería consolidada" },
+  { id: "pl_sede", label: "P&L Sedes",  icon: "🏬", desc: "Resultado operativo por sede: ventas, costos variables y márgenes." },
+  { id: "pl_bigg", label: "P&L BIGG",   icon: "🏢", desc: "Resultado corporativo por centro de HQ (R&D, Sales & Mkt, G&A)." },
+  { id: "cf",      label: "Cash Flow",  icon: "💵", desc: "Flujo de caja mensual: entradas y salidas por cuenta." },
+  { id: "balance", label: "Patrimonio Neto", icon: "⚖️", desc: "Activo, Pasivo y Patrimonio Neto de la sociedad." },
+  { id: "evpn",    label: "Evolución PN",    icon: "📈", desc: "Cómo evoluciona el patrimonio neto mes a mes." },
+  { id: "interco", label: "Intercompañía",   icon: "🔗", desc: "Posiciones entre sociedades, agrupadas por anillo." },
+  { id: "consolidado", label: "Tesorería consolidada", icon: "🏦", desc: "Saldos y movimientos de todas las sociedades del grupo." },
 ];
 
 // ─── Lentes (3 miradas por stakeholder; cada una agrupa un subconjunto de solapas) ──
@@ -1364,10 +1364,48 @@ function TabInterco({ data, sociedades }) {
   );
 }
 
+// ─── Menú-landing de Reportes: tarjetas agrupadas por lente ─────────────────────
+function ReportCard({ icon, title, desc, onClick }) {
+  return (
+    <button onClick={onClick} style={{
+      display: "flex", gap: 14, alignItems: "flex-start", textAlign: "left",
+      background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 12,
+      padding: "18px 20px", cursor: "pointer", fontFamily: T.font, width: "100%",
+      boxShadow: "0 1px 3px rgba(0,0,0,.04)", transition: "all .15s ease" }}
+      onMouseEnter={e => { e.currentTarget.style.boxShadow = T.shadowMd; e.currentTarget.style.borderColor = T.accent; e.currentTarget.style.transform = "translateY(-1px)"; }}
+      onMouseLeave={e => { e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,.04)"; e.currentTarget.style.borderColor = T.cardBorder; e.currentTarget.style.transform = "none"; }}>
+      <div style={{ fontSize: 20, lineHeight: 1, flexShrink: 0, width: 42, height: 42, borderRadius: 10,
+        background: T.accentDark, display: "flex", alignItems: "center", justifyContent: "center" }}>{icon}</div>
+      <div>
+        <div style={{ fontSize: 15, fontWeight: 800, color: T.text, marginBottom: 3 }}>{title}</div>
+        <div style={{ fontSize: 12.5, color: T.muted, lineHeight: 1.4 }}>{desc}</div>
+      </div>
+    </button>
+  );
+}
+
+function ReportesMenu({ onPick }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 26 }}>
+      {LENTES.map(lente => (
+        <div key={lente.id}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: T.muted, letterSpacing: ".1em",
+            textTransform: "uppercase", marginBottom: 10 }}>{lente.label}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
+            {lente.tabs.map(tid => {
+              const t = TABS.find(x => x.id === tid);
+              return <ReportCard key={tid} icon={t.icon} title={t.label} desc={t.desc} onClick={() => onPick(tid)} />;
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Pantalla principal ───────────────────────────────────────────────────────
 export default function PantallaReportes({ sociedad = "nako" }) {
-  const [activeLente,    setActiveLente]    = useState("sociedad");
-  const [activeTab,      setActiveTab]      = useState("balance");
+  const [activeTab,      setActiveTab]      = useState(null);   // null = menú-landing de reportes
   const [year,           setYear]           = useState(CUR_YEAR);
   const [selectedSedeCCs, setSelectedSedeCCs] = useState([]);
   const [sedeOpen,        setSedeOpen]        = useState(false);
@@ -1453,37 +1491,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     return () => { cancelled = true; };
   }, [sociedad, loadKey]);
 
-  // Keyboard navigation for tabs
-  // Lente activa → solapas visibles (las pills de abajo se acotan al subconjunto de la lente).
-  const lente       = LENTES.find(l => l.id === activeLente) ?? LENTES[0];
-  const visibleTabs = TABS.filter(t => lente.tabs.includes(t.id));
-  const cambiarLente = (id) => {
-    const l = LENTES.find(x => x.id === id) ?? LENTES[0];
-    setActiveLente(id);
-    if (!l.tabs.includes(activeTab)) setActiveTab(l.tabs[0]);   // saltar a la 1ª solapa de la lente
-  };
-
-  const handleTabKeyDown = (e) => {
-    const idx = visibleTabs.findIndex(t => t.id === activeTab);
-    let next = idx;
-    if (e.key === "ArrowRight" || e.key === "ArrowDown") {
-      e.preventDefault();
-      next = (idx + 1) % visibleTabs.length;
-    } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
-      e.preventDefault();
-      next = (idx - 1 + visibleTabs.length) % visibleTabs.length;
-    } else if (e.key === "Home") {
-      e.preventDefault();
-      next = 0;
-    } else if (e.key === "End") {
-      e.preventDefault();
-      next = visibleTabs.length - 1;
-    } else {
-      return;
-    }
-    setActiveTab(visibleTabs[next].id);
-    tabsRef.current?.querySelectorAll('[role="tab"]')[next]?.focus();
-  };
+  const curTab   = TABS.find(t => t.id === activeTab);
+  const curLente = LENTES.find(l => l.tabs.includes(activeTab));
 
   const cuentaMap = useMemo(
     () => new Map((cuentas ?? []).map(c => [c.nombre, c])),
@@ -1606,83 +1615,31 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const showMonedaCF = activeTab === "cf";
   const showSedes    = activeTab === "pl_sede" && sedeCCs.length > 0;
 
+  // Menú-landing: sin reporte elegido → tarjetas agrupadas por lente.
+  if (!activeTab) return (
+    <div style={{ padding: "28px 32px", maxWidth: 1400 }} className="fade">
+      <PageHeader title="Reportes" subtitle="Elegí un reporte" />
+      <ReportesMenu onPick={setActiveTab} />
+    </div>
+  );
+
   return (
     <div style={{ padding: "28px 32px", maxWidth: 1400 }} className="fade">
 
-      {/* ── Selector de LENTE (nivel superior: por sociedad / operaciones / consolidado) ── */}
-      <div role="tablist" aria-label="Lente de reportes" style={{
-        display: "inline-flex", gap: 4, marginBottom: 18,
-        background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 12, padding: 4,
-        boxShadow: "0 1px 3px rgba(0,0,0,.04)",
-      }}>
-        {LENTES.map(l => {
-          const active = activeLente === l.id;
-          return (
-            <button
-              key={l.id}
-              role="tab"
-              aria-selected={active}
-              onClick={() => cambiarLente(l.id)}
-              style={{
-                background: active ? T.accent : "transparent",
-                border: "none", borderRadius: 9,
-                color: active ? "#0b1220" : T.muted,
-                fontFamily: T.font, fontSize: 14, fontWeight: active ? 800 : 600,
-                padding: "9px 22px", cursor: "pointer", transition: "all .15s ease",
-              }}
-              onMouseEnter={e => { if (!active) e.currentTarget.style.background = "#eef1f5"; }}
-              onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}
-            >
-              {l.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* ── Header + pill tabs (misma fila) ── */}
+      {/* ── Header del reporte + volver al menú ── */}
       <PageHeader
-        title="Reportes"
+        title={curTab?.label ?? "Reporte"}
+        subtitle={curLente?.label}
         action={
-        <div
-          ref={tabsRef}
-          role="tablist"
-          aria-label="Reportes financieros"
-          onKeyDown={handleTabKeyDown}
-          style={{
-            display: "inline-flex", gap: 2,
-            background: "#f3f4f6", borderRadius: 10, padding: 3,
-          }}
-        >
-        {visibleTabs.map(tab => {
-          const active = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              role="tab"
-              aria-selected={active}
-              tabIndex={active ? 0 : -1}
-              onClick={() => setActiveTab(tab.id)}
-              style={{
-                background: active ? T.accentDark : "transparent",
-                border: "none", borderRadius: 8,
-                color: active ? T.accent : T.muted,
-                fontFamily: T.font, fontSize: 13,
-                fontWeight: active ? 800 : 500,
-                padding: "7px 18px", cursor: "pointer",
-                transition: "all .15s ease",
-                outline: "none",
-                boxShadow: active ? T.shadow : "none",
-              }}
-              onFocus={e => { e.currentTarget.style.outline = `2px solid ${T.accent}`; e.currentTarget.style.outlineOffset = "-2px"; }}
-              onBlur={e => { e.currentTarget.style.outline = "none"; }}
-              onMouseEnter={e => { if (!active) e.currentTarget.style.background = "#e5e7eb"; }}
-              onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
-        </div>
+          <button onClick={() => setActiveTab(null)} style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            background: "#f3f4f6", border: `1px solid ${T.cardBorder}`, borderRadius: 8,
+            color: T.text, fontFamily: T.font, fontSize: 13, fontWeight: 700,
+            padding: "8px 16px", cursor: "pointer" }}
+            onMouseEnter={e => e.currentTarget.style.background = "#e5e7eb"}
+            onMouseLeave={e => e.currentTarget.style.background = "#f3f4f6"}>
+            ← Reportes
+          </button>
         }
       />
 
