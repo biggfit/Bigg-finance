@@ -394,10 +394,12 @@ function TabProveedores() {
 
   const rows = useMemo(() => {
     const q = busqueda.toLowerCase();
+    // Coercer a String: el Sheet puede devolver cuit/nota como número (CUIT sin guiones) →
+    // .includes/.toLowerCase reventarían sobre un number.
     return !q ? proveedores : proveedores.filter(p =>
-      (p.nombre||"").toLowerCase().includes(q) ||
-      (p.cuit||"").includes(q) ||
-      (p.nota||"").toLowerCase().includes(q)
+      String(p.nombre ?? "").toLowerCase().includes(q) ||
+      String(p.cuit ?? "").toLowerCase().includes(q) ||
+      String(p.nota ?? "").toLowerCase().includes(q)
     );
   }, [busqueda, proveedores]);
 
@@ -556,7 +558,7 @@ function TabClientes() {
   const rows = useMemo(() => {
     const q = busqueda.toLowerCase();
     return !q ? clientes : clientes.filter(c =>
-      (c.nombre||"").toLowerCase().includes(q) || (c.cuit||"").includes(q)
+      String(c.nombre ?? "").toLowerCase().includes(q) || String(c.cuit ?? "").toLowerCase().includes(q)
     );
   }, [busqueda, clientes]);
 
@@ -791,7 +793,7 @@ function TabCuentas() {
       || (filtroTipo === "ingreso"    && (t === "ingreso"    || t === "ingresos" || t === "venta" || t === "ventas"))
       || (filtroTipo === "financiero" && (t === "financiero" || t === "financieros"));
     const q = busqueda.toLowerCase();
-    const matchQ = !q || c.nombre.toLowerCase().includes(q) || (c.id||"").toLowerCase().includes(q);
+    const matchQ = !q || String(c.nombre ?? "").toLowerCase().includes(q) || String(c.id ?? "").toLowerCase().includes(q);
     return matchT && matchQ;
   }), [filtroTipo, busqueda, cuentas]);
 
@@ -1354,9 +1356,9 @@ function TabCC() {
   const rows = useMemo(() => {
     const q = busqueda.toLowerCase();
     return !q ? ccs : ccs.filter(c =>
-      (c.nombre||"").toLowerCase().includes(q) ||
-      (c.id||"").toLowerCase().includes(q) ||
-      (c.grupo||"").toLowerCase().includes(q)
+      String(c.nombre ?? "").toLowerCase().includes(q) ||
+      String(c.id ?? "").toLowerCase().includes(q) ||
+      String(c.grupo ?? "").toLowerCase().includes(q)
     );
   }, [busqueda, ccs]);
 

@@ -569,35 +569,54 @@ export const normSoc = (s) => {
 // (nb_movimientos origen sueldos), neteado por legajo+mes+sociedad y agregado por legajo.
 // La antigüedad (aging) se calcula en la pantalla con la fecha de hoy sobre `items`.
 // `ambito` (hq/sedes) sale del rol de la liquidación → sirve para el deep-link al wizard.
-export function pendienteSueldosPorLegajo(liqsCerradas, pagos, { pais } = {}) {
+// Neto por (legajo|mes-anio|sociedad) = devengado (liquidaciones cerradas) − pagado (movimientos).
+// Incluye claves que SOLO tienen pago (adelanto sin liquidación aún) → quedan negativas.
+function _netoSueldos(liqsCerradas, pagos, { pais } = {}) {
   const liqs = (liqsCerradas || []).filter(l => !pais || !l.pais || l.pais === pais);
   const neto = new Map();   // legajo|anio-mes|soc → { legajo_id, legajo, mes, anio, sociedad, ambito, monto }
+  const ensure = (legajo_id, legajo, mes, anio, soc, ambito) => {
+    const key = `${legajo_id}|${anio}-${mes}|${soc}`;
+    let cur = neto.get(key);
+    if (!cur) { cur = { legajo_id, legajo, mes, anio, sociedad: soc, ambito, monto: 0 }; neto.set(key, cur); }
+    return cur;
+  };
   for (const liq of liqs) {
     const mes = Number(liq.mes) || 0, anio = Number(liq.anio) || 0;
     const ambito = ROLES_HQ.includes(liq.rol) ? "hq" : "sedes";
     const legajo = liq.legajo_nombre || liq.legajo_id || "Sin nombre";
-    for (const d of devengadoPorFormaYSociedad(liq)) {
-      const soc = normSoc(d.sociedad);
-      const key = `${liq.legajo_id}|${anio}-${mes}|${soc}`;
-      const cur = neto.get(key) || { legajo_id: liq.legajo_id, legajo, mes, anio, sociedad: soc, ambito, monto: 0 };
-      cur.monto += Number(d.total) || 0;
-      neto.set(key, cur);
-    }
+    for (const d of devengadoPorFormaYSociedad(liq))
+      ensure(liq.legajo_id, legajo, mes, anio, normSoc(d.sociedad), ambito).monto += Number(d.total) || 0;
   }
-  for (const p of (pagos || [])) {
-    const key = `${p.legajo_id}|${Number(p.anio) || 0}-${Number(p.mes) || 0}|${normSoc(p.sociedad_id)}`;
-    const cur = neto.get(key);
-    if (cur) cur.monto -= Number(p.monto) || 0;
-  }
+  for (const p of (pagos || []))
+    ensure(p.legajo_id, p.legajo_nombre || p.legajo_id || "Sin nombre",
+           Number(p.mes) || 0, Number(p.anio) || 0, normSoc(p.sociedad_id), p.ambito || "sedes").monto -= Number(p.monto) || 0;
+  return neto;
+}
+
+// Agrupa por legajo los netos que cumplen `keep(monto)`, devolviendo el monto vía `val(monto)`.
+function _agruparSueldos(neto, keep, val) {
   const porLegajo = new Map();
   for (const v of neto.values()) {
-    if (v.monto <= 0.5) continue;   // tolerancia de redondeo
+    if (!keep(v.monto)) continue;
     const g = porLegajo.get(v.legajo_id) || { legajo_id: v.legajo_id, legajo: v.legajo, total: 0, items: [] };
-    g.total += v.monto;
-    g.items.push({ mes: v.mes, anio: v.anio, sociedad: v.sociedad, ambito: v.ambito, monto: v.monto });
+    const m = val(v.monto);
+    g.total += m;
+    g.items.push({ mes: v.mes, anio: v.anio, sociedad: v.sociedad, ambito: v.ambito, monto: m });
     porLegajo.set(v.legajo_id, g);
   }
   return [...porLegajo.values()].sort((a, b) => b.total - a.total);
+}
+
+// Deuda viva de sueldos POR LEGAJO: parte POSITIVA del neto (devengado sin pagar → PASIVO).
+export function pendienteSueldosPorLegajo(liqsCerradas, pagos, opts = {}) {
+  return _agruparSueldos(_netoSueldos(liqsCerradas, pagos, opts), m => m > 0.5, m => m);
+}
+
+// Adelantos de sueldo POR LEGAJO: parte NEGATIVA del neto (pagado > devengado, o pago sin liquidación
+// cerrada → ACTIVO). Espejo de pendienteSueldosPorLegajo: mantiene el PN correcto entre el adelanto
+// y el cierre de la liquidación (la caja bajó, pero contra un activo, no contra el patrimonio).
+export function adelantoSueldosPorLegajo(liqsCerradas, pagos, opts = {}) {
+  return _agruparSueldos(_netoSueldos(liqsCerradas, pagos, opts), m => m < -0.5, m => -m);
 }
 
 // ── NOVEDADES ─────────────────────────────────────────────────────────────────

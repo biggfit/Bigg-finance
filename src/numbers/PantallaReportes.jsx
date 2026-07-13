@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, PageHeader } from "./theme";
 import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco } from "../lib/numbersApi";
-import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, SALARY_BUCKETS, pagoTipoABucket, devengadoPorFormaYSociedad } from "../lib/sueldosApi";
+import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, pendienteSueldosPorLegajo, adelantoSueldosPorLegajo } from "../lib/sueldosApi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
 import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
 import { franquiciasIngresoPnLRows } from "../lib/franquiciasAdapter";
@@ -316,7 +316,7 @@ const SEDE_GRUPOS = [
   { key: "int_corp",  label: "Interusos corporativos",   color: SEDE_HDR, cuentas: ["Coorporativos"] },
   { key: "cvar",      label: "Costos Variables",         color: SEDE_HDR, cuentas: ["Fee Facturación", "Aranceles y Otros Financieros", "IIBB", "Imp. Cred. y Deb."] },
   { key: "gp_pers",   label: "Personal",                 color: SEDE_HDR, cuentas: ["Sueldos", "Comisiones", "Aguinaldos", "Costos Salariales"] },
-  { key: "gp_ocup",   label: "Ocupación",                color: SEDE_HDR, cuentas: ["Alquiler", "Expensas y ABL", "Servicios"] },
+  { key: "gp_ocup",   label: "Ocupación",                color: SEDE_HDR, cuentas: ["Alquiler", "Expensas", "ABL", "Servicios"] },
   { key: "gp_mkt",    label: "Mkt y Pauta",              color: SEDE_HDR, cuentas: ["Acciones de Mkt"] },
   { key: "gp_otros",  label: "Otros Gastos de la Sede",  color: SEDE_HDR, cuentas: ["Honorarios Profesionales", "Equipamiento y Mantenimiento", "Limpieza", "Otros Gastos del Centro"] },
   { key: "com_res",   label: "Comisión por resultados",  color: SEDE_HDR, cuentas: ["Comision S/Resultado"] },
@@ -570,11 +570,16 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
     <>
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
       boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
-      <table style={{ width: "100%", minWidth: 180 + activeMonths.length * 110, borderCollapse: "collapse" }}>
+      <table style={{ width: "100%", minWidth: 230 + activeMonths.length * 122 + 150, borderCollapse: "collapse", tableLayout: "fixed" }}>
+        <colgroup>
+          <col style={{ width: 230 }} />
+          {activeMonths.map(m => <col key={m} style={{ width: 122 }} />)}
+          <col style={{ width: 150 }} />
+        </colgroup>
         <thead>
           <tr>
             <th onClick={toggleAll} title="Contraer / expandir todo"
-              style={{ ...thStyle, textAlign: "left", width: 1, whiteSpace: "nowrap", cursor: "pointer",
+              style={{ ...thStyle, textAlign: "left", whiteSpace: "nowrap", cursor: "pointer",
                 userSelect: "none", ...stickyCol, background: T.tableHead, zIndex: 4 }}>
               <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{allCol ? "▶" : "▼"}</span>Cuenta
             </th>
@@ -607,24 +612,21 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
           {grp("com_res")}
           {grp("inv_no_op")}
           <ResultadoRow strong label="Resultado Final" values={resFinal} activeMonths={activeMonths} />
-        </tbody>
-      </table>
-    </div>
-    {sinCls && (
-      <div style={{ marginTop: 16, background: T.card, border: "1px solid #fcd34d",
-        borderRadius: T.radius, boxShadow: T.shadow, overflowX: "auto" }}>
-        <table style={{ width: "100%", minWidth: 280 + activeMonths.length * 110, borderCollapse: "collapse" }}>
-          <tbody>
+
+          {sinCls && <>
+            <tr><td colSpan={ncols} style={{ height: 16, background: "#f8fafc", borderTop: `2px solid ${T.cardBorder}` }} /></tr>
             <PnlSection label="Sin clasificar (fuera del P&L de la sede)" accounts={pnl.sinClasificar}
               activeMonths={activeMonths} color="#f59e0b" ncols={ncols} />
-          </tbody>
-        </table>
-        <div style={{ padding: "8px 16px", fontSize: 11, color: "#92400e", background: "#fffbeb" }}>
+          </>}
+        </tbody>
+      </table>
+      {sinCls && (
+        <div style={{ padding: "8px 16px", fontSize: 11, color: "#92400e", background: "#fffbeb", borderTop: "1px solid #fcd34d" }}>
           Estas cuentas tienen movimientos en la sede pero no están asignadas a ninguna línea del P&L.
           Revisá si corresponde re-imputarlas o agregarlas a la estructura.
         </div>
-      </div>
-    )}
+      )}
+    </div>
     </>
   );
 }
@@ -781,11 +783,16 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
     <>
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
       boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
-      <table style={{ width: "100%", minWidth: 180 + activeMonths.length * 110, borderCollapse: "collapse" }}>
+      <table style={{ width: "100%", minWidth: 230 + activeMonths.length * 122 + 150, borderCollapse: "collapse", tableLayout: "fixed" }}>
+        <colgroup>
+          <col style={{ width: 230 }} />
+          {activeMonths.map(m => <col key={m} style={{ width: 122 }} />)}
+          <col style={{ width: 150 }} />
+        </colgroup>
         <thead>
           <tr>
             <th onClick={toggleAll} title="Contraer / expandir todo"
-              style={{ ...thStyle, textAlign: "left", width: 1, whiteSpace: "nowrap", cursor: "pointer",
+              style={{ ...thStyle, textAlign: "left", whiteSpace: "nowrap", cursor: "pointer",
                 userSelect: "none", ...stickyCol, background: T.tableHead, zIndex: 4 }}>
               <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{allCol ? "▶" : "▼"}</span>Cuenta
             </th>
@@ -1145,32 +1152,20 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCer
   const cxcTot = useMemo(() => sumMon(cxcRows, r => r.moneda ?? "ARS", r => Number(r.total) || 0), [cxcRows]);
   const cxpTot = useMemo(() => sumMon(cxpRows, r => r.moneda ?? "ARS", r => Number(r.total) || 0), [cxpRows]);
 
-  // Cuenta por pagar de sueldos = devengado (cerradas) − pagado (nb_movimientos origen sueldos), por balde de
-  // forma de pago (efectivo ≠ haberes), filtrado por la sociedad de cada forma. Solo ARS.
+  // Sueldos POR LEGAJO (mismo criterio que Tesorería): neto devengado(cerradas) − pagado(nb_movimientos
+  // origen sueldos). Positivo → PASIVO (deuda). Negativo → ACTIVO "adelanto" (pago sin liquidación
+  // cerrada aún) → mantiene el PN correcto hasta que se cierre la liquidación y se compensen. Por legajo
+  // —NO por bucket— para no netear la deuda de un empleado con el adelanto de otro. Solo ARS.
   const sueldoSoc = (sociedad ?? "").toLowerCase();
-  const cxpSueldosBuckets = useMemo(() => {
-    const match = (s) => !sueldoSoc || (s ?? "").toLowerCase() === sueldoSoc;
-    const dev = {}, pag = {};
-    for (const { bucket } of SALARY_BUCKETS) { dev[bucket] = 0; pag[bucket] = 0; }
-    // Sociedad del devengado por (legajo, balde): la obligación de haberes es del legajo,
-    // no de la caja con la que se pagó. El pago se atribuye a esta sociedad, no a su origen.
-    const devSoc = new Map();
-    for (const liq of liqsCerradas)
-      for (const { bucket, sociedad, total } of devengadoPorFormaYSociedad(liq)) {
-        if (match(sociedad)) dev[bucket] += total;
-        const k = liq.legajo_id + "|" + bucket;
-        if (!devSoc.has(k)) devSoc.set(k, sociedad);
-      }
-    for (const p of pagosSueldos) {
-      const bucket = pagoTipoABucket(p.tipo_componente);
-      const soc = devSoc.get(p.legajo_id + "|" + bucket) ?? p.sociedad_id;  // devengado, no caja
-      if (match(soc)) pag[bucket] += Number(p.monto) || 0;
-    }
-    return SALARY_BUCKETS
-      .map(({ bucket }) => ({ bucket, pendiente: Math.max(0, dev[bucket] - pag[bucket]) }))
-      .filter(b => b.pendiente > 0);
-  }, [liqsCerradas, pagosSueldos, sueldoSoc]);
-  const cxpSueldosTot = { ...ZERO, ARS: cxpSueldosBuckets.reduce((s, b) => s + b.pendiente, 0) };
+  const sueldosLegajoRows = (fn) => fn(liqsCerradas, pagosSueldos)
+    .map(leg => ({ label: leg.legajo, ars: leg.items.reduce((t, it) =>
+      t + ((!sueldoSoc || (it.sociedad ?? "").toLowerCase() === sueldoSoc) ? it.monto : 0), 0) }))
+    .filter(r => r.ars > 0.5);
+  const cxpSueldosRows      = useMemo(() => sueldosLegajoRows(pendienteSueldosPorLegajo), [liqsCerradas, pagosSueldos, sueldoSoc]);
+  const adelantoSueldosRows = useMemo(() => sueldosLegajoRows(adelantoSueldosPorLegajo),  [liqsCerradas, pagosSueldos, sueldoSoc]);
+  const cxpSueldosTot      = { ...ZERO, ARS: cxpSueldosRows.reduce((s, r) => s + r.ars, 0) };
+  const adelantoSueldosTot = { ...ZERO, ARS: adelantoSueldosRows.reduce((s, r) => s + r.ars, 0) };
+  const hayAdelSld = adelantoSueldosTot.ARS > 0;
 
   // Pasivo de financiaciones (planes AFIP → impuestos, créditos → financiero)
   const [finOpen, setFinOpen] = useState(true);
@@ -1190,7 +1185,7 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCer
   const haySocA = (sociosActivoTot.ARS + sociosActivoTot.USD + sociosActivoTot.EUR) > 0;
   const haySocP = (sociosPasivoTot.ARS + sociosPasivoTot.USD + sociosPasivoTot.EUR) > 0;
 
-  const activoTot  = addVals(addVals(addVals(cajaTot, bancoTot), cxcTot), sociosActivoTot);
+  const activoTot  = addVals(addVals(addVals(addVals(cajaTot, bancoTot), cxcTot), sociosActivoTot), adelantoSueldosTot);
   const pasivoTot  = addVals(addVals(addVals(addVals(addVals(cxpTot, cxpSueldosTot), finPasivoTot), antPasivo), tarjetaDeuda), sociosPasivoTot);
   const pnTot      = subVals(activoTot, pasivoTot);
 
@@ -1226,6 +1221,12 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCer
               <BDRow label="Préstamos / adelantos a socios" vals={sociosActivoTot} indent />
               <BSubRow label="Total Socios" vals={sociosActivoTot} color={T.green} />
             </>}
+
+            {hayAdelSld && <>
+              <BGrpRow label="Adelantos a empleados" expanded onToggle={() => {}} />
+              {adelantoSueldosRows.map(r => <BDRow key={r.label} label={r.label} vals={{ ...ZERO, ARS: r.ars }} indent />)}
+              <BSubRow label="Total Adelantos a empleados" vals={adelantoSueldosTot} color={T.green} />
+            </>}
           </>}
           <BResRow label="TOTAL ACTIVO" vals={activoTot} />
 
@@ -1236,10 +1237,10 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCer
             <BSubRow label="Total Cuentas a Pagar" vals={cxpTot} color={T.red} />
 
             <BGrpRow label="Cuentas a Pagar — Sueldos" expanded={cxpSldOpen} onToggle={() => setCxpSldOpen(o => !o)} />
-            {cxpSldOpen && cxpSueldosBuckets.map(b => (
-              <BDRow key={b.bucket} label={SALARY_BUCKET_LABEL[b.bucket] ?? b.bucket} vals={{ ...ZERO, ARS: b.pendiente }} indent />
+            {cxpSldOpen && cxpSueldosRows.map(r => (
+              <BDRow key={r.label} label={r.label} vals={{ ...ZERO, ARS: r.ars }} indent />
             ))}
-            {cxpSldOpen && cxpSueldosBuckets.length === 0 && <BDRow label="(sin saldo de sueldos)" vals={ZERO} indent />}
+            {cxpSldOpen && cxpSueldosRows.length === 0 && <BDRow label="(sin saldo de sueldos)" vals={ZERO} indent />}
             <BSubRow label="Total Cuentas a Pagar — Sueldos" vals={cxpSueldosTot} color={T.red} />
 
             {hayFin && <>

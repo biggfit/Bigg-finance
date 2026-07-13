@@ -15,6 +15,10 @@ styleEl.textContent = `
 }
 body{background:var(--bg);color:var(--text);font-family:var(--font)}
 input,select,textarea{font-family:var(--font);background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:20px;outline:none;transition:border-color .15s;font-size:13px}
+/* Los date inputs de los formularios son de fondo CLARO → esquema claro para que el ícono nativo
+   del calendario se dibuje oscuro y visible. Los pocos date inputs sobre fondo oscuro (Franquicias)
+   fuerzan color-scheme:dark inline, que pisa esta regla. */
+input[type=date]{color-scheme:light}
 input:focus,select:focus,textarea:focus{border-color:var(--accent)}
 ::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
 .fade{animation:fi .2s ease}@keyframes fadeInDown{from{opacity:0;transform:translateX(-50%) translateY(-8px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}

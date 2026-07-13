@@ -43,7 +43,8 @@ export const CUENTAS = [
 
   // ── GASTOS OPERATIVOS DE SEDE ──
   { id: "alquiler",                nombre: "Alquiler",                              tipo: "gasto",      cuenta_pasivo: "proveedores" },
-  { id: "expensas_abl",            nombre: "Expensas y ABL",                        tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "expensas",                nombre: "Expensas",                              tipo: "gasto",      cuenta_pasivo: "proveedores" },
+  { id: "abl",                     nombre: "ABL",                                   tipo: "gasto",      cuenta_pasivo: "proveedores" },
   { id: "limpieza",                nombre: "Limpieza",                              tipo: "gasto",      cuenta_pasivo: "proveedores" },
   { id: "servicios",               nombre: "Servicios",                             tipo: "gasto",      cuenta_pasivo: "proveedores" },
   { id: "equipamiento_mantenimiento", nombre: "Equipamiento y Mantenimiento",       tipo: "gasto",      cuenta_pasivo: "proveedores" },

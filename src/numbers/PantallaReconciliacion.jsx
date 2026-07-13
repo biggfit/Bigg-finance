@@ -309,20 +309,24 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     return lotesHaberes.find(L => Math.abs(L.total - t) <= Math.max(500, L.total * 0.01)) || null;
   };
 
-  // ── Transferencia ya contabilizada: cuando MP entra DESPUÉS de Galicia, la pata del movimiento
-  // entre cuentas ya existe (creada al conciliar el otro banco). Clave por fecha|monto de los
-  // movimientos-transferencia YA aceptados de la cuenta activa → para avisar "posible duplicado".
-  const transferKeys = useMemo(() => {
+  // ── "Posible duplicado": una línea del extracto que coincide (fecha|monto) con un movimiento YA
+  // contabilizado en la MISMA cuenta. Cubre transferencias/interco (la pata ya existe al conciliar el
+  // otro banco), pagos de tarjeta ya cargados a mano, y cualquier otro movimiento previo. Se excluyen:
+  //   • las líneas de extracto todavía pendientes (origen="extracto" sin documento_id) → no se marcan
+  //     entre sí ni a sí mismas; solo avisamos contra algo YA cargado en la caja.
+  //   • las ignoradas (documento_id "IGN-…").
+  const cajaKeys = useMemo(() => {
     const s = new Set();
     for (const m of movsCuenta) {
       if (String(m.cuenta_bancaria) !== String(cuentaTab)) continue;
-      const esTrf = ["transferencia", "intercompania"].includes(m.origen) || /^(TRF|INT)-/.test(String(m.documento_id || ""));
-      if (!esTrf) continue;
+      const doc = String(m.documento_id || "");
+      const pendiente = m.origen === "extracto" && !doc;
+      if (pendiente || doc.startsWith("IGN-")) continue;
       s.add(`${m.fecha}|${Math.round(Math.abs(Number(m.monto) || 0))}`);
     }
     return s;
   }, [movsCuenta, cuentaTab]);
-  const dupTransfer = (mov) => transferKeys.has(`${mov.fecha}|${Math.round(Math.abs(Number(mov.monto) || 0))}`);
+  const dupTransfer = (mov) => cajaKeys.has(`${mov.fecha}|${Math.round(Math.abs(Number(mov.monto) || 0))}`);
 
   // ── Imputar a factura: facturas de proveedor con saldo pendiente, de la moneda de la cuenta.
   const facturasPendientes = useMemo(() => {
@@ -1157,6 +1161,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           <span style={{ fontSize: 11, fontWeight: 700, color: T.text }}>{TIPO_LABEL[tipo] || tipo || "—"}</span>
                           {meta.regla && <span style={{ fontSize: 9, color: T.dim, marginLeft: 5 }}>({meta.regla})</span>}
                           {meta.op && <div style={{ fontSize: 10, color: T.muted }}>op {meta.op}</div>}
+                          {dupTransfer(m) && <div style={{ fontSize: 10, color: "#b45309" }}>⚠ posible duplicado — ya hay un movimiento igual en la caja (¿pago ya cargado? ignorá con ⋯)</div>}
                         </>
                       )}
                     </td>

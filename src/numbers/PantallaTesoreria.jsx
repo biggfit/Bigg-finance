@@ -25,11 +25,20 @@ const fmtSaldo = (n, moneda) => {
 };
 
 const TIPO_CFG = {
-  PAGO_FC:       { bg:"#fff7ed", color:"#f97316", label:"Pago FC"     },
-  COBRO_FC:      { bg:"#f0f9ff", color:"#0ea5e9", label:"Cobro FC"    },
-  EGRESO_GASTO:  { bg:"#fef9c3", color:"#ca8a04", label:"Gasto"       },
-  TRANSFERENCIA: { bg:"#dbeafe", color:"#2563eb", label:"Transferencia"},
+  PAGO:          { bg:"#fff7ed", color:"#f97316", label:"Pago"            },
+  COBRO:         { bg:"#f0f9ff", color:"#0ea5e9", label:"Cobro"           },
+  SUELDO:        { bg:"#e0e7ff", color:"#4f46e5", label:"Sueldo"          },
+  EGRESO_GASTO:  { bg:"#fef9c3", color:"#ca8a04", label:"Gasto"           },
+  EGRESO:        { bg:"#fef9c3", color:"#ca8a04", label:"Gasto"           },
+  INGRESO:       { bg:"#dcfce7", color:"#16a34a", label:"Ingreso"         },
+  PAGO_TARJETA:  { bg:"#ede9fe", color:"#7c3aed", label:"Pago de Tarjeta" },
+  INTERCOMPANIA: { bg:"#f3e8ff", color:"#9333ea", label:"Intercompañía"   },
+  TRANSFERENCIA: { bg:"#dbeafe", color:"#2563eb", label:"TRF Propias"     },
+  SALDO_INICIAL: { bg:"#f3f4f6", color:"#6b7280", label:"Saldo inicial"   },
 };
+// Estilo rojo para las líneas del extracto todavía SIN conciliar (mismo texto Gasto/Ingreso, otro color).
+const TIPO_SIN_CONCILIAR = { bg:"#fee2e2", color:"#dc2626" };
+const esSinConciliar = (m) => m.origen === "extracto" && !String(m.documento_id || "");
 
 
 /** Botones de barra — misma geometría; variante por intención */
@@ -1036,7 +1045,8 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, onLimpiarFi
           </thead>
           <tbody>
             {sorted.map((m, i) => {
-              const cfg    = TIPO_CFG[m.tipo] ?? { bg:"#f3f4f6", color:"#374151" };
+              const base   = TIPO_CFG[m.tipo] ?? { bg:"#f3f4f6", color:"#374151", label:m.tipo };
+              const cfg    = esSinConciliar(m) ? { ...base, ...TIPO_SIN_CONCILIAR } : base;
               const monto  = Number(m.monto) || 0;
               const nombre = cuentaMap[m.cuenta_bancaria] ?? m.cuenta_bancaria ?? "—";
               return (
@@ -1053,7 +1063,7 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, onLimpiarFi
                   <td style={{ padding:"10px 14px" }}>
                     <span style={{ display:"inline-block", padding:"2px 9px", borderRadius:999,
                       fontSize:11, fontWeight:700, background:cfg.bg, color:cfg.color,
-                      whiteSpace:"nowrap" }}>{m.tipo}</span>
+                      whiteSpace:"nowrap" }}>{cfg.label ?? m.tipo}</span>
                   </td>
                   <td style={{ padding:"10px 14px", fontSize:13, color:T.text, whiteSpace:"nowrap" }}>
                     {fmtDate(m.fecha)}
@@ -1231,10 +1241,20 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
 
   // ── Eliminar un movimiento ────────────────────────────────────────────────
   const handleEliminarMov = async (mov) => {
-    if (!confirm(`¿Eliminar movimiento "${mov.concepto ?? mov.id}"?`)) return;
+    // Transferencia/interco/cambio = PAR de patas con el mismo documento_id. Hay que borrar AMBAS,
+    // o la contrapartida queda huérfana y sigue sumando al saldo (la transferencia se "duplica").
+    // Solo se juntan las patas cargadas en la sociedad activa (interco cross-sociedad borra su lado).
+    const PAREADO = ["TRANSFERENCIA", "INTERCOMPANIA", "CAMBIO"];
+    const doc = String(mov.documento_id || "");
+    const patas = (PAREADO.includes(mov.tipo) && doc)
+      ? movimientos.filter(m => String(m.documento_id || "") === doc)
+      : [mov];
+    const extra = patas.length > 1 ? ` y su contrapartida (${patas.length} movimientos)` : "";
+    if (!confirm(`¿Eliminar movimiento "${mov.concepto ?? mov.id}"${extra}?`)) return;
     try {
-      await deleteMovTesoreria(mov.id);
-      setMovimientos(prev => prev.filter(m => m.id !== mov.id));
+      await Promise.all(patas.map(m => deleteMovTesoreria(m.id)));
+      const ids = new Set(patas.map(m => m.id));
+      setMovimientos(prev => prev.filter(m => !ids.has(m.id)));
     } catch (e) {
       alert("Error al eliminar: " + e.message);
     }

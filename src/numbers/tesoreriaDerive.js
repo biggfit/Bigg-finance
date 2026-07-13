@@ -7,7 +7,7 @@ import {
   calcSaldoPendiente, esCuentaCredito, esIgnorado,
   financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, sociosSaldos, lecturaInterco,
 } from "../lib/numbersApi";
-import { parsePagoFromMov, normSoc, pendienteSueldosPorLegajo } from "../lib/sueldosApi";
+import { parsePagoFromMov, normSoc, pendienteSueldosPorLegajo, adelantoSueldosPorLegajo } from "../lib/sueldosApi";
 import { franquiciasSaldosCxC } from "../lib/franquiciasAdapter";
 
 // Orden Activo/Pasivo: Franquiciados arriba (alineado entre ambos lados), luego por monto.
@@ -118,7 +118,26 @@ export function derivarSaldos({
   // ── Socios (dividendos + préstamos): slice de esta sociedad, balance puro ──
   const sociosCCsld = sociosSaldos(socios, sociosCC, movimientos, { sociedad });
 
-  const aCobrar = [...aCobrarComp, ...franqCC.activo, ...sociosCCsld.activo].sort(franqFirst);
+  // ── Sueldos: neto devengado−pagado por legajo/mes. Positivo → PASIVO (deuda); negativo →
+  //    ACTIVO (adelanto: pago sin liquidación cerrada aún). Se compensa al cerrar la liquidación. ──
+  const pagosSueldos = movimientos.filter(m => m.origen === "sueldos").map(parsePagoFromMov);
+  const sueldosSide = (porLegajo) => {
+    const soc = normSoc(sociedad);
+    const docs = []; let total = 0;
+    for (const leg of porLegajo) for (const it of leg.items) {
+      if (normSoc(it.sociedad) !== soc) continue;
+      total += it.monto;
+      docs.push({ contraparte: leg.legajo, vto: `${String(it.mes).padStart(2, "0")}/${it.anio}`, saldo: it.monto, moneda: "ARS" });
+    }
+    docs.sort((a, b) => b.saldo - a.saldo);
+    return { total, docs };
+  };
+  const sueldosPasivo = sueldosSide(pendienteSueldosPorLegajo(liqsSueldos, pagosSueldos));
+  const sueldosActivo = sueldosSide(adelantoSueldosPorLegajo(liqsSueldos, pagosSueldos));
+
+  const aCobrar = [...aCobrarComp, ...franqCC.activo, ...sociosCCsld.activo,
+    ...(sueldosActivo.total > 0 ? [{ label: "Adelanto a empleados", moneda: "ARS", saldo: sueldosActivo.total, docs: sueldosActivo.docs, headerColor: "#16a34a" }] : []),
+  ].sort(franqFirst);
 
   // ── A pagar (comprobantes de egreso pendientes) ──
   const pagos = pagosCobros.filter(p => (p.tipo === "PAGO" || p.tipo === "EGRESO_GASTO") && (!corte || (p.fecha ?? "") <= corte));
@@ -140,22 +159,6 @@ export function derivarSaldos({
     grpPag[key].docs.push({ contraparte: eg.proveedor || "Sin proveedor", vto: eg.vto, saldo, moneda: eg.moneda ?? "ARS" });
   }
   const aPagarComp = Object.values(grpPag).sort((a, b) => b.saldo - a.saldo);
-
-  // ── Pasivo de sueldos (devengado − pagado), por legajo, solo de esta sociedad ──
-  const pagosSueldos = movimientos.filter(m => m.origen === "sueldos").map(parsePagoFromMov);
-  const sueldosPasivo = (() => {
-    const soc = normSoc(sociedad);
-    const docs = []; let total = 0;
-    for (const leg of pendienteSueldosPorLegajo(liqsSueldos, pagosSueldos)) {
-      for (const it of leg.items) {
-        if (normSoc(it.sociedad) !== soc) continue;
-        total += it.monto;
-        docs.push({ contraparte: leg.legajo, vto: `${String(it.mes).padStart(2, "0")}/${it.anio}`, saldo: it.monto, moneda: "ARS" });
-      }
-    }
-    docs.sort((a, b) => b.saldo - a.saldo);
-    return { total, docs };
-  })();
 
   // ── Pasivo de financiaciones (planes AFIP + créditos) ──
   const finPasivo = (() => {
