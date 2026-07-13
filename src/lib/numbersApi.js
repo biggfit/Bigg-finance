@@ -1099,7 +1099,7 @@ export async function updateGastoDirecto(movId, { fecha, cuenta_contable, cuenta
 // subtipo: "EGRESO_FC" | "INGRESO_FC" | "GASTO" | null (todos)
 // Para P&L de egresos pasar ["EGRESO_FC","GASTO"] para incluir gastos directos.
 export async function fetchLineasEnriquecidas(sociedad, subtipo) {
-  const rows = await get("nb_comprobantes", { sociedad });
+  const rows = await get("nb_comprobantes", sociedad ? { sociedad } : {});
   // Normalizar campos numéricos: Sheets puede devolver "362591,17" (coma decimal) → toNum → 362591.17
   const normalize = r => ({ ...r, total: toNum(r.total), subtotal: toNum(r.subtotal), iva_monto: toNum(r.iva_monto) });
   if (!subtipo) return rows.map(normalize);

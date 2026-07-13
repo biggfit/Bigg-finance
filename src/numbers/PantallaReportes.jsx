@@ -1598,15 +1598,16 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       setLoading(true); setError(null);
       try {
         const [eg, ing, movs, cbs, ccList, ctaList, liqsC, pagosS, fin, socs, socsCC] = await Promise.all([
-          fetchLineasEnriquecidas(sociedad, ["EGRESO", "GASTO"]).catch(() => []),
-          fetchLineasEnriquecidas(sociedad, "INGRESO").catch(() => []),
-          fetchMovTesoreria(sociedad).catch(() => []),
+          // P&L Sedes/BIGG son group-level (todas las sociedades). Cash Flow (por sociedad) filtra client-side.
+          fetchLineasEnriquecidas(null, ["EGRESO", "GASTO"]).catch(() => []),
+          fetchLineasEnriquecidas(null, "INGRESO").catch(() => []),
+          fetchMovTesoreria().catch(() => []),
           fetchCuentasBancarias().catch(() => []),
           fetchCentrosCosto().catch(() => []),
           fetchCuentas().catch(() => []),
           fetchLiquidacionesCerradas().catch(() => []),
           fetchPagosAnio().catch(() => []),
-          fetchFinanciaciones(sociedad).catch(() => []),
+          fetchFinanciaciones().catch(() => []),
           fetchSocios().catch(() => []),
           fetchSociosCC().catch(() => []),
         ]);
@@ -1648,6 +1649,13 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     () => new Map((cuentas ?? []).map(c => [c.nombre, c])),
     [cuentas]
   );
+
+  // rawMovs se carga group-level (todas las sociedades) para el P&L Sedes/BIGG.
+  // La lente "Por sociedad" (Cash Flow / Balance / Evolución PN) filtra a la sociedad activa client-side.
+  const rawMovsSoc = useMemo(() => {
+    const soc = (sociedad ?? "").toLowerCase();
+    return soc ? rawMovs.filter(m => (m.sociedad ?? "").toLowerCase() === soc) : rawMovs;
+  }, [rawMovs, sociedad]);
 
   const sedeCCs = useMemo(() => ccs.filter(c => (c.grupo ?? "").toLowerCase() === "operaciones"), [ccs]);
 
@@ -1693,19 +1701,15 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   // es la única verdad del sueldo, sin partida doble en nb_comprobantes). Ver memoria project_pnl_sueldos.
   // OJO: nunca sumar nb_movimientos SUELDO acá (eso es caja → Cash Flow; el devengado viene de liquidaciones).
   // movimientoToPnLRows excluye sueldos, transferencias y pagos de factura (esos ya están vía comprobante).
-  const salaryRows = useMemo(() => {
-    const soc = (sociedad ?? "").toLowerCase();
-    return liqsCerradas
-      .flatMap(liquidacionToPnLRows)
-      .filter(r => !soc || (r.sociedad ?? "").toLowerCase() === soc);
-  }, [liqsCerradas, sociedad]);
+  // P&L Sedes/BIGG son group-level (todas las sociedades) → adaptadores sin filtro de sociedad.
+  const salaryRows = useMemo(() => liqsCerradas.flatMap(liquidacionToPnLRows), [liqsCerradas]);
 
-  const gastoMovRows = useMemo(() => movimientoToPnLRows(rawMovs, sociedad, cuentaMap), [rawMovs, sociedad, cuentaMap]);
+  const gastoMovRows = useMemo(() => movimientoToPnLRows(rawMovs, "", cuentaMap), [rawMovs, cuentaMap]);
   // Cuentas-tarjeta (crédito): sus movimientos no son caja → se excluyen del Cash Flow (la salida real es el pago de la tarjeta).
   const tarjetaIds = useMemo(() => new Set(cuentasBancarias.filter(esCuentaCredito).map(c => c.id)), [cuentasBancarias]);
 
   // Financiaciones: capital del impuesto (plan AFIP) + interés/IVA/impuestos por cuota (mes a mes).
-  const finRows = useMemo(() => financiacionToPnLRows(rawFin, sociedad), [rawFin, sociedad]);
+  const finRows = useMemo(() => financiacionToPnLRows(rawFin, ""), [rawFin]);
 
   const egConSueldos = useMemo(() => [...rawEg, ...salaryRows, ...gastoMovRows, ...finRows], [rawEg, salaryRows, gastoMovRows, finRows]);
 
@@ -1715,8 +1719,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     [ccs]
   );
   const franqRows = useMemo(
-    () => franquiciasIngresoPnLRows(rawFranq, sociedad, ventasCcId),
-    [rawFranq, sociedad, ventasCcId]
+    () => franquiciasIngresoPnLRows(rawFranq, "", ventasCcId),
+    [rawFranq, ventasCcId]
   );
   const inConFranq = useMemo(() => [...rawIn, ...franqRows], [rawIn, franqRows]);
 
@@ -1970,12 +1974,12 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
       {/* ── Cash Flow ── */}
       {activeTab === "cf" && (
-        <TabCashFlow rawMovs={rawMovs} year={year} moneda={monedaCF} tarjetaIds={tarjetaIds} />
+        <TabCashFlow rawMovs={rawMovsSoc} year={year} moneda={monedaCF} tarjetaIds={tarjetaIds} />
       )}
 
       {activeTab === "balance" && (
         <TabBalance
-          rawMovs={rawMovs}
+          rawMovs={rawMovsSoc}
           cuentasBancarias={cuentasBancarias}
           rawIn={rawIn}
           rawEg={rawEg}
@@ -1990,7 +1994,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
       {activeTab === "evpn" && (
         <TabEvolucionPN
-          rawMovs={rawMovs}
+          rawMovs={rawMovsSoc}
           cuentasBancarias={cuentasBancarias}
           rawIn={rawIn}
           rawEg={rawEg}
