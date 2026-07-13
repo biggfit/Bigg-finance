@@ -627,20 +627,21 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
 }
 
 // ─── P&L BIGG CONSOLIDADO (sedes propias + HQ + franquicias) — Etapa 1: hasta Margen Bruto ──
-// Reusa el motor de subgrupos del P&L Sedes. Diferencia clave: el subgrupo sale de la FAMILIA del
-// centro (operacion/grupo) × cuenta × lado (ingreso/egreso), no solo de la cuenta. Config hardcodeada
-// (como SEDE_GRUPOS); futuro data-driven vía columnas de nb_cuentas (franq_cat + categoria_pnl).
-// familia: "propios" (operacion empieza "Propios") · "gerenciamiento" (operacion="Sedes Administradas")
-//          · "wre" (operacion="Wellness Real Estate" ó grupo=inversiones) · "hq" (grupo="HQ")
-//          · "any" (matchea por cuenta sin importar el centro — para Gastos por Ventas).
-// side: "ingreso" (filas de ingreso) | "costo" (filas de egreso). rowBy: "cuenta" | "centro".
+// DATA-DRIVEN: el subgrupo sale de columnas que el usuario mantiene en Maestros, sin listas de cuentas
+// hardcodeadas. Dos dimensiones:
+//   · FAMILIA ← `operacion`/`grupo` del centro (nb_centros_costo): propios / gerenciamiento / wre / hq.
+//   · SECCIÓN ← `categoria_pnl` de la cuenta (nb_cuentas): "Ventas"=ingreso · "Costo por Venta"=Gastos
+//     por Ventas · (Gastos Operativos/Financieros/Impuestos = debajo de Margen Bruto → Etapa 2).
+//   · Dentro de sedes propias, Venta vs Interuso ← `categoria_pnl_sede` ("Ventas" vs "Otros Ingresos").
+// El lado (ingreso/costo) de una fila de egRows se deduce de su categoria_pnl (la venta de sede llega
+// firmada como ingreso dentro de egRows). Las franquicias (inRows) son siempre ingreso.
 const BIGG_GRUPOS = [
-  { key: "vta_sp",  label: "Venta Sedes Propias",         familia: "propios",         side: "ingreso", rowBy: "cuenta", cuentas: ["Ventas Mercado Pago", "Depositos", "Ventas en Efectivo", "Otros Gastos del Centro"] },
-  { key: "int_sp",  label: "Interusos Sedes Propias",     familia: "propios",         side: "ingreso", rowBy: "cuenta", cuentas: ["Interusos", "Coorporativos"] },
-  { key: "ger",     label: "Ingreso Gerenciamiento Sedes", familia: "gerenciamiento", side: "ingreso", rowBy: "cuenta", cuentas: ["Fee de Gestion y Adm"] },
-  { key: "wre",     label: "Ingreso Wellness Real Estate", familia: "wre",            side: "ingreso", rowBy: "centro", cuentas: null },
-  { key: "hq",      label: "Ingreso HQ",                  familia: "hq",              side: "ingreso", rowBy: "cuenta", cuentas: ["Regalias s/Ventas", "Licencia Uso de Marca", "Equipamientos", "Coorporativos (Gympass)", "Coorporativos", "APP (Gympass)", "Sponsor", "Acciones de Mkt", "Ingresos A", "Otros Ingresos"] },
-  { key: "gpv",     label: "Gastos por Ventas",           familia: "any",             side: "costo",   rowBy: "cuenta", cuentas: ["Acciones de Mkt", "Otros Egresos", "Coorporativos (Gympass)", "Coorporativos", "Aranceles y Otros Financieros", "IIBB", "Imp. Cred. y Deb."] },
+  { key: "vta_sp", label: "Venta Sedes Propias" },
+  { key: "int_sp", label: "Interusos Sedes Propias" },
+  { key: "ger",    label: "Ingreso Gerenciamiento Sedes" },
+  { key: "wre",    label: "Ingreso Wellness Real Estate" },
+  { key: "hq",     label: "Ingreso HQ" },
+  { key: "gpv",    label: "Gastos por Ventas" },
 ];
 const BIGG_ING = ["vta_sp", "int_sp", "ger", "wre", "hq"];   // subgrupos de ingreso (suman a Total Ingresos)
 const grupoBigg = (key) => BIGG_GRUPOS.find(g => g.key === key);
@@ -657,14 +658,11 @@ function familiaCentro(cc) {
   if (op === "Wellness Real Estate") return "wre";
   return null;
 }
+const FAM_A_ING = { gerenciamiento: "ger", wre: "wre", hq: "hq" };   // familia → subgrupo de ingreso (salvo propios)
 
 function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, year, moneda) {
-  const grupos = {};
-  for (const g of BIGG_GRUPOS) { grupos[g.key] = {}; if (g.cuentas) for (const c of g.cuentas) grupos[g.key][c] = new Array(12).fill(0); }
+  const grupos = {}; for (const g of BIGG_GRUPOS) grupos[g.key] = {};
   const sinClasificar = {};
-  // El lado (ingreso/costo) NO es el array: la venta de sede llega firmada como ingreso dentro de
-  // egRows (movimientoToPnLRows firma las cuentas "ventas" en +). Por eso: las filas de ingreso
-  // (inRows) siempre son ingreso; las de egRows son ingreso solo si la cuenta es categoría "ventas".
   const add = (rows, forcedSide) => {
     for (const row of rows) {
       if (!row.fecha || row.fecha.slice(0, 4) !== String(year)) continue;
@@ -674,16 +672,20 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, year, moneda) {
       const cc = ccMap.get(row.centro_costo ?? "");
       const fam = familiaCentro(cc);
       const cuenta = (row.cuenta_contable ?? "").trim() || "Sin cuenta";
-      const side = forcedSide ?? (normCat(cuentaMap?.get(cuenta)?.categoria_pnl) === "ventas" ? "ingreso" : "costo");
-      // Buscar el subgrupo: side + (familia matchea o "any") + (cuentas incluye la cuenta o acepta todo).
-      const g = BIGG_GRUPOS.find(g =>
-        g.side === side &&
-        (g.familia === "any" || g.familia === fam) &&
-        (g.cuentas === null || g.cuentas.includes(cuenta)));
-      const key = g ? (g.rowBy === "centro" ? (cc?.nombre ?? cuenta) : cuenta) : cuenta;
-      const bucket = g ? grupos[g.key] : sinClasificar;
-      if (!bucket[key]) bucket[key] = new Array(12).fill(0);
-      bucket[key][m] += Number(row.total) || 0;
+      const meta = cuentaMap?.get(cuenta);
+      const catPnl = normCat(meta?.categoria_pnl);                            // "ventas" | "costo_venta" | …
+      const side = forcedSide ?? (catPnl === "ventas" ? "ingreso" : "costo"); // inRows siempre ingreso
+      let gkey = null, rowKey = cuenta;
+      if (side === "ingreso") {
+        if (fam === "propios")
+          gkey = (meta?.categoria_pnl_sede ?? "").trim().toLowerCase() === "otros ingresos" ? "int_sp" : "vta_sp";
+        else if (fam) { gkey = FAM_A_ING[fam]; if (gkey === "wre") rowKey = cc?.nombre ?? cuenta; }
+      } else if (catPnl === "costo_venta") {
+        gkey = "gpv";                                                        // costo que pega en el margen
+      }                                                                       // resto de costos → debajo de MB (Etapa 2) → sinClasificar
+      const bucket = gkey ? grupos[gkey] : sinClasificar;
+      if (!bucket[rowKey]) bucket[rowKey] = new Array(12).fill(0);
+      bucket[rowKey][m] += Number(row.total) || 0;
     }
   };
   add(inRows, "ingreso"); add(egRows, null);
