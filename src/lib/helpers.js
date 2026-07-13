@@ -7,6 +7,16 @@ export const SKIP_CC_TYPES = new Set([]); // todos los tipos se muestran en el d
 export const SYM        = { ARS: "$", USD: "U$D", EUR: "€" };
 export const MONTHS     = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 
+// País → moneda LOCAL de operación (la que rinde el POS del franquiciado / Bigg Eye).
+// OJO: distinta de la moneda de facturación del fee (Chile/Perú facturan el fee en USD
+// pero venden en CLP/PEN). Códigos alineados con feeToUSD (ARS/EUR/UYU/PYG/CLP/PEN/USD).
+export const COUNTRY_CURRENCY = {
+  Argentina: "ARS", Uruguay: "UYU", Paraguay: "PYG", Chile: "CLP",
+  "Perú": "PEN", Peru: "PEN", "España": "EUR", Espana: "EUR",
+  Portugal: "EUR", "Panamá": "USD", Panama: "USD",
+};
+export const countryToCurrency = (country) => COUNTRY_CURRENCY[country] ?? "USD";
+
 // Documentos posibles (emisión propia)
 export const DOCS   = ["FACTURA", "NC"];
 // Documentos recibidos (no se emiten, se registran)
