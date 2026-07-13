@@ -1071,10 +1071,9 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
           facturanteStatus = `sin_invoice: ${e.message}`;
         }
       }
-      try {
-        onAddComp(r.frId, comp);
-      } catch {
-        if (comp.facturanteId) facturanteStatus = `GUARDADO_FALLIDO (AFIP OK, ID=${comp.facturanteId})`;
+      const saveResult = await onAddComp(r.frId, comp);
+      if (saveResult?.ok === false && comp.facturanteId) {
+        facturanteStatus = `GUARDADO_FALLIDO (AFIP OK, ID=${comp.facturanteId}) — cargar a mano en el sistema`;
       }
       log.push({ frName: r.frName, fee, country: r.country, dto, facturanteStatus, invoice: comp.invoice ?? null });
     }
@@ -1083,13 +1082,20 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
     setStage("done");
   };
 
-  if (stage === "done") return (
+  if (stage === "done") {
+    const failedCount = processed.filter(p => p.facturanteStatus?.startsWith("GUARDADO_FALLIDO")).length;
+    return (
     <div className="fade" style={{ textAlign: "center", padding: 40 }}>
-      <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
+      <div style={{ fontSize: 40, marginBottom: 12 }}>{failedCount > 0 ? "⚠️" : "✅"}</div>
       <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 8 }}>Lote CRM procesado</div>
       <div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 16 }}>
         {processed.length} comprobante{processed.length !== 1 ? "s" : ""} · {MONTHS[crmMonth]} {crmYear}
       </div>
+      {failedCount > 0 && (
+        <div style={{ color: "var(--red)", fontWeight: 700, fontSize: 13, marginBottom: 16 }}>
+          {failedCount} factura{failedCount !== 1 ? "s" : ""} emitida{failedCount !== 1 ? "s" : ""} en Facturante pero NO guardada{failedCount !== 1 ? "s" : ""} en el sistema
+        </div>
+      )}
       <div className="card" style={{ textAlign: "left", maxWidth: 540, margin: "0 auto 20px" }}>
         {processed.map((p, i) => (
           <div key={i} style={{ borderBottom: "1px solid var(--border)" }}>
@@ -1113,6 +1119,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
       <button className="btn" onClick={onDone}>Volver</button>
     </div>
   );
+  }
 
   const inS = { padding: "4px 8px", fontSize: 12, borderRadius: 6, background: "var(--bg)", border: "1px solid var(--border2)", color: "var(--text)", fontFamily: "var(--font)", textAlign: "right" };
   const selS = { padding: "5px 9px", fontSize: 12, borderRadius: 7, background: "var(--bg)", border: "1px solid var(--border2)", color: "var(--text)", fontFamily: "var(--font)", cursor: "pointer" };
