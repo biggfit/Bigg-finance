@@ -1733,44 +1733,44 @@ export default function PantallaReportes({ sociedad = "nako" }) {
                 boxShadow: T.shadowMd, minWidth: 220, fontSize: 13,
                 color: T.text, padding: "4px 0", maxHeight: 280, overflowY: "auto",
               }}>
-                <label style={{
+                <div onClick={() => setSelectedSedeCCs([])} style={{
                   display: "flex", alignItems: "center", gap: 8, padding: "8px 14px",
                   borderBottom: `1px solid ${T.cardBorder}`, cursor: "pointer",
                   userSelect: "none", fontWeight: 600, color: T.text,
                 }}>
-                  <input type="checkbox" checked={selectedSedeCCs.length === 0}
-                    onChange={() => setSelectedSedeCCs([])} style={{ cursor: "pointer", accentColor: T.accentDark }} />
+                  <input type="checkbox" checked={selectedSedeCCs.length === 0} readOnly
+                    style={{ pointerEvents: "none", accentColor: T.accentDark }} />
                   Todas
-                </label>
+                </div>
                 {gruposSede.map(g => {
                   const ids = g.sedes.map(c => c.id);
                   const grpChecked = selectedSedeCCs.length === 0 || ids.every(id => selectedSedeCCs.includes(id));
                   return (
                     <div key={g.id}>
                       {/* Operación = agrupador (seleccionar toda la operación) */}
-                      <label style={{
+                      <div onClick={() => toggleGrupoSede(g.id)} style={{
                         display: "flex", alignItems: "center", gap: 8, padding: "7px 14px",
                         cursor: "pointer", userSelect: "none", fontWeight: 800, color: T.muted,
                         background: "#f1f5f9", borderTop: `1px solid ${T.cardBorder}`,
                         textTransform: "uppercase", fontSize: 10.5, letterSpacing: ".06em",
                       }}>
-                        <input type="checkbox" checked={grpChecked}
-                          onChange={() => toggleGrupoSede(g.id)} style={{ cursor: "pointer", accentColor: T.accentDark }} />
+                        <input type="checkbox" checked={grpChecked} readOnly
+                          style={{ pointerEvents: "none", accentColor: T.accentDark }} />
                         {g.label}
-                      </label>
+                      </div>
                       {g.sedes.map(cc => {
                         const checked = selectedSedeCCs.length === 0 || selectedSedeCCs.includes(cc.id);
                         return (
-                          <label key={cc.id} style={{
+                          <div key={cc.id} onClick={() => toggleSedeCC(cc.id)} style={{
                             display: "flex", alignItems: "center", gap: 8, padding: "6px 14px 6px 32px",
                             cursor: "pointer", userSelect: "none", color: T.text, transition: "background .1s",
                           }}
                             onMouseEnter={e => e.currentTarget.style.background = "#eceff3"}
                             onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                            <input type="checkbox" checked={checked}
-                              onChange={() => toggleSedeCC(cc.id)} style={{ cursor: "pointer", accentColor: T.accentDark }} />
+                            <input type="checkbox" checked={checked} readOnly
+                              style={{ pointerEvents: "none", accentColor: T.accentDark }} />
                             {cc.nombre}
-                          </label>
+                          </div>
                         );
                       })}
                     </div>
