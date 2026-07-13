@@ -1305,8 +1305,6 @@ const TABS = [
   { id: "pl_sede", label: "P&L Sedes",  icon: "🏬", desc: "Resultado operativo por sede: ventas, costos variables y márgenes." },
   { id: "pl_bigg", label: "P&L BIGG",   icon: "🏢", desc: "Resultado corporativo por centro de HQ (R&D, Sales & Mkt, G&A)." },
   { id: "cf",      label: "Cash Flow",  icon: "💵", desc: "Flujo de caja mensual: entradas y salidas por cuenta." },
-  { id: "balance", label: "Patrimonio Neto", icon: "⚖️", desc: "Activo, Pasivo y Patrimonio Neto de la sociedad." },
-  { id: "evpn",    label: "Evolución PN",    icon: "📈", desc: "Cómo evoluciona el patrimonio neto mes a mes." },
   { id: "interco", label: "Intercompañía",   icon: "🔗", desc: "Posiciones entre sociedades, agrupadas por anillo." },
   { id: "consolidado", label: "Tesorería consolidada", icon: "🏦", desc: "Saldos y movimientos de todas las sociedades del grupo." },
 ];
@@ -1315,7 +1313,7 @@ const TABS = [
 // Por sociedad = estados de la entidad legal (scoped) · Operaciones = management del negocio
 // (sedes) · BIGG HQ = mirada consolidada/corporativa.
 const LENTES = [
-  { id: "sociedad",    label: "Por sociedad",       tabs: ["balance", "cf", "evpn"] },
+  { id: "sociedad",    label: "Por sociedad",       tabs: ["cf"] },
   { id: "operaciones", label: "Operaciones (sedes)", tabs: ["pl_sede"] },
   { id: "bigg",        label: "BIGG HQ",            tabs: ["pl_bigg", "interco", "consolidado"] },
 ];
