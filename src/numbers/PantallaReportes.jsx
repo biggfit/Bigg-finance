@@ -1711,7 +1711,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         {showSedes && (
           <div ref={sedeRef} style={{ position: "relative" }}>
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
-              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Sedes</label>
+              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Operaciones / Sedes</label>
             <button onClick={() => setSedeOpen(o => !o)} style={{
               ...selStyle, display: "flex", alignItems: "center", gap: 8, minWidth: 190,
               background: sedeOpen ? "#f0f2f5" : "#eceff3",
