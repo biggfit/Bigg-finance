@@ -1404,7 +1404,6 @@ function ReportesMenu({ onPick }) {
 // ─── Pantalla principal ───────────────────────────────────────────────────────
 export default function PantallaReportes({ sociedad = "nako" }) {
   const [activeTab,      setActiveTab]      = useState(null);   // null = menú-landing de reportes
-  const [selectedOperacion, setSelectedOperacion] = useState(null);   // operación elegida para P&L Sedes
   const [year,           setYear]           = useState(CUR_YEAR);
   const [selectedSedeCCs, setSelectedSedeCCs] = useState([]);
   const [sedeOpen,        setSedeOpen]        = useState(false);
@@ -1502,27 +1501,36 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
   const ccMap = useMemo(() => new Map(ccs.map(c => [c.id, c])), [ccs]);
 
-  // Operaciones = valores distintos de `operacion` en los centros de sede (lo carga el usuario en
-  // nb_centros_costo). Cada valor genera una tarjeta en el menú. Centros sin `operacion` → "(Sin asignar)".
+  // Sedes agrupadas por `operacion` (lo carga el usuario en nb_centros_costo). La operación es el
+  // agrupador (categoría) y la sede la subcategoría → un solo filtro jerárquico. Sin `operacion` → grupo aparte.
   const OP_SIN = "__sin__";
-  const operaciones = useMemo(() => {
-    const seen = [];
-    for (const c of sedeCCs) { const v = (c.operacion ?? "").trim(); if (v && !seen.includes(v)) seen.push(v); }
-    const list = seen.map(v => ({ id: v, label: v }));
-    if (sedeCCs.some(c => !(c.operacion ?? "").trim())) list.push({ id: OP_SIN, label: "(Sin operación asignada)" });
-    return list;
+  const gruposSede = useMemo(() => {
+    const map = new Map();
+    for (const c of sedeCCs) {
+      const key = (c.operacion ?? "").trim() || OP_SIN;
+      if (!map.has(key)) map.set(key, { id: key, label: key === OP_SIN ? "Sin operación" : key, sedes: [] });
+      map.get(key).sedes.push(c);
+    }
+    return [...map.values()];
   }, [sedeCCs]);
 
   const resolvedCCSede = useMemo(() => {
-    // Prioridad: la operación elegida desde el menú. Si no, la multiselección de sedes (o todas).
-    if (selectedOperacion) {
-      return sedeCCs
-        .filter(c => selectedOperacion === OP_SIN ? !(c.operacion ?? "").trim() : (c.operacion ?? "").trim() === selectedOperacion)
-        .map(c => c.id);
-    }
     if (selectedSedeCCs.length === 0) return sedeCCs.map(c => c.id);
     return selectedSedeCCs;
-  }, [selectedOperacion, selectedSedeCCs, sedeCCs]);
+  }, [selectedSedeCCs, sedeCCs]);
+
+  // Toggle de un grupo (operación) entero: agrega/saca todas sus sedes de la selección.
+  const toggleGrupoSede = (opId) => {
+    const ids = (gruposSede.find(g => g.id === opId)?.sedes ?? []).map(c => c.id);
+    setSelectedSedeCCs(prev => {
+      const allIds = sedeCCs.map(c => c.id);
+      const sel = new Set(prev.length === 0 ? allIds : prev);
+      const allIn = ids.every(id => sel.has(id));
+      ids.forEach(id => allIn ? sel.delete(id) : sel.add(id));
+      const next = [...sel];
+      return next.length === allIds.length ? [] : next;
+    });
+  };
 
   // P&L = UNA lógica de agregación (buildPnL/HQ) + TRES adaptadores ("normalizar y agregar"):
   //   · nb_comprobantes → ya viene en formato {fecha,sociedad,centro_costo,cuenta_contable,total}
@@ -1630,7 +1638,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const showMonedaPL = activeTab === "pl_sede" || activeTab === "pl_bigg";
   const showMonedaCF = activeTab === "cf";
   // El multiselect de Sedes solo aplica si NO se entró por una operación (esa ya define los centros).
-  const showSedes    = activeTab === "pl_sede" && !selectedOperacion && sedeCCs.length > 0;
+  const showSedes    = activeTab === "pl_sede" && sedeCCs.length > 0;
 
   // Menú-landing: sin reporte elegido → tarjetas agrupadas por lente (Operaciones = 1 tarjeta x operación).
   if (!activeTab) return (
@@ -1648,7 +1656,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         title={curTab?.label ?? "Reporte"}
         subtitle={curLente?.label}
         action={
-          <button onClick={() => { setActiveTab(null); setSelectedOperacion(null); }} style={{
+          <button onClick={() => setActiveTab(null)} style={{
             display: "inline-flex", alignItems: "center", gap: 6,
             background: "#f3f4f6", border: `1px solid ${T.cardBorder}`, borderRadius: 8,
             color: T.text, fontFamily: T.font, fontSize: 13, fontWeight: 700,
@@ -1702,19 +1710,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
           </div>
         )}
 
-        {/* Operación — filtra las sedes por unidad (Argentina, Colombia, …) */}
-        {activeTab === "pl_sede" && operaciones.length > 0 && (
-          <div>
-            <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
-              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Operación</label>
-            <select value={selectedOperacion ?? ""} onChange={e => setSelectedOperacion(e.target.value || null)} style={selStyle}>
-              <option value="">Todas las operaciones</option>
-              {operaciones.map(op => <option key={op.id} value={op.id}>{op.label}</option>)}
-            </select>
-          </div>
-        )}
-
-        {/* Sedes dropdown */}
+        {/* Sedes dropdown — jerárquico: Operación (agrupador) › Sede */}
         {showSedes && (
           <div ref={sedeRef} style={{ position: "relative" }}>
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
@@ -1746,20 +1742,38 @@ export default function PantallaReportes({ sociedad = "nako" }) {
                     onChange={() => setSelectedSedeCCs([])} style={{ cursor: "pointer", accentColor: T.accentDark }} />
                   Todas
                 </label>
-                {sedeCCs.map(cc => {
-                  const checked = selectedSedeCCs.length === 0 || selectedSedeCCs.includes(cc.id);
+                {gruposSede.map(g => {
+                  const ids = g.sedes.map(c => c.id);
+                  const grpChecked = selectedSedeCCs.length === 0 || ids.every(id => selectedSedeCCs.includes(id));
                   return (
-                    <label key={cc.id} style={{
-                      display: "flex", alignItems: "center", gap: 8, padding: "7px 14px",
-                      cursor: "pointer", userSelect: "none", color: T.text,
-                      transition: "background .1s",
-                    }}
-                      onMouseEnter={e => e.currentTarget.style.background = "#eceff3"}
-                      onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                      <input type="checkbox" checked={checked}
-                        onChange={() => toggleSedeCC(cc.id)} style={{ cursor: "pointer", accentColor: T.accentDark }} />
-                      {cc.nombre}
-                    </label>
+                    <div key={g.id}>
+                      {/* Operación = agrupador (seleccionar toda la operación) */}
+                      <label style={{
+                        display: "flex", alignItems: "center", gap: 8, padding: "7px 14px",
+                        cursor: "pointer", userSelect: "none", fontWeight: 800, color: T.muted,
+                        background: "#f1f5f9", borderTop: `1px solid ${T.cardBorder}`,
+                        textTransform: "uppercase", fontSize: 10.5, letterSpacing: ".06em",
+                      }}>
+                        <input type="checkbox" checked={grpChecked}
+                          onChange={() => toggleGrupoSede(g.id)} style={{ cursor: "pointer", accentColor: T.accentDark }} />
+                        {g.label}
+                      </label>
+                      {g.sedes.map(cc => {
+                        const checked = selectedSedeCCs.length === 0 || selectedSedeCCs.includes(cc.id);
+                        return (
+                          <label key={cc.id} style={{
+                            display: "flex", alignItems: "center", gap: 8, padding: "6px 14px 6px 32px",
+                            cursor: "pointer", userSelect: "none", color: T.text, transition: "background .1s",
+                          }}
+                            onMouseEnter={e => e.currentTarget.style.background = "#eceff3"}
+                            onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                            <input type="checkbox" checked={checked}
+                              onChange={() => toggleSedeCC(cc.id)} style={{ cursor: "pointer", accentColor: T.accentDark }} />
+                            {cc.nombre}
+                          </label>
+                        );
+                      })}
+                    </div>
                   );
                 })}
               </div>
