@@ -247,12 +247,12 @@ function DataRow({ label, values, activeMonths, color }) {
   );
 }
 
-function SubtotalRow({ label, values, activeMonths, color }) {
+function SubtotalRow({ label, values, activeMonths, color, strong }) {
   const total = rowSum(values);
-  const bg = "#f3f4f6";
+  const bg = strong ? "#cbd5e1" : "#f3f4f6";
   return (
-    <tr style={{ background: bg, borderTop: `2px solid ${color ?? T.cardBorder}`, borderBottom: `2px solid ${T.cardBorder}` }}>
-      <td style={{ padding: "12px 16px", fontSize: 14, fontWeight: 900,
+    <tr style={{ background: bg, borderTop: `${strong ? 3 : 2}px solid ${color ?? T.cardBorder}`, borderBottom: `2px solid ${T.cardBorder}` }}>
+      <td style={{ padding: "12px 16px", fontSize: strong ? 15 : 14, fontWeight: 900,
         color: color ?? T.text, letterSpacing: ".02em",
         ...stickyCol, background: bg }}>{label}</td>
       {activeMonths.map(m => (
@@ -271,14 +271,15 @@ function SubtotalRow({ label, values, activeMonths, color }) {
   );
 }
 
-function ResultadoRow({ label, values, activeMonths }) {
+function ResultadoRow({ label, values, activeMonths, strong }) {
   const total = rowSum(values);
   const color = total >= 0 ? T.green : T.red;
-  const bg = total >= 0 ? "#f0fdf4" : "#fff1f2";
+  const bg = strong ? (total >= 0 ? "#bbf7d0" : "#fecaca") : (total >= 0 ? "#f0fdf4" : "#fff1f2");
   return (
     <tr style={{ background: bg,
-      borderTop: `2px solid ${total >= 0 ? T.green : T.red}` }}>
-      <td style={{ padding: "12px 16px", fontSize: 14, fontWeight: 900,
+      borderTop: `${strong ? 3 : 2}px solid ${total >= 0 ? T.green : T.red}`,
+      borderBottom: strong ? `2px solid ${total >= 0 ? T.green : T.red}` : "none" }}>
+      <td style={{ padding: "12px 16px", fontSize: strong ? 15 : 14, fontWeight: 900,
         color, letterSpacing: ".02em",
         ...stickyCol, background: bg }}>{label}</td>
       {activeMonths.map(m => (
@@ -368,22 +369,37 @@ function computeSubtotalsSede(pnl) {
            activeMonths: [...months].sort((a,b) => a-b) };
 }
 
-// Banda de sección (INGRESOS / GASTOS OPERATIVOS) — separador visual, no colapsable.
-function BandaRow({ label, span }) {
+// Banda de sección (INGRESOS / GASTOS OPERATIVOS): colapsa la sección entera. La etiqueta va en
+// una celda sticky (queda fija al scroll horizontal) + relleno oscuro para el resto de columnas.
+function BandaRow({ label, span, expanded, onToggle }) {
   return (
-    <tr style={{ background: T.tableHead }}>
-      <td colSpan={span} style={{ padding: "6px 16px", fontSize: 10, fontWeight: 800,
+    <tr style={{ background: T.tableHead, cursor: onToggle ? "pointer" : "default" }} onClick={onToggle}>
+      <td style={{ padding: "6px 16px", fontSize: 10, fontWeight: 800,
         color: T.tableHeadText, letterSpacing: ".12em", textTransform: "uppercase",
-        ...stickyCol, background: T.tableHead }}>{label}</td>
+        userSelect: "none", ...stickyCol, background: T.tableHead }}>
+        {onToggle && <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{expanded ? "▼" : "▶"}</span>}
+        {label}
+      </td>
+      <td colSpan={span - 1} style={{ background: T.tableHead }} />
     </tr>
   );
 }
 
 function PnLTableSede({ pnl, sub, year, moneda, label }) {
-  const { st, totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths } = sub;
+  const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths } = sub;
   const ncols = activeMonths.length + 2;
+
+  // Colapso jerárquico: bandas de sección (Ingresos / Gastos Op) + cada sub-grupo + toggle maestro.
+  const ALLKEYS = ["sec_ing", "sec_gop", ...SEDE_GRUPOS.map(g => g.key)];
+  const [collapsed, setCollapsed] = useState({});
+  const isCol  = k => !!collapsed[k];
+  const toggle = k => setCollapsed(c => ({ ...c, [k]: !c[k] }));
+  const allCol = ALLKEYS.every(k => collapsed[k]);
+  const toggleAll = () => setCollapsed(allCol ? {} : Object.fromEntries(ALLKEYS.map(k => [k, true])));
+
   const grp = (key) => <PnlSection sub label={grupoSede(key).label} accounts={pnl.grupos[key]}
-    order={grupoSede(key).cuentas} color={grupoSede(key).color} activeMonths={activeMonths} ncols={ncols} />;
+    order={grupoSede(key).cuentas} color={grupoSede(key).color} activeMonths={activeMonths} ncols={ncols}
+    expanded={!isCol(key)} onToggle={() => toggle(key)} />;
   const sinCls = Object.keys(pnl.sinClasificar).length > 0;
 
   if (activeMonths.length === 0) return (
@@ -400,32 +416,40 @@ function PnLTableSede({ pnl, sub, year, moneda, label }) {
       <table style={{ width: "100%", minWidth: 180 + activeMonths.length * 110, borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            <th style={{ ...thStyle, textAlign: "left", width: 1, whiteSpace: "nowrap", ...stickyCol, background: T.tableHead, zIndex: 4 }}>Cuenta</th>
+            <th onClick={toggleAll} title="Contraer / expandir todo"
+              style={{ ...thStyle, textAlign: "left", width: 1, whiteSpace: "nowrap", cursor: "pointer",
+                userSelect: "none", ...stickyCol, background: T.tableHead, zIndex: 4 }}>
+              <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{allCol ? "▶" : "▼"}</span>Cuenta
+            </th>
             {activeMonths.map(m => <th key={m} style={thStyle}>{MESES[m]}</th>)}
             <th style={{ ...thStyle, borderLeft: "1px solid rgba(255,255,255,.12)" }}>TOTAL</th>
           </tr>
         </thead>
         <tbody>
-          <BandaRow label="Ingresos" span={ncols} />
-          {grp("vta_cf")}
-          {grp("int_bigg")}
-          {grp("int_corp")}
-          <SubtotalRow label="Total Ingresos" values={totIngresos} activeMonths={activeMonths} color={T.green} />
+          <BandaRow label="Ingresos" span={ncols} expanded={!isCol("sec_ing")} onToggle={() => toggle("sec_ing")} />
+          {!isCol("sec_ing") && <>
+            {grp("vta_cf")}
+            {grp("int_bigg")}
+            {grp("int_corp")}
+          </>}
+          <SubtotalRow strong label="Total Ingresos" values={totIngresos} activeMonths={activeMonths} color={T.green} />
 
           {grp("cvar")}
-          <ResultadoRow label="Margen de Contribución" values={margenContrib} activeMonths={activeMonths} />
+          <ResultadoRow strong label="Margen de Contribución" values={margenContrib} activeMonths={activeMonths} />
 
-          <BandaRow label="Gastos Operativos" span={ncols} />
-          {grp("gp_pers")}
-          {grp("gp_ocup")}
-          {grp("gp_mkt")}
-          {grp("gp_otros")}
+          <BandaRow label="Gastos Operativos" span={ncols} expanded={!isCol("sec_gop")} onToggle={() => toggle("sec_gop")} />
+          {!isCol("sec_gop") && <>
+            {grp("gp_pers")}
+            {grp("gp_ocup")}
+            {grp("gp_mkt")}
+            {grp("gp_otros")}
+          </>}
           <SubtotalRow label="Total Gastos Operativos" values={totGastosOp} activeMonths={activeMonths} color={T.red} />
-          <ResultadoRow label="Resultado Operativo" values={resOp} activeMonths={activeMonths} />
+          <ResultadoRow strong label="Resultado Operativo" values={resOp} activeMonths={activeMonths} />
 
           {grp("com_res")}
           {grp("inv_no_op")}
-          <ResultadoRow label="Resultado Final" values={resFinal} activeMonths={activeMonths} />
+          <ResultadoRow strong label="Resultado Final" values={resFinal} activeMonths={activeMonths} />
         </tbody>
       </table>
     </div>
@@ -522,8 +546,12 @@ function PnLTable({ pnl, sub, year, moneda, label }) {
 }
 
 // ─── PnlSection ───────────────────────────────────────────────────────────────
-function PnlSection({ label, accounts, activeMonths, color, ncols, sub, order }) {
-  const [expanded, setExpanded] = useState(true);
+function PnlSection({ label, accounts, activeMonths, color, ncols, sub, order, expanded: expandedProp, onToggle }) {
+  const [expandedState, setExpandedState] = useState(true);
+  // Controlado si viene onToggle (lo maneja el toggle maestro); si no, estado interno (como antes).
+  const controlled = onToggle !== undefined;
+  const expanded = controlled ? expandedProp : expandedState;
+  const toggle = controlled ? onToggle : () => setExpandedState(e => !e);
   // `order` (opcional) = orden explícito de cuentas; sin él, alfabético (comportamiento previo).
   const rows = Object.entries(accounts).sort(([a],[b]) => {
     if (order) { const ia = order.indexOf(a), ib = order.indexOf(b);
@@ -531,7 +559,6 @@ function PnlSection({ label, accounts, activeMonths, color, ncols, sub, order })
     return a.localeCompare(b);
   });
   const subTotals = MESES.map((_,m) => rows.reduce((s,[,v]) => s + (v[m] || 0), 0));
-  const toggle = () => setExpanded(e => !e);
   return (
     <>
       {!sub && (
