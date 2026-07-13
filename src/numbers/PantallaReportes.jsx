@@ -759,6 +759,10 @@ function SubSectionRow({ label, values, activeMonths, color, expanded, onToggle 
 }
 
 // ─── P&L HQ: agrupa por centro_costo usando cc.categoria_pnl ─────────────────
+// Categorías de ingreso HQ que se abren por CUENTA contable en vez de por centro:
+// todo el ingreso HQ vive en un solo centro ("10 - HQ"), así que la dimensión útil es la cuenta
+// (Fee / Interusos / Pauta / Sponsor / Licencia / Gympass / Otros). Los gastos siguen por centro.
+const HQ_POR_CUENTA = new Set(["ventas"]);
 function buildPnLHQ(rawIn, rawEg, ccMap, year, moneda) {
   const cats = { ventas:{}, costo_venta:{}, r_y_d:{}, sales_marketing:{}, g_and_a:{}, gastos_financieros:{}, impuestos:{}, sin_categoria:{} };
   const add = (rows) => {
@@ -769,18 +773,18 @@ function buildPnLHQ(rawIn, rawEg, ccMap, year, moneda) {
       if (!cc || (cc.grupo ?? "").toLowerCase() !== "hq") continue;
       const m = parseInt(row.fecha.slice(5,7), 10) - 1;
       if (m < 0 || m > 11) continue;
-      const nombre = cc.nombre;
       const cat    = normCat(cc.categoria_pnl);
+      const key    = HQ_POR_CUENTA.has(cat) ? (String(row.cuenta_contable ?? "").trim() || "Otros Ingresos") : cc.nombre;
       const bucket = cats[cat] ?? cats.sin_categoria;
-      if (!bucket[nombre]) bucket[nombre] = new Array(12).fill(0);
-      bucket[nombre][m] += Number(row.total) || 0;
+      if (!bucket[key]) bucket[key] = new Array(12).fill(0);
+      bucket[key][m] += Number(row.total) || 0;
     }
   };
   add(rawIn); add(rawEg);
   for (const cc of ccMap.values()) {
     if ((cc.grupo ?? "").toLowerCase() !== "hq") continue;
     const cat = normCat(cc.categoria_pnl);
-    if (!cat) continue;
+    if (!cat || HQ_POR_CUENTA.has(cat)) continue;   // ingreso: no sembrar el centro como fila vacía (las cuentas aparecen si tienen dato)
     const bucket = cats[cat] ?? cats.sin_categoria;
     if (!bucket[cc.nombre]) bucket[cc.nombre] = new Array(12).fill(0);
   }
@@ -831,6 +835,7 @@ function PnLTableHQ({ pnl, sub, year, moneda }) {
         </thead>
         <tbody>
           <PnlSection label="Ventas" accounts={pnl.ventas}
+            order={["Fee de Gestion y Adm", "Interusos", "Pauta", "Sponsor", "Otros Ingresos"]}
             activeMonths={activeMonths} color={T.green} ncols={ncols} />
           <SubtotalRow label="Total Ventas" values={ventasTot}
             activeMonths={activeMonths} color={T.green} />
