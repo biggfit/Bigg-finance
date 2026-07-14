@@ -2076,7 +2076,22 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     return soc ? rawMovs.filter(m => (m.sociedad ?? "").toLowerCase() === soc) : rawMovs;
   }, [rawMovs, sociedad]);
 
-  const sedeCCs = useMemo(() => ccs.filter(c => (c.grupo ?? "").toLowerCase() === "operaciones"), [ccs]);
+  // Núcleo (anillo 1) = sociedades cuyo `anillo` contiene "cleo" (Núcleo, con o sin acento).
+  const nucleoEmpresas = useMemo(() => new Set(
+    (sociedades ?? [])
+      .filter(s => (s.anillo ?? "").toLowerCase().includes("cleo"))
+      .map(s => s.id)
+  ), [sociedades]);
+
+  // P&L Sedes = SOLO sedes propias del anillo 1. El anillo vive en la sociedad, no en el centro:
+  // se resuelve centro → `empresa` → sociedad núcleo. Además la familia debe ser "propios" (sede
+  // estándar), para excluir Huergo (WRE) y Rosedal (administrada). "Propios España/Colombia" son
+  // propias pero de sociedades Fondeadas → NO entran (van a su propio reporte).
+  const sedeCCs = useMemo(() => ccs.filter(c =>
+    (c.grupo ?? "").toLowerCase() === "operaciones" &&
+    nucleoEmpresas.has((c.empresa ?? "").trim()) &&
+    familiaCentro(c) === "propios"
+  ), [ccs, nucleoEmpresas]);
 
   const ccMap = useMemo(() => new Map(ccs.map(c => [c.id, c])), [ccs]);
 
@@ -2162,12 +2177,6 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const subSede     = useMemo(() => computeSubtotalsSede(pnlSede), [pnlSede]);
   const subSedePrev = useMemo(() => computeSubtotalsSede(pnlSedePrev), [pnlSedePrev]);
   // P&L BIGG consolidado (Núcleo/anillo 1) — sedes propias + HQ + franquicias, hasta Margen Bruto.
-  // anillo "Núcleo" (con o sin acento) → contiene "cleo" en minúsculas. Robusto sin manejar diacríticos.
-  const nucleoEmpresas = useMemo(() => new Set(
-    (sociedades ?? [])
-      .filter(s => (s.anillo ?? "").toLowerCase().includes("cleo"))
-      .map(s => s.id)
-  ), [sociedades]);
   const pnlBigg = useMemo(
     () => buildPnLBigg(inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL),
     [inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL]
