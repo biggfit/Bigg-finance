@@ -1565,8 +1565,8 @@ const TABS = [
   { id: "consolidado", label: "Tesorería consolidada", icon: "🏦", desc: "Saldos y movimientos de todas las sociedades del grupo." },
 
   // ── WIP (solo esqueleto navegable; sin cálculo todavía) ──
-  { id: "inf_egresos",  label: "Egresos (detalle)",  icon: "🔎", wip: true, desc: "Listar y filtrar compras por cuenta · centro · proveedor · N° de factura · estado de pago · período. KPIs: total, NC, promedio." },
-  { id: "inf_ingresos", label: "Ingresos (detalle)", icon: "🔎", wip: true, desc: "Listar y filtrar ventas/ingresos por cuenta · centro · cliente · N° de factura · estado de cobro · período." },
+  { id: "inf_egresos",  label: "Egresos (detalle)",  icon: "🔎", desc: "Listar y filtrar compras por cuenta · centro · proveedor · moneda · período." },
+  { id: "inf_ingresos", label: "Ingresos (detalle)", icon: "🔎", desc: "Listar y filtrar ventas/ingresos por cuenta · centro · cliente · moneda · período." },
 
   { id: "er_soc",       label: "Estado de Resultados", icon: "📄", wip: true, desc: "P&L de la entidad legal seleccionada (por sociedad)." },
 
@@ -1676,6 +1676,147 @@ function ReportesMenu({ onPick }) {
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ─── Detalle de comprobantes (Ingresos / Egresos) — listar + filtrar + KPIs ────
+function TabDetalleComprobantes({ rows = [], tipo, ccs = [], sociedades = [] }) {
+  const esEg = tipo === "EGRESO";
+  const contraLabel = esEg ? "Proveedor" : "Cliente";
+  const ccMap  = useMemo(() => new Map(ccs.map(c => [c.id, c.nombre])), [ccs]);
+  const socMap = useMemo(() => new Map(sociedades.map(s => [String(s.id), s.nombre])), [sociedades]);
+  const anioDe = r => String(r.fecha || "").slice(0, 4);
+
+  const [q, setQ]         = useState("");
+  const [fSoc, setFSoc]   = useState("");
+  const [fCC, setFCC]     = useState("");
+  const [fCta, setFCta]   = useState("");
+  const [fMon, setFMon]   = useState("");
+  const [fAnio, setFAnio] = useState(String(CUR_YEAR));
+
+  // Opciones de filtro (de los datos crudos, no de lo ya filtrado).
+  const opts = useMemo(() => {
+    const soc = new Set(), cc = new Set(), cta = new Set(), mon = new Set(), anio = new Set();
+    for (const r of rows) {
+      if (r.sociedad) soc.add(String(r.sociedad));
+      if (r.centro_costo) cc.add(String(r.centro_costo));
+      if (r.cuenta_contable) cta.add(r.cuenta_contable);
+      mon.add(r.moneda || "ARS");
+      if (anioDe(r)) anio.add(anioDe(r));
+    }
+    return {
+      soc: [...soc].sort(), cc: [...cc], cta: [...cta].sort(),
+      mon: [...mon].sort(), anio: [...anio].sort().reverse(),
+    };
+  }, [rows]);
+
+  const filt = useMemo(() => {
+    const qq = q.trim().toLowerCase();
+    return rows.filter(r => {
+      if (fAnio && anioDe(r) !== fAnio) return false;
+      if (fSoc && String(r.sociedad) !== fSoc) return false;
+      if (fCC && String(r.centro_costo) !== fCC) return false;
+      if (fCta && r.cuenta_contable !== fCta) return false;
+      if (fMon && (r.moneda || "ARS") !== fMon) return false;
+      if (qq) {
+        const hay = [r.contraparte_nombre, r.nro_comp, r.nota, r.cuenta_contable]
+          .map(x => String(x || "").toLowerCase()).join(" ");
+        if (!hay.includes(qq)) return false;
+      }
+      return true;
+    }).sort((a, b) => String(b.fecha || "").localeCompare(String(a.fecha || "")));
+  }, [rows, q, fSoc, fCC, fCta, fMon, fAnio]);
+
+  const porMon = useMemo(() => {
+    const m = {};
+    for (const r of filt) { const k = r.moneda || "ARS"; m[k] = (m[k] || 0) + (Number(r.total) || 0); }
+    return m;
+  }, [filt]);
+
+  const selS = { ...selStyle, maxWidth: 200 };
+  const lbl  = { display: "block", fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 };
+  const td   = { padding: "8px 12px", fontSize: 13, borderBottom: `1px solid ${T.cardBorder}`, whiteSpace: "nowrap" };
+  const th   = { padding: "9px 12px", fontSize: 10, fontWeight: 800, color: T.tableHeadText, textTransform: "uppercase", letterSpacing: ".06em", background: T.tableHead, position: "sticky", top: 0, textAlign: "left", whiteSpace: "nowrap" };
+
+  return (
+    <div className="fade">
+      {/* Filtros */}
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-end", background: T.card,
+        border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, padding: "12px 16px", marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,.04)" }}>
+        <div style={{ flex: "1 1 220px", minWidth: 180 }}>
+          <label style={lbl}>Buscar</label>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder={`${contraLabel}, N° comp, nota…`}
+            style={{ ...selStyle, width: "100%", cursor: "text" }} />
+        </div>
+        <div><label style={lbl}>Año</label>
+          <select value={fAnio} onChange={e => setFAnio(e.target.value)} style={selS}>
+            <option value="">Todos</option>
+            {opts.anio.map(a => <option key={a} value={a}>{a}</option>)}
+          </select></div>
+        <div><label style={lbl}>Sociedad</label>
+          <select value={fSoc} onChange={e => setFSoc(e.target.value)} style={selS}>
+            <option value="">Todas</option>
+            {opts.soc.map(s => <option key={s} value={s}>{socMap.get(s) || s}</option>)}
+          </select></div>
+        <div><label style={lbl}>Centro de costo</label>
+          <select value={fCC} onChange={e => setFCC(e.target.value)} style={selS}>
+            <option value="">Todos</option>
+            {opts.cc.map(c => <option key={c} value={c}>{ccMap.get(c) || c}</option>)}
+          </select></div>
+        <div><label style={lbl}>Cuenta</label>
+          <select value={fCta} onChange={e => setFCta(e.target.value)} style={selS}>
+            <option value="">Todas</option>
+            {opts.cta.map(c => <option key={c} value={c}>{c}</option>)}
+          </select></div>
+        <div><label style={lbl}>Moneda</label>
+          <select value={fMon} onChange={e => setFMon(e.target.value)} style={selS}>
+            <option value="">Todas</option>
+            {opts.mon.map(m => <option key={m} value={m}>{m}</option>)}
+          </select></div>
+      </div>
+
+      {/* KPIs */}
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 16 }}>
+        <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, padding: "12px 18px", boxShadow: "0 1px 3px rgba(0,0,0,.04)" }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: ".08em" }}>Cantidad</div>
+          <div style={{ fontSize: 22, fontWeight: 900, color: T.text, fontFamily: T.mono }}>{filt.length}</div>
+        </div>
+        {Object.entries(porMon).sort((a, b) => b[1] - a[1]).map(([mo, tot]) => (
+          <div key={mo} style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, padding: "12px 18px", boxShadow: "0 1px 3px rgba(0,0,0,.04)" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: ".08em" }}>Total {mo}</div>
+            <div style={{ fontSize: 22, fontWeight: 900, color: esEg ? T.red : T.green, fontFamily: T.mono }}>{MONEDA_SYM[mo] ?? mo} {fmtN(tot)}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Tabla */}
+      <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, boxShadow: T.shadow, overflow: "auto", maxHeight: "60vh" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 860 }}>
+          <thead><tr>
+            <th style={th}>Fecha</th><th style={th}>N° Comp</th><th style={th}>{contraLabel}</th>
+            <th style={th}>Cuenta</th><th style={th}>Centro</th><th style={th}>Sociedad</th>
+            <th style={{ ...th, textAlign: "right" }}>Total</th>
+          </tr></thead>
+          <tbody>
+            {filt.length === 0
+              ? <tr><td colSpan={7} style={{ ...td, textAlign: "center", color: T.dim, padding: 32 }}>Sin resultados con esos filtros.</td></tr>
+              : filt.map((r, i) => (
+                <tr key={r.id ?? i} style={{ background: i % 2 ? "#fafbfc" : T.card }}>
+                  <td style={{ ...td, color: T.muted }}>{String(r.fecha || "").split("-").reverse().join("/")}</td>
+                  <td style={{ ...td, fontFamily: T.mono, fontSize: 12, color: T.muted }}>{r.nro_comp || "—"}</td>
+                  <td style={{ ...td, color: T.text, fontWeight: 600 }}>{r.contraparte_nombre || "—"}</td>
+                  <td style={{ ...td, color: T.text }}>{r.cuenta_contable || "—"}</td>
+                  <td style={{ ...td, color: T.muted, fontSize: 12 }}>{ccMap.get(String(r.centro_costo)) || r.centro_costo || "—"}</td>
+                  <td style={{ ...td, color: T.muted, fontSize: 12 }}>{socMap.get(String(r.sociedad)) || r.sociedad || "—"}</td>
+                  <td style={{ ...td, textAlign: "right", fontFamily: T.mono, fontWeight: 700, color: esEg ? T.red : T.green }}>
+                    {MONEDA_SYM[r.moneda || "ARS"] ?? (r.moneda || "ARS")} {fmtN(Number(r.total) || 0)}
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -1986,8 +2127,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         }
       />
 
-      {/* ── Toolbar / Filters (Consolidado trae la suya propia; los WIP no llevan filtros) ── */}
-      {activeTab !== "consolidado" && !curTab?.wip && (
+      {/* ── Toolbar / Filters (Consolidado y los detalles traen su propia barra; los WIP no llevan) ── */}
+      {activeTab !== "consolidado" && !curTab?.wip && activeTab !== "inf_egresos" && activeTab !== "inf_ingresos" && (
       <div style={{
         display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap", alignItems: "flex-end",
         background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
@@ -2165,6 +2306,14 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
       {activeTab === "consolidado" && (
         <TabTesoreriaConsolidada />
+      )}
+
+      {/* ── Informes · detalle de comprobantes (Egresos / Ingresos) ── */}
+      {activeTab === "inf_egresos" && (
+        <TabDetalleComprobantes rows={rawEg} tipo="EGRESO" ccs={ccs} sociedades={sociedades} />
+      )}
+      {activeTab === "inf_ingresos" && (
+        <TabDetalleComprobantes rows={rawIn} tipo="INGRESO" ccs={ccs} sociedades={sociedades} />
       )}
 
       {/* ── Reportes en construcción (esqueleto navegable, sin cálculo todavía) ── */}
