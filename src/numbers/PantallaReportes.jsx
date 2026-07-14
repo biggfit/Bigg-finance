@@ -347,7 +347,8 @@ const grupoSede = (key) => SEDE_GRUPOS.find(g => g.key === key);
 // Hektor cede el 49% del resultado de Barrio Norte a una contraparte (NO es gasto: es reparto del
 // resultado). Los retiros se imputan a la cuenta "Inversores" (hoy caen en "Sin clasificar"). v1 read-only:
 // muestra acreditado (pct×resFinal) − retirado (mov. "Inversores") = saldo de cuenta corriente acumulado.
-const CESION = { matchNombre: "Barrio Norte", pct: 0.49, contraparte: "", apertura: 0 };
+// apertura = saldo heredado de Contagram al inicio del año (deuda con la contraparte; >0 = le debemos).
+const CESION = { matchNombre: "Barrio Norte", pct: 0.49, contraparte: "", apertura: 15_500_000 };
 const CESION_CUENTA = "Inversores";   // cuenta contable donde se imputan los retiros
 
 // Helper puro: dado el resFinal[12] de la sede y los retiros[12] (cuenta "Inversores"), arma la cola.
