@@ -368,13 +368,17 @@ function computeCesion(resFinal = [], retiros = [], { pct, apertura = 0, apertur
   return { acreditado, retirado, saldoAcum, retenido };
 }
 
-// ─── Fondeadas (anillo 2): mismo P&L de sede propia, scopeado a UNA sociedad, en su moneda, + una cola de
-// IMPUESTOS debajo del Resultado Operativo → Resultado Neto. (Huergo NO: es anillo 1, no lleva impuestos acá.)
-// Los impuestos hoy salen de "Sin clasificar" (no están en SEDE_GRUPOS). Empezamos por IVA + Ganancias.
+// ─── Negocios por sociedad (además de Argentina núcleo): mismo P&L de sede, scopeado a UNA sociedad
+// (por `empresa` + `familia` del centro) y su moneda, + una cola de IMPUESTOS debajo del Resultado
+// Operativo → línea final (`netoLabel`). Los impuestos salen de "Sin clasificar". Empezamos por IVA + Ganancias.
+//   · Fondeadas (anillo 2, familia "propios"): España/Colombia/Puertos → "Resultado Neto".
+//   · Administrada (anillo 3, familia "gerenciamiento"): Rosedal → "Free Cash Flow" (base del reparto con Segui).
+// (Huergo NO entra acá: es anillo 1, sin cola de impuestos.)
 const FONDEADAS = {
-  op_espana:   { empresa: "wellness",   moneda: "EUR", label: "España" },
-  op_colombia: { empresa: "tigre-loco", moneda: "COP", label: "Colombia" },
-  op_puertos:  { empresa: "puertos",    moneda: "USD", label: "Puertos" },
+  op_espana:   { empresa: "wellness",   moneda: "EUR", label: "España",   familia: "propios" },
+  op_colombia: { empresa: "tigre-loco", moneda: "COP", label: "Colombia", familia: "propios" },
+  op_puertos:  { empresa: "puertos",    moneda: "USD", label: "Puertos",  familia: "propios" },
+  op_rosedal:  { empresa: "segui-fit",  moneda: "ARS", label: "Rosedal",  familia: "gerenciamiento", netoLabel: "Free Cash Flow" },
 };
 const IMPUESTOS_FOND = ["IVA", "Ganancias"];   // match por nombre de cuenta (incluye)
 
@@ -519,7 +523,7 @@ function celdasSede(cols, cur, prev, pol, o) {
   });
 }
 
-function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista = "evolucion", mes = 0, cesion = null, impuestos = null }) {
+function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista = "evolucion", mes = 0, cesion = null, impuestos = null, netoLabel = "Resultado Neto" }) {
   const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths } = sub;
 
   // Cesión de utilidades (cola de apropiación, solo cuando el scope es la sede con cesión, ej. Barrio Norte).
@@ -589,7 +593,7 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
     if (impData) {
       filas.push({ kind: "banda", label: "Impuestos" });
       for (const a of impData.byAcc) filas.push({ kind: "cuenta", label: a.name, cur: a.cur, prev: ZERO12, pol: -1 });
-      filas.push({ kind: "result", label: "Resultado Neto", cur: impData.resNeto, prev: ZERO12, pol: 1 });
+      filas.push({ kind: "result", label: netoLabel, cur: impData.resNeto, prev: ZERO12, pol: 1 });
     }
 
     // Cesión de utilidades (apropiación del resultado; NO afecta Resultado Final). Es una cuenta corriente
@@ -1656,7 +1660,7 @@ const TABS = [
   { id: "op_espana",    label: "P&L Sedes Propias España", icon: "🇪🇸", desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada)." },
   { id: "op_colombia",  label: "P&L Sedes Propias Colombia", icon: "🇨🇴", desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada)." },
   { id: "op_puertos",   label: "P&L Puertos", icon: "⚓", wip: true, desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada, inversión USD)." },
-  { id: "op_rosedal",   label: "P&L Rosedal (Segui Fit)", icon: "🤝", wip: true, desc: "P&L completo de la operación administrada hasta Free Cash Flow, con impuestos dentro; a BIGG entra el fee + su % del FCF." },
+  { id: "op_rosedal",   label: "P&L Rosedal (Segui Fit)", icon: "🤝", desc: "P&L completo de la operación administrada hasta Free Cash Flow, con impuestos dentro; a BIGG entra el fee + su % del FCF." },
   { id: "op_huergo",    label: "P&L Huergo", icon: "🏗️", wip: true, desc: "Negocio propio (anillo 1): ingreso del edificio − horas de coaches = margen a seguir de cerca." },
 
   { id: "consol_grupo", label: "Consolidado de grupo", icon: "🌐", wip: true, desc: "P&L y patrimonio del grupo: propias full (neto de IVA) + fee/share de administradas + impuestos del anillo al final." },
@@ -2179,11 +2183,12 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     () => isFond ? new Set([fondCfg.empresa]) : nucleoEmpresas,
     [isFond, fondCfg, nucleoEmpresas]
   );
+  const scopeFamilia = isFond ? (fondCfg.familia || "propios") : "propios";
   const sedeCCs = useMemo(() => ccs.filter(c =>
     (c.grupo ?? "").toLowerCase() === "operaciones" &&
     scopeEmpresas.has((c.empresa ?? "").trim()) &&
-    familiaCentro(c) === "propios"
-  ), [ccs, scopeEmpresas]);
+    familiaCentro(c) === scopeFamilia
+  ), [ccs, scopeEmpresas, scopeFamilia]);
 
   const ccMap = useMemo(() => new Map(ccs.map(c => [c.id, c])), [ccs]);
 
@@ -2506,7 +2511,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       {isSedeLike && (
         <PnLTableSede pnl={pnlSede} sub={subSede} pnlPrev={pnlSedePrev} subPrev={subSedePrev}
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL}
-          cesion={cesionSede} impuestos={isFond ? IMPUESTOS_FOND : null}
+          cesion={cesionSede} impuestos={isFond ? IMPUESTOS_FOND : null} netoLabel={fondCfg?.netoLabel}
           label={selectedSedeCCs === null ? "Todas las Sedes"
             : selectedSedeCCs.length === 0 ? "Ninguna sede"
             : `${selectedSedeCCs.length} seleccionada${selectedSedeCCs.length > 1 ? "s" : ""}`} />
