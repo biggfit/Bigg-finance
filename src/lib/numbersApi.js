@@ -394,6 +394,15 @@ export async function fetchMovTesoreria(sociedad) {
   return rows.filter(m => !esIgnorado(m));
 }
 
+// Cobros/pagos de franquicia de TODO el grupo (no scopeado por sociedad): la CxC de franquiciados
+// se saldan por franquiciado × empresa × moneda, independiente de en qué caja (sociedad) entró el
+// cobro (ej. una venta de BIGG Fit LLC cobrada en efectivo a la caja de Beta). El slice por sociedad
+// lo hace franquiciasSaldosCxC filtrando por empresa; necesita ver los cobros de todas las cajas.
+export async function fetchMovFranquicias() {
+  const rows = await get("nb_movimientos", {});
+  return rows.filter(m => m.origen === "franquicias" && !esIgnorado(m));
+}
+
 export async function appendMovTesoreria({ sociedad, fecha, tipo, cuenta_bancaria, cuenta_destino = "", cuenta = "", concepto, moneda, monto, origen = "manual", origen_id = "", centro_costo = "" }) {
   const id = newId("MOV");
   return post({

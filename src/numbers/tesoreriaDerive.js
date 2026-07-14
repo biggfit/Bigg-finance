@@ -65,6 +65,7 @@ export function derivarSaldos({
   cuentasBancarias = [], cuentasContables = [],
   liqsSueldos = [], financiaciones = [], socios = [], sociosCC = [],
   franqData = { comps: {}, saldos: {}, franchises: [] },
+  movsFranq = null,   // cobros de franquicia GROUP-WIDE (independientes de la sociedad de la caja); si null → usa `movimientos`
   intercoData = null, sociedadesMap = null,   // si vienen → agrega la posición interco de ESTA sociedad
 }) {
   const _soc  = (sociedad ?? "").toLowerCase();
@@ -113,7 +114,9 @@ export function derivarSaldos({
 
   // ── Franquiciados (Bigg Franquicias, read-only): activo/pasivo por empresa+moneda ──
   const now    = new Date();
-  const franqCC = franquiciasSaldosCxC(franqData, sociedad, now.getFullYear(), now.getMonth(), movimientos);
+  // La CxC de franquiciados netea por franquiciado × empresa × moneda, sin importar en qué caja
+  // (sociedad) entró el cobro. Por eso usa los cobros GROUP-WIDE (movsFranq), no los de esta sociedad.
+  const franqCC = franquiciasSaldosCxC(franqData, sociedad, now.getFullYear(), now.getMonth(), movsFranq ?? movimientos);
 
   // ── Socios (dividendos + préstamos): slice de esta sociedad, balance puro ──
   const sociosCCsld = sociosSaldos(socios, sociosCC, movimientos, { sociedad });

@@ -5,7 +5,7 @@ import {
 } from "../data/tesoreriaData";
 import { CENTROS_COSTO } from "../data/numbersData";
 import {
-  fetchMovTesoreria, appendMovTesoreria, appendTransferencia, deleteMovTesoreria, updateMovTesoreria,
+  fetchMovTesoreria, fetchMovFranquicias, appendMovTesoreria, appendTransferencia, deleteMovTesoreria, updateMovTesoreria,
   fetchEgresos, fetchIngresos, fetchPagosCobros,
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto,
   appendGastoDirecto, esIgnorado, esCuentaCredito, fetchFinanciaciones,
@@ -1120,6 +1120,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
   const [socios,           setSocios]           = useState([]);   // maestro de socios (group-level)
   const [sociosCC,         setSociosCC]         = useState([]);   // cuenta corriente de socios no-cash
   const [franqData,        setFranqData]        = useState({ comps: {}, saldos: {}, franchises: [] });  // Franquicias (read-only)
+  const [movsFranq,        setMovsFranq]        = useState([]);   // cobros de franquicia group-wide (CxC netea por empresa, no por caja)
   const [intercoData,      setIntercoData]      = useState(null);   // interco (movs+comps+centros+sociedades)
 
   // ── Fetch all data ────────────────────────────────────────────────────────
@@ -1156,6 +1157,9 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
       fetchAll().then(franq => {
         if (franq && franq.comps) setFranqData(franq);
       }).catch(() => {});
+      // Cobros de franquicia GROUP-WIDE: la CxC de franquiciados netea por empresa+moneda, sin importar
+      // en qué caja (sociedad) entró el cobro → no alcanza con los movimientos de esta sociedad.
+      fetchMovFranquicias().then(setMovsFranq).catch(() => {});
       // Intercompañía (read-only) — posiciones para el Activo/Pasivo.
       fetchIntercoData().then(d => { if (d) setIntercoData(d); }).catch(() => {});
     } catch (e) {
@@ -1178,11 +1182,11 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
       sociedad, fechaCorte,
       movimientos, egresos, ingresos, pagosCobros,
       cuentasBancarias, cuentasContables,
-      liqsSueldos, financiaciones, socios, sociosCC, franqData,
+      liqsSueldos, financiaciones, socios, sociosCC, franqData, movsFranq,
       intercoData, sociedadesMap,
     }),
     [sociedad, fechaCorte, movimientos, egresos, ingresos, pagosCobros,
-      cuentasBancarias, cuentasContables, liqsSueldos, financiaciones, socios, sociosCC, franqData,
+      cuentasBancarias, cuentasContables, liqsSueldos, financiaciones, socios, sociosCC, franqData, movsFranq,
       intercoData, sociedadesMap]
   );
 
