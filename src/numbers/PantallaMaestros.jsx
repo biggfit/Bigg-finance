@@ -58,6 +58,9 @@ const ModalField = ({ label, required, children }) => (
   </div>
 );
 
+// Coerce a String (el Sheet puede devolver números) y matchea case-insensitive contra la búsqueda.
+const incLc = (v, q) => String(v ?? "").toLowerCase().includes(q);
+
 function formaPagoLabel(formaPago, diasPago) {
   if (!formaPago || formaPago === "libre") return "—";
   if (formaPago === "transferencia")     return `+${diasPago || "?"}d fac.`;
@@ -397,9 +400,7 @@ function TabProveedores() {
     // Coercer a String: el Sheet puede devolver cuit/nota como número (CUIT sin guiones) →
     // .includes/.toLowerCase reventarían sobre un number.
     return !q ? proveedores : proveedores.filter(p =>
-      String(p.nombre ?? "").toLowerCase().includes(q) ||
-      String(p.cuit ?? "").toLowerCase().includes(q) ||
-      String(p.nota ?? "").toLowerCase().includes(q)
+      incLc(p.nombre, q) || incLc(p.cuit, q) || incLc(p.nota, q)
     );
   }, [busqueda, proveedores]);
 
@@ -558,7 +559,7 @@ function TabClientes() {
   const rows = useMemo(() => {
     const q = busqueda.toLowerCase();
     return !q ? clientes : clientes.filter(c =>
-      String(c.nombre ?? "").toLowerCase().includes(q) || String(c.cuit ?? "").toLowerCase().includes(q)
+      incLc(c.nombre, q) || incLc(c.cuit, q)
     );
   }, [busqueda, clientes]);
 
@@ -793,7 +794,7 @@ function TabCuentas() {
       || (filtroTipo === "ingreso"    && (t === "ingreso"    || t === "ingresos" || t === "venta" || t === "ventas"))
       || (filtroTipo === "financiero" && (t === "financiero" || t === "financieros"));
     const q = busqueda.toLowerCase();
-    const matchQ = !q || String(c.nombre ?? "").toLowerCase().includes(q) || String(c.id ?? "").toLowerCase().includes(q);
+    const matchQ = !q || incLc(c.nombre, q) || incLc(c.id, q);
     return matchT && matchQ;
   }), [filtroTipo, busqueda, cuentas]);
 
@@ -1356,9 +1357,7 @@ function TabCC() {
   const rows = useMemo(() => {
     const q = busqueda.toLowerCase();
     return !q ? ccs : ccs.filter(c =>
-      String(c.nombre ?? "").toLowerCase().includes(q) ||
-      String(c.id ?? "").toLowerCase().includes(q) ||
-      String(c.grupo ?? "").toLowerCase().includes(q)
+      incLc(c.nombre, q) || incLc(c.id, q) || incLc(c.grupo, q)
     );
   }, [busqueda, ccs]);
 
