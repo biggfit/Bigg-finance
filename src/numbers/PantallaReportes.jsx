@@ -1012,7 +1012,7 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
           {sec("sec_ing", "Ingresos HQ", hqAccounts, BIGG_ORDEN)}
           <SubtotalRow strong label="Total Ingresos" values={resOpMasIngHQ} activeMonths={activeMonths} color={SEDE_HDR} />
           {sec("sec_opex", "OPEX HQ", ghqAccounts, BIGG_ORDEN_GHQ, true)}
-          <SubtotalRow neg label="Total OPEX HQ" values={opexHQ} activeMonths={activeMonths} color={SEDE_HDR} />
+          <SubtotalRow strong neg label="Total OPEX HQ" values={opexHQ} activeMonths={activeMonths} color={SEDE_HDR} />
           <ResultadoRow strong label="Resultado Operativo del Grupo" values={resOpGrupo} activeMonths={activeMonths} />
 
           {/* Debajo del operativo: financieros e impuestos del grupo, en una línea al final */}
