@@ -1557,20 +1557,40 @@ function TabEvolucionPN({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, yea
 
 // ─── Tab config ───────────────────────────────────────────────────────────────
 const TABS = [
+  // ── Funcionando ──
   { id: "pl_sede", label: "P&L Sedes",  icon: "🏬", desc: "Resultado operativo por sede: ventas, costos variables y márgenes." },
   { id: "pl_bigg", label: "P&L BIGG",   icon: "🏢", desc: "Resultado corporativo por centro de HQ (R&D, Sales & Mkt, G&A)." },
   { id: "cf",      label: "Cash Flow",  icon: "💵", desc: "Flujo de caja mensual: entradas y salidas por cuenta." },
   { id: "interco", label: "Intercompañía",   icon: "🔗", desc: "Posiciones entre sociedades, agrupadas por anillo." },
   { id: "consolidado", label: "Tesorería consolidada", icon: "🏦", desc: "Saldos y movimientos de todas las sociedades del grupo." },
+
+  // ── WIP (solo esqueleto navegable; sin cálculo todavía) ──
+  { id: "inf_egresos",  label: "Egresos (detalle)",  icon: "🔎", wip: true, desc: "Listar y filtrar compras por cuenta · centro · proveedor · N° de factura · estado de pago · período. KPIs: total, NC, promedio." },
+  { id: "inf_ingresos", label: "Ingresos (detalle)", icon: "🔎", wip: true, desc: "Listar y filtrar ventas/ingresos por cuenta · centro · cliente · N° de factura · estado de cobro · período." },
+
+  { id: "er_soc",       label: "Estado de Resultados", icon: "📄", wip: true, desc: "P&L de la entidad legal seleccionada (por sociedad)." },
+
+  { id: "op_huergo",    label: "Huergo · Wellness Real Estate", icon: "🏗️", wip: true, desc: "Negocio propio de servicio: ingreso del edificio − horas de coaches = margen a seguir de cerca." },
+  { id: "op_admin",     label: "Administradas (Rosedal · Puertos)", icon: "🤝", wip: true, desc: "P&L propio de cada operación de terceros hasta Free Cash Flow; a BIGG entra el fee de gestión + tu % del FCF." },
+  { id: "op_fondeadas", label: "Fondeadas (España · Colombia)", icon: "🌎", wip: true, desc: "Negocios que fondeás: inversión puesta + compensación intercompañía, por negocio." },
+
+  { id: "consol_grupo", label: "Consolidado de grupo", icon: "🌐", wip: true, desc: "P&L y patrimonio del grupo: propias full (neto de IVA) + fee/share de administradas + impuestos del anillo al final." },
+
+  { id: "an_ventas",    label: "Ventas por línea de ingreso", icon: "📈", wip: true, desc: "Facturación abierta por línea de ingreso, para explicar de dónde vienen las ventas." },
+  { id: "an_margenes",  label: "Márgenes por negocio", icon: "🧩", wip: true, desc: "Cuánto aporta cada negocio al Margen Bruto del grupo." },
+  { id: "an_gastos_cc", label: "Gastos por centro de costo", icon: "🧾", wip: true, desc: "Apertura del gasto por centro de costo y, dentro, por cuenta contable." },
 ];
 
-// ─── Lentes (3 miradas por stakeholder; cada una agrupa un subconjunto de solapas) ──
-// Por sociedad = estados de la entidad legal (scoped) · Operaciones = management del negocio
-// (sedes) · BIGG HQ = mirada consolidada/corporativa.
+// ─── Menú por STORYTELLING (agrupado por la pregunta que uno se hace, no por taxonomía contable) ──
+// Pensado para navegar el negocio de arriba hacia abajo: la foto del grupo → cómo rinde cada negocio →
+// de dónde sale/va la plata → buscar el detalle → (lo fiscal/interno al fondo). Textos = management
+// (todavía NO simplificados para dueños). El anillo de la sociedad manda cómo consolida (ver memoria).
 const LENTES = [
-  { id: "sociedad",    label: "Por sociedad",       tabs: ["cf"] },
-  { id: "operaciones", label: "Operaciones (sedes)", tabs: ["pl_sede"] },
-  { id: "bigg",        label: "BIGG HQ",            tabs: ["pl_bigg", "interco", "consolidado"] },
+  { id: "grupo",    label: "La foto del grupo",            tabs: ["consol_grupo", "pl_bigg", "cf", "consolidado"] },
+  { id: "negocios", label: "Cómo le va a cada negocio",    tabs: ["pl_sede", "op_huergo", "op_admin", "op_fondeadas", "an_margenes"] },
+  { id: "flujo",    label: "De dónde sale y a dónde va",   tabs: ["an_ventas", "an_gastos_cc"] },
+  { id: "detalle",  label: "Buscar el detalle",            tabs: ["inf_egresos", "inf_ingresos"] },
+  { id: "interno",  label: "Interno · fiscal / contable",  tabs: ["er_soc", "interco"] },
 ];
 
 // ─── Tab Intercompañía (resumen de posiciones por anillo — LECTURA) ─────────────
@@ -1618,19 +1638,23 @@ function TabInterco({ data, sociedades }) {
 }
 
 // ─── Menú-landing de Reportes: tarjetas agrupadas por lente ─────────────────────
-function ReportCard({ icon, title, desc, onClick }) {
+function ReportCard({ icon, title, desc, wip, onClick }) {
   return (
     <button onClick={onClick} style={{
       display: "flex", gap: 14, alignItems: "flex-start", textAlign: "left",
-      background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 12,
+      background: wip ? "#fafbfc" : T.card, border: `1px ${wip ? "dashed" : "solid"} ${T.cardBorder}`, borderRadius: 12,
       padding: "18px 20px", cursor: "pointer", fontFamily: T.font, width: "100%",
       boxShadow: "0 1px 3px rgba(0,0,0,.04)", transition: "all .15s ease" }}
       onMouseEnter={e => { e.currentTarget.style.boxShadow = T.shadowMd; e.currentTarget.style.borderColor = T.accent; e.currentTarget.style.transform = "translateY(-1px)"; }}
       onMouseLeave={e => { e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,.04)"; e.currentTarget.style.borderColor = T.cardBorder; e.currentTarget.style.transform = "none"; }}>
       <div style={{ fontSize: 20, lineHeight: 1, flexShrink: 0, width: 42, height: 42, borderRadius: 10,
-        background: T.accentDark, display: "flex", alignItems: "center", justifyContent: "center" }}>{icon}</div>
-      <div>
-        <div style={{ fontSize: 15, fontWeight: 800, color: T.text, marginBottom: 3 }}>{title}</div>
+        background: wip ? "#e5e7eb" : T.accentDark, display: "flex", alignItems: "center", justifyContent: "center", opacity: wip ? .8 : 1 }}>{icon}</div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+          <span style={{ fontSize: 15, fontWeight: 800, color: wip ? T.muted : T.text }}>{title}</span>
+          {wip && <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: ".06em", color: "#b45309",
+            background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "1px 6px" }}>🚧 WIP</span>}
+        </div>
         <div style={{ fontSize: 12.5, color: T.muted, lineHeight: 1.4 }}>{desc}</div>
       </div>
     </button>
@@ -1647,11 +1671,29 @@ function ReportesMenu({ onPick }) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
             {lente.tabs.map(tid => {
               const t = TABS.find(x => x.id === tid);
-              return <ReportCard key={tid} icon={t.icon} title={t.label} desc={t.desc} onClick={() => onPick(tid)} />;
+              return <ReportCard key={tid} icon={t.icon} title={t.label} desc={t.desc} wip={t.wip} onClick={() => onPick(tid)} />;
             })}
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ─── Placeholder de reporte en construcción (esqueleto navegable) ──────────────
+function WipReport({ tab }) {
+  return (
+    <div className="fade" style={{ background: T.card, border: `1px dashed ${T.cardBorder}`, borderRadius: T.radius,
+      boxShadow: T.shadow, padding: "48px 32px", textAlign: "center" }}>
+      <div style={{ fontSize: 40, marginBottom: 12 }}>🚧</div>
+      <div style={{ fontSize: 18, fontWeight: 900, color: T.text, marginBottom: 6 }}>{tab?.label}</div>
+      <div style={{ display: "inline-block", fontSize: 10, fontWeight: 800, letterSpacing: ".08em",
+        color: "#b45309", background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "2px 8px", marginBottom: 16 }}>
+        EN CONSTRUCCIÓN
+      </div>
+      <div style={{ fontSize: 13.5, color: T.muted, lineHeight: 1.55, maxWidth: 620, margin: "0 auto" }}>
+        {tab?.desc}
+      </div>
     </div>
   );
 }
@@ -1944,8 +1986,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         }
       />
 
-      {/* ── Toolbar / Filters (Consolidado trae la suya propia) ── */}
-      {activeTab !== "consolidado" && (
+      {/* ── Toolbar / Filters (Consolidado trae la suya propia; los WIP no llevan filtros) ── */}
+      {activeTab !== "consolidado" && !curTab?.wip && (
       <div style={{
         display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap", alignItems: "flex-end",
         background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
@@ -2124,6 +2166,9 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       {activeTab === "consolidado" && (
         <TabTesoreriaConsolidada />
       )}
+
+      {/* ── Reportes en construcción (esqueleto navegable, sin cálculo todavía) ── */}
+      {curTab?.wip && <WipReport tab={curTab} />}
 
     </div>
   );
