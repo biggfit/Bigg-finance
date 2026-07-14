@@ -899,17 +899,19 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
       const catSede = (meta?.categoria_pnl_sede ?? "").trim().toLowerCase();   // "ventas" | "otros ingresos" | "costo por venta"
       let gkey = null, rowKey = cuenta, val = Number(row.total) || 0;
       if (fam === "propios") {
-        // Sede propia: por categoria_pnl_sede. Ingreso/interuso/costo arriba de margen; el opex (sin
-        // categoria_pnl_sede) va a una única línea "Gastos Sedes Propias" (debajo de margen).
+        // Sede propia: en el HOLDING entra como RESULTADO (línea "Sedes Propias Argentina", vía su propio
+        // motor) → ningún bucket de sede alimenta el holding. Su costo por venta va a "Gastos Sedes Propias"
+        // (no a gpv) para no duplicarlo con el resultado de sede.
         if (catSede === "ventas") gkey = "vta_sp";
         else if (catSede === "otros ingresos") gkey = "int_sp";
-        else if (catSede === "costo por venta") gkey = "gpv";
         else { gkey = "gsp"; rowKey = "Gastos Sedes Propias"; }
       } else if (catPnl === "costo_venta") {
-        gkey = "gpv";                                     // costo que pega en el margen (aplica aunque venga de franquicias)
-        if (forcedSide === "ingreso") val = -val;         // contra-ingreso (franquicias, signo ingreso) → costo positivo
+        gkey = "gpv";                                     // COSTO por venta → Gastos por Ventas: Interusos, Fee Fact.
+        if (forcedSide === "ingreso") val = -val;         // lado ingreso de una cuenta intermediada = contra → neto en gpv
       } else if (forcedSide === "ingreso" || catPnl === "ventas") {
-        if (fam) { gkey = FAM_A_ING[fam]; if (gkey === "wre") rowKey = cc?.nombre ?? cuenta; }   // ingreso HQ/ger/wre
+        if (fam) { gkey = FAM_A_ING[fam]; if (gkey === "wre") rowKey = cc?.nombre ?? cuenta; }   // VENTA → Ingresos HQ/ger/wre
+      } else if (GPV_COSTO_EGRESO.has(cuenta)) {
+        gkey = "gpv";                                     // cuenta intermediada: la venta es ingreso HQ, la COMPRA (egreso) = costo por venta (Pauta)
       } else if (catRaw.includes("financ")) {
         gkey = "fin";                                     // Financieros: filas = CUENTA (Intereses Ganados / Pérdidas Fin.)
       } else if (catRaw.includes("impuesto")) {
@@ -931,6 +933,10 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
 const BIGG_ORDEN_GHQ = ["HQ - Sport", "HQ - Tecnologia", "HQ - Ventas y Operaciones", "17 - Huergo",
   "HQ - Marketing", "HQ - BI", "HQ - Design", "HQ - Gerencia General", "HQ - Administracion",
   "HQ - Recursos Humanos", "HQ - Infraestructura IT"];
+const BIGG_ORDEN_GPV = ["Interusos", "Acciones de Mkt", "Coorporativos (Gympass)", "Fee Facturación"];
+// Cuentas intermediadas: su VENTA es ingreso HQ, pero su COMPRA (egreso) es costo por venta (pega en margen).
+// La pauta se le vende a franquiciados y se compra a Meta/Google → el egreso va a Gastos por Ventas, no a OPEX.
+const GPV_COSTO_EGRESO = new Set(["Acciones de Mkt"]);
 const BIGG_ORDEN_FIN = ["Intereses Ganados", "Perdidas Financieras"];
 const BIGG_ORDEN_IMP = ["Plan Facilidades AFIP", "IVA", "IVA Inversiones", "IVA Compra", "Ganancias", "Otros Impuestos"];
 
@@ -947,26 +953,29 @@ function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) {
   const sumG = obj => MESES.map((_, m) => Object.values(obj || {}).reduce((s, a) => s + (a[m] || 0), 0));
   const hqAccounts  = omit(pnl.grupos.hq,  BIGG_FEE_CUENTAS);    // ingresos HQ sin las fees de operación
   const ghqAccounts = omit(pnl.grupos.ghq, ["17 - Huergo"]);     // opex HQ sin Huergo (ya está en WRE)
-  const ingHQ = sumG(hqAccounts), opexHQ = sumG(ghqAccounts), financieros = sumG(pnl.grupos.fin), impuestos = sumG(pnl.grupos.imp);
+  const gpvAccounts = pnl.grupos.gpv;                            // costo por venta HQ: Interusos, Fee Fact., compra Pauta
+  const ingHQ = sumG(hqAccounts), gpv = sumG(gpvAccounts), opexHQ = sumG(ghqAccounts),
+        financieros = sumG(pnl.grupos.fin), impuestos = sumG(pnl.grupos.imp);
   const resOperaciones = MESES.map((_, m) => sar[m] + fg[m] + wre[m]);
-  const resOpMasIngHQ  = MESES.map((_, m) => resOperaciones[m] + ingHQ[m]);   // subtotal corriente (waterfall)
-  const resOpGrupo     = MESES.map((_, m) => resOpMasIngHQ[m] - opexHQ[m]);
+  const resOpMasIngHQ  = MESES.map((_, m) => resOperaciones[m] + ingHQ[m]);   // Total Ingresos (waterfall corriente)
+  const margen         = MESES.map((_, m) => resOpMasIngHQ[m] - gpv[m]);      // Margen de Contribución
+  const resOpGrupo     = MESES.map((_, m) => margen[m] - opexHQ[m]);
   const resAntesImp    = MESES.map((_, m) => resOpGrupo[m] - financieros[m]);
   const resGrupo       = MESES.map((_, m) => resAntesImp[m] - impuestos[m]);
   const months = new Set(); const cur = new Date().getMonth();
   for (let i = 0; i <= cur; i++) months.add(i);
-  [sar, fg, wre, ingHQ, opexHQ, financieros, impuestos].forEach(a => a.forEach((v, i) => { if (v) months.add(i); }));
-  return { sar, fg, wre, hqAccounts, ghqAccounts, ingHQ, opexHQ, financieros, impuestos,
-           resOperaciones, resOpMasIngHQ, resOpGrupo, resAntesImp, resGrupo, activeMonths: [...months].sort((a, b) => a - b) };
+  [sar, fg, wre, ingHQ, gpv, opexHQ, financieros, impuestos].forEach(a => a.forEach((v, i) => { if (v) months.add(i); }));
+  return { sar, fg, wre, hqAccounts, ghqAccounts, gpvAccounts, ingHQ, gpv, opexHQ, financieros, impuestos,
+           resOperaciones, resOpMasIngHQ, margen, resOpGrupo, resAntesImp, resGrupo, activeMonths: [...months].sort((a, b) => a - b) };
 }
 
 // P&L BIGG = P&L de HOLDING. Arriba el RESULTADO de cada negocio operativo (no la venta); después HQ
 // (ingresos − opex), y al final financieros + impuestos del grupo. `sub` = computeSubtotalsHolding.
 function PnLTableBigg({ pnl, sub, year, moneda }) {
-  const { sar, fg, wre, hqAccounts, ghqAccounts, ingHQ, opexHQ,
-          resOperaciones, resOpMasIngHQ, resOpGrupo, resAntesImp, resGrupo, activeMonths } = sub;
+  const { sar, fg, wre, hqAccounts, ghqAccounts, gpvAccounts, ingHQ, opexHQ,
+          resOperaciones, resOpMasIngHQ, margen, resOpGrupo, resAntesImp, resGrupo, activeMonths } = sub;
   const ncols = activeMonths.length + 2;
-  const ALLKEYS = ["sec_op", "sec_ing", "sec_opex", "sec_fin", "sec_imp"];
+  const ALLKEYS = ["sec_op", "sec_ing", "sec_gpv", "sec_opex", "sec_fin", "sec_imp"];
   const [collapsed, setCollapsed] = useState({});
   const isCol  = k => !!collapsed[k];
   const toggle = k => setCollapsed(c => ({ ...c, [k]: !c[k] }));
@@ -1018,6 +1027,11 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
           {/* HQ: ingresos propios − opex por departamento */}
           {sec("sec_ing", "Ingresos HQ", hqAccounts, BIGG_ORDEN)}
           <SubtotalRow strong label="Total Ingresos" values={resOpMasIngHQ} activeMonths={activeMonths} color={SEDE_HDR} />
+
+          {/* Costo por venta (variable, existe solo si hay venta): interusos a franquiciados, compra de
+              pauta, fee de facturación → Margen de Contribución. OPEX (fijo) va debajo del margen. */}
+          {sec("sec_gpv", "Gastos por Ventas", gpvAccounts, BIGG_ORDEN_GPV, true)}
+          <SubtotalRow strong label="Margen de Contribución" values={margen} activeMonths={activeMonths} color={SEDE_HDR} />
           {sec("sec_opex", "OPEX HQ", ghqAccounts, BIGG_ORDEN_GHQ, true)}
           <SubtotalRow strong neg label="Total OPEX HQ" values={opexHQ} activeMonths={activeMonths} color={SEDE_HDR} />
           <ResultadoRow strong label="Resultado Operativo del Grupo" values={resOpGrupo} activeMonths={activeMonths} />
