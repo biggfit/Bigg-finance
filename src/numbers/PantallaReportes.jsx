@@ -1155,13 +1155,15 @@ function SubSectionRow({ label, values, activeMonths, color, expanded, onToggle,
       </td>
       {activeMonths.map(m => (
         <td key={m} style={{ padding: "7px 12px", fontSize: 12, textAlign: "right",
-          fontFamily: "var(--mono)", fontWeight: 800, color: color ?? T.muted, whiteSpace: "nowrap" }}>
+          fontFamily: "var(--mono)", fontWeight: 800, color: color ?? T.muted, whiteSpace: "nowrap",
+          borderTop: `2px solid ${color ?? T.cardBorder}`, borderBottom: `1px solid ${T.cardBorder}` }}>
           {fmtPar(values[m], neg)}
         </td>
       ))}
       <td style={{ padding: "7px 14px", fontSize: 12, textAlign: "right", fontFamily: "var(--mono)",
         fontWeight: 900, color: color ?? T.muted, whiteSpace: "nowrap",
-        borderLeft: `1px solid ${T.cardBorder}` }}>
+        borderLeft: `1px solid ${T.cardBorder}`,
+        borderTop: `2px solid ${color ?? T.cardBorder}`, borderBottom: `1px solid ${T.cardBorder}` }}>
         {fmtPar(total, neg)}
       </td>
     </tr>
