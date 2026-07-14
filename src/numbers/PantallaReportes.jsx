@@ -159,6 +159,7 @@ function computeSubtotals(pnl) {
 
 const rowSum = arr => arr.reduce((s, v) => s + v, 0);
 const fmtN   = n => !n ? "—" : Math.round(Math.abs(n)).toLocaleString("es-AR");
+const fmtSigned = n => !n ? "—" : (n < 0 ? "−" : "") + fmtN(n);   // conserva el signo (fmtN es absoluto)
 
 // ─── Estilos base ─────────────────────────────────────────────────────────────
 const CTRL_H = 36;
@@ -342,6 +343,42 @@ const SEDE_CUENTA_A_GRUPO = (() => {
 })();
 const grupoSede = (key) => SEDE_GRUPOS.find(g => g.key === key);
 
+// ─── Cesión de utilidades (apropiación del resultado, DEBAJO de Resultado Final) ────────────────
+// Hektor cede el 49% del resultado de Barrio Norte a una contraparte (NO es gasto: es reparto del
+// resultado). Los retiros se imputan a la cuenta "Inversores" (hoy caen en "Sin clasificar"). v1 read-only:
+// muestra acreditado (pct×resFinal) − retirado (mov. "Inversores") = saldo de cuenta corriente acumulado.
+const CESION = { matchNombre: "Barrio Norte", pct: 0.49, contraparte: "", apertura: 0 };
+const CESION_CUENTA = "Inversores";   // cuenta contable donde se imputan los retiros
+
+// Helper puro: dado el resFinal[12] de la sede y los retiros[12] (cuenta "Inversores"), arma la cola.
+function computeCesion(resFinal = [], retiros = [], { pct, apertura = 0 }) {
+  const acreditado = Array.from({ length: 12 }, (_, m) => (Number(resFinal[m]) || 0) * pct);
+  const retenido   = Array.from({ length: 12 }, (_, m) => (Number(resFinal[m]) || 0) * (1 - pct));
+  // El retiro es un egreso (viene con signo negativo): tomamos la magnitud pagada, que REDUCE lo que se debe.
+  const retirado   = Array.from({ length: 12 }, (_, m) => Math.abs(Number(retiros[m]) || 0));
+  const saldoAcum = []; let acc = Number(apertura) || 0;
+  for (let m = 0; m < 12; m++) { acc += acreditado[m] - retirado[m]; saldoAcum[m] = acc; }  // >0 = le debemos · <0 = adelantado
+  return { acreditado, retirado, saldoAcum, retenido };
+}
+
+// Fila de la cola de cesión (violeta, con signo). `runningTotal` → el TOTAL es el saldo final (stock), no la suma.
+function CesionRow({ label, values, activeMonths, bold = false, topBorder = false, runningTotal = false }) {
+  const bg = "#faf5ff", fw = bold ? 800 : 700, top = topBorder ? { borderTop: "2px solid #7c3aed" } : {};
+  const total = runningTotal ? (values[activeMonths[activeMonths.length - 1]] ?? 0) : rowSum(values);
+  return (
+    <tr style={{ background: bg, borderBottom: `1px solid ${T.cardBorder}`, ...top }}>
+      <td style={{ padding: bold ? "10px 16px" : "9px 16px 9px 44px", fontSize: bold ? 14 : 13, fontWeight: fw,
+        color: "#6d28d9", whiteSpace: "nowrap", borderBottom: `1px solid ${T.cardBorder}`, ...top, ...stickyCol, background: bg }}>{label}</td>
+      {activeMonths.map(m => (
+        <td key={m} style={{ padding: "9px 12px", fontSize: 13, textAlign: "right", fontFamily: "var(--mono)",
+          fontWeight: fw, color: "#6d28d9", whiteSpace: "nowrap" }}>{fmtSigned(values[m])}</td>
+      ))}
+      <td style={{ padding: "9px 14px", fontSize: 13, textAlign: "right", fontFamily: "var(--mono)", fontWeight: 800,
+        color: "#6d28d9", whiteSpace: "nowrap", borderLeft: `1px solid ${T.cardBorder}` }}>{fmtSigned(total)}</td>
+    </tr>
+  );
+}
+
 function buildPnLSede(inRows, egRows, ccFilter, year, moneda) {
   // Pre-poblar cada grupo con sus cuentas configuradas en 0 → se muestran aunque no tengan monto.
   const grupos = {};
@@ -474,9 +511,17 @@ function celdasSede(cols, cur, prev, pol, o) {
   });
 }
 
-function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista = "evolucion", mes = 0 }) {
+function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista = "evolucion", mes = 0, cesion = null }) {
   const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths } = sub;
   const ncols = activeMonths.length + 2;
+
+  // Cesión de utilidades (cola de apropiación, solo cuando el scope es la sede con cesión, ej. Barrio Norte).
+  // Los retiros son la cuenta "Inversores" de sinClasificar → se saca de ahí para no mostrarla dos veces.
+  const cesKey = cesion && Object.keys(pnl.sinClasificar).find(k => _nkSede(k) === _nkSede(CESION_CUENTA));
+  const cesData = cesion ? computeCesion(resFinal, cesKey ? pnl.sinClasificar[cesKey] : [], cesion) : null;
+  const sinClasView = cesion && cesKey
+    ? Object.fromEntries(Object.entries(pnl.sinClasificar).filter(([k]) => k !== cesKey))
+    : pnl.sinClasificar;
 
   // Colapso jerárquico: bandas de sección (Ingresos / Gastos Op) + cada sub-grupo + toggle maestro.
   const ALLKEYS = ["sec_ing", "sec_gop", ...SEDE_GRUPOS.map(g => g.key)];
@@ -489,7 +534,7 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
   const grp = (key) => <PnlSection sub label={grupoSede(key).label} accounts={pnl.grupos[key]}
     order={grupoSede(key).cuentas} color={grupoSede(key).color} activeMonths={activeMonths} ncols={ncols}
     expanded={!isCol(key)} onToggle={() => toggle(key)} />;
-  const sinCls = Object.keys(pnl.sinClasificar).length > 0;
+  const sinCls = Object.keys(sinClasView).length > 0;
 
   if (activeMonths.length === 0) return (
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
@@ -625,9 +670,22 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
           {grp("inv_no_op")}
           <ResultadoRow strong label="Resultado Final" values={resFinal} activeMonths={activeMonths} />
 
+          {/* Cesión de utilidades: apropiación del resultado (NO afecta Resultado Final). Solo si hay cesión en el scope. */}
+          {cesData && <>
+            <tr><td colSpan={ncols} style={{ height: 16, background: "#f8fafc", borderTop: `2px solid ${T.cardBorder}` }} /></tr>
+            {/* Acreditado = pct × Resultado Final (con signo: en mes de pérdida es negativo, la contraparte comparte la pérdida). */}
+            <CesionRow bold topBorder activeMonths={activeMonths} values={cesData.acreditado}
+              label={`Cesión de utilidades — ${Math.round(cesion.pct * 100)}%${cesion.contraparte ? ` · ${cesion.contraparte}` : ""} (acreditado)`} />
+            <DataRow color="#7c3aed" activeMonths={activeMonths} values={cesData.retirado} label="Retiros del período (cuenta Inversores)" />
+            {/* Saldo = stock (no flujo): el TOTAL muestra el saldo final del período, no la suma de meses. */}
+            <CesionRow activeMonths={activeMonths} values={cesData.saldoAcum} runningTotal
+              label="Saldo cuenta corriente (acumulado)" />
+            <ResultadoRow label="Resultado retenido BIGG" values={cesData.retenido} activeMonths={activeMonths} />
+          </>}
+
           {sinCls && <>
             <tr><td colSpan={ncols} style={{ height: 16, background: "#f8fafc", borderTop: `2px solid ${T.cardBorder}` }} /></tr>
-            <PnlSection label="Sin clasificar (fuera del P&L de la sede)" accounts={pnl.sinClasificar}
+            <PnlSection label="Sin clasificar (fuera del P&L de la sede)" accounts={sinClasView}
               activeMonths={activeMonths} color="#f59e0b" ncols={ncols} />
           </>}
         </tbody>
@@ -2118,6 +2176,14 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     [selectedSedeCCs, sedeCCs]
   );
 
+  // Cesión de utilidades: se activa solo cuando el scope es EXACTAMENTE la sede con cesión (Barrio Norte);
+  // aplicar el % sobre un agregado de varias sedes sería incorrecto.
+  const cesionSede = useMemo(() => {
+    if (resolvedCCSede.length !== 1) return null;
+    const cc = ccMap.get(resolvedCCSede[0]);
+    return cc && _nkSede(cc.nombre).includes(_nkSede(CESION.matchNombre)) ? CESION : null;
+  }, [resolvedCCSede, ccMap]);
+
   // Toggle de un grupo (operación) entero: agrega/saca todas sus sedes de la selección.
   const toggleGrupoSede = (opId) => {
     const ids = (gruposSede.find(g => g.id === opId)?.sedes ?? []).map(c => c.id);
@@ -2408,7 +2474,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       {/* ── P&L Sedes ── */}
       {activeTab === "pl_sede" && (
         <PnLTableSede pnl={pnlSede} sub={subSede} pnlPrev={pnlSedePrev} subPrev={subSedePrev}
-          vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL}
+          vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} cesion={cesionSede}
           label={selectedSedeCCs === null ? "Todas las Sedes"
             : selectedSedeCCs.length === 0 ? "Ninguna sede"
             : `${selectedSedeCCs.length} seleccionada${selectedSedeCCs.length > 1 ? "s" : ""}`} />
