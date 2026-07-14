@@ -237,7 +237,9 @@ function DataRow({ label, values, activeMonths, color }) {
       onMouseEnter={e => { e.currentTarget.style.background = "#f0f9ff"; e.currentTarget.firstChild.style.background = "#f0f9ff"; }}
       onMouseLeave={e => { e.currentTarget.style.background = T.card; e.currentTarget.firstChild.style.background = T.card; }}>
       {/* fondo explícito (no "inherit"): evita que la celda sticky no repinte y "aparezca" al hover */}
+      {/* Repetir el borde inferior en la celda sticky: su background repinta y taparía la línea del <tr>. */}
       <td style={{ padding: "7px 16px 7px 44px", fontSize: 13, color: T.text, whiteSpace: "nowrap",
+        borderBottom: `1px solid ${T.cardBorder}`,
         ...stickyCol, background: T.card }}>{label}</td>
       {activeMonths.map(m => (
         <td key={m} style={{ padding: "7px 12px", fontSize: 13, textAlign: "right",
@@ -972,6 +974,8 @@ function SubSectionRow({ label, values, activeMonths, color, expanded, onToggle 
       onClick={onToggle}>
       <td style={{ padding: "7px 16px", fontSize: 12, fontWeight: 800,
         color: color ?? T.muted, letterSpacing: ".06em", textTransform: "uppercase",
+        // Repetir los bordes en la celda sticky: su background repinta y taparía las líneas del <tr>.
+        borderTop: `2px solid ${color ?? T.cardBorder}`, borderBottom: `1px solid ${T.cardBorder}`,
         userSelect: "none", ...stickyCol, background: bg }}>
         <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{expanded ? "▼" : "▶"}</span>
         {label}
