@@ -485,8 +485,10 @@ const colsEvolucion = months => [
   { header: "TOTAL", kind: "val", total: true, get: c => (c || []).reduce((s, v) => s + (Number(v) || 0), 0) },
 ];
 
-// Celdas de una fila para las vistas comparativas. o = estilo base de la fila.
+// Celdas de una fila. o = estilo base. o.bt/o.bb = borde sup/inf (se pone EN LA CELDA, no en el <tr>:
+// con border-collapse los bordes del <tr> no pintan confiablemente sobre las celdas).
 function celdasSede(cols, cur, prev, pol, o) {
+  const bord = { ...(o.bt ? { borderTop: o.bt } : {}), ...(o.bb ? { borderBottom: o.bb } : {}) };
   return cols.map((col, i) => {
     if (col.kind === "var") {
       const a = col.a(cur, prev), b = col.b(cur, prev), d = a - b;
@@ -494,14 +496,14 @@ function celdasSede(cols, cur, prev, pol, o) {
       // flecha por signo crudo; color por MEJORA (polaridad: ingresos/resultados +1, costos −1).
       const color = pct == null ? T.dim : (d * pol > 0 ? T.green : d * pol < 0 ? T.red : T.dim);
       return <td key={i} style={{ padding: o.pad, fontSize: (o.fs || 13) - 1, textAlign: "right",
-        fontFamily: "var(--mono)", fontWeight: 700, color, whiteSpace: "nowrap",
+        fontFamily: "var(--mono)", fontWeight: 700, color, whiteSpace: "nowrap", ...bord,
         ...(col.total ? { borderLeft: `1px solid ${T.cardBorder}` } : {}) }}>
         {pct == null ? "—" : `${d > 0 ? "↑" : d < 0 ? "↓" : ""}${Math.abs(pct).toFixed(1)}%`}</td>;
     }
     const v = col.get(cur, prev);
     const color = o.bySign ? (v > 0 ? T.green : v < 0 ? T.red : T.dim) : (v ? (o.color || T.text) : T.dim);
     return <td key={i} style={{ padding: o.pad, fontSize: o.fs || 13, textAlign: "right",
-      fontFamily: "var(--mono)", fontWeight: o.fw || 400, color, whiteSpace: "nowrap",
+      fontFamily: "var(--mono)", fontWeight: o.fw || 400, color, whiteSpace: "nowrap", ...bord,
       ...(col.total ? { borderLeft: `1px solid ${T.cardBorder}` } : {}) }}>
       {v ? fmtN(v) : "—"}</td>;
   });
@@ -657,7 +659,8 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
                   <tr key={idx} style={{ background: bg, borderTop: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, borderBottom: `2px solid ${T.cardBorder}` }}>
                     <td style={{ padding: "12px 14px", fontSize: f.strong ? 15 : 14, fontWeight: 900, color: SEDE_HDR,
                       borderTop: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, borderBottom: `2px solid ${T.cardBorder}`, ...stickyCol, background: bg }}>{f.label}</td>
-                    {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: f.strong ? 15 : 14, fw: 900, color: SEDE_HDR })}
+                    {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: f.strong ? 15 : 14, fw: 900, color: SEDE_HDR,
+                      bt: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, bb: `2px solid ${T.cardBorder}` })}
                   </tr>
                 );
               }
@@ -666,7 +669,8 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
                 <tr key={idx} style={{ background: rbg, borderTop: `3px solid ${rc}`, borderBottom: `2px solid ${rc}` }}>
                   <td style={{ padding: "12px 14px", fontSize: 15, fontWeight: 900, color: rc,
                     borderTop: `3px solid ${rc}`, borderBottom: `2px solid ${rc}`, ...stickyCol, background: rbg }}>{f.label}</td>
-                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: 15, fw: 900, bySign: true })}
+                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: 15, fw: 900, bySign: true,
+                    bt: `3px solid ${rc}`, bb: `2px solid ${rc}` })}
                 </tr>
               );
             })}
