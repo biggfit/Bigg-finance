@@ -180,9 +180,9 @@ const thStyle = {
 const stickyCol = {
   position: "sticky", left: 0, zIndex: 2, background: "inherit",
   boxShadow: "2px 0 4px rgba(0,0,0,.04)",
-  // Bug de repintado de sticky en navegadores embebidos: la celda fija no pinta hasta un repaint
-  // (por eso "aparecía" recién al hover). willChange la promueve a su propia capa → pinta de una.
-  willChange: "transform",
+  // NOTA: NO usar `will-change: transform` acá. Promueve la celda a su propia capa de composición y en
+  // pantallas con DPR fraccional (ej. 1.25) su borde rasteriza ~1px corrido respecto de las celdas de
+  // valores → los bordes gruesos (Resultado/Subtotal) se ven escalonados bajo la columna "Cuenta".
 };
 
 // ─── Spinner ──────────────────────────────────────────────────────────────────
