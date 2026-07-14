@@ -269,24 +269,23 @@ function SubtotalRow({ label, values, activeMonths, color, strong, neg = false, 
   // en el <tr> y en la celda genera costura/doblado al colapsar. Fuente única = la celda.
   // noBottom: el divisor de abajo lo posee la fila siguiente (su borderTop) → evita que el borde
   // inferior propio compita con el de la fila de abajo (la sticky no colapsa y quedaría despareja).
-  const bt = `${strong ? 3 : 2}px solid ${color ?? T.cardBorder}`;
-  const bb = noBottom ? "none" : `2px solid ${T.cardBorder}`;
+  const bord = { borderTop: `${strong ? 3 : 2}px solid ${color ?? T.cardBorder}`,
+                 borderBottom: noBottom ? "none" : `2px solid ${T.cardBorder}` };
   return (
     <tr style={{ background: bg }}>
       <td style={{ padding: "12px 16px", fontSize: strong ? 15 : 14, fontWeight: 900,
-        color: color ?? T.text, letterSpacing: ".02em",
-        borderTop: bt, borderBottom: bb,
+        color: color ?? T.text, letterSpacing: ".02em", ...bord,
         ...stickyCol, background: bg }}>{label}</td>
       {activeMonths.map(m => (
         <td key={m} style={{ padding: "12px 12px", fontSize: 14, textAlign: "right",
           fontFamily: "var(--mono)", fontWeight: 900, color: color ?? T.text,
-          whiteSpace: "nowrap", borderTop: bt, borderBottom: bb }}>
+          whiteSpace: "nowrap", ...bord }}>
           {fmtPar(values[m], neg)}
         </td>
       ))}
       <td style={{ padding: "12px 14px", fontSize: 15, textAlign: "right", fontFamily: "var(--mono)",
         fontWeight: 900, color: color ?? T.text, whiteSpace: "nowrap",
-        borderLeft: `1px solid ${T.cardBorder}`, borderTop: bt, borderBottom: bb }}>
+        borderLeft: `1px solid ${T.cardBorder}`, ...bord }}>
         {fmtPar(total, neg)}
       </td>
     </tr>
@@ -299,24 +298,24 @@ function ResultadoRow({ label, values, activeMonths, strong, noBottom = false })
   const bg = strong ? (total >= 0 ? "#bbf7d0" : "#fecaca") : (total >= 0 ? "#f0fdf4" : "#fff1f2");
   // Bordes SOLO en las celdas (no en el <tr>): evita costura/doblado en la sticky al colapsar.
   // noBottom: la fila siguiente posee el divisor (su borderTop) → sin borde inferior propio que compita.
-  const bt = `${strong ? 3 : 2}px solid ${color}`;
-  const bb = (strong && !noBottom) ? `2px solid ${color}` : "none";
+  const bord = { borderTop: `${strong ? 3 : 2}px solid ${color}`,
+                 borderBottom: (strong && !noBottom) ? `2px solid ${color}` : "none" };
   return (
     <tr style={{ background: bg }}>
       <td style={{ padding: "12px 16px", fontSize: strong ? 15 : 14, fontWeight: 900,
-        color, letterSpacing: ".02em", borderTop: bt, borderBottom: bb,
+        color, letterSpacing: ".02em", ...bord,
         ...stickyCol, background: bg }}>{label}</td>
       {activeMonths.map(m => (
         <td key={m} style={{ padding: "12px 12px", fontSize: 14, textAlign: "right",
           fontFamily: "var(--mono)", fontWeight: 900,
           color: values[m] > 0 ? T.green : values[m] < 0 ? T.red : T.dim,
-          whiteSpace: "nowrap", borderTop: bt, borderBottom: bb }}>
+          whiteSpace: "nowrap", ...bord }}>
           {fmtPar(values[m])}
         </td>
       ))}
       <td style={{ padding: "12px 14px", fontSize: 15, textAlign: "right", fontFamily: "var(--mono)",
         fontWeight: 900, color, whiteSpace: "nowrap",
-        borderLeft: `1px solid ${T.cardBorder}`, borderTop: bt, borderBottom: bb }}>
+        borderLeft: `1px solid ${T.cardBorder}`, ...bord }}>
         {fmtPar(total)}
       </td>
     </tr>
@@ -1151,27 +1150,25 @@ function SubSectionRow({ label, values, activeMonths, color, expanded, onToggle,
   const total = rowSum(values);
   const bg = "#f1f5f9";
   // Bordes SOLO en las celdas (no en el <tr>): evita costura/doblado en la sticky al colapsar.
+  const bord = { borderTop: `2px solid ${color ?? T.cardBorder}`, borderBottom: `1px solid ${T.cardBorder}` };
   return (
     <tr style={{ background: bg, cursor: "pointer" }}
       onClick={onToggle}>
       <td style={{ padding: "7px 16px", fontSize: 12, fontWeight: 800,
-        color: color ?? T.muted, letterSpacing: ".06em", textTransform: "uppercase",
-        borderTop: `2px solid ${color ?? T.cardBorder}`, borderBottom: `1px solid ${T.cardBorder}`,
+        color: color ?? T.muted, letterSpacing: ".06em", textTransform: "uppercase", ...bord,
         userSelect: "none", ...stickyCol, background: bg }}>
         <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{expanded ? "▼" : "▶"}</span>
         {label}
       </td>
       {activeMonths.map(m => (
         <td key={m} style={{ padding: "7px 12px", fontSize: 12, textAlign: "right",
-          fontFamily: "var(--mono)", fontWeight: 800, color: color ?? T.muted, whiteSpace: "nowrap",
-          borderTop: `2px solid ${color ?? T.cardBorder}`, borderBottom: `1px solid ${T.cardBorder}` }}>
+          fontFamily: "var(--mono)", fontWeight: 800, color: color ?? T.muted, whiteSpace: "nowrap", ...bord }}>
           {fmtPar(values[m], neg)}
         </td>
       ))}
       <td style={{ padding: "7px 14px", fontSize: 12, textAlign: "right", fontFamily: "var(--mono)",
         fontWeight: 900, color: color ?? T.muted, whiteSpace: "nowrap",
-        borderLeft: `1px solid ${T.cardBorder}`,
-        borderTop: `2px solid ${color ?? T.cardBorder}`, borderBottom: `1px solid ${T.cardBorder}` }}>
+        borderLeft: `1px solid ${T.cardBorder}`, ...bord }}>
         {fmtPar(total, neg)}
       </td>
     </tr>
