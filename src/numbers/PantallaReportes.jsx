@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, PageHeader } from "./theme";
-import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco } from "../lib/numbersApi";
+import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco, calcSaldoPendiente } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, pendienteSueldosPorLegajo, adelantoSueldosPorLegajo } from "../lib/sueldosApi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
 import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
@@ -1680,53 +1680,173 @@ function ReportesMenu({ onPick }) {
   );
 }
 
+// ─── Multi-select con checkboxes (opciones planas o agrupadas · búsqueda opcional) ──
+// selected = Set de values (vacío ⇒ "todos", sin filtro). groups = [{key,label,items:[{value,label}]}].
+function MultiSelect({ label, options = null, groups = null, selected, onChange, searchable = false, allLabel = "Todos", width = 200 }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
+  const flat = groups ? groups.flatMap(g => g.items) : (options || []);
+  const summary = selected.size === 0 ? allLabel
+    : selected.size === 1 ? (flat.find(o => selected.has(o.value))?.label ?? "1 sel.")
+    : `${selected.size} seleccionados`;
+  const toggle = v => { const s = new Set(selected); s.has(v) ? s.delete(v) : s.add(v); onChange(s); };
+  const toggleGroup = items => { const s = new Set(selected); const all = items.every(i => s.has(i.value)); items.forEach(i => all ? s.delete(i.value) : s.add(i.value)); onChange(s); };
+  const qq = q.trim().toLowerCase();
+  const show = o => !qq || o.label.toLowerCase().includes(qq);
+  const lbl = { display: "block", fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 };
+  const row = { display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" };
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      {label && <label style={lbl}>{label}</label>}
+      <button type="button" onClick={() => setOpen(o => !o)} style={{ ...selStyle, width, textAlign: "left",
+        display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, cursor: "pointer" }}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: selected.size ? T.text : T.muted }}>{summary}</span>
+        <span style={{ fontSize: 9, opacity: .6 }}>▾</span>
+      </button>
+      {open && (
+        <div style={{ position: "absolute", zIndex: 60, top: "calc(100% + 4px)", left: 0, minWidth: width, maxWidth: 340,
+          maxHeight: 340, overflowY: "auto", background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10, boxShadow: T.shadowMd, padding: 4 }}>
+          {searchable && (
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar…" autoFocus
+              style={{ ...selStyle, width: "100%", cursor: "text", marginBottom: 4 }} />
+          )}
+          {selected.size > 0 && (
+            <div onClick={() => onChange(new Set())} style={{ padding: "5px 10px", fontSize: 11, color: T.blue, cursor: "pointer" }}>✕ Limpiar selección</div>
+          )}
+          {(groups || [{ key: "_", items: flat }]).map(g => {
+            const items = g.items.filter(show);
+            if (!items.length) return null;
+            const allIn = g.items.every(i => selected.has(i.value));
+            return (
+              <div key={g.key}>
+                {g.label && (
+                  <div onClick={() => toggleGroup(g.items)} style={{ ...row, padding: "6px 10px", fontWeight: 800, fontSize: 10.5,
+                    color: T.muted, textTransform: "uppercase", letterSpacing: ".04em", background: "#f1f5f9" }}>
+                    <input type="checkbox" checked={allIn} readOnly style={{ pointerEvents: "none", accentColor: T.accentDark }} />
+                    {g.label}
+                  </div>
+                )}
+                {items.map(o => (
+                  <div key={o.value} onClick={() => toggle(o.value)} style={{ ...row, padding: g.label ? "6px 10px 6px 26px" : "6px 10px", fontSize: 13, color: T.text }}>
+                    <input type="checkbox" checked={selected.has(o.value)} readOnly style={{ pointerEvents: "none", accentColor: T.accentDark }} />
+                    {o.label}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Filtro de fecha con presets (como Contagram) → devuelve rango {desde,hasta} ISO ──
+const DATE_PRESETS = [
+  { id: "todos", label: "Todo" }, { id: "hoy", label: "Hoy" }, { id: "ayer", label: "Ayer" },
+  { id: "semana", label: "Últimos 7 días" }, { id: "dias30", label: "Últimos 30 días" },
+  { id: "mes", label: "Mes actual" }, { id: "mes_ant", label: "Mes anterior" },
+  { id: "anio", label: "Año actual" }, { id: "rango", label: "Desde – Hasta" },
+];
+function rangoDePreset(id, desde, hasta) {
+  const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  const mk = (a, b) => ({ desde: a ? iso(a) : "", hasta: b ? iso(b) : "" });
+  const dd = n => { const x = new Date(t); x.setDate(t.getDate() + n); return x; };
+  switch (id) {
+    case "hoy":     return mk(t, t);
+    case "ayer":    return mk(dd(-1), dd(-1));
+    case "semana":  return mk(dd(-6), t);
+    case "dias30":  return mk(dd(-29), t);
+    case "mes":     return mk(new Date(t.getFullYear(), t.getMonth(), 1), new Date(t.getFullYear(), t.getMonth() + 1, 0));
+    case "mes_ant": return mk(new Date(t.getFullYear(), t.getMonth() - 1, 1), new Date(t.getFullYear(), t.getMonth(), 0));
+    case "anio":    return mk(new Date(t.getFullYear(), 0, 1), new Date(t.getFullYear(), 11, 31));
+    case "rango":   return { desde: desde || "", hasta: hasta || "" };
+    default:        return { desde: "", hasta: "" };
+  }
+}
+
+// Subtipo del comprobante → etiqueta de "tipo" para la columna.
+const TIPO_COMP_LABEL = { EGRESO: "Compra", GASTO: "Gasto", INGRESO: "Venta", NC: "Nota de crédito" };
+
 // ─── Detalle de comprobantes (Ingresos / Egresos) — listar + filtrar + KPIs ────
-function TabDetalleComprobantes({ rows = [], tipo, ccs = [], sociedades = [] }) {
+function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedades = [] }) {
   const esEg = tipo === "EGRESO";
   const contraLabel = esEg ? "Proveedor" : "Cliente";
-  const ccMap  = useMemo(() => new Map(ccs.map(c => [c.id, c.nombre])), [ccs]);
+  const ccMap  = useMemo(() => new Map(ccs.map(c => [String(c.id), c.nombre])), [ccs]);
   const socMap = useMemo(() => new Map(sociedades.map(s => [String(s.id), s.nombre])), [sociedades]);
-  const anioDe = r => String(r.fecha || "").slice(0, 4);
 
-  const [q, setQ]         = useState("");
-  const [fSoc, setFSoc]   = useState("");
-  const [fCC, setFCC]     = useState("");
-  const [fCta, setFCta]   = useState("");
-  const [fMon, setFMon]   = useState("");
-  const [fAnio, setFAnio] = useState(String(CUR_YEAR));
+  const [q, setQ]           = useState("");
+  const [fSoc, setFSoc]     = useState(new Set());
+  const [fCC, setFCC]       = useState(new Set());
+  const [fCta, setFCta]     = useState(new Set());
+  const [fMon, setFMon]     = useState(new Set());
+  const [fEstado, setFEstado] = useState(new Set());
+  const [preset, setPreset] = useState("anio");
+  const [dDesde, setDDesde] = useState("");
+  const [dHasta, setDHasta] = useState("");
+  const { desde, hasta } = rangoDePreset(preset, dDesde, dHasta);
 
-  // Opciones de filtro (de los datos crudos, no de lo ya filtrado).
-  const opts = useMemo(() => {
-    const soc = new Set(), cc = new Set(), cta = new Set(), mon = new Set(), anio = new Set();
-    for (const r of rows) {
-      if (r.sociedad) soc.add(String(r.sociedad));
-      if (r.centro_costo) cc.add(String(r.centro_costo));
-      if (r.cuenta_contable) cta.add(r.cuenta_contable);
-      mon.add(r.moneda || "ARS");
-      if (anioDe(r)) anio.add(anioDe(r));
+  // Opciones de filtro (de los datos crudos).
+  const socOpts = useMemo(() => [...new Set(rows.map(r => String(r.sociedad)).filter(Boolean))].sort().map(s => ({ value: s, label: socMap.get(s) || s })), [rows, socMap]);
+  const ctaOpts = useMemo(() => [...new Set(rows.map(r => r.cuenta_contable).filter(Boolean))].sort().map(c => ({ value: c, label: c })), [rows]);
+  const monOpts = useMemo(() => [...new Set(rows.map(r => r.moneda || "ARS"))].sort().map(m => ({ value: m, label: m })), [rows]);
+  // Centros presentes, agrupados por operación (o grupo HQ) — igual criterio que el filtro de Sedes.
+  const centroGroups = useMemo(() => {
+    const present = new Set(rows.map(r => String(r.centro_costo)).filter(Boolean));
+    const m = new Map();
+    for (const c of ccs) {
+      const id = String(c.id);
+      if (!present.has(id)) continue;
+      const key = (c.operacion ?? "").trim() || (String(c.grupo ?? "").toLowerCase() === "hq" ? "HQ" : "Otros");
+      if (!m.has(key)) m.set(key, { key, label: key, items: [] });
+      m.get(key).items.push({ value: id, label: c.nombre });
     }
-    return {
-      soc: [...soc].sort(), cc: [...cc], cta: [...cta].sort(),
-      mon: [...mon].sort(), anio: [...anio].sort().reverse(),
-    };
-  }, [rows]);
+    const covered = new Set([...m.values()].flatMap(g => g.items.map(i => i.value)));
+    const missing = [...present].filter(id => !covered.has(id));
+    if (missing.length) m.set("_x", { key: "_x", label: "Sin centro", items: missing.map(id => ({ value: id, label: id })) });
+    return [...m.values()];
+  }, [rows, ccs]);
 
+  // Estado de pago por comprobante: devengado (Σ líneas) − pagado (movimientos que lo referencian).
+  const estadoDe = useMemo(() => {
+    const pagoTipo = esEg ? "PAGO" : "COBRO";
+    const totalByComp = {}, pagadoByComp = {};
+    for (const r of rows) { const k = r.id_comp; totalByComp[k] = (totalByComp[k] || 0) + (Number(r.total) || 0); }
+    for (const m of movs) { if (m.tipo === pagoTipo && m.documento_id) pagadoByComp[m.documento_id] = (pagadoByComp[m.documento_id] || 0) + Math.abs(Number(m.monto) || 0); }
+    return r => {
+      const t = totalByComp[r.id_comp] || 0, p = pagadoByComp[r.id_comp] || 0;
+      if (t > 0 && calcSaldoPendiente(t, [{ monto: p }]) <= 0.5) return "Pagado";
+      return p > 0.5 ? "Parcial" : "Pendiente";
+    };
+  }, [rows, movs, esEg]);
+
+  const inSet = (set, v) => set.size === 0 || set.has(v);
   const filt = useMemo(() => {
     const qq = q.trim().toLowerCase();
     return rows.filter(r => {
-      if (fAnio && anioDe(r) !== fAnio) return false;
-      if (fSoc && String(r.sociedad) !== fSoc) return false;
-      if (fCC && String(r.centro_costo) !== fCC) return false;
-      if (fCta && r.cuenta_contable !== fCta) return false;
-      if (fMon && (r.moneda || "ARS") !== fMon) return false;
+      const f = String(r.fecha || "");
+      if (desde && f < desde) return false;
+      if (hasta && f > hasta) return false;
+      if (!inSet(fSoc, String(r.sociedad))) return false;
+      if (!inSet(fCC, String(r.centro_costo))) return false;
+      if (!inSet(fCta, r.cuenta_contable)) return false;
+      if (!inSet(fMon, r.moneda || "ARS")) return false;
+      if (fEstado.size && !fEstado.has(estadoDe(r))) return false;
       if (qq) {
-        const hay = [r.contraparte_nombre, r.nro_comp, r.nota, r.cuenta_contable]
-          .map(x => String(x || "").toLowerCase()).join(" ");
+        const hay = [r.contraparte_nombre, r.nro_comp, r.nota, r.cuenta_contable].map(x => String(x || "").toLowerCase()).join(" ");
         if (!hay.includes(qq)) return false;
       }
       return true;
     }).sort((a, b) => String(b.fecha || "").localeCompare(String(a.fecha || "")));
-  }, [rows, q, fSoc, fCC, fCta, fMon, fAnio]);
+  }, [rows, q, fSoc, fCC, fCta, fMon, fEstado, desde, hasta, estadoDe]);
 
   const porMon = useMemo(() => {
     const m = {};
@@ -1734,46 +1854,39 @@ function TabDetalleComprobantes({ rows = [], tipo, ccs = [], sociedades = [] }) 
     return m;
   }, [filt]);
 
-  const selS = { ...selStyle, maxWidth: 200 };
-  const lbl  = { display: "block", fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 };
-  const td   = { padding: "8px 12px", fontSize: 13, borderBottom: `1px solid ${T.cardBorder}`, whiteSpace: "nowrap" };
-  const th   = { padding: "9px 12px", fontSize: 10, fontWeight: 800, color: T.tableHeadText, textTransform: "uppercase", letterSpacing: ".06em", background: T.tableHead, position: "sticky", top: 0, textAlign: "left", whiteSpace: "nowrap" };
+  const lbl = { display: "block", fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 };
+  const td  = { padding: "8px 12px", fontSize: 13, borderBottom: `1px solid ${T.cardBorder}`, whiteSpace: "nowrap" };
+  const th  = { padding: "9px 12px", fontSize: 10, fontWeight: 800, color: T.tableHeadText, textTransform: "uppercase", letterSpacing: ".06em", background: T.tableHead, position: "sticky", top: 0, textAlign: "left", whiteSpace: "nowrap" };
 
   return (
     <div className="fade">
       {/* Filtros */}
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-end", background: T.card,
         border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, padding: "12px 16px", marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,.04)" }}>
-        <div style={{ flex: "1 1 220px", minWidth: 180 }}>
+        <div style={{ flex: "1 1 200px", minWidth: 170 }}>
           <label style={lbl}>Buscar</label>
           <input value={q} onChange={e => setQ(e.target.value)} placeholder={`${contraLabel}, N° comp, nota…`}
             style={{ ...selStyle, width: "100%", cursor: "text" }} />
         </div>
-        <div><label style={lbl}>Año</label>
-          <select value={fAnio} onChange={e => setFAnio(e.target.value)} style={selS}>
-            <option value="">Todos</option>
-            {opts.anio.map(a => <option key={a} value={a}>{a}</option>)}
-          </select></div>
-        <div><label style={lbl}>Sociedad</label>
-          <select value={fSoc} onChange={e => setFSoc(e.target.value)} style={selS}>
-            <option value="">Todas</option>
-            {opts.soc.map(s => <option key={s} value={s}>{socMap.get(s) || s}</option>)}
-          </select></div>
-        <div><label style={lbl}>Centro de costo</label>
-          <select value={fCC} onChange={e => setFCC(e.target.value)} style={selS}>
-            <option value="">Todos</option>
-            {opts.cc.map(c => <option key={c} value={c}>{ccMap.get(c) || c}</option>)}
-          </select></div>
-        <div><label style={lbl}>Cuenta</label>
-          <select value={fCta} onChange={e => setFCta(e.target.value)} style={selS}>
-            <option value="">Todas</option>
-            {opts.cta.map(c => <option key={c} value={c}>{c}</option>)}
-          </select></div>
-        <div><label style={lbl}>Moneda</label>
-          <select value={fMon} onChange={e => setFMon(e.target.value)} style={selS}>
-            <option value="">Todas</option>
-            {opts.mon.map(m => <option key={m} value={m}>{m}</option>)}
-          </select></div>
+        <div>
+          <label style={lbl}>Fecha</label>
+          <select value={preset} onChange={e => setPreset(e.target.value)} style={selStyle}>
+            {DATE_PRESETS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+          </select>
+        </div>
+        {preset === "rango" && (
+          <>
+            <div><label style={lbl}>Desde</label>
+              <input type="date" value={dDesde} onChange={e => setDDesde(e.target.value)} style={{ ...selStyle, cursor: "pointer" }} /></div>
+            <div><label style={lbl}>Hasta</label>
+              <input type="date" value={dHasta} onChange={e => setDHasta(e.target.value)} style={{ ...selStyle, cursor: "pointer" }} /></div>
+          </>
+        )}
+        <MultiSelect label="Sociedad" options={socOpts} selected={fSoc} onChange={setFSoc} allLabel="Todas" />
+        <MultiSelect label="Centro de costo" groups={centroGroups} selected={fCC} onChange={setFCC} searchable allLabel="Todos" width={220} />
+        <MultiSelect label="Cuenta" options={ctaOpts} selected={fCta} onChange={setFCta} searchable allLabel="Todas" width={220} />
+        <MultiSelect label="Moneda" options={monOpts} selected={fMon} onChange={setFMon} allLabel="Todas" width={120} />
+        <MultiSelect label="Estado de pago" options={[{ value: "Pendiente", label: "Pendiente" }, { value: "Parcial", label: "Parcial" }, { value: "Pagado", label: "Pagado" }]} selected={fEstado} onChange={setFEstado} allLabel="Todos" width={150} />
       </div>
 
       {/* KPIs */}
@@ -1792,11 +1905,11 @@ function TabDetalleComprobantes({ rows = [], tipo, ccs = [], sociedades = [] }) 
 
       {/* Tabla */}
       <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, boxShadow: T.shadow, overflow: "auto", maxHeight: "60vh" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 860 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
           <thead><tr>
-            <th style={th}>Fecha</th><th style={th}>N° Comp</th><th style={th}>{contraLabel}</th>
-            <th style={th}>Cuenta</th><th style={th}>Centro</th><th style={th}>Sociedad</th>
-            <th style={{ ...th, textAlign: "right" }}>Total</th>
+            <th style={th}>Fecha</th><th style={th}>Tipo</th><th style={th}>{contraLabel}</th>
+            <th style={th}>Sociedad</th><th style={th}>Centro</th><th style={th}>Cuenta</th>
+            <th style={{ ...th, textAlign: "right" }}>Precio</th>
           </tr></thead>
           <tbody>
             {filt.length === 0
@@ -1804,11 +1917,11 @@ function TabDetalleComprobantes({ rows = [], tipo, ccs = [], sociedades = [] }) 
               : filt.map((r, i) => (
                 <tr key={r.id ?? i} style={{ background: i % 2 ? "#fafbfc" : T.card }}>
                   <td style={{ ...td, color: T.muted }}>{String(r.fecha || "").split("-").reverse().join("/")}</td>
-                  <td style={{ ...td, fontFamily: T.mono, fontSize: 12, color: T.muted }}>{r.nro_comp || "—"}</td>
+                  <td style={{ ...td, fontSize: 12, color: T.muted }}>{TIPO_COMP_LABEL[String(r.subtipo || "").toUpperCase()] || r.subtipo || "—"}</td>
                   <td style={{ ...td, color: T.text, fontWeight: 600 }}>{r.contraparte_nombre || "—"}</td>
-                  <td style={{ ...td, color: T.text }}>{r.cuenta_contable || "—"}</td>
-                  <td style={{ ...td, color: T.muted, fontSize: 12 }}>{ccMap.get(String(r.centro_costo)) || r.centro_costo || "—"}</td>
                   <td style={{ ...td, color: T.muted, fontSize: 12 }}>{socMap.get(String(r.sociedad)) || r.sociedad || "—"}</td>
+                  <td style={{ ...td, color: T.muted, fontSize: 12 }}>{ccMap.get(String(r.centro_costo)) || r.centro_costo || "—"}</td>
+                  <td style={{ ...td, color: T.text }}>{r.cuenta_contable || "—"}</td>
                   <td style={{ ...td, textAlign: "right", fontFamily: T.mono, fontWeight: 700, color: esEg ? T.red : T.green }}>
                     {MONEDA_SYM[r.moneda || "ARS"] ?? (r.moneda || "ARS")} {fmtN(Number(r.total) || 0)}
                   </td>
@@ -2310,10 +2423,10 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
       {/* ── Informes · detalle de comprobantes (Egresos / Ingresos) ── */}
       {activeTab === "inf_egresos" && (
-        <TabDetalleComprobantes rows={rawEg} tipo="EGRESO" ccs={ccs} sociedades={sociedades} />
+        <TabDetalleComprobantes rows={rawEg} movs={rawMovs} tipo="EGRESO" ccs={ccs} sociedades={sociedades} />
       )}
       {activeTab === "inf_ingresos" && (
-        <TabDetalleComprobantes rows={rawIn} tipo="INGRESO" ccs={ccs} sociedades={sociedades} />
+        <TabDetalleComprobantes rows={rawIn} movs={rawMovs} tipo="INGRESO" ccs={ccs} sociedades={sociedades} />
       )}
 
       {/* ── Reportes en construcción (esqueleto navegable, sin cálculo todavía) ── */}
