@@ -1862,7 +1862,7 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
   }, [filt]);
 
   const lbl = { display: "block", fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 };
-  const td  = { padding: "8px 12px", fontSize: 13, borderBottom: `1px solid ${T.cardBorder}`, whiteSpace: "nowrap" };
+  const td  = { padding: "8px 12px", fontSize: 13, borderBottom: `1px solid ${T.cardBorder}`, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
   const th  = { padding: "9px 12px", fontSize: 10, fontWeight: 800, color: T.tableHeadText, textTransform: "uppercase", letterSpacing: ".06em", background: T.tableHead, position: "sticky", top: 0, textAlign: "left", whiteSpace: "nowrap" };
 
   return (
@@ -1912,7 +1912,16 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
 
       {/* Tabla */}
       <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, boxShadow: T.shadow, overflow: "auto", maxHeight: "60vh" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", minWidth: 1020 }}>
+          <colgroup>
+            <col style={{ width: 90 }} />
+            <col style={{ width: 100 }} />
+            <col style={{ width: 120 }} />
+            <col style={{ width: 200 }} />
+            <col style={{ width: 200 }} />
+            <col style={{ width: 200 }} />
+            <col style={{ width: 130 }} />
+          </colgroup>
           <thead><tr>
             <th style={th}>Fecha</th><th style={th}>Tipo</th><th style={th}>Sociedad</th>
             <th style={th}>{contraLabel}</th><th style={th}>Cuenta</th><th style={th}>Centro</th>
@@ -1926,9 +1935,9 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
                   <td style={{ ...td, color: T.muted }}>{String(r.fecha || "").split("-").reverse().join("/")}</td>
                   <td style={{ ...td, fontSize: 12, color: T.muted }}>{r._tipo || TIPO_COMP_LABEL[String(r.subtipo || "").toUpperCase()] || r.subtipo || "—"}</td>
                   <td style={{ ...td, color: T.muted, fontSize: 12 }}>{socMap.get(String(r.sociedad)) || r.sociedad || "—"}</td>
-                  <td style={{ ...td, color: T.text, fontWeight: 600 }}>{r.contraparte_nombre || "—"}</td>
-                  <td style={{ ...td, color: T.text }}>{r.cuenta_contable || "—"}</td>
-                  <td style={{ ...td, color: T.muted, fontSize: 12 }}>{ccMap.get(String(r.centro_costo)) || r.centro_costo || "—"}</td>
+                  <td style={{ ...td, color: T.text, fontWeight: 600 }} title={r.contraparte_nombre || ""}>{r.contraparte_nombre || "—"}</td>
+                  <td style={{ ...td, color: T.text }} title={r.cuenta_contable || ""}>{r.cuenta_contable || "—"}</td>
+                  <td style={{ ...td, color: T.muted, fontSize: 12 }} title={ccMap.get(String(r.centro_costo)) || r.centro_costo || ""}>{ccMap.get(String(r.centro_costo)) || r.centro_costo || "—"}</td>
                   <td style={{ ...td, textAlign: "right", fontFamily: T.mono, fontWeight: 700, color: esEg ? T.red : T.green }}>
                     {MONEDA_SYM[r.moneda || "ARS"] ?? (r.moneda || "ARS")} {fmtN(Math.abs(Number(r.total) || 0))}
                   </td>
