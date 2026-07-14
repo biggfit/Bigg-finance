@@ -262,65 +262,61 @@ function DataRow({ label, values, activeMonths, color, neg = false }) {
   );
 }
 
-function SubtotalRow({ label, values, activeMonths, color, strong, neg = false }) {
+function SubtotalRow({ label, values, activeMonths, color, strong, neg = false, noBottom = false }) {
   const total = rowSum(values);
   const bg = strong ? "#cbd5e1" : "#f3f4f6";
   // Bordes SOLO en las celdas (no en el <tr>): con border-collapse + celda sticky, duplicar el borde
   // en el <tr> y en la celda genera costura/doblado al colapsar. Fuente única = la celda.
+  // noBottom: el divisor de abajo lo posee la fila siguiente (su borderTop) → evita que el borde
+  // inferior propio compita con el de la fila de abajo (la sticky no colapsa y quedaría despareja).
+  const bt = `${strong ? 3 : 2}px solid ${color ?? T.cardBorder}`;
+  const bb = noBottom ? "none" : `2px solid ${T.cardBorder}`;
   return (
     <tr style={{ background: bg }}>
       <td style={{ padding: "12px 16px", fontSize: strong ? 15 : 14, fontWeight: 900,
         color: color ?? T.text, letterSpacing: ".02em",
-        borderTop: `${strong ? 3 : 2}px solid ${color ?? T.cardBorder}`,
-        borderBottom: `2px solid ${T.cardBorder}`,
+        borderTop: bt, borderBottom: bb,
         ...stickyCol, background: bg }}>{label}</td>
       {activeMonths.map(m => (
         <td key={m} style={{ padding: "12px 12px", fontSize: 14, textAlign: "right",
           fontFamily: "var(--mono)", fontWeight: 900, color: color ?? T.text,
-          whiteSpace: "nowrap",
-          borderTop: `${strong ? 3 : 2}px solid ${color ?? T.cardBorder}`,
-          borderBottom: `2px solid ${T.cardBorder}` }}>
+          whiteSpace: "nowrap", borderTop: bt, borderBottom: bb }}>
           {fmtPar(values[m], neg)}
         </td>
       ))}
       <td style={{ padding: "12px 14px", fontSize: 15, textAlign: "right", fontFamily: "var(--mono)",
         fontWeight: 900, color: color ?? T.text, whiteSpace: "nowrap",
-        borderLeft: `1px solid ${T.cardBorder}`,
-        borderTop: `${strong ? 3 : 2}px solid ${color ?? T.cardBorder}`,
-        borderBottom: `2px solid ${T.cardBorder}` }}>
+        borderLeft: `1px solid ${T.cardBorder}`, borderTop: bt, borderBottom: bb }}>
         {fmtPar(total, neg)}
       </td>
     </tr>
   );
 }
 
-function ResultadoRow({ label, values, activeMonths, strong }) {
+function ResultadoRow({ label, values, activeMonths, strong, noBottom = false }) {
   const total = rowSum(values);
   const color = total >= 0 ? T.green : T.red;
   const bg = strong ? (total >= 0 ? "#bbf7d0" : "#fecaca") : (total >= 0 ? "#f0fdf4" : "#fff1f2");
   // Bordes SOLO en las celdas (no en el <tr>): evita costura/doblado en la sticky al colapsar.
+  // noBottom: la fila siguiente posee el divisor (su borderTop) → sin borde inferior propio que compita.
+  const bt = `${strong ? 3 : 2}px solid ${color}`;
+  const bb = (strong && !noBottom) ? `2px solid ${color}` : "none";
   return (
     <tr style={{ background: bg }}>
       <td style={{ padding: "12px 16px", fontSize: strong ? 15 : 14, fontWeight: 900,
-        color, letterSpacing: ".02em",
-        borderTop: `${strong ? 3 : 2}px solid ${color}`,
-        borderBottom: strong ? `2px solid ${color}` : "none",
+        color, letterSpacing: ".02em", borderTop: bt, borderBottom: bb,
         ...stickyCol, background: bg }}>{label}</td>
       {activeMonths.map(m => (
         <td key={m} style={{ padding: "12px 12px", fontSize: 14, textAlign: "right",
           fontFamily: "var(--mono)", fontWeight: 900,
           color: values[m] > 0 ? T.green : values[m] < 0 ? T.red : T.dim,
-          whiteSpace: "nowrap",
-          borderTop: `${strong ? 3 : 2}px solid ${color}`,
-          borderBottom: strong ? `2px solid ${color}` : "none" }}>
+          whiteSpace: "nowrap", borderTop: bt, borderBottom: bb }}>
           {fmtPar(values[m])}
         </td>
       ))}
       <td style={{ padding: "12px 14px", fontSize: 15, textAlign: "right", fontFamily: "var(--mono)",
         fontWeight: 900, color, whiteSpace: "nowrap",
-        borderLeft: `1px solid ${T.cardBorder}`,
-        borderTop: `${strong ? 3 : 2}px solid ${color}`,
-        borderBottom: strong ? `2px solid ${color}` : "none" }}>
+        borderLeft: `1px solid ${T.cardBorder}`, borderTop: bt, borderBottom: bb }}>
         {fmtPar(total)}
       </td>
     </tr>
@@ -1026,15 +1022,15 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
 
           {/* HQ: ingresos propios − opex por departamento */}
           {sec("sec_ing", "Ingresos HQ", hqAccounts, BIGG_ORDEN)}
-          <SubtotalRow strong label="Total Ingresos" values={resOpMasIngHQ} activeMonths={activeMonths} color={SEDE_HDR} />
+          <SubtotalRow strong noBottom label="Total Ingresos" values={resOpMasIngHQ} activeMonths={activeMonths} color={SEDE_HDR} />
 
           {/* Costo por venta (variable, existe solo si hay venta): interusos a franquiciados, compra de
               pauta, fee de facturación → Margen de Contribución. OPEX (fijo) va debajo del margen. */}
           {sec("sec_gpv", "Gastos por Ventas", gpvAccounts, BIGG_ORDEN_GPV, true)}
-          <SubtotalRow strong label="Margen de Contribución" values={margen} activeMonths={activeMonths} color={SEDE_HDR} />
+          <SubtotalRow strong noBottom label="Margen de Contribución" values={margen} activeMonths={activeMonths} color={SEDE_HDR} />
           {sec("sec_opex", "OPEX HQ", ghqAccounts, BIGG_ORDEN_GHQ, true)}
-          <SubtotalRow strong neg label="Total OPEX HQ" values={opexHQ} activeMonths={activeMonths} color={SEDE_HDR} />
-          <ResultadoRow strong label="Resultado Operativo del Grupo" values={resOpGrupo} activeMonths={activeMonths} />
+          <SubtotalRow strong neg noBottom label="Total OPEX HQ" values={opexHQ} activeMonths={activeMonths} color={SEDE_HDR} />
+          <ResultadoRow strong noBottom label="Resultado Operativo del Grupo" values={resOpGrupo} activeMonths={activeMonths} />
 
           {/* Debajo del operativo: financieros e impuestos del grupo, en una línea al final */}
           {sec("sec_fin", "Financieros", pnl.grupos.fin, BIGG_ORDEN_FIN, true)}
