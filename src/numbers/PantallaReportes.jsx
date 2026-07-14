@@ -276,13 +276,17 @@ function SubtotalRow({ label, values, activeMonths, color, strong, neg = false }
       {activeMonths.map(m => (
         <td key={m} style={{ padding: "12px 12px", fontSize: 14, textAlign: "right",
           fontFamily: "var(--mono)", fontWeight: 900, color: color ?? T.text,
-          whiteSpace: "nowrap" }}>
+          whiteSpace: "nowrap",
+          borderTop: `${strong ? 3 : 2}px solid ${color ?? T.cardBorder}`,
+          borderBottom: `2px solid ${T.cardBorder}` }}>
           {fmtPar(values[m], neg)}
         </td>
       ))}
       <td style={{ padding: "12px 14px", fontSize: 15, textAlign: "right", fontFamily: "var(--mono)",
         fontWeight: 900, color: color ?? T.text, whiteSpace: "nowrap",
-        borderLeft: `1px solid ${T.cardBorder}` }}>
+        borderLeft: `1px solid ${T.cardBorder}`,
+        borderTop: `${strong ? 3 : 2}px solid ${color ?? T.cardBorder}`,
+        borderBottom: `2px solid ${T.cardBorder}` }}>
         {fmtPar(total, neg)}
       </td>
     </tr>
@@ -307,13 +311,17 @@ function ResultadoRow({ label, values, activeMonths, strong }) {
         <td key={m} style={{ padding: "12px 12px", fontSize: 14, textAlign: "right",
           fontFamily: "var(--mono)", fontWeight: 900,
           color: values[m] > 0 ? T.green : values[m] < 0 ? T.red : T.dim,
-          whiteSpace: "nowrap" }}>
+          whiteSpace: "nowrap",
+          borderTop: `${strong ? 3 : 2}px solid ${color}`,
+          borderBottom: strong ? `2px solid ${color}` : "none" }}>
           {fmtPar(values[m])}
         </td>
       ))}
       <td style={{ padding: "12px 14px", fontSize: 15, textAlign: "right", fontFamily: "var(--mono)",
         fontWeight: 900, color, whiteSpace: "nowrap",
-        borderLeft: `1px solid ${T.cardBorder}` }}>
+        borderLeft: `1px solid ${T.cardBorder}`,
+        borderTop: `${strong ? 3 : 2}px solid ${color}`,
+        borderBottom: strong ? `2px solid ${color}` : "none" }}>
         {fmtPar(total)}
       </td>
     </tr>
