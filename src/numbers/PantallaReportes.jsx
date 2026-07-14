@@ -993,14 +993,15 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
           </tr>
         </thead>
         <tbody>
-          {/* Resultado de operaciones: una línea por negocio = SU resultado (no la venta) */}
-          <BandaRow label="Resultado de Operaciones" span={ncols} expanded={!isCol("sec_op")} onToggle={() => toggle("sec_op")} />
+          {/* Resultado de operaciones: una línea por negocio = SU resultado (no la venta). Mismo diseño
+              que "Ingresos HQ" (SubSectionRow slate), no la banda oscura de secciones crudas. */}
+          <SubSectionRow label="Resultado de Operaciones" values={resOperaciones} activeMonths={activeMonths}
+            color={SEDE_HDR} expanded={!isCol("sec_op")} onToggle={() => toggle("sec_op")} />
           {!isCol("sec_op") && <>
             <DataRow label="Sedes Propias Argentina" values={sar} activeMonths={activeMonths} color={SEDE_HDR} />
             <DataRow label="Gerenciamiento de Sedes (Rosedal)" values={fg} activeMonths={activeMonths} color={SEDE_HDR} />
             <DataRow label="Wellness Real Estate (Huergo)" values={wre} activeMonths={activeMonths} color={SEDE_HDR} />
           </>}
-          <SubtotalRow strong label="Resultado de Operaciones" values={resOperaciones} activeMonths={activeMonths} color={SEDE_HDR} />
 
           {/* HQ: ingresos propios − opex por departamento */}
           {sec("sec_ing", "Ingresos HQ", hqAccounts, BIGG_ORDEN)}
