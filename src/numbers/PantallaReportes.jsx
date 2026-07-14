@@ -1654,7 +1654,7 @@ const TABS = [
   { id: "er_soc",       label: "Estado de Resultados", icon: "📄", wip: true, desc: "P&L de la entidad legal seleccionada (por sociedad)." },
 
   { id: "op_espana",    label: "P&L Sedes Propias España", icon: "🇪🇸", desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada)." },
-  { id: "op_colombia",  label: "P&L Sedes Propias Colombia", icon: "🇨🇴", wip: true, desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada)." },
+  { id: "op_colombia",  label: "P&L Sedes Propias Colombia", icon: "🇨🇴", desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada)." },
   { id: "op_puertos",   label: "P&L Puertos", icon: "⚓", wip: true, desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada, inversión USD)." },
   { id: "op_rosedal",   label: "P&L Rosedal (Segui Fit)", icon: "🤝", wip: true, desc: "P&L completo de la operación administrada hasta Free Cash Flow, con impuestos dentro; a BIGG entra el fee + su % del FCF." },
   { id: "op_huergo",    label: "P&L Huergo", icon: "🏗️", wip: true, desc: "Negocio propio (anillo 1): ingreso del edificio − horas de coaches = margen a seguir de cerca." },
