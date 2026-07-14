@@ -1010,7 +1010,7 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
 
           {/* HQ: ingresos propios − opex por departamento */}
           {sec("sec_ing", "Ingresos HQ", hqAccounts, BIGG_ORDEN)}
-          <SubtotalRow label="Resultado de Operaciones + Ingresos HQ" values={resOpMasIngHQ} activeMonths={activeMonths} color={SEDE_HDR} />
+          <SubtotalRow label="Total Ingresos" values={resOpMasIngHQ} activeMonths={activeMonths} color={SEDE_HDR} />
           {sec("sec_opex", "OPEX HQ", ghqAccounts, BIGG_ORDEN_GHQ, true)}
           <SubtotalRow neg label="Total OPEX HQ" values={opexHQ} activeMonths={activeMonths} color={SEDE_HDR} />
           <ResultadoRow strong label="Resultado Operativo del Grupo" values={resOpGrupo} activeMonths={activeMonths} />
