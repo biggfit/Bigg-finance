@@ -368,24 +368,6 @@ function computeCesion(resFinal = [], retiros = [], { pct, apertura = 0, apertur
   return { acreditado, retirado, saldoAcum, retenido };
 }
 
-// Fila de la cola de cesión (violeta, con signo). `runningTotal` → el TOTAL es el saldo final (stock), no la suma.
-function CesionRow({ label, values, activeMonths, bold = false, topBorder = false, runningTotal = false }) {
-  const bg = "#faf5ff", fw = bold ? 800 : 700, top = topBorder ? { borderTop: "2px solid #7c3aed" } : {};
-  const total = runningTotal ? (values[activeMonths[activeMonths.length - 1]] ?? 0) : rowSum(values);
-  return (
-    <tr style={{ background: bg, borderBottom: `1px solid ${T.cardBorder}`, ...top }}>
-      <td style={{ padding: bold ? "10px 16px" : "9px 16px 9px 44px", fontSize: bold ? 14 : 13, fontWeight: fw,
-        color: "#6d28d9", whiteSpace: "nowrap", borderBottom: `1px solid ${T.cardBorder}`, ...top, ...stickyCol, background: bg }}>{label}</td>
-      {activeMonths.map(m => (
-        <td key={m} style={{ padding: "9px 12px", fontSize: 13, textAlign: "right", fontFamily: "var(--mono)",
-          fontWeight: fw, color: "#6d28d9", whiteSpace: "nowrap" }}>{fmtSigned(values[m])}</td>
-      ))}
-      <td style={{ padding: "9px 14px", fontSize: 13, textAlign: "right", fontFamily: "var(--mono)", fontWeight: 800,
-        color: "#6d28d9", whiteSpace: "nowrap", borderLeft: `1px solid ${T.cardBorder}` }}>{fmtSigned(total)}</td>
-    </tr>
-  );
-}
-
 function buildPnLSede(inRows, egRows, ccFilter, year, moneda) {
   // Pre-poblar cada grupo con sus cuentas configuradas en 0 → se muestran aunque no tengan monto.
   const grupos = {};
@@ -497,6 +479,11 @@ function colsSedeVista(vista, mes, year) {
     { header: "Var%",           kind: "var", a: c => Number(c[mes]) || 0, b: (c, p) => Number(p?.[mes]) || 0 },
   ];
 }
+// Columnas de la vista Evolución: una por mes activo + TOTAL (marcada con `total` para el separador/stock).
+const colsEvolucion = months => [
+  ...months.map(m => ({ header: MESES[m], kind: "val", get: c => Number(c[m]) || 0 })),
+  { header: "TOTAL", kind: "val", total: true, get: c => (c || []).reduce((s, v) => s + (Number(v) || 0), 0) },
+];
 
 // Celdas de una fila para las vistas comparativas. o = estilo base de la fila.
 function celdasSede(cols, cur, prev, pol, o) {
@@ -507,20 +494,21 @@ function celdasSede(cols, cur, prev, pol, o) {
       // flecha por signo crudo; color por MEJORA (polaridad: ingresos/resultados +1, costos −1).
       const color = pct == null ? T.dim : (d * pol > 0 ? T.green : d * pol < 0 ? T.red : T.dim);
       return <td key={i} style={{ padding: o.pad, fontSize: (o.fs || 13) - 1, textAlign: "right",
-        fontFamily: "var(--mono)", fontWeight: 700, color, whiteSpace: "nowrap" }}>
+        fontFamily: "var(--mono)", fontWeight: 700, color, whiteSpace: "nowrap",
+        ...(col.total ? { borderLeft: `1px solid ${T.cardBorder}` } : {}) }}>
         {pct == null ? "—" : `${d > 0 ? "↑" : d < 0 ? "↓" : ""}${Math.abs(pct).toFixed(1)}%`}</td>;
     }
     const v = col.get(cur, prev);
     const color = o.bySign ? (v > 0 ? T.green : v < 0 ? T.red : T.dim) : (v ? (o.color || T.text) : T.dim);
     return <td key={i} style={{ padding: o.pad, fontSize: o.fs || 13, textAlign: "right",
-      fontFamily: "var(--mono)", fontWeight: o.fw || 400, color, whiteSpace: "nowrap" }}>
+      fontFamily: "var(--mono)", fontWeight: o.fw || 400, color, whiteSpace: "nowrap",
+      ...(col.total ? { borderLeft: `1px solid ${T.cardBorder}` } : {}) }}>
       {v ? fmtN(v) : "—"}</td>;
   });
 }
 
 function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista = "evolucion", mes = 0, cesion = null }) {
   const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths } = sub;
-  const ncols = activeMonths.length + 2;
 
   // Cesión de utilidades (cola de apropiación, solo cuando el scope es la sede con cesión, ej. Barrio Norte).
   // Los retiros son la cuenta "Inversores" de sinClasificar → se saca de ahí para no mostrarla dos veces.
@@ -538,9 +526,6 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
   const allCol = ALLKEYS.every(k => collapsed[k]);
   const toggleAll = () => setCollapsed(allCol ? {} : Object.fromEntries(ALLKEYS.map(k => [k, true])));
 
-  const grp = (key) => <PnlSection sub label={grupoSede(key).label} accounts={pnl.grupos[key]}
-    order={grupoSede(key).cuentas} color={grupoSede(key).color} activeMonths={activeMonths} ncols={ncols}
-    expanded={!isCol(key)} onToggle={() => toggle(key)} />;
   const sinCls = Object.keys(sinClasView).length > 0;
 
   if (activeMonths.length === 0) return (
@@ -550,9 +535,10 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
     </div>
   );
 
-  // ── Vistas comparativas (Mensual / YTD): mismas filas, distinto bloque de columnas ──
-  if (vista !== "evolucion") {
-    const cols = colsSedeVista(vista, mes, year);
+  // ── Un solo render para las 3 vistas: MISMAS filas, distinto bloque de columnas (cols) ──
+  {
+    const cols = vista === "evolucion" ? colsEvolucion(activeMonths) : colsSedeVista(vista, mes, year);
+    const lastM = activeMonths[activeMonths.length - 1];
     const Pg = pnlPrev?.grupos || {};
     const stP = k => (subPrev?.st?.[k]) || ZERO12;
     const filas = [];
@@ -574,22 +560,69 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
     pushGrupo("inv_no_op", -1);
     filas.push({ kind: "result", label: "Resultado Final", cur: resFinal, prev: subPrev.resFinal, pol: 1 });
 
+    // Cesión de utilidades (apropiación del resultado; NO afecta Resultado Final). Es una cuenta corriente
+    // (serie de tiempo) → solo en Evolución; comparar un saldo corriente M-1/A-1/YTD no tiene sentido.
+    if (cesData && vista === "evolucion") {
+      filas.push({ kind: "spacer" });
+      filas.push({ kind: "cesion", bold: true, top: true, signed: true, cur: cesData.acreditado,
+        label: `Cesión de utilidades — ${Math.round(cesion.pct * 100)}%${cesion.contraparte ? ` · ${cesion.contraparte}` : ""} (acreditado)` });
+      filas.push({ kind: "cesion", cur: cesData.retirado, label: "Retiros del período (cuenta Inversores)" });
+      filas.push({ kind: "cesion", signed: true, stock: true, cur: cesData.saldoAcum, label: "Saldo cuenta corriente (acumulado)" });
+      filas.push({ kind: "result", label: "Resultado retenido BIGG", cur: cesData.retenido, prev: ZERO12, pol: 1 });
+    }
+    // Sin clasificar (cuentas con movimiento fuera del P&L de la sede) — solo en Evolución (diagnóstico).
+    if (sinCls && vista === "evolucion") {
+      filas.push({ kind: "spacer" });
+      filas.push({ kind: "banda", amber: true, label: "Sin clasificar (fuera del P&L de la sede)" });
+      for (const [name, arr] of Object.entries(sinClasView))
+        filas.push({ kind: "cuenta", label: name, cur: arr, prev: ZERO12, pol: 1, color: "#b45309" });
+    }
+
+    // Celdas de una fila de cesión (violeta, con signo). Stock (saldo) → la col TOTAL muestra el saldo final.
+    const cesionCells = (f) => cols.map((col, i) => {
+      if (col.kind === "var") return <td key={i} style={{ padding: "9px 12px", textAlign: "right", color: T.dim }}>—</td>;
+      const v = f.stock && col.total ? (f.cur[lastM] ?? 0) : col.get(f.cur);
+      return <td key={i} style={{ padding: "9px 12px", fontSize: 13, textAlign: "right", fontFamily: "var(--mono)",
+        fontWeight: f.bold ? 800 : 700, color: "#6d28d9", whiteSpace: "nowrap",
+        ...(col.total ? { borderLeft: `1px solid ${T.cardBorder}` } : {}) }}>{f.signed ? fmtSigned(v) : fmtN(v)}</td>;
+    });
+
     return (
       <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
         boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
-        <table style={{ width: "100%", minWidth: 260 + cols.length * 120, borderCollapse: "collapse" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse",
+          ...(vista === "evolucion"
+            ? { minWidth: 230 + activeMonths.length * 122 + 150, tableLayout: "fixed" }
+            : { minWidth: 260 + cols.length * 120 }) }}>
+          {vista === "evolucion" && (
+            <colgroup>
+              <col style={{ width: 230 }} />
+              {activeMonths.map(m => <col key={m} style={{ width: 122 }} />)}
+              <col style={{ width: 150 }} />
+            </colgroup>
+          )}
           <thead><tr>
             <th onClick={toggleAll} title="Contraer / expandir todo" style={{ ...thStyle, textAlign: "left",
-              width: 1, whiteSpace: "nowrap", cursor: "pointer", userSelect: "none", ...stickyCol,
+              whiteSpace: "nowrap", cursor: "pointer", userSelect: "none", ...stickyCol,
               background: T.tableHead, zIndex: 4 }}>
               <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{allCol ? "▶" : "▼"}</span>Cuenta
             </th>
-            {cols.map((c, i) => <th key={i} style={thStyle}>{c.header}</th>)}
+            {cols.map((c, i) => <th key={i} style={{ ...thStyle, ...(c.total ? { borderLeft: "1px solid rgba(255,255,255,.12)" } : {}) }}>{c.header}</th>)}
           </tr></thead>
           <tbody>
             {filas.map((f, idx) => {
-              if (f.kind === "banda")
+              if (f.kind === "spacer")
+                return <tr key={idx}><td colSpan={cols.length + 1} style={{ height: 16, background: "#f8fafc", borderTop: `2px solid ${T.cardBorder}` }} /></tr>;
+              if (f.kind === "banda") {
+                if (f.amber) return (
+                  <tr key={idx} style={{ background: "#fffbeb" }}>
+                    <td style={{ padding: "6px 16px", fontSize: 10, fontWeight: 800, color: "#b45309", letterSpacing: ".12em",
+                      textTransform: "uppercase", ...stickyCol, background: "#fffbeb" }}>{f.label}</td>
+                    <td colSpan={cols.length} style={{ background: "#fffbeb" }} />
+                  </tr>
+                );
                 return <BandaRow key={idx} label={f.label} span={cols.length + 1} expanded={!isCol(f.key)} onToggle={() => toggle(f.key)} />;
+              }
               if (f.kind === "grupo") return (
                 <tr key={idx} onClick={() => toggle(f.key)} style={{ background: "#f1f5f9", borderTop: `1px solid ${T.cardBorder}`, cursor: "pointer" }}>
                   <td style={{ padding: "7px 14px", fontSize: 10.5, fontWeight: 800, color: T.muted, textTransform: "uppercase",
@@ -603,109 +636,51 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
                 <tr key={idx} style={{ borderBottom: `1px solid ${T.cardBorder}`, background: T.card }}
                   onMouseEnter={e => { e.currentTarget.style.background = "#f0f9ff"; e.currentTarget.firstChild.style.background = "#f0f9ff"; }}
                   onMouseLeave={e => { e.currentTarget.style.background = T.card; e.currentTarget.firstChild.style.background = T.card; }}>
-                  <td style={{ padding: "6px 14px 6px 32px", fontSize: 13, color: T.text, whiteSpace: "nowrap", ...stickyCol, background: T.card }}>{f.label}</td>
-                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "6px 12px", fs: 13, fw: 400, color: SEDE_HDR })}
+                  <td style={{ padding: "6px 14px 6px 32px", fontSize: 13, color: f.color || T.text, whiteSpace: "nowrap",
+                    borderBottom: `1px solid ${T.cardBorder}`, ...stickyCol, background: T.card }}>{f.label}</td>
+                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "6px 12px", fs: 13, fw: 400, color: f.color || SEDE_HDR })}
                 </tr>
               );
+              if (f.kind === "cesion") {
+                const bg = "#faf5ff", top = f.top ? { borderTop: "2px solid #7c3aed" } : {};
+                return (
+                  <tr key={idx} style={{ background: bg, borderBottom: `1px solid ${T.cardBorder}`, ...top }}>
+                    <td style={{ padding: f.bold ? "10px 16px" : "9px 16px 9px 44px", fontSize: f.bold ? 14 : 13, fontWeight: f.bold ? 800 : 700,
+                      color: "#6d28d9", whiteSpace: "nowrap", borderBottom: `1px solid ${T.cardBorder}`, ...top, ...stickyCol, background: bg }}>{f.label}</td>
+                    {cesionCells(f)}
+                  </tr>
+                );
+              }
               if (f.kind === "subtotal") {
                 const bg = f.strong ? "#cbd5e1" : "#f3f4f6";
                 return (
                   <tr key={idx} style={{ background: bg, borderTop: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, borderBottom: `2px solid ${T.cardBorder}` }}>
-                    <td style={{ padding: "12px 14px", fontSize: f.strong ? 15 : 14, fontWeight: 900, color: SEDE_HDR, ...stickyCol, background: bg }}>{f.label}</td>
+                    <td style={{ padding: "12px 14px", fontSize: f.strong ? 15 : 14, fontWeight: 900, color: SEDE_HDR,
+                      borderTop: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, borderBottom: `2px solid ${T.cardBorder}`, ...stickyCol, background: bg }}>{f.label}</td>
                     {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: f.strong ? 15 : 14, fw: 900, color: SEDE_HDR })}
                   </tr>
                 );
               }
-              const pv = primaryVal(vista, f.cur, mes), col = pv >= 0 ? T.green : T.red, bg = pv >= 0 ? "#bbf7d0" : "#fecaca";
+              const pv = primaryVal(vista, f.cur, mes), rc = pv >= 0 ? T.green : T.red, rbg = pv >= 0 ? "#bbf7d0" : "#fecaca";
               return (
-                <tr key={idx} style={{ background: bg, borderTop: `3px solid ${col}`, borderBottom: `2px solid ${col}` }}>
-                  <td style={{ padding: "12px 14px", fontSize: 15, fontWeight: 900, color: col, ...stickyCol, background: bg }}>{f.label}</td>
+                <tr key={idx} style={{ background: rbg, borderTop: `3px solid ${rc}`, borderBottom: `2px solid ${rc}` }}>
+                  <td style={{ padding: "12px 14px", fontSize: 15, fontWeight: 900, color: rc,
+                    borderTop: `3px solid ${rc}`, borderBottom: `2px solid ${rc}`, ...stickyCol, background: rbg }}>{f.label}</td>
                   {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: 15, fw: 900, bySign: true })}
                 </tr>
               );
             })}
           </tbody>
         </table>
+        {sinCls && vista === "evolucion" && (
+          <div style={{ padding: "8px 16px", fontSize: 11, color: "#92400e", background: "#fffbeb", borderTop: "1px solid #fcd34d" }}>
+            Estas cuentas tienen movimientos en la sede pero no están asignadas a ninguna línea del P&L.
+            Revisá si corresponde re-imputarlas o agregarlas a la estructura.
+          </div>
+        )}
       </div>
     );
   }
-
-  return (
-    <>
-    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
-      boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
-      <table style={{ width: "100%", minWidth: 230 + activeMonths.length * 122 + 150, borderCollapse: "collapse", tableLayout: "fixed" }}>
-        <colgroup>
-          <col style={{ width: 230 }} />
-          {activeMonths.map(m => <col key={m} style={{ width: 122 }} />)}
-          <col style={{ width: 150 }} />
-        </colgroup>
-        <thead>
-          <tr>
-            <th onClick={toggleAll} title="Contraer / expandir todo"
-              style={{ ...thStyle, textAlign: "left", whiteSpace: "nowrap", cursor: "pointer",
-                userSelect: "none", ...stickyCol, background: T.tableHead, zIndex: 4 }}>
-              <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{allCol ? "▶" : "▼"}</span>Cuenta
-            </th>
-            {activeMonths.map(m => <th key={m} style={thStyle}>{MESES[m]}</th>)}
-            <th style={{ ...thStyle, borderLeft: "1px solid rgba(255,255,255,.12)" }}>TOTAL</th>
-          </tr>
-        </thead>
-        <tbody>
-          <BandaRow label="Ingresos" span={ncols} expanded={!isCol("sec_ing")} onToggle={() => toggle("sec_ing")} />
-          {!isCol("sec_ing") && <>
-            {grp("vta_cf")}
-            {grp("int_bigg")}
-            {grp("int_corp")}
-          </>}
-          <SubtotalRow strong label="Total Ingresos" values={totIngresos} activeMonths={activeMonths} color={SEDE_HDR} />
-
-          {grp("cvar")}
-          <ResultadoRow strong label="Margen de Contribución" values={margenContrib} activeMonths={activeMonths} />
-
-          <BandaRow label="Gastos Operativos" span={ncols} expanded={!isCol("sec_gop")} onToggle={() => toggle("sec_gop")} />
-          {!isCol("sec_gop") && <>
-            {grp("gp_pers")}
-            {grp("gp_ocup")}
-            {grp("gp_mkt")}
-            {grp("gp_otros")}
-          </>}
-          <SubtotalRow label="Total Gastos Operativos" values={totGastosOp} activeMonths={activeMonths} color={SEDE_HDR} />
-          <ResultadoRow strong label="Resultado Operativo" values={resOp} activeMonths={activeMonths} />
-
-          {grp("com_res")}
-          {grp("inv_no_op")}
-          <ResultadoRow strong label="Resultado Final" values={resFinal} activeMonths={activeMonths} />
-
-          {/* Cesión de utilidades: apropiación del resultado (NO afecta Resultado Final). Solo si hay cesión en el scope. */}
-          {cesData && <>
-            <tr><td colSpan={ncols} style={{ height: 16, background: "#f8fafc", borderTop: `2px solid ${T.cardBorder}` }} /></tr>
-            {/* Acreditado = pct × Resultado Final (con signo: en mes de pérdida es negativo, la contraparte comparte la pérdida). */}
-            <CesionRow bold topBorder activeMonths={activeMonths} values={cesData.acreditado}
-              label={`Cesión de utilidades — ${Math.round(cesion.pct * 100)}%${cesion.contraparte ? ` · ${cesion.contraparte}` : ""} (acreditado)`} />
-            <DataRow color="#7c3aed" activeMonths={activeMonths} values={cesData.retirado} label="Retiros del período (cuenta Inversores)" />
-            {/* Saldo = stock (no flujo): el TOTAL muestra el saldo final del período, no la suma de meses. */}
-            <CesionRow activeMonths={activeMonths} values={cesData.saldoAcum} runningTotal
-              label="Saldo cuenta corriente (acumulado)" />
-            <ResultadoRow label="Resultado retenido BIGG" values={cesData.retenido} activeMonths={activeMonths} />
-          </>}
-
-          {sinCls && <>
-            <tr><td colSpan={ncols} style={{ height: 16, background: "#f8fafc", borderTop: `2px solid ${T.cardBorder}` }} /></tr>
-            <PnlSection label="Sin clasificar (fuera del P&L de la sede)" accounts={sinClasView}
-              activeMonths={activeMonths} color="#f59e0b" ncols={ncols} />
-          </>}
-        </tbody>
-      </table>
-      {sinCls && (
-        <div style={{ padding: "8px 16px", fontSize: 11, color: "#92400e", background: "#fffbeb", borderTop: "1px solid #fcd34d" }}>
-          Estas cuentas tienen movimientos en la sede pero no están asignadas a ninguna línea del P&L.
-          Revisá si corresponde re-imputarlas o agregarlas a la estructura.
-        </div>
-      )}
-    </div>
-    </>
-  );
 }
 
 // ─── P&L BIGG CONSOLIDADO (sedes propias + HQ + franquicias) — Etapa 1: hasta Margen Bruto ──
