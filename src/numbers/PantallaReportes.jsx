@@ -81,12 +81,14 @@ function movimientoToPnLRows(movs, sociedad, cuentaMap) {
     // lleva documento_id de la factura (netea la CxC), por eso se la reconoce por origen.
     if (!String(m.documento_id ?? "").startsWith("CONTAB-") && m.origen !== "retencion") continue;
     const monto = Number(m.monto) || 0;
-    let total;
+    let total, _tipo;
     if (m.origen === "retencion") {
       total = Math.abs(monto);
+      _tipo = "Retención";
     } else {
       const esIngreso = normCat(cuentaMap?.get(nombre)?.categoria_pnl) === "ventas";
       total = esIngreso ? monto : -monto;
+      _tipo = esIngreso ? "Ingreso" : "Gasto";
     }
     out.push({
       fecha:           m.fecha,
@@ -95,6 +97,8 @@ function movimientoToPnLRows(movs, sociedad, cuentaMap) {
       cuenta_contable: m.cuenta_contable ?? "",
       moneda:          m.moneda ?? "ARS",
       total,
+      _tipo,                                          // para el detalle de Informes (tipo de egreso)
+      contraparte_nombre: m.contraparte_nombre ?? "",
     });
   }
   return out;
@@ -113,9 +117,9 @@ function financiacionToPnLRows(planes, sociedad) {
     if (soc && (p.sociedad ?? "").toLowerCase() !== soc) continue;
     if (p.tipo === "plan_afip" && !p.es_apertura && p.cuenta_capital) {
       const capTot = (p.cuotas ?? []).reduce((s, c) => s + (Number(c.capital) || 0), 0);
-      if (capTot > 0) out.push({ fecha: p.fecha_consolidacion, sociedad: p.sociedad, centro_costo: p.centro_capital, cuenta_contable: p.cuenta_capital, moneda: p.moneda, total: capTot });
+      if (capTot > 0) out.push({ fecha: p.fecha_consolidacion, sociedad: p.sociedad, centro_costo: p.centro_capital, cuenta_contable: p.cuenta_capital, moneda: p.moneda, total: capTot, _tipo: "Financiación", contraparte_nombre: p.acreedor_nombre ?? "" });
     }
-    const base = { sociedad: p.sociedad, moneda: p.moneda };
+    const base = { sociedad: p.sociedad, moneda: p.moneda, _tipo: "Financiación", contraparte_nombre: p.acreedor_nombre ?? "" };
     const push = (cuenta, centro, total, fecha) => { if (total > 0 && cuenta) out.push({ ...base, fecha, centro_costo: centro, cuenta_contable: cuenta, total }); };
     for (const c of (p.cuotas ?? [])) {
       if (c.estado === "cancelada") continue;
@@ -1717,9 +1721,11 @@ function MultiSelect({ label, options = null, groups = null, selected, onChange,
             <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar…" autoFocus
               style={{ ...selStyle, width: "100%", cursor: "text", marginBottom: 4 }} />
           )}
-          {selected.size > 0 && (
-            <div onClick={() => onChange(new Set())} style={{ padding: "5px 10px", fontSize: 11, color: T.blue, cursor: "pointer" }}>✕ Limpiar selección</div>
-          )}
+          {/* "Todos" arriba: limpiar la selección = sin filtro. Tildado cuando no hay nada elegido. */}
+          <div onClick={() => onChange(new Set())} style={{ ...row, padding: "6px 10px", fontWeight: 700, borderBottom: `1px solid ${T.cardBorder}` }}>
+            <input type="checkbox" checked={selected.size === 0} readOnly style={{ pointerEvents: "none", accentColor: T.accentDark }} />
+            {allLabel}
+          </div>
           {(groups || [{ key: "_", items: flat }]).map(g => {
             const items = g.items.filter(show);
             if (!items.length) return null;
@@ -1822,6 +1828,7 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
     for (const r of rows) { const k = r.id_comp; totalByComp[k] = (totalByComp[k] || 0) + (Number(r.total) || 0); }
     for (const m of movs) { if (m.tipo === pagoTipo && m.documento_id) pagadoByComp[m.documento_id] = (pagadoByComp[m.documento_id] || 0) + Math.abs(Number(m.monto) || 0); }
     return r => {
+      if (!r.id_comp) return null;   // estado de pago solo aplica a facturas (comprobantes)
       const t = totalByComp[r.id_comp] || 0, p = pagadoByComp[r.id_comp] || 0;
       if (t > 0 && calcSaldoPendiente(t, [{ monto: p }]) <= 0.5) return "Pagado";
       return p > 0.5 ? "Parcial" : "Pendiente";
@@ -1850,7 +1857,7 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
 
   const porMon = useMemo(() => {
     const m = {};
-    for (const r of filt) { const k = r.moneda || "ARS"; m[k] = (m[k] || 0) + (Number(r.total) || 0); }
+    for (const r of filt) { const k = r.moneda || "ARS"; m[k] = (m[k] || 0) + Math.abs(Number(r.total) || 0); }
     return m;
   }, [filt]);
 
@@ -1917,13 +1924,13 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
               : filt.map((r, i) => (
                 <tr key={r.id ?? i} style={{ background: i % 2 ? "#fafbfc" : T.card }}>
                   <td style={{ ...td, color: T.muted }}>{String(r.fecha || "").split("-").reverse().join("/")}</td>
-                  <td style={{ ...td, fontSize: 12, color: T.muted }}>{TIPO_COMP_LABEL[String(r.subtipo || "").toUpperCase()] || r.subtipo || "—"}</td>
+                  <td style={{ ...td, fontSize: 12, color: T.muted }}>{r._tipo || TIPO_COMP_LABEL[String(r.subtipo || "").toUpperCase()] || r.subtipo || "—"}</td>
                   <td style={{ ...td, color: T.text, fontWeight: 600 }}>{r.contraparte_nombre || "—"}</td>
                   <td style={{ ...td, color: T.muted, fontSize: 12 }}>{socMap.get(String(r.sociedad)) || r.sociedad || "—"}</td>
                   <td style={{ ...td, color: T.muted, fontSize: 12 }}>{ccMap.get(String(r.centro_costo)) || r.centro_costo || "—"}</td>
                   <td style={{ ...td, color: T.text }}>{r.cuenta_contable || "—"}</td>
                   <td style={{ ...td, textAlign: "right", fontFamily: T.mono, fontWeight: 700, color: esEg ? T.red : T.green }}>
-                    {MONEDA_SYM[r.moneda || "ARS"] ?? (r.moneda || "ARS")} {fmtN(Number(r.total) || 0)}
+                    {MONEDA_SYM[r.moneda || "ARS"] ?? (r.moneda || "ARS")} {fmtN(Math.abs(Number(r.total) || 0))}
                   </td>
                 </tr>
               ))}
@@ -2105,7 +2112,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   // OJO: nunca sumar nb_movimientos SUELDO acá (eso es caja → Cash Flow; el devengado viene de liquidaciones).
   // movimientoToPnLRows excluye sueldos, transferencias y pagos de factura (esos ya están vía comprobante).
   // P&L Sedes/BIGG son group-level (todas las sociedades) → adaptadores sin filtro de sociedad.
-  const salaryRows = useMemo(() => liqsCerradas.flatMap(liquidacionToPnLRows), [liqsCerradas]);
+  const salaryRows = useMemo(() => liqsCerradas.flatMap(liquidacionToPnLRows).map(r => ({ ...r, _tipo: "Sueldo", contraparte_nombre: r.legajo_nombre ?? r.contraparte_nombre ?? "" })), [liqsCerradas]);
 
   const gastoMovRows = useMemo(() => movimientoToPnLRows(rawMovs, "", cuentaMap), [rawMovs, cuentaMap]);
   // Cuentas-tarjeta (crédito): sus movimientos no son caja → se excluyen del Cash Flow (la salida real es el pago de la tarjeta).
@@ -2122,10 +2129,16 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     [ccs]
   );
   const franqRows = useMemo(
-    () => franquiciasIngresoPnLRows(rawFranq, "", ventasCcId),
+    () => franquiciasIngresoPnLRows(rawFranq, "", ventasCcId).map(r => ({ ...r, _tipo: "Franquicia" })),
     [rawFranq, ventasCcId]
   );
   const inConFranq = useMemo(() => [...rawIn, ...franqRows], [rawIn, franqRows]);
+
+  // Detalle de Informes: las MISMAS fuentes que el P&L (comprobantes + gastos directos + sueldos +
+  // financiaciones), tagueadas por `_tipo`. Egresos = todo lo que resta en el resultado; Ingresos = ventas
+  // + franquicias + ingresos contabilizados por movimiento.
+  const egDetalle  = useMemo(() => egConSueldos.filter(r => !r._tipo || ["Gasto", "Sueldo", "Financiación"].includes(r._tipo)), [egConSueldos]);
+  const ingDetalle = useMemo(() => [...inConFranq, ...gastoMovRows.filter(r => r._tipo === "Ingreso" || r._tipo === "Retención")], [inConFranq, gastoMovRows]);
 
   const pnlSede = useMemo(
     () => buildPnLSede(inConFranq, egConSueldos, resolvedCCSede, year, monedaPL),
@@ -2423,10 +2436,10 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
       {/* ── Informes · detalle de comprobantes (Egresos / Ingresos) ── */}
       {activeTab === "inf_egresos" && (
-        <TabDetalleComprobantes rows={rawEg} movs={rawMovs} tipo="EGRESO" ccs={ccs} sociedades={sociedades} />
+        <TabDetalleComprobantes rows={egDetalle} movs={rawMovs} tipo="EGRESO" ccs={ccs} sociedades={sociedades} />
       )}
       {activeTab === "inf_ingresos" && (
-        <TabDetalleComprobantes rows={rawIn} movs={rawMovs} tipo="INGRESO" ccs={ccs} sociedades={sociedades} />
+        <TabDetalleComprobantes rows={ingDetalle} movs={rawMovs} tipo="INGRESO" ccs={ccs} sociedades={sociedades} />
       )}
 
       {/* ── Reportes en construcción (esqueleto navegable, sin cálculo todavía) ── */}
