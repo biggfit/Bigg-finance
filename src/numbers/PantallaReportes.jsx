@@ -368,6 +368,17 @@ function computeCesion(resFinal = [], retiros = [], { pct, apertura = 0, apertur
   return { acreditado, retirado, saldoAcum, retenido };
 }
 
+// Cola de impuestos (Fondeadas/Rosedal): cuentas de "Sin clasificar" cuyo nombre matchea `matchers`
+// (IVA, Ganancias…) → líneas de impuesto + Resultado Neto/FCF = resFinal − Σ impuestos. null si no hay.
+function computeImpuestos(sinClasificar, matchers, resFinal) {
+  const keys = Object.keys(sinClasificar).filter(k => matchers.some(m => _nkSede(k).includes(_nkSede(m))));
+  if (!keys.length) return null;
+  const byAcc = keys.map(k => ({ name: k, cur: sinClasificar[k] }));
+  const total = Array.from({ length: 12 }, (_, m) => byAcc.reduce((s, a) => s + (Number(a.cur[m]) || 0), 0));
+  const resNeto = resFinal.map((v, m) => (Number(v) || 0) - total[m]);
+  return { keys, byAcc, resNeto };
+}
+
 // ─── Negocios por sociedad (además de Argentina núcleo): mismo P&L de sede, scopeado a UNA sociedad
 // (por `empresa` + `familia` del centro) y su moneda, + una cola de IMPUESTOS debajo del Resultado
 // Operativo → línea final (`netoLabel`). Los impuestos salen de "Sin clasificar". Empezamos por IVA + Ganancias.
@@ -531,17 +542,11 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
   const cesKey = cesion && Object.keys(pnl.sinClasificar).find(k => _nkSede(k) === _nkSede(CESION_CUENTA));
   const cesData = cesion ? computeCesion(resFinal, cesKey ? pnl.sinClasificar[cesKey] : [], cesion) : null;
 
-  // Impuestos (Fondeadas): cuentas de "Sin clasificar" cuyo nombre matchea `impuestos` (IVA, Ganancias…) →
-  // cola debajo del Resultado Operativo/Final → Resultado Neto. Se sacan de "Sin clasificar" (no duplicar).
-  const impKeys = impuestos ? Object.keys(pnl.sinClasificar).filter(k => impuestos.some(m => _nkSede(k).includes(_nkSede(m)))) : [];
-  const impData = impKeys.length ? (() => {
-    const byAcc = impKeys.map(k => ({ name: k, cur: pnl.sinClasificar[k] }));
-    const total = Array.from({ length: 12 }, (_, m) => byAcc.reduce((s, a) => s + (Number(a.cur[m]) || 0), 0));
-    const resNeto = resFinal.map((v, m) => (Number(v) || 0) - total[m]);
-    return { byAcc, resNeto };
-  })() : null;
+  // Impuestos (Fondeadas/Rosedal): cola debajo del Resultado Operativo/Final. Las cuentas se sacan de
+  // "Sin clasificar" (no duplicar) → ver computeImpuestos.
+  const impData = impuestos ? computeImpuestos(pnl.sinClasificar, impuestos, resFinal) : null;
 
-  const hidden = new Set([cesKey, ...impKeys].filter(Boolean));
+  const hidden = new Set([cesKey, ...(impData?.keys || [])].filter(Boolean));
   const sinClasView = hidden.size
     ? Object.fromEntries(Object.entries(pnl.sinClasificar).filter(([k]) => !hidden.has(k)))
     : pnl.sinClasificar;
@@ -2383,10 +2388,11 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     () => ccs.filter(c => (c.operacion ?? "").trim() === "Wellness Real Estate").map(c => c.id),
     [ccs]
   );
-  const pnlHuergo     = useMemo(() => buildPnLHuergo(inConFranq, egConSueldos, huergoCCs, year, monedaPL), [inConFranq, egConSueldos, huergoCCs, year, monedaPL]);
-  const subHuergo     = useMemo(() => computeSubtotalsHuergo(pnlHuergo), [pnlHuergo]);
-  const pnlHuergoPrev = useMemo(() => buildPnLHuergo(inConFranq, egConSueldos, huergoCCs, year - 1, monedaPL), [inConFranq, egConSueldos, huergoCCs, year, monedaPL]);
-  const subHuergoPrev = useMemo(() => computeSubtotalsHuergo(pnlHuergoPrev), [pnlHuergoPrev]);
+  // Se computa solo cuando la pestaña Huergo está activa (evita escanear los datasets en cada render de otras).
+  const pnlHuergo     = useMemo(() => isHuergo ? buildPnLHuergo(inConFranq, egConSueldos, huergoCCs, year, monedaPL) : null, [isHuergo, inConFranq, egConSueldos, huergoCCs, year, monedaPL]);
+  const subHuergo     = useMemo(() => pnlHuergo ? computeSubtotalsHuergo(pnlHuergo) : null, [pnlHuergo]);
+  const pnlHuergoPrev = useMemo(() => isHuergo ? buildPnLHuergo(inConFranq, egConSueldos, huergoCCs, year - 1, monedaPL) : null, [isHuergo, inConFranq, egConSueldos, huergoCCs, year, monedaPL]);
+  const subHuergoPrev = useMemo(() => pnlHuergoPrev ? computeSubtotalsHuergo(pnlHuergoPrev) : null, [pnlHuergoPrev]);
 
   // P&L BIGG consolidado (Núcleo/anillo 1) — sedes propias + HQ + franquicias, hasta Margen Bruto.
   const pnlBigg = useMemo(
