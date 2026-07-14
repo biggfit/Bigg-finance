@@ -456,10 +456,18 @@ function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef }) {
     const dsoLabel = !r.hasOpened || r.deuda_USD === 0
       ? '✓'
       : 'U$D ' + fmtN(r.deuda_USD) + (r.saludRatio != null ? ' (' + (r.saludRatio < 1 ? '&lt;1' : r.saludRatio.toFixed(1)) + ')' : '');
+    const cobradoLabel = r.sinVentasEye ? 's/d' : r.pctCobrado == null ? '—' : r.pctCobrado.toFixed(1) + '%';
+    const cobradoColor = r.sinVentasEye || r.pctCobrado == null ? C.tdMuted
+      : Math.abs(r.pctCobrado - r.royaltyContrato) <= 0.3 ? C.green
+      : r.pctCobrado < r.royaltyContrato ? C.red
+      : C.orange;
+    const contratoLabel = r.royaltyContrato ? r.royaltyContrato + '%' : '—';
     return '<tr class="em-row" style="background:' + bg + ';border-bottom:1px solid ' + C.rowBorder + ';">' +
       '<td style="padding:8px 12px;font-size:13px;color:' + (r.hasOpened ? C.tdMain : C.tdMuted) + ';font-weight:600;">' + r.sede + '</td>' +
       '<td style="padding:8px 12px;font-size:13px;color:' + C.tdSec + ';">' + r.pais + '</td>' +
       '<td style="padding:8px 12px;font-size:13px;color:' + (r.sinFeeMes ? C.tdMuted : C.tdMain) + ';font-family:monospace;text-align:right;">' + (r.sinFeeMes ? '—' : fmtN(r.feeMes_USD)) + '</td>' +
+      '<td style="padding:8px 12px;font-size:13px;color:' + cobradoColor + ';font-family:monospace;text-align:center;font-weight:700;">' + cobradoLabel + '</td>' +
+      '<td style="padding:8px 12px;font-size:13px;color:' + C.tdSec + ';font-family:monospace;text-align:center;">' + contratoLabel + '</td>' +
       '<td style="padding:8px 12px;font-size:13px;color:' + vc + ';font-family:monospace;text-align:center;font-weight:700;">' + vl + '</td>' +
       '<td style="padding:8px 12px;font-size:13px;color:' + C.tdMain + ';font-family:monospace;text-align:right;font-weight:700;">' + (r.feeYTD_USD ? fmtN(r.feeYTD_USD) : '—') + '</td>' +
       '<td style="padding:8px 12px;font-size:13px;color:' + dsoColor + ';font-family:monospace;text-align:center;font-weight:700;">' + dsoLabel + '</td>' +
@@ -544,6 +552,8 @@ function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef }) {
     '<th class="em-th" style="padding:8px 12px;text-align:left;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">Sede</th>' +
     '<th class="em-th" style="padding:8px 12px;text-align:left;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">País</th>' +
     '<th class="em-th" style="padding:8px 12px;text-align:right;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">Fee ' + mesLabel + '<br><span style="font-size:9px;font-weight:400;color:' + C.tdMuted + ';">U$D · ' + year + '</span></th>' +
+    '<th class="em-th" style="padding:8px 12px;text-align:center;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">% Cobrado</th>' +
+    '<th class="em-th" style="padding:8px 12px;text-align:center;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">% Contrato</th>' +
     '<th class="em-th" style="padding:8px 12px;text-align:center;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">Var %<br><span style="font-size:9px;font-weight:400;color:' + C.tdMuted + ';">vs ' + prevLabel + '</span></th>' +
     '<th class="em-th" style="padding:8px 12px;text-align:right;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">Fee YTD<br><span style="font-size:9px;font-weight:400;color:' + C.tdMuted + ';">Ene–' + mesLabel + ' · U$D</span></th>' +
     '<th class="em-th" style="padding:8px 12px;text-align:center;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">Deuda (DSO)</th>' +
@@ -657,13 +667,14 @@ export default function ReporteFeeModal({ franchises, comps, saldoInicial = {}, 
   const anyFilter = filterSedes.size > 0 || filterPaises.size > 0;
 
   const handleSendReport = async () => {
-    if (!sendEmails.trim()) return;
+    const to = sendEmails.split(",").map(s => s.trim()).filter(Boolean).join(",");
+    if (!to) return;
     setSendState("sending");
     try {
       try { localStorage.setItem("bigg_feeReportEmails", sendEmails); } catch {}
       const html = buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef });
       await sendMailFr({
-        to: sendEmails.trim(),
+        to,
         subject: `Reporte de Fee — ${MONTHS[month]} ${year}`,
         htmlBody: html,
       });
