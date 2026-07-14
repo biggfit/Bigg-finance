@@ -347,18 +347,24 @@ const grupoSede = (key) => SEDE_GRUPOS.find(g => g.key === key);
 // Hektor cede el 49% del resultado de Barrio Norte a una contraparte (NO es gasto: es reparto del
 // resultado). Los retiros se imputan a la cuenta "Inversores" (hoy caen en "Sin clasificar"). v1 read-only:
 // muestra acreditado (pct×resFinal) − retirado (mov. "Inversores") = saldo de cuenta corriente acumulado.
-// apertura = saldo heredado de Contagram al inicio del año (deuda con la contraparte; >0 = le debemos).
-const CESION = { matchNombre: "Barrio Norte", pct: 0.49, contraparte: "", apertura: 15_500_000 };
+// apertura = saldo heredado de Contagram al 30/6 (deuda con la contraparte; >0 = le debemos). Se siembra en
+// `aperturaMes` (5 = junio, corte de go-live): ya incluye todo lo previo, así que julio lo hereda y acumula.
+const CESION = { matchNombre: "Barrio Norte", pct: 0.49, contraparte: "", apertura: 15_500_000, aperturaMes: 5 };
 const CESION_CUENTA = "Inversores";   // cuenta contable donde se imputan los retiros
 
 // Helper puro: dado el resFinal[12] de la sede y los retiros[12] (cuenta "Inversores"), arma la cola.
-function computeCesion(resFinal = [], retiros = [], { pct, apertura = 0 }) {
+function computeCesion(resFinal = [], retiros = [], { pct, apertura = 0, aperturaMes = 0 }) {
   const acreditado = Array.from({ length: 12 }, (_, m) => (Number(resFinal[m]) || 0) * pct);
   const retenido   = Array.from({ length: 12 }, (_, m) => (Number(resFinal[m]) || 0) * (1 - pct));
   // El retiro es un egreso (viene con signo negativo): tomamos la magnitud pagada, que REDUCE lo que se debe.
   const retirado   = Array.from({ length: 12 }, (_, m) => Math.abs(Number(retiros[m]) || 0));
-  const saldoAcum = []; let acc = Number(apertura) || 0;
-  for (let m = 0; m < 12; m++) { acc += acreditado[m] - retirado[m]; saldoAcum[m] = acc; }  // >0 = le debemos · <0 = adelantado
+  // La CC arranca en `aperturaMes` con el saldo heredado (que ya incluye todo lo previo); los meses anteriores
+  // quedan sin saldo (null). Desde ahí acumula (acreditado − retirado). >0 = le debemos · <0 = adelantado.
+  const saldoAcum = new Array(12).fill(null); let acc = 0;
+  for (let m = aperturaMes; m < 12; m++) {
+    acc = m === aperturaMes ? (Number(apertura) || 0) : acc + acreditado[m] - retirado[m];
+    saldoAcum[m] = acc;
+  }
   return { acreditado, retirado, saldoAcum, retenido };
 }
 
