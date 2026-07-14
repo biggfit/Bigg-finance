@@ -1624,6 +1624,7 @@ const TABS = [
 
   { id: "op_espana",    label: "P&L Sedes Propias España", icon: "🇪🇸", wip: true, desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada)." },
   { id: "op_colombia",  label: "P&L Sedes Propias Colombia", icon: "🇨🇴", wip: true, desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada)." },
+  { id: "op_puertos",   label: "P&L Puertos", icon: "⚓", wip: true, desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada, inversión USD)." },
   { id: "op_rosedal",   label: "P&L Rosedal (Segui Fit)", icon: "🤝", wip: true, desc: "P&L completo de la operación administrada hasta Free Cash Flow, con impuestos dentro; a BIGG entra el fee + su % del FCF." },
   { id: "op_huergo",    label: "P&L Huergo", icon: "🏗️", wip: true, desc: "Negocio propio (anillo 1): ingreso del edificio − horas de coaches = margen a seguir de cerca." },
 
@@ -1640,7 +1641,7 @@ const TABS = [
 // (todavía NO simplificados para dueños). El anillo de la sociedad manda cómo consolida (ver memoria).
 const LENTES = [
   { id: "grupo",    label: "La foto del grupo",            tabs: ["consol_grupo", "pl_bigg", "cf", "consolidado"] },
-  { id: "negocios", label: "Cómo le va a cada negocio",    tabs: ["pl_sede", "op_espana", "op_colombia", "op_rosedal", "op_huergo", "an_margenes"] },
+  { id: "negocios", label: "Cómo le va a cada negocio",    tabs: ["pl_sede", "op_espana", "op_colombia", "op_puertos", "op_rosedal", "op_huergo", "an_margenes"] },
   { id: "flujo",    label: "De dónde sale y a dónde va",   tabs: ["an_ventas", "an_gastos_cc"] },
   { id: "detalle",  label: "Buscar el detalle",            tabs: ["inf_egresos", "inf_ingresos"] },
   { id: "interno",  label: "Interno · fiscal / contable",  tabs: ["er_soc", "interco"] },
