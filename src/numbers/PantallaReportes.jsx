@@ -942,21 +942,22 @@ function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) {
   const ghqAccounts = omit(pnl.grupos.ghq, ["17 - Huergo"]);     // opex HQ sin Huergo (ya está en WRE)
   const ingHQ = sumG(hqAccounts), opexHQ = sumG(ghqAccounts), financieros = sumG(pnl.grupos.fin), impuestos = sumG(pnl.grupos.imp);
   const resOperaciones = MESES.map((_, m) => sar[m] + fg[m] + wre[m]);
-  const resOpGrupo     = MESES.map((_, m) => resOperaciones[m] + ingHQ[m] - opexHQ[m]);
+  const resOpMasIngHQ  = MESES.map((_, m) => resOperaciones[m] + ingHQ[m]);   // subtotal corriente (waterfall)
+  const resOpGrupo     = MESES.map((_, m) => resOpMasIngHQ[m] - opexHQ[m]);
   const resAntesImp    = MESES.map((_, m) => resOpGrupo[m] - financieros[m]);
   const resGrupo       = MESES.map((_, m) => resAntesImp[m] - impuestos[m]);
   const months = new Set(); const cur = new Date().getMonth();
   for (let i = 0; i <= cur; i++) months.add(i);
   [sar, fg, wre, ingHQ, opexHQ, financieros, impuestos].forEach(a => a.forEach((v, i) => { if (v) months.add(i); }));
   return { sar, fg, wre, hqAccounts, ghqAccounts, ingHQ, opexHQ, financieros, impuestos,
-           resOperaciones, resOpGrupo, resAntesImp, resGrupo, activeMonths: [...months].sort((a, b) => a - b) };
+           resOperaciones, resOpMasIngHQ, resOpGrupo, resAntesImp, resGrupo, activeMonths: [...months].sort((a, b) => a - b) };
 }
 
 // P&L BIGG = P&L de HOLDING. Arriba el RESULTADO de cada negocio operativo (no la venta); después HQ
 // (ingresos − opex), y al final financieros + impuestos del grupo. `sub` = computeSubtotalsHolding.
 function PnLTableBigg({ pnl, sub, year, moneda }) {
   const { sar, fg, wre, hqAccounts, ghqAccounts, ingHQ, opexHQ,
-          resOperaciones, resOpGrupo, resAntesImp, resGrupo, activeMonths } = sub;
+          resOperaciones, resOpMasIngHQ, resOpGrupo, resAntesImp, resGrupo, activeMonths } = sub;
   const ncols = activeMonths.length + 2;
   const ALLKEYS = ["sec_op", "sec_ing", "sec_opex", "sec_fin", "sec_imp"];
   const [collapsed, setCollapsed] = useState({});
@@ -1009,7 +1010,7 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
 
           {/* HQ: ingresos propios − opex por departamento */}
           {sec("sec_ing", "Ingresos HQ", hqAccounts, BIGG_ORDEN)}
-          <SubtotalRow label="Total Ingresos HQ" values={ingHQ} activeMonths={activeMonths} color={SEDE_HDR} />
+          <SubtotalRow label="Resultado de Operaciones + Ingresos HQ" values={resOpMasIngHQ} activeMonths={activeMonths} color={SEDE_HDR} />
           {sec("sec_opex", "OPEX HQ", ghqAccounts, BIGG_ORDEN_GHQ, true)}
           <SubtotalRow neg label="Total OPEX HQ" values={opexHQ} activeMonths={activeMonths} color={SEDE_HDR} />
           <ResultadoRow strong label="Resultado Operativo del Grupo" values={resOpGrupo} activeMonths={activeMonths} />
