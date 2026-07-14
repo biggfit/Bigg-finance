@@ -1914,8 +1914,8 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
       <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, boxShadow: T.shadow, overflow: "auto", maxHeight: "60vh" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
           <thead><tr>
-            <th style={th}>Fecha</th><th style={th}>Tipo</th><th style={th}>{contraLabel}</th>
-            <th style={th}>Sociedad</th><th style={th}>Centro</th><th style={th}>Cuenta</th>
+            <th style={th}>Fecha</th><th style={th}>Tipo</th><th style={th}>Sociedad</th>
+            <th style={th}>{contraLabel}</th><th style={th}>Cuenta</th><th style={th}>Centro</th>
             <th style={{ ...th, textAlign: "right" }}>Precio</th>
           </tr></thead>
           <tbody>
@@ -1925,10 +1925,10 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
                 <tr key={r.id ?? i} style={{ background: i % 2 ? "#fafbfc" : T.card }}>
                   <td style={{ ...td, color: T.muted }}>{String(r.fecha || "").split("-").reverse().join("/")}</td>
                   <td style={{ ...td, fontSize: 12, color: T.muted }}>{r._tipo || TIPO_COMP_LABEL[String(r.subtipo || "").toUpperCase()] || r.subtipo || "—"}</td>
-                  <td style={{ ...td, color: T.text, fontWeight: 600 }}>{r.contraparte_nombre || "—"}</td>
                   <td style={{ ...td, color: T.muted, fontSize: 12 }}>{socMap.get(String(r.sociedad)) || r.sociedad || "—"}</td>
-                  <td style={{ ...td, color: T.muted, fontSize: 12 }}>{ccMap.get(String(r.centro_costo)) || r.centro_costo || "—"}</td>
+                  <td style={{ ...td, color: T.text, fontWeight: 600 }}>{r.contraparte_nombre || "—"}</td>
                   <td style={{ ...td, color: T.text }}>{r.cuenta_contable || "—"}</td>
+                  <td style={{ ...td, color: T.muted, fontSize: 12 }}>{ccMap.get(String(r.centro_costo)) || r.centro_costo || "—"}</td>
                   <td style={{ ...td, textAlign: "right", fontFamily: T.mono, fontWeight: 700, color: esEg ? T.red : T.green }}>
                     {MONEDA_SYM[r.moneda || "ARS"] ?? (r.moneda || "ARS")} {fmtN(Math.abs(Number(r.total) || 0))}
                   </td>
