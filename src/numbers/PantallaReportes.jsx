@@ -2142,6 +2142,14 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const curTab   = TABS.find(t => t.id === activeTab);
   const curLente = LENTES.find(l => l.tabs.includes(activeTab));
 
+  // Fondeada activa (España/Colombia/Puertos ya construida). Usa el MISMO reporte de sede (mismos filtros
+  // moneda + sede), pero escopea el universo de sedes a las de ESA sociedad y agrega la cola de impuestos.
+  const fondCfg    = FONDEADAS[activeTab] || null;
+  const isFond     = !!fondCfg && !curTab?.wip;
+  const isSedeLike = activeTab === "pl_sede" || isFond;
+  // Al entrar a una fondeada, arrancar en SU moneda (el usuario igual puede cambiarla con el picker).
+  useEffect(() => { if (isFond) setMonedaPL(fondCfg.moneda); }, [activeTab]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   const cuentaMap = useMemo(
     () => new Map((cuentas ?? []).map(c => [c.nombre, c])),
     [cuentas]
@@ -2165,11 +2173,17 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   // se resuelve centro → `empresa` → sociedad núcleo. Además la familia debe ser "propios" (sede
   // estándar), para excluir Huergo (WRE) y Rosedal (administrada). "Propios España/Colombia" son
   // propias pero de sociedades Fondeadas → NO entran (van a su propio reporte).
+  // Universo de sedes del reporte activo: Argentina (pl_sede) = propias del núcleo; Fondeada = propias de
+  // ESA sociedad (empresa). En ambos casos, familia "propios" (excluye WRE/administradas).
+  const scopeEmpresas = useMemo(
+    () => isFond ? new Set([fondCfg.empresa]) : nucleoEmpresas,
+    [isFond, fondCfg, nucleoEmpresas]
+  );
   const sedeCCs = useMemo(() => ccs.filter(c =>
     (c.grupo ?? "").toLowerCase() === "operaciones" &&
-    nucleoEmpresas.has((c.empresa ?? "").trim()) &&
+    scopeEmpresas.has((c.empresa ?? "").trim()) &&
     familiaCentro(c) === "propios"
-  ), [ccs, nucleoEmpresas]);
+  ), [ccs, scopeEmpresas]);
 
   const ccMap = useMemo(() => new Map(ccs.map(c => [c.id, c])), [ccs]);
 
@@ -2263,18 +2277,6 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const subSede     = useMemo(() => computeSubtotalsSede(pnlSede), [pnlSede]);
   const subSedePrev = useMemo(() => computeSubtotalsSede(pnlSedePrev), [pnlSedePrev]);
 
-  // Fondeadas (España/Colombia/Puertos): mismo motor del P&L Sedes, scopeado a las sedes de ESA sociedad
-  // (por `empresa`) y en su moneda; + cola de impuestos (ver PnLTableSede). Año anterior para las vistas.
-  const fondCfg = FONDEADAS[activeTab] || null;
-  const fondCCs = useMemo(
-    () => fondCfg ? ccs.filter(c => (c.empresa ?? "").trim() === fondCfg.empresa).map(c => c.id) : [],
-    [fondCfg, ccs]
-  );
-  const pnlFond     = useMemo(() => fondCfg ? buildPnLSede(inConFranq, egConSueldos, fondCCs, year, fondCfg.moneda) : null, [fondCfg, inConFranq, egConSueldos, fondCCs, year]);
-  const subFond     = useMemo(() => pnlFond ? computeSubtotalsSede(pnlFond) : null, [pnlFond]);
-  const pnlFondPrev = useMemo(() => fondCfg ? buildPnLSede(inConFranq, egConSueldos, fondCCs, year - 1, fondCfg.moneda) : null, [fondCfg, inConFranq, egConSueldos, fondCCs, year]);
-  const subFondPrev = useMemo(() => pnlFondPrev ? computeSubtotalsSede(pnlFondPrev) : null, [pnlFondPrev]);
-
   // P&L BIGG consolidado (Núcleo/anillo 1) — sedes propias + HQ + franquicias, hasta Margen Bruto.
   const pnlBigg = useMemo(
     () => buildPnLBigg(inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL),
@@ -2334,14 +2336,9 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     </div>
   );
 
-  const showMonedaPL = activeTab === "pl_sede" || activeTab === "pl_bigg";
+  const showMonedaPL = isSedeLike || activeTab === "pl_bigg";
   const showMonedaCF = activeTab === "cf";
-  // El multiselect de Sedes solo aplica si NO se entró por una operación (esa ya define los centros).
-  const showSedes    = activeTab === "pl_sede" && sedeCCs.length > 0;
-  // Fondeada activa (España/Colombia/Puertos ya construida): usa el mismo P&L de sede (toggle de vista, mes),
-  // moneda fija por sociedad (sin picker), sin multiselect de sedes.
-  const isFond = !!fondCfg && !curTab?.wip;
-  const isSedeLike = activeTab === "pl_sede" || isFond;
+  const showSedes    = isSedeLike && sedeCCs.length > 0;
 
   // Menú-landing: sin reporte elegido → tarjetas agrupadas por lente (Operaciones = 1 tarjeta x operación).
   if (!activeTab) return (
@@ -2359,7 +2356,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       {/* ── Header del reporte + volver al menú ── */}
       <PageHeader
         title={curTab?.label ?? "Reporte"}
-        subtitle={isSedeLike ? (isFond ? `Moneda: ${fondCfg.moneda}` : undefined) : curLente?.label}
+        subtitle={isSedeLike ? undefined : curLente?.label}
         action={
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             {isSedeLike && <VistaToggle value={vistaPnl} onChange={setVistaPnl} />}
@@ -2504,20 +2501,15 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       </div>
       )}
 
-      {/* ── P&L Sedes ── */}
-      {activeTab === "pl_sede" && (
+      {/* ── P&L Sedes (Argentina núcleo) y Fondeadas (España/Colombia/Puertos): mismo reporte, distinto
+             universo de sedes (scopeEmpresas) + cola de impuestos en Fondeadas ── */}
+      {isSedeLike && (
         <PnLTableSede pnl={pnlSede} sub={subSede} pnlPrev={pnlSedePrev} subPrev={subSedePrev}
-          vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} cesion={cesionSede}
+          vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL}
+          cesion={cesionSede} impuestos={isFond ? IMPUESTOS_FOND : null}
           label={selectedSedeCCs === null ? "Todas las Sedes"
             : selectedSedeCCs.length === 0 ? "Ninguna sede"
             : `${selectedSedeCCs.length} seleccionada${selectedSedeCCs.length > 1 ? "s" : ""}`} />
-      )}
-
-      {/* ── Fondeadas (España / Colombia / Puertos): P&L de sede propia + impuestos → Resultado Neto ── */}
-      {isFond && subFond && (
-        <PnLTableSede pnl={pnlFond} sub={subFond} pnlPrev={pnlFondPrev} subPrev={subFondPrev}
-          vista={vistaPnl} mes={mesSel} year={year} moneda={fondCfg.moneda} impuestos={IMPUESTOS_FOND}
-          label={fondCfg.label} />
       )}
 
       {/* ── P&L BIGG consolidado (subgrupos, hasta Margen Bruto) ── */}
