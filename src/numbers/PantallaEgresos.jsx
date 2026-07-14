@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import { T, ESTADO_EGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
 import { fetchEgresos, appendEgreso, deleteEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, deleteMovTesoreria, updateMovTesoreria, shortId, appendProveedor, appendCuenta } from "../lib/numbersApi";
@@ -641,6 +641,16 @@ function RowMenu({ egreso, onPago, onDetalle, onEditar, onDuplicar, onCtaCte, on
     setOpen(o => !o);
   };
 
+  // Si el menú se sale por abajo del viewport (última fila), lo abrimos hacia arriba.
+  useLayoutEffect(() => {
+    if (!open || !menuRef.current || !btnRef.current) return;
+    const menu = menuRef.current.getBoundingClientRect();
+    if (menu.bottom > window.innerHeight - 8) {
+      const b = btnRef.current.getBoundingClientRect();
+      setPos({ top: b.top - menu.height - 4, left: b.left });
+    }
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const handler = e => {
@@ -801,7 +811,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
     const q = busqueda.toLowerCase();
     const matchQ = !q || (e.proveedor ?? "").toLowerCase().includes(q) || (e.cuenta ?? "").toLowerCase().includes(q) || (e.cc ?? "").toLowerCase().includes(q);
     return matchEstado && matchQ && filtroFecha.inRange(e.fecha);
-  }), [busqueda, filtroEstado, egresos, filtroFecha.inRange]);
+  }).sort((a, b) => String(b.fecha ?? "").localeCompare(String(a.fecha ?? ""))), [busqueda, filtroEstado, egresos, filtroFecha.inRange]);
 
   const totalesPorMoneda = useMemo(() => {
     const enPeriodo = egresos.filter(e => filtroFecha.inRange(e.fecha));
