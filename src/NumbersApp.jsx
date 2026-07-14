@@ -668,7 +668,9 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
           )}
         </div>
 
-        <div style={{ flex:1, overflow:"auto", display:"flex", flexDirection:"column" }}>
+        {/* key por sociedad: al cambiar de sociedad se remonta el contenido → resetea sub-views/detalles
+            internos de cada pantalla y re-fetchea (evita quedar viendo el detalle de la sociedad anterior). */}
+        <div key={activeSoc?.id ?? "none"} style={{ flex:1, overflow:"auto", display:"flex", flexDirection:"column" }}>
           {!socReady
             ? <div style={{ display:"flex", alignItems:"center", justifyContent:"center",
                 height:"100%", color:"#9ca3af", fontSize:13 }}>Cargando…</div>
