@@ -265,11 +265,12 @@ function DataRow({ label, values, activeMonths, color, neg = false }) {
 function SubtotalRow({ label, values, activeMonths, color, strong, neg = false }) {
   const total = rowSum(values);
   const bg = strong ? "#cbd5e1" : "#f3f4f6";
+  // Bordes SOLO en las celdas (no en el <tr>): con border-collapse + celda sticky, duplicar el borde
+  // en el <tr> y en la celda genera costura/doblado al colapsar. Fuente única = la celda.
   return (
-    <tr style={{ background: bg, borderTop: `${strong ? 3 : 2}px solid ${color ?? T.cardBorder}`, borderBottom: `2px solid ${T.cardBorder}` }}>
+    <tr style={{ background: bg }}>
       <td style={{ padding: "12px 16px", fontSize: strong ? 15 : 14, fontWeight: 900,
         color: color ?? T.text, letterSpacing: ".02em",
-        // Repetir el borde en la celda sticky: su background la repinta y taparía la línea del <tr>.
         borderTop: `${strong ? 3 : 2}px solid ${color ?? T.cardBorder}`,
         borderBottom: `2px solid ${T.cardBorder}`,
         ...stickyCol, background: bg }}>{label}</td>
@@ -297,13 +298,11 @@ function ResultadoRow({ label, values, activeMonths, strong }) {
   const total = rowSum(values);
   const color = total >= 0 ? T.green : T.red;
   const bg = strong ? (total >= 0 ? "#bbf7d0" : "#fecaca") : (total >= 0 ? "#f0fdf4" : "#fff1f2");
+  // Bordes SOLO en las celdas (no en el <tr>): evita costura/doblado en la sticky al colapsar.
   return (
-    <tr style={{ background: bg,
-      borderTop: `${strong ? 3 : 2}px solid ${total >= 0 ? T.green : T.red}`,
-      borderBottom: strong ? `2px solid ${total >= 0 ? T.green : T.red}` : "none" }}>
+    <tr style={{ background: bg }}>
       <td style={{ padding: "12px 16px", fontSize: strong ? 15 : 14, fontWeight: 900,
         color, letterSpacing: ".02em",
-        // Repetir el borde en la celda sticky: su background la repinta y taparía la línea del <tr>.
         borderTop: `${strong ? 3 : 2}px solid ${color}`,
         borderBottom: strong ? `2px solid ${color}` : "none",
         ...stickyCol, background: bg }}>{label}</td>
@@ -1141,13 +1140,12 @@ function PnlSection({ label, accounts, activeMonths, color, ncols, sub, order, e
 function SubSectionRow({ label, values, activeMonths, color, expanded, onToggle, neg = false }) {
   const total = rowSum(values);
   const bg = "#f1f5f9";
+  // Bordes SOLO en las celdas (no en el <tr>): evita costura/doblado en la sticky al colapsar.
   return (
-    <tr style={{ background: bg, borderTop: `2px solid ${color ?? T.cardBorder}`,
-      borderBottom: `1px solid ${T.cardBorder}`, cursor: "pointer" }}
+    <tr style={{ background: bg, cursor: "pointer" }}
       onClick={onToggle}>
       <td style={{ padding: "7px 16px", fontSize: 12, fontWeight: 800,
         color: color ?? T.muted, letterSpacing: ".06em", textTransform: "uppercase",
-        // Repetir los bordes en la celda sticky: su background repinta y taparía las líneas del <tr>.
         borderTop: `2px solid ${color ?? T.cardBorder}`, borderBottom: `1px solid ${T.cardBorder}`,
         userSelect: "none", ...stickyCol, background: bg }}>
         <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{expanded ? "▼" : "▶"}</span>
