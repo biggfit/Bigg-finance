@@ -2253,7 +2253,9 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   );
 
   return (
-    <div style={{ padding: "28px 32px", maxWidth: 1400 }} className="fade">
+    // --border (dark, del theme global del shell) → cardBorder claro: las tablas de reportes viven en
+    // cards blancas; así la regla global `td/th{border:var(--border)}` no pinta líneas oscuras sobre blanco.
+    <div style={{ padding: "28px 32px", maxWidth: 1400, "--border": T.cardBorder }} className="fade">
 
       {/* ── Header del reporte + volver al menú ── */}
       <PageHeader
