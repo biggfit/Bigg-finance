@@ -843,8 +843,6 @@ const BIGG_GRUPOS = [
   { key: "fin",    label: "Financieros" },             // Intereses Ganados − Pérdidas Financieras
   { key: "imp",    label: "Impuestos" },               // IVA, Ganancias, Plan AFIP…
 ];
-const BIGG_ING = ["vta_sp", "int_sp", "ger", "wre", "hq"];   // subgrupos de ingreso (suman a Total Ingresos)
-const grupoBigg = (key) => BIGG_GRUPOS.find(g => g.key === key);
 // Orden de las cuentas dentro de cada subgrupo (display; las que no figuran van al final, alfabéticas).
 // Hardcodeado a propósito: es presentación, bajo riesgo (un nombre que no matchea solo se ordena último).
 const BIGG_ORDEN = [
@@ -918,49 +916,54 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
   return { grupos, sinClasificar };
 }
 
-function computeSubtotalsBigg(pnl) {
-  const { grupos, sinClasificar } = pnl;
-  const st = {};
-  for (const g of BIGG_GRUPOS) st[g.key] = sumGrupoSede(grupos[g.key]);
-  const totIngresos = MESES.map((_, m) => BIGG_ING.reduce((s, k) => s + st[k][m], 0));
-  const totGastosVta = st.gpv;
-  const margenBruto = MESES.map((_, m) => totIngresos[m] - totGastosVta[m]);
-  // Debajo de Margen Bruto (por centro): Gastos (sedes propias + HQ) → Res. Operativo; Financieros →
-  // Res. antes de Impuestos; Impuestos → Resultado. Los gastos ya vienen firmados en + (costo) por los
-  // adaptadores, así que se restan; Intereses Ganados viene en − dentro de Financieros y suma solo.
-  const totGastosOp   = MESES.map((_, m) => st.gsp[m] + st.ghq[m]);
-  const resOp         = MESES.map((_, m) => margenBruto[m] - totGastosOp[m]);
-  const resAntesImp   = MESES.map((_, m) => resOp[m] - st.fin[m]);
-  const resultado     = MESES.map((_, m) => resAntesImp[m] - st.imp[m]);
-  const months = new Set();
-  const curMonth = new Date().getMonth();
-  for (let i = 0; i <= curMonth; i++) months.add(i);
-  const scan = (obj) => Object.values(obj).forEach(arr => arr.forEach((v, i) => { if (v) months.add(i); }));
-  Object.values(grupos).forEach(scan); scan(sinClasificar);
-  return { st, totIngresos, totGastosVta, margenBruto, totGastosOp, resOp, resAntesImp, resultado,
-           activeMonths: [...months].sort((a, b) => a - b) };
-}
-
 // Orden de los centros dentro de "Gastos HQ" (display).
 const BIGG_ORDEN_GHQ = ["HQ - Sport", "HQ - Tecnologia", "HQ - Ventas y Operaciones", "17 - Huergo",
   "HQ - Marketing", "HQ - BI", "HQ - Design", "HQ - Gerencia General", "HQ - Administracion",
   "HQ - Recursos Humanos", "HQ - Infraestructura IT"];
 const BIGG_ORDEN_FIN = ["Intereses Ganados", "Perdidas Financieras"];
 const BIGG_ORDEN_IMP = ["Plan Facilidades AFIP", "IVA", "IVA Inversiones", "IVA Compra", "Ganancias", "Otros Impuestos"];
+
+// Cuentas de fee (gerenciamiento/WRE) que NO van en "Ingresos HQ" (ya son líneas de operación → no duplicar).
+const BIGG_FEE_CUENTAS = ["Fee de Gestion y Adm", "Fee de Gestion y Adm (Huergo)"];
+
+// P&L de HOLDING: arma el waterfall de management a partir de los RESULTADOS por negocio (resSedesAR/feeGer/
+// resWRE, ya netos y pre-fin/pre-imp) + los grupos de HQ/financieros/impuestos que ya barrió buildPnLBigg.
+// Convención de signo: igual que computeSubtotalsBigg (ingresos +, gastos/fin/imp positivos y se RESTAN).
+function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) {
+  const Z = () => new Array(12).fill(0);
+  const sar = resSedesAR || Z(), fg = feeGer || Z(), wre = resWRE || Z();
+  const omit = (obj, keys) => Object.fromEntries(Object.entries(obj || {}).filter(([k]) => !keys.includes(k)));
+  const sumG = obj => MESES.map((_, m) => Object.values(obj || {}).reduce((s, a) => s + (a[m] || 0), 0));
+  const hqAccounts  = omit(pnl.grupos.hq,  BIGG_FEE_CUENTAS);    // ingresos HQ sin las fees de operación
+  const ghqAccounts = omit(pnl.grupos.ghq, ["17 - Huergo"]);     // opex HQ sin Huergo (ya está en WRE)
+  const ingHQ = sumG(hqAccounts), opexHQ = sumG(ghqAccounts), financieros = sumG(pnl.grupos.fin), impuestos = sumG(pnl.grupos.imp);
+  const resOperaciones = MESES.map((_, m) => sar[m] + fg[m] + wre[m]);
+  const resOpGrupo     = MESES.map((_, m) => resOperaciones[m] + ingHQ[m] - opexHQ[m]);
+  const resAntesImp    = MESES.map((_, m) => resOpGrupo[m] - financieros[m]);
+  const resGrupo       = MESES.map((_, m) => resAntesImp[m] - impuestos[m]);
+  const months = new Set(); const cur = new Date().getMonth();
+  for (let i = 0; i <= cur; i++) months.add(i);
+  [sar, fg, wre, ingHQ, opexHQ, financieros, impuestos].forEach(a => a.forEach((v, i) => { if (v) months.add(i); }));
+  return { sar, fg, wre, hqAccounts, ghqAccounts, ingHQ, opexHQ, financieros, impuestos,
+           resOperaciones, resOpGrupo, resAntesImp, resGrupo, activeMonths: [...months].sort((a, b) => a - b) };
+}
+
+// P&L BIGG = P&L de HOLDING. Arriba el RESULTADO de cada negocio operativo (no la venta); después HQ
+// (ingresos − opex), y al final financieros + impuestos del grupo. `sub` = computeSubtotalsHolding.
 function PnLTableBigg({ pnl, sub, year, moneda }) {
-  const { totIngresos, totGastosVta, margenBruto, totGastosOp, resOp, resAntesImp, resultado, activeMonths } = sub;
+  const { sar, fg, wre, hqAccounts, ghqAccounts, ingHQ, opexHQ,
+          resOperaciones, resOpGrupo, resAntesImp, resGrupo, activeMonths } = sub;
   const ncols = activeMonths.length + 2;
-  const ALLKEYS = ["sec_ing", "sec_gas", ...BIGG_GRUPOS.map(g => g.key)];
+  const ALLKEYS = ["sec_op", "sec_ing", "sec_opex", "sec_fin", "sec_imp"];
   const [collapsed, setCollapsed] = useState({});
   const isCol  = k => !!collapsed[k];
   const toggle = k => setCollapsed(c => ({ ...c, [k]: !c[k] }));
   const allCol = ALLKEYS.every(k => collapsed[k]);
   const toggleAll = () => setCollapsed(allCol ? {} : Object.fromEntries(ALLKEYS.map(k => [k, true])));
 
-  const grp = (key, order = BIGG_ORDEN) => <PnlSection sub label={grupoBigg(key).label} accounts={pnl.grupos[key]}
+  const sec = (key, label, accounts, order) => <PnlSection sub label={label} accounts={accounts}
     order={order} color={SEDE_HDR} activeMonths={activeMonths} ncols={ncols}
     expanded={!isCol(key)} onToggle={() => toggle(key)} />;
-  const sinCls = Object.keys(pnl.sinClasificar).length > 0;
 
   if (activeMonths.length === 0) return (
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
@@ -970,7 +973,6 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
   );
 
   return (
-    <>
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
       boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
       <table style={{ width: "100%", minWidth: 230 + activeMonths.length * 122 + 150, borderCollapse: "collapse", tableLayout: "fixed" }}>
@@ -991,51 +993,30 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
           </tr>
         </thead>
         <tbody>
-          <BandaRow label="Ingresos" span={ncols} expanded={!isCol("sec_ing")} onToggle={() => toggle("sec_ing")} />
-          {!isCol("sec_ing") && <>
-            {grp("vta_sp")}
-            {grp("int_sp")}
-            {grp("ger")}
-            {grp("wre")}
-            {grp("hq")}
+          {/* Resultado de operaciones: una línea por negocio = SU resultado (no la venta) */}
+          <BandaRow label="Resultado de Operaciones" span={ncols} expanded={!isCol("sec_op")} onToggle={() => toggle("sec_op")} />
+          {!isCol("sec_op") && <>
+            <DataRow label="Sedes Propias Argentina" values={sar} activeMonths={activeMonths} color={SEDE_HDR} />
+            <DataRow label="Gerenciamiento de Sedes (Rosedal)" values={fg} activeMonths={activeMonths} color={SEDE_HDR} />
+            <DataRow label="Wellness Real Estate (Huergo)" values={wre} activeMonths={activeMonths} color={SEDE_HDR} />
           </>}
-          <SubtotalRow strong label="Total Ingresos" values={totIngresos} activeMonths={activeMonths} color={SEDE_HDR} />
+          <SubtotalRow strong label="Resultado de Operaciones" values={resOperaciones} activeMonths={activeMonths} color={SEDE_HDR} />
 
-          {grp("gpv")}
-          <ResultadoRow strong label="Margen Bruto" values={margenBruto} activeMonths={activeMonths} />
+          {/* HQ: ingresos propios − opex por departamento */}
+          {sec("sec_ing", "Ingresos HQ", hqAccounts, BIGG_ORDEN)}
+          <SubtotalRow label="Total Ingresos HQ" values={ingHQ} activeMonths={activeMonths} color={SEDE_HDR} />
+          {sec("sec_opex", "OPEX HQ", ghqAccounts, BIGG_ORDEN_GHQ)}
+          <SubtotalRow label="Total OPEX HQ" values={opexHQ} activeMonths={activeMonths} color={SEDE_HDR} />
+          <ResultadoRow strong label="Resultado Operativo del Grupo" values={resOpGrupo} activeMonths={activeMonths} />
 
-          {/* ── Debajo de Margen Bruto (por centro de costo) ── */}
-          <BandaRow label="Gastos" span={ncols} expanded={!isCol("sec_gas")} onToggle={() => toggle("sec_gas")} />
-          {!isCol("sec_gas") && <>
-            <DataRow label="Gastos Sedes Propias" values={sub.st.gsp} activeMonths={activeMonths} color={SEDE_HDR} />
-            {grp("ghq", BIGG_ORDEN_GHQ)}
-          </>}
-          <SubtotalRow label="Total Gastos" values={totGastosOp} activeMonths={activeMonths} color={SEDE_HDR} />
-          <ResultadoRow strong label="Resultado Operativo" values={resOp} activeMonths={activeMonths} />
-
-          {grp("fin", BIGG_ORDEN_FIN)}
+          {/* Debajo del operativo: financieros e impuestos del grupo, en una línea al final */}
+          {sec("sec_fin", "Financieros", pnl.grupos.fin, BIGG_ORDEN_FIN)}
           <ResultadoRow label="Resultado antes de Impuestos" values={resAntesImp} activeMonths={activeMonths} />
-
-          {grp("imp", BIGG_ORDEN_IMP)}
-          <ResultadoRow strong label="Resultado" values={resultado} activeMonths={activeMonths} />
+          {sec("sec_imp", "Impuestos", pnl.grupos.imp, BIGG_ORDEN_IMP)}
+          <ResultadoRow strong label="Resultado del Grupo" values={resGrupo} activeMonths={activeMonths} />
         </tbody>
       </table>
     </div>
-    {sinCls && (
-      <div style={{ marginTop: 16, background: T.card, border: "1px solid #fcd34d",
-        borderRadius: T.radius, boxShadow: T.shadow, overflowX: "auto" }}>
-        <table style={{ width: "100%", minWidth: 280 + activeMonths.length * 110, borderCollapse: "collapse" }}>
-          <tbody>
-            <PnlSection label="Sin clasificar (fuera del P&L consolidado)" accounts={pnl.sinClasificar}
-              activeMonths={activeMonths} color="#f59e0b" ncols={ncols} />
-          </tbody>
-        </table>
-        <div style={{ padding: "8px 16px", fontSize: 11, color: "#92400e", background: "#fffbeb" }}>
-          Estas cuentas/centros tienen movimientos pero no están asignados a ningún subgrupo del P&L consolidado.
-        </div>
-      </div>
-    )}
-    </>
   );
 }
 
@@ -2394,12 +2375,52 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const pnlHuergoPrev = useMemo(() => isHuergo ? buildPnLHuergo(inConFranq, egConSueldos, huergoCCs, year - 1, monedaPL) : null, [isHuergo, inConFranq, egConSueldos, huergoCCs, year, monedaPL]);
   const subHuergoPrev = useMemo(() => pnlHuergoPrev ? computeSubtotalsHuergo(pnlHuergoPrev) : null, [pnlHuergoPrev]);
 
-  // P&L BIGG consolidado (Núcleo/anillo 1) — sedes propias + HQ + franquicias, hasta Margen Bruto.
-  const pnlBigg = useMemo(
-    () => buildPnLBigg(inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL),
-    [inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL]
+  // ── P&L BIGG = P&L de HOLDING (Núcleo/anillo 1). Se computa solo en la pestaña pl_bigg. ──
+  const isBigg = activeTab === "pl_bigg";
+  // Scope fijo del holding (independiente del tab): sedes propias AR del núcleo + el centro Barrio Norte.
+  const arNucleoCCs = useMemo(
+    () => ccs.filter(c => (c.grupo ?? "").toLowerCase() === "operaciones" &&
+      nucleoEmpresas.has((c.empresa ?? "").trim()) && familiaCentro(c) === "propios").map(c => c.id),
+    [ccs, nucleoEmpresas]
   );
-  const subBigg = useMemo(() => computeSubtotalsBigg(pnlBigg), [pnlBigg]);
+  const bnCcId = useMemo(() => ccs.find(c => _nkSede(c.nombre).includes(_nkSede(CESION.matchNombre)))?.id, [ccs]);
+
+  // Línea "Sedes Propias Argentina" = resultado de las sedes AR NETO del 49% de la cesión de Barrio Norte.
+  const resSedesAR = useMemo(() => {
+    if (!isBigg) return null;
+    const rfAR = computeSubtotalsSede(buildPnLSede(inConFranq, egConSueldos, arNucleoCCs, year, monedaPL)).resFinal;
+    const rfBN = bnCcId ? computeSubtotalsSede(buildPnLSede(inConFranq, egConSueldos, [bnCcId], year, monedaPL)).resFinal : new Array(12).fill(0);
+    return rfAR.map((v, m) => v - CESION.pct * (Number(rfBN[m]) || 0));
+  }, [isBigg, inConFranq, egConSueldos, arNucleoCCs, bnCcId, year, monedaPL]);
+
+  // Línea "Gerenciamiento (Rosedal)" = fee interco Ñako→Segui (cuenta "Fee de Gestion y Adm" exacta, núcleo).
+  const feeGer = useMemo(() => {
+    if (!isBigg) return null;
+    const t = new Array(12).fill(0);
+    for (const r of inConFranq) {
+      if (_nkSede(r.cuenta_contable) !== _nkSede("Fee de Gestion y Adm")) continue;
+      if (!nucleoEmpresas.has((r.sociedad ?? "").trim())) continue;
+      if (!r.fecha || r.fecha.slice(0, 4) !== String(year)) continue;
+      if ((r.moneda ?? "ARS") !== monedaPL) continue;
+      const m = parseInt(r.fecha.slice(5, 7), 10) - 1; if (m >= 0 && m < 12) t[m] += Number(r.total) || 0;
+    }
+    return t;
+  }, [isBigg, inConFranq, nucleoEmpresas, year, monedaPL]);
+
+  // Línea "Wellness Real Estate" = margen de Huergo (+ Puertos a futuro).
+  const resWRE = useMemo(
+    () => isBigg ? computeSubtotalsHuergo(buildPnLHuergo(inConFranq, egConSueldos, huergoCCs, year, monedaPL)).margen : null,
+    [isBigg, inConFranq, egConSueldos, huergoCCs, year, monedaPL]
+  );
+
+  const pnlBigg = useMemo(
+    () => isBigg ? buildPnLBigg(inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL) : null,
+    [isBigg, inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL]
+  );
+  const subBigg = useMemo(
+    () => pnlBigg ? computeSubtotalsHolding(pnlBigg, { resSedesAR, feeGer, resWRE }) : null,
+    [pnlBigg, resSedesAR, feeGer, resWRE]
+  );
 
   const toggleSedeCC = (id) => {
     setSelectedSedeCCs(prev => {
