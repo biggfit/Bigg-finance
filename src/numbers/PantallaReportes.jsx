@@ -160,6 +160,10 @@ function computeSubtotals(pnl) {
 const rowSum = arr => arr.reduce((s, v) => s + v, 0);
 const fmtN   = n => !n ? "—" : Math.round(Math.abs(n)).toLocaleString("es-AR");
 const fmtSigned = n => !n ? "—" : (n < 0 ? "−" : "") + fmtN(n);   // conserva el signo (fmtN es absoluto)
+// Convención contable. neg=false (ingresos/resultados): positivo normal, negativo (pérdida) entre
+// paréntesis. neg=true (líneas de gasto/que restan): positivo = egreso entre paréntesis, negativo = crédito
+// (ej. Intereses Ganados dentro de Financieros) normal. Siempre se muestra la magnitud.
+const fmtPar = (n, neg = false) => !n ? "—" : (neg ? n > 0 : n < 0) ? `(${fmtN(n)})` : fmtN(n);
 
 // ─── Estilos base ─────────────────────────────────────────────────────────────
 const CTRL_H = 36;
@@ -231,7 +235,7 @@ function SectionRow({ label, span, values, activeMonths, expanded, onToggle }) {
   );
 }
 
-function DataRow({ label, values, activeMonths, color }) {
+function DataRow({ label, values, activeMonths, color, neg = false }) {
   const total = rowSum(values);
   return (
     <tr style={{ borderBottom: `1px solid ${T.cardBorder}`, background: T.card }}
@@ -246,19 +250,19 @@ function DataRow({ label, values, activeMonths, color }) {
         <td key={m} style={{ padding: "7px 12px", fontSize: 13, textAlign: "right",
           fontFamily: "var(--mono)", color: values[m] ? (color ?? T.text) : T.dim,
           whiteSpace: "nowrap" }}>
-          {values[m] ? fmtN(values[m]) : "—"}
+          {fmtPar(values[m], neg)}
         </td>
       ))}
       <td style={{ padding: "7px 14px", fontSize: 13, textAlign: "right", fontFamily: "var(--mono)",
         fontWeight: 800, color: color ?? T.text, whiteSpace: "nowrap",
         borderLeft: `1px solid ${T.cardBorder}` }}>
-        {fmtN(total)}
+        {fmtPar(total, neg)}
       </td>
     </tr>
   );
 }
 
-function SubtotalRow({ label, values, activeMonths, color, strong }) {
+function SubtotalRow({ label, values, activeMonths, color, strong, neg = false }) {
   const total = rowSum(values);
   const bg = strong ? "#cbd5e1" : "#f3f4f6";
   return (
@@ -273,13 +277,13 @@ function SubtotalRow({ label, values, activeMonths, color, strong }) {
         <td key={m} style={{ padding: "12px 12px", fontSize: 14, textAlign: "right",
           fontFamily: "var(--mono)", fontWeight: 900, color: color ?? T.text,
           whiteSpace: "nowrap" }}>
-          {values[m] ? fmtN(values[m]) : "—"}
+          {fmtPar(values[m], neg)}
         </td>
       ))}
       <td style={{ padding: "12px 14px", fontSize: 15, textAlign: "right", fontFamily: "var(--mono)",
         fontWeight: 900, color: color ?? T.text, whiteSpace: "nowrap",
         borderLeft: `1px solid ${T.cardBorder}` }}>
-        {fmtN(total)}
+        {fmtPar(total, neg)}
       </td>
     </tr>
   );
@@ -304,13 +308,13 @@ function ResultadoRow({ label, values, activeMonths, strong }) {
           fontFamily: "var(--mono)", fontWeight: 900,
           color: values[m] > 0 ? T.green : values[m] < 0 ? T.red : T.dim,
           whiteSpace: "nowrap" }}>
-          {values[m] !== 0 ? fmtN(values[m]) : "—"}
+          {fmtPar(values[m])}
         </td>
       ))}
       <td style={{ padding: "12px 14px", fontSize: 15, textAlign: "right", fontFamily: "var(--mono)",
         fontWeight: 900, color, whiteSpace: "nowrap",
         borderLeft: `1px solid ${T.cardBorder}` }}>
-        {fmtN(total)}
+        {fmtPar(total)}
       </td>
     </tr>
   );
@@ -530,7 +534,7 @@ function celdasSede(cols, cur, prev, pol, o) {
     return <td key={i} style={{ padding: o.pad, fontSize: o.fs || 13, textAlign: "right",
       fontFamily: "var(--mono)", fontWeight: o.fw || 400, color, whiteSpace: "nowrap", ...bord,
       ...(col.total ? { borderLeft: `1px solid ${T.cardBorder}` } : {}) }}>
-      {v ? fmtN(v) : "—"}</td>;
+      {fmtPar(v, pol < 0)}</td>;
   });
 }
 
@@ -961,8 +965,8 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
   const allCol = ALLKEYS.every(k => collapsed[k]);
   const toggleAll = () => setCollapsed(allCol ? {} : Object.fromEntries(ALLKEYS.map(k => [k, true])));
 
-  const sec = (key, label, accounts, order) => <PnlSection sub label={label} accounts={accounts}
-    order={order} color={SEDE_HDR} activeMonths={activeMonths} ncols={ncols}
+  const sec = (key, label, accounts, order, neg = false) => <PnlSection sub label={label} accounts={accounts}
+    order={order} color={SEDE_HDR} activeMonths={activeMonths} ncols={ncols} neg={neg}
     expanded={!isCol(key)} onToggle={() => toggle(key)} />;
 
   if (activeMonths.length === 0) return (
@@ -1006,14 +1010,14 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
           {/* HQ: ingresos propios − opex por departamento */}
           {sec("sec_ing", "Ingresos HQ", hqAccounts, BIGG_ORDEN)}
           <SubtotalRow label="Total Ingresos HQ" values={ingHQ} activeMonths={activeMonths} color={SEDE_HDR} />
-          {sec("sec_opex", "OPEX HQ", ghqAccounts, BIGG_ORDEN_GHQ)}
-          <SubtotalRow label="Total OPEX HQ" values={opexHQ} activeMonths={activeMonths} color={SEDE_HDR} />
+          {sec("sec_opex", "OPEX HQ", ghqAccounts, BIGG_ORDEN_GHQ, true)}
+          <SubtotalRow neg label="Total OPEX HQ" values={opexHQ} activeMonths={activeMonths} color={SEDE_HDR} />
           <ResultadoRow strong label="Resultado Operativo del Grupo" values={resOpGrupo} activeMonths={activeMonths} />
 
           {/* Debajo del operativo: financieros e impuestos del grupo, en una línea al final */}
-          {sec("sec_fin", "Financieros", pnl.grupos.fin, BIGG_ORDEN_FIN)}
+          {sec("sec_fin", "Financieros", pnl.grupos.fin, BIGG_ORDEN_FIN, true)}
           <ResultadoRow label="Resultado antes de Impuestos" values={resAntesImp} activeMonths={activeMonths} />
-          {sec("sec_imp", "Impuestos", pnl.grupos.imp, BIGG_ORDEN_IMP)}
+          {sec("sec_imp", "Impuestos", pnl.grupos.imp, BIGG_ORDEN_IMP, true)}
           <ResultadoRow strong label="Resultado del Grupo" values={resGrupo} activeMonths={activeMonths} />
         </tbody>
       </table>
@@ -1095,7 +1099,7 @@ function PnLTable({ pnl, sub, year, moneda, label }) {
 }
 
 // ─── PnlSection ───────────────────────────────────────────────────────────────
-function PnlSection({ label, accounts, activeMonths, color, ncols, sub, order, expanded: expandedProp, onToggle }) {
+function PnlSection({ label, accounts, activeMonths, color, ncols, sub, order, expanded: expandedProp, onToggle, neg = false }) {
   const [expandedState, setExpandedState] = useState(true);
   // Controlado si viene onToggle (lo maneja el toggle maestro); si no, estado interno (como antes).
   const controlled = onToggle !== undefined;
@@ -1116,16 +1120,16 @@ function PnlSection({ label, accounts, activeMonths, color, ncols, sub, order, e
       )}
       {sub && (
         <SubSectionRow label={label} values={subTotals} activeMonths={activeMonths}
-          color={color} expanded={expanded} onToggle={toggle} />
+          color={color} expanded={expanded} onToggle={toggle} neg={neg} />
       )}
       {expanded && rows.map(([nombre, vals]) => (
-        <DataRow key={nombre} label={nombre} values={vals} activeMonths={activeMonths} color={color} />
+        <DataRow key={nombre} label={nombre} values={vals} activeMonths={activeMonths} color={color} neg={neg} />
       ))}
     </>
   );
 }
 
-function SubSectionRow({ label, values, activeMonths, color, expanded, onToggle }) {
+function SubSectionRow({ label, values, activeMonths, color, expanded, onToggle, neg = false }) {
   const total = rowSum(values);
   const bg = "#f1f5f9";
   return (
@@ -1143,13 +1147,13 @@ function SubSectionRow({ label, values, activeMonths, color, expanded, onToggle 
       {activeMonths.map(m => (
         <td key={m} style={{ padding: "7px 12px", fontSize: 12, textAlign: "right",
           fontFamily: "var(--mono)", fontWeight: 800, color: color ?? T.muted, whiteSpace: "nowrap" }}>
-          {values[m] ? fmtN(values[m]) : "—"}
+          {fmtPar(values[m], neg)}
         </td>
       ))}
       <td style={{ padding: "7px 14px", fontSize: 12, textAlign: "right", fontFamily: "var(--mono)",
         fontWeight: 900, color: color ?? T.muted, whiteSpace: "nowrap",
         borderLeft: `1px solid ${T.cardBorder}` }}>
-        {total ? fmtN(total) : "—"}
+        {fmtPar(total, neg)}
       </td>
     </tr>
   );
