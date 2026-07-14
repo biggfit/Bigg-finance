@@ -722,6 +722,100 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
   }
 }
 
+// ─── P&L HUERGO (Wellness Real Estate, anillo 1) — negocio de MARGEN, no sede ──────────────────────
+// Estructura simple (no waterfall de sede): Ingresos (lo que paga el edificio) − Costos (horas de coaches)
+// = Margen. Agrupa dinámico por cuenta: inRows→Ingresos, egRows→Costos (así no hay que hardcodear cuentas).
+function buildPnLHuergo(inRows, egRows, ccFilter, year, moneda) {
+  const ingresos = {}, costos = {};
+  const add = (rows, bucket) => {
+    for (const row of rows) {
+      if (!row.fecha || row.fecha.slice(0, 4) !== String(year)) continue;
+      if ((row.moneda ?? "ARS") !== moneda) continue;
+      const cc = row.centro_costo ?? "";
+      if (!(Array.isArray(ccFilter) ? ccFilter.includes(cc) : cc === ccFilter)) continue;
+      const m = parseInt(row.fecha.slice(5, 7), 10) - 1; if (m < 0 || m > 11) continue;
+      const nombre = (row.cuenta_contable ?? "").trim() || "Sin cuenta";
+      (bucket[nombre] ??= new Array(12).fill(0))[m] += Number(row.total) || 0;
+    }
+  };
+  add(inRows, ingresos); add(egRows, costos);
+  return { ingresos, costos };
+}
+function computeSubtotalsHuergo(pnl) {
+  const sumB = obj => MESES.map((_, m) => Object.values(obj).reduce((s, a) => s + (a[m] || 0), 0));
+  const totIng = sumB(pnl.ingresos), totCos = sumB(pnl.costos);
+  const margen = totIng.map((v, m) => v - totCos[m]);
+  const months = new Set(); const curM = new Date().getMonth();
+  for (let i = 0; i <= curM; i++) months.add(i);
+  [pnl.ingresos, pnl.costos].forEach(o => Object.values(o).forEach(a => a.forEach((v, i) => { if (v) months.add(i); })));
+  return { totIng, totCos, margen, activeMonths: [...months].sort((a, b) => a - b) };
+}
+function PnLTableHuergo({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolucion", mes = 0 }) {
+  const { totIng, totCos, margen, activeMonths } = sub;
+  if (activeMonths.length === 0) return (
+    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
+      padding: "60px 24px", textAlign: "center", boxShadow: T.shadow }}>
+      <div style={{ fontSize: 14, color: T.muted }}>Sin datos para {year} en {moneda}.</div>
+    </div>
+  );
+  const cols = vista === "evolucion" ? colsEvolucion(activeMonths) : colsSedeVista(vista, mes, year);
+  const Pi = pnlPrev?.ingresos || {}, Pc = pnlPrev?.costos || {};
+  const filas = [{ kind: "banda", label: "Ingresos" }];
+  for (const [n, a] of Object.entries(pnl.ingresos)) filas.push({ kind: "cuenta", label: n, cur: a, prev: Pi[n] || ZERO12, pol: 1 });
+  filas.push({ kind: "subtotal", strong: true, label: "Total Ingresos", cur: totIng, prev: subPrev.totIng, pol: 1 });
+  filas.push({ kind: "banda", label: "Costos (horas de coaches)" });
+  for (const [n, a] of Object.entries(pnl.costos)) filas.push({ kind: "cuenta", label: n, cur: a, prev: Pc[n] || ZERO12, pol: -1 });
+  filas.push({ kind: "subtotal", label: "Total Costos", cur: totCos, prev: subPrev.totCos, pol: -1 });
+  filas.push({ kind: "result", label: "Margen", cur: margen, prev: subPrev.margen, pol: 1 });
+
+  return (
+    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
+      boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse",
+        ...(vista === "evolucion" ? { minWidth: 230 + activeMonths.length * 122 + 150, tableLayout: "fixed" } : { minWidth: 260 + cols.length * 120 }) }}>
+        {vista === "evolucion" && (
+          <colgroup><col style={{ width: 230 }} />{activeMonths.map(m => <col key={m} style={{ width: 122 }} />)}<col style={{ width: 150 }} /></colgroup>
+        )}
+        <thead><tr>
+          <th style={{ ...thStyle, textAlign: "left", whiteSpace: "nowrap", ...stickyCol, background: T.tableHead, zIndex: 4 }}>Cuenta</th>
+          {cols.map((c, i) => <th key={i} style={{ ...thStyle, ...(c.total ? { borderLeft: "1px solid rgba(255,255,255,.12)" } : {}) }}>{c.header}</th>)}
+        </tr></thead>
+        <tbody>
+          {filas.map((f, idx) => {
+            if (f.kind === "banda") return <BandaRow key={idx} label={f.label} span={cols.length + 1} expanded onToggle={undefined} />;
+            if (f.kind === "cuenta") return (
+              <tr key={idx} style={{ borderBottom: `1px solid ${T.cardBorder}`, background: T.card }}>
+                <td style={{ padding: "6px 14px 6px 32px", fontSize: 13, color: T.text, whiteSpace: "nowrap",
+                  borderBottom: `1px solid ${T.cardBorder}`, ...stickyCol, background: T.card }}>{f.label}</td>
+                {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "6px 12px", fs: 13, fw: 400, color: SEDE_HDR })}
+              </tr>
+            );
+            if (f.kind === "subtotal") {
+              const bg = f.strong ? "#cbd5e1" : "#f3f4f6";
+              return (
+                <tr key={idx} style={{ background: bg, borderTop: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, borderBottom: `2px solid ${T.cardBorder}` }}>
+                  <td style={{ padding: "12px 14px", fontSize: f.strong ? 15 : 14, fontWeight: 900, color: SEDE_HDR,
+                    borderTop: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, borderBottom: `2px solid ${T.cardBorder}`, ...stickyCol, background: bg }}>{f.label}</td>
+                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: f.strong ? 15 : 14, fw: 900, color: SEDE_HDR,
+                    bt: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, bb: `2px solid ${T.cardBorder}` })}
+                </tr>
+              );
+            }
+            const pv = primaryVal(vista, f.cur, mes), rc = pv >= 0 ? T.green : T.red, rbg = pv >= 0 ? "#bbf7d0" : "#fecaca";
+            return (
+              <tr key={idx} style={{ background: rbg, borderTop: `3px solid ${rc}`, borderBottom: `2px solid ${rc}` }}>
+                <td style={{ padding: "12px 14px", fontSize: 15, fontWeight: 900, color: rc,
+                  borderTop: `3px solid ${rc}`, borderBottom: `2px solid ${rc}`, ...stickyCol, background: rbg }}>{f.label}</td>
+                {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: 15, fw: 900, bySign: true, bt: `3px solid ${rc}`, bb: `2px solid ${rc}` })}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ─── P&L BIGG CONSOLIDADO (sedes propias + HQ + franquicias) — Etapa 1: hasta Margen Bruto ──
 // DATA-DRIVEN: el subgrupo sale de columnas que el usuario mantiene en Maestros, sin listas de cuentas
 // hardcodeadas. Dos dimensiones:
@@ -1661,7 +1755,7 @@ const TABS = [
   { id: "op_colombia",  label: "P&L Sedes Propias Colombia", icon: "🇨🇴", desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada)." },
   { id: "op_puertos",   label: "P&L Puertos", icon: "⚓", wip: true, desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada, inversión USD)." },
   { id: "op_rosedal",   label: "P&L Rosedal (Segui Fit)", icon: "🤝", desc: "P&L completo de la operación administrada hasta Free Cash Flow, con impuestos dentro; a BIGG entra el fee + su % del FCF." },
-  { id: "op_huergo",    label: "P&L Huergo", icon: "🏗️", wip: true, desc: "Negocio propio (anillo 1): ingreso del edificio − horas de coaches = margen a seguir de cerca." },
+  { id: "op_huergo",    label: "P&L Huergo", icon: "🏗️", desc: "Negocio propio (anillo 1): ingreso del edificio − horas de coaches = margen a seguir de cerca." },
 
   { id: "consol_grupo", label: "Consolidado de grupo", icon: "🌐", wip: true, desc: "P&L y patrimonio del grupo: propias full (neto de IVA) + fee/share de administradas + impuestos del anillo al final." },
 
@@ -2151,8 +2245,10 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const fondCfg    = FONDEADAS[activeTab] || null;
   const isFond     = !!fondCfg && !curTab?.wip;
   const isSedeLike = activeTab === "pl_sede" || isFond;
-  // Al entrar a una fondeada, arrancar en SU moneda (el usuario igual puede cambiarla con el picker).
-  useEffect(() => { if (isFond) setMonedaPL(fondCfg.moneda); }, [activeTab]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const isHuergo   = activeTab === "op_huergo" && !curTab?.wip;   // negocio de margen (WRE, anillo 1)
+  const isPnlTiempo = isSedeLike || isHuergo;   // reportes con toggle de vista (Evolución/Mensual/YTD) + Año/Moneda
+  // Al entrar a un negocio, arrancar en su moneda (fondeada = la suya; Huergo = ARS). Igual se puede cambiar.
+  useEffect(() => { if (isFond) setMonedaPL(fondCfg.moneda); else if (isHuergo) setMonedaPL("ARS"); }, [activeTab]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const cuentaMap = useMemo(
     () => new Map((cuentas ?? []).map(c => [c.nombre, c])),
@@ -2282,6 +2378,16 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const subSede     = useMemo(() => computeSubtotalsSede(pnlSede), [pnlSede]);
   const subSedePrev = useMemo(() => computeSubtotalsSede(pnlSedePrev), [pnlSedePrev]);
 
+  // Huergo (WRE): negocio de margen. Scope = centro con operacion "Wellness Real Estate".
+  const huergoCCs = useMemo(
+    () => ccs.filter(c => (c.operacion ?? "").trim() === "Wellness Real Estate").map(c => c.id),
+    [ccs]
+  );
+  const pnlHuergo     = useMemo(() => buildPnLHuergo(inConFranq, egConSueldos, huergoCCs, year, monedaPL), [inConFranq, egConSueldos, huergoCCs, year, monedaPL]);
+  const subHuergo     = useMemo(() => computeSubtotalsHuergo(pnlHuergo), [pnlHuergo]);
+  const pnlHuergoPrev = useMemo(() => buildPnLHuergo(inConFranq, egConSueldos, huergoCCs, year - 1, monedaPL), [inConFranq, egConSueldos, huergoCCs, year, monedaPL]);
+  const subHuergoPrev = useMemo(() => computeSubtotalsHuergo(pnlHuergoPrev), [pnlHuergoPrev]);
+
   // P&L BIGG consolidado (Núcleo/anillo 1) — sedes propias + HQ + franquicias, hasta Margen Bruto.
   const pnlBigg = useMemo(
     () => buildPnLBigg(inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL),
@@ -2341,7 +2447,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     </div>
   );
 
-  const showMonedaPL = isSedeLike || activeTab === "pl_bigg";
+  const showMonedaPL = isPnlTiempo || activeTab === "pl_bigg";
   const showMonedaCF = activeTab === "cf";
   const showSedes    = isSedeLike && sedeCCs.length > 0;
 
@@ -2361,10 +2467,10 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       {/* ── Header del reporte + volver al menú ── */}
       <PageHeader
         title={curTab?.label ?? "Reporte"}
-        subtitle={isSedeLike ? undefined : curLente?.label}
+        subtitle={isPnlTiempo ? undefined : curLente?.label}
         action={
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            {isSedeLike && <VistaToggle value={vistaPnl} onChange={setVistaPnl} />}
+            {isPnlTiempo && <VistaToggle value={vistaPnl} onChange={setVistaPnl} />}
             <button onClick={() => setActiveTab(null)} style={{
               display: "inline-flex", alignItems: "center", gap: 6,
               background: "#f3f4f6", border: `1px solid ${T.cardBorder}`, borderRadius: 8,
@@ -2421,7 +2527,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         )}
 
         {/* Mes — solo para vistas comparativas (Mensual / YTD) */}
-        {isSedeLike && vistaPnl !== "evolucion" && (
+        {isPnlTiempo && vistaPnl !== "evolucion" && (
           <div>
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Mes</label>
@@ -2515,6 +2621,12 @@ export default function PantallaReportes({ sociedad = "nako" }) {
           label={selectedSedeCCs === null ? "Todas las Sedes"
             : selectedSedeCCs.length === 0 ? "Ninguna sede"
             : `${selectedSedeCCs.length} seleccionada${selectedSedeCCs.length > 1 ? "s" : ""}`} />
+      )}
+
+      {/* ── P&L Huergo (Wellness Real Estate): Ingresos − Costos (horas de coaches) = Margen ── */}
+      {isHuergo && (
+        <PnLTableHuergo pnl={pnlHuergo} sub={subHuergo} pnlPrev={pnlHuergoPrev} subPrev={subHuergoPrev}
+          vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} />
       )}
 
       {/* ── P&L BIGG consolidado (subgrupos, hasta Margen Bruto) ── */}
