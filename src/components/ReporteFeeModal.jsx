@@ -478,6 +478,31 @@ function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef }) {
       '</tr>';
   }).join('');
 
+  // Fila de Total — mismo cálculo que el <tfoot> del modal.
+  const tot = rows.reduce((a, r) => ({
+    fee:    a.fee    + (r.feeMes_USD     || 0),
+    prev:   a.prev   + (r.feePrev_USD    || 0),
+    ytd:    a.ytd    + (r.feeYTD_USD     || 0),
+    deuda:  a.deuda  + (r.deuda_USD      || 0),
+    neto:   a.neto   + (r.feeMesNeto_USD || 0),
+    ventas: a.ventas + (r.ventas_USD     || 0),
+  }), { fee: 0, prev: 0, ytd: 0, deuda: 0, neto: 0, ventas: 0 });
+  const totVarPct   = tot.prev > 0 ? ((tot.fee - tot.prev) / tot.prev) * 100 : null;
+  const totPct      = tot.ventas > 0 ? (tot.neto / tot.ventas) * 100 : null;
+  const totVarColor = totVarPct == null ? C.tdMuted : totVarPct > 0 ? C.green : totVarPct < 0 ? C.red : C.tdMain;
+  const totVarLabel = totVarPct == null ? '—' : (totVarPct >= 0 ? '+' : '') + totVarPct.toFixed(1) + '%';
+  const totalRow =
+    '<tr style="background:' + C.tableBg + ';border-top:2px solid ' + C.thBorder + ';">' +
+    '<td style="padding:8px 12px;font-size:13px;font-weight:700;color:' + C.tdMain + ';">Total</td>' +
+    '<td style="padding:8px 12px;font-size:13px;font-weight:700;color:' + C.tdSec + ';">' + rows.length + ' sedes</td>' +
+    '<td style="padding:8px 12px;font-size:13px;font-weight:700;color:' + C.tdMain + ';font-family:monospace;text-align:right;">' + fmtN(tot.fee) + '</td>' +
+    '<td style="padding:8px 12px;font-size:13px;font-weight:700;color:' + C.tdMain + ';font-family:monospace;text-align:center;">' + (totPct != null ? totPct.toFixed(1) + '%' : '—') + '</td>' +
+    '<td style="padding:8px 12px;font-size:13px;font-weight:700;color:' + C.tdSec + ';font-family:monospace;text-align:center;">—</td>' +
+    '<td style="padding:8px 12px;font-size:13px;font-weight:700;color:' + totVarColor + ';font-family:monospace;text-align:center;">' + totVarLabel + '</td>' +
+    '<td style="padding:8px 12px;font-size:13px;font-weight:700;color:' + C.tdMain + ';font-family:monospace;text-align:right;">' + fmtN(tot.ytd) + '</td>' +
+    '<td style="padding:8px 12px;font-size:13px;font-weight:700;color:' + C.tdMain + ';font-family:monospace;text-align:center;">' + (tot.deuda > 0 ? 'U$D ' + fmtN(tot.deuda) : '✓') + '</td>' +
+    '</tr>';
+
   const darkStyle =
     '@media (prefers-color-scheme:dark){' +
     '.em-wrap{background:#111111 !important;}' +
@@ -561,7 +586,7 @@ function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef }) {
     '<th class="em-th" style="padding:8px 12px;text-align:center;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">Var %<br><span style="font-size:9px;font-weight:400;color:' + C.tdMuted + ';">vs ' + prevLabel + '</span></th>' +
     '<th class="em-th" style="padding:8px 12px;text-align:right;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">Fee YTD<br><span style="font-size:9px;font-weight:400;color:' + C.tdMuted + ';">Ene–' + mesLabel + ' · U$D</span></th>' +
     '<th class="em-th" style="padding:8px 12px;text-align:center;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">Deuda (DSO)</th>' +
-    '</tr>' + tableRows + '</table></td></tr>' +
+    '</tr>' + tableRows + totalRow + '</table></td></tr>' +
 
     // Footer
     '<tr><td class="em-footer" style="background:' + C.footerBg + ';padding:16px 32px;border-top:1px solid ' + C.kpiBorder + ';">' +
