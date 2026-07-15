@@ -380,7 +380,7 @@ function SortFilterTh({ col, label, options, selected, onChange, sortCol, sortDi
 }
 
 // ─── Email HTML builder ───────────────────────────────────────────────────────
-function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef }) {
+function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef, resumen }) {
   const mesLabel  = MONTHS[month];
   const prevLabel = MONTHS[prev.month];
   const fmtU = n => n ? 'U$D ' + Math.round(n).toLocaleString('es-AR') : '—';
@@ -539,12 +539,22 @@ function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef }) {
       ).join('') + '</table>' : '') +
     '</td>';
 
+  // Resumen ejecutivo — texto libre, arriba de todo, antes del header/render.
+  const escapeHtml = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const resumenBlock = (resumen && resumen.trim())
+    ? '<tr><td style="padding:20px 32px;background:' + C.tableBg + ';border-bottom:1px solid ' + C.kpiBorder + ';">' +
+      '<div style="font-size:13px;line-height:1.6;color:' + C.tdMain + ';">' + escapeHtml(resumen.trim()).replace(/\n/g, '<br>') + '</div>' +
+      '</td></tr>'
+    : '';
+
   return '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
     '<style>' + darkStyle + mobileStyle + '</style>' +
     '</head>' +
     '<body class="em-wrap" style="margin:0;padding:0;background:' + C.bodyBg + ';font-family:Arial,sans-serif;">' +
     '<table width="100%" cellpadding="0" cellspacing="0" bgcolor="' + C.bodyBg + '"><tr><td style="padding:0;">' +
     '<table width="100%" cellpadding="0" cellspacing="0" style="width:100%;">' +
+
+    resumenBlock +
 
     // Header — siempre oscuro (logo BIGG)
     '<tr><td bgcolor="#111111" style="background:#111111;">' +
@@ -608,6 +618,7 @@ export default function ReporteFeeModal({ franchises, comps, saldoInicial = {}, 
   const [filterPaises, setFilterPaises] = useState(new Set());
   const [showSendPanel, setShowSendPanel] = useState(false);
   const [sendEmails,    setSendEmails]    = useState(() => { try { return localStorage.getItem("bigg_feeReportEmails") || ""; } catch { return ""; } });
+  const [resumenEjecutivo, setResumenEjecutivo] = useState("");
   const [sendState,     setSendState]     = useState("idle"); // "idle"|"sending"|"sent"|"error"
   const [ventasEye,     setVentasEye]     = useState({});     // { [frId]: { ventas, error } } — ventas del mes desde Bigg Eye
   const [eyeLoading,    setEyeLoading]    = useState(false);
@@ -701,7 +712,7 @@ export default function ReporteFeeModal({ franchises, comps, saldoInicial = {}, 
     setSendState("sending");
     try {
       try { localStorage.setItem("bigg_feeReportEmails", sendEmails); } catch {}
-      const html = buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef });
+      const html = buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef, resumen: resumenEjecutivo });
       await sendMailFr({
         to,
         subject: `Reporte de Fee — ${MONTHS[month]} ${year}`,
@@ -758,6 +769,18 @@ export default function ReporteFeeModal({ franchises, comps, saldoInicial = {}, 
               <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
                 <div style={{ flex: 1 }}>
                   <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: ".07em", display: "block", marginBottom: 6 }}>
+                    RESUMEN EJECUTIVO — opcional, va arriba del reporte en el mail
+                  </label>
+                  <textarea
+                    value={resumenEjecutivo}
+                    onChange={e => setResumenEjecutivo(e.target.value)}
+                    placeholder="Ej: este mes cerramos con..."
+                    rows={3}
+                    style={{ width: "100%", background: "var(--bg)", border: "1px solid var(--border2)", borderRadius: 7,
+                      padding: "8px 12px", color: "var(--text)", fontSize: 12, resize: "vertical",
+                      boxSizing: "border-box", fontFamily: "inherit", marginBottom: 14 }}
+                  />
+                  <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: ".07em", display: "block", marginBottom: 6 }}>
                     DESTINATARIOS — separados por coma
                   </label>
                   <textarea
@@ -769,7 +792,6 @@ export default function ReporteFeeModal({ franchises, comps, saldoInicial = {}, 
                       padding: "8px 12px", color: "var(--text)", fontSize: 12, resize: "none",
                       boxSizing: "border-box", fontFamily: "inherit" }}
                   />
-                  {/* Resumen del reporte */}
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 18 }}>
                   <button
