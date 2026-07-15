@@ -540,10 +540,16 @@ function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef, resumen 
     '</td>';
 
   // Resumen ejecutivo — texto libre, arriba de todo, antes del header/render.
+  // Soporta **negrita** (markdown simple) — se escapa el HTML primero y recién
+  // después se convierte **texto** en <strong>, así no se puede inyectar HTML real.
   const escapeHtml = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const resumenBlock = (resumen && resumen.trim())
     ? '<tr><td style="padding:20px 32px;background:' + C.tableBg + ';border-bottom:1px solid ' + C.kpiBorder + ';">' +
-      '<div style="font-size:13px;line-height:1.6;color:' + C.tdMain + ';">' + escapeHtml(resumen.trim()).replace(/\n/g, '<br>') + '</div>' +
+      '<div style="font-size:13px;line-height:1.6;color:' + C.tdMain + ';">' +
+      escapeHtml(resumen.trim())
+        .replace(/\n/g, '<br>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>') +
+      '</div>' +
       '</td></tr>'
     : '';
 
