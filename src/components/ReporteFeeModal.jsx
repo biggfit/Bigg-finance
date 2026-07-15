@@ -570,7 +570,7 @@ function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef, resumen 
     // KPIs
     '<tr><td class="em-kpi" style="background:' + C.kpiBg + ';border-bottom:1px solid ' + C.kpiBorder + ';">' +
     '<table class="kpi-row" width="100%" cellpadding="0" cellspacing="0"><tr>' +
-    kpiL('Pagan Fee', pagando.length + ' / ' + abiertas.length, '#fff',
+    kpiL('Factura Fee', pagando.length + ' / ' + abiertas.length, '#fff',
       [['ARG', regPag(rowsARG)], ['LATAM', regPag(rowsLATAM)], ['Europa', regPag(rowsEU)]]) +
     kpiL('Fee ' + mesLabel, fmtU(totMes), '#fff',
       [['ARG', fmtU(regFee(rowsARG))], ['LATAM', fmtU(regFee(rowsLATAM))], ['Europa', fmtU(regFee(rowsEU))]]) +
@@ -881,7 +881,7 @@ export default function ReporteFeeModal({ franchises, comps, saldoInicial = {}, 
 
           const kpis = [
             {
-              label: "Pagan fee",
+              label: "Factura fee",
               value: `${pagando.length} / ${abiertas.length}`,
               sub: null,
               breakdown: [
