@@ -209,14 +209,22 @@ export function computeSaldoPrevMes(frId, y, m, comps, saldoInicial, frCurrency 
  *   TabDeudores lo usa para mostrar el estado "a hoy". TabResumenMes no lo usa
  *   (proyecta el mes completo hasta su último día).
  */
-export function computeSaldoReal(frId, y, m, comps, saldoInicial, frCurrency = null, filterCurrency = null, empresa = null, cutoff = null) {
+/**
+ * graceUntil (DD/MM/YYYY): si se pasa, además de lo del mes (m/y) suma los PAGO
+ * (no PAGO_PAUTA, ese ya liquida Pauta aparte) del mes SIGUIENTE fechados hasta
+ * esa fecha — para reflejar cobros ya recibidos aunque su fecha caiga después
+ * del cierre del período (ej: Reporte de Fee, "deuda a la fecha de envío").
+ */
+export function computeSaldoReal(frId, y, m, comps, saldoInicial, frCurrency = null, filterCurrency = null, empresa = null, cutoff = null, graceUntil = null) {
   const key = String(frId);
   const si  = getSaldoInicial(saldoInicial, key, empresa, frCurrency, filterCurrency);
   const { mesInicio, mesFin } = monthRange(m, y);
+  const nextRange = graceUntil ? monthRange(m === 11 ? 0 : m + 1, m === 11 ? y + 1 : y) : null;
 
   let fAnt = 0, ncAnt = 0, pAnt = 0, ppAnt = 0, eAnt = 0;
   let fMes = 0, ncMes = 0, pMes = 0, ppMes = 0, eMes = 0;
   let fPautaMes = 0;
+  let pGracia = 0;
 
   for (const c of (comps[key] ?? [])) {
     if (cutoff !== null && cmpDate(c.date, cutoff) > 0) continue;
@@ -227,7 +235,12 @@ export function computeSaldoReal(frId, y, m, comps, saldoInicial, frCurrency = n
     const t         = c.type ?? "";
     const beforeMes = cmpDate(c.date, mesInicio) < 0;
     const enMes     = !beforeMes && cmpDate(c.date, mesFin) <= 0;
-    if (!beforeMes && !enMes) continue;
+    if (!beforeMes && !enMes) {
+      if (nextRange && t === "PAGO" && cmpDate(c.date, nextRange.mesInicio) >= 0 && cmpDate(c.date, graceUntil) <= 0) {
+        pGracia += amt;
+      }
+      continue;
+    }
 
     if      (t.startsWith("FACTURA|"))                           { if (enMes) { fMes += amt; if (t === "FACTURA|PAUTA") fPautaMes += amt; } else fAnt += amt; }
     else if (t.startsWith("NC|") || t.startsWith("FC_RECIBIDA|")) { if (enMes) ncMes += amt; else ncAnt += amt; }
@@ -237,7 +250,7 @@ export function computeSaldoReal(frId, y, m, comps, saldoInicial, frCurrency = n
   }
 
   const saldoAnt = si + fAnt - ncAnt - pAnt - ppAnt + eAnt;
-  return saldoAnt + fMes - ncMes - pMes - Math.min(ppMes, fPautaMes) + eMes;
+  return saldoAnt + fMes - ncMes - pMes - Math.min(ppMes, fPautaMes) + eMes - pGracia;
 }
 
 export function computeSaldoRealPrevMes(frId, y, m, comps, saldoInicial, frCurrency = null, filterCurrency = null, empresa = null) {
@@ -289,7 +302,7 @@ export function computePautaPendiente(frId, comps, upToYear, upToMonth, frCurren
 
   let total = 0;
   for (const pago of pagos) {
-    const match = factsPool.find(f => !f._used && Math.abs(f.amount - pago.amount) < 0.01);
+    const match = factsPool.find(f => !f._used && Math.round(Math.abs(f.amount - pago.amount) * 100) <= 1);
     if (match) { match._used = true; }
     else { total += pago.amount; }
   }

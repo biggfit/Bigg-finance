@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
 import { MONTHS, AVAILABLE_YEARS, makeType, computeSaldoReal, countryToCurrency } from "../lib/helpers";
+import { todayDmy } from "../data/franchisor";
 import { sendMailFr } from "../lib/sheetsApi";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -106,8 +107,11 @@ function buildRows(franchises, comps, year, month, tiposCambio = {}, saldoInicia
     const varPct      = feePrev_USD > 0 ? ((feeMes_USD - feePrev_USD) / feePrev_USD) * 100 : null;
 
     // ── DSO nominal en meses: Deuda total (ÑAKO + BIGG FIT) / Promedio mensual YTD ──
-    const saldoNako = computeSaldoReal(fr.id, year, month, comps, saldoInicial, feeCurrency, null, "ÑAKO SRL");
-    const saldoBigg = computeSaldoReal(fr.id, year, month, comps, saldoInicial, feeCurrency, null, "BIGG FIT LLC");
+    // graceUntil = hoy: los PAGO ya recibidos (aunque fechados el mes siguiente) descuentan
+    // la deuda del período — "deuda a la fecha de envío", no "deuda al cierre del mes".
+    const hoy = todayDmy();
+    const saldoNako = computeSaldoReal(fr.id, year, month, comps, saldoInicial, feeCurrency, null, "ÑAKO SRL", null, hoy);
+    const saldoBigg = computeSaldoReal(fr.id, year, month, comps, saldoInicial, feeCurrency, null, "BIGG FIT LLC", null, hoy);
     const deuda_USD = Math.max(0, feeToUSD(saldoNako + saldoBigg, feeCurrency, tc));
     const mesesYTD      = month + 1; // Ene=0 → 1 mes, May=4 → 5 meses
     const feePromedio   = feeYTD_USD > 0 ? feeYTD_USD / mesesYTD : feePrev_USD;
