@@ -736,32 +736,34 @@ const _r2 = n => Math.round((Number(n) || 0) * 100);   // monto a centavos, para
 //     fecha ±ventana, todavía sin atar a una línea de banco) → se le ESTAMPA el `extracto_saldo` del banco
 //     (queda conciliado; futuras re-subidas lo reconocen). NO crea fila, NO pide ignorar.
 //  3) Si no hay match → crea la pendiente (como antes).
-//  dryRun=true → devuelve el PLAN {matched, created, dups} sin escribir nada (para revisar antes).
-export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "ARS", lineas = [], onProgress, dryRun = false, matchWindowDias = 3 } = {}) {
+export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "ARS", lineas = [], onProgress } = {}) {
+  const VENTANA_DIAS = 3;   // tolerancia de fecha para el auto-match (banco liquida ±días de la operación)
   const todos = await get("nb_movimientos", { sociedad });
   const dela  = todos.filter(m => String(m.cuenta_bancaria) === String(cuenta_bancaria));
-  const seen  = new Set(dela.map(_extractoRef).filter(Boolean));
+  const seen  = new Set(dela.map(_extractoRef).filter(Boolean));   // dedup vs DB + dentro del archivo
   // Candidatos a auto-match: cargados por un humano/otro módulo, sin atar a línea de banco, no ignorados.
   // Se excluye origen="extracto" (esas YA son líneas de banco; las rotas sin ref se sanean aparte, no acá).
-  const disponibles = dela.filter(m => !_extractoRef(m) && !esIgnorado(m) && m.origen !== "extracto");
+  // Precomputo ts/centavos una vez por candidato (evita re-parsear fechas L×C veces en el loop).
+  const disponibles = dela
+    .filter(m => !_extractoRef(m) && !esIgnorado(m) && m.origen !== "extracto")
+    .map(m => ({ mov: m, ts: +new Date(m.fecha), cents: _r2(m.monto) }));
   const usados = new Set();
-  const diffDias = (a, b) => Math.abs((new Date(a) - new Date(b)) / 86400000);
   const buscarMatch = (l) => {
+    const lts = +new Date(l.fecha), lcents = _r2(l.monto);
     let best = null, bestD = Infinity;
-    for (const m of disponibles) {
-      if (usados.has(m.id) || _r2(m.monto) !== _r2(l.monto)) continue;
-      const d = diffDias(m.fecha, l.fecha);
-      if (d <= matchWindowDias && d < bestD) { best = m; bestD = d; }
+    for (const c of disponibles) {
+      if (usados.has(c.mov.id) || c.cents !== lcents) continue;
+      const d = Math.abs((c.ts - lts) / 86400000);
+      if (d <= VENTANA_DIAS && d < bestD) { best = c.mov; bestD = d; }
     }
     return best;
   };
 
   const nuevas = [], matches = []; let dups = 0;
-  const seenFile = new Set();   // evita duplicar filas repetidas DENTRO del mismo archivo
   for (const l of lineas) {
     const ref = String(l.saldo);   // identidad estable = saldo (NO fecha: el banco re-fecha entre descargas)
-    if (seen.has(ref) || seenFile.has(ref)) { dups++; continue; }
-    seenFile.add(ref);
+    if (seen.has(ref)) { dups++; continue; }
+    seen.add(ref);
     const m = buscarMatch(l);
     if (m) { usados.add(m.id); matches.push({ mov: m, ref, linea: l }); continue; }
     const p = l.propuesta || {};
@@ -780,14 +782,6 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
       created_at: new Date().toISOString(),
     }});
   }
-
-  if (dryRun) return {
-    dryRun: true, dups,
-    creados: nuevas.length, matched: matches.length,
-    matchDetalle: matches.map(x => ({ monto: x.mov.monto, fecha: x.linea.fecha, banco: x.linea.descripcion || "",
-      contra: `${x.mov.origen}·${x.mov.concepto || x.mov.documento_id || x.mov.id}` })),
-    createDetalle: nuevas.map(x => ({ monto: x.row.monto, fecha: x.row.fecha, concepto: x.row.concepto })),
-  };
 
   // 1) Estampar la ref del banco en los movimientos ya cargados que matchearon (quedan conciliados).
   let matcheados = 0;
