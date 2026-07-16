@@ -721,24 +721,49 @@ export const esCuentaCredito = c => (c?.tipo ?? "").toLowerCase() === "tarjeta";
 // Ingesta: crea movimientos pendientes con dedupe (no duplica al re-subir).
 const _saldoDe = m => { const x = String(m.referencia || "").match(/saldo=([^;]*)/); return x ? x[1] : ""; };
 
-export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "ARS", lineas = [], onProgress } = {}) {
+// Identidad ÚNICA de una línea del extracto = el SALDO (running balance). NO se incluye la fecha:
+// el banco RE-FECHA una misma línea entre descargas (fecha valor vs operación, pendiente vs confirmada)
+// → si la clave llevara fecha, la re-descarga duplicaría. El saldo es el cursor propio del banco: estable.
+// Vive en la columna propia `extracto_saldo` (NO en `referencia`) → contabilizar una línea
+// (aceptarMovimiento/imputarPagoFC, que reescriben `referencia`) ya NO borra la clave de dedup.
+// Fallback para filas viejas: el `saldo=` que quedó embebido en `referencia`.
+const _extractoRef = m => String(m.extracto_saldo || "") || String(_saldoDe(m) || "");
+const _r2 = n => Math.round((Number(n) || 0) * 100);   // monto a centavos, para comparar sin ruido de float
+
+// Ingesta del extracto = "matchear o crear" (ya NO "crear o ignorar"):
+//  1) DEDUP: si la línea del banco ya existe (mismo `saldo` en `extracto_saldo`) → se saltea.
+//  2) AUTO-MATCH: si hay un movimiento YA cargado por el tesorero/otro módulo (mismo monto + cuenta +
+//     fecha ±ventana, todavía sin atar a una línea de banco) → se le ESTAMPA el `extracto_saldo` del banco
+//     (queda conciliado; futuras re-subidas lo reconocen). NO crea fila, NO pide ignorar.
+//  3) Si no hay match → crea la pendiente (como antes).
+//  dryRun=true → devuelve el PLAN {matched, created, dups} sin escribir nada (para revisar antes).
+export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "ARS", lineas = [], onProgress, dryRun = false, matchWindowDias = 3 } = {}) {
   const todos = await get("nb_movimientos", { sociedad });
-  // dedupe contra TODOS los movimientos de la cuenta (pendientes, aceptados, splits de franquicia).
-  // Clave por SALDO del extracto (running balance, único por línea) → robusta a edición de
-  // monto y a splits; fallback a fecha|monto cuando no hay saldo.
-  const keyOf = (fecha, monto, saldo) => saldo ? `${fecha}|${saldo}` : `${fecha}|${Number(monto) || 0}`;
-  const existentes = todos.filter(m => String(m.cuenta_bancaria) === String(cuenta_bancaria));
-  const seen = new Set(existentes.map(m => keyOf(m.fecha, m.monto, _saldoDe(m))));
-  let dups = 0;
-  // 1) Dedup del lado cliente + armado de filas. 2) Escritura en LOTE (add_batch, un viaje por
-  // chunk) en vez de 1 POST por fila: mucho más rápido y resiliente — un extracto grande no se
-  // corta a la mitad si el GAS se pone lento o la pestaña pasa a segundo plano. El dedup por clave
-  // estable hace la operación idempotente: reintentar/re-subir solo completa lo que falta.
-  const nuevas = [];
+  const dela  = todos.filter(m => String(m.cuenta_bancaria) === String(cuenta_bancaria));
+  const seen  = new Set(dela.map(_extractoRef).filter(Boolean));
+  // Candidatos a auto-match: cargados por un humano/otro módulo, sin atar a línea de banco, no ignorados.
+  // Se excluye origen="extracto" (esas YA son líneas de banco; las rotas sin ref se sanean aparte, no acá).
+  const disponibles = dela.filter(m => !_extractoRef(m) && !esIgnorado(m) && m.origen !== "extracto");
+  const usados = new Set();
+  const diffDias = (a, b) => Math.abs((new Date(a) - new Date(b)) / 86400000);
+  const buscarMatch = (l) => {
+    let best = null, bestD = Infinity;
+    for (const m of disponibles) {
+      if (usados.has(m.id) || _r2(m.monto) !== _r2(l.monto)) continue;
+      const d = diffDias(m.fecha, l.fecha);
+      if (d <= matchWindowDias && d < bestD) { best = m; bestD = d; }
+    }
+    return best;
+  };
+
+  const nuevas = [], matches = []; let dups = 0;
+  const seenFile = new Set();   // evita duplicar filas repetidas DENTRO del mismo archivo
   for (const l of lineas) {
-    const k = keyOf(l.fecha, l.monto, l.saldo);
-    if (seen.has(k)) { dups++; continue; }
-    seen.add(k);   // evita duplicar filas repetidas DENTRO del mismo archivo
+    const ref = String(l.saldo);   // identidad estable = saldo (NO fecha: el banco re-fecha entre descargas)
+    if (seen.has(ref) || seenFile.has(ref)) { dups++; continue; }
+    seenFile.add(ref);
+    const m = buscarMatch(l);
+    if (m) { usados.add(m.id); matches.push({ mov: m, ref, linea: l }); continue; }
     const p = l.propuesta || {};
     nuevas.push({ linea: l, row: {
       id: newId("EXT"), sociedad, fecha: l.fecha,
@@ -749,13 +774,30 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
       iva_rate: Number(l.iva_rate) || 0, iva_monto: Number(l.iva_monto) || 0,
       concepto: l.descripcion || "",
       contraparte_id: "", contraparte_nombre: l.ley1 || l.contraparte || "",   // razón social del banco (Leyenda 1)
+      extracto_saldo: ref,   // ← clave de dedup en columna propia (inmune a que se reescriba `referencia`)
       referencia: `cod=${l.codigoConcepto || ""};tipo=${p.tipo || ""};regla=${p.regla_id || ""};prov=${p.proveedor_id || ""};fr=${p.franquicia_id || ""};frops=${(p.franquicia_opciones || []).join("|")};plan=${p.plan_id || ""};pcuota=${p.cuota_row_id || ""};op=${l.nro_operacion || ""};cuit=${l.ley2 || l.cuit || ""};saldo=${l.saldo || ""}`,
       origen: "extracto",
       created_at: new Date().toISOString(),
     }});
   }
+
+  if (dryRun) return {
+    dryRun: true, dups,
+    creados: nuevas.length, matched: matches.length,
+    matchDetalle: matches.map(x => ({ monto: x.mov.monto, fecha: x.linea.fecha, banco: x.linea.descripcion || "",
+      contra: `${x.mov.origen}·${x.mov.concepto || x.mov.documento_id || x.mov.id}` })),
+    createDetalle: nuevas.map(x => ({ monto: x.row.monto, fecha: x.row.fecha, concepto: x.row.concepto })),
+  };
+
+  // 1) Estampar la ref del banco en los movimientos ya cargados que matchearon (quedan conciliados).
+  let matcheados = 0;
+  for (const x of matches) {
+    try { await post({ action: "edit", sheet: "nb_movimientos", id: x.mov.id, patch: { extracto_saldo: x.ref } }); matcheados++; }
+    catch (e) { /* si falla el match, la línea NO se creó → se puede reintentar re-subiendo */ }
+  }
+  // 2) Crear las líneas nuevas en LOTE (resiliente a GAS lento / pestaña en background).
   let creados = 0;
-  const fallidas = [];   // líneas cuyo lote falló → se devuelven para reintentar solo esas
+  const fallidas = [];
   const CHUNK = 100;
   for (let i = 0; i < nuevas.length; i += CHUNK) {
     const grupo = nuevas.slice(i, i + CHUNK);
@@ -767,7 +809,7 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
     }
     if (onProgress) onProgress(Math.min(i + CHUNK, nuevas.length), nuevas.length);
   }
-  return { creados, dups, errores: fallidas.length, fallidas };
+  return { creados, matcheados, dups, errores: fallidas.length, fallidas };
 }
 
 // Trae los movimientos del extracto que faltan conciliar.

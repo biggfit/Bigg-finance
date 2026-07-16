@@ -468,9 +468,9 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         lineas = clasificarLineas(data.lineas, reglas, proveedores, ctx);
       }
       setProgreso({ done: 0, total: lineas.length });
-      const { creados, dups, errores, fallidas } = await ingestarExtracto({ sociedad, cuenta_bancaria: cuentaTab, moneda, lineas,
+      const { creados, matcheados = 0, dups, errores, fallidas } = await ingestarExtracto({ sociedad, cuenta_bancaria: cuentaTab, moneda, lineas,
         onProgress: (done, total) => setProgreso({ done, total }) });
-      setMsg(`✓ ${creados} nuevos${dups ? ` · ${dups} duplicados` : ""}${errores ? ` · ⚠ ${errores} con error` : ""}.`);
+      setMsg(`✓ ${creados} nuevos${matcheados ? ` · ${matcheados} conciliados con lo ya cargado` : ""}${dups ? ` · ${dups} ya estaban` : ""}${errores ? ` · ⚠ ${errores} con error` : ""}.`);
       setErroresIngesta(errores ? { lineas: fallidas, cuenta_bancaria: cuentaTab, moneda } : null);
       await recargar();
     } catch (e) { setMsg("Error: " + e.message); }
