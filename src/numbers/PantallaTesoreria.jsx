@@ -1070,7 +1070,9 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, onLimpiarFi
                   </td>
                   <td style={{ padding:"10px 14px", fontSize:12, color:T.muted }}>{nombre}</td>
                   <td style={{ padding:"10px 14px", fontSize:13, color:T.text }}>{m.concepto ?? "—"}</td>
-                  <td style={{ padding:"10px 14px", fontSize:11, color:T.muted }}>{m.cuenta ?? "—"}</td>
+                  <td style={{ padding:"10px 14px", fontSize:11, color:T.muted }}>
+                    {String(m.cuenta_contable || m.cuenta || "").replace(/^CUENTA_/, "") || "—"}
+                  </td>
                   <td style={{ padding:"10px 14px", fontSize:11, color:T.muted }}>
                     {m.centro_costo ? (ccMap[m.centro_costo] ?? m.centro_costo) : "—"}
                   </td>
