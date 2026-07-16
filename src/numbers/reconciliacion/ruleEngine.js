@@ -88,30 +88,11 @@ export function reconocerCuota(linea, cuotasPendientes, moneda) {
     const score = (byPlan ? 0 : 1e9) + diff;         // prioriza match por nº de plan
     if (!best || score < best.score) best = { c, esTardio: dTT < dT, byPlan, score };
   }
-  // Fallback por MONTO EXACTO: los débitos automáticos AFIP de Galicia no traen ni el
-  // Nº de plan en la glosa ni el CUIT en la leyenda → nunca llegan al match de arriba.
-  // Pero las cuotas de AFIP tienen montos distintos y fijos, así que el importe exacto
-  // identifica el plan. Solo si matchea UN ÚNICO plan (si dos planes tuvieran la misma
-  // cuota es ambiguo → no adivina). accion "escala" → siempre lo confirma el humano.
-  if (!best) {
-    const hits = cuotasPendientes.filter(c =>
-      (!moneda || !c.moneda || c.moneda === moneda) &&
-      (Math.abs(monto - (Number(c.total) || 0)) <= 1 ||
-       ((Number(c.total_tardio) || 0) > 0 && Math.abs(monto - Number(c.total_tardio)) <= 1)));
-    const planes = [...new Set(hits.map(c => c.plan_id))];
-    if (planes.length === 1 && hits.length) {
-      const c = hits.slice().sort((a, b) => (Number(a.nro_cuota) || 0) - (Number(b.nro_cuota) || 0))[0];
-      const esTardio = (Number(c.total_tardio) || 0) > 0 && Math.abs(monto - Number(c.total_tardio)) < Math.abs(monto - (Number(c.total) || 0));
-      return {
-        regla_id: "", tipo: "cuota_financiacion",
-        cuenta_contable: "", centro_costo: "", cuenta_destino: "", proveedor_id: "",
-        plan_id: c.plan_id, nro_cuota: c.nro_cuota, cuota_row_id: c.row_id, esTardio,
-        accion: "escala",
-        motivo: `Cuota ${c.nro_cuota} · ${c.acreedor_nombre || c.nro_plan || "plan"} (por monto)`,
-        confianza: "media",
-      };
-    }
-  }
+  // SIN fallback por monto: sólo se propone una cuota si hay señal real (Nº de plan en la glosa
+  // o CUIT en la leyenda). El match por importe suelto era peligroso — un débito ajeno (ej. IIBB
+  // del banco de $24.078) coincidía con una cuota de plan de $24.077,83 y proponía consumirla,
+  // desordenando el plan. Decisión del usuario: preferir SIN propuesta antes que una que consuma
+  // una cuota por error. Si un débito de cuota no trae plan/CUIT, se imputa a mano desde el ⋯.
   if (!best) return null;
   const { c, esTardio, byPlan } = best;
   return {
