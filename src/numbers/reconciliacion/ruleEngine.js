@@ -127,14 +127,19 @@ export function clasificarLinea(linea, reglas, proveedores = [], ctx = {}) {
 
   for (const r of aplicables) {
     if (matchRegla(r, linea)) {
+      // Regla que reconoce un CLIENTE (ej. cobro recurrente de Gympass por glosa) → el crédito
+      // es un cobro contra la factura de ese cliente. Siempre escala (el humano elige la/s FC,
+      // los montos varían mes a mes). Espeja a `proveedor_id` (que reconoce proveedor → pago).
+      const cliente_id = r.cliente_id || "";
       return {
         regla_id: r.id,
-        tipo: r.tipo || "",
+        tipo: r.tipo || (cliente_id ? "cobro_cliente" : ""),
         cuenta_contable: r.cuenta_contable || "",
         centro_costo: r.centro_costo || "",
         cuenta_destino: r.cuenta_destino || "",
         proveedor_id: r.proveedor_id || "",
-        accion: r.accion || "auto",
+        cliente_id,
+        accion: cliente_id ? "escala" : (r.accion || "auto"),
         motivo: `Regla ${r.id} (${r.match_tipo}: ${r.match_valor})`,
         confianza: "alta",
       };

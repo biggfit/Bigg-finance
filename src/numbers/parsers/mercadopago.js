@@ -1,17 +1,5 @@
 import * as XLSX from "xlsx";
-import { toISO } from "./galicia";   // normalización de fecha (serial Excel / ISO / D-M-Y) compartida
-
-// Número robusto: si ya es number lo devuelve; si es texto acepta formato AR (miles con punto,
-// decimal con coma) o formato con punto decimal. Vacío → 0.
-function num(v) {
-  if (typeof v === "number") return v;
-  const s = String(v ?? "").trim();
-  if (!s) return 0;
-  // Si tiene coma, es decimal AR → sacar puntos de miles y cambiar coma por punto.
-  // Si no, dejar el punto como decimal.
-  const norm = s.includes(",") ? s.replace(/\./g, "").replace(",", ".") : s;
-  return Number(norm.replace(/[^0-9.\-]/g, "")) || 0;
-}
+import { toISO, num } from "./galicia";   // fecha + número robusto (compartidos entre parsers)
 
 const norm = s => String(s ?? "").trim().toLowerCase();
 

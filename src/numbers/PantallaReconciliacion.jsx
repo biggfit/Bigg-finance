@@ -8,13 +8,16 @@ import {
   appendBancoRegla, fetchIngresos, imputarCobroIngreso,
   fetchFinanciaciones, imputarCuota, pagarTarjeta, esCuentaCredito, fetchMovTesoreria,
   fetchIntercoData, pendientesInterco, reconocerVentaInterco, normCuit,
+  pendientesIntercoRecibir, declararIntercoRecibida, intercoMatchCandidato,
 } from "../lib/numbersApi";
 import { BancoReglaModal } from "./PantallaMaestros";
 import MundoTarjeta from "./reconciliacion/MundoTarjeta";
 import { fetchAll } from "../lib/sheetsApi";
+import { groupCentrosCosto } from "./formUtils";
 import { computeSaldoReal } from "../lib/helpers";
 import { parseGalicia } from "./parsers/galicia";
 import { parseInterAudi } from "./parsers/interaudi";
+import { parseCaixa } from "./parsers/caixa";
 import { parseMercadoPago } from "./parsers/mercadopago";
 import { clasificarLineas, clasificarLinea, reconocerCuota } from "./reconciliacion/ruleEngine";
 
@@ -61,6 +64,11 @@ const fmt = n => (Number(n) || 0).toLocaleString("es-AR", { minimumFractionDigit
 const dedupById = arr => { const seen = new Set(); return (arr || []).filter(x => x && !seen.has(x.id) && seen.add(x.id)); };
 const MENU_ITEM = { display: "block", width: "100%", textAlign: "left", padding: "9px 12px", fontSize: 11, border: "none", borderBottom: "1px solid #f1f5f9", background: "#fff", color: "#111827", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" };
 const parseMeta = ref => Object.fromEntries(String(ref || "").split(";").map(kv => kv.split("=")).filter(a => a.length === 2));
+// Estilos compartidos de los modales interco (Reconocer / Declarar recibida).
+const MODAL_INP = { width: "100%", background: "#eceff3", border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "9px 12px", fontSize: 13, color: T.text, fontFamily: T.font, outline: "none", boxSizing: "border-box" };
+const MODAL_LBL = { fontSize: 12, color: T.muted, fontWeight: 600, display: "block", marginBottom: 5 };
+// El carril Banco concilia extractos → solo cuentas tipo "Banco" (cajas/inversión/tarjeta no tienen extracto).
+const esCuentaBanco = c => String(c?.tipo || "").toLowerCase() === "banco";
 const sel = { fontSize: 11, padding: "4px 6px", border: "1px solid #94a3b8", borderRadius: 6, fontFamily: T.font, color: "#111827", background: "#f8fafc" };
 // Campo imputado: VERDE si está completo (no tocar) / ÁMBAR si falta elegir. Ancho fijo → columnas alineadas.
 const fld = (lleno, w = 150) => ({ fontSize: 11, padding: "4px 6px", borderRadius: 6, fontFamily: T.font, color: "#111827", width: w, boxSizing: "border-box",
@@ -90,8 +98,7 @@ function ReconocerIntercoModal({ pend, sociedad, cuentas = [], centros = [], onC
     } catch (e) { setBusy(false); alert("No se pudo reconocer: " + (e?.message || e)); }
   };
 
-  const inp = { width: "100%", background: "#eceff3", border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "9px 12px", fontSize: 13, color: T.text, fontFamily: T.font, outline: "none", boxSizing: "border-box" };
-  const lbl = { fontSize: 12, color: T.muted, fontWeight: 600, display: "block", marginBottom: 5 };
+  const inp = MODAL_INP, lbl = MODAL_LBL;
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={onClose}>
@@ -123,6 +130,68 @@ function ReconocerIntercoModal({ pend, sociedad, cuentas = [], centros = [], onC
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
             <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${T.cardBorder}`, borderRadius: 999, padding: "8px 18px", fontSize: 13, fontWeight: 700, color: T.muted, cursor: "pointer", fontFamily: T.font }}>Cancelar</button>
             <button onClick={guardar} disabled={!canSave} style={{ background: T.accent, border: "none", borderRadius: 999, padding: "8px 20px", fontSize: 13, fontWeight: 800, color: "#000", cursor: canSave ? "pointer" : "default", opacity: canSave ? 1 : .5, fontFamily: T.font }}>{busy ? "Guardando…" : "Reconocer y registrar compra"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Modal para DECLARAR una interco recibida (lado receptor): la plata que entró a mi banco/caja → fondeo,
+// sin P&L, sin posición nueva. Costo de clearing opcional → Perdidas Financieras (P&L). Marca la pata parkeada.
+function DeclararRecibidaModal({ pend, sociedad, cuentas = [], onClose, onDone }) {
+  const ctaHint = (cuentas || []).find(c => String(c.id) === String(pend?.cuenta_hint));
+  const [cuenta, setCuenta] = useState(ctaHint ? String(ctaHint.id) : "");
+  const [monto, setMonto]   = useState("");
+  const [fecha, setFecha]   = useState(new Date().toISOString().slice(0, 10));
+  const [costo, setCosto]   = useState("");
+  const [busy, setBusy]     = useState(false);
+  const ctas = (cuentas || []).slice().sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
+  const monedaCta = ctas.find(c => String(c.id) === String(cuenta))?.moneda || "EUR";
+  const canSave = cuenta && Number(monto) > 0 && !busy;
+
+  const guardar = async () => {
+    if (!canSave) return;
+    setBusy(true);
+    try {
+      await declararIntercoRecibida({
+        sociedad, cuenta_bancaria: cuenta, fecha,
+        origen_sociedad: pend.origen_sociedad, origen_nombre: pend.origen_nombre,
+        monto: Number(monto), moneda: monedaCta, costo: Number(costo) || 0, parked_leg_id: pend.id,
+      });
+      await onDone();
+    } catch (e) { setBusy(false); alert("No se pudo declarar: " + (e?.message || e)); }
+  };
+
+  const inp = MODAL_INP, lbl = MODAL_LBL;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#f1f5f9", borderRadius: 16, width: 480, maxWidth: "97vw", overflow: "hidden", boxShadow: T.shadowMd }}>
+        <div style={{ background: T.accentDark, padding: "16px 22px" }}>
+          <div style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>Declarar interco recibida</div>
+          <div style={{ fontSize: 12, color: "rgba(255,255,255,.6)", marginTop: 2 }}>
+            {pend?.origen_nombre} parkeó {pend?.moneda} {Math.round(pend?.monto || 0).toLocaleString("es-AR")}{pend?.fecha ? ` · ${pend.fecha}` : ""}
+          </div>
+        </div>
+        <div style={{ padding: 22, display: "flex", flexDirection: "column", gap: 14 }}>
+          <div><label style={lbl}>Cuenta / caja donde entró *</label>
+            <select value={cuenta} onChange={e => setCuenta(e.target.value)} style={inp}>
+              <option value="">— Elegí la cuenta —</option>
+              {ctas.map(c => <option key={c.id} value={c.id}>{c.nombre} · {c.moneda}</option>)}
+            </select></div>
+          <div style={{ display: "flex", gap: 12 }}>
+            <div style={{ flex: 1 }}><label style={lbl}>Monto recibido ({monedaCta}) *</label>
+              <input value={monto} onChange={e => setMonto(e.target.value)} style={inp} placeholder="lo que entró" /></div>
+            <div style={{ flex: 1 }}><label style={lbl}>Fecha</label>
+              <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={inp} /></div>
+          </div>
+          <div><label style={lbl}>Costo de transferencia / clearing (opcional)</label>
+            <input value={costo} onChange={e => setCosto(e.target.value)} style={inp} placeholder="si la financiera te lo informa → P&L" /></div>
+          <div style={{ fontSize: 11.5, color: T.muted }}>Se registra el ingreso como <b>fondeo</b> en tu caja (sin P&L). La deuda queda en USD (la pata que mandó el núcleo); el TC no se necesita.</div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+            <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${T.cardBorder}`, borderRadius: 999, padding: "8px 18px", fontSize: 13, fontWeight: 700, color: T.muted, cursor: "pointer", fontFamily: T.font }}>Cancelar</button>
+            <button onClick={guardar} disabled={!canSave} style={{ background: T.accent, border: "none", borderRadius: 999, padding: "8px 20px", fontSize: 13, fontWeight: 800, color: "#000", cursor: canSave ? "pointer" : "default", opacity: canSave ? 1 : .5, fontFamily: T.font }}>{busy ? "Guardando…" : "Declarar recibida"}</button>
           </div>
         </div>
       </div>
@@ -170,19 +239,22 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     return () => document.removeEventListener("click", h);
   }, [menuFor]);
 
-  // Avisa al sidebar el conteo de pendientes (badge en vivo)
-  useEffect(() => { onPendientes?.(pendientes.length); }, [pendientes, onPendientes]);
 
   const [intercoData, setIntercoData] = useState({ movs: [], comps: [], centros: [], clientes: [], sociedades: [] });  // fuentes interco (read-only)
   const [reconocerFor, setReconocerFor] = useState(null);  // pendiente interco que se está reconociendo
-  // `mundo` (banco | interco) viene por prop desde el sidebar (dropdown en Conciliación).
-  // Carga on-demand: fetchIntercoData trae TODAS las sociedades (payload pesado), así que solo se
-  // dispara cuando el usuario entra al carril Interco (no en cada montaje del Banco).
+  // fetchIntercoData trae TODAS las sociedades (payload pesado): lo necesitan tanto Interco (mapa/pendientes)
+  // como Banco (al conciliar una línea interco hay que detectar la pata parkeada de la contraparte,
+  // "matchear o parkear"). No depende de `mundo` → se carga una vez por sociedad, no en cada toggle.
   useEffect(() => {
-    if (mundo !== "interco") return;
     fetchIntercoData().then(d => d && setIntercoData(d)).catch(console.error);
-  }, [mundo]);
+  }, [sociedad]);
   const pendInterco = useMemo(() => pendientesInterco(intercoData, { sociedad }), [intercoData, sociedad]);
+  const pendRecibir = useMemo(() => pendientesIntercoRecibir(intercoData, { sociedad }), [intercoData, sociedad]);
+  // Avisa al sidebar los conteos de pendientes (badge en vivo): Banco (extracto sin conciliar) + Interco
+  // (ventas a reconocer + CC a liquidar ida/vuelta).
+  useEffect(() => { onPendientes?.({ banco: pendientes.length, interco: pendRecibir.length + pendInterco.length }); },
+    [pendientes, pendRecibir, pendInterco, onPendientes]);
+  const [declararFor, setDeclararFor] = useState(null);  // pata parkeada hacia mí que estoy declarando (recibí)
 
   const recargar = async () => {
     setLoading(true);
@@ -204,7 +276,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       const soc = (all || []).filter(c => c.sociedad === sociedad);
       setCuentas(soc);
       // Pestaña inicial = primera cuenta real (las tarjeta se concilian en el mundo Tarjeta).
-      setCuentaTab((soc.find(c => !esCuentaCredito(c)) || soc[0])?.id || "");
+      setCuentaTab((soc.find(esCuentaBanco) || soc[0])?.id || "");
     }).catch(console.error);
     fetchCuentas().then(c => setPlanCuentas(dedupById(c))).catch(console.error);
     fetchCentrosCosto().then(c => setCentros(dedupById(c))).catch(console.error);
@@ -389,8 +461,71 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   }, [ingresos]);
   const cobClienteDe = (mov) => {
     const ed = edits[mov.id] || {};
-    return ed.cob_cli ?? reconocerClienteCobro(mov);   // auto: cliente reconocido por contraparte
+    if (ed.cob_cli != null) return ed.cob_cli;
+    // Cliente de la regla (cli=…, ej. Gympass por glosa) o reconocido por contraparte.
+    return parseMeta(mov.referencia).cli || reconocerClienteCobro(mov);
   };
+  // Anillo de cada sociedad + el de la sociedad activa (para separar transferencia intra-anillo de interco).
+  const anilloDe = useMemo(() => {
+    const m = {}; (sociedades || []).forEach(s => { m[String(s.id)] = String(s.anillo || ""); }); return m;
+  }, [sociedades]);
+  const anilloActivo = anilloDe[String(sociedad)] || "";
+  const mismoAnillo = (socId) => !!anilloActivo && (anilloDe[String(socId)] || "") === anilloActivo;
+  // Sociedades destino para "parkear" una interco (una sola pata): las de OTRO anillo (desde el banco que
+  // estoy contabilizando serían interco). Intra-anillo va por "transferencia entre cuentas" (dos patas).
+  const socInterco = useMemo(() => {
+    return (sociedades || [])
+      .filter(s => String(s.id) !== String(sociedad))
+      .filter(s => !anilloActivo || String(s.anillo || "") !== anilloActivo)
+      .map(s => ({ id: String(s.id), nombre: s.nombre || s.id }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre));
+  }, [sociedades, sociedad, anilloActivo]);
+  const socNombre = (id) => socInterco.find(s => String(s.id) === String(id))?.nombre
+    || (sociedades.find(s => String(s.id) === String(id))?.nombre) || id;
+  // Modo interco (parkear una pata): toggle manual del ⋯, o AUTO por regla de banco (tipo=interco_park).
+  const modoIntercoDe = (mov) => {
+    const ed = edits[mov.id] || {};
+    if (ed.modoInterco !== undefined) return ed.modoInterco;
+    return parseMeta(mov.referencia).tipo === "interco_park";
+  };
+  // Sociedad destino: la elegida a mano, o (si vino por regla) derivada de la cuenta única del otro lado.
+  const intercoSocDe = (mov) => {
+    const ed = edits[mov.id] || {};
+    if (ed.interco_soc != null) return ed.interco_soc;
+    const acc = cuentasAll.find(c => String(c.id) === String(parseMeta(mov.referencia).idest));
+    return acc?.sociedad || "";
+  };
+  // Cuenta destino elegida (hint): la del usuario, la de la regla (idest), o la única de la sociedad.
+  // "matchear o parkear": ¿la contraparte elegida ya parkeó su pata (dirección opuesta)? → cerramos contra ella.
+  const intercoMatchDe = (mov) => intercoMatchCandidato(intercoData, { sociedad, contraparte: intercoSocDe(mov), monto: mov.monto });
+  const intercoAccDe = (mov) => {
+    const ed = edits[mov.id] || {};
+    if (ed.interco_acc != null) return ed.interco_acc;
+    const idest = parseMeta(mov.referencia).idest;
+    if (idest) return idest;
+    const accs = cuentasAll.filter(c => String(c.sociedad) === String(intercoSocDe(mov)));
+    return accs.length === 1 ? String(accs[0].id) : "";
+  };
+  // Modo "interco recibida" (lado receptor, solo créditos): manual desde el ⋯. La plata entró y la
+  // reconozco como fondeo de otra sociedad → caja real, sin P&L, sin posición nueva. Costo financiero opcional.
+  const modoRecvDe = (mov) => !!edits[mov.id]?.modoRecv;
+  const recvSocDe = (mov) => edits[mov.id]?.recv_soc ?? "";
+  // Opciones del <select> de centro de costo, agrupadas: Operaciones por país → HQ → Otros.
+  const centroOptionsEls = useMemo(() => {
+    const { hq, ops, rest } = groupCentrosCosto(centros);   // clasificación hq/ops/rest compartida
+    const porPais = {};
+    for (const c of ops) { const p = c.pais || "Sin país"; (porPais[p] ||= []).push(c); }   // solo el sub-grupo por país es propio de esta pantalla
+    const opt = c => <option key={c.id} value={c.id}>{c.nombre}</option>;
+    return (
+      <>
+        {Object.keys(porPais).sort().map(p => (
+          <optgroup key={p} label={`Operaciones · ${p}`}>{porPais[p].map(opt)}</optgroup>
+        ))}
+        {hq.length > 0 && <optgroup label="HQ">{hq.map(opt)}</optgroup>}
+        {rest.length > 0 && <optgroup label="Otros">{rest.map(opt)}</optgroup>}
+      </>
+    );
+  }, [centros]);
   const cobIdDe = (mov) => {
     const ed = edits[mov.id] || {};
     if (ed.cob_id != null) return ed.cob_id;
@@ -462,8 +597,10 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
           } };
         });
       } else {
-        // Extracto crudo: InterAudi = CSV propio; el resto = Galicia (.xlsx). Clasifica por reglas.
-        const data = /interaudi/i.test(banco) ? await parseInterAudi(file) : await parseGalicia(file);
+        // Extracto crudo: InterAudi = CSV propio; Caixa = .xls/.xlsx propio; el resto = Galicia. Clasifica por reglas.
+        const data = /interaudi/i.test(banco) ? await parseInterAudi(file)
+          : /caixa/i.test(banco) ? await parseCaixa(file)
+          : await parseGalicia(file);
         const ctx = { banco: cta?.banco, sociedad, pais: "", franquicias, sociedades, cuentas: cuentasAll, moneda, cuotasPendientes };
         lineas = clasificarLineas(data.lineas, reglas, proveedores, ctx);
       }
@@ -503,7 +640,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     const porCuit = (meta.cuit && credito)
       ? franquicias.filter(f => f.activa !== false && normCuit(f.cuit) === normCuit(meta.cuit))
       : [];
-    const es = !ed.noFranquicia && (meta.tipo === "cobro_franquicia" || porCuit.length > 0 || !!ed.modoFranquicia);
+    const es = !ed.noFranquicia && !modoIntercoDe(mov) && !modoRecvDe(mov) && (meta.tipo === "cobro_franquicia" || porCuit.length > 0 || !!ed.modoFranquicia);
     if (!es) return { es: false };
     // Dropdown SIEMPRE con TODAS las franquicias activas (para corregir un match errado); se
     // PRESELECCIONA la reconocida (CUIT con match único, o la empacada). Si el CUIT mapea a varias,
@@ -538,6 +675,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     return hit ? hit.id : "";
   };
   const esTransferMov = (mov) => {
+    if (modoIntercoDe(mov) || modoRecvDe(mov)) return false;   // interco (parkear/recibida) tiene prioridad
     if (edits[mov.id]?.noTransfer) return false;   // override: "volver a normal" apaga el modo transferencia bakeado
     const meta = parseMeta(mov.referencia);
     const tipo = meta.tipo || (Number(mov.monto) > 0 ? "ingreso" : "");
@@ -554,7 +692,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   // otros modos (FC/cobro/transfer). Devuelve la financiación y cuota pre-seleccionadas.
   const cuotaState = (mov) => {
     const ed = edits[mov.id] || {};
-    if (ed.noCuota || ed.modoFC || ed.modoCobro || ed.modoTransfer) return { es: false };
+    if (ed.noCuota || ed.modoFC || ed.modoCobro || ed.modoTransfer || modoIntercoDe(mov)) return { es: false };
     const manual = !!ed.modoCuota;
     let auto = null;
     if (!manual) {
@@ -586,7 +724,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   // ¿La fila ya está en otro modo (transfer/franquicia/cuota) o lo detectamos? → FC y cobro ceden.
   const otroModoActivo = (mov) => {
     const ed = edits[mov.id] || {};
-    return ed.modoTransfer || ed.modoFranquicia || ed.modoCuota || esTransferMov(mov) || frState(mov).es || cuotaState(mov).es;
+    return modoIntercoDe(mov) || modoRecvDe(mov) || ed.modoTransfer || ed.modoFranquicia || ed.modoCuota || esTransferMov(mov) || frState(mov).es || cuotaState(mov).es;
   };
   const modoFCde = (mov) => {
     const ed = edits[mov.id] || {};
@@ -603,6 +741,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     if ((Number(mov.monto) || 0) <= 0) return false;   // cobro = crédito
     if (grupoGlosa(mov)) return false;   // FX/AFIP/Tarjeta por glosa → no es cobro de venta
     if (ed.modoCobro !== undefined) return ed.modoCobro;   // toggle explícito del ⋯ (forzar cobro / volver a normal)
+    if (parseMeta(mov.referencia).tipo === "cobro_cliente") return true;   // regla de cliente → cobro contra su factura
     // Mercado Pago: el crédito es venta directa → ingreso rápido (elegí cuenta+centro), no cobro.
     if (esCuentaMP(mov.cuenta_bancaria)) return false;
     // Otros bancos: si YA viene con propuesta (cuenta+centro) es ingreso rápido; sin propuesta,
@@ -614,6 +753,8 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
 
   // ¿La fila está lista para aceptar? (imputación completa).
   const puedeAceptarMov = (mov) => {
+    if (modoIntercoDe(mov)) return !!intercoSocDe(mov);
+    if (modoRecvDe(mov)) return !!recvSocDe(mov);
     if (esTransferMov(mov)) return !!destinoDe(mov);
     const fr = frState(mov);
     const total = Math.abs(Number(mov.monto) || 0);
@@ -638,6 +779,23 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
 
   // Ejecuta la aceptación (asume fila lista). Lanza si el GAS falla.
   const doAceptar = async (mov) => {
+    if (modoIntercoDe(mov)) {
+      const soc = intercoSocDe(mov);
+      const cand = intercoMatchDe(mov);   // si la contraparte ya parkeó → cierro contra ella; si no → parkeo
+      await aceptarMovimiento(mov, { tipo: "interco_park", destino_sociedad: soc, destino_nombre: socNombre(soc),
+        cuenta_destino: intercoAccDe(mov), match_leg_id: cand?.id || "" });
+      setIntercoData(prev => ({ ...prev, movs: (prev.movs || []).map(x => x.id === cand?.id ? { ...x, referencia: "recibida=" + mov.id } : x) }));
+      setPendientes(prev => prev.filter(m => m.id !== mov.id));
+      return;
+    }
+    if (modoRecvDe(mov)) {
+      const soc = recvSocDe(mov);
+      const ed = edits[mov.id] || {};
+      await aceptarMovimiento(mov, { tipo: "interco_recv", origen_sociedad: soc, origen_nombre: socNombre(soc),
+        costo: Number(ed.recv_costo) || 0, costo_centro: ed.recv_costo_centro || "" });
+      setPendientes(prev => prev.filter(m => m.id !== mov.id));
+      return;
+    }
     if (esTransferMov(mov)) {
       const dest = cuentasAll.find(c => String(c.id) === String(destinoDe(mov)));
       await aceptarMovimiento(mov, { tipo: "transferencia_interna", cuenta_destino: destinoDe(mov), interco: esInterco(mov),
@@ -821,6 +979,8 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
 
   // Grupo de "Propuesta" de una fila → para filtrar y aprobar por grupos.
   const grupoDe = (m) => {
+    if (modoIntercoDe(m)) return "Interco";
+    if (modoRecvDe(m)) return "Interco recibida";
     if (esTransferMov(m)) return esInterco(m) ? "Transferencia interco" : "Transferencia propia";
     if (frState(m).es) return "Franquicia";
     const csG = cuotaState(m);
@@ -886,6 +1046,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         if (!p || p.tipo === "sin_clasificar") continue;
         if (p.tipo === "transferencia_interna") {
           next[m.id] = { ...next[m.id], modoTransfer: true, modoFranquicia: false, modoFC: false, modoCobro: false, noFranquicia: true, cuenta_destino: p.cuenta_destino || next[m.id]?.cuenta_destino };
+        } else if (p.tipo === "cobro_cliente" && p.cliente_id) {
+          // Regla de cliente (ej. Gympass) → modo cobro con el cliente pre-seleccionado (la FC la elige el usuario).
+          next[m.id] = { ...next[m.id], modoCobro: true, cob_cli: p.cliente_id, cob_id: undefined, modoTransfer: false, modoFranquicia: false, modoFC: false, noFranquicia: true };
+        } else if (p.tipo === "interco_park") {
+          // Regla interco (ej. Tigre Loco / Wellness) → parkear: sociedad derivada de la cuenta única del otro lado.
+          const acc = (cuentasAll || []).find(c => String(c.id) === String(p.cuenta_destino));
+          next[m.id] = { ...next[m.id], modoInterco: true, interco_soc: acc?.sociedad || "", interco_acc: p.cuenta_destino || "", modoTransfer: false, modoFranquicia: false, modoFC: false, modoCobro: false, noFranquicia: true, noTransfer: true };
         } else if (p.cuenta_contable) {
           next[m.id] = { ...next[m.id], cuenta_contable: p.cuenta_contable, centro_costo: p.centro_costo || next[m.id]?.centro_costo, proveedor_id: p.proveedor_id || next[m.id]?.proveedor_id };
         } else continue;
@@ -950,7 +1117,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
             ) : (
               <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10, overflow: "hidden", boxShadow: T.shadow, maxWidth: 720 }}>
                 {pend.map((p, i) => (
-                  <div key={p.id_comp} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", borderTop: i ? `1px solid ${T.cardBorder}` : "none", fontSize: 13 }}>
+                  <div key={p.id_comp} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", borderTop: i ? `1px solid ${T.cardBorder}` : "none", fontSize: 13, color: T.text }}>
                     <div style={{ flex: 1 }}>
                       <b>{p.vendedorNombre}</b> te vendió <b style={{ color: "#16a34a", fontFamily: T.mono }}>{money(p.total, p.moneda)}</b>
                       <span style={{ color: T.muted }}>{p.nroComp ? ` · ${p.nroComp}` : ""}{p.fecha ? ` · ${p.fecha}` : ""}</span>
@@ -961,6 +1128,52 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                     </button>
                   </div>
                 ))}
+              </div>
+            )}
+            {/* CC interco pendiente de liquidar (ida y vuelta) */}
+            <div style={{ fontSize: 12, color: T.muted, margin: "22px 0 12px" }}>
+              Cuenta corriente interco pendiente de liquidar con otras sociedades <b>(ida y vuelta)</b>. Cada una muestra de qué cuenta/caja salió y a cuál entró. Lo que recibiste en caja → <b>Contabilizar recepción</b>; lo que enviaste se cierra al conciliar tu extracto (Banco).
+            </div>
+            {pendRecibir.length === 0 ? (
+              <div style={{ color: T.muted, fontSize: 13, padding: "8px 4px" }}>No hay interco pendientes de liquidar.</div>
+            ) : (
+              <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10, overflow: "hidden", boxShadow: T.shadow }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, color: T.text }}>
+                  <thead>
+                    <tr style={{ color: T.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em", textAlign: "left", borderBottom: `1px solid ${T.cardBorder}` }}>
+                      <th style={{ padding: "9px 14px", fontWeight: 700 }}>Fecha</th>
+                      <th style={{ padding: "9px 14px", fontWeight: 700 }}>Concepto</th>
+                      <th style={{ padding: "9px 14px", fontWeight: 700 }}>Cuentas</th>
+                      <th style={{ padding: "9px 14px", fontWeight: 700, textAlign: "right" }}>Monto</th>
+                      <th style={{ padding: "9px 14px" }} />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pendRecibir.map((p, i) => {
+                      const ctaNom = id => cuentasAll.find(c => String(c.id) === String(id))?.nombre || (id || "—");
+                      const recibi = p.dir === "recibi";
+                      const de  = recibi ? ctaNom(p.cuenta_otro) : ctaNom(p.cuenta_mia);
+                      const a   = recibi ? ctaNom(p.cuenta_mia)  : ctaNom(p.cuenta_otro);
+                      return (
+                      <tr key={p.id} style={{ borderTop: i ? `1px solid ${T.cardBorder}` : "none" }}>
+                        <td style={{ padding: "11px 14px", color: T.muted, whiteSpace: "nowrap" }}>{p.fecha}</td>
+                        <td style={{ padding: "11px 14px" }}><b>{p.origen_nombre}</b> {recibi ? "te transfirió" : "— le transferiste"}</td>
+                        <td style={{ padding: "11px 14px", fontSize: 11, color: T.muted, whiteSpace: "nowrap" }}>{de} <span style={{ color: T.dim }}>→</span> {a}</td>
+                        <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: T.mono, fontWeight: 700, whiteSpace: "nowrap" }}>{money(p.monto, p.moneda)}</td>
+                        <td style={{ padding: "8px 14px", textAlign: "right", whiteSpace: "nowrap" }}>
+                          {p.mia ? (
+                            <span style={{ fontSize: 11, color: T.dim }}>esperando que {p.origen_nombre} la cierre</span>
+                          ) : recibi ? (
+                            <button onClick={() => setDeclararFor(p)}
+                              style={{ background: T.accent, border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 12.5, fontWeight: 800, color: "#000", cursor: "pointer", fontFamily: T.font }}>
+                              Contabilizar recepción
+                            </button>
+                          ) : <span style={{ fontSize: 11, color: T.dim }}>cerrás desde Banco</span>}
+                        </td>
+                      </tr>
+                    ); })}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>
@@ -989,7 +1202,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
 
       {/* Pestañas por cuenta bancaria (las cuentas-tarjeta viven en el mundo Tarjeta, no acá) */}
       <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
-        {cuentas.filter(c => !esCuentaCredito(c)).map(c => {
+        {cuentas.filter(esCuentaBanco).map(c => {
           const active = c.id === cuentaTab;
           const n = countByCuenta[c.id] || 0;
           return (
@@ -1095,7 +1308,20 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                 const cuotaSt = cuotaState(m);
                 const modoCuota = cuotaSt.es;
                 const cuotaSelObj = modoCuota && cuotaSt.cuotaSel ? cuotasPendientes.find(c => String(c.row_id) === String(cuotaSt.cuotaSel)) : null;
-                const hMatch = (!fr.es && !modoTransfer && !modoFC && !modoCobro && !modoCuota) ? haberesMatch(m) : null;   // débito que coincide con un lote de haberes
+                const modoInterco = modoIntercoDe(m);                  // parkeo interco (una pata): manual ⋯ o auto por regla
+                const intercoSocSel = modoInterco ? intercoSocDe(m) : "";   // evita parseMeta+find por fila en filas normales
+                const intercoAccSel = modoInterco ? intercoAccDe(m) : "";
+                const intercoAccOpts = modoInterco && intercoSocSel ? cuentasAll.filter(c => String(c.sociedad) === String(intercoSocSel)) : [];
+                const intercoMatch = modoInterco && intercoSocSel ? intercoMatchDe(m) : null;   // pata parkeada de la contraparte → cerrar
+                const intercoMatchTxt = intercoMatch ? (() => {
+                  const cAbs = Math.abs(Number(intercoMatch.monto) || 0), mAbs = Math.abs(Number(m.monto) || 0);
+                  const otra = intercoMatch.moneda || "", mia = m.moneda || "";
+                  const tc = (mAbs > 0 && otra !== mia) ? ` · TC impl. ${otra}/${mia} ${(cAbs / mAbs).toFixed(4)}` : "";
+                  return `${otra} ${fmt(cAbs)} (parkeada ${intercoMatch.fecha})${tc}`;
+                })() : "";
+                const modoRecv = modoRecvDe(m);                        // interco recibida (lado receptor, crédito)
+                const recvSocSel = recvSocDe(m);
+                const hMatch = (!fr.es && !modoTransfer && !modoFC && !modoCobro && !modoCuota && !modoInterco && !modoRecv) ? haberesMatch(m) : null;   // débito que coincide con un lote de haberes
                 return (
                   <Fragment key={`${m.id}-${i}`}>
                   <tr style={{ borderBottom: fr.split ? "none" : "1px solid #cbd5e1", background: bg }}>
@@ -1111,7 +1337,23 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                       {Number(m.monto) > 0 ? fmt(total) : ""}
                     </td>
                     <td style={{ padding: "8px 12px" }}>
-                      {fr.es ? (
+                      {modoInterco ? (
+                        <div>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed" }}>{intercoMatch ? "Interco · cerrar circuito" : "Interco · parkear"}</span>
+                          {!intercoSocSel
+                            ? <div style={{ fontSize: 10, color: "#b45309" }}>elegí la sociedad</div>
+                            : intercoMatch
+                              ? <div style={{ fontSize: 10, color: "#16a34a" }}>→ cierra contra {socNombre(intercoSocSel)} · {intercoMatchTxt}</div>
+                              : <div style={{ fontSize: 10, color: T.muted }}>→ parkear a {socNombre(intercoSocSel)} · queda pendiente</div>}
+                        </div>
+                      ) : modoRecv ? (
+                        <div>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed" }}>Interco recibida</span>
+                          {recvSocSel
+                            ? <div style={{ fontSize: 10, color: T.muted }}>de {socNombre(recvSocSel)} · fondeo (sin P&L)</div>
+                            : <div style={{ fontSize: 10, color: "#b45309" }}>elegí la sociedad de origen</div>}
+                        </div>
+                      ) : fr.es ? (
                         <div>
                           <span style={{ fontSize: 11, fontWeight: 700, color: T.text }}>{neg ? "Transferencia a franquicia" : "Cobro franquicia"}</span>
                           {fr.franquiciaSel
@@ -1166,7 +1408,28 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                       )}
                     </td>
                     <td style={{ padding: "8px 4px 8px 12px", minWidth: 220, textAlign: "center" }}>
-                      {modoTransfer ? (
+                      {modoInterco ? (
+                        <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+                          <select value={intercoSocSel} onChange={e => setModo(m.id, { interco_soc: e.target.value, interco_acc: undefined })} style={fld(!!intercoSocSel, 150)}>
+                            <option value="">— sociedad —</option>
+                            {socInterco.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+                          </select>
+                          <select value={intercoAccSel} onChange={e => setModo(m.id, { interco_acc: e.target.value })} disabled={!intercoSocSel} style={fld(!!intercoAccSel, 160)}>
+                            <option value="">{!intercoSocSel ? "elegí sociedad" : (intercoAccOpts.length ? "— cuenta —" : "sin cuenta")}</option>
+                            {intercoAccOpts.map(c => <option key={c.id} value={c.id}>{c.nombre} · {c.moneda}</option>)}
+                          </select>
+                        </div>
+                      ) : modoRecv ? (
+                        <div style={{ display: "flex", gap: 6, justifyContent: "center", alignItems: "center" }}>
+                          <select value={recvSocSel} onChange={e => setModo(m.id, { recv_soc: e.target.value })} style={fld(!!recvSocSel, 150)}>
+                            <option value="">— origen —</option>
+                            {socInterco.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+                          </select>
+                          <input type="number" placeholder="costo fin. (opc)" value={edits[m.id]?.recv_costo ?? ""}
+                            onChange={e => setModo(m.id, { recv_costo: e.target.value })} style={fld(false, 110)}
+                            title="Costo de transferencia/clearing → Perdidas Financieras (P&L)" />
+                        </div>
+                      ) : modoTransfer ? (
                         <div style={{ display: "flex", gap: 6, justifyContent: "center", alignItems: "center" }}>
                           {interco && <span style={{ fontSize: 9, fontWeight: 800, color: "#7c3aed", background: "#ede9fe", border: "1px solid #c4b5fd", borderRadius: 6, padding: "2px 6px", whiteSpace: "nowrap" }}>INTERCO</span>}
                           <span style={{ fontSize: 11, color: T.muted }}>→</span>
@@ -1175,8 +1438,11 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                             {cuentasAll
                               .filter(c => String(c.id) !== String(m.cuenta_bancaria))
                               // Transferencia propia (misma sociedad, contraparte = tu nombre): solo tus cuentas.
-                              // Transferencia manual (⋯): todas, para permitir intercompañía a otra sociedad.
-                              .filter(c => !esTransferPropia(m) || String(c.sociedad ?? "").toLowerCase() === String(sociedad ?? "").toLowerCase())
+                              // Transferencia manual (⋯): cuentas del MISMO anillo (intra-anillo = 2 patas;
+                              // la interco cross-anillo va por "Transferencia interco" = 1 pata parkeada).
+                              .filter(c => esTransferPropia(m)
+                                ? String(c.sociedad ?? "").toLowerCase() === String(sociedad ?? "").toLowerCase()
+                                : (!anilloActivo || mismoAnillo(c.sociedad)))
                               .map(c => (
                               <option key={c.id} value={c.id}>{c.nombre}{c.sociedad !== sociedad ? ` · ${c.sociedad}` : ""}</option>
                             ))}
@@ -1263,7 +1529,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           </select>
                           <select value={ccOk ? ccSel : ""} onChange={e => setEdit(m.id, "centro_costo", e.target.value)} style={fld(ccOk)}>
                             <option value="">— centro —</option>
-                            {centros.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                            {centroOptionsEls}
                           </select>
                         </div>
                       )}
@@ -1283,29 +1549,43 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                       {menuFor === m.id && (
                         <div onClick={(e) => e.stopPropagation()} style={{ position: "absolute", right: 6, top: "calc(100% - 2px)", zIndex: 30,
                           background: "#fff", border: "1px solid #cbd5e1", borderRadius: 8, boxShadow: "0 6px 18px rgba(0,0,0,.14)", minWidth: 220, overflow: "hidden" }}>
-                          {!fr.es && !modoTransfer && (
-                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFranquicia: true, noFranquicia: false, modoTransfer: false }); setMenuFor(null); }}>↪ Convertir a {Number(m.monto) < 0 ? "transferencia a franquicia" : "cobro de franquicia"}</button>
+                          {/* Acciones primarias (se ocultan cuando la fila ya está en un modo) */}
+                          {!fr.es && !modoTransfer && !modoInterco && (
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoTransfer: true, noTransfer: false, modoFranquicia: false, modoInterco: false, noFranquicia: true }); setMenuFor(null); }}>⇄ Transferencia entre cuentas</button>
                           )}
-                          {!fr.es && !modoTransfer && (
-                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoTransfer: true, noTransfer: false, modoFranquicia: false, noFranquicia: true }); setMenuFor(null); }}>⇄ Convertir a transferencia entre cuentas</button>
+                          {!modoInterco && !fr.es && !modoTransfer && !modoFC && !modoCobro && !modoCuota && (
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoInterco: true, modoFranquicia: false, modoTransfer: false, modoFC: false, modoCobro: false, modoCuota: false, noFranquicia: true, noTransfer: true }); setMenuFor(null); }}>🌐 Transferencia interco (otra sociedad)…</button>
                           )}
-                          {neg && !fr.es && !modoTransfer && !modoFC && !modoCuota && (
-                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFC: true, modoFranquicia: false, modoTransfer: false, noFranquicia: true }); setMenuFor(null); }}>🧾 Imputar a una factura…</button>
+                          {!neg && !modoRecv && !modoInterco && !fr.es && !modoTransfer && !modoCobro && (
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoRecv: true, modoFranquicia: false, modoTransfer: false, modoFC: false, modoCobro: false, noFranquicia: true, noTransfer: true }); setMenuFor(null); }}>🌐 Interco recibida (de otra sociedad)…</button>
                           )}
-                          {neg && !fr.es && !modoTransfer && !modoFC && !modoCuota && !modoCobro && cuentas.some(c => esCuentaCredito(c) && c.moneda === (m.moneda || "ARS")) && (
-                            <button style={MENU_ITEM} onClick={() => { setMenuFor(null); pagarTarjetaDesdeExtracto(m); }}>💳 Es el pago de la tarjeta</button>
+                          {modoRecv && (
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoRecv: false, recv_soc: undefined, recv_costo: undefined, noFranquicia: false, noTransfer: false }); setMenuFor(null); }}>↩ Volver a normal (no es interco recibida)</button>
+                          )}
+                          {!fr.es && !modoTransfer && !modoInterco && (
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFranquicia: true, noFranquicia: false, modoTransfer: false, modoInterco: false }); setMenuFor(null); }}>🏬 Mov. franquicias</button>
+                          )}
+                          {neg && !fr.es && !modoTransfer && !modoInterco && !modoFC && !modoCuota && (
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFC: true, modoFranquicia: false, modoTransfer: false, noFranquicia: true }); setMenuFor(null); }}>🧾 Imputar a factura</button>
+                          )}
+                          {!neg && !fr.es && !modoTransfer && !modoInterco && !modoCobro && (
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCobro: true, modoFranquicia: false, modoTransfer: false, noFranquicia: true }); setMenuFor(null); }}>🧾 Imputar a factura</button>
+                          )}
+                          {neg && !fr.es && !modoTransfer && !modoInterco && !modoFC && !modoCobro && !modoCuota && (
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCuota: true, noCuota: false, modoFranquicia: false, modoTransfer: false, modoFC: false, modoCobro: false, noFranquicia: true }); setMenuFor(null); }}>💳 Imputar a cuota de financiación</button>
+                          )}
+                          {neg && !fr.es && !modoTransfer && !modoInterco && !modoFC && !modoCuota && !modoCobro && cuentas.some(c => esCuentaCredito(c) && c.moneda === (m.moneda || "ARS")) && (
+                            <button style={MENU_ITEM} onClick={() => { setMenuFor(null); pagarTarjetaDesdeExtracto(m); }}>💳 Pago de tarjeta</button>
+                          )}
+                          {/* Toggles contextuales: volver a normal / dividir (solo con el modo activo) */}
+                          {modoInterco && (
+                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoInterco: false, interco_soc: undefined, noFranquicia: false, noTransfer: false }); setMenuFor(null); }}>↩ Volver a normal (no es interco)</button>
                           )}
                           {modoFC && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFC: false, fc_id: undefined, noFranquicia: false }); setMenuFor(null); }}>{esProvServ(m) ? "🧾✗ Contabilizar como gasto directo (sin factura)" : "↩ Volver a normal (no es pago de factura)"}</button>
                           )}
-                          {neg && !fr.es && !modoTransfer && !modoFC && !modoCobro && !modoCuota && (
-                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCuota: true, noCuota: false, modoFranquicia: false, modoTransfer: false, modoFC: false, modoCobro: false, noFranquicia: true }); setMenuFor(null); }}>💳 Imputar a cuota de financiación…</button>
-                          )}
                           {modoCuota && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCuota: false, noCuota: true, cuota_plan: undefined, cuota_row: undefined, noFranquicia: false }); setMenuFor(null); }}>↩ No es cuota de financiación</button>
-                          )}
-                          {!neg && !fr.es && !modoTransfer && !modoCobro && (
-                            <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCobro: true, modoFranquicia: false, modoTransfer: false, noFranquicia: true }); setMenuFor(null); }}>🧾 Imputar a factura de venta (cobro)…</button>
                           )}
                           {modoCobro && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCobro: false, cob_id: undefined, cob_cli: undefined, rets: [], noFranquicia: false }); setMenuFor(null); }}>↩ Volver a normal (no es cobro de venta)</button>
@@ -1325,8 +1605,8 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           {hMatch && (
                             <button style={{ ...MENU_ITEM, color: "#7c3aed", fontWeight: 700 }} onClick={() => { ignorar(m, `haberes:${hMatch.lote}`); setMenuFor(null); }}>✓ Ya está en Sueldos — descartar</button>
                           )}
-                          <button style={MENU_ITEM} onClick={() => { setReglaModal({ prefill: prefillRegla(m) }); setMenuFor(null); }}>⚙ Crear regla de banco…</button>
-                          <button style={{ ...MENU_ITEM, color: "#b45309" }} onClick={() => { if (window.confirm(`Ignorar esta línea (no se contabiliza)?\n${m.concepto || ""} · $${fmt(total)}`)) ignorar(m); setMenuFor(null); }}>🚫 Ignorar (no contabilizar)</button>
+                          <button style={MENU_ITEM} onClick={() => { setReglaModal({ prefill: prefillRegla(m) }); setMenuFor(null); }}>⚙ Crear regla</button>
+                          <button style={{ ...MENU_ITEM, color: "#b45309" }} onClick={() => { if (window.confirm(`Ignorar esta línea (no se contabiliza)?\n${m.concepto || ""} · $${fmt(total)}`)) ignorar(m); setMenuFor(null); }}>🚫 Ignorar</button>
                         </div>
                       )}
                     </td>
@@ -1432,6 +1712,16 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
           centros={centros}
           onClose={() => setReconocerFor(null)}
           onDone={async () => { setReconocerFor(null); try { const d = await fetchIntercoData(); setIntercoData(d); } catch {} }}
+        />
+      )}
+
+      {declararFor && (
+        <DeclararRecibidaModal
+          pend={declararFor}
+          sociedad={sociedad}
+          cuentas={cuentas}
+          onClose={() => setDeclararFor(null)}
+          onDone={async () => { setDeclararFor(null); try { const d = await fetchIntercoData(); setIntercoData(d); } catch {} }}
         />
       )}
     </div>

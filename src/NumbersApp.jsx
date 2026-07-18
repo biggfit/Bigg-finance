@@ -101,7 +101,8 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
   const [socReady,       setSocReady]       = useState(false);
   const [activeSpecial,  setActiveSpecial]  = useState(null);
   const [nuevaOpTarget,  setNuevaOpTarget]  = useState(null);  // "+" del sidebar → abre modal del especial
-  const [pendConcil,     setPendConcil]     = useState(0);
+  const [pendConcil,     setPendConcil]     = useState({ banco: 0, interco: 0 });
+  const pendConcilTotal = (pendConcil.banco || 0) + (pendConcil.interco || 0);
   // null = main app; string = maestros active tab
   const [activeMaestrosTab, setActiveMaestrosTab] = useState(null);
   const showMaestros = activeMaestrosTab !== null;
@@ -140,9 +141,10 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
   // Contador de movimientos sin conciliar (sociedad activa) para el badge
   useEffect(() => {
     if (!socReady || !activeSoc?.id) return;
+    // Semilla del contador de Banco antes de abrir la pantalla; Interco lo reporta la pantalla en vivo (onPendientes).
     fetchMovimientosPendientes(activeSoc.id)
-      .then(r => setPendConcil(Array.isArray(r) ? r.length : 0))
-      .catch(() => setPendConcil(0));
+      .then(r => setPendConcil(p => ({ ...p, banco: Array.isArray(r) ? r.length : 0 })))
+      .catch(() => setPendConcil(p => ({ ...p, banco: 0 })));
   }, [socReady, activeSoc?.id]);
 
   const section = SECTIONS.find(s => s.id === activeId);
@@ -488,11 +490,11 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
                   <div key={s.id}>
                     <button onClick={() => { setActiveId("reconciliacion"); setActiveSpecial(null); setActiveMaestrosTab(null); setEgresoSubView(null); setIngresoSubView(null); setConcilOpen(o => !o); }}
                       aria-expanded={concilOpen}
-                      style={navBtnStyle(parentActive)} {...navBtnHover(parentActive)}>
+                      style={{ ...navBtnStyle(parentActive), gap: 6 }} {...navBtnHover(parentActive)}>
                       <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>{s.icon}</span>
                       <span style={{ flex:1 }}>{s.label}</span>
-                      {pendConcil > 0 && (
-                        <span style={{ fontSize:10, fontWeight:800, padding:"1px 7px", borderRadius:999, background:"#dc2626", color:"#fff", flexShrink:0, marginRight:6 }}>{pendConcil}</span>
+                      {pendConcilTotal > 0 && (
+                        <span style={{ fontSize:10, fontWeight:800, padding:"1px 7px", borderRadius:999, background:"#dc2626", color:"#fff", flexShrink:0 }}>{pendConcilTotal}</span>
                       )}
                       <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink:0, transform: concilOpen ? "rotate(180deg)" : "rotate(0deg)", transition:"transform .2s", opacity:.5 }}>
                         <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
@@ -514,6 +516,11 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
                               fontWeight: subActive ? 700 : 400 }}>
                             {sub.label}
                           </button>
+                          {(pendConcil[sub.id] || 0) > 0 && (
+                            <span style={{ fontSize:10, fontWeight:800, padding:"1px 7px", borderRadius:999, background:"#dc2626", color:"#fff", flexShrink:0, marginRight:28 }}>
+                              {pendConcil[sub.id]}
+                            </span>
+                          )}
                         </div>
                       );
                     })}
@@ -528,9 +535,9 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
                   style={navBtnStyle(active)} {...navBtnHover(active)}>
                   <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>{s.icon}</span>
                   <span style={{ flex:1 }}>{s.label}</span>
-                  {s.id === "reconciliacion" && pendConcil > 0 && (
+                  {s.id === "reconciliacion" && pendConcilTotal > 0 && (
                     <span style={{ fontSize:10, fontWeight:800, padding:"1px 7px", borderRadius:999,
-                      background:"#dc2626", color:"#fff", flexShrink:0 }}>{pendConcil}</span>
+                      background:"#dc2626", color:"#fff", flexShrink:0 }}>{pendConcilTotal}</span>
                   )}
                 </button>
               );

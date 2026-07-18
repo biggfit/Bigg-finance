@@ -777,7 +777,7 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
       concepto: l.descripcion || "",
       contraparte_id: "", contraparte_nombre: l.ley1 || l.contraparte || "",   // razón social del banco (Leyenda 1)
       extracto_saldo: ref,   // ← clave de dedup en columna propia (inmune a que se reescriba `referencia`)
-      referencia: `cod=${l.codigoConcepto || ""};tipo=${p.tipo || ""};regla=${p.regla_id || ""};prov=${p.proveedor_id || ""};fr=${p.franquicia_id || ""};frops=${(p.franquicia_opciones || []).join("|")};plan=${p.plan_id || ""};pcuota=${p.cuota_row_id || ""};op=${l.nro_operacion || ""};cuit=${l.ley2 || l.cuit || ""};saldo=${l.saldo || ""}`,
+      referencia: `cod=${l.codigoConcepto || ""};tipo=${p.tipo || ""};regla=${p.regla_id || ""};prov=${p.proveedor_id || ""};cli=${p.cliente_id || ""};idest=${p.cuenta_destino || ""};fr=${p.franquicia_id || ""};frops=${(p.franquicia_opciones || []).join("|")};plan=${p.plan_id || ""};pcuota=${p.cuota_row_id || ""};op=${l.nro_operacion || ""};cuit=${l.ley2 || l.cuit || ""};saldo=${l.saldo || ""}`,
       origen: "extracto",
       created_at: new Date().toISOString(),
     }});
@@ -908,6 +908,51 @@ export async function aceptarMovimiento(mov, prop = {}) {
     }});
     return;
   }
+  if (tipo === "interco_park") {
+    // MATCHEAR O PARKEAR (modelo simétrico):
+    if (prop.match_leg_id) {
+      // Hay una interco parkeada de la contraparte (dirección opuesta) → CIERRO contra ella. Registro MI
+      // caja (sin cuenta_contable → sin P&L) y NO creo posición nueva (la posición la tiene la pata que
+      // parkeó primero, queda intacta). Marco esa pata como matcheada → sale de pendientes de ambos lados.
+      const esEg = (Number(mov.monto) || 0) < 0;
+      await Promise.all([   // dos filas distintas, sin dependencia entre sí
+        post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
+          tipo: esEg ? "EGRESO" : "INGRESO",
+          contraparte_id: prop.destino_sociedad || "", contraparte_nombre: prop.destino_nombre || "",
+          cuenta_contable: "", centro_costo: "", cuenta_destino: prop.cuenta_destino || "",
+          documento_id: "INTERRECV-" + mov.id, origen: "interco_recibida", referencia: "par=" + prop.match_leg_id,
+          ...firma(),
+        }}),
+        post({ action: "edit", sheet: "nb_movimientos", id: prop.match_leg_id, patch: { referencia: "recibida=" + mov.id } }),
+      ]);
+      return;
+    }
+    // No hay contraparte parkeada → PARKEO: se registra SOLO mi pata (posición interco, lecturaInterco la
+    // lee por origen). La otra sociedad la va a matchear/declarar cuando concilie su lado (espejo asistido).
+    return post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
+      tipo: "INTERCOMPANIA",
+      contraparte_id: prop.destino_sociedad || "", contraparte_nombre: prop.destino_nombre || "",
+      cuenta_contable: "", centro_costo: "",
+      cuenta_destino: prop.cuenta_destino || "",   // hint: la cuenta única del otro lado (no crea pata)
+      documento_id: "INTERPARK-" + mov.id, origen: "interco_park", referencia: "1",
+      ...firma(),
+    }});
+  }
+  if (tipo === "interco_recv") {
+    // Lado RECEPTOR (ej. Wellness): la plata entró y la reconozco como fondeo de otra sociedad. Mete el
+    // EUR real en mi caja/cuenta (la línea del extracto) SIN P&L y SIN crear posición nueva (la deuda en
+    // USD ya la da la pata parkeada del emisor). El TC queda implícito. Costo de clearing → aparte (P&L).
+    await post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
+      tipo: "INGRESO", cuenta_contable: "", centro_costo: "",
+      contraparte_id: prop.origen_sociedad || "", contraparte_nombre: prop.origen_nombre || "",
+      documento_id: "INTERRECV-" + mov.id, origen: "interco_recibida", referencia: "1",
+      ...firma(),
+    }});
+    if (Number(prop.costo) > 0) await _addCostoFinanciero({
+      sociedad: mov.sociedad, fecha: mov.fecha, monto: prop.costo,
+      moneda: mov.moneda, centro: prop.costo_centro, origen_nombre: prop.origen_nombre });
+    return;
+  }
   const cuentaId = prop.cuenta_contable || mov.cuenta_contable || "";
   const esEgreso = (Number(mov.monto) || 0) < 0;
   return post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
@@ -919,6 +964,90 @@ export async function aceptarMovimiento(mov, prop = {}) {
     documento_id:       "CONTAB-" + mov.id,
     ...firma(),
   }});
+}
+
+// Costo de transferencia/clearing de una interco recibida (cuando la financiera lo informa). Es un gasto
+// financiero SIN caja: la merma ya la comió la financiera (la caja quedó en el neto) → solo va al P&L.
+async function _addCostoFinanciero({ sociedad, fecha, monto, moneda = "ARS", centro = "", origen_nombre = "" }) {
+  const id = newId("FINC");
+  return post({ action: "add", sheet: "nb_movimientos", row: {
+    id, sociedad, fecha, tipo: "EGRESO_GASTO", cuenta_bancaria: "",   // sin caja → P&L puro
+    cuenta_contable: "Perdidas Financieras", centro_costo: centro,
+    moneda, monto: -Math.abs(Number(monto) || 0),
+    documento_id: "CONTAB-" + id, origen: "gasto_directo",
+    concepto: `Costo transferencia interco${origen_nombre ? " · " + origen_nombre : ""}`,
+    created_at: new Date().toISOString(), ...firma(),
+  }});
+}
+
+// Declara MANUALMENTE una interco recibida (cuando entró a una CAJA/efectivo, sin extracto). Crea el
+// movimiento del receptor (plata real, sin P&L, sin posición nueva) y, si viene de una pata parkeada,
+// la marca como reconocida para que salga de la lista de pendientes. Costo de clearing → P&L (opcional).
+export async function declararIntercoRecibida({ sociedad, cuenta_bancaria, fecha, origen_sociedad, origen_nombre = "",
+    monto, moneda = "EUR", costo = 0, costo_centro = "", concepto = "", parked_leg_id = "" } = {}) {
+  const id = newId("IRCV");
+  // Las 3 escrituras son independientes (el id es local) → en paralelo.
+  await Promise.all([
+    post({ action: "add", sheet: "nb_movimientos", row: {
+      id, sociedad, fecha, tipo: "INGRESO", cuenta_bancaria, cuenta_destino: "",
+      cuenta_contable: "", centro_costo: "", moneda, monto: Math.abs(Number(monto) || 0),
+      documento_id: "INTERRECV-" + id, origen: "interco_recibida",
+      contraparte_id: origen_sociedad || "", contraparte_nombre: origen_nombre,
+      concepto: concepto || `Interco recibida${origen_nombre ? " de " + origen_nombre : ""}`,
+      referencia: "1", created_at: new Date().toISOString(), ...firma(),
+    }}),
+    // marca la pata parkeada como reconocida (sale de pendientes)
+    parked_leg_id ? post({ action: "edit", sheet: "nb_movimientos", id: parked_leg_id, patch: { referencia: "recibida=" + id } }) : null,
+    Number(costo) > 0 ? _addCostoFinanciero({ sociedad, fecha, monto: costo, moneda, centro: costo_centro, origen_nombre }) : null,
+  ]);
+  return id;
+}
+
+// Patas parkeadas por OTRA sociedad hacia la activa, todavía sin declarar (lista de pendientes / semáforo).
+// `movs` = nb_movimientos (de fetchIntercoData). Vínculo blando por sociedad; se saca al declarar (referencia recibida=).
+// Match del modelo "matchear o parkear": ¿hay una interco parkeada por la CONTRAPARTE hacia mí, con
+// dirección OPUESTA a mi línea, sin cerrar? Si existe, cierro contra ella (sin nueva posición) en vez de
+// parkear otra. El match es por sociedad + signo opuesto (no por monto: son monedas distintas).
+export function intercoMatchCandidato({ movs = [] } = {}, { sociedad, contraparte, monto } = {}) {
+  if (!contraparte || !sociedad) return null;
+  const miSigno = Math.sign(Number(monto) || 0);
+  if (!miSigno) return null;
+  return (movs || []).find(m =>
+    m.origen === "interco_park" && String(m.sociedad) === String(contraparte)
+    && String(m.contraparte_id) === String(sociedad) && !esIgnorado(m)
+    && !/recibida=/.test(String(m.referencia || ""))
+    && Math.sign(Number(m.monto) || 0) === -miSigno) || null;
+}
+
+// Interco de CC pendientes de liquidar con la sociedad activa, EN AMBAS DIRECCIONES (lo que la contraparte
+// parkeó hacia mí, haya sido ella la que pagó=yo recibí, o la que recibió=yo envié). No es fondeo/devolución:
+// es una cuenta corriente viva. Cada una trae la dirección y las cuentas (la de la contraparte + hint de la mía).
+export function pendientesIntercoRecibir({ movs = [], sociedades = [] } = {}, { sociedad } = {}) {
+  const nombreDe = new Map((sociedades || []).map(s => [String(s.id), s.nombre]));
+  const soc = String(sociedad);
+  return (movs || [])
+    .filter(m => m.origen === "interco_park" && !esIgnorado(m) && !/recibida=/.test(String(m.referencia || ""))
+      && (String(m.contraparte_id) === soc || String(m.sociedad) === soc))
+    .map(m => {
+      // Una sola pata parkeada por circuito, visible en DOS inboxes: el del que parkeó (mia=true, ya creó la
+      // posición → solo espera) y el de la contraparte (mia=false → cierra). La perspectiva de la caja cambia
+      // según de quién sea la fila: si es mía, m.monto es MI caja; si es de la contraparte, es la suya.
+      const mia   = String(m.sociedad) === soc;
+      const otra  = mia ? String(m.contraparte_id) : String(m.sociedad);
+      const mnt   = Number(m.monto) || 0;
+      // dir = desde MI perspectiva. Mía: pagué (monto<0)=envié / cobré=recibí. Ajena: la otra pagó=yo recibí.
+      const dir   = mia ? (mnt < 0 ? "envie" : "recibi") : (mnt < 0 ? "recibi" : "envie");
+      return {
+        id: m.id, origen_sociedad: otra, origen_nombre: nombreDe.get(otra) || otra,
+        fecha: m.fecha, monto: Math.abs(mnt), moneda: m.moneda || "USD", mia, dir,
+        // cuenta_mia = mi caja real; cuenta_otro = la de la contraparte. En mi propia pata la real es
+        // cuenta_bancaria y el hint del otro lado es cuenta_destino; en la ajena, al revés.
+        cuenta_mia:  mia ? (m.cuenta_bancaria || "") : (m.cuenta_destino || ""),
+        cuenta_otro: mia ? (m.cuenta_destino || "")  : (m.cuenta_bancaria || ""),
+        concepto: m.concepto || "",
+      };
+    })
+    .sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
 }
 
 // Acepta un COBRO de franquiciado (1 o varias franquicias = split).
@@ -1277,10 +1406,12 @@ export const deleteCambio = _deleteMovRows;
 
 // ── Intercompañía ─────────────────────────────────────────────────────────────
 
+// Interco de UNA sola pata (apertura o parkeo): no son transferencias de dos patas; viven solo en el
+// mapa de posiciones (lecturaInterco). Se excluyen del pareo de INTERCOMPANIA.
+const esIntercoUnaPata = m => m.origen === "interco_apertura" || m.origen === "interco_park";
+
 export async function fetchIntercompania() {
-  // Excluye las aperturas (origen interco_apertura): son de UNA pata y sin caja → no son
-  // transferencias. Viven solo en el mapa de posiciones (Reportes › Intercompañía, lecturaInterco).
-  const movs = (await get("nb_movimientos", {})).filter(m => m.origen !== "interco_apertura");
+  const movs = (await get("nb_movimientos", {})).filter(m => !esIntercoUnaPata(m));
   return _pairMovs(movs, "INTERCOMPANIA").map(({ salida, entrada, _ids }) => {
     const notaRaw = salida?.concepto ?? "";
     return {
@@ -1459,6 +1590,15 @@ export function lecturaInterco({ movs = [], comps = [], centros = [] } = {}, { s
     if (!A || !B || String(A) === String(B) || Math.abs(mm) < 0.01) continue;
     add(A, B, m.moneda || "ARS", mm);
     add(B, A, m.moneda || "ARS", -mm);
+  }
+  // 4. Interco PARKEADAS (una sola pata, CON caja) — fuera de núcleo / cruzada de moneda. El signo
+  //    lo da la caja: salida (pagué, monto<0) → soy acreedor (+); entrada (recibí) → soy deudor (−).
+  for (const m of movs) {
+    if (m.origen !== "interco_park" || esIgnorado(m)) continue;
+    const A = m.sociedad, B = m.contraparte_id, contrib = -toNum(m.monto);
+    if (!A || !B || String(A) === String(B) || Math.abs(contrib) < 0.01) continue;
+    add(A, B, m.moneda || "ARS", contrib);
+    add(B, A, m.moneda || "ARS", -contrib);
   }
   const soc = sociedad ? String(sociedad).toLowerCase() : null;
   const out = [];

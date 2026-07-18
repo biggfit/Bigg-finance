@@ -33,6 +33,16 @@ export function toISO(v) {
   return s;
 }
 
+// Número robusto (compartido por los parsers): si ya es number lo devuelve; si es texto
+// acepta formato AR/EU (miles con punto, decimal con coma) o formato con punto decimal. Vacío → 0.
+export function num(v) {
+  if (typeof v === "number") return v;
+  const s = String(v ?? "").trim();
+  if (!s) return 0;
+  const norm = s.includes(",") ? s.replace(/\./g, "").replace(",", ".") : s;
+  return Number(norm.replace(/[^0-9.\-]/g, "")) || 0;
+}
+
 // Cabeceras esperadas del extracto Galicia
 const GALICIA_HEADERS = ["Fecha", "Descripción", "Débitos", "Créditos"];
 
