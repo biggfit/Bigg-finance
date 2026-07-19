@@ -488,10 +488,21 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     if (ed.modoInterco !== undefined) return ed.modoInterco;
     return parseMeta(mov.referencia).tipo === "interco_park";
   };
-  // Sociedad destino: la elegida a mano, o (si vino por regla) derivada de la cuenta única del otro lado.
+  // "Matchear o parkear": ¿ALGUNA contraparte ya parkeó una pata hacia mí (dirección opuesta)? Busca sin
+  // saber la contraparte de antemano → así la propuesta auto sugiere cerrar en vez de parkear a ciegas.
+  const intercoInboundSoc = (mov) => {
+    for (const s of socInterco) {
+      if (intercoMatchCandidato(intercoData, { sociedad, contraparte: s.id, monto: mov.monto })) return s.id;
+    }
+    return "";
+  };
+  // Sociedad destino: la elegida a mano; si no, la contraparte que ya parkeó hacia mí (cerrar circuito);
+  // si tampoco, la derivada de la regla (cuenta única del otro lado).
   const intercoSocDe = (mov) => {
     const ed = edits[mov.id] || {};
-    if (ed.interco_soc != null) return ed.interco_soc;
+    if (ed.interco_soc) return ed.interco_soc;
+    const inbound = intercoInboundSoc(mov);
+    if (inbound) return inbound;
     const acc = cuentasAll.find(c => String(c.id) === String(parseMeta(mov.referencia).idest));
     return acc?.sociedad || "";
   };

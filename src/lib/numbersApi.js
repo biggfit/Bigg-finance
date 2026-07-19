@@ -1433,11 +1433,11 @@ export async function fetchIntercompania() {
   });
 }
 
-export async function appendIntercompania({ fecha, tipoOp = "prestamo", socOrigen, ctaOrigen, monedaOrigen, montoOrigen, socDestino, ctaDestino, monedaDestino, montoDestino, nota = "" }) {
+export async function appendIntercompania({ fecha, socOrigen, ctaOrigen, monedaOrigen, montoOrigen, socDestino, ctaDestino, monedaDestino, montoDestino, nota = "" }) {
   const id         = newId("INTERCOMPANY");
   const tc         = montoOrigen > 0 ? (montoDestino / montoOrigen).toFixed(6) : "1";
-  const tipoLabel  = tipoOp === "fondeo" ? "Fondeo" : "Préstamo";
-  const concepto   = `${tipoLabel}: ${socOrigen} → ${socDestino}${nota ? " · " + nota : ""}`;
+  // Interco = transferencia con saldo vivo; la clasificación (inversión / crédito puente) se deriva del anillo (patrimonio), no acá.
+  const concepto   = `Transferencia interco: ${socOrigen} → ${socDestino}${nota ? " · " + nota : ""}`;
   const created_at = new Date().toISOString();
   await post({ action:"add", sheet:"nb_movimientos", row: {
     id:`${id}-S`, sociedad:socOrigen, fecha, tipo:"INTERCOMPANIA",
@@ -1549,11 +1549,18 @@ export async function reconocerVentaInterco({ sociedad, ventaIdComp, vendedorId 
 export function lecturaInterco({ movs = [], comps = [], centros = [] } = {}, { sociedad = null } = {}) {
   const empresaDe = new Map((centros || []).map(c => [String(c.id), c.empresa]));
   const acc = {};  // acc[sociedad][contraparte][moneda] = neto
+  const accIni = {};  // solo el componente de APERTURA (saldo inicial), misma clave
   const add = (s, c, moneda, delta) => {
     s = String(s || ""); c = String(c || "");
     if (!s || !c || s === c) return;
     ((acc[s] ??= {})[c] ??= {});
     acc[s][c][moneda] = (acc[s][c][moneda] || 0) + delta;
+  };
+  const addIni = (s, c, moneda, delta) => {
+    s = String(s || ""); c = String(c || "");
+    if (!s || !c || s === c) return;
+    ((accIni[s] ??= {})[c] ??= {});
+    accIni[s][c][moneda] = (accIni[s][c][moneda] || 0) + delta;
   };
   const fondeo = (A, centroId, moneda, monto) => {
     const B = empresaDe.get(String(centroId || ""));
@@ -1588,8 +1595,8 @@ export function lecturaInterco({ movs = [], comps = [], centros = [] } = {}, { s
     if (m.origen !== "interco_apertura" || esIgnorado(m)) continue;
     const A = m.sociedad, B = m.contraparte_id, mm = toNum(m.monto);
     if (!A || !B || String(A) === String(B) || Math.abs(mm) < 0.01) continue;
-    add(A, B, m.moneda || "ARS", mm);
-    add(B, A, m.moneda || "ARS", -mm);
+    add(A, B, m.moneda || "ARS", mm);      addIni(A, B, m.moneda || "ARS", mm);
+    add(B, A, m.moneda || "ARS", -mm);     addIni(B, A, m.moneda || "ARS", -mm);
   }
   // 4. Interco PARKEADAS (una sola pata, CON caja) — fuera de núcleo / cruzada de moneda. El signo
   //    lo da la caja: salida (pagué, monto<0) → soy acreedor (+); entrada (recibí) → soy deudor (−).
@@ -1606,7 +1613,10 @@ export function lecturaInterco({ movs = [], comps = [], centros = [] } = {}, { s
     if (soc && s.toLowerCase() !== soc) continue;
     for (const [c, porMon] of Object.entries(porC))
       for (const [moneda, neto] of Object.entries(porMon))
-        if (Math.abs(neto) >= 0.01) out.push({ sociedad: s, contraparte: c, moneda, neto });
+        if (Math.abs(neto) >= 0.01) {
+          const inicial = accIni[s]?.[c]?.[moneda] || 0;   // componente de apertura (saldo inicial)
+          out.push({ sociedad: s, contraparte: c, moneda, neto, inicial, movimientos: neto - inicial });
+        }
   }
   return out;
 }

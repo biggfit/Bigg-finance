@@ -494,7 +494,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
                       <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>{s.icon}</span>
                       <span style={{ flex:1 }}>{s.label}</span>
                       {pendConcilTotal > 0 && (
-                        <span style={{ fontSize:10, fontWeight:800, padding:"1px 7px", borderRadius:999, background:"#dc2626", color:"#fff", flexShrink:0 }}>{pendConcilTotal}</span>
+                        <span style={{ fontSize:10, fontWeight:800, minWidth:18, height:16, padding:"0 5px", borderRadius:999, display:"inline-flex", alignItems:"center", justifyContent:"center", lineHeight:1, boxSizing:"border-box", background:"#dc2626", color:"#fff", flexShrink:0 }}>{pendConcilTotal}</span>
                       )}
                       <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink:0, transform: concilOpen ? "rotate(180deg)" : "rotate(0deg)", transition:"transform .2s", opacity:.5 }}>
                         <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
@@ -517,7 +517,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
                             {sub.label}
                           </button>
                           {(pendConcil[sub.id] || 0) > 0 && (
-                            <span style={{ fontSize:10, fontWeight:800, padding:"1px 7px", borderRadius:999, background:"#dc2626", color:"#fff", flexShrink:0, marginRight:28 }}>
+                            <span style={{ fontSize:10, fontWeight:800, minWidth:18, height:16, padding:"0 5px", borderRadius:999, display:"inline-flex", alignItems:"center", justifyContent:"center", lineHeight:1, boxSizing:"border-box", background:"transparent", border:"1px solid #dc2626", color:"#fff", flexShrink:0, marginRight:28 }}>
                               {pendConcil[sub.id]}
                             </span>
                           )}
