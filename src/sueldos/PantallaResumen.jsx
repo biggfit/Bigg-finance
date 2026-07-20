@@ -126,7 +126,7 @@ export default function PantallaResumen({ pais = "AR" }) {
       cdpCoachCant: 0, cdpFrontCant: 0, cdpMonto: 0,
       oneShotCant: 0, oneShotMonto: 0, asignaciones: 0, objGrupalMonto: 0,
       feriadosCant: 0, feriadosMonto: 0, domingosCant: 0, domingosMonto: 0,
-      yogaCant: 0, yogaMonto: 0, redondeo: 0, sueldoVariable: 0,
+      yogaCant: 0, yogaMonto: 0, runningCant: 0, runningMonto: 0, redondeo: 0, sueldoVariable: 0,
     };
     const fijoVistos = new Set();   // no duplicar el sueldo base si hay varias filas (multi-sede)
     const sedes = [];
@@ -143,7 +143,7 @@ export default function PantallaResumen({ pais = "AR" }) {
       for (const k of ["horasCant","horasMonto","cdpCoachCant","cdpFrontCant","cdpMonto",
                        "oneShotCant","oneShotMonto","asignaciones","objGrupalMonto",
                        "feriadosCant","feriadosMonto","domingosCant","domingosMonto",
-                       "yogaCant","yogaMonto","redondeo","sueldoVariable"]) {
+                       "yogaCant","yogaMonto","runningCant","runningMonto","redondeo","sueldoVariable"]) {
         acc[k] += d[k] || 0;
       }
       const sn = row.sede_nombre || "—";

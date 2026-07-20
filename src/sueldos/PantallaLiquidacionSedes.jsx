@@ -360,21 +360,23 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     const tarifaOS   = getTarifa("ONE SHOT");
     const tarifaDom  = getTarifa("DOMINGO");
     const tarifaYoga = getTarifa("YOGA");
+    const tarifaRun  = getTarifa("RUNNING");
     const fijo     = Number(row.sueldo_base) || 0;
     const horas    = Number(row.horas) || 0,          horasMonto    = horas * tarifaHora;
     const feriados = Number(row.horas_feriados) || 0, feriadosMonto = feriados * tarifaHora;
     const domingos = Number(row.horas_domingos) || 0, domingosMonto = domingos * tarifaDom;
     const yoga     = Number(row.horas_yoga) || 0,     yogaMonto     = yoga * tarifaYoga;
+    const running  = Number(row.horas_running) || 0,  runningMonto  = running * tarifaRun;
     const cdpCoach = Number(row.q_cdp_coach) || 0,    cdpCoachMonto = cdpCoach * tCdpCoach;
     const cdpFront = Number(row.q_cdp_front) || 0,    cdpFrontMonto = cdpFront * tCdpFront;
     const os       = Number(row.q_one_shot) || 0,     osMonto       = os * tarifaOS;
     const asignado  = Number(row.asignado) || 0;
     const cGrupoPct = Number(row.c_grupo_pct) || 0;
     const cGrupoMonto = baseGrupalDe(row.rol, { horasMonto, feriadosMonto, asignado, sueldoBase: fijo }) * (cGrupoPct / 100);
-    const total = fijo + horasMonto + feriadosMonto + domingosMonto + yogaMonto
+    const total = fijo + horasMonto + feriadosMonto + domingosMonto + yogaMonto + runningMonto
                 + cdpCoachMonto + cdpFrontMonto + osMonto + asignado + cGrupoMonto;
-    return { tarifaHora, tCdpCoach, tCdpFront, tarifaOS, tarifaDom, tarifaYoga, fijo,
-      horas, horasMonto, feriados, feriadosMonto, domingos, domingosMonto, yoga, yogaMonto,
+    return { tarifaHora, tCdpCoach, tCdpFront, tarifaOS, tarifaDom, tarifaYoga, tarifaRun, fijo,
+      horas, horasMonto, feriados, feriadosMonto, domingos, domingosMonto, yoga, yogaMonto, running, runningMonto,
       cdpCoach, cdpCoachMonto, cdpFront, cdpFrontMonto, os, osMonto, asignado, cGrupoPct, cGrupoMonto, total };
   }, [getTarifa, tarifaHoraRow]);
 
@@ -400,6 +402,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     add("Feriados", m.feriados, m.tarifaHora, m.feriadosMonto);
     add("Domingos", m.domingos, m.tarifaDom, m.domingosMonto);
     add("Yoga", m.yoga, m.tarifaYoga, m.yogaMonto);
+    add("Running", m.running, m.tarifaRun, m.runningMonto);
     add("CDP coach", m.cdpCoach, m.tCdpCoach, m.cdpCoachMonto);
     add("CDP front desk", m.cdpFront, m.tCdpFront, m.cdpFrontMonto);
     add("One Shot", m.os, m.tarifaOS, m.osMonto);

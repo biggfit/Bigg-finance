@@ -313,6 +313,7 @@ const LIQ_CONCEPTO_CAMPO = {
   "Feriados":        "feriados",
   "Domingos":        "domingos",
   "Yoga":            "yoga",
+  "Running":         "running",
   "Programaciones":  "programacion",   // legacy (la comisión del encargado pasó a ser novedad)
   "Redondeo":        "redondeo",       // aumento de sueldo por redondear el efectivo hacia arriba
 };
@@ -346,6 +347,7 @@ function liqFromLineas(idLiq, lineas) {
     feriados_cant: 0, feriados_monto_unit: 0, feriados_total: 0,
     domingos_cant: 0, domingos_monto_unit: 0, domingos_total: 0,
     yoga_cant: 0, yoga_monto_unit: 0, yoga_total: 0,
+    running_cant: 0, running_monto_unit: 0, running_total: 0,
     programacion_cant: 0, programacion_monto_unit: 0, programacion_total: 0,
     bonos_cant: 0, bonos_monto_unit: 0, bonos_total: 0,
     redondeo_cant: 0, redondeo_monto_unit: 0, redondeo_total: 0,
@@ -897,6 +899,7 @@ export function desglosarLiquidacion(liq, categorias = []) {
   const tarifaOS      = tarifa("ONE SHOT");
   const tarifaDomingo = tarifa("DOMINGO");
   const tarifaYoga    = tarifa("YOGA");
+  const tarifaRunning = tarifa("RUNNING");
 
   const horasCant     = Number(liq.horas_cant) || 0;
   const horasMonto    = horasCant * tarifaHora;
@@ -918,13 +921,15 @@ export function desglosarLiquidacion(liq, categorias = []) {
   const domingosMonto = Number(liq.domingos_total) || (domingosCant * tarifaDomingo);
   const yogaCant      = Number(liq.yoga_cant) || 0;
   const yogaMonto     = Number(liq.yoga_total) || (yogaCant * tarifaYoga);
+  const runningCant   = Number(liq.running_cant) || 0;
+  const runningMonto  = Number(liq.running_total) || (runningCant * tarifaRunning);
   const redondeo      = Number(liq.redondeo_total) || 0;
   const programaciones = Number(liq.programacion_total) || 0;
   const fijo          = Number(liq.sueldo_base) || 0;
 
   const sueldoFijo     = fijo + horasMonto;
   const sueldoVariable = cdpMonto + oneShotMonto + asignaciones + objGrupalMonto
-                       + feriadosMonto + domingosMonto + yogaMonto + redondeo + programaciones;
+                       + feriadosMonto + domingosMonto + yogaMonto + runningMonto + redondeo + programaciones;
   const sueldoTotal    = sueldoFijo + sueldoVariable;
   // total_bruto (Σ líneas pago = sueldo) es la fuente de verdad; si no está, se reconstruye.
   const totalLiquidar  = Number(liq.total_bruto) || sueldoTotal;
@@ -935,7 +940,8 @@ export function desglosarLiquidacion(liq, categorias = []) {
     cdpCant, cdpMonto, cdpCoachCant, cdpFrontCant,
     oneShotCant, oneShotMonto,
     asignaciones, objGrupalPct, objGrupalMonto,
-    feriadosCant, feriadosMonto, domingosCant, domingosMonto, yogaCant, yogaMonto, redondeo, programaciones,
+    feriadosCant, feriadosMonto, domingosCant, domingosMonto, yogaCant, yogaMonto,
+    runningCant, runningMonto, tarifaRunning, redondeo, programaciones,
     sueldoFijo, sueldoVariable, sueldoTotal, totalLiquidar,
     monto_haberes:       Number(liq.monto_haberes) || 0,
     monto_transferencia: Number(liq.monto_transferencia) || 0,
@@ -1088,6 +1094,7 @@ function mapRowToSedes(r) {
     horas_feriados:  Number(r.feriados_cant)   || 0,
     horas_domingos:  Number(r.domingos_cant)   || 0,
     horas_yoga:      Number(r.yoga_cant)       || 0,
+    horas_running:   Number(r.running_cant)    || 0,
     q_cdp_coach:         Number(r.cdp_coach_cant)    || 0,
     q_cdp_front:         Number(r.cdp_front_cant ?? r.cdp_cant) || 0,  // legacy "CDP" → front
     q_one_shot:          Number(r.one_shot_cant)     || 0,

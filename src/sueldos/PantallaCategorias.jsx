@@ -33,6 +33,8 @@ const CONCEPTOS_DEFAULT = [
   "ONE SHOT",
   "COMISIÓN X REFERIDO",
   "DOMINGO",
+  "YOGA",
+  "RUNNING",
 ];
 
 function newRow(overrides = {}) {
