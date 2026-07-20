@@ -197,8 +197,10 @@ function clasificarClase(raw) {
   return "BIGG CLASS";
 }
 function esPresente(r) {
-  const s = String(pick(r, "asistio", "asistió", "attended", "presente", "asistencia") ?? "").toLowerCase();
-  if (!s) return true;   // sin dato → contar (compat)
+  const v = pick(r, "has_attended", "asistio", "asistió", "attended", "presente", "asistencia");
+  if (v == null) return true;                 // sin dato → contar (compat)
+  if (typeof v === "boolean") return v;       // report 12: has_attended (bool)
+  const s = String(v).toLowerCase();
   return s.startsWith("pres") || s === "true" || s === "1" || s === "si" || s === "sí";
 }
 // rows → líneas normalizadas (una por coach×sede×clase×asistió), filtradas a las sedes operadas.
@@ -218,7 +220,7 @@ function eyeLineasDe(rows, sedesTargetIds, sedesById) {
       coach_name:    String(r.coach_name ?? "").trim(),
       location_id:   locId,
       location_name: sede?.nombre ?? r.location_name ?? String(locId),
-      clase:         clasificarClase(pick(r, "clase", "class", "tipo_clase", "class_type", "class_name")),
+      clase:         clasificarClase(pick(r, "parent_class_name", "clase", "class", "tipo_clase", "class_type", "class_name")),
       asistio:       esPresente(r) ? "Presentes" : "Ausentes",
       regulares:     regFinal, feriado: fer, domingo: dom,
       hours:         regFinal + fer + dom,   // compat con consumidores viejos
