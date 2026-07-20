@@ -1670,12 +1670,9 @@ function PasoFormaPago({ empls, pagoDraft, onChangePago, onAtras, onContinuar, o
                   </td>
                   <td style={{ padding: "5px 8px", color: T.muted }}>{empl.rol}</td>
                   <td style={{ padding: "5px 8px", color: T.muted, fontSize: 11 }}>{empl.sedes.join(", ") || "—"}</td>
-                  <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700 }}>
+                  <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700 }}
+                    title={nov > 0 ? `Incluye ${fmtMoney(nov)} de novedades` : undefined}>
                     {fmtMoney(empl.total)}
-                    {nov > 0 && (
-                      <span style={{ marginLeft: 5, fontSize: 10, color: T.purple, fontWeight: 600 }}
-                        title={`Incluye ${fmtMoney(nov)} de novedades`}>+nov</span>
-                    )}
                   </td>
                   <td style={{ padding: "4px 8px", textAlign: "right" }}>
                     <input style={MON()} value={d.monto_haberes ?? ""} placeholder="0"

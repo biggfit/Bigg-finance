@@ -925,10 +925,8 @@ function PasoPago({ liqStaff, liqOwners, liqExternos, sueldosDraft, formasDraft,
                       <span style={{ color: T.dim, marginRight: 6, fontSize: 11 }}>{open ? "▾" : "▸"}</span>
                       {liq.legajo_nombre}
                     </td>
-                    <td style={TD({ textAlign: "right", fontWeight: 700, color: T.blue })}>
-                      {novs.length > 0 && (
-                        <span style={{ marginRight: 5, fontSize: 10, color: T.purple, fontWeight: 600 }} title="Incluye novedades">+nov</span>
-                      )}
+                    <td style={TD({ textAlign: "right", fontWeight: 700, color: T.blue })}
+                      title={(liq.total_novedades || 0) > 0 ? `Incluye ${fmtMoney(liq.total_novedades)} de novedades` : undefined}>
                       {fmtMoney(target + (liq.total_novedades || 0))}
                     </td>
                     {COLS.map(c => (
@@ -1143,10 +1141,8 @@ function ModalCerrar({ mes, anio, liqs, saving, onClose, onConfirm }) {
                 <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: T.text }}>{l.legajo_nombre}</span>
                 <span style={{ fontSize: 10.5, fontWeight: 700, color: T.muted, background: T.bg, borderRadius: 5, padding: "2px 7px" }}>{l.rol}</span>
                 {cerrada && <span style={{ fontSize: 12, color: T.green }}>🔒</span>}
-                {(l.total_novedades || 0) > 0 && (
-                  <span style={{ fontSize: 10, color: T.purple, fontWeight: 600 }} title="Incluye novedades">+nov</span>
-                )}
-                <span style={{ fontSize: 13, color: T.muted, minWidth: 96, textAlign: "right" }}>{fmtMoney(l.total_liquidacion ?? l.total_bruto)}</span>
+                <span style={{ fontSize: 13, color: T.muted, minWidth: 96, textAlign: "right" }}
+                  title={(l.total_novedades || 0) > 0 ? `Incluye ${fmtMoney(l.total_novedades)} de novedades` : undefined}>{fmtMoney(l.total_liquidacion ?? l.total_bruto)}</span>
               </label>
             );
           })}
