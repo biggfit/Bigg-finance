@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "react";
 import * as XLSX from "xlsx";
 import {
   fetchLegajos, fetchCategorias, fetchObjetivos,
@@ -1283,6 +1283,7 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, updateR
 
   const [sortKey,    setSortKey]    = useState("sede_nombre");
   const [sortDir,    setSortDir]    = useState("asc");
+  const [openDet,    setOpenDet]    = useState(null);   // _id del coach con el detalle de Eye abierto
   const [eyeLoading, setEyeLoading] = useState(false);
   const [eyeResult,  setEyeResult]  = useState(null);
   // { items: N, matched: N, eyeOnly: [coach_name, ...] }
@@ -1394,9 +1395,18 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, updateR
                   Sin coaches para este mes. Agregá filas abajo.
                 </td>
               </tr>
-            ) : sortedRows.map((row, i) => (
-                <tr key={row._id} style={{ background: bucketBg(row, i % 2 === 0 ? T.card : T.bg), borderBottom: `1px solid ${T.border}` }}>
-                  <td style={{ padding: "5px 8px", fontWeight: 600 }}>{row.legajo_nombre}</td>
+            ) : sortedRows.map((row, i) => {
+                const det = row.horas_detalle || [];
+                const abierto = openDet === row._id;
+                return (
+                <Fragment key={row._id}>
+                <tr style={{ background: bucketBg(row, i % 2 === 0 ? T.card : T.bg), borderBottom: det.length && abierto ? "none" : `1px solid ${T.border}` }}>
+                  <td style={{ padding: "5px 8px", fontWeight: 600, cursor: det.length ? "pointer" : "default" }}
+                    onClick={() => det.length && setOpenDet(abierto ? null : row._id)}
+                    title={det.length ? "Ver detalle de BIGG Eye por clase" : undefined}>
+                    {det.length > 0 && <span style={{ color: T.dim, marginRight: 5, fontSize: 10 }}>{abierto ? "▾" : "▸"}</span>}
+                    {row.legajo_nombre}
+                  </td>
                   <td style={{ padding: "4px 6px" }}>
                     <select
                       value={row.rol}
@@ -1421,7 +1431,29 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, updateR
                       style={{ background: "none", border: "none", cursor: "pointer", color: T.dim, fontSize: 12, padding: 2 }}>🗑</button>
                   </td>
                 </tr>
-              ))}
+                {/* Detalle BIGG Eye por clase × asistió (espejo del reporte; los Ausentes NO suman a las columnas) */}
+                {abierto && det.map((l, di) => {
+                  const pres = l.asistio !== "Ausentes";
+                  return (
+                    <tr key={row._id + "-d" + di} style={{ background: pres ? "#f8fafc" : "#fffbeb",
+                      borderBottom: di === det.length - 1 ? `1px solid ${T.border}` : "none", fontSize: 11 }}>
+                      <td style={{ padding: "3px 8px 3px 24px", color: T.muted }} colSpan={3}>
+                        <span style={{ fontWeight: 600, color: T.text }}>{l.clase}</span>
+                        <span style={{ marginLeft: 8, padding: "1px 6px", borderRadius: 4, fontSize: 9.5, fontWeight: 700,
+                          color: pres ? "#16a34a" : "#b45309", background: pres ? "#dcfce7" : "#fef3c7" }}>
+                          {pres ? "Presentes" : "Ausentes · pendiente check-in"}
+                        </span>
+                      </td>
+                      <td style={{ padding: "3px 6px", textAlign: "right", color: pres ? T.text : "#b45309" }} title="Regulares">{l.regulares || 0}</td>
+                      <td style={{ padding: "3px 6px", textAlign: "right", color: pres ? T.text : "#b45309" }} title="Feriado">{l.feriado || 0}</td>
+                      <td style={{ padding: "3px 6px", textAlign: "right", color: pres ? T.text : "#b45309" }} title="Domingo">{l.domingo || 0}</td>
+                      <td colSpan={3} />
+                    </tr>
+                  );
+                })}
+                </Fragment>
+                );
+              })}
           </tbody>
         </table>
       </div>

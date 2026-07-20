@@ -1,7 +1,7 @@
 {
   "_meta": {
-    "generado": "2026-06-01",
-    "nota": "Cache manual vía MCP. Regenerar cada mes al liquidar sueldos."
+    "generado": "2026-07-20",
+    "nota": "Cache manual vía MCP get_report(12). Regenerar cada mes al liquidar sueldos. Desde 2026-07 el reporte trae parent_class_name + regular/holiday/sunday_hours + has_attended (el endpoint normaliza ambas formas)."
   },
   "2026-05-AR": [
     { "coach_name": "Caetano Bravo",        "location_id": 1,  "location_name": "Recoleta",            "hours": 100 },
@@ -46,5 +46,21 @@
     { "coach_name": "Miguel Fuenmayor",     "location_id": 32, "location_name": "Botánico",            "hours": 101 },
     { "coach_name": "Serena Moreno",        "location_id": 32, "location_name": "Botánico",            "hours": 102 },
     { "coach_name": "Tomas Bustos Barron",  "location_id": 32, "location_name": "Botánico",            "hours": 41  }
+  ],
+  "2026-07-AR": [
+    { "coach_name": "Caetano Bravo",     "location_id": 1, "location_name": "Recoleta", "parent_class_name": "BIGG CLASS", "regular_hours": 29, "holiday_hours": 0, "sunday_hours": 0, "has_attended": false },
+    { "coach_name": "Caetano Bravo",     "location_id": 1, "location_name": "Recoleta", "parent_class_name": "BIGG CLASS", "regular_hours": 57, "holiday_hours": 0, "sunday_hours": 0, "has_attended": true },
+    { "coach_name": "Facundo Fernandez", "location_id": 1, "location_name": "Recoleta", "parent_class_name": "BIGG CLASS", "regular_hours": 0,  "holiday_hours": 0, "sunday_hours": 2, "has_attended": false },
+    { "coach_name": "Facundo Fernandez", "location_id": 1, "location_name": "Recoleta", "parent_class_name": "BIGG CLASS", "regular_hours": 0,  "holiday_hours": 0, "sunday_hours": 6, "has_attended": true },
+    { "coach_name": "Facundo Perez",     "location_id": 1, "location_name": "Recoleta", "parent_class_name": "BIGG CLASS", "regular_hours": 48, "holiday_hours": 0, "sunday_hours": 0, "has_attended": true },
+    { "coach_name": "Francisco Leon",    "location_id": 1, "location_name": "Recoleta", "parent_class_name": "BIGG CLASS", "regular_hours": 3,  "holiday_hours": 0, "sunday_hours": 0, "has_attended": true },
+    { "coach_name": "Gianluca Musitano", "location_id": 1, "location_name": "Recoleta", "parent_class_name": "BIGG CLASS", "regular_hours": 1,  "holiday_hours": 0, "sunday_hours": 0, "has_attended": false },
+    { "coach_name": "Gianluca Musitano", "location_id": 1, "location_name": "Recoleta", "parent_class_name": "BIGG CLASS", "regular_hours": 12, "holiday_hours": 0, "sunday_hours": 0, "has_attended": true },
+    { "coach_name": "Ivan Silva",        "location_id": 1, "location_name": "Recoleta", "parent_class_name": "BIGG CLASS", "regular_hours": 40, "holiday_hours": 0, "sunday_hours": 0, "has_attended": false },
+    { "coach_name": "Ivan Silva",        "location_id": 1, "location_name": "Recoleta", "parent_class_name": "BIGG CLASS", "regular_hours": 71, "holiday_hours": 4, "sunday_hours": 0, "has_attended": true },
+    { "coach_name": "Julieta Maiorana",  "location_id": 1, "location_name": "Recoleta", "parent_class_name": "BIGG CLASS", "regular_hours": 34, "holiday_hours": 0, "sunday_hours": 0, "has_attended": false },
+    { "coach_name": "Julieta Maiorana",  "location_id": 1, "location_name": "Recoleta", "parent_class_name": "BIGG CLASS", "regular_hours": 26, "holiday_hours": 4, "sunday_hours": 0, "has_attended": true },
+    { "coach_name": "Vicky Bedini",      "location_id": 1, "location_name": "Recoleta", "parent_class_name": "BIGG YOGA",  "regular_hours": 1,  "holiday_hours": 0, "sunday_hours": 0, "has_attended": false },
+    { "coach_name": "Vicky Bedini",      "location_id": 1, "location_name": "Recoleta", "parent_class_name": "BIGG YOGA",  "regular_hours": 3,  "holiday_hours": 0, "sunday_hours": 0, "has_attended": true }
   ]
 }
