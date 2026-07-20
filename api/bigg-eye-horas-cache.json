@@ -1,0 +1,50 @@
+{
+  "_meta": {
+    "generado": "2026-06-01",
+    "nota": "Cache manual vía MCP. Regenerar cada mes al liquidar sueldos."
+  },
+  "2026-05-AR": [
+    { "coach_name": "Caetano Bravo",        "location_id": 1,  "location_name": "Recoleta",            "hours": 100 },
+    { "coach_name": "Facundo Fernandez",    "location_id": 1,  "location_name": "Recoleta",            "hours": 12  },
+    { "coach_name": "Facundo Perez",        "location_id": 1,  "location_name": "Recoleta",            "hours": 95  },
+    { "coach_name": "Francisco Leon",       "location_id": 1,  "location_name": "Recoleta",            "hours": 7   },
+    { "coach_name": "Gianluca Musitano",    "location_id": 1,  "location_name": "Recoleta",            "hours": 106 },
+    { "coach_name": "Ivan Silva",           "location_id": 1,  "location_name": "Recoleta",            "hours": 101 },
+    { "coach_name": "Julieta Maiorana",     "location_id": 1,  "location_name": "Recoleta",            "hours": 87  },
+    { "coach_name": "Lautaro Pablovich",    "location_id": 1,  "location_name": "Recoleta",            "hours": 30  },
+    { "coach_name": "Vicky Bedini",         "location_id": 1,  "location_name": "Recoleta",            "hours": 5   },
+
+    { "coach_name": "Lucas Zalazar",        "location_id": 8,  "location_name": "Barrio Norte",        "hours": 125 },
+    { "coach_name": "Nahuel Perez",         "location_id": 8,  "location_name": "Barrio Norte",        "hours": 108 },
+    { "coach_name": "Nicolas Gago",         "location_id": 8,  "location_name": "Barrio Norte",        "hours": 83  },
+    { "coach_name": "Sabrina Frias",        "location_id": 8,  "location_name": "Barrio Norte",        "hours": 4   },
+
+    { "coach_name": "Betiana Araoz",        "location_id": 3,  "location_name": "Belgrano Av Cabildo", "hours": 5   },
+    { "coach_name": "Emanuel Fernandez",    "location_id": 3,  "location_name": "Belgrano Av Cabildo", "hours": 77  },
+    { "coach_name": "Franco Gomez",         "location_id": 3,  "location_name": "Belgrano Av Cabildo", "hours": 88  },
+    { "coach_name": "Lucia Tripicchio",     "location_id": 3,  "location_name": "Belgrano Av Cabildo", "hours": 46  },
+    { "coach_name": "Martin Lucena",        "location_id": 3,  "location_name": "Belgrano Av Cabildo", "hours": 37  },
+    { "coach_name": "Nicolas Gago",         "location_id": 3,  "location_name": "Belgrano Av Cabildo", "hours": 103 },
+
+    { "coach_name": "Daiana Ercolino",      "location_id": 6,  "location_name": "Plaza Libertad",      "hours": 5   },
+    { "coach_name": "Juan Manuel Varela",   "location_id": 6,  "location_name": "Plaza Libertad",      "hours": 110 },
+    { "coach_name": "Julian Alles",         "location_id": 6,  "location_name": "Plaza Libertad",      "hours": 23  },
+    { "coach_name": "Lautaro Pablovich",    "location_id": 6,  "location_name": "Plaza Libertad",      "hours": 51  },
+    { "coach_name": "Martin Vazquez",       "location_id": 6,  "location_name": "Plaza Libertad",      "hours": 103 },
+    { "coach_name": "Pablo Omerzu",         "location_id": 6,  "location_name": "Plaza Libertad",      "hours": 15  },
+
+    { "coach_name": "Agustin Fernandez",    "location_id": 42, "location_name": "Palermo Rosedal",     "hours": 46  },
+    { "coach_name": "Maira Irungaray",      "location_id": 42, "location_name": "Palermo Rosedal",     "hours": 108 },
+    { "coach_name": "Roberto Tedin",        "location_id": 42, "location_name": "Palermo Rosedal",     "hours": 134 },
+
+    { "coach_name": "Facundo Garcia",       "location_id": 2,  "location_name": "Palermo Chico",       "hours": 110 },
+    { "coach_name": "Francisco Waddington", "location_id": 2,  "location_name": "Palermo Chico",       "hours": 100 },
+    { "coach_name": "Franco Gomez",         "location_id": 2,  "location_name": "Palermo Chico",       "hours": 99  },
+    { "coach_name": "Valentina Perez Turbay","location_id": 2, "location_name": "Palermo Chico",       "hours": 5   },
+
+    { "coach_name": "Facundo Garcia",       "location_id": 32, "location_name": "Botánico",            "hours": 60  },
+    { "coach_name": "Miguel Fuenmayor",     "location_id": 32, "location_name": "Botánico",            "hours": 101 },
+    { "coach_name": "Serena Moreno",        "location_id": 32, "location_name": "Botánico",            "hours": 102 },
+    { "coach_name": "Tomas Bustos Barron",  "location_id": 32, "location_name": "Botánico",            "hours": 41  }
+  ]
+}

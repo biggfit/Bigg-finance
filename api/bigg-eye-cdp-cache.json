@@ -1,0 +1,321 @@
+{
+  "_meta": {
+    "generado": "2026-06-01",
+    "nota": "Cache manual vía MCP. Regenerar cada mes al liquidar sueldos. Dos fuentes: (1) cdp_count coaches = socios convertidos (type=Members en get_conversion_cdp). (2) cdp_count + one_shot_count vendedores = cierres Trial Class y One Shot del vendedor (report_id=20, seller_name). Excluir entradas con member_name que contenga 'test'.",
+    "ciclo": "mismo ciclo que bigg-eye-horas-cache.json"
+  },
+  "2026-05-AR": [
+    {
+      "coach_name": "Gianluca Musitano",
+      "location_id": 1,
+      "location_name": "Recoleta",
+      "cdp_coach": 7,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Julieta Maiorana",
+      "location_id": 1,
+      "location_name": "Recoleta",
+      "cdp_coach": 5,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Caetano Bravo",
+      "location_id": 1,
+      "location_name": "Recoleta",
+      "cdp_coach": 3,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Ivan Silva",
+      "location_id": 1,
+      "location_name": "Recoleta",
+      "cdp_coach": 3,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Facundo Perez",
+      "location_id": 1,
+      "location_name": "Recoleta",
+      "cdp_coach": 2,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Lautaro Pablovich",
+      "location_id": 1,
+      "location_name": "Recoleta",
+      "cdp_coach": 1,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Abril Coronel",
+      "location_id": 1,
+      "location_name": "Recoleta",
+      "cdp_coach": 0,
+      "cdp_front": 10,
+      "one_shot_count": 6
+    },
+    {
+      "coach_name": "Valentina Contreras",
+      "location_id": 1,
+      "location_name": "Recoleta",
+      "cdp_coach": 0,
+      "cdp_front": 9,
+      "one_shot_count": 2
+    },
+    {
+      "coach_name": "Francisco Leon",
+      "location_id": 1,
+      "location_name": "Recoleta",
+      "cdp_coach": 0,
+      "cdp_front": 3,
+      "one_shot_count": 3
+    },
+    {
+      "coach_name": "Francisco Waddington",
+      "location_id": 2,
+      "location_name": "Palermo Chico",
+      "cdp_coach": 10,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Franco Gomez",
+      "location_id": 2,
+      "location_name": "Palermo Chico",
+      "cdp_coach": 3,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Facundo Garcia",
+      "location_id": 2,
+      "location_name": "Palermo Chico",
+      "cdp_coach": 3,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Agustin Chaicoski",
+      "location_id": 2,
+      "location_name": "Palermo Chico",
+      "cdp_coach": 0,
+      "cdp_front": 11,
+      "one_shot_count": 1
+    },
+    {
+      "coach_name": "Barbara Frenkiel",
+      "location_id": 2,
+      "location_name": "Palermo Chico",
+      "cdp_coach": 0,
+      "cdp_front": 5,
+      "one_shot_count": 3
+    },
+    {
+      "coach_name": "Franco Gomez",
+      "location_id": 3,
+      "location_name": "Belgrano Av Cabildo",
+      "cdp_coach": 8,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Nicolas Gago",
+      "location_id": 3,
+      "location_name": "Belgrano Av Cabildo",
+      "cdp_coach": 6,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Emanuel Fernandez",
+      "location_id": 3,
+      "location_name": "Belgrano Av Cabildo",
+      "cdp_coach": 1,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Alfonsina Parrilla",
+      "location_id": 3,
+      "location_name": "Belgrano Av Cabildo",
+      "cdp_coach": 0,
+      "cdp_front": 9,
+      "one_shot_count": 1
+    },
+    {
+      "coach_name": "Candela Martinez",
+      "location_id": 3,
+      "location_name": "Belgrano Av Cabildo",
+      "cdp_coach": 0,
+      "cdp_front": 6,
+      "one_shot_count": 2
+    },
+    {
+      "coach_name": "Juan Manuel Varela",
+      "location_id": 6,
+      "location_name": "Plaza Libertad",
+      "cdp_coach": 6,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Julian Alles",
+      "location_id": 6,
+      "location_name": "Plaza Libertad",
+      "cdp_coach": 2,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Martin Vazquez",
+      "location_id": 6,
+      "location_name": "Plaza Libertad",
+      "cdp_coach": 2,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Lautaro Pablovich",
+      "location_id": 6,
+      "location_name": "Plaza Libertad",
+      "cdp_coach": 2,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Pablo Torres",
+      "location_id": 6,
+      "location_name": "Plaza Libertad",
+      "cdp_coach": 0,
+      "cdp_front": 8,
+      "one_shot_count": 3
+    },
+    {
+      "coach_name": "Catalina Williner",
+      "location_id": 6,
+      "location_name": "Plaza Libertad",
+      "cdp_coach": 0,
+      "cdp_front": 4,
+      "one_shot_count": 2
+    },
+    {
+      "coach_name": "Nahuel Perez",
+      "location_id": 8,
+      "location_name": "Barrio Norte",
+      "cdp_coach": 8,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Lucas Zalazar",
+      "location_id": 8,
+      "location_name": "Barrio Norte",
+      "cdp_coach": 6,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Nicolas Gago",
+      "location_id": 8,
+      "location_name": "Barrio Norte",
+      "cdp_coach": 4,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Loana Rios",
+      "location_id": 8,
+      "location_name": "Barrio Norte",
+      "cdp_coach": 0,
+      "cdp_front": 9,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Mateo Pastormerlo",
+      "location_id": 8,
+      "location_name": "Barrio Norte",
+      "cdp_coach": 0,
+      "cdp_front": 9,
+      "one_shot_count": 1
+    },
+    {
+      "coach_name": "Miguel Fuenmayor",
+      "location_id": 32,
+      "location_name": "Botánico",
+      "cdp_coach": 7,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Serena Moreno",
+      "location_id": 32,
+      "location_name": "Botánico",
+      "cdp_coach": 4,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Sofia Isabella Paredes",
+      "location_id": 32,
+      "location_name": "Botánico",
+      "cdp_coach": 0,
+      "cdp_front": 7,
+      "one_shot_count": 1
+    },
+    {
+      "coach_name": "Tomas Bustos Barrón",
+      "location_id": 32,
+      "location_name": "Botánico",
+      "cdp_coach": 0,
+      "cdp_front": 4,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Tomas Bustos Barron",
+      "location_id": 32,
+      "location_name": "Botánico",
+      "cdp_coach": 0,
+      "cdp_front": 0,
+      "one_shot_count": 3
+    },
+    {
+      "coach_name": "Maira Irungaray",
+      "location_id": 42,
+      "location_name": "Palermo Rosedal",
+      "cdp_coach": 3,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Roberto Tedin",
+      "location_id": 42,
+      "location_name": "Palermo Rosedal",
+      "cdp_coach": 2,
+      "cdp_front": 0,
+      "one_shot_count": 0
+    },
+    {
+      "coach_name": "Agustin Fernandez",
+      "location_id": 42,
+      "location_name": "Palermo Rosedal",
+      "cdp_coach": 2,
+      "cdp_front": 6,
+      "one_shot_count": 1
+    },
+    {
+      "coach_name": "Natacha Gonzalez",
+      "location_id": 42,
+      "location_name": "Palermo Rosedal",
+      "cdp_coach": 0,
+      "cdp_front": 1,
+      "one_shot_count": 0
+    }
+  ]
+}

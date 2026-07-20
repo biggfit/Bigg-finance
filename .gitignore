@@ -8,3 +8,8 @@ dist
 
 # Migration artifacts
 migration_*.csv
+
+# Artefactos locales (no versionar)
+*.log
+*.pptx
+UsersASUSDownloadscomps_raw.json
