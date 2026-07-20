@@ -75,6 +75,12 @@ function sumar5(detalle) {
   return t;
 }
 
+// Ordena las líneas de clase: Presentes antes que Ausentes (espejo de BIGG Eye), estable en el resto.
+function ordenarDetalle(detalle) {
+  return [...(detalle || [])].sort((a, b) =>
+    (a.asistio === "Ausentes" ? 1 : 0) - (b.asistio === "Ausentes" ? 1 : 0));
+}
+
 // Sintetiza líneas de detalle desde los 5 campos agregados (para filas sin check-in de Eye o guardadas).
 function detalleDesde5(row) {
   const h = Number(row.horas) || 0, f = Number(row.horas_feriados) || 0, dm = Number(row.horas_domingos) || 0;
@@ -541,6 +547,8 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       if (row.id)                         row.horas_detalle = detalleDesde5(row);
       else if (row.horas_detalle?.length) Object.assign(row, sumar5(row.horas_detalle));
       else                                row.horas_detalle = detalleDesde5(row);
+      // Presentes primero (espejo de BIGG Eye): estable, respeta el orden de clases dentro de cada asistió.
+      row.horas_detalle = ordenarDetalle(row.horas_detalle);
     }
 
     return applyObjetivosToRows([...byKey.values()], objetivos);
