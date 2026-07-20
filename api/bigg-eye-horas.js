@@ -282,10 +282,11 @@ export default async function handler(req, res) {
   const dateMes = `${yr}-${pad(mo)}`;
 
   // ── 0. Cache manual (datos precargados vía MCP, se regeneran cada mes) ──────
+  const fresh      = req.query.fresh === "1" || req.query.fresh === "true";  // "Re-sincronizar": saltea cache, baja en vivo
   const cacheKey   = `${yr}-${pad(mo)}-${pais ? pais.toUpperCase() : "ALL"}`;
   const cacheData  = getCache();
   const cachedItems = cacheData[cacheKey];
-  if (Array.isArray(cachedItems) && cachedItems.length > 0) {
+  if (!fresh && Array.isArray(cachedItems) && cachedItems.length > 0) {
     // Si se pasa pais pero hay cache sin pais específico, ya vienen filtrados.
     // Filtrar adicionalmente por sedesTarget en caso de mismatch.
     const sedesTargetIdsCache = new Set(sedesTarget.map(s => s.id));
@@ -349,9 +350,11 @@ export default async function handler(req, res) {
       // REST sin location_id no devolvió datos. Intentar el MCP server de Cloudflare Workers.
       let mcpRows = [];
       try {
-        // Fetch sin location_id (null) para obtener todos
-        const rows = await fetchViaWorkerMcp(null, start, end);
-        if (Array.isArray(rows)) mcpRows = rows;
+        // Un request POR SEDE: el worker exige location_id (con null tira "undefined method id for nil").
+        const perSede = await Promise.all(
+          sedesTarget.map(s => fetchViaWorkerMcp(s.id, start, end).catch(() => null))
+        );
+        mcpRows = perSede.filter(Array.isArray).flat();
       } catch {}
 
       const mcpItems = eyeLineasDe(mcpRows, sedesTargetIds, sedesById);
@@ -364,8 +367,24 @@ export default async function handler(req, res) {
           total_locations: sedesTarget.length,
           location_names:  sedesTarget.map(s => `${s.id}:${s.nombre}`),
           rejected_count:  0, rejected_msgs: [],
-          _sample_url:     "vía MCP Cloudflare Workers",
-          _sample_resp:    { raw: `${mcpItems.length} items desde MCP server` },
+          _sample_url:     "en vivo · MCP por sede",
+          _sample_resp:    { raw: `${mcpItems.length} items en vivo (worker por sede)` },
+        }));
+        return;
+      }
+
+      // En vivo no devolvió nada. Si hay cache del mes, devolverlo (no dejar la pantalla vacía).
+      if (Array.isArray(cachedItems) && cachedItems.length > 0) {
+        const filtered = eyeLineasDe(cachedItems, sedesTargetIds, sedesById);
+        res.statusCode = 200;
+        res.end(JSON.stringify({
+          items:           filtered,
+          locations_count: sedesTarget.length,
+          total_locations: sedesTarget.length,
+          location_names:  sedesTarget.map(s => `${s.id}:${s.nombre}`),
+          rejected_count:  0, rejected_msgs: [],
+          _sample_url:     `cache-fallback:${cacheKey}`,
+          _sample_resp:    { raw: `${filtered.length} coaches desde cache (en vivo no respondió)` },
         }));
         return;
       }

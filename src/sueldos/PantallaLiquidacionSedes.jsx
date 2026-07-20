@@ -1352,7 +1352,7 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, updateR
     setEyeResult(null);
     try {
       const eyeIds = sedes.filter(s => s.bigg_eye_id).map(s => s.bigg_eye_id);
-      const eyeData = await fetchHorasDesdeEye(mes, anio, pais, eyeIds);
+      const eyeData = await fetchHorasDesdeEye(mes, anio, pais, eyeIds, true);  // fresh: baja en vivo, saltea cache
       const items = eyeData.items ?? [];
       onResyncEye(items);
 
@@ -1556,7 +1556,7 @@ function PasoIncentivos({ rows, legajos, sedes, mes, anio, pais, updateRow, remo
     setCdpResult(null);
     try {
       const eyeIds = sedes.filter(s => s.bigg_eye_id).map(s => s.bigg_eye_id);
-      const cdpData = await fetchCdpDesdeEye(mes, anio, pais, eyeIds);
+      const cdpData = await fetchCdpDesdeEye(mes, anio, pais, eyeIds, true);  // fresh: baja en vivo, saltea cache
       const items = cdpData.items ?? [];
 
       const cdpMap = new Map();   // row._id → { q_cdp, q_one_shot }

@@ -201,13 +201,16 @@ export default async function handler(req, res) {
   const sedesById      = Object.fromEntries(sedesTarget.map(s => [s.id, s]));
 
   // ── 0. Cache manual ──────────────────────────────────────────────────────────
+  const fresh       = req.query.fresh === "1" || req.query.fresh === "true";  // "Cargar CDP": saltea cache, baja en vivo
   const cacheKey    = `${yr}-${pad(mo)}-${pais ? pais.toUpperCase() : "ALL"}`;
   const cacheData   = getCache();
   const cachedItems = cacheData[cacheKey];
-  if (Array.isArray(cachedItems) && cachedItems.length > 0) {
-    const filtered = cachedItems.filter(r => sedesTargetIds.has(Number(r.location_id)));
+  const cacheFiltered = Array.isArray(cachedItems)
+    ? cachedItems.filter(r => sedesTargetIds.has(Number(r.location_id)))
+    : [];
+  if (!fresh && cacheFiltered.length > 0) {
     res.statusCode = 200;
-    res.end(JSON.stringify({ items: filtered, _source: `cache:${cacheKey}` }));
+    res.end(JSON.stringify({ items: cacheFiltered, _source: `cache:${cacheKey}` }));
     return;
   }
 
@@ -221,10 +224,14 @@ export default async function handler(req, res) {
   // cdp_front al vendedor que cerró (seller). One-shots: report 20 (cdp='One Shot').
   // Se traen por el MCP de Cloudflare Workers (el REST /report del token está roto).
   try {
-    const [cdpRows, oneShotRows] = await Promise.all([
-      fetchViaWorkerMcp(9,  null, start, end),
-      fetchViaWorkerMcp(20, null, start, end),
-    ]);
+    // Un request POR SEDE por reporte: el worker exige location_id (con null tira "undefined method id for nil").
+    const pull = async (report_id) => {
+      const per = await Promise.all(
+        sedesTarget.map(s => fetchViaWorkerMcp(report_id, s.id, start, end).catch(() => null))
+      );
+      return per.filter(Array.isArray).flat();
+    };
+    const [cdpRows, oneShotRows] = await Promise.all([pull(9), pull(20)]);
     const cdpResult     = { data: cdpRows || [],     status: 200, raw: "" };
     const oneShotResult = { data: oneShotRows || [], status: 200, raw: "" };
 
@@ -262,12 +269,19 @@ export default async function handler(req, res) {
     const items = Array.from(map.values())
       .filter(r => r.cdp_coach > 0 || r.cdp_front > 0 || r.one_shot_count > 0);
 
+    // En vivo no devolvió nada. Si hay cache del mes, devolverlo (no dejar la pantalla vacía).
+    if (items.length === 0 && cacheFiltered.length > 0) {
+      res.statusCode = 200;
+      res.end(JSON.stringify({ items: cacheFiltered, _source: `cache-fallback:${cacheKey}` }));
+      return;
+    }
+
     const cdpCount = extractRows(cdpResult.data).length;
     res.statusCode = 200;
     res.end(JSON.stringify({
       items,
-      _source: `report_id=9 vía MCP (${cdpCount} filas) + report_id=20 (one-shot)`,
-      ...(cdpCount === 0 && { _debug: "report 9 vía MCP devolvió 0 filas" }),
+      _source: `report 9 por sede en vivo (${cdpCount} filas) + report 20 (one-shot)`,
+      ...(cdpCount === 0 && { _debug: "report 9 en vivo devolvió 0 filas" }),
     }));
   } catch (err) {
     res.statusCode = 500;

@@ -847,9 +847,10 @@ export async function pagarCargasSociales({
  * para el mes/año indicado. Devuelve un array de
  * { coach_name, location_id, location_name, hours }.
  */
-export async function fetchHorasDesdeEye(mes, anio, pais = "", locationIds = []) {
+export async function fetchHorasDesdeEye(mes, anio, pais = "", locationIds = [], fresh = false) {
   const qs = new URLSearchParams({ month: mes, year: anio, ...(pais ? { pais } : {}) });
   if (locationIds.length > 0) qs.set("location_ids", locationIds.join(","));
+  if (fresh) qs.set("fresh", "1");   // saltea cache, baja en vivo del worker por sede
   const res  = await fetch(`/api/bigg-eye-horas?${qs}`);
   const data = await res.json();
   if (data?.error) throw new Error(data.error);
@@ -860,9 +861,10 @@ export async function fetchHorasDesdeEye(mes, anio, pais = "", locationIds = [])
  * Trae las conversiones CDP y one-shots por coach desde Bigg Eye.
  * Devuelve { items: [{ coach_name, location_id, location_name, cdp_count, one_shot_count }] }
  */
-export async function fetchCdpDesdeEye(mes, anio, pais = "", locationIds = []) {
+export async function fetchCdpDesdeEye(mes, anio, pais = "", locationIds = [], fresh = false) {
   const qs = new URLSearchParams({ month: mes, year: anio, ...(pais ? { pais } : {}) });
   if (locationIds.length > 0) qs.set("location_ids", locationIds.join(","));
+  if (fresh) qs.set("fresh", "1");   // saltea cache, baja en vivo del worker por sede
   const res  = await fetch(`/api/bigg-eye-cdp?${qs}`);
   const data = await res.json();
   if (data?.error) throw new Error(data.error);
