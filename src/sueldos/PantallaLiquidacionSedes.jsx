@@ -680,6 +680,20 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     }
   };
 
+  // Filas del roster ocultadas con removeRow (edits[_id]._deleted). El borrado persiste en el draft;
+  // este contador + "Restaurar" las hace recuperables (limpia el flag, dejando el resto de los edits).
+  const ocultas = useMemo(
+    () => rosterBase.filter(r => edits[r._id]?._deleted).map(r => r.legajo_nombre),
+    [rosterBase, edits]);
+  const restaurarOcultas = () => setEdits(prev => {
+    const n = {};
+    for (const [k, v] of Object.entries(prev)) {
+      if (v?._deleted) { const { _deleted, ...rest } = v; if (Object.keys(rest).length) n[k] = rest; }
+      else n[k] = v;
+    }
+    return n;
+  });
+
   const handleAddRow = () => {
     const leg  = legajos.find(l => l.id === addForm.legajo_id);
     const sede = sedes.find(s => s.id === addForm.sede_id);
@@ -852,6 +866,16 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
           {categorias.length === 0 && (
             <span style={{ fontSize: 12, color: T.yellow }}>⚠️ Sin tarifas — cargalas en Categorías</span>
+          )}
+          {ocultas.length > 0 && (
+            <span style={{ fontSize: 11, color: T.muted, display: "flex", alignItems: "center", gap: 6 }}
+              title={`Ocultas: ${ocultas.join(", ")}`}>
+              🙈 {ocultas.length} {ocultas.length === 1 ? "fila oculta" : "filas ocultas"}
+              <button onClick={restaurarOcultas}
+                style={{ background: "none", border: "none", cursor: "pointer", color: T.blue, fontSize: 11, textDecoration: "underline", fontFamily: T.font }}>
+                restaurar
+              </button>
+            </span>
           )}
           {draftSavedAt && (
             <span style={{ fontSize: 11, color: T.muted, display: "flex", alignItems: "center", gap: 6 }}>
