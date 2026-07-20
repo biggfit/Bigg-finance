@@ -180,41 +180,6 @@ export async function appendEgreso(egreso) {
   return { ok: true, id_comp };
 }
 
-/**
- * Resumen de tarjeta de crédito → un egreso (nb_comprobantes) POR MONEDA.
- * Cada línea lleva sus dimensiones: cuenta + centro + titular + comercio (nota) + moneda + monto.
- * Las líneas se agrupan por moneda; cada grupo es un id_comp (CxP) propio, escrito en UN add_batch.
- * Sin IVA discriminado: los impuestos del resumen son sus propias líneas (con su cuenta de impuesto).
- * La contraparte es la tarjeta (proveedor "^Tarjeta") → la CxP agrupa como "Tarjeta de crédito".
- */
-export async function appendResumenTarjeta({ sociedad, tarjetaId = "", tarjeta = "", periodo = "", fecha, vto = "", lineas = [] }) {
-  const created_at = new Date().toISOString();
-  const porMoneda = {};
-  for (const l of lineas) (porMoneda[l.moneda || "ARS"] ??= []).push(l);
-
-  const ids = [];
-  for (const [moneda, ls] of Object.entries(porMoneda)) {
-    const id_comp = newId("TAR");
-    const rows = ls.map((l, i) => {
-      const monto = Number(l.monto) || 0;
-      return {
-        id: `${id_comp}-L${pad(i + 1)}`, id_comp,
-        sociedad, fecha, vto, subtipo: "EGRESO",
-        contraparte_id: tarjetaId, contraparte_nombre: tarjeta,
-        cuenta_contable: l.cuenta ?? "", cuenta_contable_id: l.cuentaId ?? "",
-        moneda, centro_costo: l.cc ?? "",
-        subtotal: monto, iva_rate: 0, iva_monto: 0, total: monto,
-        nro_comp: `${tarjeta} ${periodo}`.trim(), nota: l.comercio ?? "",
-        titular: l.titular ?? "",
-        created_at,
-      };
-    });
-    await post({ action: "add_batch", sheet: "nb_comprobantes", rows });
-    ids.push({ moneda, id_comp });
-  }
-  return { ok: true, ids };
-}
-
 /** Elimina todas las líneas de un egreso (por id_comp). */
 export async function deleteEgreso(id_comp) {
   return post({ action: "del_comp", sheet: "nb_comprobantes", id_comp });
