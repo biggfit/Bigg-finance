@@ -10,6 +10,7 @@ import {
   fetchSociedades, appendSociedad, updateSociedad, deleteSociedad,
   appendSaldoInicial, fetchSaldoInicialMovimiento, updateSaldoInicial,
   fetchBancoReglas, appendBancoRegla, updateBancoRegla, deleteBancoRegla,
+  contarUsosMaestro,
 } from "../lib/numbersApi";
 import { CUENTAS as CUENTAS_STATIC, CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 
@@ -386,10 +387,17 @@ function TabProveedores() {
   };
 
   const handleEliminar = async (prov) => {
-    if (!confirm(`¿Eliminar "${prov.nombre}"?`)) return;
     try {
-      await deleteProveedor(prov.id);
-      setProveedores(prev => prev.filter(p => p.id !== prov.id));
+      const usos = await contarUsosMaestro({ contraparteId: prov.id });
+      if (usos > 0) {
+        if (!confirm(`"${prov.nombre}" tiene ${usos} comprobante(s)/movimiento(s) asociado(s), así que no se puede borrar sin dejar esos registros colgados.\n\n¿Desactivarlo (activo: No)? Deja de aparecer en los selectores pero conserva su historial.`)) return;
+        await updateProveedor(prov.id, { activo: false });
+        setProveedores(prev => prev.map(p => p.id === prov.id ? { ...p, activo: false } : p));
+      } else {
+        if (!confirm(`¿Eliminar "${prov.nombre}"? No tiene movimientos asociados.`)) return;
+        await deleteProveedor(prov.id);
+        setProveedores(prev => prev.filter(p => p.id !== prov.id));
+      }
     } catch (e) {
       alert("Error al eliminar: " + e.message);
     }
@@ -547,10 +555,17 @@ function TabClientes() {
   };
 
   const handleEliminar = async (cli) => {
-    if (!confirm(`¿Eliminar "${cli.nombre}"?`)) return;
     try {
-      await deleteCliente(cli.id);
-      setClientes(prev => prev.filter(c => c.id !== cli.id));
+      const usos = await contarUsosMaestro({ contraparteId: cli.id });
+      if (usos > 0) {
+        if (!confirm(`"${cli.nombre}" tiene ${usos} comprobante(s)/movimiento(s) asociado(s), así que no se puede borrar sin dejar esos registros colgados.\n\n¿Desactivarlo (activo: No)? Deja de aparecer en los selectores pero conserva su historial.`)) return;
+        await updateCliente(cli.id, { activo: false });
+        setClientes(prev => prev.map(c => c.id === cli.id ? { ...c, activo: false } : c));
+      } else {
+        if (!confirm(`¿Eliminar "${cli.nombre}"? No tiene movimientos asociados.`)) return;
+        await deleteCliente(cli.id);
+        setClientes(prev => prev.filter(c => c.id !== cli.id));
+      }
     } catch (e) {
       alert("Error al eliminar: " + e.message);
     }
@@ -1345,10 +1360,17 @@ function TabCC() {
   };
 
   const handleEliminar = async (cc) => {
-    if (!confirm(`¿Eliminar "${cc.nombre}"?`)) return;
     try {
-      await deleteCentroCosto(cc.id);
-      setCcs(prev => prev.filter(c => c.id !== cc.id));
+      const usos = await contarUsosMaestro({ centroId: cc.id });
+      if (usos > 0) {
+        if (!confirm(`"${cc.nombre}" tiene ${usos} comprobante(s)/movimiento(s) imputado(s), así que no se puede borrar sin dejar esos registros colgados.\n\n¿Desactivarlo (activo: No)? Deja de aparecer en los selectores pero conserva su historial.`)) return;
+        await updateCentroCosto(cc.id, { activo: false });
+        setCcs(prev => prev.map(c => c.id === cc.id ? { ...c, activo: false } : c));
+      } else {
+        if (!confirm(`¿Eliminar "${cc.nombre}"? No tiene movimientos asociados.`)) return;
+        await deleteCentroCosto(cc.id);
+        setCcs(prev => prev.filter(c => c.id !== cc.id));
+      }
     } catch (e) {
       alert("Error al eliminar: " + e.message);
     }
@@ -1540,9 +1562,17 @@ function TabSociedades() {
   };
 
   const handleEliminar = async (s) => {
-    if (!confirm(`¿Eliminar "${s.nombre}"? Esto no elimina las cuentas asociadas.`)) return;
-    try { await deleteSociedad(s.id); await recargar(); }
-    catch (e) { alert("Error: " + e.message); }
+    try {
+      const usos = await contarUsosMaestro({ sociedadId: s.id });
+      if (usos > 0) {
+        if (!confirm(`"${s.nombre}" tiene ${usos} comprobante(s)/movimiento(s) asociado(s), así que no se puede borrar sin dejar esos registros colgados.\n\n¿Desactivarla (activo: No)? Deja de aparecer en los selectores pero conserva su historial. (No elimina las cuentas asociadas.)`)) return;
+        await updateSociedad(s.id, { activo: false });
+      } else {
+        if (!confirm(`¿Eliminar "${s.nombre}"? No tiene movimientos asociados. Esto no elimina las cuentas asociadas.`)) return;
+        await deleteSociedad(s.id);
+      }
+      await recargar();
+    } catch (e) { alert("Error: " + e.message); }
   };
 
   return (

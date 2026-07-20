@@ -1621,6 +1621,23 @@ export function lecturaInterco({ movs = [], comps = [], centros = [] } = {}, { s
   return out;
 }
 
+// ── Integridad referencial de maestros ────────────────────────────────────────
+// Cuenta cuántos registros (comprobantes + movimientos) referencian a un maestro, para decidir
+// antes de borrar: si tiene usos → soft-delete (activo:false); si no → borrado físico seguro.
+// Sheets no tiene FKs, así que el chequeo es client-side sobre las dos tablas transaccionales.
+export async function contarUsosMaestro({ contraparteId = "", centroId = "", sociedadId = "" } = {}) {
+  const [comps, movs] = await Promise.all([
+    get("nb_comprobantes", {}).catch(() => []),
+    get("nb_movimientos", {}).catch(() => []),
+  ]);
+  const cp = String(contraparteId || ""), cc = String(centroId || ""), so = String(sociedadId || "");
+  const hit = r =>
+    (cp && String(r.contraparte_id || "") === cp) ||
+    (cc && String(r.centro_costo || "") === cc) ||
+    (so && String(r.sociedad || "") === so);
+  return [...(Array.isArray(comps) ? comps : []), ...(Array.isArray(movs) ? movs : [])].filter(hit).length;
+}
+
 // ── Validación de duplicados ──────────────────────────────────────────────────
 
 /**
