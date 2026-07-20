@@ -183,6 +183,50 @@ async function fetchViaWorkerMcp(location_id, start, end) {
   return null;
 }
 
+// ── Mapeo de filas del reporte 12 nuevo (clase × día × asistió) ────────────────
+// El reporte ahora desglosa por CLASE (BIGG CLASS / YOGA / RUNNING) × tipo de día
+// (regulares / feriado / domingo) + Asistió (Presentes / Ausentes). Los nombres de campo
+// del MCP no están 100% confirmados → mapeo TOLERANTE (prueba variantes). Compat hacia atrás:
+// si la fila no trae desglose nuevo, se toma `hours` como BIGG CLASS regulares.
+const numh = (v) => { const n = Number(String(v ?? "").toString().replace(",", ".")); return isFinite(n) ? n : 0; };
+const pick = (r, ...keys) => { for (const k of keys) if (r[k] != null && r[k] !== "") return r[k]; return undefined; };
+function clasificarClase(raw) {
+  const s = String(raw ?? "").toUpperCase();
+  if (s.includes("YOGA")) return "YOGA";
+  if (s.includes("RUNNING") || s.includes("RUN")) return "RUNNING";
+  return "BIGG CLASS";
+}
+function esPresente(r) {
+  const s = String(pick(r, "asistio", "asistió", "attended", "presente", "asistencia") ?? "").toLowerCase();
+  if (!s) return true;   // sin dato → contar (compat)
+  return s.startsWith("pres") || s === "true" || s === "1" || s === "si" || s === "sí";
+}
+// rows → líneas normalizadas (una por coach×sede×clase×asistió), filtradas a las sedes operadas.
+function eyeLineasDe(rows, sedesTargetIds, sedesById) {
+  const out = [];
+  for (const r of (Array.isArray(rows) ? rows : [])) {
+    const locId = Number(r.location_id);
+    if (!sedesTargetIds.has(locId)) continue;
+    const reg = numh(pick(r, "hs_regulares", "regulares", "horas_regulares", "regular_hours", "hs_regular", "horas_regular"));
+    const fer = numh(pick(r, "hs_feriado", "feriado", "horas_feriado", "holiday_hours", "hs_feriados", "feriados"));
+    const dom = numh(pick(r, "hs_domingo", "domingo", "horas_domingo", "sunday_hours", "hs_domingos", "domingos"));
+    const tieneDesglose = pick(r, "hs_regulares", "regulares", "horas_regulares", "regular_hours", "hs_feriado", "feriado", "hs_domingo", "domingo", "clase", "class") != null;
+    const regFinal = tieneDesglose ? reg : numh(pick(r, "hours", "hs_total", "total_horas"));
+    if (regFinal === 0 && fer === 0 && dom === 0) continue;
+    const sede = sedesById[locId];
+    out.push({
+      coach_name:    String(r.coach_name ?? "").trim(),
+      location_id:   locId,
+      location_name: sede?.nombre ?? r.location_name ?? String(locId),
+      clase:         clasificarClase(pick(r, "clase", "class", "tipo_clase", "class_type", "class_name")),
+      asistio:       esPresente(r) ? "Presentes" : "Ausentes",
+      regulares:     regFinal, feriado: fer, domingo: dom,
+      hours:         regFinal + fer + dom,   // compat con consumidores viejos
+    });
+  }
+  return out;
+}
+
 export default async function handler(req, res) {
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -243,7 +287,9 @@ export default async function handler(req, res) {
     // Si se pasa pais pero hay cache sin pais específico, ya vienen filtrados.
     // Filtrar adicionalmente por sedesTarget en caso de mismatch.
     const sedesTargetIdsCache = new Set(sedesTarget.map(s => s.id));
-    const filtered = cachedItems.filter(r => sedesTargetIdsCache.has(Number(r.location_id)));
+    const sedesByIdCache = Object.fromEntries(sedesTarget.map(s => [s.id, s]));
+    // eyeLineasDe normaliza tanto la caché nueva (con clase/desglose) como la vieja (hours).
+    const filtered = eyeLineasDe(cachedItems, sedesTargetIdsCache, sedesByIdCache);
     res.statusCode = 200;
     res.end(JSON.stringify({
       items:           filtered,
@@ -306,18 +352,7 @@ export default async function handler(req, res) {
         if (Array.isArray(rows)) mcpRows = rows;
       } catch {}
 
-      const mcpItems = mcpRows
-        .filter(r => Number(r.hours) > 0 && sedesTargetIds.has(Number(r.location_id)))
-        .map(r => {
-          const locId = Number(r.location_id);
-          const sede  = sedesById[locId];
-          return {
-            coach_name:    String(r.coach_name ?? "").trim(),
-            location_id:   locId,
-            location_name: sede?.nombre ?? r.location_name ?? String(locId),
-            hours:         Number(r.hours) || 0,
-          };
-        });
+      const mcpItems = eyeLineasDe(mcpRows, sedesTargetIds, sedesById);
 
       if (mcpItems.length > 0) {
         res.statusCode = 200;
@@ -343,20 +378,9 @@ export default async function handler(req, res) {
       return;
     }
 
-    // Hay una URL que funciona — filtrar client-side a nuestras sedes
+    // Hay una URL que funciona — normalizar a líneas por clase/día y filtrar a nuestras sedes
     const allRows = extractRows(probes[working].data);
-    const items = allRows
-      .filter(r => Number(r.hours) > 0 && sedesTargetIds.has(Number(r.location_id)))
-      .map(r => {
-        const locId = Number(r.location_id);
-        const sede  = sedesById[locId];
-        return {
-          coach_name:    String(r.coach_name ?? "").trim(),
-          location_id:   locId,
-          location_name: sede?.nombre ?? r.location_name ?? String(locId),
-          hours:         Number(r.hours) || 0,
-        };
-      });
+    const items = eyeLineasDe(allRows, sedesTargetIds, sedesById);
 
     res.statusCode = 200;
     res.end(JSON.stringify({

@@ -470,7 +470,22 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
           legajo_nombre: item.coach_name, sede_id: sede.id, sede_nombre: sede.nombre, rol: "COACH" };
       }
       if (!byKey.has(key)) byKey.set(key, baseRow(seed));
-      byKey.get(key).horas += Number(item.hours) || 0;
+      const row = byKey.get(key);
+      // Guardo la línea cruda de Eye (clase × asistió × reg/fer/dom) para la grilla espejo.
+      (row.horas_detalle ??= []).push({
+        clase: item.clase || "BIGG CLASS", asistio: item.asistio || "Presentes",
+        regulares: Number(item.regulares) || 0, feriado: Number(item.feriado) || 0, domingo: Number(item.domingo) || 0,
+      });
+      // Derivo los campos de pago desde lo CONFIRMADO (Presentes). Feriado/Domingo solo en BIGG CLASS;
+      // YOGA/RUNNING = tarifa plana (todas sus horas a su balde). Los Ausentes quedan en el detalle
+      // (editables/pagables aparte). Las liquidaciones guardadas pisan estos derivados en el merge (paso 3).
+      if (item.asistio !== "Ausentes") {
+        const reg = Number(item.regulares) || 0, fer = Number(item.feriado) || 0, dom = Number(item.domingo) || 0;
+        const clase = (item.clase || "BIGG CLASS").toUpperCase();
+        if (clase === "YOGA")         row.horas_yoga    += reg + fer + dom;
+        else if (clase === "RUNNING") row.horas_running += reg + fer + dom;
+        else { row.horas += reg; row.horas_feriados += fer; row.horas_domingos += dom; }
+      }
     }
 
     // 2) Legajos activos de rol Sedes sin check-in → se siembran igual (0 horas).
