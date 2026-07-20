@@ -1148,7 +1148,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
             {pendRecibir.length === 0 ? (
               <div style={{ color: T.muted, fontSize: 13, padding: "8px 4px" }}>No hay interco pendientes de liquidar.</div>
             ) : (
-              <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10, overflow: "hidden", boxShadow: T.shadow }}>
+              <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10, overflowX: "auto", boxShadow: T.shadow }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, color: T.text }}>
                   <thead>
                     <tr style={{ color: T.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em", textAlign: "left", borderBottom: `1px solid ${T.cardBorder}` }}>
@@ -1171,7 +1171,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                         <td style={{ padding: "11px 14px" }}><b>{p.origen_nombre}</b> {recibi ? "te transfirió" : "— le transferiste"}</td>
                         <td style={{ padding: "11px 14px", fontSize: 11, color: T.muted, whiteSpace: "nowrap" }}>{de} <span style={{ color: T.dim }}>→</span> {a}</td>
                         <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: T.mono, fontWeight: 700, whiteSpace: "nowrap" }}>{money(p.monto, p.moneda)}</td>
-                        <td style={{ padding: "8px 14px", textAlign: "right", whiteSpace: "nowrap" }}>
+                        <td style={{ padding: "8px 14px", textAlign: "right", minWidth: 150 }}>
                           {p.mia ? (
                             <span style={{ fontSize: 11, color: T.dim }}>esperando que {p.origen_nombre} la cierre</span>
                           ) : recibi ? (
