@@ -61,6 +61,30 @@ function baseGrupalDe(rol, { horasMonto, feriadosMonto, asignado, sueldoBase }) 
 
 // Orden de visualización: primero por rol (Encargados → Vendedores → Limpieza → Coaches),
 // luego por centro de costo 1→7 (numérico, según el prefijo "01 - …" de la sede).
+// Deriva los 5 campos de pago (fuente única) desde el detalle de líneas de clase de BIGG Eye.
+// Feriado/Domingo solo aplican a BIGG CLASS; YOGA/RUNNING = tarifa plana (todas sus horas a su balde).
+function sumar5(detalle) {
+  const t = { horas: 0, horas_feriados: 0, horas_domingos: 0, horas_yoga: 0, horas_running: 0 };
+  for (const l of (detalle || [])) {
+    const reg = Number(l.regulares) || 0, fer = Number(l.feriado) || 0, dom = Number(l.domingo) || 0;
+    const c = String(l.clase || "BIGG CLASS").toUpperCase();
+    if (c.includes("YOGA"))         t.horas_yoga    += reg + fer + dom;
+    else if (c.includes("RUNNING")) t.horas_running += reg + fer + dom;
+    else { t.horas += reg; t.horas_feriados += fer; t.horas_domingos += dom; }
+  }
+  return t;
+}
+
+// Sintetiza líneas de detalle desde los 5 campos agregados (para filas sin check-in de Eye o guardadas).
+function detalleDesde5(row) {
+  const h = Number(row.horas) || 0, f = Number(row.horas_feriados) || 0, dm = Number(row.horas_domingos) || 0;
+  const y = Number(row.horas_yoga) || 0, r = Number(row.horas_running) || 0;
+  const d = [{ clase: "BIGG CLASS", asistio: "Presentes", regulares: h, feriado: f, domingo: dm }];
+  if (y) d.push({ clase: "YOGA",    asistio: "Presentes", regulares: y, feriado: 0, domingo: 0 });
+  if (r) d.push({ clase: "RUNNING", asistio: "Presentes", regulares: r, feriado: 0, domingo: 0 });
+  return d;
+}
+
 const ROL_ORDEN = { ENCARGADO: 0, VENTAS: 1, LIMPIEZA: 2, COACH_SENIOR: 3, COACH: 4, BOTANICO: 5, YOGA: 6 };
 const sortByRol = (arr) => [...arr].sort((a, b) => {
   const ro = (ROL_ORDEN[a.rol] ?? 9) - (ROL_ORDEN[b.rol] ?? 9);
@@ -470,22 +494,11 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
           legajo_nombre: item.coach_name, sede_id: sede.id, sede_nombre: sede.nombre, rol: "COACH" };
       }
       if (!byKey.has(key)) byKey.set(key, baseRow(seed));
-      const row = byKey.get(key);
-      // Guardo la línea cruda de Eye (clase × asistió × reg/fer/dom) para la grilla espejo.
-      (row.horas_detalle ??= []).push({
+      // 1 línea de detalle por clase × asistió (espejo del reporte). El pago sale de acá (ver normalización).
+      (byKey.get(key).horas_detalle ??= []).push({
         clase: item.clase || "BIGG CLASS", asistio: item.asistio || "Presentes",
         regulares: Number(item.regulares) || 0, feriado: Number(item.feriado) || 0, domingo: Number(item.domingo) || 0,
       });
-      // Derivo los campos de pago desde lo CONFIRMADO (Presentes). Feriado/Domingo solo en BIGG CLASS;
-      // YOGA/RUNNING = tarifa plana (todas sus horas a su balde). Los Ausentes quedan en el detalle
-      // (editables/pagables aparte). Las liquidaciones guardadas pisan estos derivados en el merge (paso 3).
-      if (item.asistio !== "Ausentes") {
-        const reg = Number(item.regulares) || 0, fer = Number(item.feriado) || 0, dom = Number(item.domingo) || 0;
-        const clase = (item.clase || "BIGG CLASS").toUpperCase();
-        if (clase === "YOGA")         row.horas_yoga    += reg + fer + dom;
-        else if (clase === "RUNNING") row.horas_running += reg + fer + dom;
-        else { row.horas += reg; row.horas_feriados += fer; row.horas_domingos += dom; }
-      }
     }
 
     // 2) Legajos activos de rol Sedes sin check-in → se siembran igual (0 horas).
@@ -520,6 +533,16 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       }
     }
 
+    // Normalización: el detalle por clase es la fuente única de las horas.
+    //  - guardada (id): sus 5 campos mandan → sintetizo el detalle desde ellos (para la grilla).
+    //  - de Eye (tiene detalle): los 5 campos = suma del detalle (Presentes + Ausentes; ver grilla).
+    //  - sin check-in / sin detalle: sintetizo 1 línea BIGG CLASS desde los agregados (0/base).
+    for (const row of byKey.values()) {
+      if (row.id)                         row.horas_detalle = detalleDesde5(row);
+      else if (row.horas_detalle?.length) Object.assign(row, sumar5(row.horas_detalle));
+      else                                row.horas_detalle = detalleDesde5(row);
+    }
+
     return applyObjetivosToRows([...byKey.values()], objetivos);
   }, [eyeItems, legajos, liqsSaved, sedes, objetivos, mes, anio, pais]);
 
@@ -533,6 +556,19 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     return [...rosterBase.map(overlay), ...manualRows.map(overlay)]
       .filter(r => !r._deleted);
   }, [rosterBase, manualRows, edits]);
+
+  // Detalle base (sin ediciones) por fila, para el editor de líneas de clase.
+  const baseDetalle = useMemo(
+    () => new Map([...rosterBase, ...manualRows].map(r => [r._id, r.horas_detalle || []])),
+    [rosterBase, manualRows]);
+  // Edita una línea del detalle (regulares/feriado/domingo) y recalcula los 5 campos de pago del coach.
+  const updateDetalle = useCallback((_id, idx, field, val) => {
+    setEdits(prev => {
+      const cur = prev[_id]?.horas_detalle ?? baseDetalle.get(_id) ?? [];
+      const detalle = cur.map((l, i) => i === idx ? { ...l, [field]: Number(val) || 0 } : l);
+      return { ...prev, [_id]: { ...(prev[_id] || {}), horas_detalle: detalle, ...sumar5(detalle) } };
+    });
+  }, [baseDetalle]);
 
   // Conciliación: contadores por bucket para el banner.
   const conc = useMemo(() => {
@@ -725,6 +761,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       sede_nombre:     sede?.nombre        ?? "",
       rol:             leg.rol,
       horas: 0, horas_feriados: 0, horas_domingos: 0, horas_yoga: 0, horas_running: 0,
+      horas_detalle: [{ clase: "BIGG CLASS", asistio: "Presentes", regulares: 0, feriado: 0, domingo: 0 }],
       q_cdp_coach: 0, q_cdp_front: 0, q_one_shot: 0, asignado: 0, c_grupo_pct: 0, redondeo: 0,
       sueldo_base: leg.sueldo_total ?? 0,
       monto_haberes: 0, monto_deposito: 0, monto_transferencia: 0, monto_efectivo: 0,
@@ -956,6 +993,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
               mes={mes}
               anio={anio}
               pais={pais}
+              updateDetalle={updateDetalle}
               onResyncEye={setEyeItems}
               onAtras={() => setPaso(1)}
               onContinuar={() => setPaso(3)}
@@ -1266,13 +1304,11 @@ function PasoFijos({ rowsFijos, legajos, sedes, originalRows, updateRow, removeR
 
 // ── Paso 2: Horas (solo coaches) ──────────────────────────────────────────────
 
-function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, updateRow, removeRow,
+function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, updateRow, removeRow, updateDetalle,
   showAddForm, setShowAddForm, addForm, setAddForm, handleAddRow,
   mes, anio, pais, onResyncEye,
   onAtras, onContinuar, onSiguiente, saving }) {
 
-  // Tipos de check-in que bajan de BIGG Eye (por ahora solo "horas" se autocompleta;
-  // el resto se carga a mano hasta que Eye los discrimine).
   const HORA_COLS = [
     { field: "horas",          label: "Hs. Coach", w: 80 },
     { field: "horas_feriados", label: "Feriados",   w: 80 },
@@ -1379,80 +1415,74 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, updateR
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr style={{ background: T.bg }}>
-              {thSort("legajo_nombre", "Nombre", { minWidth: 140 })}
-              {thSort("rol",          "Rol",    { minWidth: 100 })}
-              {thSort("sede_nombre",  "Sede",   { minWidth: 110 })}
-              {HORA_COLS.map(c => (
-                <th key={c.field} style={TH({ width: c.w, textAlign: "right" })}>{c.label}</th>
-              ))}
+              {thSort("legajo_nombre", "Nombre", { minWidth: 130 })}
+              {thSort("rol",          "Rol",    { minWidth: 95 })}
+              {thSort("sede_nombre",  "Sede",   { minWidth: 100 })}
+              <th style={TH({ minWidth: 90 })}>Clase</th>
+              <th style={TH({ width: 80, textAlign: "right" })}>Regulares</th>
+              <th style={TH({ width: 70, textAlign: "right" })}>Feriado</th>
+              <th style={TH({ width: 70, textAlign: "right" })}>Domingo</th>
+              <th style={TH({ width: 60, textAlign: "right" })}>Total</th>
+              <th style={TH({ minWidth: 90 })}>Asistió</th>
               <th style={TH({ width: 32 })}></th>
             </tr>
           </thead>
           <tbody>
             {sortedRows.length === 0 ? (
               <tr>
-                <td colSpan={4 + HORA_COLS.length} style={{ padding: "24px 10px", textAlign: "center", color: T.dim, fontSize: 12 }}>
+                <td colSpan={10} style={{ padding: "24px 10px", textAlign: "center", color: T.dim, fontSize: 12 }}>
                   Sin coaches para este mes. Agregá filas abajo.
                 </td>
               </tr>
             ) : sortedRows.map((row, i) => {
-                const det = row.horas_detalle || [];
-                const abierto = openDet === row._id;
-                return (
-                <Fragment key={row._id}>
-                <tr style={{ background: bucketBg(row, i % 2 === 0 ? T.card : T.bg), borderBottom: det.length && abierto ? "none" : `1px solid ${T.border}` }}>
-                  <td style={{ padding: "5px 8px", fontWeight: 600, cursor: det.length ? "pointer" : "default" }}
-                    onClick={() => det.length && setOpenDet(abierto ? null : row._id)}
-                    title={det.length ? "Ver detalle de BIGG Eye por clase" : undefined}>
-                    {det.length > 0 && <span style={{ color: T.dim, marginRight: 5, fontSize: 10 }}>{abierto ? "▾" : "▸"}</span>}
-                    {row.legajo_nombre}
-                  </td>
-                  <td style={{ padding: "4px 6px" }}>
-                    <select
-                      value={row.rol}
-                      onChange={e => updateRow(row._id, "rol", e.target.value)}
-                      style={{ fontSize: 11, fontFamily: T.font, border: `1px solid ${T.border}`,
-                        borderRadius: 4, padding: "2px 4px", background: T.card, color: T.text,
-                        width: "100%", cursor: "pointer" }}>
-                      {ROLES_COACHES.map(r => (
-                        <option key={r} value={r}>{ROL_CONCEPTO[r] ?? r}</option>
-                      ))}
-                    </select>
-                  </td>
-                  <td style={{ padding: "5px 8px", color: T.muted }}>{row.sede_nombre || "—"}</td>
-                  {HORA_COLS.map(c => (
-                    <td key={c.field} style={{ padding: "4px 6px" }}>
-                      <input style={iStyle} value={row[c.field] || ""} placeholder="0"
-                        onChange={e => updateRow(row._id, c.field, e.target.value)} />
-                    </td>
-                  ))}
-                  <td style={{ padding: "4px", textAlign: "center" }}>
-                    <button onClick={() => removeRow(row._id)}
-                      style={{ background: "none", border: "none", cursor: "pointer", color: T.dim, fontSize: 12, padding: 2 }}>🗑</button>
-                  </td>
-                </tr>
-                {/* Detalle BIGG Eye por clase × asistió (espejo del reporte; los Ausentes NO suman a las columnas) */}
-                {abierto && det.map((l, di) => {
-                  const pres = l.asistio !== "Ausentes";
+                // Una fila por clase × asistió (espejo de BIGG Eye). Nombre/Rol/Sede solo en la 1ª línea del coach.
+                const det = (row.horas_detalle && row.horas_detalle.length)
+                  ? row.horas_detalle
+                  : [{ clase: "BIGG CLASS", asistio: "Presentes", regulares: 0, feriado: 0, domingo: 0 }];
+                const bg = bucketBg(row, i % 2 === 0 ? T.card : T.bg);
+                return det.map((l, di) => {
+                  const pres  = l.asistio !== "Ausentes";
+                  const esBigg = !/YOGA|RUNNING/i.test(l.clase || "");   // feriado/domingo solo en BIGG CLASS
+                  const first = di === 0, last = di === det.length - 1;
+                  const tot   = (Number(l.regulares) || 0) + (Number(l.feriado) || 0) + (Number(l.domingo) || 0);
+                  const inp = (field, on) => on
+                    ? <input style={iStyle} value={l[field] || ""} placeholder="0"
+                        onChange={e => updateDetalle(row._id, di, field, e.target.value)} />
+                    : <span style={{ color: T.dim }}>—</span>;
                   return (
-                    <tr key={row._id + "-d" + di} style={{ background: pres ? "#f8fafc" : "#fffbeb",
-                      borderBottom: di === det.length - 1 ? `1px solid ${T.border}` : "none", fontSize: 11 }}>
-                      <td style={{ padding: "3px 8px 3px 24px", color: T.muted }} colSpan={3}>
-                        <span style={{ fontWeight: 600, color: T.text }}>{l.clase}</span>
-                        <span style={{ marginLeft: 8, padding: "1px 6px", borderRadius: 4, fontSize: 9.5, fontWeight: 700,
-                          color: pres ? "#16a34a" : "#b45309", background: pres ? "#dcfce7" : "#fef3c7" }}>
-                          {pres ? "Presentes" : "Ausentes · pendiente check-in"}
+                    <tr key={row._id + "-" + di} style={{ background: bg, borderBottom: last ? `1px solid ${T.border}` : "none" }}>
+                      <td style={{ padding: "5px 8px", fontWeight: 600 }}>{first ? row.legajo_nombre : ""}</td>
+                      <td style={{ padding: "4px 6px" }}>
+                        {first && (
+                          <select value={row.rol} onChange={e => updateRow(row._id, "rol", e.target.value)}
+                            style={{ fontSize: 11, fontFamily: T.font, border: `1px solid ${T.border}`,
+                              borderRadius: 4, padding: "2px 4px", background: T.card, color: T.text, width: "100%", cursor: "pointer" }}>
+                            {ROLES_COACHES.map(r => <option key={r} value={r}>{ROL_CONCEPTO[r] ?? r}</option>)}
+                          </select>
+                        )}
+                      </td>
+                      <td style={{ padding: "5px 8px", color: T.muted }}>{first ? (row.sede_nombre || "—") : ""}</td>
+                      <td style={{ padding: "5px 8px", fontWeight: 600, color: T.text }}>{l.clase}</td>
+                      <td style={{ padding: "4px 6px", textAlign: "right" }}>{inp("regulares", true)}</td>
+                      <td style={{ padding: "4px 6px", textAlign: "right" }}>{inp("feriado", esBigg)}</td>
+                      <td style={{ padding: "4px 6px", textAlign: "right" }}>{inp("domingo", esBigg)}</td>
+                      <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700, color: T.text }}>{tot}</td>
+                      <td style={{ padding: "4px 8px" }}>
+                        <span style={{ padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 700,
+                          color: pres ? "#16a34a" : "#b45309", background: pres ? "#dcfce7" : "#fef3c7" }}
+                          title={pres ? undefined : "Check-in pendiente — igual paga si dejás horas"}>
+                          {pres ? "Presentes" : "Ausentes"}
                         </span>
                       </td>
-                      <td style={{ padding: "3px 6px", textAlign: "right", color: pres ? T.text : "#b45309" }} title="Regulares">{l.regulares || 0}</td>
-                      <td style={{ padding: "3px 6px", textAlign: "right", color: pres ? T.text : "#b45309" }} title="Feriado">{l.feriado || 0}</td>
-                      <td style={{ padding: "3px 6px", textAlign: "right", color: pres ? T.text : "#b45309" }} title="Domingo">{l.domingo || 0}</td>
-                      <td colSpan={3} />
+                      <td style={{ padding: "4px", textAlign: "center" }}>
+                        {first && (
+                          <button onClick={() => removeRow(row._id)}
+                            style={{ background: "none", border: "none", cursor: "pointer", color: T.dim, fontSize: 12, padding: 2 }}>🗑</button>
+                        )}
+                      </td>
                     </tr>
                   );
-                })}
-                </Fragment>
-                );
+                });
               })}
           </tbody>
         </table>
