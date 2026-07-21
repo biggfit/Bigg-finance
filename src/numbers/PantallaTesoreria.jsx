@@ -600,11 +600,13 @@ export function PaginaAging({ item, fechaCorte, headerColor, onBack }) {
 }
 
 function BalanceBlock({ title, items, headerColor, onItemClick }) {
-  // totals per moneda
+  // Las líneas `_info` (ej. MP a acreditarse) se muestran pero NO suman al total ni cuentan como cuenta.
   const totals = {};
   for (const it of items) {
+    if (it._info) continue;
     totals[it.moneda] = (totals[it.moneda] ?? 0) + it.saldo;
   }
+  const nReales = items.filter(i => !i._info).length;
 
   return (
     <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`,
@@ -614,7 +616,7 @@ function BalanceBlock({ title, items, headerColor, onItemClick }) {
         justifyContent:"space-between", alignItems:"center" }}>
         <span style={{ fontSize:14, fontWeight:800, color:"#fff" }}>{title}</span>
         <span style={{ fontSize:11, color:"rgba(255,255,255,.65)" }}>
-          {items.length} cuenta{items.length !== 1 ? "s" : ""}
+          {nReales} cuenta{nReales !== 1 ? "s" : ""}
         </span>
       </div>
       <div style={{ overflowY:"auto", maxHeight:200, flex:1 }}>
@@ -622,7 +624,23 @@ function BalanceBlock({ title, items, headerColor, onItemClick }) {
           <div style={{ padding:"18px", fontSize:12, color:T.dim, textAlign:"center" }}>
             Sin pendientes
           </div>
-        ) : items.map((item, i) => (
+        ) : items.map((item, i) => item._info ? (
+          <div key={i} title={item.title || ""}
+            style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
+              padding:"8px 18px", borderBottom:`1px solid ${T.cardBorder}`,
+              background:"#f9fafb", cursor:"default" }}>
+            <span style={{ fontSize:12, color:T.dim, fontStyle:"italic", flex:1, overflow:"hidden",
+              textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{item.label}</span>
+            <span style={{ fontSize:9, background:"#eef2f6", color:T.dim, borderRadius:4,
+              padding:"2px 6px", fontWeight:700, marginLeft:8, flexShrink:0, letterSpacing:".04em" }}>
+              NO SUMA
+            </span>
+            <span style={{ fontSize:12, fontFamily:"var(--mono)", fontWeight:700,
+              color: T.dim, flexShrink:0, minWidth:110, textAlign:"right", whiteSpace:"nowrap" }}>
+              {fmtSaldo(item.saldo, item.moneda)}
+            </span>
+          </div>
+        ) : (
           <div key={i} onClick={() => onItemClick?.(item)}
             style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
               padding:"8px 18px", borderBottom:`1px solid ${T.cardBorder}`,
@@ -827,10 +845,19 @@ export function TabSaldos({ cuentas, aCobrar, aPagar, interco = [], filtroMoneda
   const cajas       = filtrar(cuentas.filter(c => c.tipo === "caja"));
   const inversiones = filtrar(cuentas.filter(c => c.tipo === "inversion"));
 
-  // El "a acreditarse" de MP NO va al Activo/PN: es un dato EN VIVO de hoy (ventas ya cobradas pero aún no
-  // asentadas en Numbers; se asientan en el cierre de fin de mes). Sumarlo al Activo sin asentar la venta
-  // rompería PN = resultado acumulado. Se muestra solo como anotación en la fila de MP (pill + tooltip).
-  const aCobrarFilt = filtroMoneda === "ALL" ? aCobrar : aCobrar.filter(i => i.moneda === filtroMoneda);
+  // MP a acreditarse = dato EN VIVO de hoy (ventas ya cobradas pero aún no asentadas; se asientan en el cierre
+  // mensual). Se muestra como línea INFORMATIVA en el Activo (`_info`) pero NO suma al Total Activo/PN: sumarlo
+  // sin asentar la venta rompería PN = resultado acumulado.
+  const mpMoneda = mpLive?.moneda || "ARS";
+  const aCobrarMP = (mpLive && !mpLive.loading && !mpLive.error && Number(mpLive.a_acreditarse) > 0
+      && (filtroMoneda === "ALL" || filtroMoneda === mpMoneda))
+    ? [{ label: "Mercado Pago — a acreditarse", moneda: mpMoneda, saldo: Number(mpLive.a_acreditarse),
+         _info: true, title: "En vivo de hoy · ventas cobradas por liberarse. No suma al PN (se asienta en el cierre mensual)." }]
+    : [];
+  const aCobrarFilt = [
+    ...(filtroMoneda === "ALL" ? aCobrar : aCobrar.filter(i => i.moneda === filtroMoneda)),
+    ...aCobrarMP,
+  ];
   const aPagarFilt  = filtroMoneda === "ALL" ? aPagar  : aPagar.filter(i => i.moneda === filtroMoneda);
   const intercoFilt = filtroMoneda === "ALL" ? interco : interco.filter(i => i.moneda === filtroMoneda);
 
