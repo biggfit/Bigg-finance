@@ -1794,12 +1794,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
               _duplicate: true,   // NUEVA factura (id nuevo), no editar una existente
               proveedor: prov?.nombre || mov.contraparte_nombre || "",
               proveedorId: provId,
-              moneda: mov.moneda || "ARS",
+              cuentaId: prov?.cuentaDefault || "",           // cuenta contable default del proveedor (ej. Aysa → Servicios)
+              moneda: prov?.monedaDefault || mov.moneda || "ARS",
               fecha: mov.fecha,
               vto: mov.fecha,
               nroComp: "",
               nota: mov.concepto || "",
-              lineas: [{ cc: "", subtotal: tot, ivaRate: 0, iva_monto: 0, total_linea: tot }],
+              lineas: [{ cc: prov?.ccDefault || "", subtotal: tot, ivaRate: 0, iva_monto: 0, total_linea: tot }],
               importe: tot,
             }}
             onClose={() => setCargarFacturaFor(null)}
