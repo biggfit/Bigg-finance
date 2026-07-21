@@ -57,18 +57,17 @@ export default async function handler(req, res) {
   const begin = encodeURIComponent(isoAR(inicio));
   const end   = encodeURIComponent(isoAR(hasta));
   const nowMs = ahora.getTime();
-  const inicioMs = inicio.getTime();
   // Una sola pasada por money_release_date [1° del mes → hoy+ventana]; separamos acreditado (liberado ≤ hoy)
   // de a_acreditarse (liberación futura). El acreditado del mes es la plata que ya entró y todavía NO está
   // en Numbers (se concilia a fin de mes) → explica por qué la caja MP da negativa (los cashouts sí están).
-  // OJO doble conteo: las ventas de meses ANTERIORES que recién se liberan este mes ya están en el saldo de
-  // apertura (que incluye "a liquidar") → se excluyen del acreditado por date_approved < 1° del mes.
+  // El saldo de apertura al 30/6 es SOLO disponible (no incluye "a liquidar") → contar todo lo liberado este
+  // mes, sin filtrar por fecha de venta, NO duplica (las ventas de junio que liberan en julio no están en la
+  // apertura; son plata nueva que entra a la caja MP este mes).
   const base = `status=approved&range=money_release_date&begin_date=${begin}&end_date=${end}&sort=money_release_date&criteria=asc`;
 
   try {
     const LIMIT = 100, MAX_PAGES = 60;   // backstop: 6000 cobros
     let offset = 0, total = Infinity, count = 0, acreditado = 0, aAcreditarse = 0, moneda = "ARS", truncado = false;
-    let acreditadoMesAnterior = 0;   // ventas previas liberadas este mes (ya en la apertura, informativo)
     const porFecha = new Map();
 
     for (let page = 0; page < MAX_PAGES && offset < total; page++) {
@@ -84,15 +83,12 @@ export default async function handler(req, res) {
         count += 1;
         if (p.currency_id) moneda = p.currency_id;
         const rel = p.money_release_date ? new Date(p.money_release_date).getTime() : 0;
-        const app = p.date_approved ? new Date(p.date_approved).getTime() : 0;
         if (rel && rel > nowMs) {
           aAcreditarse += neto;
           const fecha = String(p.money_release_date).slice(0, 10);
           porFecha.set(fecha, (porFecha.get(fecha) || 0) + neto);   // agenda futura (Dashboard/flujo)
-        } else if (app && app < inicioMs) {
-          acreditadoMesAnterior += neto;   // venta previa liberada este mes → ya está en la apertura, NO sumar
         } else {
-          acreditado += neto;   // vendido y liberado este mes = plata nueva que no está en Numbers
+          acreditado += neto;   // ya liberado este mes = plata nueva que entró y no está en Numbers
         }
       }
       offset += LIMIT;
@@ -106,14 +102,13 @@ export default async function handler(req, res) {
 
     res.statusCode = 200;
     res.end(JSON.stringify({
-      acreditado:    Math.round(acreditado),      // vendido Y liberado este mes = plata nueva que falta en Numbers
+      acreditado:    Math.round(acreditado),      // liberado del 1° del mes a hoy = plata que entró y falta en Numbers
       a_acreditarse: Math.round(aAcreditarse),     // por liberarse (futuro)
-      acreditado_mes_anterior: Math.round(acreditadoMesAnterior),  // ventas previas liberadas este mes (ya en la apertura)
       moneda,
       proximos,
       count,
       ...(truncado && { truncado: true }),         // hubo más cobros que el tope de páginas
-      _source: `payments/search · release [1°mes, hoy+${ventana}d] · acreditado=venta≥1°mes`,
+      _source: `payments/search · release [1°mes, hoy+${ventana}d]`,
     }));
   } catch (err) {
     res.statusCode = 500;
