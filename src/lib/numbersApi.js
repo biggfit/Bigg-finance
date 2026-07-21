@@ -485,9 +485,14 @@ export async function fetchCuentasBancarias() {
   return get("nb_cuentas_bancarias");
 }
 
+// ¿La cuenta bancaria es de Mercado Pago? Predicado único (antes duplicado en Tesorería/Conciliación
+// con drift: unos miraban banco, otros banco||nombre). Match sobre banco y nombre para no depender de cuál trae "MP".
+export const esCuentaMercadoPago = (cuenta) =>
+  /mercado\s*pago/i.test(cuenta?.banco || cuenta?.nombre || "");
+
 // Saldo EN VIVO de Mercado Pago (read-only) vía el serverless /api/mercadopago. Devuelve
-// { disponible, a_liberar, moneda } o lanza si el endpoint falla (sin token → error). Fetch directo
-// (no pasa por el proxy get()). Espejo de fetchHorasDesdeEye.
+// { acreditado, a_acreditarse, acreditado_mes_anterior, moneda, proximos, count } o lanza si el endpoint
+// falla (sin token → error). Fetch directo (no pasa por el proxy get()). Espejo de fetchHorasDesdeEye.
 export async function fetchSaldoMercadoPago(sociedad) {
   const qs = new URLSearchParams(sociedad ? { sociedad } : {});
   const res  = await fetch(`/api/mercadopago?${qs}`);

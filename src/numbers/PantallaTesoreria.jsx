@@ -7,7 +7,7 @@ import { CENTROS_COSTO } from "../data/numbersData";
 import {
   fetchMovTesoreria, fetchMovFranquicias, appendMovTesoreria, appendTransferencia, deleteMovTesoreria, updateMovTesoreria,
   fetchEgresos, fetchIngresos, fetchPagosCobros,
-  fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto, fetchSaldoMercadoPago,
+  fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto, fetchSaldoMercadoPago, esCuentaMercadoPago,
   appendGastoDirecto, esIgnorado, esCuentaCredito, fetchFinanciaciones,
   pagarTarjeta, fetchSocios, fetchSociosCC, fetchIntercoData,
 } from "../lib/numbersApi";
@@ -690,6 +690,7 @@ function CuentaRow({ cuenta, onClick, mpLive }) {
   const mpMon   = mpLive?.moneda || cuenta.moneda;
   const mpReady = mpLive && !mpLive.loading && !mpLive.error;
   const mpEstimado = saldo + (Number(mpLive?.acreditado) || 0);   // saldo contable + acreditado = caja MP real ≈
+  const mpNeg   = mpReady && mpEstimado < 0;
   const mpTxt = mpLive == null ? null
     : mpLive.loading ? "MP: …"
     : mpLive.error   ? null   // sin token / API caída → no mostramos nada (no rompe)
@@ -698,7 +699,7 @@ function CuentaRow({ cuenta, onClick, mpLive }) {
     ? [
         `Acreditado del mes (ya entró, aún no conciliado en Numbers): ${fmtSaldo(Number(mpLive.acreditado) || 0, mpMon)}`,
         `Por acreditarse (aún no libera; NO suma al PN): ${fmtSaldo(Number(mpLive.a_acreditarse) || 0, mpMon)}`,
-        `MP real ≈ saldo contable + acreditado: ${fmtSaldo(saldo + (Number(mpLive.acreditado) || 0), mpMon)}`,
+        `MP real ≈ saldo contable + acreditado: ${fmtSaldo(mpEstimado, mpMon)}`,
         `(dato en vivo de hoy — no es parte del Balance/PN)`,
         (mpLive.proximos?.length ? "Próximas liberaciones:\n" + mpLive.proximos.slice(0, 6).map(p => `  ${p.fecha}: ${fmtSaldo(p.monto, mpMon)}`).join("\n") : ""),
         (mpLive.truncado ? "(⚠ hay más cobros que el tope; acreditado parcial)" : ""),
@@ -721,9 +722,9 @@ function CuentaRow({ cuenta, onClick, mpLive }) {
         {mpTxt && (
           <span title={mpTitle}
             style={{ fontSize:10.5, fontWeight:700,
-              color: mpReady && mpEstimado < 0 ? "#b91c1c" : "#059669",
-              background: mpReady && mpEstimado < 0 ? "#fef2f2" : "#ecfdf5",
-              border: `1px solid ${mpReady && mpEstimado < 0 ? "#fecaca" : "#a7f3d0"}`,
+              color: mpNeg ? "#b91c1c" : "#059669",
+              background: mpNeg ? "#fef2f2" : "#ecfdf5",
+              border: `1px solid ${mpNeg ? "#fecaca" : "#a7f3d0"}`,
               borderRadius:5, padding:"1px 7px", cursor:"help", whiteSpace:"nowrap" }}>
             {mpTxt}
           </span>
@@ -770,7 +771,7 @@ function GrupoBlock({ icon, label, cuentas, onCuentaClick, mpLive }) {
           </div>
         ) : cuentas.map(c => (
           <CuentaRow key={c.id} cuenta={c}
-            mpLive={/mercado\s*pago/i.test(c.banco || c.nombre || "") ? mpLive : null}
+            mpLive={esCuentaMercadoPago(c) ? mpLive : null}
             onClick={onCuentaClick ? () => onCuentaClick(c) : undefined} />
         ))}
       </div>
@@ -1184,7 +1185,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
   const [franqData,        setFranqData]        = useState({ comps: {}, saldos: {}, franchises: [] });  // Franquicias (read-only)
   const [movsFranq,        setMovsFranq]        = useState([]);   // cobros de franquicia group-wide (CxC netea por empresa, no por caja)
   const [intercoData,      setIntercoData]      = useState(null);   // interco (movs+comps+centros+sociedades)
-  const [mpLive,           setMpLive]           = useState(null);   // saldo MP en vivo (read-only): {loading, disponible, a_liberar, moneda, error}
+  const [mpLive,           setMpLive]           = useState(null);   // saldo MP en vivo (read-only): {loading, acreditado, a_acreditarse, moneda, proximos, error}
 
   // ── Fetch all data ────────────────────────────────────────────────────────
   const cargarMovimientos = async () => {
@@ -1237,13 +1238,18 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
     cargarMovimientos();
   }, [sociedad]);
 
+  // ¿La sociedad activa tiene una cuenta Mercado Pago? Booleano derivado (no el array) para que el fetch MP
+  // no se re-dispare en cada recarga de datos (cuentasBancarias cambia de referencia sin cambiar la respuesta).
+  const tieneMP = useMemo(
+    () => cuentasBancarias.some(c =>
+      (c.sociedad ?? "").toLowerCase() === (sociedad ?? "").toLowerCase() && esCuentaMercadoPago(c)),
+    [cuentasBancarias, sociedad]);
+
   // Saldo MP EN VIVO (read-only): solo si la sociedad tiene una cuenta Mercado Pago. Falla suave → el
   // bloque muestra "—" (sin token en local, o error de API) y no rompe el resto de Tesorería.
   useEffect(() => {
     // MP en vivo es una foto de HOY → solo tiene sentido en "Al día de hoy". Con una fecha de corte pasada
     // se esconde (no se puede reconstruir el acreditado/por-acreditarse a una fecha histórica).
-    const tieneMP = cuentasBancarias.some(c =>
-      (c.sociedad ?? "").toLowerCase() === (sociedad ?? "").toLowerCase() && /mercado\s*pago/i.test(c.banco || c.nombre || ""));
     if (!tieneMP || fechaCorte) { setMpLive(null); return; }
     let vivo = true;
     setMpLive({ loading: true });
@@ -1251,7 +1257,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
       .then(d => { if (vivo) setMpLive({ ...d, loading: false }); })
       .catch(e => { if (vivo) setMpLive({ error: e.message, loading: false }); });
     return () => { vivo = false; };
-  }, [sociedad, cuentasBancarias, fechaCorte]);
+  }, [sociedad, tieneMP, fechaCorte]);
 
   const sociedadesMap = useMemo(() => sociedadNombreMap(intercoData?.sociedades ?? []), [intercoData]);
 

@@ -11,6 +11,7 @@ import {
   fetchFinanciaciones, imputarCuota, pagarTarjeta, esCuentaCredito, fetchMovTesoreria,
   fetchIntercoData, pendientesInterco, reconocerVentaInterco, normCuit,
   pendientesIntercoRecibir, declararIntercoRecibida, declararIntercoEnviada, intercoMatchCandidato,
+  esCuentaMercadoPago,
 } from "../lib/numbersApi";
 import { BancoReglaModal } from "./PantallaMaestros";
 import MundoTarjeta from "./reconciliacion/MundoTarjeta";
@@ -376,7 +377,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   // directa (ingreso rápido), no un cobro B2B → arranca pidiendo cuenta+centro, no factura.
   // Set memoizado (se consulta por fila en cada render) en vez de un .find sobre todas las cuentas.
   const mpCuentaIds = useMemo(
-    () => new Set(cuentasAll.filter(c => /mercado\s*pago/i.test(String(c.banco || ""))).map(c => String(c.id))),
+    () => new Set(cuentasAll.filter(esCuentaMercadoPago).map(c => String(c.id))),
     [cuentasAll]);
   const esCuentaMP = (cuentaId) => mpCuentaIds.has(String(cuentaId));
 
