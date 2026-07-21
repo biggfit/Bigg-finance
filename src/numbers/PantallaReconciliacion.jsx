@@ -188,17 +188,17 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], onClose, onDone }
           </div>
         </div>
         <div style={{ padding: 22, display: "flex", flexDirection: "column", gap: 14 }}>
-          <div><label style={lbl}>{envio ? "Cuenta / caja de donde salió *" : "Cuenta / caja donde entró *"}</label>
-            <select value={cuenta} onChange={e => setCuenta(e.target.value)} style={inp}>
-              <option value="">— Elegí la cuenta —</option>
-              {ctas.map(c => <option key={c.id} value={c.id}>{c.nombre} · {c.moneda}</option>)}
-            </select></div>
           <div style={{ display: "flex", gap: 12 }}>
-            <div style={{ flex: 1 }}><label style={lbl}>{envio ? `Monto que salió de tu caja (${monedaCta}) *` : `Monto bruto que ingresó (post-TC) (${monedaCta}) *`}</label>
-              <input value={monto} onChange={e => setMonto(e.target.value)} style={inp} placeholder={envio ? "lo que salió" : "el bruto, antes del costo"} /></div>
+            <div style={{ flex: 1.4 }}><label style={lbl}>{envio ? "Cuenta / caja de donde salió *" : "Cuenta / caja donde entró *"}</label>
+              <select value={cuenta} onChange={e => setCuenta(e.target.value)} style={inp}>
+                <option value="">— Elegí la cuenta —</option>
+                {ctas.map(c => <option key={c.id} value={c.id}>{c.nombre} · {c.moneda}</option>)}
+              </select></div>
             <div style={{ flex: 1 }}><label style={lbl}>Fecha</label>
               <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={inp} /></div>
           </div>
+          <div><label style={lbl}>{envio ? `Monto que salió de tu caja (${monedaCta}) *` : `Monto bruto que ingresó (post-TC) (${monedaCta}) *`}</label>
+            <input value={monto} onChange={e => setMonto(e.target.value)} style={inp} placeholder={envio ? "lo que salió" : "el bruto, antes del costo"} /></div>
           <div><label style={lbl}>Costo de transferencia / clearing (opcional)</label>
             <input value={costo} onChange={e => setCosto(e.target.value)} style={inp} placeholder="si la financiera te lo informa → egreso pagado + P&L" /></div>
           {Number(costo) > 0 && (
