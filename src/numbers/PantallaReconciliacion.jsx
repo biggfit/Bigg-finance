@@ -744,7 +744,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   // otros modos (FC/cobro/transfer). Devuelve la financiación y cuota pre-seleccionadas.
   const cuotaState = (mov) => {
     const ed = edits[mov.id] || {};
-    if (ed.noCuota || ed.modoFC || ed.modoCobro || ed.modoTransfer || modoIntercoDe(mov)) return { es: false };
+    if (ed.noCuota || ed.modoFC || ed.modoCobro || ed.modoTransfer || ed.modoFranquicia || modoIntercoDe(mov)) return { es: false };
     const manual = !!ed.modoCuota;
     let auto = null;
     if (!manual) {
@@ -1017,13 +1017,16 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     const ed = e[mov.id] || {};
     if (ed.split) { const { split, ...rest } = ed; return { ...e, [mov.id]: rest }; }
     const monto = Math.abs(Number(mov.monto) || 0);
-    return { ...e, [mov.id]: { ...ed, split: [{ franquicia_id: "", fr_tipo: ed.fr_tipo || "PAGO", monto }] } };
+    // Débito (plata que SALIÓ a franquicias) → PAGO_ENVIADO en cada parte; si no, el signo se invierte en la CC.
+    const ftDefault = (Number(mov.monto) || 0) < 0 ? "PAGO_ENVIADO" : (ed.fr_tipo || "PAGO");
+    return { ...e, [mov.id]: { ...ed, split: [{ franquicia_id: "", fr_tipo: ftDefault, monto }] } };
   });
   const updSplit = (id, idx, k, v) => setEdits(e => {
     const split = (e[id]?.split || []).map((p, i) => i === idx ? { ...p, [k]: k === "monto" ? (parseFloat(String(v).replace(",", ".")) || 0) : v } : p);
     return { ...e, [id]: { ...e[id], split } };
   });
-  const addSplit = (id) => setEdits(e => ({ ...e, [id]: { ...e[id], split: [...(e[id]?.split || []), { franquicia_id: "", fr_tipo: "PAGO", monto: 0 }] } }));
+  // La nueva parte hereda el fr_tipo de las existentes (mismo signo del extracto) → no fuerza "PAGO" en un débito.
+  const addSplit = (id) => setEdits(e => ({ ...e, [id]: { ...e[id], split: [...(e[id]?.split || []), { franquicia_id: "", fr_tipo: e[id]?.split?.[0]?.fr_tipo || "PAGO", monto: 0 }] } }));
   const rmSplit = (id, idx) => setEdits(e => {
     const split = (e[id]?.split || []).filter((_, i) => i !== idx);
     return { ...e, [id]: { ...e[id], split: split.length ? split : null } };
@@ -1683,8 +1686,9 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           <td style={{ padding: "4px 12px" }}>
                             <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
                               <select value={p.fr_tipo} onChange={e => updSplit(m.id, idx, "fr_tipo", e.target.value)} style={fld(true)}>
-                                <option value="PAGO">Pago de CC</option>
-                                <option value="PAGO_PAUTA">Pago a cuenta</option>
+                                {(Number(m.monto) || 0) < 0
+                                  ? <option value="PAGO_ENVIADO">Transf. enviada</option>
+                                  : <><option value="PAGO">Pago de CC</option><option value="PAGO_PAUTA">Pago a cuenta</option></>}
                               </select>
                               <select value={p.franquicia_id} onChange={e => updSplit(m.id, idx, "franquicia_id", e.target.value)} style={fld(!!p.franquicia_id)}>
                                 <option value="">— franquicia —</option>
