@@ -159,10 +159,12 @@ export default defineConfig({
             return;
           }
 
-          // ── Proxy /api/bigg-eye-* → handlers locales de Bigg Eye ──────────
+          // ── Proxy /api/bigg-eye-* y /api/mercadopago → handlers locales (Node en Vite) ──
           // IMPORTANTE: las rutas más específicas deben ir primero.
-          if (req.url && req.url.startsWith('/api/bigg-eye')) {
-            const apiFile = req.url.startsWith('/api/bigg-eye-horas')
+          if (req.url && (req.url.startsWith('/api/bigg-eye') || req.url.startsWith('/api/mercadopago'))) {
+            const apiFile = req.url.startsWith('/api/mercadopago')
+              ? 'api/mercadopago.js'
+              : req.url.startsWith('/api/bigg-eye-horas')
               ? 'api/bigg-eye-horas.js'
               : req.url.startsWith('/api/bigg-eye-cdp')
               ? 'api/bigg-eye-cdp.js'
