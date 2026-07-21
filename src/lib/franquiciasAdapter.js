@@ -8,6 +8,7 @@
 // nb_movimientos, hay que reapuntar la fuente del saldo ACÁ (un solo lugar). Las facturas
 // del P&L (franquiciasIngresoPnLRows) NO cambian: FACTURA|/NC| no son financieros.
 import { compEmpresa, compCurrency, computeSaldoReal, COMP_TYPES } from "./helpers";
+import { normCuit } from "./numbersApi";
 
 // Fuente única: sociedad Numbers → empresa emisora de Franquicias (y su inversa).
 export const SOCIEDAD_EMPRESA = {
@@ -22,6 +23,34 @@ const EMPRESA_SOCIEDAD = Object.fromEntries(Object.entries(SOCIEDAD_EMPRESA).map
 // vende pauta a los franquiciados); INTERUSOS es costo que pega en margen; SPONSORS/OTROS directo.
 const FRANQ_CUENTA = { FEE: "Regalias s/Ventas", INTERUSOS: "Interusos", PAUTA: "Acciones de Mkt", SPONSORS: "Sponsor", SPONSOR: "Sponsor", OTROS: "Otros Ingresos" };
 const MONEDAS = ["ARS", "USD", "EUR"];
+
+// Documentos de franquicia (FACTURA/NC) que una franquicia cuyo CUIT es el de la sociedad activa me emitió
+// → pendientes para reconocer en la Conciliación interco de esa sociedad (ej. Segui, que es sociedad Y
+// franquicia). FACTURA (le debo: pauta/sponsoreo) → EGRESO/CxP; NC (a mi favor: interuso) → INGRESO/CxC.
+// Mismo shape que un pendiente de venta interco; el dedup por interco_ref (id_comp "FR-…") lo aplica
+// pendientesInterco. Reusa COMP_TYPES/compEmpresa/compCurrency/EMPRESA_SOCIEDAD (no re-deriva los internals).
+export function franquiciasPendientesInterco(compsByFr, franchises, miCuit) {
+  const cuit = normCuit(miCuit);
+  if (!cuit) return [];
+  const out = [];
+  for (const fr of (franchises ?? [])) {
+    if (normCuit(fr.cuit) !== cuit) continue;                        // solo la franquicia que ES esta sociedad
+    for (const c of (compsByFr?.[String(fr.id)] ?? [])) {
+      const def = COMP_TYPES[c.type];
+      if (!def || (def.doc !== "FACTURA" && def.doc !== "NC")) continue;
+      const monto = Math.abs(Number(c.amount) || 0);
+      if (!monto) continue;
+      const emisora = compEmpresa(c);
+      out.push({
+        id_comp: `FR-${c.id}`, origen: "franquicia",
+        subtipo: def.doc === "NC" ? "INGRESO" : "EGRESO",             // NC (a mi favor) → ingreso; FACTURA → CxP
+        concepto: def.cuenta || "", vendedor: EMPRESA_SOCIEDAD[emisora] ?? "", vendedorNombre: emisora,
+        fecha: c.date, nroComp: c.invoice || "", moneda: compCurrency(c), total: monto,
+      });
+    }
+  }
+  return out;
+}
 
 // Facturación a franquiciados → filas P&L de ingreso. Solo FACTURA|* (+) y NC|* (−);
 // ignora FC_RECIBIDA y los financieros (doc null). Sociedad por empresa emisora; centro = HQ Ventas.

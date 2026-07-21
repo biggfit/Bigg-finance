@@ -16,7 +16,7 @@ import {
 import { BancoReglaModal } from "./PantallaMaestros";
 import MundoTarjeta from "./reconciliacion/MundoTarjeta";
 import { fetchAll } from "../lib/sheetsApi";
-import { SOCIEDAD_EMPRESA } from "../lib/franquiciasAdapter";
+import { franquiciasPendientesInterco } from "../lib/franquiciasAdapter";
 import { groupCentrosCosto, makeCrearMaestro } from "./formUtils";
 import NuevoEgresoModal from "./NuevoEgresoModal";
 import NuevoIngresoModal from "./NuevoIngresoModal";
@@ -299,28 +299,9 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   // Pendientes de documentos de FRANQUICIA emitidos a MI sociedad (ej. Segui = una franquicia cuyo CUIT es
   // el de la sociedad activa). Los docs viven en el backend de Franquicias (frComps) → los surteamos al mismo
   // inbox de reconocer. FACTURA (le debo: pauta/sponsoreo) → EGRESO/CxP; NC (a mi favor: interuso) → INGRESO/CxC.
-  const franqPend = useMemo(() => {
-    const miCuit = normCuit((sociedades.find(s => String(s.id) === String(sociedad)) || {}).cuit);
-    if (!miCuit) return [];
-    const empresaToSoc = Object.fromEntries(Object.entries(SOCIEDAD_EMPRESA).map(([k, v]) => [v, k]));
-    const out = [];
-    for (const fr of (franquicias || [])) {
-      if (normCuit(fr.cuit) !== miCuit) continue;                       // solo la franquicia que SOY yo
-      for (const c of (frComps[String(fr.id)] || [])) {
-        const [doc, cuenta] = String(c.type || "").split("|");
-        if (doc !== "FACTURA" && doc !== "NC") continue;                 // solo devengado (no FC_RECIBIDA ni pagos)
-        const emisora = c.empresa || ((c.currency || "ARS") === "ARS" ? "ÑAKO SRL" : "BIGG FIT LLC");
-        out.push({
-          id_comp: `FR-${c.id}`, origen: "franquicia",
-          subtipo: doc === "NC" ? "INGRESO" : "EGRESO",
-          concepto: cuenta || "", vendedor: empresaToSoc[emisora] || "", vendedorNombre: emisora,
-          fecha: c.date, nroComp: c.invoice || "", moneda: c.currency || "ARS",
-          total: Math.abs(Number(c.amount) || 0),
-        });
-      }
-    }
-    return out;
-  }, [franquicias, frComps, sociedades, sociedad]);
+  const franqPend = useMemo(
+    () => franquiciasPendientesInterco(frComps, franquicias, (sociedades.find(s => String(s.id) === String(sociedad)) || {}).cuit),
+    [frComps, franquicias, sociedades, sociedad]);
   const pendInterco = useMemo(() => pendientesInterco({ ...intercoData, franqPend }, { sociedad }), [intercoData, franqPend, sociedad]);
   const pendRecibir = useMemo(() => pendientesIntercoRecibir(intercoData, { sociedad }), [intercoData, sociedad]);
   // Avisa al sidebar los conteos de pendientes (badge en vivo): Banco (extracto sin conciliar) + Interco
