@@ -1796,8 +1796,8 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
               proveedorId: provId,
               cuentaId: prov?.cuentaDefault || "",           // cuenta contable default del proveedor (ej. Aysa → Servicios)
               moneda: prov?.monedaDefault || mov.moneda || "ARS",
-              fecha: mov.fecha,
-              vto: mov.fecha,
+              fecha: "",           // emisión vacía a propósito (no es la fecha del pago) → obliga a completarla, no queda mal
+              vto: mov.fecha,      // vto = fecha del pago que estás conciliando
               nroComp: "",
               nota: mov.concepto || "",
               lineas: [{ cc: prov?.ccDefault || "", subtotal: tot, ivaRate: 0, iva_monto: 0, total_linea: tot }],
