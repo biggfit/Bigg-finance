@@ -139,8 +139,10 @@ function ReconocerIntercoModal({ pend, sociedad, cuentas = [], centros = [], onC
 
 // Modal para DECLARAR una interco recibida (lado receptor): la plata que entró a mi banco/caja → fondeo,
 // sin P&L, sin posición nueva. Costo de clearing opcional → Perdidas Financieras (P&L). Marca la pata parkeada.
-function DeclararRecibidaModal({ pend, sociedad, cuentas = [], onClose, onDone }) {
+function DeclararRecibidaModal({ pend, sociedad, cuentas = [], planCuentas = [], onClose, onDone }) {
   const envio = pend?.dir === "envie";   // envié = EGRESO (cierro mi salida); recibí = INGRESO (fondeo)
+  const ctasContables = (planCuentas || []).slice().sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
+  const [costoCuenta, setCostoCuenta] = useState("Perdidas Financieras");   // cuenta contable del costo (editable)
   // El que parkeó dejó su caja destino como hint (cuenta_mia desde mi lado) → precargar la cuenta.
   const ctaHint = (cuentas || []).find(c => String(c.id) === String(pend?.cuenta_mia));
   // Precargar el monto SOLO si la moneda de la caja coincide con la parkeada. Cross-moneda (recibís EUR/COP
@@ -163,13 +165,13 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], onClose, onDone }
         await declararIntercoEnviada({
           sociedad, cuenta_bancaria: cuenta, fecha,
           destino_sociedad: pend.origen_sociedad, destino_nombre: pend.origen_nombre,
-          monto: Number(monto), moneda: monedaCta, costo: Number(costo) || 0, parked_leg_id: pend.id,
+          monto: Number(monto), moneda: monedaCta, costo: Number(costo) || 0, costo_cuenta: costoCuenta, parked_leg_id: pend.id,
         });
       } else {
         await declararIntercoRecibida({
           sociedad, cuenta_bancaria: cuenta, fecha,
           origen_sociedad: pend.origen_sociedad, origen_nombre: pend.origen_nombre,
-          monto: Number(monto), moneda: monedaCta, costo: Number(costo) || 0, parked_leg_id: pend.id,
+          monto: Number(monto), moneda: monedaCta, costo: Number(costo) || 0, costo_cuenta: costoCuenta, parked_leg_id: pend.id,
         });
       }
       await onDone();
@@ -199,12 +201,19 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], onClose, onDone }
           </div>
           <div><label style={lbl}>{envio ? `Monto que salió de tu caja (${monedaCta}) *` : `Monto bruto que ingresó (post-TC) (${monedaCta}) *`}</label>
             <input value={monto} onChange={e => setMonto(e.target.value)} style={inp} placeholder={envio ? "lo que salió" : "el bruto, antes del costo"} /></div>
-          <div><label style={lbl}>Costo de transferencia / clearing (opcional)</label>
-            <input value={costo} onChange={e => setCosto(e.target.value)} style={inp} placeholder="si la financiera te lo informa → egreso pagado + P&L" /></div>
+          <div style={{ display: "flex", gap: 12 }}>
+            <div style={{ flex: 1 }}><label style={lbl}>Costo de transferencia / clearing (opcional)</label>
+              <input value={costo} onChange={e => setCosto(e.target.value)} style={inp} placeholder="si la financiera te lo informa" /></div>
+            <div style={{ flex: 1.2 }}><label style={lbl}>Cuenta contable del costo</label>
+              <select value={costoCuenta} onChange={e => setCostoCuenta(e.target.value)} style={inp} disabled={!(Number(costo) > 0)}>
+                {!ctasContables.some(c => c.nombre === costoCuenta) && <option value={costoCuenta}>{costoCuenta}</option>}
+                {ctasContables.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
+              </select></div>
+          </div>
           {Number(costo) > 0 && (
             <div style={{ fontSize: 11.5, color: T.text, background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 6, padding: "6px 10px" }}>
               Neto en tu caja: <b>{monedaCta} {Math.round((Number(monto) || 0) - (Number(costo) || 0)).toLocaleString("es-AR")}</b>
-              &nbsp;(ingreso {Math.round(Number(monto) || 0).toLocaleString("es-AR")} − costo {Math.round(Number(costo) || 0).toLocaleString("es-AR")})
+              &nbsp;(ingreso {Math.round(Number(monto) || 0).toLocaleString("es-AR")} − costo {Math.round(Number(costo) || 0).toLocaleString("es-AR")}) · a <b>{costoCuenta}</b>
             </div>
           )}
           <div style={{ fontSize: 11.5, color: T.muted }}>
@@ -1754,6 +1763,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
           pend={declararFor}
           sociedad={sociedad}
           cuentas={cuentas}
+          planCuentas={cuentasTodas}
           onClose={() => setDeclararFor(null)}
           onDone={async () => { setDeclararFor(null); try { const d = await fetchIntercoData(); setIntercoData(d); } catch {} }}
         />

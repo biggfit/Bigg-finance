@@ -933,11 +933,11 @@ export async function aceptarMovimiento(mov, prop = {}) {
 
 // Costo de transferencia/clearing de una interco recibida (cuando la financiera lo informa). Es un gasto
 // financiero SIN caja: la merma ya la comió la financiera (la caja quedó en el neto) → solo va al P&L.
-async function _addCostoFinanciero({ sociedad, fecha, monto, moneda = "ARS", centro = "", origen_nombre = "", cuenta_bancaria = "" }) {
+async function _addCostoFinanciero({ sociedad, fecha, monto, moneda = "ARS", centro = "", origen_nombre = "", cuenta_bancaria = "", cuenta_contable = "Perdidas Financieras" }) {
   const id = newId("FINC");
   return post({ action: "add", sheet: "nb_movimientos", row: {
     id, sociedad, fecha, tipo: "EGRESO_GASTO", cuenta_bancaria,   // PAGADO desde la caja (sale plata → no deja CxP colgada)
-    cuenta_contable: "Perdidas Financieras", centro_costo: centro,
+    cuenta_contable: cuenta_contable || "Perdidas Financieras", centro_costo: centro,
     moneda, monto: -Math.abs(Number(monto) || 0),
     documento_id: "CONTAB-" + id, origen: "gasto_directo",
     concepto: `Costo transferencia interco${origen_nombre ? " · " + origen_nombre : ""}`,
@@ -949,7 +949,7 @@ async function _addCostoFinanciero({ sociedad, fecha, monto, moneda = "ARS", cen
 // movimiento del receptor (plata real, sin P&L, sin posición nueva) y, si viene de una pata parkeada,
 // la marca como reconocida para que salga de la lista de pendientes. Costo de clearing → P&L (opcional).
 export async function declararIntercoRecibida({ sociedad, cuenta_bancaria, fecha, origen_sociedad, origen_nombre = "",
-    monto, moneda = "EUR", costo = 0, costo_centro = "", concepto = "", parked_leg_id = "" } = {}) {
+    monto, moneda = "EUR", costo = 0, costo_centro = "", costo_cuenta = "", concepto = "", parked_leg_id = "" } = {}) {
   const id = newId("IRCV");
   // Las 3 escrituras son independientes (el id es local) → en paralelo.
   await Promise.all([
@@ -964,7 +964,8 @@ export async function declararIntercoRecibida({ sociedad, cuenta_bancaria, fecha
     // marca la pata parkeada como reconocida (sale de pendientes)
     parked_leg_id ? post({ action: "edit", sheet: "nb_movimientos", id: parked_leg_id, patch: { referencia: "recibida=" + id } }) : null,
     // Costo = egreso PAGADO de la misma caja → tu caja neta = monto − costo, y el gasto no queda colgado.
-    Number(costo) > 0 ? _addCostoFinanciero({ sociedad, fecha, monto: costo, moneda, centro: costo_centro, origen_nombre, cuenta_bancaria }) : null,
+    // cuenta_contable elegible: si la plata iba a pagar sueldos, el costo es carga social encubierta (no financiero).
+    Number(costo) > 0 ? _addCostoFinanciero({ sociedad, fecha, monto: costo, moneda, centro: costo_centro, origen_nombre, cuenta_bancaria, cuenta_contable: costo_cuenta }) : null,
   ]);
   return id;
 }
@@ -974,7 +975,7 @@ export async function declararIntercoRecibida({ sociedad, cuenta_bancaria, fecha
 // (plata que salió, sin P&L, sin posición nueva) y marca la pata parkeada como cerrada. Costo opcional → P&L.
 // OJO doble conteo: si además aparece en el extracto, esa línea hay que neutralizarla (no aceptarla otra vez).
 export async function declararIntercoEnviada({ sociedad, cuenta_bancaria, fecha, destino_sociedad, destino_nombre = "",
-    monto, moneda = "USD", costo = 0, costo_centro = "", concepto = "", parked_leg_id = "" } = {}) {
+    monto, moneda = "USD", costo = 0, costo_centro = "", costo_cuenta = "", concepto = "", parked_leg_id = "" } = {}) {
   const id = newId("ISND");
   await Promise.all([
     post({ action: "add", sheet: "nb_movimientos", row: {
@@ -986,7 +987,7 @@ export async function declararIntercoEnviada({ sociedad, cuenta_bancaria, fecha,
       referencia: "1", created_at: new Date().toISOString(), ...firma(),
     }}),
     parked_leg_id ? post({ action: "edit", sheet: "nb_movimientos", id: parked_leg_id, patch: { referencia: "recibida=" + id } }) : null,
-    Number(costo) > 0 ? _addCostoFinanciero({ sociedad, fecha, monto: costo, moneda, centro: costo_centro, origen_nombre: destino_nombre, cuenta_bancaria }) : null,
+    Number(costo) > 0 ? _addCostoFinanciero({ sociedad, fecha, monto: costo, moneda, centro: costo_centro, origen_nombre: destino_nombre, cuenta_bancaria, cuenta_contable: costo_cuenta }) : null,
   ]);
   return id;
 }
