@@ -6,6 +6,7 @@ import {
   ignorarMovimiento, restaurarMovimiento, fetchMovimientosIgnorados, fetchPagosSueldos,
   fetchEgresos, fetchPagosCobros, calcSaldoPendiente, imputarPagoFC,
   appendEgreso, appendProveedor, appendCuenta,
+  appendIngreso, fetchClientes, appendCliente,
   appendBancoRegla, fetchIngresos, imputarCobroIngreso,
   fetchFinanciaciones, imputarCuota, pagarTarjeta, esCuentaCredito, fetchMovTesoreria,
   fetchIntercoData, pendientesInterco, reconocerVentaInterco, normCuit,
@@ -16,6 +17,7 @@ import MundoTarjeta from "./reconciliacion/MundoTarjeta";
 import { fetchAll } from "../lib/sheetsApi";
 import { groupCentrosCosto, makeCrearMaestro } from "./formUtils";
 import NuevoEgresoModal from "./NuevoEgresoModal";
+import NuevoIngresoModal from "./NuevoIngresoModal";
 import { computeSaldoReal } from "../lib/helpers";
 import { parseGalicia } from "./parsers/galicia";
 import { parseInterAudi } from "./parsers/interaudi";
@@ -258,12 +260,15 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const [msg,        setMsg]        = useState("");
   const [edits,      setEdits]      = useState({}); // movId → {cuenta_contable, centro_costo}
   const [menuFor,    setMenuFor]    = useState(null); // movId con el menú ⋯ abierto
-  const [cargarFacturaFor, setCargarFacturaFor] = useState(null); // mov para el que abrimos "Cargar factura" (modal Nueva Compra)
+  const [cargarFacturaFor, setCargarFacturaFor] = useState(null); // mov para el que abrimos "Cargar factura" de compra (débito)
+  const [cargarIngresoFor, setCargarIngresoFor] = useState(null); // mov para el que abrimos "Cargar factura de venta" (crédito)
+  const [clientes,   setClientes]   = useState([]); // maestro de clientes (para el modal de venta)
   const fileRef = useRef(null);
 
-  // Crear proveedor/cuenta desde el modal de Nueva Compra (mismo patrón que Egresos).
+  // Crear proveedor/cuenta/cliente desde los modales de Nueva Compra / Venta (mismo patrón que Egresos/Ingresos).
   const crearProveedor = useMemo(() => makeCrearMaestro(appendProveedor, fetchProveedores, setProveedores), []);
   const crearCuenta     = useMemo(() => makeCrearMaestro(appendCuenta,     fetchCuentas,     l => setPlanCuentas(dedupById(l))), []);
+  const crearCliente    = useMemo(() => makeCrearMaestro(appendCliente,    fetchClientes,    setClientes), []);
 
   // Cerrar el menú ⋯ al clickear afuera
   useEffect(() => {
@@ -328,6 +333,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     fetchMovimientosIgnorados(sociedad).then(i => setIgnorados(i || [])).catch(console.error);
     fetchEgresos(sociedad).then(e => setEgresos(e || [])).catch(console.error);
     fetchIngresos(sociedad).then(i => setIngresos(i || [])).catch(console.error);
+    fetchClientes().then(c => setClientes(c || [])).catch(console.error);
     fetchPagosCobros(sociedad).then(p => setPagosCobros(p || [])).catch(console.error);
     fetchFinanciaciones(sociedad).then(f => setFinanciaciones(f || [])).catch(console.error);
     recargar();
@@ -1619,6 +1625,9 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           {!neg && !fr.es && !modoTransfer && !modoInterco && !modoCobro && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCobro: true, modoFranquicia: false, modoTransfer: false, noFranquicia: true }); setMenuFor(null); }}>🧾 Imputar a factura</button>
                           )}
+                          {!neg && !fr.es && !modoTransfer && !modoInterco && !modoRecv && (
+                            <button style={MENU_ITEM} onClick={() => { setCargarIngresoFor(m); setMenuFor(null); }}>➕ Cargar factura de venta nueva…</button>
+                          )}
                           {neg && !fr.es && !modoTransfer && !modoInterco && !modoFC && !modoCobro && !modoCuota && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCuota: true, noCuota: false, modoFranquicia: false, modoTransfer: false, modoFC: false, modoCobro: false, noFranquicia: true }); setMenuFor(null); }}>💳 Imputar a cuota de financiación</button>
                           )}
@@ -1817,6 +1826,53 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
               setPendientes(prev => prev.filter(x => x.id !== mov.id));   // sale de la bandeja
               fetchEgresos(sociedad).then(e => setEgresos(e || [])).catch(() => {});   // refresca Compras
               setCargarFacturaFor(null);
+            }}
+          />
+        );
+      })()}
+
+      {/* Cargar factura de VENTA nueva desde un crédito (espejo del de compra): crea el ingreso y
+          concilia el cobro contra él en un paso. */}
+      {cargarIngresoFor && (() => {
+        const mov = cargarIngresoFor;
+        const cliId = cobClienteDe(mov) || "";
+        const cli = clientes.find(c => String(c.id) === String(cliId)) || {};
+        const tot = Math.abs(Number(mov.monto) || 0);
+        return (
+          <NuevoIngresoModal
+            sociedad={sociedad}
+            clientes={clientes}
+            cuentas={planCuentas}
+            centrosCosto={centros}
+            onCrearCliente={crearCliente}
+            onCrearCuenta={crearCuenta}
+            initialData={{
+              _duplicate: true,
+              cliente: cli.nombre || mov.contraparte_nombre || "",
+              clienteId: cliId,
+              cuentaId: cli.cuentaDefault || "",
+              moneda: cli.monedaDefault || mov.moneda || "ARS",
+              fecha: "",           // emisión vacía a propósito → obliga a completarla
+              vto: mov.fecha,      // vto = fecha del cobro que estás conciliando
+              nroComp: "",
+              nota: mov.concepto || "",
+              lineas: [{ cc: cli.ccDefault || "", subtotal: tot, ivaRate: 0, iva_monto: 0, total_linea: tot }],
+              importe: tot,
+            }}
+            onClose={() => setCargarIngresoFor(null)}
+            onSave={async (payload) => {
+              // 1) crear la factura de venta, 2) imputar el cobro del extracto contra ella = conciliar.
+              await appendIngreso(payload);
+              await imputarCobroIngreso(mov, {
+                documento_id: payload.id,
+                cuenta_contable: payload.cuentaId || payload.cuenta || "",
+                centro_costo: String(payload.cc || "").split(",")[0].trim(),
+                cliente_id: payload.clienteId || "", cliente_nombre: payload.cliente || "",
+                retenciones: [], retencion_centro: centroRetencion,
+              });
+              setPendientes(prev => prev.filter(x => x.id !== mov.id));   // sale de la bandeja
+              fetchIngresos(sociedad).then(i => setIngresos(i || [])).catch(() => {});   // refresca Ventas
+              setCargarIngresoFor(null);
             }}
           />
         );
