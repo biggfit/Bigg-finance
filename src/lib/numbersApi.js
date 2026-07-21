@@ -84,9 +84,13 @@ const pad  = (n, l = 5) => String(n).padStart(l, "0");
 // milisegundo (ej. loop de ingesta de 285 líneas) o al re-subir. El componente de
 // tiempo agrega entropía entre sesiones; el `_seq` asegura que NUNCA se repita dentro
 // de una. (Antes: solo Date.now()%100000 → colisionaba y dejaba filas con id duplicado.)
+// Salt aleatorio POR SESIÓN (3 chars base36): dos cargas/pestañas distintas pueden coincidir en
+// Date.now()%100000 Y en _seq (ambas en su 1er id) → sin salt colisionaban y dejaban filas con id
+// duplicado. Con el salt, la colisión entre sesiones es despreciable (~1/46k adicional).
+const _salt = Math.floor(Math.random() * 46656).toString(36).padStart(3, "0");
 let _seq = 0;
 function newId(prefix) {
-  return `${prefix}-${pad(Date.now() % 100000)}-${_seq++}`;
+  return `${prefix}-${pad(Date.now() % 100000)}-${_salt}${_seq++}`;
 }
 
 /**
