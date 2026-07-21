@@ -8,7 +8,7 @@ import {
   appendBancoRegla, fetchIngresos, imputarCobroIngreso,
   fetchFinanciaciones, imputarCuota, pagarTarjeta, esCuentaCredito, fetchMovTesoreria,
   fetchIntercoData, pendientesInterco, reconocerVentaInterco, normCuit,
-  pendientesIntercoRecibir, declararIntercoRecibida, intercoMatchCandidato,
+  pendientesIntercoRecibir, declararIntercoRecibida, declararIntercoEnviada, intercoMatchCandidato,
 } from "../lib/numbersApi";
 import { BancoReglaModal } from "./PantallaMaestros";
 import MundoTarjeta from "./reconciliacion/MundoTarjeta";
@@ -140,25 +140,34 @@ function ReconocerIntercoModal({ pend, sociedad, cuentas = [], centros = [], onC
 // Modal para DECLARAR una interco recibida (lado receptor): la plata que entró a mi banco/caja → fondeo,
 // sin P&L, sin posición nueva. Costo de clearing opcional → Perdidas Financieras (P&L). Marca la pata parkeada.
 function DeclararRecibidaModal({ pend, sociedad, cuentas = [], onClose, onDone }) {
+  const envio = pend?.dir === "envie";   // envié = EGRESO (cierro mi salida); recibí = INGRESO (fondeo)
   const ctaHint = (cuentas || []).find(c => String(c.id) === String(pend?.cuenta_hint));
   const [cuenta, setCuenta] = useState(ctaHint ? String(ctaHint.id) : "");
-  const [monto, setMonto]   = useState("");
+  const [monto, setMonto]   = useState(pend?.monto ? String(Math.round(pend.monto)) : "");
   const [fecha, setFecha]   = useState(new Date().toISOString().slice(0, 10));
   const [costo, setCosto]   = useState("");
   const [busy, setBusy]     = useState(false);
   const ctas = (cuentas || []).slice().sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
-  const monedaCta = ctas.find(c => String(c.id) === String(cuenta))?.moneda || "EUR";
+  const monedaCta = ctas.find(c => String(c.id) === String(cuenta))?.moneda || pend?.moneda || "USD";
   const canSave = cuenta && Number(monto) > 0 && !busy;
 
   const guardar = async () => {
     if (!canSave) return;
     setBusy(true);
     try {
-      await declararIntercoRecibida({
-        sociedad, cuenta_bancaria: cuenta, fecha,
-        origen_sociedad: pend.origen_sociedad, origen_nombre: pend.origen_nombre,
-        monto: Number(monto), moneda: monedaCta, costo: Number(costo) || 0, parked_leg_id: pend.id,
-      });
+      if (envio) {
+        await declararIntercoEnviada({
+          sociedad, cuenta_bancaria: cuenta, fecha,
+          destino_sociedad: pend.origen_sociedad, destino_nombre: pend.origen_nombre,
+          monto: Number(monto), moneda: monedaCta, costo: Number(costo) || 0, parked_leg_id: pend.id,
+        });
+      } else {
+        await declararIntercoRecibida({
+          sociedad, cuenta_bancaria: cuenta, fecha,
+          origen_sociedad: pend.origen_sociedad, origen_nombre: pend.origen_nombre,
+          monto: Number(monto), moneda: monedaCta, costo: Number(costo) || 0, parked_leg_id: pend.id,
+        });
+      }
       await onDone();
     } catch (e) { setBusy(false); alert("No se pudo declarar: " + (e?.message || e)); }
   };
@@ -169,29 +178,33 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], onClose, onDone }
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={onClose}>
       <div onClick={e => e.stopPropagation()} style={{ background: "#f1f5f9", borderRadius: 16, width: 480, maxWidth: "97vw", overflow: "hidden", boxShadow: T.shadowMd }}>
         <div style={{ background: T.accentDark, padding: "16px 22px" }}>
-          <div style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>Declarar interco recibida</div>
+          <div style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>{envio ? "Cerrar interco enviada" : "Declarar interco recibida"}</div>
           <div style={{ fontSize: 12, color: "rgba(255,255,255,.6)", marginTop: 2 }}>
             {pend?.origen_nombre} parkeó {pend?.moneda} {Math.round(pend?.monto || 0).toLocaleString("es-AR")}{pend?.fecha ? ` · ${pend.fecha}` : ""}
           </div>
         </div>
         <div style={{ padding: 22, display: "flex", flexDirection: "column", gap: 14 }}>
-          <div><label style={lbl}>Cuenta / caja donde entró *</label>
+          <div><label style={lbl}>{envio ? "Cuenta / caja de donde salió *" : "Cuenta / caja donde entró *"}</label>
             <select value={cuenta} onChange={e => setCuenta(e.target.value)} style={inp}>
               <option value="">— Elegí la cuenta —</option>
               {ctas.map(c => <option key={c.id} value={c.id}>{c.nombre} · {c.moneda}</option>)}
             </select></div>
           <div style={{ display: "flex", gap: 12 }}>
-            <div style={{ flex: 1 }}><label style={lbl}>Monto recibido ({monedaCta}) *</label>
-              <input value={monto} onChange={e => setMonto(e.target.value)} style={inp} placeholder="lo que entró" /></div>
+            <div style={{ flex: 1 }}><label style={lbl}>{envio ? `Monto enviado (${monedaCta}) *` : `Monto recibido (${monedaCta}) *`}</label>
+              <input value={monto} onChange={e => setMonto(e.target.value)} style={inp} placeholder={envio ? "lo que salió" : "lo que entró"} /></div>
             <div style={{ flex: 1 }}><label style={lbl}>Fecha</label>
               <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={inp} /></div>
           </div>
           <div><label style={lbl}>Costo de transferencia / clearing (opcional)</label>
             <input value={costo} onChange={e => setCosto(e.target.value)} style={inp} placeholder="si la financiera te lo informa → P&L" /></div>
-          <div style={{ fontSize: 11.5, color: T.muted }}>Se registra el ingreso como <b>fondeo</b> en tu caja (sin P&L). La deuda queda en USD (la pata que mandó el núcleo); el TC no se necesita.</div>
+          <div style={{ fontSize: 11.5, color: T.muted }}>
+            {envio
+              ? <>Registra la <b>salida</b> de tu caja (sin P&L). Usalo si la plata salió de una caja/efectivo sin extracto, o para cerrar sin esperar al banco. <b>Si además aparece en tu extracto, esa línea no la aceptes de nuevo</b> (neutralizala) para no duplicar.</>
+              : <>Se registra el ingreso como <b>fondeo</b> en tu caja (sin P&L). La deuda queda en USD (la pata que mandó el núcleo); el TC no se necesita.</>}
+          </div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
             <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${T.cardBorder}`, borderRadius: 999, padding: "8px 18px", fontSize: 13, fontWeight: 700, color: T.muted, cursor: "pointer", fontFamily: T.font }}>Cancelar</button>
-            <button onClick={guardar} disabled={!canSave} style={{ background: T.accent, border: "none", borderRadius: 999, padding: "8px 20px", fontSize: 13, fontWeight: 800, color: "#000", cursor: canSave ? "pointer" : "default", opacity: canSave ? 1 : .5, fontFamily: T.font }}>{busy ? "Guardando…" : "Declarar recibida"}</button>
+            <button onClick={guardar} disabled={!canSave} style={{ background: T.accent, border: "none", borderRadius: 999, padding: "8px 20px", fontSize: 13, fontWeight: 800, color: "#000", cursor: canSave ? "pointer" : "default", opacity: canSave ? 1 : .5, fontFamily: T.font }}>{busy ? "Guardando…" : (envio ? "Cerrar envío" : "Declarar recibida")}</button>
           </div>
         </div>
       </div>
@@ -1174,12 +1187,15 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                         <td style={{ padding: "8px 14px", textAlign: "right", minWidth: 150 }}>
                           {p.mia ? (
                             <span style={{ fontSize: 11, color: T.dim }}>esperando que {p.origen_nombre} la cierre</span>
-                          ) : recibi ? (
-                            <button onClick={() => setDeclararFor(p)}
-                              style={{ background: T.accent, border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 12.5, fontWeight: 800, color: "#000", cursor: "pointer", fontFamily: T.font }}>
-                              Contabilizar recepción
-                            </button>
-                          ) : <span style={{ fontSize: 11, color: T.dim }}>cerrás desde Banco</span>}
+                          ) : (
+                            <div style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
+                              <button onClick={() => setDeclararFor(p)}
+                                style={{ background: T.accent, border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 12.5, fontWeight: 800, color: "#000", cursor: "pointer", fontFamily: T.font }}>
+                                {recibi ? "Contabilizar recepción" : "Cerrar envío acá"}
+                              </button>
+                              {!recibi && <span style={{ fontSize: 10.5, color: T.dim }}>o al conciliar tu banco</span>}
+                            </div>
+                          )}
                         </td>
                       </tr>
                     ); })}

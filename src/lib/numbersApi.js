@@ -968,6 +968,28 @@ export async function declararIntercoRecibida({ sociedad, cuenta_bancaria, fecha
   return id;
 }
 
+// Declara MANUALMENTE una interco ENVIADA (lado emisor, cuando salió de una CAJA/efectivo sin extracto, o
+// para cerrar desde el carril sin esperar al banco). Espejo de declararIntercoRecibida: crea el EGRESO real
+// (plata que salió, sin P&L, sin posición nueva) y marca la pata parkeada como cerrada. Costo opcional → P&L.
+// OJO doble conteo: si además aparece en el extracto, esa línea hay que neutralizarla (no aceptarla otra vez).
+export async function declararIntercoEnviada({ sociedad, cuenta_bancaria, fecha, destino_sociedad, destino_nombre = "",
+    monto, moneda = "USD", costo = 0, costo_centro = "", concepto = "", parked_leg_id = "" } = {}) {
+  const id = newId("ISND");
+  await Promise.all([
+    post({ action: "add", sheet: "nb_movimientos", row: {
+      id, sociedad, fecha, tipo: "EGRESO", cuenta_bancaria, cuenta_destino: "",
+      cuenta_contable: "", centro_costo: "", moneda, monto: -Math.abs(Number(monto) || 0),
+      documento_id: "INTERSND-" + id, origen: "interco_enviada",
+      contraparte_id: destino_sociedad || "", contraparte_nombre: destino_nombre,
+      concepto: concepto || `Interco enviada${destino_nombre ? " a " + destino_nombre : ""}`,
+      referencia: "1", created_at: new Date().toISOString(), ...firma(),
+    }}),
+    parked_leg_id ? post({ action: "edit", sheet: "nb_movimientos", id: parked_leg_id, patch: { referencia: "recibida=" + id } }) : null,
+    Number(costo) > 0 ? _addCostoFinanciero({ sociedad, fecha, monto: costo, moneda, centro: costo_centro, origen_nombre: destino_nombre }) : null,
+  ]);
+  return id;
+}
+
 // Patas parkeadas por OTRA sociedad hacia la activa, todavía sin declarar (lista de pendientes / semáforo).
 // `movs` = nb_movimientos (de fetchIntercoData). Vínculo blando por sociedad; se saca al declarar (referencia recibida=).
 // Match del modelo "matchear o parkear": ¿hay una interco parkeada por la CONTRAPARTE hacia mí, con
