@@ -1188,13 +1188,10 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           {p.mia ? (
                             <span style={{ fontSize: 11, color: T.dim }}>esperando que {p.origen_nombre} la cierre</span>
                           ) : (
-                            <div style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
-                              <button onClick={() => setDeclararFor(p)}
-                                style={{ background: T.accent, border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 12.5, fontWeight: 800, color: "#000", cursor: "pointer", fontFamily: T.font }}>
-                                {recibi ? "Contabilizar recepción" : "Cerrar envío acá"}
-                              </button>
-                              {!recibi && <span style={{ fontSize: 10.5, color: T.dim }}>o al conciliar tu banco</span>}
-                            </div>
+                            <button onClick={() => setDeclararFor(p)}
+                              style={{ background: T.accent, border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 12.5, fontWeight: 800, color: "#000", cursor: "pointer", fontFamily: T.font }}>
+                              {recibi ? "Contabilizar recepción" : "Cerrar operación"}
+                            </button>
                           )}
                         </td>
                       </tr>
