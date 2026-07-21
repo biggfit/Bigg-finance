@@ -16,6 +16,7 @@ import {
 import { BancoReglaModal } from "./PantallaMaestros";
 import MundoTarjeta from "./reconciliacion/MundoTarjeta";
 import { fetchAll } from "../lib/sheetsApi";
+import { SOCIEDAD_EMPRESA } from "../lib/franquiciasAdapter";
 import { groupCentrosCosto, makeCrearMaestro } from "./formUtils";
 import NuevoEgresoModal from "./NuevoEgresoModal";
 import NuevoIngresoModal from "./NuevoIngresoModal";
@@ -86,7 +87,11 @@ function ReconocerIntercoModal({ pend, sociedad, cuentas = [], centros = [], onC
   const [total, setTotal]   = useState(String(pend?.total ?? ""));
   const [fecha, setFecha]   = useState(new Date().toISOString().slice(0, 10));
   const [busy, setBusy]     = useState(false);
-  const cuentasGasto = (cuentas || []).filter(c => !/^(venta|ventas|ingreso|ingresos)$/i.test(String(c.tipo || "")))
+  // NC de interuso (a mi favor) → la reconozco como INGRESO a una cuenta de venta/ingreso (CxC). El resto
+  // (FACTURA que debo) → EGRESO a una cuenta de gasto (CxP). Se filtra la lista de cuentas según el caso.
+  const esIngreso = pend?.subtipo === "INGRESO";
+  const esVentaTipo = c => /^(venta|ventas|ingreso|ingresos)$/i.test(String(c.tipo || ""));
+  const cuentasGasto = (cuentas || []).filter(c => esIngreso ? esVentaTipo(c) : !esVentaTipo(c))
     .sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
   const centrosOrd = (centros || []).slice().sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
   const canSave = cuenta && Number(total) > 0 && !busy;
@@ -98,6 +103,7 @@ function ReconocerIntercoModal({ pend, sociedad, cuentas = [], centros = [], onC
       await reconocerVentaInterco({
         sociedad, ventaIdComp: pend.id_comp, vendedorId: pend.vendedor, vendedorNombre: pend.vendedorNombre,
         cuenta_contable: cuenta, centro_costo: centro, total: Number(total), moneda: pend.moneda, fecha, nroComp: pend.nroComp,
+        subtipo: pend.subtipo || "EGRESO",
       });
       await onDone();
     } catch (e) { setBusy(false); alert("No se pudo reconocer: " + (e?.message || e)); }
@@ -109,9 +115,9 @@ function ReconocerIntercoModal({ pend, sociedad, cuentas = [], centros = [], onC
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={onClose}>
       <div onClick={e => e.stopPropagation()} style={{ background: "#f1f5f9", borderRadius: 16, width: 480, maxWidth: "97vw", overflow: "hidden", boxShadow: T.shadowMd }}>
         <div style={{ background: T.accentDark, padding: "16px 22px" }}>
-          <div style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>Reconocer compra</div>
+          <div style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>{esIngreso ? "Reconocer crédito" : "Reconocer compra"}</div>
           <div style={{ fontSize: 12, color: "rgba(255,255,255,.6)", marginTop: 2 }}>
-            {pend?.vendedorNombre} te vendió {pend?.moneda} {Math.round(pend?.total || 0).toLocaleString("es-AR")}{pend?.nroComp ? ` · ${pend.nroComp}` : ""}
+            {pend?.vendedorNombre} te {esIngreso ? "acreditó" : "vendió"} {pend?.moneda} {Math.round(pend?.total || 0).toLocaleString("es-AR")}{pend?.concepto ? ` · ${pend.concepto}` : ""}{pend?.nroComp ? ` · ${pend.nroComp}` : ""}
           </div>
         </div>
         <div style={{ padding: 22, display: "flex", flexDirection: "column", gap: 14 }}>
@@ -131,10 +137,12 @@ function ReconocerIntercoModal({ pend, sociedad, cuentas = [], centros = [], onC
             <div style={{ flex: 1 }}><label style={lbl}>Fecha</label>
               <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={inp} /></div>
           </div>
-          <div style={{ fontSize: 11.5, color: T.muted }}>Se registra como compra en tu sociedad → queda como <b>factura por pagar</b> a {pend?.vendedorNombre}.</div>
+          <div style={{ fontSize: 11.5, color: T.muted }}>{esIngreso
+            ? <>Se registra como <b>ingreso</b> en tu sociedad → queda como <b>cuenta por cobrar</b> a {pend?.vendedorNombre}.</>
+            : <>Se registra como compra en tu sociedad → queda como <b>factura por pagar</b> a {pend?.vendedorNombre}.</>}</div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
             <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${T.cardBorder}`, borderRadius: 999, padding: "8px 18px", fontSize: 13, fontWeight: 700, color: T.muted, cursor: "pointer", fontFamily: T.font }}>Cancelar</button>
-            <button onClick={guardar} disabled={!canSave} style={{ background: T.accent, border: "none", borderRadius: 999, padding: "8px 20px", fontSize: 13, fontWeight: 800, color: "#000", cursor: canSave ? "pointer" : "default", opacity: canSave ? 1 : .5, fontFamily: T.font }}>{busy ? "Guardando…" : "Reconocer y registrar compra"}</button>
+            <button onClick={guardar} disabled={!canSave} style={{ background: T.accent, border: "none", borderRadius: 999, padding: "8px 20px", fontSize: 13, fontWeight: 800, color: "#000", cursor: canSave ? "pointer" : "default", opacity: canSave ? 1 : .5, fontFamily: T.font }}>{busy ? "Guardando…" : (esIngreso ? "Reconocer y registrar ingreso" : "Reconocer y registrar compra")}</button>
           </div>
         </div>
       </div>
@@ -288,7 +296,32 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   useEffect(() => {
     fetchIntercoData().then(d => d && setIntercoData(d)).catch(console.error);
   }, [sociedad]);
-  const pendInterco = useMemo(() => pendientesInterco(intercoData, { sociedad }), [intercoData, sociedad]);
+  // Pendientes de documentos de FRANQUICIA emitidos a MI sociedad (ej. Segui = una franquicia cuyo CUIT es
+  // el de la sociedad activa). Los docs viven en el backend de Franquicias (frComps) → los surteamos al mismo
+  // inbox de reconocer. FACTURA (le debo: pauta/sponsoreo) → EGRESO/CxP; NC (a mi favor: interuso) → INGRESO/CxC.
+  const franqPend = useMemo(() => {
+    const miCuit = normCuit((sociedades.find(s => String(s.id) === String(sociedad)) || {}).cuit);
+    if (!miCuit) return [];
+    const empresaToSoc = Object.fromEntries(Object.entries(SOCIEDAD_EMPRESA).map(([k, v]) => [v, k]));
+    const out = [];
+    for (const fr of (franquicias || [])) {
+      if (normCuit(fr.cuit) !== miCuit) continue;                       // solo la franquicia que SOY yo
+      for (const c of (frComps[String(fr.id)] || [])) {
+        const [doc, cuenta] = String(c.type || "").split("|");
+        if (doc !== "FACTURA" && doc !== "NC") continue;                 // solo devengado (no FC_RECIBIDA ni pagos)
+        const emisora = c.empresa || ((c.currency || "ARS") === "ARS" ? "ÑAKO SRL" : "BIGG FIT LLC");
+        out.push({
+          id_comp: `FR-${c.id}`, origen: "franquicia",
+          subtipo: doc === "NC" ? "INGRESO" : "EGRESO",
+          concepto: cuenta || "", vendedor: empresaToSoc[emisora] || "", vendedorNombre: emisora,
+          fecha: c.date, nroComp: c.invoice || "", moneda: c.currency || "ARS",
+          total: Math.abs(Number(c.amount) || 0),
+        });
+      }
+    }
+    return out;
+  }, [franquicias, frComps, sociedades, sociedad]);
+  const pendInterco = useMemo(() => pendientesInterco({ ...intercoData, franqPend }, { sociedad }), [intercoData, franqPend, sociedad]);
   const pendRecibir = useMemo(() => pendientesIntercoRecibir(intercoData, { sociedad }), [intercoData, sociedad]);
   // Avisa al sidebar los conteos de pendientes (badge en vivo): Banco (extracto sin conciliar) + Interco
   // (ventas a reconocer + CC a liquidar ida/vuelta).
@@ -1165,7 +1198,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         return (
           <div className="fade" style={{ overflow: "auto" }}>
             <div style={{ fontSize: 12, color: T.muted, marginBottom: 12 }}>
-              Ventas que otra sociedad registró con vos como cliente y todavía no reconociste. <b>Reconocer</b> = cargás tu compra (con tus cuentas) → te queda la factura por pagar.
+              Documentos que otra sociedad te emitió y todavía no reconociste (ventas de otra sociedad + docs de franquicia hacia vos, ej. Segui). <b>Reconocer</b> = lo cargás con TUS cuentas: una factura (te la vendieron) queda por pagar; un crédito/NC (a tu favor, ej. interuso) queda a cobrar.
             </div>
             {pend.length === 0 ? (
               <div style={{ color: T.muted, fontSize: 13, padding: "24px 4px" }}>No hay ventas de otras sociedades pendientes de reconocer.</div>
@@ -1174,8 +1207,8 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                 {pend.map((p, i) => (
                   <div key={p.id_comp} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", borderTop: i ? `1px solid ${T.cardBorder}` : "none", fontSize: 13, color: T.text }}>
                     <div style={{ flex: 1 }}>
-                      <b>{p.vendedorNombre}</b> te vendió <b style={{ color: "#16a34a", fontFamily: T.mono }}>{money(p.total, p.moneda)}</b>
-                      <span style={{ color: T.muted }}>{p.nroComp ? ` · ${p.nroComp}` : ""}{p.fecha ? ` · ${p.fecha}` : ""}</span>
+                      <b>{p.vendedorNombre}</b> te {p.subtipo === "INGRESO" ? "acreditó" : "vendió"} <b style={{ color: p.subtipo === "INGRESO" ? "#0284c7" : "#16a34a", fontFamily: T.mono }}>{money(p.total, p.moneda)}</b>
+                      <span style={{ color: T.muted }}>{p.concepto ? ` · ${p.concepto}` : ""}{p.nroComp ? ` · ${p.nroComp}` : ""}{p.fecha ? ` · ${p.fecha}` : ""}</span>
                     </div>
                     <button onClick={() => setReconocerFor(p)}
                       style={{ background: T.accent, border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 12.5, fontWeight: 800, color: "#000", cursor: "pointer", fontFamily: T.font }}>

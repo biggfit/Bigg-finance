@@ -1500,7 +1500,7 @@ export const normCuit = s => String(s ?? "").replace(/\D/g, "").replace(/^0+/, "
 // registró con MI sociedad como cliente (match por CUIT), que yo todavía NO reconocí con mi
 // compra. Reconocer crea una compra en mi sociedad con nota "interco_ref=<id_comp de la venta>".
 // Fuente: comprobantes INGRESO (ventas) de otras sociedades cuyo cliente tiene MI CUIT.
-export function pendientesInterco({ comps = [], clientes = [], sociedades = [] } = {}, { sociedad } = {}) {
+export function pendientesInterco({ comps = [], clientes = [], sociedades = [], franqPend = [] } = {}, { sociedad } = {}) {
   const miCuit = normCuit((sociedades.find(s => String(s.id) === String(sociedad)) || {}).cuit);
   if (!miCuit) return [];  // sin CUIT propio no puedo saber quién me vendió
   const cliById = new Map(clientes.map(c => [String(c.id), c]));
@@ -1526,19 +1526,23 @@ export function pendientesInterco({ comps = [], clientes = [], sociedades = [] }
     });
     ventas.get(key).total += toNum(c.total);
   }
-  return [...ventas.values()].filter(v => !reconocidos.has(v.id_comp))
+  // franqPend = pendientes de documentos de franquicia emitidos a mí (ej. Segui), ya con forma de pendiente
+  // y armados por la pantalla (que tiene el mundo Franquicias). Mismo dedup por interco_ref (id_comp "FR-…").
+  return [...ventas.values(), ...franqPend].filter(v => !reconocidos.has(v.id_comp))
     .sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
 }
 
 // Reconocer una venta interco = registrar MI compra (factura de proveedor / CxP) en mi sociedad,
 // con MIS cuenta+centro, contraparte = la sociedad vendedora, y link `interco_ref=<id_comp venta>`
 // (así el pendiente desaparece y no se re-crea). Queda como FC por pagar (EGRESO sin pago).
-export async function reconocerVentaInterco({ sociedad, ventaIdComp, vendedorId = "", vendedorNombre = "", cuenta_contable, centro_costo = "", total, moneda = "ARS", fecha, nroComp = "" }) {
-  const id_comp = newId("EG");
+export async function reconocerVentaInterco({ sociedad, ventaIdComp, vendedorId = "", vendedorNombre = "", cuenta_contable, centro_costo = "", total, moneda = "ARS", fecha, nroComp = "", subtipo = "EGRESO" }) {
+  // subtipo="EGRESO" (default): lo que le compro/debo a la contraparte → CxP. subtipo="INGRESO": un crédito a
+  // mi favor (ej. NC de interuso que Ñako me emite) → lo reconozco como venta/ingreso a mi cuenta → CxC.
+  const id_comp = newId(subtipo === "INGRESO" ? "IN" : "EG");
   const t = toNum(total);
   await post({ action: "add", sheet: "nb_comprobantes", row: {
     id: `${id_comp}-L1`, id_comp, sociedad, fecha,
-    subtipo: "EGRESO",
+    subtipo,
     contraparte_id: vendedorId, contraparte_nombre: vendedorNombre,
     cuenta_contable: String(cuenta_contable || "").replace(/^CUENTA_/, ""),
     centro_costo, subtotal: t, iva_rate: 0, iva_monto: 0, total: t,
