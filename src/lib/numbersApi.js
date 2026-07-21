@@ -933,10 +933,10 @@ export async function aceptarMovimiento(mov, prop = {}) {
 
 // Costo de transferencia/clearing de una interco recibida (cuando la financiera lo informa). Es un gasto
 // financiero SIN caja: la merma ya la comió la financiera (la caja quedó en el neto) → solo va al P&L.
-async function _addCostoFinanciero({ sociedad, fecha, monto, moneda = "ARS", centro = "", origen_nombre = "" }) {
+async function _addCostoFinanciero({ sociedad, fecha, monto, moneda = "ARS", centro = "", origen_nombre = "", cuenta_bancaria = "" }) {
   const id = newId("FINC");
   return post({ action: "add", sheet: "nb_movimientos", row: {
-    id, sociedad, fecha, tipo: "EGRESO_GASTO", cuenta_bancaria: "",   // sin caja → P&L puro
+    id, sociedad, fecha, tipo: "EGRESO_GASTO", cuenta_bancaria,   // PAGADO desde la caja (sale plata → no deja CxP colgada)
     cuenta_contable: "Perdidas Financieras", centro_costo: centro,
     moneda, monto: -Math.abs(Number(monto) || 0),
     documento_id: "CONTAB-" + id, origen: "gasto_directo",
@@ -963,7 +963,8 @@ export async function declararIntercoRecibida({ sociedad, cuenta_bancaria, fecha
     }}),
     // marca la pata parkeada como reconocida (sale de pendientes)
     parked_leg_id ? post({ action: "edit", sheet: "nb_movimientos", id: parked_leg_id, patch: { referencia: "recibida=" + id } }) : null,
-    Number(costo) > 0 ? _addCostoFinanciero({ sociedad, fecha, monto: costo, moneda, centro: costo_centro, origen_nombre }) : null,
+    // Costo = egreso PAGADO de la misma caja → tu caja neta = monto − costo, y el gasto no queda colgado.
+    Number(costo) > 0 ? _addCostoFinanciero({ sociedad, fecha, monto: costo, moneda, centro: costo_centro, origen_nombre, cuenta_bancaria }) : null,
   ]);
   return id;
 }
@@ -985,7 +986,7 @@ export async function declararIntercoEnviada({ sociedad, cuenta_bancaria, fecha,
       referencia: "1", created_at: new Date().toISOString(), ...firma(),
     }}),
     parked_leg_id ? post({ action: "edit", sheet: "nb_movimientos", id: parked_leg_id, patch: { referencia: "recibida=" + id } }) : null,
-    Number(costo) > 0 ? _addCostoFinanciero({ sociedad, fecha, monto: costo, moneda, centro: costo_centro, origen_nombre: destino_nombre }) : null,
+    Number(costo) > 0 ? _addCostoFinanciero({ sociedad, fecha, monto: costo, moneda, centro: costo_centro, origen_nombre: destino_nombre, cuenta_bancaria }) : null,
   ]);
   return id;
 }

@@ -194,22 +194,28 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], onClose, onDone }
               {ctas.map(c => <option key={c.id} value={c.id}>{c.nombre} · {c.moneda}</option>)}
             </select></div>
           <div style={{ display: "flex", gap: 12 }}>
-            <div style={{ flex: 1 }}><label style={lbl}>{envio ? `Monto que salió de tu caja (${monedaCta}) *` : `Monto que entró a tu caja (${monedaCta}) *`}</label>
-              <input value={monto} onChange={e => setMonto(e.target.value)} style={inp} placeholder={envio ? "lo que salió" : "lo que entró"} /></div>
+            <div style={{ flex: 1 }}><label style={lbl}>{envio ? `Monto que salió de tu caja (${monedaCta}) *` : `Monto bruto que ingresó (post-TC) (${monedaCta}) *`}</label>
+              <input value={monto} onChange={e => setMonto(e.target.value)} style={inp} placeholder={envio ? "lo que salió" : "el bruto, antes del costo"} /></div>
             <div style={{ flex: 1 }}><label style={lbl}>Fecha</label>
               <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={inp} /></div>
           </div>
-          {!mismaMoneda && (
+          {!mismaMoneda && !envio && (
             <div style={{ fontSize: 11, color: T.muted, marginTop: -6 }}>
-              La otra pata parkeó <b>{pend?.moneda} {Math.round(pend?.monto || 0).toLocaleString("es-AR")}</b> (moneda del núcleo). Poné el monto <b>real de tu caja</b> ({monedaCta}); la brecha de cambio no se registra acá.
+              La otra pata parkeó <b>{pend?.moneda} {Math.round(pend?.monto || 0).toLocaleString("es-AR")}</b> (moneda del núcleo). Poné el <b>bruto post-TC</b> en {monedaCta}; el costo (abajo) sale como egreso pagado → tu caja queda en el neto. La brecha de cambio no se registra.
             </div>
           )}
           <div><label style={lbl}>Costo de transferencia / clearing (opcional)</label>
-            <input value={costo} onChange={e => setCosto(e.target.value)} style={inp} placeholder="si la financiera te lo informa → P&L" /></div>
+            <input value={costo} onChange={e => setCosto(e.target.value)} style={inp} placeholder="si la financiera te lo informa → egreso pagado + P&L" /></div>
+          {Number(costo) > 0 && (
+            <div style={{ fontSize: 11.5, color: T.text, background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 6, padding: "6px 10px" }}>
+              Neto en tu caja: <b>{monedaCta} {Math.round((Number(monto) || 0) - (Number(costo) || 0)).toLocaleString("es-AR")}</b>
+              &nbsp;(ingreso {Math.round(Number(monto) || 0).toLocaleString("es-AR")} − costo {Math.round(Number(costo) || 0).toLocaleString("es-AR")})
+            </div>
+          )}
           <div style={{ fontSize: 11.5, color: T.muted }}>
             {envio
-              ? <>Registra la <b>salida</b> de tu caja (sin P&L). Usalo si la plata salió de una caja/efectivo sin extracto, o para cerrar sin esperar al banco. <b>Si además aparece en tu extracto, esa línea no la aceptes de nuevo</b> (neutralizala) para no duplicar.</>
-              : <>Se registra el ingreso como <b>fondeo</b> en tu caja (sin P&L). La deuda queda en USD (la pata que mandó el núcleo); el TC no se necesita.</>}
+              ? <>Registra la <b>salida</b> de tu caja (sin P&L). Usalo si la plata salió de una caja/efectivo sin extracto, o para cerrar sin esperar al banco. El costo, si lo hay, sale como <b>egreso pagado</b> de la misma caja. <b>Si además aparece en tu extracto, esa línea no la aceptes de nuevo</b> (neutralizala) para no duplicar.</>
+              : <>Se registra el ingreso como <b>fondeo</b> (sin P&L) y el costo como <b>egreso pagado</b> de la misma caja (Perdidas Financieras → P&L). Tu caja queda en el neto, sin CxP colgada. La deuda queda en USD (la pata del núcleo); el TC no se necesita.</>}
           </div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
             <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${T.cardBorder}`, borderRadius: 999, padding: "8px 18px", fontSize: 13, fontWeight: 700, color: T.muted, cursor: "pointer", fontFamily: T.font }}>Cancelar</button>
