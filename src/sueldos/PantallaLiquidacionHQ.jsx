@@ -1253,6 +1253,21 @@ function lineasDetalle(liqs, tipo) {
         l.nota || "",
       ]);
     }
+    // Novedades ruteadas a este tipo (depósito / transf. financiera): también deben instruirse al banco.
+    // Igual que lineasGalicia. La novedad no trae banco/cuenta/cuit propios → caen al CBU del empleado.
+    for (const n of liq.novedades || []) {
+      if (n.forma_pago !== tipo) continue;
+      if (!(Number(n.monto) > 0)) continue;
+      filas.push([
+        liq.legajo_nombre,
+        liq.legajo_nombre || "",
+        Number(n.monto),
+        "", "", "",
+        liq.cbu || "",
+        "",
+        n.cuenta_contable_nombre || n.descripcion || "",
+      ]);
+    }
   }
   return filas;
 }

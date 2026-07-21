@@ -104,7 +104,10 @@ export function franquiciasSaldosCxC({ comps, saldos, franchises }, sociedad, ye
     let totA = 0, totP = 0;
     for (const fr of (franchises ?? [])) {
       if (fr.activa === false) continue;
-      const saldo = computeSaldoReal(fr.id, year, month, compsCC, saldos, null, moneda, empresa);
+      // Moneda por defecto de la franquicia (para saldos/comps SIN currency explícita): así no se cuentan
+      // en las 3 monedas del loop. Un saldo/comp con currency propia sigue ganando (entry.currency ?? frCurrency).
+      const frCur = fr.currencies?.[0] || "ARS";
+      const saldo = computeSaldoReal(fr.id, year, month, compsCC, saldos, frCur, moneda, empresa);
       if (saldo > 0.01)       { deben.push({ contraparte: fr.name, vto: "", saldo, moneda }); totA += saldo; }
       else if (saldo < -0.01) { debemos.push({ contraparte: fr.name, vto: "", saldo: -saldo, moneda }); totP += -saldo; }
     }
