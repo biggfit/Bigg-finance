@@ -679,8 +679,9 @@ function CuentaRow({ cuenta, onClick, mpLive }) {
   const mpTitle = mpReady
     ? [
         `Acreditado del mes (ya entró, aún no conciliado en Numbers): ${fmtSaldo(Number(mpLive.acreditado) || 0, mpMon)}`,
-        `A acreditarse (en Activo): ${fmtSaldo(Number(mpLive.a_acreditarse) || 0, mpMon)}`,
-        `MP estimado ≈ saldo + acreditado: ${fmtSaldo(saldo + (Number(mpLive.acreditado) || 0), mpMon)}`,
+        `Por acreditarse (aún no libera; NO suma al PN): ${fmtSaldo(Number(mpLive.a_acreditarse) || 0, mpMon)}`,
+        `MP real ≈ saldo contable + acreditado: ${fmtSaldo(saldo + (Number(mpLive.acreditado) || 0), mpMon)}`,
+        `(dato en vivo de hoy — no es parte del Balance/PN)`,
         (mpLive.proximos?.length ? "Próximas liberaciones:\n" + mpLive.proximos.slice(0, 6).map(p => `  ${p.fecha}: ${fmtSaldo(p.monto, mpMon)}`).join("\n") : ""),
         (mpLive.truncado ? "(⚠ hay más cobros que el tope; acreditado parcial)" : ""),
       ].filter(Boolean).join("\n")
@@ -826,18 +827,10 @@ export function TabSaldos({ cuentas, aCobrar, aPagar, interco = [], filtroMoneda
   const cajas       = filtrar(cuentas.filter(c => c.tipo === "caja"));
   const inversiones = filtrar(cuentas.filter(c => c.tipo === "inversion"));
 
-  // MP a acreditarse = cuenta por cobrar a Mercado Pago (plata por liberarse) → va al ACTIVO, no a Bancos.
-  const mpMoneda = mpLive?.moneda || "ARS";
-  const aCobrarMP = (mpLive && !mpLive.loading && !mpLive.error && Number(mpLive.a_acreditarse) > 0
-      && (filtroMoneda === "ALL" || filtroMoneda === mpMoneda))
-    ? [{ label: "Mercado Pago — a acreditarse", moneda: mpMoneda, saldo: Number(mpLive.a_acreditarse), _mpLive: true }]
-    : [];
-  const aCobrarFilt = [
-    ...(filtroMoneda === "ALL" ? aCobrar : aCobrar.filter(i => i.moneda === filtroMoneda)),
-    ...aCobrarMP,
-  ];
-  // El item MP en vivo no tiene aging → no abre drill-down (los demás sí).
-  const onItemClickAct = it => { if (!it?._mpLive) onItemClick?.(it); };
+  // El "a acreditarse" de MP NO va al Activo/PN: es un dato EN VIVO de hoy (ventas ya cobradas pero aún no
+  // asentadas en Numbers; se asientan en el cierre de fin de mes). Sumarlo al Activo sin asentar la venta
+  // rompería PN = resultado acumulado. Se muestra solo como anotación en la fila de MP (pill + tooltip).
+  const aCobrarFilt = filtroMoneda === "ALL" ? aCobrar : aCobrar.filter(i => i.moneda === filtroMoneda);
   const aPagarFilt  = filtroMoneda === "ALL" ? aPagar  : aPagar.filter(i => i.moneda === filtroMoneda);
   const intercoFilt = filtroMoneda === "ALL" ? interco : interco.filter(i => i.moneda === filtroMoneda);
 
@@ -845,7 +838,7 @@ export function TabSaldos({ cuentas, aCobrar, aPagar, interco = [], filtroMoneda
     <div>
       {/* A Cobrar + A Pagar */}
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16 }}>
-        <BalanceBlock title="Activo"  items={aCobrarFilt} headerColor="#16a34a" onItemClick={onItemClickAct} />
+        <BalanceBlock title="Activo"  items={aCobrarFilt} headerColor="#16a34a" onItemClick={onItemClick} />
         <BalanceBlock title="Pasivo"  items={aPagarFilt}  headerColor="#dc2626" onItemClick={onItemClick} />
       </div>
 
@@ -1225,16 +1218,18 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
   // Saldo MP EN VIVO (read-only): solo si la sociedad tiene una cuenta Mercado Pago. Falla suave → el
   // bloque muestra "—" (sin token en local, o error de API) y no rompe el resto de Tesorería.
   useEffect(() => {
+    // MP en vivo es una foto de HOY → solo tiene sentido en "Al día de hoy". Con una fecha de corte pasada
+    // se esconde (no se puede reconstruir el acreditado/por-acreditarse a una fecha histórica).
     const tieneMP = cuentasBancarias.some(c =>
       (c.sociedad ?? "").toLowerCase() === (sociedad ?? "").toLowerCase() && /mercado\s*pago/i.test(c.banco || c.nombre || ""));
-    if (!tieneMP) { setMpLive(null); return; }
+    if (!tieneMP || fechaCorte) { setMpLive(null); return; }
     let vivo = true;
     setMpLive({ loading: true });
     fetchSaldoMercadoPago(sociedad)
       .then(d => { if (vivo) setMpLive({ ...d, loading: false }); })
       .catch(e => { if (vivo) setMpLive({ error: e.message, loading: false }); });
     return () => { vivo = false; };
-  }, [sociedad, cuentasBancarias]);
+  }, [sociedad, cuentasBancarias, fechaCorte]);
 
   const sociedadesMap = useMemo(() => sociedadNombreMap(intercoData?.sociedades ?? []), [intercoData]);
 
