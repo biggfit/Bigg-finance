@@ -1590,6 +1590,11 @@ export function lecturaInterco({ movs = [], comps = [], centros = [] } = {}, { s
   // 1b. Fondeo vía gastos directos / conciliación contabilizada (nb_movimientos)
   for (const m of movs) {
     if (esIgnorado(m)) continue;
+    // Solo EGRESOS fondean (A puso plata en el centro de B → A acreedor). Un INGRESO/COBRO contabilizado
+    // al centro de otra sociedad es lo opuesto (A cobró plata de B); fondeo() usa Math.abs y siempre pone a
+    // A como acreedor, así que invertiría el signo. Espeja el filtro de la fuente 1a (comps) y de fetchGastos.
+    const tipo = String(m.tipo || "").toUpperCase();
+    if (tipo === "INGRESO" || tipo === "COBRO") continue;
     const esGasto = m.origen === "gasto_directo" || String(m.documento_id || "").startsWith("CONTAB-");
     if (!esGasto) continue;
     fondeo(m.sociedad, m.centro_costo, m.moneda, m.monto);
