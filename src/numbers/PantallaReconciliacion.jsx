@@ -5,6 +5,7 @@ import {
   aceptarCobroFranquicia, fetchBancoReglas, fetchProveedores, fetchCuentas, fetchCentrosCosto, fetchSociedades,
   ignorarMovimiento, restaurarMovimiento, fetchMovimientosIgnorados, fetchPagosSueldos,
   fetchEgresos, fetchPagosCobros, calcSaldoPendiente, imputarPagoFC,
+  appendEgreso, appendProveedor, appendCuenta,
   appendBancoRegla, fetchIngresos, imputarCobroIngreso,
   fetchFinanciaciones, imputarCuota, pagarTarjeta, esCuentaCredito, fetchMovTesoreria,
   fetchIntercoData, pendientesInterco, reconocerVentaInterco, normCuit,
@@ -13,7 +14,8 @@ import {
 import { BancoReglaModal } from "./PantallaMaestros";
 import MundoTarjeta from "./reconciliacion/MundoTarjeta";
 import { fetchAll } from "../lib/sheetsApi";
-import { groupCentrosCosto } from "./formUtils";
+import { groupCentrosCosto, makeCrearMaestro } from "./formUtils";
+import NuevoEgresoModal from "./NuevoEgresoModal";
 import { computeSaldoReal } from "../lib/helpers";
 import { parseGalicia } from "./parsers/galicia";
 import { parseInterAudi } from "./parsers/interaudi";
@@ -256,7 +258,12 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const [msg,        setMsg]        = useState("");
   const [edits,      setEdits]      = useState({}); // movId → {cuenta_contable, centro_costo}
   const [menuFor,    setMenuFor]    = useState(null); // movId con el menú ⋯ abierto
+  const [cargarFacturaFor, setCargarFacturaFor] = useState(null); // mov para el que abrimos "Cargar factura" (modal Nueva Compra)
   const fileRef = useRef(null);
+
+  // Crear proveedor/cuenta desde el modal de Nueva Compra (mismo patrón que Egresos).
+  const crearProveedor = useMemo(() => makeCrearMaestro(appendProveedor, fetchProveedores, setProveedores), []);
+  const crearCuenta     = useMemo(() => makeCrearMaestro(appendCuenta,     fetchCuentas,     l => setPlanCuentas(dedupById(l))), []);
 
   // Cerrar el menú ⋯ al clickear afuera
   useEffect(() => {
@@ -1606,6 +1613,9 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           {neg && !fr.es && !modoTransfer && !modoInterco && !modoFC && !modoCuota && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFC: true, modoFranquicia: false, modoTransfer: false, noFranquicia: true }); setMenuFor(null); }}>🧾 Imputar a factura</button>
                           )}
+                          {neg && !fr.es && !modoTransfer && !modoInterco && !modoCuota && !modoCobro && (
+                            <button style={MENU_ITEM} onClick={() => { setCargarFacturaFor(m); setMenuFor(null); }}>➕ Cargar factura nueva…</button>
+                          )}
                           {!neg && !fr.es && !modoTransfer && !modoInterco && !modoCobro && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCobro: true, modoFranquicia: false, modoTransfer: false, noFranquicia: true }); setMenuFor(null); }}>🧾 Imputar a factura</button>
                           )}
@@ -1763,6 +1773,49 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
           onDone={async () => { setDeclararFor(null); try { const d = await fetchIntercoData(); setIntercoData(d); } catch {} }}
         />
       )}
+
+      {/* Cargar factura nueva desde la bandeja (modal Nueva Compra, encima de la conciliación).
+          Prefill con proveedor reconocido + monto/fecha del débito; al guardar, queda lista para
+          imputar el pago (auto-entra en modo FC con la factura preseleccionada). */}
+      {cargarFacturaFor && (() => {
+        const mov = cargarFacturaFor;
+        const provId = fcProvDe(mov) || "";
+        const prov = proveedores.find(p => String(p.id) === String(provId));
+        const tot = Math.abs(Number(mov.monto) || 0);
+        return (
+          <NuevoEgresoModal
+            sociedad={sociedad}
+            proveedores={proveedores}
+            cuentas={planCuentas}
+            centrosCosto={centros}
+            onCrearProveedor={crearProveedor}
+            onCrearCuenta={crearCuenta}
+            initialData={{
+              _duplicate: true,   // NUEVA factura (id nuevo), no editar una existente
+              proveedor: prov?.nombre || mov.contraparte_nombre || "",
+              proveedorId: provId,
+              moneda: mov.moneda || "ARS",
+              fecha: mov.fecha,
+              vto: mov.fecha,
+              nroComp: "",
+              nota: mov.concepto || "",
+              lineas: [{ cc: "", subtotal: tot, ivaRate: 0, iva_monto: 0, total_linea: tot }],
+              importe: tot,
+            }}
+            onClose={() => setCargarFacturaFor(null)}
+            onSave={async (payload) => {
+              await appendEgreso(payload);
+              const [egs, pcs] = await Promise.all([fetchEgresos(sociedad), fetchPagosCobros(sociedad)]);
+              setEgresos(egs || []); setPagosCobros(pcs || []);
+              // Dejar la línea lista para imputar el pago a la factura recién creada.
+              setEdits(prev => ({ ...prev, [mov.id]: { ...(prev[mov.id] || {}),
+                modoFC: true, modoFranquicia: false, modoTransfer: false, modoCobro: false, noFranquicia: true,
+                fc_prov: String(payload.proveedorId || ""), fc_id: String(payload.id || "") } }));
+              setCargarFacturaFor(null);
+            }}
+          />
+        );
+      })()}
     </div>
   );
 }
