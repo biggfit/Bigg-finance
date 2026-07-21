@@ -199,11 +199,6 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], onClose, onDone }
             <div style={{ flex: 1 }}><label style={lbl}>Fecha</label>
               <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={inp} /></div>
           </div>
-          {!mismaMoneda && !envio && (
-            <div style={{ fontSize: 11, color: T.muted, marginTop: -6 }}>
-              La otra pata parkeó <b>{pend?.moneda} {Math.round(pend?.monto || 0).toLocaleString("es-AR")}</b> (moneda del núcleo). Poné el <b>bruto post-TC</b> en {monedaCta}; el costo (abajo) sale como egreso pagado → tu caja queda en el neto. La brecha de cambio no se registra.
-            </div>
-          )}
           <div><label style={lbl}>Costo de transferencia / clearing (opcional)</label>
             <input value={costo} onChange={e => setCosto(e.target.value)} style={inp} placeholder="si la financiera te lo informa → egreso pagado + P&L" /></div>
           {Number(costo) > 0 && (
