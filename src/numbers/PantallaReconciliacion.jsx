@@ -1190,7 +1190,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           ) : (
                             <button onClick={() => setDeclararFor(p)}
                               style={{ background: T.accent, border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 12.5, fontWeight: 800, color: "#000", cursor: "pointer", fontFamily: T.font }}>
-                              {recibi ? "Contabilizar recepción" : "Cerrar operación"}
+                              Cerrar operación
                             </button>
                           )}
                         </td>
