@@ -78,6 +78,8 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
     const cuenta = CUENTAS_GASTO.find(c => c.id === cuentaId);
     return {
       id: isEdit ? initialData.id : `EG-${Date.now()}`,
+      sociedad,                       // desde la prop → la FC se guarda con la sociedad activa (blinda TODOS
+                                      // los callers: Conciliación llamaba appendEgreso(payload) sin inyectarla)
       _isEdit: isEdit,
       proveedor: prov?.nombre ?? "—",
       proveedorId: provId,

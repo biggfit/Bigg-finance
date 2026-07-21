@@ -73,6 +73,8 @@ export default function NuevoIngresoModal({ onClose, onSave, sociedad, clientes 
     const cuenta = CUENTAS_INGRESO.find(c => c.id === cuentaId);
     return {
       id: isEdit ? initialData.id : `IN-${Date.now()}`,
+      sociedad,                       // desde la prop → la FC se guarda con la sociedad activa (blinda TODOS
+                                      // los callers: Conciliación llamaba appendIngreso(payload) sin inyectarla)
       _isEdit: isEdit,
       cliente: cli?.nombre ?? "—",
       clienteId: cliId,
