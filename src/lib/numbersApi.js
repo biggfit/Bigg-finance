@@ -931,8 +931,9 @@ export async function aceptarMovimiento(mov, prop = {}) {
   }});
 }
 
-// Costo de transferencia/clearing de una interco recibida (cuando la financiera lo informa). Es un gasto
-// financiero SIN caja: la merma ya la comió la financiera (la caja quedó en el neto) → solo va al P&L.
+// Costo de transferencia/clearing de una interco (cuando la financiera lo informa). Egreso a `cuenta_contable`
+// (default Perdidas Financieras; puede ser otra, ej. Cargas Sociales si la plata iba a sueldos).
+// Con `cuenta_bancaria` → egreso PAGADO de esa caja (sale plata, no deja CxP). Sin ella ("") → P&L puro, sin caja.
 async function _addCostoFinanciero({ sociedad, fecha, monto, moneda = "ARS", centro = "", origen_nombre = "", cuenta_bancaria = "", cuenta_contable = "Perdidas Financieras" }) {
   const id = newId("FINC");
   return post({ action: "add", sheet: "nb_movimientos", row: {
