@@ -141,9 +141,13 @@ function ReconocerIntercoModal({ pend, sociedad, cuentas = [], centros = [], onC
 // sin P&L, sin posición nueva. Costo de clearing opcional → Perdidas Financieras (P&L). Marca la pata parkeada.
 function DeclararRecibidaModal({ pend, sociedad, cuentas = [], onClose, onDone }) {
   const envio = pend?.dir === "envie";   // envié = EGRESO (cierro mi salida); recibí = INGRESO (fondeo)
-  const ctaHint = (cuentas || []).find(c => String(c.id) === String(pend?.cuenta_hint));
+  // El que parkeó dejó su caja destino como hint (cuenta_mia desde mi lado) → precargar la cuenta.
+  const ctaHint = (cuentas || []).find(c => String(c.id) === String(pend?.cuenta_mia));
+  // Precargar el monto SOLO si la moneda de la caja coincide con la parkeada. Cross-moneda (recibís EUR/COP
+  // vs los USD que mandó el núcleo) → vacío, lo completás con lo que realmente entró/salió de tu caja.
+  const mismaMoneda = ctaHint && String(ctaHint.moneda) === String(pend?.moneda);
   const [cuenta, setCuenta] = useState(ctaHint ? String(ctaHint.id) : "");
-  const [monto, setMonto]   = useState(pend?.monto ? String(Math.round(pend.monto)) : "");
+  const [monto, setMonto]   = useState(mismaMoneda && pend?.monto ? String(Math.round(pend.monto)) : "");
   const [fecha, setFecha]   = useState(new Date().toISOString().slice(0, 10));
   const [costo, setCosto]   = useState("");
   const [busy, setBusy]     = useState(false);
@@ -178,9 +182,9 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], onClose, onDone }
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={onClose}>
       <div onClick={e => e.stopPropagation()} style={{ background: "#f1f5f9", borderRadius: 16, width: 480, maxWidth: "97vw", overflow: "hidden", boxShadow: T.shadowMd }}>
         <div style={{ background: T.accentDark, padding: "16px 22px" }}>
-          <div style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>{envio ? "Cerrar interco enviada" : "Declarar interco recibida"}</div>
+          <div style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>Cerrar operación</div>
           <div style={{ fontSize: 12, color: "rgba(255,255,255,.6)", marginTop: 2 }}>
-            {pend?.origen_nombre} parkeó {pend?.moneda} {Math.round(pend?.monto || 0).toLocaleString("es-AR")}{pend?.fecha ? ` · ${pend.fecha}` : ""}
+            {envio ? "Le enviaste a " : "Te envió "}{pend?.origen_nombre} · parkeó {pend?.moneda} {Math.round(pend?.monto || 0).toLocaleString("es-AR")}{pend?.fecha ? ` · ${pend.fecha}` : ""}
           </div>
         </div>
         <div style={{ padding: 22, display: "flex", flexDirection: "column", gap: 14 }}>
@@ -190,11 +194,16 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], onClose, onDone }
               {ctas.map(c => <option key={c.id} value={c.id}>{c.nombre} · {c.moneda}</option>)}
             </select></div>
           <div style={{ display: "flex", gap: 12 }}>
-            <div style={{ flex: 1 }}><label style={lbl}>{envio ? `Monto enviado (${monedaCta}) *` : `Monto recibido (${monedaCta}) *`}</label>
+            <div style={{ flex: 1 }}><label style={lbl}>{envio ? `Monto que salió de tu caja (${monedaCta}) *` : `Monto que entró a tu caja (${monedaCta}) *`}</label>
               <input value={monto} onChange={e => setMonto(e.target.value)} style={inp} placeholder={envio ? "lo que salió" : "lo que entró"} /></div>
             <div style={{ flex: 1 }}><label style={lbl}>Fecha</label>
               <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={inp} /></div>
           </div>
+          {!mismaMoneda && (
+            <div style={{ fontSize: 11, color: T.muted, marginTop: -6 }}>
+              La otra pata parkeó <b>{pend?.moneda} {Math.round(pend?.monto || 0).toLocaleString("es-AR")}</b> (moneda del núcleo). Poné el monto <b>real de tu caja</b> ({monedaCta}); la brecha de cambio no se registra acá.
+            </div>
+          )}
           <div><label style={lbl}>Costo de transferencia / clearing (opcional)</label>
             <input value={costo} onChange={e => setCosto(e.target.value)} style={inp} placeholder="si la financiera te lo informa → P&L" /></div>
           <div style={{ fontSize: 11.5, color: T.muted }}>
@@ -204,7 +213,7 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], onClose, onDone }
           </div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
             <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${T.cardBorder}`, borderRadius: 999, padding: "8px 18px", fontSize: 13, fontWeight: 700, color: T.muted, cursor: "pointer", fontFamily: T.font }}>Cancelar</button>
-            <button onClick={guardar} disabled={!canSave} style={{ background: T.accent, border: "none", borderRadius: 999, padding: "8px 20px", fontSize: 13, fontWeight: 800, color: "#000", cursor: canSave ? "pointer" : "default", opacity: canSave ? 1 : .5, fontFamily: T.font }}>{busy ? "Guardando…" : (envio ? "Cerrar envío" : "Declarar recibida")}</button>
+            <button onClick={guardar} disabled={!canSave} style={{ background: T.accent, border: "none", borderRadius: 999, padding: "8px 20px", fontSize: 13, fontWeight: 800, color: "#000", cursor: canSave ? "pointer" : "default", opacity: canSave ? 1 : .5, fontFamily: T.font }}>{busy ? "Guardando…" : "Cerrar operación"}</button>
           </div>
         </div>
       </div>
