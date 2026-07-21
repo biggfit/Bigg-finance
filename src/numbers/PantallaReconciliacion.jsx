@@ -1170,7 +1170,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                         <td style={{ padding: "11px 14px", color: T.muted, whiteSpace: "nowrap" }}>{p.fecha}</td>
                         <td style={{ padding: "11px 14px" }}><b>{p.origen_nombre}</b> {recibi ? "te transfirió" : "— le transferiste"}</td>
                         <td style={{ padding: "11px 14px", fontSize: 11, color: T.muted, whiteSpace: "nowrap" }}>{de} <span style={{ color: T.dim }}>→</span> {a}</td>
-                        <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: T.mono, fontWeight: 700, whiteSpace: "nowrap" }}>{money(p.monto, p.moneda)}</td>
+                        <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: T.mono, fontWeight: 700, whiteSpace: "nowrap", color: recibi ? "#16a34a" : "#dc2626" }}>{recibi ? "+" : "−"} {money(p.monto, p.moneda)}</td>
                         <td style={{ padding: "8px 14px", textAlign: "right", minWidth: 150 }}>
                           {p.mia ? (
                             <span style={{ fontSize: 11, color: T.dim }}>esperando que {p.origen_nombre} la cierre</span>
