@@ -665,15 +665,25 @@ function BalanceBlock({ title, items, headerColor, onItemClick }) {
 function CuentaRow({ cuenta, onClick, mpLive }) {
   const tipoCfg = TIPO_CUENTA[cuenta.tipo] ?? { icon:"💳", color:T.muted };
   const saldo   = Number(cuenta.saldo) || 0;
-  // MP en vivo (read-only): neto A ACREDITARSE (cobros con liberación futura, de /payments/search).
-  // MP no expone el saldo por API; esto es la plata que va a entrar y hoy no se ve en Numbers.
+  // MP en vivo (read-only, de /payments/search; MP no expone el saldo por API):
+  //  - acreditado    = liberado del 1° del mes a hoy → plata que YA entró y aún NO está en Numbers
+  //    (por eso la caja MP da negativa: los cashouts sí están cargados, las ventas del mes no).
+  //  - a_acreditarse = por liberarse (futuro).
+  const mpMon   = mpLive?.moneda || cuenta.moneda;
+  const mpReady = mpLive && !mpLive.loading && !mpLive.error;
   const mpTxt = mpLive == null ? null
     : mpLive.loading ? "MP: …"
     : mpLive.error   ? null   // sin token / API caída → no mostramos nada (no rompe)
-    : `+ ${fmtSaldo(Number(mpLive.a_acreditarse) || 0, mpLive.moneda || cuenta.moneda)} a acreditarse`;
-  const mpTitle = (mpLive && !mpLive.loading && !mpLive.error && Array.isArray(mpLive.proximos) && mpLive.proximos.length)
-    ? "Próximas liberaciones:\n" + mpLive.proximos.slice(0, 8).map(p => `${p.fecha}: ${fmtSaldo(p.monto, mpLive.moneda || cuenta.moneda)}`).join("\n")
-    : "Neto a acreditarse en MP (cobros por liberarse). MP no expone el saldo por API.";
+    : `+ ${fmtSaldo(Number(mpLive.acreditado) || 0, mpMon)} acreditado (mes)`;
+  const mpTitle = mpReady
+    ? [
+        `Acreditado del mes (ya entró, aún no conciliado en Numbers): ${fmtSaldo(Number(mpLive.acreditado) || 0, mpMon)}`,
+        `A acreditarse (por liberarse): ${fmtSaldo(Number(mpLive.a_acreditarse) || 0, mpMon)}`,
+        `MP estimado ≈ saldo + acreditado: ${fmtSaldo(saldo + (Number(mpLive.acreditado) || 0), mpMon)}`,
+        (mpLive.proximos?.length ? "Próximas liberaciones:\n" + mpLive.proximos.slice(0, 6).map(p => `  ${p.fecha}: ${fmtSaldo(p.monto, mpMon)}`).join("\n") : ""),
+        (mpLive.truncado ? "(⚠ hay más cobros que el tope; acreditado parcial)" : ""),
+      ].filter(Boolean).join("\n")
+    : "Datos en vivo de Mercado Pago";
   return (
     <div onClick={onClick} style={{ display:"flex", alignItems:"center", gap:12,
       padding:"10px 18px", borderBottom:`1px solid ${T.cardBorder}`,
@@ -682,7 +692,7 @@ function CuentaRow({ cuenta, onClick, mpLive }) {
     }}
     onMouseEnter={e => { if (onClick) e.currentTarget.style.background="#f0f9ff"; }}
     onMouseLeave={e => { e.currentTarget.style.background=""; }}>
-      <div style={{ flex:1, fontSize:13, color:T.text, fontWeight:500,
+      <div style={{ flexShrink:0, maxWidth:180, fontSize:13, color:T.text, fontWeight:500,
         overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
         {cuenta.nombre}
         {cuenta.banco && (
@@ -690,10 +700,13 @@ function CuentaRow({ cuenta, onClick, mpLive }) {
             {cuenta.banco}
           </span>
         )}
+      </div>
+      {/* pill MP fuera del nombre → no lo recorta el ellipsis; empuja con flex:1 */}
+      <div style={{ flex:1 }}>
         {mpTxt && (
           <span title={mpTitle}
             style={{ fontSize:10.5, fontWeight:700, color:"#059669", background:"#ecfdf5",
-              border:"1px solid #a7f3d0", borderRadius:5, padding:"1px 7px", marginLeft:8, cursor:"help", whiteSpace:"nowrap" }}>
+              border:"1px solid #a7f3d0", borderRadius:5, padding:"1px 7px", cursor:"help", whiteSpace:"nowrap" }}>
             {mpTxt}
           </span>
         )}

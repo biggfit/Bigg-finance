@@ -51,22 +51,25 @@ export default async function handler(req, res) {
   }
 
   const ventana = Math.max(1, Math.min(120, Number(dias) || 30));
-  const ahora = new Date();
-  const hasta = new Date(ahora.getTime() + ventana * 86400000);
-  const begin = encodeURIComponent(isoAR(ahora));
+  const ahora  = new Date();
+  const inicio = new Date(ahora.getFullYear(), ahora.getMonth(), 1);        // 1° del mes en curso
+  const hasta  = new Date(ahora.getTime() + ventana * 86400000);            // + ventana futura
+  const begin = encodeURIComponent(isoAR(inicio));
   const end   = encodeURIComponent(isoAR(hasta));
-  const base  = `status=approved&range=money_release_date&begin_date=${begin}&end_date=${end}&sort=money_release_date&criteria=asc`;
+  const nowMs = ahora.getTime();
+  // Una sola pasada por money_release_date [1° del mes → hoy+ventana]; separamos acreditado (liberado ≤ hoy)
+  // de a_acreditarse (liberación futura). El acreditado del mes es la plata que ya entró y todavía NO está
+  // en Numbers (se concilia a fin de mes) → explica por qué la caja MP da negativa (los cashouts sí están).
+  const base = `status=approved&range=money_release_date&begin_date=${begin}&end_date=${end}&sort=money_release_date&criteria=asc`;
 
   try {
-    // Paginado: sumar el neto de todos los cobros que se liberan en la ventana futura.
-    const LIMIT = 100, MAX_PAGES = 40;   // backstop: 4000 cobros
-    let offset = 0, total = Infinity, count = 0, aAcreditarse = 0, moneda = "ARS";
+    const LIMIT = 100, MAX_PAGES = 60;   // backstop: 6000 cobros
+    let offset = 0, total = Infinity, count = 0, acreditado = 0, aAcreditarse = 0, moneda = "ARS", truncado = false;
     const porFecha = new Map();
 
     for (let page = 0; page < MAX_PAGES && offset < total; page++) {
       const r = await mpSearch(`${base}&limit=${LIMIT}&offset=${offset}`, token);
       if (!r.ok || !r.data) {
-        // Si es la 1ª página, es un error real; si ya venía sumando, corto y devuelvo lo acumulado.
         if (page === 0) { res.statusCode = 502; res.end(JSON.stringify({ error: `MP payments/search falló (${r.status}): ${r.raw}` })); return; }
         break;
       }
@@ -74,14 +77,20 @@ export default async function handler(req, res) {
       const rows = r.data.results || [];
       for (const p of rows) {
         const neto = Number(p?.transaction_details?.net_received_amount) || Number(p?.transaction_amount) || 0;
-        aAcreditarse += neto;
         count += 1;
         if (p.currency_id) moneda = p.currency_id;
-        const fecha = String(p.money_release_date || "").slice(0, 10);
-        if (fecha) porFecha.set(fecha, (porFecha.get(fecha) || 0) + neto);
+        const rel = p.money_release_date ? new Date(p.money_release_date).getTime() : 0;
+        if (rel && rel > nowMs) {
+          aAcreditarse += neto;
+          const fecha = String(p.money_release_date).slice(0, 10);
+          porFecha.set(fecha, (porFecha.get(fecha) || 0) + neto);   // agenda futura (Dashboard/flujo)
+        } else {
+          acreditado += neto;   // ya liberado este mes
+        }
       }
       offset += LIMIT;
       if (rows.length < LIMIT) break;
+      if (page === MAX_PAGES - 1 && offset < total) truncado = true;
     }
 
     const proximos = [...porFecha.entries()]
@@ -90,11 +99,13 @@ export default async function handler(req, res) {
 
     res.statusCode = 200;
     res.end(JSON.stringify({
-      a_acreditarse: Math.round(aAcreditarse),
+      acreditado:    Math.round(acreditado),      // liberado del 1° del mes a hoy (falta en Numbers)
+      a_acreditarse: Math.round(aAcreditarse),     // por liberarse (futuro)
       moneda,
-      proximos,           // agenda por fecha de liberación (para el Dashboard/flujo)
+      proximos,
       count,
-      _source: `payments/search · money_release_date +${ventana}d`,
+      ...(truncado && { truncado: true }),         // hubo más cobros que el tope de páginas
+      _source: `payments/search · release [1°mes, hoy+${ventana}d]`,
     }));
   } catch (err) {
     res.statusCode = 500;
