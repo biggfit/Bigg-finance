@@ -1779,7 +1779,18 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
           cuentas={cuentas}
           planCuentas={cuentasTodas}
           onClose={() => setDeclararFor(null)}
-          onDone={async () => { setDeclararFor(null); try { const d = await fetchIntercoData(); setIntercoData(d); } catch {} }}
+          onDone={async () => {
+            const closedId = declararFor?.id;   // pata parkeada que se acaba de cerrar
+            setDeclararFor(null);
+            // Optimista: marcarla "recibida=" localmente para que salga YA de pendientes (GAS tiene lag
+            // read-after-write → el refetch inmediato suele traer la hoja pre-edit y la línea reaparecía).
+            const marcarCerrada = (movs) => (movs || []).map(m =>
+              String(m.id) === String(closedId) && !/recibida=/.test(String(m.referencia || ""))
+                ? { ...m, referencia: "recibida=local" } : m);
+            if (closedId) setIntercoData(prev => ({ ...prev, movs: marcarCerrada(prev.movs) }));
+            // Reconcilia con el servidor, pero mantiene la marca local si todavía no propagó (no revive la línea).
+            try { const d = await fetchIntercoData(); setIntercoData({ ...d, movs: closedId ? marcarCerrada(d.movs) : d.movs }); } catch {}
+          }}
         />
       )}
 
