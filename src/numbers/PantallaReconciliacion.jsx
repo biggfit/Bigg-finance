@@ -216,11 +216,6 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], planCuentas = [],
               &nbsp;(ingreso {Math.round(Number(monto) || 0).toLocaleString("es-AR")} − costo {Math.round(Number(costo) || 0).toLocaleString("es-AR")}) · a <b>{costoCuenta}</b>
             </div>
           )}
-          <div style={{ fontSize: 11.5, color: T.muted }}>
-            {envio
-              ? <>Registra la <b>salida</b> de tu caja (sin P&L). Usalo si la plata salió de una caja/efectivo sin extracto, o para cerrar sin esperar al banco. El costo, si lo hay, sale como <b>egreso pagado</b> de la misma caja. <b>Si además aparece en tu extracto, esa línea no la aceptes de nuevo</b> (neutralizala) para no duplicar.</>
-              : <>Se registra el ingreso como <b>fondeo</b> (sin P&L) y el costo como <b>egreso pagado</b> de la misma caja (Perdidas Financieras → P&L). Tu caja queda en el neto, sin CxP colgada. La deuda queda en USD (la pata del núcleo); el TC no se necesita.</>}
-          </div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
             <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${T.cardBorder}`, borderRadius: 999, padding: "8px 18px", fontSize: 13, fontWeight: 700, color: T.muted, cursor: "pointer", fontFamily: T.font }}>Cancelar</button>
             <button onClick={guardar} disabled={!canSave} style={{ background: T.accent, border: "none", borderRadius: 999, padding: "8px 20px", fontSize: 13, fontWeight: 800, color: "#000", cursor: canSave ? "pointer" : "default", opacity: canSave ? 1 : .5, fontFamily: T.font }}>{busy ? "Guardando…" : "Cerrar operación"}</button>
