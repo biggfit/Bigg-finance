@@ -6,6 +6,8 @@
 // Se parsea el CSV como TEXTO (no XLSX): XLSX coacciona "2026-06-29" a serial Excel y mete
 // líos de timezone/epoch (off-by-one). El texto crudo preserva la fecha ISO exacta.
 
+import { num } from "./galicia";   // parser de número robusto (tolera separador de miles)
+
 const IA_REQ = ["Date", "DebitCredit", "Amount", "Description1"];
 
 // CSV → array de arrays, respetando comillas con comas internas ("ATLASSIAN,SF,CA").
@@ -53,7 +55,7 @@ export function parseInterAudi(file) {
         const lineas = rows.slice(1)
           .filter(r => String(r[ci.date] || "").trim() && String(r[ci.amt] ?? "").trim() !== "")
           .map((r, idx) => {
-            const amount  = Math.abs(Number(r[ci.amt]) || 0);
+            const amount  = Math.abs(num(r[ci.amt]));   // num() tolera separador de miles ("1,234.56")
             const isDebit = String(r[ci.dc]).trim().toUpperCase() === "DEBIT";
             const d1 = String(r[ci.d1] || "").trim();   // contraparte / concepto
             const d2 = String(r[ci.d2] || "").trim();   // sub-tipo (Funds Transfer / Debit Card / Other / ACH)

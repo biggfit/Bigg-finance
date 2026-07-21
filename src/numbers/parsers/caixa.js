@@ -51,7 +51,7 @@ export function parseCaixa(file) {
             const mas = String(r[ci.mas] || "").trim();   // ej "Recibo de suministros" / "Comercia Global Payments"
             return {
               idx,
-              fecha:          toISO(r[ci.fecha]),
+              fecha:          toISO(r[ci.fecha], true),   // Caixa (ES) = D/M
               descripcion:    mas ? `${mov} · ${mas}` : mov,   // glosa completa (matchea por Movimiento o Más datos)
               monto:          num(r[ci.imp]),
               ley1:           mas || mov,

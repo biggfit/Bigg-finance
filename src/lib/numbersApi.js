@@ -1871,8 +1871,12 @@ export function generarCuotas({ capital_original, n_cuotas, tasaMensual = 0, iva
     saldo   = Math.max(0, round2(cap0 - capAcum));
     const iva       = round2(interes * ((Number(ivaPct) || 0) / 100));
     const impuestos = round2((capital + interes) * ((Number(impuestoPct) || 0) / 100));
-    const d = new Date(base);
-    d.setMonth(d.getMonth() + (k - 1) * stepMeses);
+    // Sumar meses sin overflow: base día 31 + 1 mes NO debe saltar a marzo. Clampeamos al último día del
+    // mes destino (setMonth desbordaría: new Date(2026,1,31)=3-mar).
+    const mesDestino = base.getMonth() + (k - 1) * stepMeses;
+    const d = new Date(base.getFullYear(), mesDestino, 1);
+    const ultDia = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    d.setDate(Math.min(base.getDate(), ultDia));
     out.push({
       nro_cuota: k,
       vto:       d.toISOString().slice(0, 10),

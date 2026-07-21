@@ -15,7 +15,9 @@ export function excelDateToISO(serial) {
 // Normaliza una fecha del extracto a YYYY-MM-DD.
 // El crudo del banco la trae como TEXTO "M/D/AA" (ej "5/31/26"); los procesados
 // a veces como serial Excel. Maneja ambos.
-export function toISO(v) {
+// dayFirst: en el caso AMBIGUO (ambos ≤12) interpreta D/M (bancos ES/AR: Caixa, Mercado Pago) en vez de
+// M/D (Galicia, que baja US). Los casos inequívocos (un componente >12) se resuelven solos, sin depender del flag.
+export function toISO(v, dayFirst = false) {
   if (v === null || v === undefined || v === "") return "";
   if (typeof v === "number") return excelDateToISO(v);
   const s = String(v).trim();
@@ -24,10 +26,11 @@ export function toISO(v) {
   if (m) {
     let a = +m[1], b = +m[2], y = +m[3];
     if (y < 100) y += 2000;
-    // Si el 1º > 12 es D/M; si el 2º > 12 es M/D; ambiguo → M/D (como baja del banco)
     let mon, day;
-    if (a > 12) { day = a; mon = b; }
-    else        { mon = a; day = b; }
+    if (a > 12)        { day = a; mon = b; }   // 1º > 12 → D/M inequívoco
+    else if (b > 12)   { mon = a; day = b; }   // 2º > 12 → M/D inequívoco
+    else if (dayFirst) { day = a; mon = b; }   // ambiguo → D/M (ES/AR)
+    else               { mon = a; day = b; }   // ambiguo → M/D (Galicia US)
     return `${y}-${String(mon).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
   }
   return s;

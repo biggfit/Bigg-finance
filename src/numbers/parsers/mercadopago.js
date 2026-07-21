@@ -87,7 +87,7 @@ export function parseMercadoPago(file) {
           .filter(r => cell(r, "fecha") !== "" && cell(r, "tipo") !== "")
           .map((r, idx) => ({
             idx,
-            fecha:        toISO(cell(r, "fecha")),
+            fecha:        toISO(cell(r, "fecha"), true),   // Mercado Pago (AR) = D/M
             descripcion:  String(cell(r, "descripcion") || ""),
             monto:        num(cell(r, "monto")),
             saldo:        cell(r, "saldo") === "" ? "" : num(cell(r, "saldo")),
