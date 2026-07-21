@@ -1804,13 +1804,17 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
             }}
             onClose={() => setCargarFacturaFor(null)}
             onSave={async (payload) => {
+              // 1) crear la factura, 2) imputar el pago del extracto contra ella = conciliar la línea.
               await appendEgreso(payload);
-              const [egs, pcs] = await Promise.all([fetchEgresos(sociedad), fetchPagosCobros(sociedad)]);
-              setEgresos(egs || []); setPagosCobros(pcs || []);
-              // Dejar la línea lista para imputar el pago a la factura recién creada.
-              setEdits(prev => ({ ...prev, [mov.id]: { ...(prev[mov.id] || {}),
-                modoFC: true, modoFranquicia: false, modoTransfer: false, modoCobro: false, noFranquicia: true,
-                fc_prov: String(payload.proveedorId || ""), fc_id: String(payload.id || "") } }));
+              await imputarPagoFC(mov, {
+                documento_id: payload.id,
+                cuenta_contable: payload.cuentaId || payload.cuenta || "",
+                centro_costo: String(payload.cc || "").split(",")[0].trim(),
+                proveedor_id: payload.proveedorId || "",
+                proveedor_nombre: payload.proveedor || "",
+              });
+              setPendientes(prev => prev.filter(x => x.id !== mov.id));   // sale de la bandeja
+              fetchEgresos(sociedad).then(e => setEgresos(e || [])).catch(() => {});   // refresca Compras
               setCargarFacturaFor(null);
             }}
           />
