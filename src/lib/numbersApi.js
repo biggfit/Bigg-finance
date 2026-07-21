@@ -1795,7 +1795,10 @@ export function agruparPlanes(rows = []) {
     const pagadas        = p.cuotas.filter(c => c.estado === "pagada");
     const capital_total  = p.cuotas.reduce((s, c) => s + c.capital, 0);
     const capital_pagado = pagadas.reduce((s, c) => s + c.capital, 0);
-    const saldo          = Math.max(0, capital_total - capital_pagado);
+    // Pasivo vivo = capital de cuotas PENDIENTES (excluye pagadas Y canceladas). En un plan normal
+    // (sin canceladas) equivale a capital_total − capital_pagado; al precancelar, las cuotas en estado
+    // "cancelada" dejan de sumar al saldo (antes seguían contando y el pasivo no bajaba).
+    const saldo          = p.cuotas.filter(c => c.estado === "pendiente").reduce((s, c) => s + c.capital, 0);
     const prox           = p.cuotas.find(c => c.estado === "pendiente");
     return {
       ...p,
