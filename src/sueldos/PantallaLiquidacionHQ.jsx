@@ -1794,7 +1794,8 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
     if (tipo === "haberes")  return liq?.sociedad_id ?? "";
     if (tipo === "deposito") return "beta";
     if (tipo === "efectivo") return "beta";  // caja de Beta
-    return form.sociedad_id;                 // transferencia: el usuario elige
+    if (tipo === "transferencia_financiera") return "beta";  // financiera = pool de Beta (igual que Anular/Batch)
+    return form.sociedad_id;                 // monotributo: el usuario elige
   }, [tipo, form.sociedad_id, liq?.sociedad_id]);
 
   const cuentasFiltradas = useMemo(() =>
