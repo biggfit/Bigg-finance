@@ -671,10 +671,11 @@ function CuentaRow({ cuenta, onClick, mpLive }) {
   //  - a_acreditarse = por liberarse (futuro).
   const mpMon   = mpLive?.moneda || cuenta.moneda;
   const mpReady = mpLive && !mpLive.loading && !mpLive.error;
+  const mpEstimado = saldo + (Number(mpLive?.acreditado) || 0);   // saldo contable + acreditado = caja MP real ≈
   const mpTxt = mpLive == null ? null
     : mpLive.loading ? "MP: …"
     : mpLive.error   ? null   // sin token / API caída → no mostramos nada (no rompe)
-    : `+ ${fmtSaldo(Number(mpLive.acreditado) || 0, mpMon)} acreditado (mes)`;
+    : `MP real ≈ ${fmtSaldo(mpEstimado, mpMon)}`;
   const mpTitle = mpReady
     ? [
         `Acreditado del mes (ya entró, aún no conciliado en Numbers): ${fmtSaldo(Number(mpLive.acreditado) || 0, mpMon)}`,
@@ -705,8 +706,11 @@ function CuentaRow({ cuenta, onClick, mpLive }) {
       <div style={{ flex:1 }}>
         {mpTxt && (
           <span title={mpTitle}
-            style={{ fontSize:10.5, fontWeight:700, color:"#059669", background:"#ecfdf5",
-              border:"1px solid #a7f3d0", borderRadius:5, padding:"1px 7px", cursor:"help", whiteSpace:"nowrap" }}>
+            style={{ fontSize:10.5, fontWeight:700,
+              color: mpReady && mpEstimado < 0 ? "#b91c1c" : "#059669",
+              background: mpReady && mpEstimado < 0 ? "#fef2f2" : "#ecfdf5",
+              border: `1px solid ${mpReady && mpEstimado < 0 ? "#fecaca" : "#a7f3d0"}`,
+              borderRadius:5, padding:"1px 7px", cursor:"help", whiteSpace:"nowrap" }}>
             {mpTxt}
           </span>
         )}
