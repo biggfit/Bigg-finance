@@ -123,7 +123,9 @@ export function derivarSaldos({
 
   // ── Sueldos: neto devengado−pagado por legajo/mes. Positivo → PASIVO (deuda); negativo →
   //    ACTIVO (adelanto: pago sin liquidación cerrada aún). Se compensa al cerrar la liquidación. ──
-  const pagosSueldos = movimientos.filter(m => m.origen === "sueldos").map(parsePagoFromMov);
+  // Solo pagos de sueldo REALES (tipo SUELDO). El pago del F931 (cargas sociales) es origen "sueldos"
+  // pero tipo PAGO y sin legajo → excluirlo evita un "Adelanto a empleados" fantasma en el Activo.
+  const pagosSueldos = movimientos.filter(m => m.origen === "sueldos" && m.tipo === "SUELDO").map(parsePagoFromMov);
   const sueldosSide = (porLegajo) => {
     const soc = normSoc(sociedad);
     const docs = []; let total = 0;

@@ -695,7 +695,9 @@ export function parsePagoFromMov(m) {
 // el PERÍODO de la liquidación (columnas mes/anio del movimiento), no la fecha de pago.
 function _pagosDeMovs(rows, { mes, anio } = {}) {
   return (Array.isArray(rows) ? rows : [])
-    .filter(m => m.origen === "sueldos")
+    // Solo pagos de sueldo REALES (tipo SUELDO). El pago del F931 (pagarCargasSociales) también es
+    // origen "sueldos" pero tipo PAGO y sin legajo/mes → si entrara acá generaría un "adelanto" fantasma.
+    .filter(m => m.origen === "sueldos" && m.tipo === "SUELDO")
     .filter(m => mes  == null || Number(m.mes)  === Number(mes))
     .filter(m => anio == null || Number(m.anio) === Number(anio))
     .map(parsePagoFromMov);
