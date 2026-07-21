@@ -7,7 +7,7 @@ import { CENTROS_COSTO } from "../data/numbersData";
 import {
   fetchMovTesoreria, fetchMovFranquicias, appendMovTesoreria, appendTransferencia, deleteMovTesoreria, updateMovTesoreria,
   fetchEgresos, fetchIngresos, fetchPagosCobros,
-  fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto,
+  fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto, fetchSaldoMercadoPago,
   appendGastoDirecto, esIgnorado, esCuentaCredito, fetchFinanciaciones,
   pagarTarjeta, fetchSocios, fetchSociosCC, fetchIntercoData,
 } from "../lib/numbersApi";
@@ -662,9 +662,15 @@ function BalanceBlock({ title, items, headerColor, onItemClick }) {
 }
 
 // ─── Tarjeta de cuenta individual ────────────────────────────────────────────
-function CuentaRow({ cuenta, onClick }) {
+function CuentaRow({ cuenta, onClick, mpLive }) {
   const tipoCfg = TIPO_CUENTA[cuenta.tipo] ?? { icon:"💳", color:T.muted };
   const saldo   = Number(cuenta.saldo) || 0;
+  // MP en vivo (read-only): "lo que hay realmente" en la cuenta MP. El gap vs `saldo` (calculado por
+  // movimientos) = la caja que no se ve hasta conciliar a fin de mes.
+  const mpTxt = mpLive == null ? null
+    : mpLive.loading ? "MP: …"
+    : mpLive.error   ? null   // sin token / API caída → no mostramos nada (no rompe)
+    : `MP real: ${fmtSaldo(Number(mpLive.disponible) || 0, mpLive.moneda || cuenta.moneda)} disp.`;
   return (
     <div onClick={onClick} style={{ display:"flex", alignItems:"center", gap:12,
       padding:"10px 18px", borderBottom:`1px solid ${T.cardBorder}`,
@@ -681,6 +687,13 @@ function CuentaRow({ cuenta, onClick }) {
             {cuenta.banco}
           </span>
         )}
+        {mpTxt && (
+          <span title={mpLive?.a_liberar != null ? `A liberar: ${fmtSaldo(Number(mpLive.a_liberar) || 0, mpLive.moneda || cuenta.moneda)}` : "Saldo en vivo de Mercado Pago"}
+            style={{ fontSize:10.5, fontWeight:700, color:"#059669", background:"#ecfdf5",
+              border:"1px solid #a7f3d0", borderRadius:5, padding:"1px 7px", marginLeft:8, cursor:"help", whiteSpace:"nowrap" }}>
+            {mpTxt}
+          </span>
+        )}
       </div>
       <span style={{ fontSize:11, background:"#f3f4f6", color:T.dim,
         borderRadius:4, padding:"2px 7px", fontWeight:700, flexShrink:0,
@@ -695,7 +708,7 @@ function CuentaRow({ cuenta, onClick }) {
 }
 
 // ─── Grupo de cuentas (Bancos / Cajas / Inversiones) ─────────────────────────
-function GrupoBlock({ icon, label, cuentas, onCuentaClick }) {
+function GrupoBlock({ icon, label, cuentas, onCuentaClick, mpLive }) {
   // Agrupar por moneda para el subtotal
   const porMoneda = {};
   for (const c of cuentas) {
@@ -723,6 +736,7 @@ function GrupoBlock({ icon, label, cuentas, onCuentaClick }) {
           </div>
         ) : cuentas.map(c => (
           <CuentaRow key={c.id} cuenta={c}
+            mpLive={/mercado\s*pago/i.test(c.banco || c.nombre || "") ? mpLive : null}
             onClick={onCuentaClick ? () => onCuentaClick(c) : undefined} />
         ))}
       </div>
@@ -786,7 +800,7 @@ function ResumenMonedas({ cuentas }) {
 }
 
 // ─── Tab: Saldos ─────────────────────────────────────────────────────────────
-export function TabSaldos({ cuentas, aCobrar, aPagar, interco = [], filtroMoneda, onCuentaClick, onItemClick }) {
+export function TabSaldos({ cuentas, aCobrar, aPagar, interco = [], filtroMoneda, mpLive, onCuentaClick, onItemClick }) {
   const filtrar = arr => filtroMoneda === "ALL" ? arr : arr.filter(c => c.moneda === filtroMoneda);
   const bancos      = filtrar(cuentas.filter(c => c.tipo === "banco"));
   const cajas       = filtrar(cuentas.filter(c => c.tipo === "caja"));
@@ -807,7 +821,7 @@ export function TabSaldos({ cuentas, aCobrar, aPagar, interco = [], filtroMoneda
       {/* Bancos | Caja en paralelo, Inversiones abajo */}
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16 }}>
         <GrupoBlock icon="💵" label="Caja"   cuentas={cajas}  onCuentaClick={onCuentaClick} />
-        <GrupoBlock icon="🏦" label="Bancos" cuentas={bancos} onCuentaClick={onCuentaClick} />
+        <GrupoBlock icon="🏦" label="Bancos" cuentas={bancos} onCuentaClick={onCuentaClick} mpLive={mpLive} />
       </div>
       <div style={{ marginBottom:16 }}>
         <GrupoBlock icon="📈" label="Inversiones" cuentas={inversiones} onCuentaClick={onCuentaClick} />
@@ -1124,6 +1138,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
   const [franqData,        setFranqData]        = useState({ comps: {}, saldos: {}, franchises: [] });  // Franquicias (read-only)
   const [movsFranq,        setMovsFranq]        = useState([]);   // cobros de franquicia group-wide (CxC netea por empresa, no por caja)
   const [intercoData,      setIntercoData]      = useState(null);   // interco (movs+comps+centros+sociedades)
+  const [mpLive,           setMpLive]           = useState(null);   // saldo MP en vivo (read-only): {loading, disponible, a_liberar, moneda, error}
 
   // ── Fetch all data ────────────────────────────────────────────────────────
   const cargarMovimientos = async () => {
@@ -1175,6 +1190,20 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
     setFiltroCuenta(null);
     cargarMovimientos();
   }, [sociedad]);
+
+  // Saldo MP EN VIVO (read-only): solo si la sociedad tiene una cuenta Mercado Pago. Falla suave → el
+  // bloque muestra "—" (sin token en local, o error de API) y no rompe el resto de Tesorería.
+  useEffect(() => {
+    const tieneMP = cuentasBancarias.some(c =>
+      (c.sociedad ?? "").toLowerCase() === (sociedad ?? "").toLowerCase() && /mercado\s*pago/i.test(c.banco || c.nombre || ""));
+    if (!tieneMP) { setMpLive(null); return; }
+    let vivo = true;
+    setMpLive({ loading: true });
+    fetchSaldoMercadoPago(sociedad)
+      .then(d => { if (vivo) setMpLive({ ...d, loading: false }); })
+      .catch(e => { if (vivo) setMpLive({ error: e.message, loading: false }); });
+    return () => { vivo = false; };
+  }, [sociedad, cuentasBancarias]);
 
   const sociedadesMap = useMemo(() => sociedadNombreMap(intercoData?.sociedades ?? []), [intercoData]);
 
@@ -1448,6 +1477,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
               aPagar={aPagarFull}
               interco={intercoItems}
               filtroMoneda={filtroMoneda}
+              mpLive={mpLive}
               onCuentaClick={handleCuentaClick}
               onItemClick={setDrillDownItem}
             />

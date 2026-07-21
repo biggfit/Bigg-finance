@@ -485,6 +485,17 @@ export async function fetchCuentasBancarias() {
   return get("nb_cuentas_bancarias");
 }
 
+// Saldo EN VIVO de Mercado Pago (read-only) vía el serverless /api/mercadopago. Devuelve
+// { disponible, a_liberar, moneda } o lanza si el endpoint falla (sin token → error). Fetch directo
+// (no pasa por el proxy get()). Espejo de fetchHorasDesdeEye.
+export async function fetchSaldoMercadoPago(sociedad) {
+  const qs = new URLSearchParams(sociedad ? { sociedad } : {});
+  const res  = await fetch(`/api/mercadopago?${qs}`);
+  const data = await res.json();
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
 export async function appendCuentaBancaria(cuenta) {
   const id = newId("CB");
   await post({ action: "add", sheet: "nb_cuentas_bancarias", row: { id, ...cuenta, activo: true, created_at: new Date().toISOString() } });
