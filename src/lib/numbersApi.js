@@ -328,12 +328,13 @@ function _hoy() {
 }
 function _parseVto(vtoStr) {
   if (!vtoStr) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(vtoStr)) return new Date(vtoStr);
-  if (/^\d{2}\/\d{2}\/\d{4}$/.test(vtoStr)) {
-    const [d, m, y] = vtoStr.split("/");
-    return new Date(`${y}-${m}-${d}`);
-  }
-  return null;
+  // Medianoche LOCAL (no UTC): new Date("YYYY-MM-DD") parsea a medianoche UTC → en AR (UTC-3) queda el día
+  // anterior 21:00 y una factura que vence HOY caía como "vencido". _hoy() es medianoche local → alinear.
+  let y, m, d;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(vtoStr))       { [y, m, d] = vtoStr.split("-"); }
+  else if (/^\d{2}\/\d{2}\/\d{4}$/.test(vtoStr)) { [d, m, y] = vtoStr.split("/"); }
+  else return null;
+  return new Date(Number(y), Number(m) - 1, Number(d));
 }
 
 export function calcEstadoEgreso(saldo, totalDoc, vtoStr) {
