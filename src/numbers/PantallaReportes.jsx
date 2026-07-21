@@ -1290,6 +1290,31 @@ const ZERO    = { ARS: 0, USD: 0, EUR: 0 };
 
 const SALARY_BUCKET_LABEL = { haberes: "Haberes", deposito: "Depósito", monotributo: "Monotributo", efectivo: "Efectivo" };
 
+// CxC / CxP del Balance = saldo PENDIENTE por comprobante. Los comprobantes NO tienen campo `estado`
+// (el estado de pago se deriva); por eso NO se filtra por r.estado (que era siempre undefined → sumaba
+// todo lo histórico). Se agrupa por id_comp (una FC = varias líneas), se restan los pagos (COBRO/PAGO por
+// documento_id), y se suma el saldo remanente. Scope por sociedad, igual que cajas/bancos. Devuelve por moneda.
+function saldoPendientePorComp(lineas, movs, subtipo, pagoTipo, sociedad) {
+  const comp = {};   // id_comp → { total, moneda }
+  for (const r of lineas) {
+    if ((r.subtipo ?? "").toUpperCase() !== subtipo) continue;
+    if (sociedad && (r.sociedad ?? "").toLowerCase() !== sociedad.toLowerCase()) continue;
+    const k = r.id_comp || r.id;
+    if (!comp[k]) comp[k] = { total: 0, moneda: r.moneda ?? "ARS" };
+    comp[k].total += Number(r.total) || 0;
+  }
+  const pagado = {};   // documento_id → Σ |monto| de los pagos
+  for (const m of movs) {
+    if (m.tipo === pagoTipo && m.documento_id) pagado[m.documento_id] = (pagado[m.documento_id] || 0) + Math.abs(Number(m.monto) || 0);
+  }
+  const out = { ...ZERO };
+  for (const k in comp) {
+    const saldo = calcSaldoPendiente(comp[k].total, [{ monto: pagado[k] || 0 }]);
+    if (saldo > 0.5 && comp[k].moneda in out) out[comp[k].moneda] += saldo;
+  }
+  return out;
+}
+
 // Pasivo de financiaciones por bucket (impuestos/financiero). Usa el helper compartido de
 // numbersApi → mismo número que Tesorería (una sola fuente de la clasificación).
 function financiacionPasivoRows(planes, sociedad) {
@@ -1336,15 +1361,8 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCer
   const tarjetaDeuda = useMemo(() => subVals({ ...ZERO }, sumGrp(tarjetas)), [tarjetas, saldos]);
   const hayTarjeta = (tarjetaDeuda.ARS + tarjetaDeuda.USD + tarjetaDeuda.EUR) !== 0;
 
-  const cxcRows = useMemo(() =>
-    rawIn.filter(r => (r.subtipo ?? "").toUpperCase() === "INGRESO" && r.estado !== "cobrado"),
-    [rawIn]);
-  const cxpRows = useMemo(() =>
-    rawEg.filter(r => (r.subtipo ?? "").toUpperCase() === "EGRESO" && r.estado !== "pagado"),
-    [rawEg]);
-
-  const cxcTot = useMemo(() => sumMon(cxcRows, r => r.moneda ?? "ARS", r => Number(r.total) || 0), [cxcRows]);
-  const cxpTot = useMemo(() => sumMon(cxpRows, r => r.moneda ?? "ARS", r => Number(r.total) || 0), [cxpRows]);
+  const cxcTot = useMemo(() => saldoPendientePorComp(rawIn, rawMovs, "INGRESO", "COBRO", sociedad), [rawIn, rawMovs, sociedad]);
+  const cxpTot = useMemo(() => saldoPendientePorComp(rawEg, rawMovs, "EGRESO", "PAGO", sociedad), [rawEg, rawMovs, sociedad]);
 
   // Sueldos POR LEGAJO (mismo criterio que Tesorería): neto devengado(cerradas) − pagado(nb_movimientos
   // origen sueldos). Positivo → PASIVO (deuda). Negativo → ACTIVO "adelanto" (pago sin liquidación
