@@ -1038,7 +1038,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
           <thead>
             <tr style={{ background:T.tableHead }}>
               <th style={{ width:36 }} />
-              {["ID","Estado","Emisión","Vencimiento","Proveedor","N° FC","Cuenta","Centros de Costo","Importe","Pagado","Pendiente","Medio de Pago","Nota"].map(h => (
+              {["ID","Estado","Emisión","Vencimiento","Proveedor","Importe","N° FC","Cuenta","Centros de Costo","Pagado","Pendiente","Medio de Pago","Nota"].map(h => (
                 <th key={h} style={{ padding:"10px 14px", fontSize:11, fontWeight:700,
                   letterSpacing:".08em", textTransform:"uppercase", whiteSpace:"nowrap",
                   color:T.tableHeadText, textAlign: ["Importe","Pagado","Pendiente"].includes(h) ? "right" : "left" }}>{h}</th>
@@ -1077,14 +1077,14 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
                   <td style={{ padding:"10px 14px", fontSize:13,
                     color:e.estado==="vencido"?T.red:T.text, fontWeight:e.estado==="vencido"?700:400 }}>{fmtDate(e.vto)}</td>
                   <td style={{ padding:"10px 14px", fontSize:13, color:T.text, fontWeight:600 }}>{e.proveedor}</td>
+                  <td style={{ padding:"10px 14px", fontSize:13, fontFamily:"var(--mono)",
+                    fontWeight:700, color:T.text, textAlign:"right", whiteSpace:"nowrap" }}>
+                    {fmtMoney(e.importe, e.moneda)}
+                  </td>
                   <td style={{ padding:"10px 14px", fontSize:11, color:T.muted, fontFamily:"var(--mono)" }}>{e.nroComp || "—"}</td>
                   <td style={{ padding:"10px 14px", fontSize:12, color:T.muted }}>{e.cuenta}</td>
                   <td style={{ padding:"10px 14px" }}>
                     <CCDisplay lineas={e.lineas} resolveCC={resolveCC} />
-                  </td>
-                  <td style={{ padding:"10px 14px", fontSize:13, fontFamily:"var(--mono)",
-                    fontWeight:700, color:T.text, textAlign:"right", whiteSpace:"nowrap" }}>
-                    {fmtMoney(e.importe, e.moneda)}
                   </td>
                   <td style={{ padding:"10px 14px", fontSize:13, fontFamily:"var(--mono)",
                     fontWeight:700, color:T.green, textAlign:"right", whiteSpace:"nowrap" }}>
