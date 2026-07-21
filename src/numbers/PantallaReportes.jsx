@@ -900,6 +900,12 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
         if (catSede === "ventas") gkey = "vta_sp";
         else if (catSede === "otros ingresos") gkey = "int_sp";
         else { gkey = "gsp"; rowKey = "Gastos Sedes Propias"; }
+      } else if ((fam === "wre" || fam === "gerenciamiento") && forcedSide !== "ingreso" && catPnl !== "ventas") {
+        // EGRESO de WRE (Huergo/Puertos) o Gerenciamiento (Rosedal): su resultado entra al holding vía su
+        // propio motor (resWRE / feeGer), que YA resta estos costos. Rutearlos a su bucket (no consumido por
+        // computeSubtotalsHolding) evita el doble conteo — antes un costo con categoria "costo_venta" caía en
+        // gpv y se restaba dos veces (una en el margen WRE, otra en Gastos por Ventas del holding).
+        gkey = FAM_A_ING[fam]; if (gkey === "wre") rowKey = cc?.nombre ?? cuenta;
       } else if (catPnl === "costo_venta") {
         gkey = "gpv";                                     // COSTO por venta → Gastos por Ventas: Interusos, Fee Fact.
         if (forcedSide === "ingreso") val = -val;         // lado ingreso de una cuenta intermediada = contra → neto en gpv
