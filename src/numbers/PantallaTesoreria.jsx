@@ -715,11 +715,6 @@ function CuentaRow({ cuenta, onClick, mpLive }) {
       <div style={{ flexShrink:0, maxWidth:180, fontSize:13, color:T.text, fontWeight:500,
         overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
         {cuenta.nombre}
-        {cuenta.banco && (
-          <span style={{ fontSize:11, color:T.dim, fontWeight:400, marginLeft:5 }}>
-            {cuenta.banco}
-          </span>
-        )}
       </div>
       {/* pill MP fuera del nombre → no lo recorta el ellipsis; empuja con flex:1 */}
       <div style={{ flex:1 }}>
