@@ -665,12 +665,15 @@ function BalanceBlock({ title, items, headerColor, onItemClick }) {
 function CuentaRow({ cuenta, onClick, mpLive }) {
   const tipoCfg = TIPO_CUENTA[cuenta.tipo] ?? { icon:"💳", color:T.muted };
   const saldo   = Number(cuenta.saldo) || 0;
-  // MP en vivo (read-only): "lo que hay realmente" en la cuenta MP. El gap vs `saldo` (calculado por
-  // movimientos) = la caja que no se ve hasta conciliar a fin de mes.
+  // MP en vivo (read-only): neto A ACREDITARSE (cobros con liberación futura, de /payments/search).
+  // MP no expone el saldo por API; esto es la plata que va a entrar y hoy no se ve en Numbers.
   const mpTxt = mpLive == null ? null
     : mpLive.loading ? "MP: …"
     : mpLive.error   ? null   // sin token / API caída → no mostramos nada (no rompe)
-    : `MP real: ${fmtSaldo(Number(mpLive.disponible) || 0, mpLive.moneda || cuenta.moneda)} disp.`;
+    : `+ ${fmtSaldo(Number(mpLive.a_acreditarse) || 0, mpLive.moneda || cuenta.moneda)} a acreditarse`;
+  const mpTitle = (mpLive && !mpLive.loading && !mpLive.error && Array.isArray(mpLive.proximos) && mpLive.proximos.length)
+    ? "Próximas liberaciones:\n" + mpLive.proximos.slice(0, 8).map(p => `${p.fecha}: ${fmtSaldo(p.monto, mpLive.moneda || cuenta.moneda)}`).join("\n")
+    : "Neto a acreditarse en MP (cobros por liberarse). MP no expone el saldo por API.";
   return (
     <div onClick={onClick} style={{ display:"flex", alignItems:"center", gap:12,
       padding:"10px 18px", borderBottom:`1px solid ${T.cardBorder}`,
@@ -688,7 +691,7 @@ function CuentaRow({ cuenta, onClick, mpLive }) {
           </span>
         )}
         {mpTxt && (
-          <span title={mpLive?.a_liberar != null ? `A liberar: ${fmtSaldo(Number(mpLive.a_liberar) || 0, mpLive.moneda || cuenta.moneda)}` : "Saldo en vivo de Mercado Pago"}
+          <span title={mpTitle}
             style={{ fontSize:10.5, fontWeight:700, color:"#059669", background:"#ecfdf5",
               border:"1px solid #a7f3d0", borderRadius:5, padding:"1px 7px", marginLeft:8, cursor:"help", whiteSpace:"nowrap" }}>
             {mpTxt}

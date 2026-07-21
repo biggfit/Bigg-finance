@@ -1,83 +1,100 @@
 // api/mercadopago.js — Vercel Serverless Function
 //
-// Saldo EN VIVO de una cuenta de Mercado Pago (visibilidad de caja durante el mes).
-// v1 READ-ONLY: solo consulta el balance del comercio (disponible + a liberar). No emite pagos ni transferencias.
+// Visibilidad EN VIVO de Mercado Pago (READ-ONLY): "neto a acreditarse" = plata cobrada que todavía
+// NO se liberó (money_release_date futuro). Da una mejor referencia de lo que hay/entra en la caja MP
+// durante el mes (los cashouts MP→banco ya se ven por el extracto de Galicia; esto suma lo que falta ver).
+//
+// Por qué NO el saldo disponible: MP no expone el balance de la cuenta por API (endpoint 403/legacy).
+// Lo accesible con el Access Token del comercio es /payments/search → de ahí derivamos lo a acreditarse.
 //
 // Query params:
 //   sociedad — id de sociedad (nako | hektor | ...) → elige el token de esa cuenta MP
+//   dias     — ventana futura de liberación a sumar (default 30)
 //
-// Token (server-only, NUNCA con prefijo VITE → no viaja al bundle):
-//   MP_ACCESS_TOKEN_<SOCIEDAD>  (ej. MP_ACCESS_TOKEN_NAKO / _HEKTOR) — uno por cuenta MP
-//   MP_ACCESS_TOKEN             — fallback si no hay uno por sociedad
-//   Es el Access Token de PRODUCCIÓN del propio comercio (MP → Credenciales de producción).
+// Token (server-only, NUNCA con prefijo VITE): MP_ACCESS_TOKEN_<SOCIEDAD> (fallback MP_ACCESS_TOKEN).
+//   Access Token de PRODUCCIÓN del propio comercio. Solo se LEE (no emite pagos ni transferencias).
 //
-// Devuelve:
-//   { disponible, a_liberar, moneda, _source }   ·   { error } si algo falla
-//
-// Nota: el Access Token puede crear pagos/refunds (mueve plata) pero NO permite retirar el saldo por API
-// (MP no expone cash-out). Este endpoint solo LEE el balance.
+// Devuelve: { a_acreditarse, moneda, proximos:[{fecha, monto}], count, _source } · { error } si falla.
 
 const MP_API = "https://api.mercadopago.com";
 
-async function mpGet(path, token) {
-  const res = await fetch(`${MP_API}${path}`, {
-    headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
-  });
-  const text = await res.text();
-  let data = null;
-  try { data = JSON.parse(text); } catch { /* deja data en null */ }
-  return { ok: res.ok, status: res.status, data, raw: text.slice(0, 200) };
+function isoAR(d) {
+  // ISO con offset AR (-03:00), formato que acepta el search de MP.
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.000-03:00`;
 }
 
-// El env var name no admite guiones → sanitizar la sociedad (segui-fit → SEGUI_FIT).
 function tokenDeSociedad(sociedad) {
   const key = String(sociedad || "").toUpperCase().replace(/[^A-Z0-9]/g, "_");
   return (key && process.env[`MP_ACCESS_TOKEN_${key}`]) || process.env.MP_ACCESS_TOKEN || null;
+}
+
+async function mpSearch(qs, token) {
+  const res = await fetch(`${MP_API}/v1/payments/search?${qs}`, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+  });
+  const text = await res.text();
+  let data = null; try { data = JSON.parse(text); } catch { /* noop */ }
+  return { ok: res.ok, status: res.status, data, raw: text.slice(0, 200) };
 }
 
 export default async function handler(req, res) {
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Access-Control-Allow-Origin", "*");
 
-  const { sociedad } = req.query;
-  const token = tokenDeSociedad(sociedad);   // leído por request (evita caching de env)
+  const { sociedad, dias } = req.query;
+  const token = tokenDeSociedad(sociedad);
   if (!token) {
     res.statusCode = 500;
     res.end(JSON.stringify({ error: `MP_ACCESS_TOKEN${sociedad ? "_" + String(sociedad).toUpperCase() : ""} no configurado` }));
     return;
   }
 
+  const ventana = Math.max(1, Math.min(120, Number(dias) || 30));
+  const ahora = new Date();
+  const hasta = new Date(ahora.getTime() + ventana * 86400000);
+  const begin = encodeURIComponent(isoAR(ahora));
+  const end   = encodeURIComponent(isoAR(hasta));
+  const base  = `status=approved&range=money_release_date&begin_date=${begin}&end_date=${end}&sort=money_release_date&criteria=asc`;
+
   try {
-    // 1) user_id del token (necesario para el endpoint clásico de balance)
-    const me = await mpGet("/users/me", token);
-    if (!me.ok || !me.data?.id) {
-      res.statusCode = 502;
-      res.end(JSON.stringify({ error: `MP /users/me falló (${me.status}): ${me.raw}` }));
-      return;
-    }
-    const userId = me.data.id;
+    // Paginado: sumar el neto de todos los cobros que se liberan en la ventana futura.
+    const LIMIT = 100, MAX_PAGES = 40;   // backstop: 4000 cobros
+    let offset = 0, total = Infinity, count = 0, aAcreditarse = 0, moneda = "ARS";
+    const porFecha = new Map();
 
-    // 2) balance — endpoint clásico; si no responde, fallback a /v1/account/balance
-    let bal = await mpGet(`/users/${userId}/mercadopago_account/balance`, token);
-    let source = "mercadopago_account/balance";
-    if (!bal.ok || bal.data == null) {
-      bal = await mpGet(`/v1/account/balance`, token);
-      source = "v1/account/balance";
-    }
-    if (!bal.ok || bal.data == null) {
-      res.statusCode = 502;
-      res.end(JSON.stringify({ error: `MP balance falló (${bal.status}): ${bal.raw}` }));
-      return;
+    for (let page = 0; page < MAX_PAGES && offset < total; page++) {
+      const r = await mpSearch(`${base}&limit=${LIMIT}&offset=${offset}`, token);
+      if (!r.ok || !r.data) {
+        // Si es la 1ª página, es un error real; si ya venía sumando, corto y devuelvo lo acumulado.
+        if (page === 0) { res.statusCode = 502; res.end(JSON.stringify({ error: `MP payments/search falló (${r.status}): ${r.raw}` })); return; }
+        break;
+      }
+      total = r.data.paging?.total ?? 0;
+      const rows = r.data.results || [];
+      for (const p of rows) {
+        const neto = Number(p?.transaction_details?.net_received_amount) || Number(p?.transaction_amount) || 0;
+        aAcreditarse += neto;
+        count += 1;
+        if (p.currency_id) moneda = p.currency_id;
+        const fecha = String(p.money_release_date || "").slice(0, 10);
+        if (fecha) porFecha.set(fecha, (porFecha.get(fecha) || 0) + neto);
+      }
+      offset += LIMIT;
+      if (rows.length < LIMIT) break;
     }
 
-    const d = bal.data;
-    const num = (v) => Number(v) || 0;
+    const proximos = [...porFecha.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([fecha, monto]) => ({ fecha, monto: Math.round(monto) }));
+
     res.statusCode = 200;
     res.end(JSON.stringify({
-      disponible: num(d.available_balance),
-      a_liberar:  num(d.unavailable_balance),
-      moneda:     d.currency_id || "ARS",
-      _source:    source,
+      a_acreditarse: Math.round(aAcreditarse),
+      moneda,
+      proximos,           // agenda por fecha de liberación (para el Dashboard/flujo)
+      count,
+      _source: `payments/search · money_release_date +${ventana}d`,
     }));
   } catch (err) {
     res.statusCode = 500;
