@@ -202,10 +202,10 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], planCuentas = [],
           <div><label style={lbl}>{envio ? `Monto que salió de tu caja (${monedaCta}) *` : `Monto bruto que ingresó (post-TC) (${monedaCta}) *`}</label>
             <input value={monto} onChange={e => setMonto(e.target.value)} style={inp} placeholder={envio ? "lo que salió" : "el bruto, antes del costo"} /></div>
           <div style={{ display: "flex", gap: 12 }}>
-            <div style={{ flex: 1 }}><label style={lbl}>Costo de transferencia / clearing (opcional)</label>
+            <div style={{ flex: 1 }}><label style={lbl}>Costo de transferencia / clearing</label>
               <input value={costo} onChange={e => setCosto(e.target.value)} style={inp} placeholder="si la financiera te lo informa" /></div>
             <div style={{ flex: 1.2 }}><label style={lbl}>Cuenta contable del costo</label>
-              <select value={costoCuenta} onChange={e => setCostoCuenta(e.target.value)} style={inp} disabled={!(Number(costo) > 0)}>
+              <select value={costoCuenta} onChange={e => setCostoCuenta(e.target.value)} style={inp}>
                 {!ctasContables.some(c => c.nombre === costoCuenta) && <option value={costoCuenta}>{costoCuenta}</option>}
                 {ctasContables.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
               </select></div>
