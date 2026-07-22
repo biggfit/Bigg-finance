@@ -98,7 +98,7 @@ function newId(prefix) {
  * (ej: "362591,17" → 362591.17, "1.234,56" → 1234.56).
  * Si no contiene coma, lo trata como formato estándar (punto decimal o entero).
  */
-function toNum(v) {
+export function toNum(v) {
   if (typeof v === "number") return v;
   if (v === null || v === undefined || v === "") return 0;
   const s = String(v).trim();
@@ -256,22 +256,21 @@ export async function contabilizarBorrador(id_comp, egreso) {
   return { ok: true, id_comp_nuevo: res.id_comp };
 }
 
-/** Ignorar un borrador (queda EGRESO_IGNORADO: invisible al ledger, pero el id COR- recuerda que ya se vio). */
-export async function ignorarBorrador(id_comp, motivo = "") {
+/** Aplica un patch a todas las filas de un borrador (por id_comp). Base de ignorar/restaurar. */
+async function _patchBorrador(id_comp, patch) {
   const rows = await get("nb_comprobantes", {});
   const ids = rows.filter(r => String(r.id_comp) === String(id_comp)).map(r => r.id);
-  await Promise.all(ids.map(id => post({ action: "edit", sheet: "nb_comprobantes", id,
-    patch: { subtipo: "EGRESO_IGNORADO", nota: motivo ? `ign=${motivo}` : "" } })));
+  await Promise.all(ids.map(id => post({ action: "edit", sheet: "nb_comprobantes", id, patch })));
   return { ok: true, n: ids.length };
 }
 
+/** Ignorar un borrador (queda EGRESO_IGNORADO: invisible al ledger, pero el id COR- recuerda que ya se vio). */
+export const ignorarBorrador  = (id_comp, motivo = "") =>
+  _patchBorrador(id_comp, { subtipo: "EGRESO_IGNORADO", nota: motivo ? `ign=${motivo}` : "" });
+
 /** Restaurar un borrador ignorado → vuelve a la bandeja. */
-export async function restaurarBorrador(id_comp) {
-  const rows = await get("nb_comprobantes", {});
-  const ids = rows.filter(r => String(r.id_comp) === String(id_comp)).map(r => r.id);
-  await Promise.all(ids.map(id => post({ action: "edit", sheet: "nb_comprobantes", id, patch: { subtipo: "EGRESO_BORRADOR" } })));
-  return { ok: true, n: ids.length };
-}
+export const restaurarBorrador = (id_comp) =>
+  _patchBorrador(id_comp, { subtipo: "EGRESO_BORRADOR" });
 
 // ─── INGRESOS ────────────────────────────────────────────────────────────────
 

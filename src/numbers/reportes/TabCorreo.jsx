@@ -6,7 +6,7 @@ import { T, PageHeader, fmtDate, fmtMoney } from "../theme";
 import {
   fetchCorreoBorradores, contabilizarBorrador, ignorarBorrador,
   fetchSociedades, fetchCuentas, fetchCentrosCosto, fetchProveedores,
-  fetchEgresos, fetchMovTesoreria,
+  fetchEgresos, fetchMovTesoreria, toNum,
 } from "../../lib/numbersApi";
 import NuevoEgresoModal from "../NuevoEgresoModal";
 import { formatNroComp } from "../formUtils";
@@ -15,7 +15,6 @@ const arr = x => Array.isArray(x) ? x : [];
 const metaRef   = nota => (String(nota || "").match(/mail_ref=([^\s;]+)/) || [])[1] || "";
 const metaFecha = nota => (String(nota || "").match(/fecha_correo=([^\s;]+)/) || [])[1] || "";
 const gmailUrl  = ref => ref ? `https://mail.google.com/mail/u/0/#all/${ref}` : null;
-const toNum = v => { const n = parseFloat(String(v ?? "").replace(/[^\d.,-]/g, "").replace(/\.(?=\d{3},)/g, "").replace(",", ".")); return isNaN(n) ? 0 : n; };
 
 export default function TabCorreo({ onPend } = {}) {
   const [borradores, setBorradores] = useState([]);
@@ -108,19 +107,13 @@ export default function TabCorreo({ onPend } = {}) {
   };
 
   // "Abrir para editar" → NuevoEgresoModal precargado (para repartir en varios centros).
+  // Reusa payloadDe y sólo agrega lo propio del modal (marca _duplicate + nombre de cuenta legible).
   const initialDe = (row) => {
     const e = ed(row);
-    const linea = (row.lineas && row.lineas[0]) || {};
     return {
+      ...payloadDe(row, e),
       _duplicate: true,   // se trata como comprobante NUEVO (el id COR- no es un egreso real)
-      proveedorId: row.proveedorId, proveedor: row.proveedor,
-      cuentaId: e.cuentaId || row.cuentaId, cuenta: (cuentas.find(c => c.id === (e.cuentaId || row.cuentaId))?.nombre) || row.cuenta,
-      moneda: row.moneda || "ARS",
-      fecha: e.fechaServicio || row.fecha || "",
-      vto: row.vto || "",
-      nroComp: e.nroComp || row.nroComp || "",
-      nota: row.nota || "",
-      lineas: [{ cc: e.centro || "", subtotal: linea.subtotal ?? row.total, ivaRate: linea.ivaRate ?? 0 }],
+      cuenta: (cuentas.find(c => c.id === e.cuentaId)?.nombre) || row.cuenta,
     };
   };
   const guardarEditado = async (payload) => {
@@ -136,7 +129,6 @@ export default function TabCorreo({ onPend } = {}) {
     fontSize:12, color:T.text, fontFamily:T.font, outline:"none", maxWidth:150 };
   const num = (bold) => ({ padding:"9px 12px", fontSize:13, fontWeight: bold?800:600, color:T.text,
     fontFamily:"var(--mono)", textAlign:"right", whiteSpace:"nowrap" });
-  const chip = (bg, col) => ({ fontSize:10, fontWeight:700, background:bg, color:col, borderRadius:5, padding:"1px 6px", whiteSpace:"nowrap" });
 
   if (editar) {
     return (
@@ -184,9 +176,7 @@ export default function TabCorreo({ onPend } = {}) {
             <tbody>
               {borradores.map((row, i) => {
                 const e = ed(row);
-                const ref = metaRef(row.nota);
                 const linea = (row.lineas && row.lineas[0]) || {};
-                const listo = e.sociedad && e.cuentaId && e.centro;
                 const enCurso = busy === row.id;
                 const pago = pagoPendiente(row);
                 const dup  = posibleDup(row);
