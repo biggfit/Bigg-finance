@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { T, Btn, Input, Select, PageHeader, fmtDate, fmtMoney } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
-import { fetchCambios, appendCambio, deleteCambio, fetchCuentasBancarias } from "../lib/numbersApi";
+import { fetchCambios, appendCambio, updateCambio, deleteCambio, fetchCuentasBancarias } from "../lib/numbersApi";
 
 const HOY = new Date().toISOString().slice(0, 10);
 
@@ -15,21 +15,35 @@ const FORM_VACÍO = {
 };
 
 
-export default function PantallaCambioMoneda({ sociedad, openNew, onOpenNewConsumed }) {
+export default function PantallaCambioMoneda({ sociedad, openNew, onOpenNewConsumed, openEditDoc, onEditConsumed }) {
   const [todosCambios, setTodosCambios] = useState([]);
   const [loading,      setLoading]      = useState(true);
   const [showForm,     setShowForm]     = useState(false);
   const [saving,       setSaving]       = useState(false);
   const [allCuentas,   setAllCuentas]   = useState([]);
   const [form,         setForm]         = useState(FORM_VACÍO);
+  const [editId,       setEditId]       = useState(null);   // documento_id del cambio en edición
   const [deleting,     setDeleting]     = useState(null);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   // Abrir el modal desde el "+" del sidebar (una sola vez por click).
   useEffect(() => {
-    if (openNew) { setForm(FORM_VACÍO); setShowForm(true); onOpenNewConsumed?.(); }
+    if (openNew) { setForm(FORM_VACÍO); setEditId(null); setShowForm(true); onOpenNewConsumed?.(); }
   }, [openNew]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Deep-link "Editar" desde Tesorería: abrir el modal pre-cargado con ese cambio.
+  useEffect(() => {
+    if (!openEditDoc || !todosCambios.length) return;
+    const c = todosCambios.find(x => String(x.id) === String(openEditDoc));
+    if (c) {
+      setForm({ fecha: c.fecha || HOY, cuentaOrigenId: c.cuentaOrigen || "", montoOrigen: String(c.montoOrigen ?? ""),
+        cuentaDestinoId: c.cuentaDestino || "", montoDestino: String(c.montoDestino ?? ""), nota: c.nota || "" });
+      setEditId(String(c.id));
+      setShowForm(true);
+    }
+    onEditConsumed?.();
+  }, [openEditDoc, todosCambios]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const cuentas = useMemo(() =>
     allCuentas.filter(c => (c.sociedad ?? "").toLowerCase() === (sociedad ?? "").toLowerCase()),
@@ -87,7 +101,7 @@ export default function PantallaCambioMoneda({ sociedad, openNew, onOpenNewConsu
     _savingRef.current = true;
     setSaving(true);
     try {
-      await appendCambio({
+      const datos = {
         sociedad,
         fecha:          form.fecha,
         cuentaOrigen:   form.cuentaOrigenId,
@@ -97,8 +111,14 @@ export default function PantallaCambioMoneda({ sociedad, openNew, onOpenNewConsu
         monedaDestino,
         montoDestino:   montoDestinoN,
         nota:           form.nota,
-      });
+      };
+      if (editId) {
+        await updateCambio({ ...datos, salidaId: `${editId}-S`, entradaId: `${editId}-E` });
+      } else {
+        await appendCambio(datos);
+      }
       setForm(FORM_VACÍO);
+      setEditId(null);
       setShowForm(false);
       await cargar();
     } finally {
@@ -135,7 +155,7 @@ export default function PantallaCambioMoneda({ sociedad, openNew, onOpenNewConsu
       <PageHeader
         title="Cambio de moneda"
         action={
-          <Btn onClick={() => { setForm(FORM_VACÍO); setShowForm(true); }}
+          <Btn onClick={() => { setForm(FORM_VACÍO); setEditId(null); setShowForm(true); }}
             style={{ background: T.accent, color:"#000", border:"none" }}>
             + Nueva operación
           </Btn>
@@ -146,13 +166,13 @@ export default function PantallaCambioMoneda({ sociedad, openNew, onOpenNewConsu
       {showForm && (
         <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.45)", zIndex:500,
           display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
-          onClick={() => { setShowForm(false); setForm(FORM_VACÍO); }}>
+          onClick={() => { setShowForm(false); setForm(FORM_VACÍO); setEditId(null); }}>
         <div className="fade" style={{ background:T.card, borderRadius:10, width:520, maxWidth:"97vw",
           boxShadow:"0 20px 60px rgba(0,0,0,.25)", overflow:"hidden" }} onClick={e => e.stopPropagation()}>
           <div style={{ background:"#0e7490", padding:"14px 22px", display:"flex",
             justifyContent:"space-between", alignItems:"center" }}>
-            <span style={{ fontSize:15, fontWeight:800, color:"#fff" }}>Nueva operación de cambio</span>
-            <button onClick={() => { setShowForm(false); setForm(FORM_VACÍO); }}
+            <span style={{ fontSize:15, fontWeight:800, color:"#fff" }}>{editId ? "Editar operación de cambio" : "Nueva operación de cambio"}</span>
+            <button onClick={() => { setShowForm(false); setForm(FORM_VACÍO); setEditId(null); }}
               style={{ background:"transparent", border:"none", color:"rgba(255,255,255,.6)",
                 fontSize:20, cursor:"pointer", lineHeight:1 }}>✕</button>
           </div>
@@ -190,14 +210,14 @@ export default function PantallaCambioMoneda({ sociedad, openNew, onOpenNewConsu
             </div>
 
             <div style={{ display:"flex", justifyContent:"flex-end", gap:10 }}>
-              <button onClick={() => { setShowForm(false); setForm(FORM_VACÍO); }} style={{
+              <button onClick={() => { setShowForm(false); setForm(FORM_VACÍO); setEditId(null); }} style={{
                 background:"#dc2626", border:"none", borderRadius:8, padding:"9px 20px",
                 fontSize:13, fontWeight:700, color:"#fff", cursor:"pointer", fontFamily:T.font }}>Cancelar ✕</button>
               <button onClick={handleGuardar} disabled={!canSave || saving} style={{
                 background: canSave && !saving ? "#16a34a" : "#9ca3af", border:"none", borderRadius:8,
                 padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff",
                 cursor: canSave && !saving ? "pointer" : "default", fontFamily:T.font }}>
-                {saving ? "Guardando…" : "Crear ✓"}</button>
+                {saving ? "Guardando…" : editId ? "Guardar ✓" : "Crear ✓"}</button>
             </div>
           </div>
         </div>

@@ -100,6 +100,44 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
   const [showSocDrop,    setShowSocDrop]    = useState(false);
   const [socReady,       setSocReady]       = useState(false);
   const [activeSpecial,  setActiveSpecial]  = useState(null);
+  // Deep-link a un comprobante: desde Tesorería, "Editar" de un PAGO/COBRO abre el detalle del
+  // Egreso/Ingreso que salda (ahí vive el editor de pago). { section, id }.
+  const [deepDoc,        setDeepDoc]        = useState(null);
+  const irADoc = (section, id) => {
+    setActiveSpecial(null);
+    setActiveMaestrosTab(null);
+    if (section === "egresos")  setEgresoSubView(null);
+    if (section === "ingresos") setIngresoSubView(null);
+    setActiveId(section);
+    setDeepDoc({ section, id });
+  };
+  // Deep-link inverso: desde el detalle de un comprobante, el "medio de pago" abre Tesorería
+  // filtrada a esa caja (pestaña Movimientos).
+  const [deepCaja, setDeepCaja] = useState(null);
+  const irACaja = (cuentaId) => {
+    if (!cuentaId) return;
+    setActiveSpecial(null);
+    setActiveMaestrosTab(null);
+    setActiveId("tesoreria");
+    setDeepCaja(cuentaId);
+  };
+  // "Editar" de una transferencia interco (par de núcleo) → abre el módulo Intercompañía con esa
+  // transferencia pre-cargada en el modal (edita las 2 patas).
+  const [deepInterco, setDeepInterco] = useState(null);
+  const irAInterco = (docId) => {
+    if (!docId) return;
+    setActiveMaestrosTab(null);
+    setActiveSpecial("intercompania");
+    setDeepInterco(docId);
+  };
+  // "Editar" de un cambio de moneda → abre el módulo Cambio de moneda con esa operación pre-cargada.
+  const [deepCambio, setDeepCambio] = useState(null);
+  const irACambio = (docId) => {
+    if (!docId) return;
+    setActiveMaestrosTab(null);
+    setActiveSpecial("cambio");
+    setDeepCambio(docId);
+  };
   const [nuevaOpTarget,  setNuevaOpTarget]  = useState(null);  // "+" del sidebar → abre modal del especial
   const [pendConcil,     setPendConcil]     = useState({ banco: 0, interco: 0 });
   const pendConcilTotal = (pendConcil.banco || 0) + (pendConcil.interco || 0);
@@ -684,9 +722,11 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
             : showMaestros
             ? <PantallaMaestros activeTab={activeMaestrosTab} />
             : activeSpecial === "intercompania"
-            ? <PantallaIntercompania sociedad={activeSoc.id} openNew={nuevaOpTarget === "intercompania"} onOpenNewConsumed={() => setNuevaOpTarget(null)} />
+            ? <PantallaIntercompania sociedad={activeSoc.id} openNew={nuevaOpTarget === "intercompania"} onOpenNewConsumed={() => setNuevaOpTarget(null)}
+                openEditDoc={deepInterco} onEditConsumed={() => setDeepInterco(null)} />
             : activeSpecial === "cambio"
-            ? <PantallaCambioMoneda sociedad={activeSoc.id} openNew={nuevaOpTarget === "cambio"} onOpenNewConsumed={() => setNuevaOpTarget(null)} />
+            ? <PantallaCambioMoneda sociedad={activeSoc.id} openNew={nuevaOpTarget === "cambio"} onOpenNewConsumed={() => setNuevaOpTarget(null)}
+                openEditDoc={deepCambio} onEditConsumed={() => setDeepCambio(null)} />
             : activeSpecial === "socios"
             ? <PantallaSocios />
             : activeSpecial === "usuarios"
@@ -697,13 +737,18 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
             ? section.id === "egresos" && (egresoSubView === "gastos" || egresoSubView === "new-gasto")
               ? <PantallaGastos   sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView} navPulse={navPulse} />
               : section.id === "egresos"
-              ? <PantallaEgresos  sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView} navPulse={navPulse} />
+              ? <PantallaEgresos  sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView} navPulse={navPulse}
+                  openDocId={deepDoc?.section === "egresos" ? deepDoc.id : null} onDocOpened={() => setDeepDoc(null)} onIrACaja={irACaja} />
               : section.id === "ingresos"
-              ? <PantallaIngresos sociedad={activeSoc.id} subView={ingresoSubView} onSubViewChange={setIngresoSubView} navPulse={navPulse} />
+              ? <PantallaIngresos sociedad={activeSoc.id} subView={ingresoSubView} onSubViewChange={setIngresoSubView} navPulse={navPulse}
+                  openDocId={deepDoc?.section === "ingresos" ? deepDoc.id : null} onDocOpened={() => setDeepDoc(null)} onIrACaja={irACaja} />
               : section.id === "financiaciones"
               ? <PantallaFinanciaciones sociedad={activeSoc.id} tab={finTab} onTabChange={setFinTab} />
               : section.id === "reconciliacion"
               ? <PantallaReconciliacion sociedad={activeSoc.id} onPendientes={setPendConcil} mundo={concilMundo} />
+              : section.id === "tesoreria"
+              ? <PantallaTesoreria sociedad={activeSoc.id} onEditarDoc={irADoc} onEditarInterco={irAInterco} onEditarCambio={irACambio}
+                  openCuentaId={deepCaja} onCuentaOpened={() => setDeepCaja(null)} />
               : <section.component sociedad={activeSoc.id} />
             : section?.placeholder
             ? <Placeholder section={section} />

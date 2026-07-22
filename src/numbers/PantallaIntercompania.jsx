@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { T, Btn, Input, Select, PageHeader, fmtMoney } from "./theme";
 import { TIPO_CUENTA, SOCIEDADES } from "../data/tesoreriaData";
-import { appendIntercompania, fetchCuentasBancarias, fetchIntercoData, lecturaInterco } from "../lib/numbersApi";
+import { appendIntercompania, updateIntercompania, fetchCuentasBancarias, fetchIntercoData, lecturaInterco } from "../lib/numbersApi";
 import { sociedadNombreMap } from "./tesoreriaDerive";
 
 const HOY = new Date().toISOString().slice(0, 10);
@@ -17,20 +17,37 @@ const FORM_VACÍO = {
 // Nombre corto de sociedad
 const socNombre = (id) => SOCIEDADES.find(s => s.id === id)?.nombre ?? id;
 
-export default function PantallaIntercompania({ sociedad, openNew, onOpenNewConsumed }) {
+export default function PantallaIntercompania({ sociedad, openNew, onOpenNewConsumed, openEditDoc, onEditConsumed }) {
   const [allCuentas, setAllCuentas] = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [showForm,   setShowForm]   = useState(false);
   const [saving,     setSaving]     = useState(false);
   const [form,       setForm]       = useState(FORM_VACÍO);
+  const [editPatas,  setEditPatas]  = useState(null);     // { salidaId, entradaId } si estoy editando un par
   const [intercoData, setIntercoData] = useState(null);   // fuente de las posiciones (CC viva)
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   // Abrir el modal desde el "+" del sidebar (una sola vez por click).
   useEffect(() => {
-    if (openNew) { setForm(FORM_VACÍO); setShowForm(true); onOpenNewConsumed?.(); }
+    if (openNew) { setForm(FORM_VACÍO); setEditPatas(null); setShowForm(true); onOpenNewConsumed?.(); }
   }, [openNew]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Deep-link "Editar" desde Tesorería: abrir el modal pre-cargado con ese par (2 patas del núcleo).
+  useEffect(() => {
+    if (!openEditDoc || !intercoData) return;
+    const patas = (intercoData.movs || []).filter(m => String(m.documento_id || "") === String(openEditDoc));
+    const salida  = patas.find(p => Number(p.monto) < 0);
+    const entrada = patas.find(p => Number(p.monto) > 0);
+    if (salida && entrada) {
+      const nota = String(salida.concepto || "").split(" · ").slice(1).join(" · ");
+      setForm({ fecha: salida.fecha || HOY, ctaOrigenId: salida.cuenta_bancaria || "",
+        ctaDestinoId: entrada.cuenta_bancaria || "", monto: String(Math.abs(Number(salida.monto) || 0)), nota });
+      setEditPatas({ salidaId: salida.id, entradaId: entrada.id });
+      setShowForm(true);
+    }
+    onEditConsumed?.();
+  }, [openEditDoc, intercoData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function cargar() {
     setLoading(true);
@@ -67,19 +84,35 @@ export default function PantallaIntercompania({ sociedad, openNew, onOpenNewCons
     _savingRef.current = true;
     setSaving(true);
     try {
-      await appendIntercompania({
-        fecha:         form.fecha,
-        socOrigen:     ctaOrigen.sociedad,
-        ctaOrigen:     form.ctaOrigenId,
-        monedaOrigen:  moneda,
-        montoOrigen:   montoN,
-        socDestino:    ctaDestino.sociedad,
-        ctaDestino:    form.ctaDestinoId,
-        monedaDestino: moneda,   // misma moneda en ambas patas
-        montoDestino:  montoN,
-        nota:          form.nota,
-      });
+      if (editPatas) {
+        await updateIntercompania({
+          salidaId:   editPatas.salidaId,
+          entradaId:  editPatas.entradaId,
+          fecha:      form.fecha,
+          socOrigen:  ctaOrigen.sociedad,
+          ctaOrigen:  form.ctaOrigenId,
+          socDestino: ctaDestino.sociedad,
+          ctaDestino: form.ctaDestinoId,
+          moneda,
+          monto:      montoN,
+          nota:       form.nota,
+        });
+      } else {
+        await appendIntercompania({
+          fecha:         form.fecha,
+          socOrigen:     ctaOrigen.sociedad,
+          ctaOrigen:     form.ctaOrigenId,
+          monedaOrigen:  moneda,
+          montoOrigen:   montoN,
+          socDestino:    ctaDestino.sociedad,
+          ctaDestino:    form.ctaDestinoId,
+          monedaDestino: moneda,   // misma moneda en ambas patas
+          montoDestino:  montoN,
+          nota:          form.nota,
+        });
+      }
       setForm(FORM_VACÍO);
+      setEditPatas(null);
       setShowForm(false);
       await cargar();
     } finally {
@@ -115,7 +148,7 @@ export default function PantallaIntercompania({ sociedad, openNew, onOpenNewCons
       <PageHeader
         title="Cuenta corriente intercompañía"
         action={
-          <Btn onClick={() => { setForm(FORM_VACÍO); setShowForm(true); }}
+          <Btn onClick={() => { setForm(FORM_VACÍO); setEditPatas(null); setShowForm(true); }}
             style={{ background: T.accent, color:"#000", border:"none" }}>
             + Nueva transferencia
           </Btn>
@@ -126,13 +159,13 @@ export default function PantallaIntercompania({ sociedad, openNew, onOpenNewCons
       {showForm && (
         <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.45)", zIndex:500,
           display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
-          onClick={() => { setShowForm(false); setForm(FORM_VACÍO); }}>
+          onClick={() => { setShowForm(false); setForm(FORM_VACÍO); setEditPatas(null); }}>
         <div className="fade" style={{ background:T.card, borderRadius:10, width:520, maxWidth:"97vw",
           boxShadow:"0 20px 60px rgba(0,0,0,.25)", overflow:"hidden" }} onClick={e => e.stopPropagation()}>
           <div style={{ background:"#0e7490", padding:"14px 22px", display:"flex",
             justifyContent:"space-between", alignItems:"center" }}>
-            <span style={{ fontSize:15, fontWeight:800, color:"#fff" }}>Nueva transferencia intercompañía</span>
-            <button onClick={() => { setShowForm(false); setForm(FORM_VACÍO); }}
+            <span style={{ fontSize:15, fontWeight:800, color:"#fff" }}>{editPatas ? "Editar transferencia intercompañía" : "Nueva transferencia intercompañía"}</span>
+            <button onClick={() => { setShowForm(false); setForm(FORM_VACÍO); setEditPatas(null); }}
               style={{ background:"transparent", border:"none", color:"rgba(255,255,255,.6)",
                 fontSize:20, cursor:"pointer", lineHeight:1 }}>✕</button>
           </div>
@@ -162,14 +195,14 @@ export default function PantallaIntercompania({ sociedad, openNew, onOpenNewCons
                   fontFamily:T.font, outline:"none", resize:"vertical", minHeight:60, boxSizing:"border-box" }} />
             </div>
             <div style={{ display:"flex", justifyContent:"flex-end", gap:10 }}>
-              <button onClick={() => { setShowForm(false); setForm(FORM_VACÍO); }} style={{
+              <button onClick={() => { setShowForm(false); setForm(FORM_VACÍO); setEditPatas(null); }} style={{
                 background:"#dc2626", border:"none", borderRadius:8, padding:"9px 20px",
                 fontSize:13, fontWeight:700, color:"#fff", cursor:"pointer", fontFamily:T.font }}>Cancelar ✕</button>
               <button onClick={handleGuardar} disabled={!canSave || saving} style={{
                 background: canSave && !saving ? "#16a34a" : "#9ca3af", border:"none", borderRadius:8,
                 padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff",
                 cursor: canSave && !saving ? "pointer" : "default", fontFamily:T.font }}>
-                {saving ? "Guardando…" : "Crear ✓"}</button>
+                {saving ? "Guardando…" : editPatas ? "Guardar ✓" : "Crear ✓"}</button>
             </div>
           </div>
         </div>

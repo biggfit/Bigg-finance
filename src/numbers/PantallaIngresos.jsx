@@ -367,7 +367,7 @@ function EditarCobroModal({ cobro, sociedad, cuentasSoc, cuentasContables = [], 
 }
 
 // ─── Modal: Ver Detalle (estilo Contagram) ───────────────────────────────────
-function DetalleModal({ ingreso, cuentasBancarias = [], centrosCosto = [], onClose, onAgregarCobro, onAgregarRetencion, onEditar, onEditarCobro, asPage = false }) {
+function DetalleModal({ ingreso, cuentasBancarias = [], centrosCosto = [], onClose, onAgregarCobro, onAgregarRetencion, onEditar, onEditarCobro, onIrACaja, asPage = false }) {
   const resolveCB = makeResolveCB(cuentasBancarias);
   const resolveCC = makeResolveCC(centrosCosto);
   const cobrado    = ingreso.pagosVinculados?.reduce((s,p) => s + (Number(p.monto)||0), 0) ?? 0;
@@ -475,7 +475,17 @@ function DetalleModal({ ingreso, cuentasBancarias = [], centrosCosto = [], onClo
                         <td style={{ padding:"8px 14px", fontSize:11, color:"#666",
                           fontFamily:"var(--mono)" }}>{p.id}</td>
                         <td style={{ padding:"8px 14px", fontSize:13, color:"#1a1a1a" }}>{fmtDate(p.fecha)}</td>
-                        <td style={{ padding:"8px 14px", fontSize:13, color:"#333" }}>{p.origen === "retencion" ? `Retención · ${p.cuenta_contable || ""}` : resolveCB(p.cuenta_bancaria)}</td>
+                        <td style={{ padding:"8px 14px", fontSize:13, color:"#333" }}>
+                          {p.origen === "retencion"
+                            ? `Retención · ${p.cuenta_contable || ""}`
+                            : p.cuenta_bancaria && onIrACaja
+                            ? <button onClick={() => onIrACaja(p.cuenta_bancaria)} title="Ver esta caja en Tesorería"
+                                style={{ background:"none", border:"none", padding:0, font:"inherit", cursor:"pointer",
+                                  color:"#0284c7", fontWeight:600, textDecoration:"underline" }}>
+                                {resolveCB(p.cuenta_bancaria)}
+                              </button>
+                            : resolveCB(p.cuenta_bancaria)}
+                        </td>
                         <td style={{ padding:"8px 14px", fontSize:13, fontFamily:"var(--mono)",
                           fontWeight:700, color:T.green, textAlign:"right" }}>
                           {fmtMoney(Number(p.monto), ingreso.moneda)}
@@ -821,7 +831,7 @@ function RowMenu({ ingreso, onCobro, onRetencion, onDetalle, onEditar, onDuplica
 }
 
 // ─── Pantalla principal ───────────────────────────────────────────────────────
-export default function PantallaIngresos({ sociedad = "nako", subView = null, onSubViewChange, navPulse = 0 }) {
+export default function PantallaIngresos({ sociedad = "nako", subView = null, onSubViewChange, navPulse = 0, openDocId = null, onDocOpened, onIrACaja }) {
   const [busqueda, setBusqueda]         = useState("");
   const [filtroEstado, setFiltroEstado] = useState("todos");
   const filtroFecha = useFiltroFecha();
@@ -892,6 +902,13 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
   // Tocar un ítem del sidebar (Ventas / +) cierra el detalle abierto y vuelve a la lista, aunque
   // el subView no cambie de valor. El "+" además muestra el modal (subView="new-venta").
   useEffect(() => { setShowDetalle(null); }, [navPulse]); // eslint-disable-line
+
+  // Deep-link desde Tesorería ("Editar" de un COBRO): abrir el detalle del comprobante que salda.
+  useEffect(() => {
+    if (!openDocId) return;
+    const target = ingresos.find(i => i.id === openDocId);
+    if (target) { setShowDetalle(target); onDocOpened?.(); }
+  }, [openDocId, ingresos]); // eslint-disable-line
 
   const handleSave = async (ingreso) => {
     try {
@@ -1035,6 +1052,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
           onAgregarRetencion={i => setShowRetencion(i)}
           onEditar={i => { setShowDetalle(null); setShowEditar(i); }}
           onEditarCobro={p => setEditingCobro(p)}
+          onIrACaja={onIrACaja}
         />
         {showCobro    && <RegistrarCobroModal ingreso={showCobro} saldoPendiente={showCobro.saldoPendiente ?? showCobro.importe} cuentas={cuentasSoc} anticipos={anticipos.filter(a => String(a.cliente_id) === String(showCobro.clienteId))} onClose={() => setShowCobro(null)} onSave={handleCobro} />}
         {showRetencion && <RegistrarRetencionModal ingreso={showRetencion} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentasContables={cuentas} centros={centrosCosto} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}

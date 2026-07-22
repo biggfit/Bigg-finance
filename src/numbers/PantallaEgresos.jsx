@@ -254,7 +254,7 @@ function EditarPagoModal({ pago, sociedad, cuentasSoc, onClose, onSaved }) {
 }
 
 // ─── Modal: Ver Detalle (estilo Contagram) ───────────────────────────────────
-function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClose, onAgregarPago, onEditar, onEditarPago, asPage = false }) {
+function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClose, onAgregarPago, onEditar, onEditarPago, onIrACaja, asPage = false }) {
   const resolveCB = makeResolveCB(cuentasBancarias);
   const resolveCC = makeResolveCC(centrosCosto);
   const pagado  = egreso.pagosVinculados?.reduce((s,p) => s + Math.abs(Number(p.monto)||0), 0) ?? 0;
@@ -362,7 +362,15 @@ function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClos
                         <td style={{ padding:"8px 14px", fontSize:11, color:"#666",
                           fontFamily:"var(--mono)" }}>{p.id}</td>
                         <td style={{ padding:"8px 14px", fontSize:13, color:"#1a1a1a" }}>{fmtDate(p.fecha)}</td>
-                        <td style={{ padding:"8px 14px", fontSize:13, color:"#333" }}>{resolveCB(p.cuenta_bancaria)}</td>
+                        <td style={{ padding:"8px 14px", fontSize:13, color:"#333" }}>
+                          {p.cuenta_bancaria && onIrACaja
+                            ? <button onClick={() => onIrACaja(p.cuenta_bancaria)} title="Ver esta caja en Tesorería"
+                                style={{ background:"none", border:"none", padding:0, font:"inherit", cursor:"pointer",
+                                  color:"#0284c7", fontWeight:600, textDecoration:"underline" }}>
+                                {resolveCB(p.cuenta_bancaria)}
+                              </button>
+                            : resolveCB(p.cuenta_bancaria)}
+                        </td>
                         <td style={{ padding:"8px 14px", fontSize:13, fontFamily:"var(--mono)",
                           fontWeight:700, color:T.green, textAlign:"right" }}>
                           {fmtMoney(Math.abs(Number(p.monto)||0), egreso.moneda)}
@@ -742,7 +750,7 @@ function MigrarSociedadModal({ egreso, sociedades, actual, onClose, onConfirm })
 }
 
 // ─── Pantalla principal ───────────────────────────────────────────────────────
-export default function PantallaEgresos({ sociedad = "nako", subView = null, onSubViewChange, navPulse = 0 }) {
+export default function PantallaEgresos({ sociedad = "nako", subView = null, onSubViewChange, navPulse = 0, openDocId = null, onDocOpened, onIrACaja }) {
   const [busqueda, setBusqueda]         = useState("");
   const [filtroEstado, setFiltroEstado] = useState("todos");
   const filtroFecha = useFiltroFecha();
@@ -838,6 +846,13 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
 
   // Tocar un ítem del sidebar (Compras / +) cierra el detalle abierto y vuelve a la lista.
   useEffect(() => { setShowDetalle(null); }, [navPulse]); // eslint-disable-line
+
+  // Deep-link desde Tesorería ("Editar" de un PAGO): abrir el detalle del comprobante que salda.
+  useEffect(() => {
+    if (!openDocId) return;
+    const target = egresos.find(e => e.id === openDocId);
+    if (target) { setShowDetalle(target); onDocOpened?.(); }
+  }, [openDocId, egresos]); // eslint-disable-line
 
   // Alta rápida de proveedor/cuenta desde los selects de la factura (append → refetch → preselecciona).
   const crearProveedor = makeCrearMaestro(appendProveedor, fetchProveedores, setProveedores);
@@ -946,6 +961,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
           onAgregarPago={e => setShowPago(e)}
           onEditar={e => { setShowDetalle(null); setShowEditar(e); }}
           onEditarPago={p => setEditingPago(p)}
+          onIrACaja={onIrACaja}
         />
         {showPago    && <AgregarPagoModal egreso={showPago} saldoPendiente={showPago.saldoPendiente ?? showPago.importe} cuentas={cuentasSoc} onClose={() => setShowPago(null)} onSave={handlePago} />}
         {editingPago && <EditarPagoModal  pago={editingPago} sociedad={sociedad} cuentasSoc={cuentasSoc} onClose={() => setEditingPago(null)} onSaved={() => { setEditingPago(null); cargarEgresos(); }} />}

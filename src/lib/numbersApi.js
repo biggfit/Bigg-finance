@@ -274,7 +274,7 @@ export async function fetchPagosCobros(sociedad) {
  * Registra un pago contra un egreso.
  * Escribe directamente en nb_movimientos (monto negativo).
  */
-export async function appendPago({ documento_id, sociedad, fecha, monto, moneda, cuenta_bancaria, cuenta = "", referencia, nota, centro_costo = "" }) {
+export async function appendPago({ documento_id, sociedad, fecha, monto, moneda, cuenta_bancaria, cuenta = "", referencia, nota }) {
   const id = newId("PAG");
   return post({
     action: "add", sheet: "nb_movimientos",
@@ -284,7 +284,7 @@ export async function appendPago({ documento_id, sociedad, fecha, monto, moneda,
       cuenta_bancaria,
       cuenta_destino:  "",
       cuenta_contable: cuenta,
-      centro_costo,
+      centro_costo:    "",   // el centro vive en el comprobante (que puede tener varios); el pago no lo lleva. Cash Flow lo deriva de la FC linkeada.
       moneda,
       monto:           -Math.abs(monto),
       documento_id,
@@ -297,7 +297,7 @@ export async function appendPago({ documento_id, sociedad, fecha, monto, moneda,
 }
 
 /** Registra un cobro contra un ingreso. Escribe en nb_movimientos (monto positivo). */
-export async function appendCobro({ documento_id, sociedad, fecha, monto, moneda, cuenta_bancaria, cuenta = "", referencia, nota, centro_costo = "" }) {
+export async function appendCobro({ documento_id, sociedad, fecha, monto, moneda, cuenta_bancaria, cuenta = "", referencia, nota }) {
   const id = newId("COB");
   return post({
     action: "add", sheet: "nb_movimientos",
@@ -307,7 +307,7 @@ export async function appendCobro({ documento_id, sociedad, fecha, monto, moneda
       cuenta_bancaria,
       cuenta_destino:  "",
       cuenta_contable: cuenta,
-      centro_costo,
+      centro_costo:    "",   // idem appendPago: el centro es del comprobante; Cash Flow lo deriva de la FC.
       moneda,
       monto:           Math.abs(monto),
       documento_id,
@@ -415,6 +415,16 @@ export async function appendTransferencia({ sociedad, fecha, moneda = "ARS", mon
   ]});
 }
 
+// Edita una transferencia entre cuentas propias EXISTENTE (par) en su lugar. Patchea ambas patas.
+export async function updateTransferencia({ salidaId, entradaId, fecha, moneda, monto, cuentaSalida, cuentaEntrada, conceptoSalida = "", conceptoEntrada = "" }) {
+  const abs = Math.abs(Number(monto) || 0);
+  await post({ action:"edit", sheet:"nb_movimientos", id: salidaId,  patch: {
+    fecha, moneda, cuenta_bancaria: cuentaSalida,  cuenta_destino: cuentaEntrada, monto: -abs, concepto: conceptoSalida } });
+  await post({ action:"edit", sheet:"nb_movimientos", id: entradaId, patch: {
+    fecha, moneda, cuenta_bancaria: cuentaEntrada, cuenta_destino: cuentaSalida,  monto:  abs, concepto: conceptoEntrada } });
+  return { ok:true };
+}
+
 /**
  * Pago de tarjeta (saldo corriente, admite parciales). Par de movimientos:
  *  - lado real: la caja/banco baja (−monto) → es la salida real de caja.
@@ -440,6 +450,17 @@ export async function pagarTarjeta({ sociedad, fecha, monto, moneda, cuenta_real
 
 export async function updateMovTesoreria(id, patch) {
   return post({ action: "edit", sheet: "nb_movimientos", id, patch });
+}
+
+// Edita un pago de tarjeta EXISTENTE (par: caja real − / tarjeta +) en su lugar. Patchea ambas patas.
+export async function updatePagoTarjeta({ realId, tarjetaId, fecha, monto, moneda, cuenta_real, tarjeta_cuenta, nota = "" }) {
+  const m = Math.abs(Number(monto) || 0);
+  const concepto = nota || "Pago de tarjeta";
+  await post({ action:"edit", sheet:"nb_movimientos", id: realId, patch: {
+    fecha, moneda, cuenta_bancaria: cuenta_real,   monto: -m, concepto } });
+  await post({ action:"edit", sheet:"nb_movimientos", id: tarjetaId, patch: {
+    fecha, moneda, cuenta_bancaria: tarjeta_cuenta, monto:  m, concepto } });
+  return { ok:true };
 }
 
 // ─── PROVEEDORES ─────────────────────────────────────────────────────────────
@@ -1113,11 +1134,11 @@ export async function appendMovFranquicia({ id, sociedad, fecha, fr_tipo, franqu
 // PAGO linkeado a esa FC. Tesorería netea la CxP (match por documento_id); el P&L la excluye
 // (no es "CONTAB-": el devengado ya está en el comprobante). Pago parcial = si |monto| < saldo
 // de la FC, el remanente sigue pendiente. No crea fila nueva: edita la del extracto in-place.
-export async function imputarPagoFC(mov, { documento_id, cuenta_contable = "", centro_costo = "", proveedor_id = "", proveedor_nombre = "" }) {
+export async function imputarPagoFC(mov, { documento_id, cuenta_contable = "", proveedor_id = "", proveedor_nombre = "" }) {
   return post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
     tipo:               "PAGO",
     cuenta_contable:    String(cuenta_contable || "").replace(/^CUENTA_/, ""),
-    centro_costo,
+    centro_costo:       "",   // el centro vive en la FC (que puede tener varios); el pago no lo copia. Cash Flow lo deriva del comprobante linkeado.
     contraparte_id:     proveedor_id,
     contraparte_nombre: proveedor_nombre || mov.contraparte_nombre || "",
     documento_id,                                       // id de la FC → netea CxP en Tesorería
@@ -1138,7 +1159,7 @@ export async function imputarCobroIngreso(mov, { documento_id, cuenta_contable =
   await post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
     tipo:               "COBRO",
     cuenta_contable:    String(cuenta_contable || "").replace(/^CUENTA_/, ""),
-    centro_costo,
+    centro_costo:       "",   // el cobro no lleva centro (la venta puede tener varios); Cash Flow lo deriva de la FC. `centro_costo` se conserva como param solo para el fallback del centro de retenciones (abajo).
     contraparte_id:     cliente_id,
     contraparte_nombre: cliente_nombre || mov.contraparte_nombre || "",
     documento_id,
@@ -1413,6 +1434,20 @@ export async function appendCambio({ sociedad, fecha, cuentaOrigen, monedaOrigen
   return { ok:true, id };
 }
 
+// Edita un cambio de moneda EXISTENTE (par S/E, distinta moneda) en su lugar. Patchea ambas patas y
+// recomputa el TC. Misma convención de signo que appendCambio (salida −, entrada +).
+export async function updateCambio({ salidaId, entradaId, fecha, cuentaOrigen, monedaOrigen, montoOrigen, cuentaDestino, monedaDestino, montoDestino, nota = "" }) {
+  const tc = monedaOrigen !== "ARS"
+    ? (montoOrigen  > 0 ? (montoDestino / montoOrigen).toFixed(2) : "0")
+    : (montoDestino > 0 ? (montoOrigen  / montoDestino).toFixed(2) : "0");
+  const concepto = `Cambio ${monedaOrigen}→${monedaDestino}${nota ? " · " + nota : ""}`;
+  await post({ action:"edit", sheet:"nb_movimientos", id: salidaId, patch: {
+    fecha, cuenta_bancaria: cuentaOrigen,  cuenta_destino: cuentaDestino, moneda: monedaOrigen, monto: -Math.abs(montoOrigen),  concepto, referencia: tc } });
+  await post({ action:"edit", sheet:"nb_movimientos", id: entradaId, patch: {
+    fecha, cuenta_bancaria: cuentaDestino, cuenta_destino: cuentaOrigen,  moneda: monedaDestino, monto:  Math.abs(montoDestino), concepto, referencia: tc } });
+  return { ok:true };
+}
+
 export const deleteCambio = _deleteMovRows;
 
 // ── Intercompañía ─────────────────────────────────────────────────────────────
@@ -1465,6 +1500,23 @@ export async function appendIntercompania({ fecha, socOrigen, ctaOrigen, monedaO
     documento_id:id, concepto, referencia:tc, origen:"intercompania", created_at,
   }});
   return { ok:true, id };
+}
+
+// Edita una transferencia interco EXISTENTE (par de 2 patas del núcleo) en su lugar: patchea la pata
+// de salida (salidaId, monto −) y la de entrada (entradaId, monto +) con los datos nuevos, recomputando
+// concepto + TC. NO borra ni recrea (ids estables, sin ventana con el par a medias). Misma moneda ambas patas.
+export async function updateIntercompania({ salidaId, entradaId, fecha, socOrigen, ctaOrigen, socDestino, ctaDestino, moneda, monto, nota = "" }) {
+  const m        = Math.abs(Number(monto) || 0);
+  const concepto = `Transferencia interco: ${socOrigen} → ${socDestino}${nota ? " · " + nota : ""}`;
+  await post({ action:"edit", sheet:"nb_movimientos", id: salidaId, patch: {
+    fecha, sociedad: socOrigen, cuenta_bancaria: ctaOrigen, cuenta_destino: ctaDestino,
+    moneda, monto: -m, concepto, referencia: "1",
+  }});
+  await post({ action:"edit", sheet:"nb_movimientos", id: entradaId, patch: {
+    fecha, sociedad: socDestino, cuenta_bancaria: ctaDestino, cuenta_destino: ctaOrigen,
+    moneda, monto: m, concepto, referencia: "1",
+  }});
+  return { ok:true };
 }
 
 export const deleteIntercompania = _deleteMovRows;

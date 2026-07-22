@@ -5,10 +5,10 @@ import {
 } from "../data/tesoreriaData";
 import { CENTROS_COSTO } from "../data/numbersData";
 import {
-  fetchMovTesoreria, fetchMovFranquicias, appendMovTesoreria, appendTransferencia, deleteMovTesoreria, updateMovTesoreria,
+  fetchMovTesoreria, fetchMovFranquicias, appendMovTesoreria, appendTransferencia, updateTransferencia, updatePagoTarjeta, deleteMovTesoreria, updateMovTesoreria,
   fetchEgresos, fetchIngresos, fetchPagosCobros,
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto, fetchSaldoMercadoPago, esCuentaMercadoPago,
-  appendGastoDirecto, esIgnorado, esCuentaCredito, fetchFinanciaciones,
+  appendGastoDirecto, esIgnorado, ignorarMovimiento, esCuentaCredito, fetchFinanciaciones,
   pagarTarjeta, fetchSocios, fetchSociosCC, fetchIntercoData,
 } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas } from "../lib/sueldosApi";
@@ -70,10 +70,10 @@ const tesoreriaActionBtn = {
 };
 
 // ─── Modal: Movimiento entre cuentas ─────────────────────────────────────────
-function MovimientoModal({ sociedad, cuentasBancarias, onClose, onSave }) {
+function MovimientoModal({ sociedad, cuentasBancarias, initial = null, editMode = false, onClose, onSave }) {
   const _soc = (sociedad ?? "").toLowerCase();
   const cuentasSoc = cuentasBancarias.filter(c => (c.sociedad ?? "").toLowerCase() === _soc);
-  const [form, setForm] = useState({
+  const [form, setForm] = useState(initial || {
     fecha: new Date().toISOString().slice(0, 10),
     monto: "", moneda: "ARS", cuentaSalida: "", cuentaEntrada: "", observacion: "",
   });
@@ -100,7 +100,7 @@ function MovimientoModal({ sociedad, cuentasBancarias, onClose, onSave }) {
 
         <div style={{ background:"#0e7490", padding:"14px 22px", display:"flex",
           justifyContent:"space-between", alignItems:"center" }}>
-          <span style={{ fontSize:15, fontWeight:800, color:"#fff" }}>Movimiento Entre Cuentas</span>
+          <span style={{ fontSize:15, fontWeight:800, color:"#fff" }}>{editMode ? "Editar movimiento entre cuentas" : "Movimiento Entre Cuentas"}</span>
           <button onClick={onClose} style={{ background:"transparent", border:"none",
             color:"rgba(255,255,255,.6)", fontSize:20, cursor:"pointer", lineHeight:1 }}>✕</button>
         </div>
@@ -136,7 +136,7 @@ function MovimientoModal({ sociedad, cuentasBancarias, onClose, onSave }) {
             <button onClick={() => { onSave(form); onClose(); }} disabled={!canSave} style={{
               background: canSave ? "#16a34a" : "#9ca3af", border:"none", borderRadius:8,
               padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff",
-              cursor: canSave ? "pointer" : "default", fontFamily:T.font }}>Crear ✓</button>
+              cursor: canSave ? "pointer" : "default", fontFamily:T.font }}>{editMode ? "Guardar ✓" : "Crear ✓"}</button>
           </div>
         </div>
       </div>
@@ -147,11 +147,11 @@ function MovimientoModal({ sociedad, cuentasBancarias, onClose, onSave }) {
 // ─── Modal: Pagar tarjeta ─────────────────────────────────────────────────────
 // Paga el saldo de una cuenta-tarjeta (total o parcial) desde una caja/banco real.
 // Genera el par PAGO_TARJETA: la caja real baja (salida real) y la cuenta-tarjeta sube (baja la deuda).
-function PagarTarjetaModal({ sociedad, cuentas, onClose, onSave }) {
+function PagarTarjetaModal({ sociedad, cuentas, initial = null, editMode = false, onClose, onSave }) {
   const _soc = (sociedad ?? "").toLowerCase();
   const cuentasSoc = cuentas.filter(c => (c.sociedad ?? "").toLowerCase() === _soc);
   const tarjetas   = cuentasSoc.filter(esCuentaCredito);
-  const [form, setForm] = useState({
+  const [form, setForm] = useState(initial || {
     fecha: new Date().toISOString().slice(0, 10), tarjeta: "", cuentaReal: "", monto: "",
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -175,7 +175,7 @@ function PagarTarjetaModal({ sociedad, cuentas, onClose, onSave }) {
         boxShadow:"0 20px 60px rgba(0,0,0,.25)", overflow:"hidden" }} onClick={e => e.stopPropagation()}>
         <div style={{ background:"#dc2626", padding:"14px 22px", display:"flex",
           justifyContent:"space-between", alignItems:"center" }}>
-          <span style={{ fontSize:15, fontWeight:800, color:"#fff" }}>Pagar Tarjeta</span>
+          <span style={{ fontSize:15, fontWeight:800, color:"#fff" }}>{editMode ? "Editar pago de tarjeta" : "Pagar Tarjeta"}</span>
           <button onClick={onClose} style={{ background:"transparent", border:"none",
             color:"rgba(255,255,255,.6)", fontSize:20, cursor:"pointer", lineHeight:1 }}>✕</button>
         </div>
@@ -202,7 +202,7 @@ function PagarTarjetaModal({ sociedad, cuentas, onClose, onSave }) {
             <button onClick={() => { onSave({ ...form, moneda: monedaTjt }); onClose(); }} disabled={!canSave} style={{
               background: canSave ? "#16a34a" : "#9ca3af", border:"none", borderRadius:8,
               padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff",
-              cursor: canSave ? "pointer" : "default", fontFamily:T.font }}>Pagar ✓</button>
+              cursor: canSave ? "pointer" : "default", fontFamily:T.font }}>{editMode ? "Guardar ✓" : "Pagar ✓"}</button>
           </div>
         </div>
       </div>
@@ -416,7 +416,10 @@ function GastoDirectoModal({ sociedad, cuentasBancarias, cuentasContables = [], 
 }
 
 // ─── Editar movimiento existente ─────────────────────────────────────────────
-function EditarMovModal({ mov, cuentasBancarias, onClose, onSave }) {
+function EditarMovModal({ mov, cuentasBancarias, cuentasContables = [], centrosCosto = [], onClose, onSave }) {
+  // Un gasto/ingreso contabilizado ES el devengado (sin comprobante) → se edita cuenta contable + centro
+  // (lo que pega en el P&L), no solo la caja. Un pago/cobro/transferencia no muestra esos campos.
+  const esGastoIngreso = ["EGRESO_GASTO", "INGRESO", "EGRESO"].includes(mov.tipo);
   const [form, setForm] = useState({
     fecha:           mov.fecha ?? new Date().toISOString().slice(0, 10),
     monto:           String(Math.abs(Number(mov.monto) || 0)),
@@ -467,6 +470,14 @@ function EditarMovModal({ mov, cuentasBancarias, onClose, onSave }) {
             onChange={v => set("monto", v)} placeholder="0,00" />
           <Select label="Cuenta" value={form.cuenta_bancaria} onChange={v => set("cuenta_bancaria", v)}
             options={[{ value:"", label:"— Seleccioná —" }, ...cuentasOptions]} />
+          {esGastoIngreso && (
+            <>
+              <Select label="Cuenta contable" value={form.cuenta_contable} onChange={v => set("cuenta_contable", v)}
+                options={[{ value:"", label:"— Seleccioná —" }, ...cuentasContables.map(c => ({ value:c.nombre, label:c.nombre }))]} />
+              <Select label="Centro de costo" value={form.centro_costo} onChange={v => set("centro_costo", v)}
+                options={[{ value:"", label:"— Seleccioná —" }, ...centrosCosto.map(c => ({ value:c.id, label:c.nombre }))]} />
+            </>
+          )}
           <Input label="Concepto" value={form.concepto} onChange={v => set("concepto", v)} />
           <div style={{ display:"flex", justifyContent:"flex-end", gap:10, paddingTop:4 }}>
             <button onClick={onClose} style={{ background:"#f3f4f6", border:"none", borderRadius:8,
@@ -943,7 +954,7 @@ function IntercoBlock({ items, onItemClick }) {
 }
 
 // ─── Dropdown por fila ────────────────────────────────────────────────────────
-function RowMenu({ onEditar, onEliminar }) {
+function RowMenu({ onEditar, onVerDetalle, onEliminar, onIgnorar }) {
   const [open, setOpen] = useState(false);
   const [pos,  setPos]  = useState({ top:0, left:0 });
   const btnRef  = useRef(null);
@@ -997,8 +1008,10 @@ function RowMenu({ onEditar, onEliminar }) {
           boxShadow:"0 8px 24px rgba(0,0,0,.15)", minWidth:150, overflow:"hidden",
         }}>
           {onEditar && item("Editar", onEditar)}
-          {onEditar && <div style={{ height:1, background:T.cardBorder, margin:"3px 0" }} />}
-          {item("Eliminar",  onEliminar ?? (() => {}), T.red)}
+          {onVerDetalle && item("Ver detalle", onVerDetalle)}
+          {(onEditar || onVerDetalle) && (onIgnorar || onEliminar) && <div style={{ height:1, background:T.cardBorder, margin:"3px 0" }} />}
+          {onIgnorar && item("Ignorar (no contabilizar)", onIgnorar, "#b45309")}
+          {onEliminar && item("Eliminar", onEliminar, T.red)}
         </div>
       )}
     </>
@@ -1006,7 +1019,7 @@ function RowMenu({ onEditar, onEliminar }) {
 }
 
 // ─── Tab: Movimientos ─────────────────────────────────────────────────────────
-export function TabMovimientos({ movimientos, cuentas, filtroCuenta, onLimpiarFiltro, onEliminar, onEditar, onNuevoMov, centrosCosto = [] }) {
+export function TabMovimientos({ movimientos, cuentas, filtroCuenta, onLimpiarFiltro, onEliminar, onEditar, onEditarDoc, onEditarInterco, onEditarCambio, onEditarPar, onIgnorar, onNuevoMov, centrosCosto = [] }) {
   const cuentaMap = useMemo(() => {
     const m = {};
     for (const c of cuentas) m[c.id] = c.nombre;
@@ -1110,14 +1123,40 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, onLimpiarFi
               const cfg    = esSinConciliar(m) ? { ...base, ...TIPO_SIN_CONCILIAR } : base;
               const monto  = Number(m.monto) || 0;
               const nombre = cuentaMap[m.cuenta_bancaria] ?? m.cuenta_bancaria ?? "—";
+              // "Editar" de un PAGO/COBRO = editar el pago en el detalle de su comprobante (donde vive
+              // el editor bueno: fecha/monto/medio/borrar). Se rutea por el prefijo del documento_id.
+              const doc = String(m.documento_id || "");
+              const editarDoc = (m.tipo === "PAGO"  && doc.startsWith("EG-")) ? ["egresos",  doc]
+                              : (m.tipo === "COBRO" && doc.startsWith("IN-")) ? ["ingresos", doc]
+                              : null;
+              // Todo lo que tiene editor local en Tesorería abre el modal flotante: gasto/ingreso
+              // contabilizado (cuenta+centro+monto) y pago/cobro (fecha/monto/medio/concepto in-place).
+              // Un pago/cobro además ofrece "Ver detalle" → detalle del comprobante que salda (editarDoc).
+              const esContab = m.origen === "gasto_directo" || doc.startsWith("CONTAB-");
+              const editaModal = m.origen === "manual" || esContab || !!editarDoc;
+              // Transferencia interco de núcleo (2 patas): "Editar" abre el módulo Intercompañía con esa
+              // transferencia pre-cargada (edita ambas patas). No usa el modal local.
+              const editarInterco = m.origen === "intercompania" && doc ? doc : null;
+              // Cambio de moneda (2 patas): "Editar" abre el módulo Cambio de moneda pre-cargado.
+              const editarCambio  = m.origen === "cambio" && doc ? doc : null;
+              // Transferencia propia / pago de tarjeta (2 patas, local): "Editar" abre su modal pre-cargado.
+              const editarPar     = (m.tipo === "TRANSFERENCIA" || m.tipo === "PAGO_TARJETA") ? m : null;
               return (
                 <tr key={m.id ?? i} style={{ borderBottom:`1px solid ${T.cardBorder}`,
                   background: i % 2 === 0 ? T.card : "#fafbfc" }}>
                   <td style={{ padding:"8px 6px 8px 10px", verticalAlign:"middle" }}>
-                    {(onEditar || onEliminar) && (
+                    {(onEditar || onEditarDoc || onEliminar) && (
                       <RowMenu
-                        onEditar={m.origen === "manual" ? () => onEditar?.(m) : undefined}
-                        onEliminar={() => onEliminar?.(m)}
+                        onEditar={
+                          editarInterco && onEditarInterco ? () => onEditarInterco(editarInterco)
+                          : editarCambio && onEditarCambio  ? () => onEditarCambio(editarCambio)
+                          : editarPar && onEditarPar        ? () => onEditarPar(editarPar)
+                          : editaModal                      ? () => onEditar?.(m)
+                          : undefined
+                        }
+                        onVerDetalle={editarDoc && onEditarDoc ? () => onEditarDoc(editarDoc[0], editarDoc[1]) : undefined}
+                        onIgnorar={esSinConciliar(m) ? () => onIgnorar?.(m) : undefined}
+                        onEliminar={esSinConciliar(m) ? undefined : () => onEliminar?.(m)}
                       />
                     )}
                   </td>
@@ -1158,7 +1197,7 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, onLimpiarFi
 }
 
 // ─── Pantalla principal ───────────────────────────────────────────────────────
-export default function PantallaTesoreria({ sociedad = "nako" }) {
+export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEditarInterco, onEditarCambio, openCuentaId = null, onCuentaOpened }) {
   const datePickerRef = useRef(null);
   const [movimientos,   setMovimientos]   = useState([]);
   const [egresos,       setEgresos]       = useState([]);
@@ -1173,6 +1212,8 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
   const [showMovModal,     setShowMovModal]     = useState(false);
   const [showNuevoMov,     setShowNuevoMov]     = useState(false);
   const [showPagarTjt,     setShowPagarTjt]     = useState(false);
+  const [editTransfer,     setEditTransfer]     = useState(null);  // { salidaId, entradaId, initial }
+  const [editTarjeta,      setEditTarjeta]      = useState(null);  // { realId, tarjetaId, initial }
   const [editingMov,       setEditingMov]       = useState(null);
   const [filtroCuenta,     setFiltroCuenta]     = useState(null);
   const [cuentasBancarias, setCuentasBancarias] = useState([]);
@@ -1307,6 +1348,55 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
     }
   };
 
+  // ── Editar un PAR local (transferencia propia / pago de tarjeta): abre el mismo modal con el que
+  //    se creó, pre-cargado; al guardar, actualiza las 2 patas en su lugar. ──────────────────────
+  const abrirEditarPar = (m) => {
+    const doc = String(m.documento_id || "");
+    const patas = movimientos.filter(x => String(x.documento_id || "") === doc);
+    if (m.tipo === "TRANSFERENCIA") {
+      const salida = patas.find(p => Number(p.monto) < 0), entrada = patas.find(p => Number(p.monto) > 0);
+      if (!salida || !entrada) return;
+      setEditTransfer({ salidaId: salida.id, entradaId: entrada.id, initial: {
+        fecha: salida.fecha, monto: String(Math.abs(Number(salida.monto) || 0)), moneda: salida.moneda || "ARS",
+        cuentaSalida: salida.cuenta_bancaria || "", cuentaEntrada: entrada.cuenta_bancaria || "", observacion: "" } });
+    } else if (m.tipo === "PAGO_TARJETA") {
+      const real = patas.find(p => Number(p.monto) < 0), tjt = patas.find(p => Number(p.monto) > 0);
+      if (!real || !tjt) return;
+      setEditTarjeta({ realId: real.id, tarjetaId: tjt.id, initial: {
+        fecha: real.fecha, tarjeta: tjt.cuenta_bancaria || "", cuentaReal: real.cuenta_bancaria || "",
+        monto: String(Math.abs(Number(real.monto) || 0)) } });
+    }
+  };
+
+  const handleEditTransfer = async (form) => {
+    if (!editTransfer) return;
+    try {
+      const nombreCta = id => cuentasBancarias.find(c => c.id === id)?.nombre ?? id;
+      await updateTransferencia({
+        salidaId: editTransfer.salidaId, entradaId: editTransfer.entradaId,
+        fecha: form.fecha, moneda: form.moneda, monto: form.monto,
+        cuentaSalida: form.cuentaSalida, cuentaEntrada: form.cuentaEntrada,
+        conceptoSalida:  `Trf Cta Propia → ${nombreCta(form.cuentaEntrada)}`,
+        conceptoEntrada: `Trf Cta Propia ← ${nombreCta(form.cuentaSalida)}`,
+      });
+      setEditTransfer(null);
+      await cargarMovimientos();
+    } catch (e) { alert("Error al guardar: " + e.message); }
+  };
+
+  const handleEditTarjeta = async (form) => {
+    if (!editTarjeta) return;
+    try {
+      await updatePagoTarjeta({
+        realId: editTarjeta.realId, tarjetaId: editTarjeta.tarjetaId,
+        fecha: form.fecha, monto: form.monto, moneda: form.moneda || "ARS",
+        cuenta_real: form.cuentaReal, tarjeta_cuenta: form.tarjeta,
+      });
+      setEditTarjeta(null);
+      await cargarMovimientos();
+    } catch (e) { alert("Error al guardar: " + (e?.message || e)); }
+  };
+
   // ── Editar movimiento manual (solo campos básicos, para TRANSFERENCIA) ───────
   const handleEditarMovManual = async (form) => {
     if (!editingMov) return;
@@ -1333,7 +1423,7 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
     // Transferencia/interco/cambio = PAR de patas con el mismo documento_id. Hay que borrar AMBAS,
     // o la contrapartida queda huérfana y sigue sumando al saldo (la transferencia se "duplica").
     // Solo se juntan las patas cargadas en la sociedad activa (interco cross-sociedad borra su lado).
-    const PAREADO = ["TRANSFERENCIA", "INTERCOMPANIA", "CAMBIO"];
+    const PAREADO = ["TRANSFERENCIA", "INTERCOMPANIA", "CAMBIO", "PAGO_TARJETA"];
     const doc = String(mov.documento_id || "");
     const patas = (PAREADO.includes(mov.tipo) && doc)
       ? movimientos.filter(m => String(m.documento_id || "") === doc)
@@ -1349,11 +1439,32 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
     }
   };
 
+  // ── Ignorar una línea de extracto (no contabilizar) ───────────────────────
+  // Solo para líneas crudas del banco todavía sin conciliar: NO se borran (se recrean al re-subir)
+  // → soft-mark documento_id="IGN-", sale del ledger pero sobrevive el dedup. Reversible en Conciliación.
+  const handleIgnorarMov = async (mov) => {
+    if (!confirm(`¿Ignorar "${mov.concepto ?? mov.id}" (${fmtSaldo(Number(mov.monto) || 0, mov.moneda)})?\nSale del listado pero no se borra; podés restaurarla desde Conciliación.`)) return;
+    try {
+      await ignorarMovimiento(mov);
+      setMovimientos(prev => prev.map(m => m.id === mov.id ? { ...m, documento_id: "IGN-" + mov.id } : m));
+    } catch (e) {
+      alert("Error al ignorar: " + (e?.message || e));
+    }
+  };
+
   // ── Al clickear una cuenta en Saldos → ir a Movimientos filtrado ──────────
   const handleCuentaClick = (cuenta) => {
     setFiltroCuenta(cuenta.id);
     setActiveTab("movimientos");
   };
+
+  // ── Deep-link desde el detalle de un comprobante (medio de pago) → filtrar esa caja ──
+  useEffect(() => {
+    if (!openCuentaId) return;
+    setFiltroCuenta(openCuentaId);
+    setActiveTab("movimientos");
+    onCuentaOpened?.();
+  }, [openCuentaId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Drill-down como página completa ──────────────────────────────────────
   if (drillDownItem) {
@@ -1544,6 +1655,11 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
               onLimpiarFiltro={() => setFiltroCuenta(null)}
               onEliminar={handleEliminarMov}
               onEditar={m => setEditingMov(m)}
+              onEditarDoc={onEditarDoc}
+              onEditarInterco={onEditarInterco}
+              onEditarCambio={onEditarCambio}
+              onEditarPar={abrirEditarPar}
+              onIgnorar={handleIgnorarMov}
               onNuevoMov={() => setShowNuevoMov(true)}
             centrosCosto={centrosCosto}
             />
@@ -1577,10 +1693,32 @@ export default function PantallaTesoreria({ sociedad = "nako" }) {
           onSave={handlePagarTarjeta}
         />
       )}
+      {editTransfer && (
+        <MovimientoModal
+          sociedad={sociedad}
+          cuentasBancarias={cuentasBancarias}
+          initial={editTransfer.initial}
+          editMode
+          onClose={() => setEditTransfer(null)}
+          onSave={handleEditTransfer}
+        />
+      )}
+      {editTarjeta && (
+        <PagarTarjetaModal
+          sociedad={sociedad}
+          cuentas={cuentas}
+          initial={editTarjeta.initial}
+          editMode
+          onClose={() => setEditTarjeta(null)}
+          onSave={handleEditTarjeta}
+        />
+      )}
       {editingMov && (
         <EditarMovModal
           mov={editingMov}
           cuentasBancarias={cuentasBancarias}
+          cuentasContables={cuentasContables}
+          centrosCosto={centrosCosto}
           onClose={() => setEditingMov(null)}
           onSave={handleEditarMovManual}
         />
