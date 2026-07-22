@@ -17,7 +17,7 @@ const metaFecha = nota => (String(nota || "").match(/fecha_correo=([^\s;]+)/) ||
 const gmailUrl  = ref => ref ? `https://mail.google.com/mail/u/0/#all/${ref}` : null;
 const toNum = v => { const n = parseFloat(String(v ?? "").replace(/[^\d.,-]/g, "").replace(/\.(?=\d{3},)/g, "").replace(",", ".")); return isNaN(n) ? 0 : n; };
 
-export default function TabCorreo() {
+export default function TabCorreo({ onPend } = {}) {
   const [borradores, setBorradores] = useState([]);
   const [sociedades, setSociedades] = useState([]);
   const [cuentas,    setCuentas]    = useState([]);
@@ -47,6 +47,7 @@ export default function TabCorreo() {
       ]);
       setBorradores(arr(brs)); setSociedades(arr(socs)); setCuentas(arr(ctas));
       setCentros(arr(ccs)); setProveedores(arr(provs)); setEgresos(arr(egs)); setMovs(arr(mvs));
+      onPend?.(arr(brs).length);
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   }

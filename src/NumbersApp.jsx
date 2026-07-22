@@ -17,7 +17,7 @@ import PantallaFinanciaciones   from "./numbers/PantallaFinanciaciones";
 import PantallaSocios            from "./numbers/PantallaSocios";
 import PantallaUsuarios          from "./numbers/PantallaUsuarios";
 import { SOCIEDADES as SOC_FALLBACK } from "./data/tesoreriaData";
-import { fetchSociedades, fetchMovimientosPendientes } from "./lib/numbersApi";
+import { fetchSociedades, fetchMovimientosPendientes, fetchCorreoBorradores } from "./lib/numbersApi";
 import { inicial } from "./lib/auth";
 
 // ─── Nav button style helpers ─────────────────────────────────────────────────
@@ -142,6 +142,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
   const [nuevaOpTarget,  setNuevaOpTarget]  = useState(null);  // "+" del sidebar → abre modal del especial
   const [pendConcil,     setPendConcil]     = useState({ banco: 0, interco: 0 });
   const pendConcilTotal = (pendConcil.banco || 0) + (pendConcil.interco || 0);
+  const [correoPend,     setCorreoPend]     = useState(0);   // facturas parkeadas en Correo (consolidado)
   // null = main app; string = maestros active tab
   const [activeMaestrosTab, setActiveMaestrosTab] = useState(null);
   const showMaestros = activeMaestrosTab !== null;
@@ -185,6 +186,14 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
       .then(r => setPendConcil(p => ({ ...p, banco: Array.isArray(r) ? r.length : 0 })))
       .catch(() => setPendConcil(p => ({ ...p, banco: 0 })));
   }, [socReady, activeSoc?.id]);
+
+  // Contador de facturas parkeadas en Correo (consolidado, todas las sociedades). La bandeja lo actualiza en vivo (onPend).
+  useEffect(() => {
+    if (!socReady) return;
+    fetchCorreoBorradores()
+      .then(r => setCorreoPend(Array.isArray(r) ? r.length : 0))
+      .catch(() => setCorreoPend(0));
+  }, [socReady]);
 
   const section = SECTIONS.find(s => s.id === activeId);
 
@@ -586,7 +595,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
           <div style={{ borderTop:"1px solid rgba(255,255,255,.07)", padding:"8px 0 4px" }}>
             <div style={{ padding:"4px 16px 6px", fontSize:10, fontWeight:700, letterSpacing:".1em", color:T.sidebarMuted, textTransform:"uppercase" }}>Navegación consolidada</div>
             {[
-              { id:"correo",          icon:"✉", label:"Correo",             soon:false, onClick: () => { setActiveSpecial("correo"); } },
+              { id:"correo",          icon:"✉", label:"Correo",             soon:false, badge: correoPend, onClick: () => { setActiveSpecial("correo"); } },
               { id:"reportes",        icon:"▦", label:"Reportes",          soon:false, onClick: () => { setActiveSpecial("reportes"); } },
               { id:"socios",          icon:"◎", label:"Socios",             soon:false, onClick: () => { setActiveSpecial("socios"); } },
             ].map(item => {
@@ -597,6 +606,9 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
                   {...navBtnHover(active)}>
                   <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>{item.icon}</span>
                   <span style={{ flex:1 }}>{item.label}</span>
+                  {item.badge > 0 && (
+                    <span style={{ fontSize:10, fontWeight:800, minWidth:18, height:16, padding:"0 5px", borderRadius:999, display:"inline-flex", alignItems:"center", justifyContent:"center", lineHeight:1, boxSizing:"border-box", background:"#dc2626", color:"#fff", flexShrink:0 }}>{item.badge}</span>
+                  )}
                   {item.soon && (
                     <span style={{ fontSize:9, fontWeight:700, letterSpacing:".06em", color:"rgba(255,255,255,.2)",
                       background:"rgba(255,255,255,.06)", borderRadius:4, padding:"2px 5px" }}>PRONTO</span>
@@ -735,7 +747,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
             : activeSpecial === "usuarios"
             ? <PantallaUsuarios sesion={sesion} onCerrarSesion={onCerrarSesion} />
             : activeSpecial === "correo"
-            ? <TabCorreo />
+            ? <TabCorreo onPend={setCorreoPend} />
             : activeSpecial === "reportes"
             ? <PantallaReportes sociedad={activeSoc.id} />
             : section?.component
