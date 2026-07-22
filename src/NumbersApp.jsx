@@ -607,7 +607,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
                   <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>{item.icon}</span>
                   <span style={{ flex:1 }}>{item.label}</span>
                   {item.badge > 0 && (
-                    <span style={{ fontSize:10, fontWeight:800, minWidth:18, height:16, padding:"0 5px", borderRadius:999, display:"inline-flex", alignItems:"center", justifyContent:"center", lineHeight:1, boxSizing:"border-box", background:"#dc2626", color:"#fff", flexShrink:0 }}>{item.badge}</span>
+                    <span style={{ fontSize:10, fontWeight:800, minWidth:18, height:16, padding:"0 5px", borderRadius:999, display:"inline-flex", alignItems:"center", justifyContent:"center", lineHeight:1, boxSizing:"border-box", background:"#dc2626", color:"#fff", flexShrink:0, marginRight:18 }}>{item.badge}</span>
                   )}
                   {item.soon && (
                     <span style={{ fontSize:9, fontWeight:700, letterSpacing:".06em", color:"rgba(255,255,255,.2)",
