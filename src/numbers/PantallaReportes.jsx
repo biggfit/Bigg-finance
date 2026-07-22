@@ -6,6 +6,8 @@ import { MONEDA_SYM } from "../data/tesoreriaData";
 import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
 import { franquiciasIngresoPnLRows } from "../lib/franquiciasAdapter";
 import TabTesoreriaConsolidada from "./reportes/TabTesoreriaConsolidada";
+import TabCxPProveedores from "./reportes/TabCxPProveedores";
+import TabCxCClientes from "./reportes/TabCxCClientes";
 
 const MESES    = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
 const CUR_YEAR = new Date().getFullYear();
@@ -1846,6 +1848,8 @@ const TABS = [
   { id: "cf",      label: "Cash Flow",  icon: "💵", desc: "Flujo de caja mensual: entradas y salidas por cuenta." },
   { id: "interco", label: "Intercompañía",   icon: "🔗", desc: "Posiciones entre sociedades, agrupadas por anillo." },
   { id: "consolidado", label: "Tesorería consolidada", icon: "🏦", desc: "Saldos y movimientos de todas las sociedades del grupo." },
+  { id: "cxp_prov", label: "CxP por proveedor", icon: "📋", desc: "Cuentas por pagar consolidadas por proveedor (todas las sociedades), con antigüedad." },
+  { id: "cxc_cli", label: "CxC por cliente", icon: "📥", desc: "Cuentas por cobrar consolidadas por cliente (todas las sociedades), con antigüedad." },
 
   // ── WIP (solo esqueleto navegable; sin cálculo todavía) ──
   { id: "inf_egresos",  label: "Egresos (detalle)",  icon: "🔎", desc: "Listar y filtrar compras por cuenta · centro · proveedor · moneda · período." },
@@ -1871,7 +1875,7 @@ const TABS = [
 // de dónde sale/va la plata → buscar el detalle → (lo fiscal/interno al fondo). Textos = management
 // (todavía NO simplificados para dueños). El anillo de la sociedad manda cómo consolida (ver memoria).
 const LENTES = [
-  { id: "grupo",    label: "La foto del grupo",            tabs: ["consol_grupo", "pl_bigg", "cf", "consolidado"] },
+  { id: "grupo",    label: "La foto del grupo",            tabs: ["consol_grupo", "pl_bigg", "cf", "consolidado", "cxp_prov", "cxc_cli"] },
   { id: "negocios", label: "Cómo le va a cada negocio",    tabs: ["pl_sede", "op_espana", "op_colombia", "op_rosedal", "op_huergo", "op_puertos"] },
   { id: "flujo",    label: "De dónde sale y a dónde va",   tabs: ["an_ventas", "an_gastos_cc"] },
   { id: "detalle",  label: "Buscar el detalle",            tabs: ["inf_egresos", "inf_ingresos"] },
@@ -2642,7 +2646,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       />
 
       {/* ── Toolbar / Filters (Consolidado y los detalles traen su propia barra; los WIP no llevan) ── */}
-      {activeTab !== "consolidado" && !curTab?.wip && activeTab !== "inf_egresos" && activeTab !== "inf_ingresos" && (
+      {activeTab !== "consolidado" && activeTab !== "cxp_prov" && activeTab !== "cxc_cli" && !curTab?.wip && activeTab !== "inf_egresos" && activeTab !== "inf_ingresos" && (
       <div style={{
         display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap", alignItems: "flex-end",
         background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
@@ -2835,6 +2839,14 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
       {activeTab === "consolidado" && (
         <TabTesoreriaConsolidada />
+      )}
+
+      {activeTab === "cxp_prov" && (
+        <TabCxPProveedores />
+      )}
+
+      {activeTab === "cxc_cli" && (
+        <TabCxCClientes />
       )}
 
       {/* ── Informes · detalle de comprobantes (Egresos / Ingresos) ── */}
