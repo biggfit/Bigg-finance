@@ -9,6 +9,7 @@ import {
   fetchEgresos, fetchMovTesoreria,
 } from "../../lib/numbersApi";
 import NuevoEgresoModal from "../NuevoEgresoModal";
+import { formatNroComp } from "../formUtils";
 
 const arr = x => Array.isArray(x) ? x : [];
 const metaRef   = nota => (String(nota || "").match(/mail_ref=([^\s;]+)/) || [])[1] || "";
@@ -173,9 +174,9 @@ export default function TabCorreo() {
       ) : (
         <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:T.radius, boxShadow:T.shadow, overflow:"visible" }}>
           <div style={{ overflowX:"auto" }}>
-          <table style={{ width:"100%", borderCollapse:"collapse", minWidth:1280 }}>
+          <table style={{ width:"100%", borderCollapse:"collapse", minWidth:1360 }}>
             <thead><tr style={{ background:"#0e7490" }}>
-              {[["Proveedor","left"],["N°","left"],["Fecha correo","left"],["Sociedad","left"],["Fecha servicio","left"],
+              {[["Proveedor","left"],["N°","left"],["Fecha correo","left"],["Sociedad","left"],["Fecha servicio","left"],["Vto","left"],
                 ["Cuenta contable","left"],["Centro","left"],["Subtotal","right"],["IVA","right"],["Total","right"],["",""]]
                 .map(([h,a],i) => <th key={i} style={{ ...thS, textAlign:a }}>{h}</th>)}
             </tr></thead>
@@ -188,20 +189,20 @@ export default function TabCorreo() {
                 const enCurso = busy === row.id;
                 const pago = pagoPendiente(row);
                 const dup  = posibleDup(row);
+                // Vto: si el pago ya se debitó en el banco, mostramos esa fecha; si no, la de la factura.
+                const vtoMostrar = pago ? pago.fecha : row.vto;
                 return (
                   <tr key={row.id} style={{ borderBottom:`1px solid ${T.cardBorder}`, background: i%2===0 ? T.card : "#fafbfc" }}>
                     <td style={{ padding:"9px 12px", whiteSpace:"nowrap" }}>
                       <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:13, fontWeight:700, color:T.text }}>
                         <span>{row.proveedor || "—"}</span>
                         {pago && <span style={{ fontSize:13, cursor:"help" }} title={`Pago ya realizado — falta matchearlo contra esta factura.\nDébito en Banco: ${pago.cuenta_bancaria} · ${pago.fecha} · ${fmtMoney(Math.abs(toNum(pago.monto)), row.moneda||"ARS")}`}>💳</span>}
+                        {dup && <span style={{ fontSize:13, cursor:"help" }} title="Posible duplicado: ya hay un EGRESO del mismo proveedor por el mismo monto.">⚠️</span>}
                       </div>
-                      {dup && <div style={{ display:"flex", gap:5, marginTop:3 }}>
-                        <span style={chip("#fffbeb", "#b45309")} title="Ya hay un EGRESO del mismo proveedor por el mismo monto">⚠ posible duplicado</span>
-                      </div>}
                     </td>
                     <td style={{ padding:"9px 12px" }}>
-                      <input value={e.nroComp} onChange={ev => setEd(row.id, { nroComp: ev.target.value })}
-                        placeholder="s/n" style={{ ...sel, maxWidth:130 }} />
+                      <input value={e.nroComp} onChange={ev => setEd(row.id, { nroComp: formatNroComp(ev.target.value) })}
+                        placeholder="FC-A 0001-00001234" style={{ ...sel, maxWidth:130 }} />
                     </td>
                     <td style={{ padding:"9px 12px", fontSize:12, color:T.muted, whiteSpace:"nowrap" }}>{metaFecha(row.nota) ? fmtDate(metaFecha(row.nota)) : "—"}</td>
                     <td style={{ padding:"9px 12px" }}>
@@ -214,6 +215,10 @@ export default function TabCorreo() {
                     <td style={{ padding:"9px 12px" }}>
                       <input type="date" value={e.fechaServicio} onChange={ev => setEd(row.id, { fechaServicio: ev.target.value })}
                         style={{ ...sel, maxWidth:140 }} />
+                    </td>
+                    <td style={{ padding:"9px 12px", fontSize:12, color: pago ? "#059669" : T.muted, whiteSpace:"nowrap", fontWeight: pago ? 700 : 400 }}
+                      title={pago ? "Fecha del pago ya debitado en el banco" : "Vencimiento de la factura"}>
+                      {vtoMostrar ? fmtDate(vtoMostrar) : "—"}
                     </td>
                     <td style={{ padding:"9px 12px" }}>
                       <select value={e.cuentaId} onChange={ev => setEd(row.id, { cuentaId: ev.target.value })} style={sel}>
