@@ -728,6 +728,12 @@ function CuentaRow({ cuenta, onClick, mpLive }) {
         overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
         {cuenta.nombre}
       </div>
+      {/* Sociedad en gris (solo consolidado, cuando viene `_soc`): distingue cuentas homónimas sin ensuciar el nombre. */}
+      {cuenta._soc && (
+        <span style={{ flexShrink:0, fontSize:11, color:T.dim, fontWeight:600, whiteSpace:"nowrap" }}>
+          · {cuenta._soc}
+        </span>
+      )}
       {/* pill MP fuera del nombre → no lo recorta el ellipsis; empuja con flex:1 */}
       <div style={{ flex:1 }}>
         {mpTxt && (

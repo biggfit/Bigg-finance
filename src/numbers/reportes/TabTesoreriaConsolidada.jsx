@@ -119,7 +119,7 @@ export default function TabTesoreriaConsolidada() {
     // la sociedad para distinguirlas (solo acá; en la Tesorería por sociedad sería redundante).
     const socName = id => sociedades.find(s => String(s.id) === String(id))?.nombre || String(id || "");
     return {
-      cuentas:  perSoc.flatMap(r => r.cuentas).map(c => ({ ...c, nombre: `${c.nombre} — ${socName(c.sociedad)}` })),
+      cuentas:  perSoc.flatMap(r => r.cuentas).map(c => ({ ...c, _soc: socName(c.sociedad) })),
       aCobrar:  mergeItems(perSoc.map(r => r.aCobrar)),
       aPagar:   mergeItems(perSoc.map(r => r.aPagar)),
       interco:  [...ic.activo, ...ic.pasivo],   // bloque propio abajo de Inversiones
