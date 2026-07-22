@@ -8,6 +8,7 @@ import PantallaIngresos  from "./numbers/PantallaIngresos";
 import PantallaMaestros  from "./numbers/PantallaMaestros";
 import PantallaTesoreria from "./numbers/PantallaTesoreria";
 import PantallaReportes      from "./numbers/PantallaReportes";
+import TabCorreo             from "./numbers/reportes/TabCorreo";
 import PantallaCambioMoneda     from "./numbers/PantallaCambioMoneda";
 import PantallaIntercompania    from "./numbers/PantallaIntercompania";
 import PantallaGastos           from "./numbers/PantallaGastos";
@@ -585,6 +586,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
           <div style={{ borderTop:"1px solid rgba(255,255,255,.07)", padding:"8px 0 4px" }}>
             <div style={{ padding:"4px 16px 6px", fontSize:10, fontWeight:700, letterSpacing:".1em", color:T.sidebarMuted, textTransform:"uppercase" }}>Navegación consolidada</div>
             {[
+              { id:"correo",          icon:"✉", label:"Correo",             soon:false, onClick: () => { setActiveSpecial("correo"); } },
               { id:"reportes",        icon:"▦", label:"Reportes",          soon:false, onClick: () => { setActiveSpecial("reportes"); } },
               { id:"socios",          icon:"◎", label:"Socios",             soon:false, onClick: () => { setActiveSpecial("socios"); } },
             ].map(item => {
@@ -688,6 +690,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
             showMaestros
               ? `Maestros › ${MAESTROS_TABS.find(t => t.id === activeMaestrosTab)?.label ?? ""}`
               : activeSpecial === "reportes"       ? "Reportes"
+              : activeSpecial === "correo"         ? "Correo — facturas"
               : activeSpecial === "intercompania"  ? "Intercompañía"
               : activeSpecial === "cambio"         ? "Cambio de moneda"
               : activeSpecial === "socios"         ? "Socios"
@@ -703,7 +706,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
             <span key={`crumb${i}`} style={{ fontSize:12, fontWeight:700, color:T.text }}>{part}</span>,
           ])}
           {/* Badge sociedad activa — oculto en módulos transversales */}
-          {!showMaestros && activeSpecial !== "socios" && activeSpecial !== "usuarios" && (
+          {!showMaestros && activeSpecial !== "socios" && activeSpecial !== "usuarios" && activeSpecial !== "correo" && (
             <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6,
               background:"#f0f9ff", border:"1px solid #bae6fd", borderRadius:999,
               padding:"3px 10px", fontSize:11, fontWeight:700, color:"#0369a1" }}>
@@ -731,6 +734,8 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
             ? <PantallaSocios />
             : activeSpecial === "usuarios"
             ? <PantallaUsuarios sesion={sesion} onCerrarSesion={onCerrarSesion} />
+            : activeSpecial === "correo"
+            ? <TabCorreo />
             : activeSpecial === "reportes"
             ? <PantallaReportes sociedad={activeSoc.id} />
             : section?.component
