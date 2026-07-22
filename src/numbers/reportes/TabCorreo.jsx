@@ -203,7 +203,7 @@ export default function TabCorreo({ onPend } = {}) {
                     </td>
                     <td style={{ padding:"9px 12px" }}>
                       <input value={e.nroComp} onChange={ev => setEd(row.id, { nroComp: formatNroComp(ev.target.value) })}
-                        placeholder="FC-A 0001-00001234" style={{ ...sel, maxWidth:130 }} />
+                        placeholder="" style={{ ...sel, maxWidth:130 }} />
                     </td>
                     <td style={{ padding:"9px 12px", fontSize:12, color:T.muted, whiteSpace:"nowrap" }}>{metaFecha(row.nota) ? fmtDate(metaFecha(row.nota)) : "—"}</td>
                     <td style={{ padding:"9px 12px" }}>
