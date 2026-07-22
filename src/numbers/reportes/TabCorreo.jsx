@@ -2,7 +2,7 @@
 // Read-only sobre Gmail (el lector parkea aparte); acá el equipo revisa y CONTABILIZA (crea el EGRESO real) o
 // IGNORA. Consolidado: todas las sociedades, columna Sociedad editable. Nada automático.
 import { useState, useMemo, useEffect, useRef } from "react";
-import { T, fmtDate, fmtMoney } from "../theme";
+import { T, PageHeader, fmtDate, fmtMoney } from "../theme";
 import {
   fetchCorreoBorradores, contabilizarBorrador, ignorarBorrador,
   fetchSociedades, fetchCuentas, fetchCentrosCosto, fetchProveedores,
@@ -156,11 +156,11 @@ export default function TabCorreo({ onPend } = {}) {
   );
 
   return (
-    <div className="fade">
-      <div style={{ fontSize:12, color:T.muted, margin:"2px 0 14px", maxWidth:820 }}>
-        Facturas leídas del mail (pagos@bigg.fit), <b>parkeadas</b> sin contabilizar. Revisá y <b>Contabilizá</b>
-        {" "}(crea la factura/CxP en su sociedad) o <b>Ignorá</b>. Consolidado: todas las sociedades. El mail no se toca.
-      </div>
+    <div className="fade" style={{ padding:"28px 32px" }}>
+      <PageHeader
+        title="Correo — facturas"
+        subtitle="Facturas leídas del mail (pagos@bigg.fit), parkeadas sin contabilizar. Revisá y Contabilizá (crea la factura/CxP en su sociedad) o Ignorá. Consolidado: todas las sociedades. El mail no se toca." />
+
 
       {loading && <div style={{ padding:"50px", textAlign:"center", color:T.muted, fontSize:14 }}>Cargando bandeja de correo…</div>}
       {error && !loading && (
