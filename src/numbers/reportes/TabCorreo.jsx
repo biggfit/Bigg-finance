@@ -74,7 +74,7 @@ export default function TabCorreo({ onPend } = {}) {
   const posibleDup = (row) => egresos.some(e => String(e.proveedorId || "") === String(row.proveedorId || "")
     && row.proveedorId && Math.abs(toNum(e.total) - toNum(row.total)) < 0.01);
 
-  const ed = (row) => edits[row.id] || { sociedad: row.sociedad || "", cuentaId: row.cuentaId || "", centro: "", fechaServicio: row.fecha || "", nroComp: row.nroComp || "" };
+  const ed = (row) => edits[row.id] || { sociedad: row.sociedad || "", cuentaId: row.cuentaId || "", centro: row.cc || "", fechaServicio: row.fecha || "", nroComp: row.nroComp || "" };
   const setEd = (id, patch) => setEdits(e => ({ ...e, [id]: { ...(edits[id] || {}), ...patch } }));
 
   const payloadDe = (row, e) => {
