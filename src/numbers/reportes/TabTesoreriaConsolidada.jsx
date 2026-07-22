@@ -115,8 +115,11 @@ export default function TabTesoreriaConsolidada() {
     const ic = intercoData
       ? intercoConsolidado(intercoData, socsIncluidas.map(s => s.id), sociedades)
       : { activo: [], pasivo: [] };
+    // En el consolidado, distintas sociedades pueden tener cuentas homónimas ("Galicia ARS") → sufijo con
+    // la sociedad para distinguirlas (solo acá; en la Tesorería por sociedad sería redundante).
+    const socName = id => sociedades.find(s => String(s.id) === String(id))?.nombre || String(id || "");
     return {
-      cuentas:  perSoc.flatMap(r => r.cuentas),
+      cuentas:  perSoc.flatMap(r => r.cuentas).map(c => ({ ...c, nombre: `${c.nombre} — ${socName(c.sociedad)}` })),
       aCobrar:  mergeItems(perSoc.map(r => r.aCobrar)),
       aPagar:   mergeItems(perSoc.map(r => r.aPagar)),
       interco:  [...ic.activo, ...ic.pasivo],   // bloque propio abajo de Inversiones
