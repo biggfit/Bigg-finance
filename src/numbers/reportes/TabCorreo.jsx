@@ -191,11 +191,13 @@ export default function TabCorreo() {
                 return (
                   <tr key={row.id} style={{ borderBottom:`1px solid ${T.cardBorder}`, background: i%2===0 ? T.card : "#fafbfc" }}>
                     <td style={{ padding:"9px 12px", whiteSpace:"nowrap" }}>
-                      <div style={{ fontSize:13, fontWeight:700, color:T.text }}>{row.proveedor || "—"}</div>
-                      <div style={{ display:"flex", gap:5, marginTop:3 }}>
-                        {pago && <span style={chip("#ecfdf5", "#059669")} title={`Débito en Banco: ${pago.cuenta_bancaria} · ${pago.fecha} · ${fmtMoney(Math.abs(toNum(pago.monto)), row.moneda||"ARS")}`}>💳 pago pendiente</span>}
-                        {dup && <span style={chip("#fffbeb", "#b45309")} title="Ya hay un EGRESO del mismo proveedor por el mismo monto">⚠ posible duplicado</span>}
+                      <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:13, fontWeight:700, color:T.text }}>
+                        <span>{row.proveedor || "—"}</span>
+                        {pago && <span style={{ fontSize:13, cursor:"help" }} title={`Pago ya realizado — falta matchearlo contra esta factura.\nDébito en Banco: ${pago.cuenta_bancaria} · ${pago.fecha} · ${fmtMoney(Math.abs(toNum(pago.monto)), row.moneda||"ARS")}`}>💳</span>}
                       </div>
+                      {dup && <div style={{ display:"flex", gap:5, marginTop:3 }}>
+                        <span style={chip("#fffbeb", "#b45309")} title="Ya hay un EGRESO del mismo proveedor por el mismo monto">⚠ posible duplicado</span>
+                      </div>}
                     </td>
                     <td style={{ padding:"9px 12px" }}>
                       <input value={e.nroComp} onChange={ev => setEd(row.id, { nroComp: ev.target.value })}
