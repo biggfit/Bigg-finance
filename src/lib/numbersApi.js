@@ -202,6 +202,77 @@ export async function migrarComprobanteSociedad(comp, nuevaSociedad) {
   return { ok: true, migradas: ids.length };
 }
 
+// ─── CORREO — bandeja consolidada de facturas desde el mail ─────────────────────
+// El lector (asistido vía conector Gmail, o server-side a futuro; SIEMPRE read-only sobre Gmail) parkea cada
+// factura como una fila subtipo="EGRESO_BORRADOR" en nb_comprobantes. Es INVISIBLE al ledger porque el P&L, la
+// CxP (derivarSaldos) y Egresos filtran subtipo==="EGRESO". id_comp="COR-<mailId>" → dedup natural. El estado
+// vive acá (NO en Gmail). Aceptar = crear el EGRESO real (con N líneas/centros) y borrar el borrador.
+const CORREO_PREFIX = "COR-";
+
+/** Facturas parkeadas (todas las sociedades) pendientes de contabilizar. Consolidado, sin scope de sociedad. */
+export async function fetchCorreoBorradores() {
+  const rows = await get("nb_comprobantes", {});
+  const brs = rows.filter(r => (r.subtipo ?? "").toUpperCase() === "EGRESO_BORRADOR");
+  return _agruparPorComp(brs, "EGRESO");   // mismo shape que un egreso (proveedor/vto/moneda/total)
+}
+
+/**
+ * Parkea una factura leída del mail. Idempotente por id_comp=COR-<mailId>. Dedup: si ya existe una fila con ese
+ * id_comp (borrador/ignorado), o un EGRESO real con el mismo nº+proveedor, NO duplica (devuelve dedup).
+ */
+export async function parkearFacturaCorreo({ mailId, threadId = "", remitente = "", fechaCorreo = "", proveedorId = "", proveedor = "", cuenta = "", cuentaId = "", sociedad = "", moneda = "ARS", total, ivaRate = 0, vto = "", nroComp = "", fechaServicio = "" }) {
+  const id_comp = CORREO_PREFIX + mailId;
+  const rows = await get("nb_comprobantes", {});
+  if (rows.some(r => String(r.id_comp) === id_comp)) return { ok: true, dedup: "mail", id_comp };
+  const nro = String(nroComp || "").trim();
+  if (nro && rows.some(r => (r.subtipo ?? "").toUpperCase() === "EGRESO"
+      && (r.nro_comp ?? "").trim() === nro && String(r.contraparte_id ?? "") === String(proveedorId)))
+    return { ok: true, dedup: "fc", id_comp };
+  // El total viene del mail (bruto). Si el proveedor discrimina IVA, se abre subtotal + iva_monto.
+  const t   = round2(Number(total) || 0);
+  const rate = Number(ivaRate) || 0;
+  const sub  = rate > 0 ? round2(t / (1 + rate / 100)) : t;
+  const iva  = round2(t - sub);
+  await post({ action: "add", sheet: "nb_comprobantes", row: {
+    id: `${id_comp}-L01`, id_comp,
+    sociedad, fecha: fechaServicio || "", vto,       // fecha = fecha del servicio (período de la factura)
+    subtipo: "EGRESO_BORRADOR",
+    contraparte_id: proveedorId, contraparte_nombre: proveedor,
+    cuenta_contable: cuenta, cuenta_contable_id: cuentaId,
+    moneda, centro_costo: "",
+    subtotal: sub, iva_rate: rate, iva_monto: iva, total: t,
+    nro_comp: nro,
+    nota: `mail_ref=${threadId || mailId};fecha_correo=${fechaCorreo};remitente=${remitente}`,
+    created_at: new Date().toISOString(),
+  }});
+  return { ok: true, id_comp };
+}
+
+/** Aceptar un borrador → crea el EGRESO real (N líneas/centros vía appendEgreso) y borra el borrador. */
+export async function contabilizarBorrador(id_comp, egreso) {
+  const nota = (egreso.nota ? egreso.nota + " · " : "") + `desde_correo=${id_comp}`;
+  const res = await appendEgreso({ ...egreso, id: undefined, nota });   // id nuevo (EG-), NO reusa el COR-
+  await deleteEgreso(id_comp);
+  return { ok: true, id_comp_nuevo: res.id_comp };
+}
+
+/** Ignorar un borrador (queda EGRESO_IGNORADO: invisible al ledger, pero el id COR- recuerda que ya se vio). */
+export async function ignorarBorrador(id_comp, motivo = "") {
+  const rows = await get("nb_comprobantes", {});
+  const ids = rows.filter(r => String(r.id_comp) === String(id_comp)).map(r => r.id);
+  await Promise.all(ids.map(id => post({ action: "edit", sheet: "nb_comprobantes", id,
+    patch: { subtipo: "EGRESO_IGNORADO", nota: motivo ? `ign=${motivo}` : "" } })));
+  return { ok: true, n: ids.length };
+}
+
+/** Restaurar un borrador ignorado → vuelve a la bandeja. */
+export async function restaurarBorrador(id_comp) {
+  const rows = await get("nb_comprobantes", {});
+  const ids = rows.filter(r => String(r.id_comp) === String(id_comp)).map(r => r.id);
+  await Promise.all(ids.map(id => post({ action: "edit", sheet: "nb_comprobantes", id, patch: { subtipo: "EGRESO_BORRADOR" } })));
+  return { ok: true, n: ids.length };
+}
+
 // ─── INGRESOS ────────────────────────────────────────────────────────────────
 
 export async function fetchIngresos(sociedad) {
