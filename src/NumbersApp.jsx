@@ -417,7 +417,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
                             {sub.label}
                           </button>
                           <button
-                            onClick={() => { setActiveId("egresos"); setEgresoSubView(sub.id); setEgresoOpen(true); setActiveMaestrosTab(null); bumpNav(); }}
+                            onClick={() => { setActiveId("egresos"); setEgresoSubView(sub.id); setEgresoOpen(true); setActiveMaestrosTab(null); setActiveSpecial(null); bumpNav(); }}
                             aria-label={sub.ariaAdd}
                             title={sub.ariaAdd}
                             style={{
@@ -471,7 +471,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
                           Ventas
                         </button>
                         <button
-                          onClick={() => { setActiveId("ingresos"); setIngresoSubView("new-venta"); setIngresoOpen(true); setActiveMaestrosTab(null); bumpNav(); }}
+                          onClick={() => { setActiveId("ingresos"); setIngresoSubView("new-venta"); setIngresoOpen(true); setActiveMaestrosTab(null); setActiveSpecial(null); bumpNav(); }}
                           aria-label="Agregar venta"
                           title="Agregar venta"
                           style={{
