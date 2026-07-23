@@ -407,6 +407,11 @@ const FONDEADAS = {
 };
 const IMPUESTOS_FOND = ["IVA", "Ganancias"];   // match por nombre de cuenta (incluye)
 
+// Go-live: el P&L arranca el 1/7/2026. Todo lo anterior es migración de saldos iniciales de Contagram
+// (metida en cualquier cuenta/centro) y NO es resultado del período → se excluye de TODOS los P&L. Los
+// saldos iniciales de verdad viven como filas SALDO_INICIAL en nb_movimientos (Balance/Tesorería, nunca P&L).
+const PNL_INICIO = "2026-07-01";
+
 function buildPnLSede(inRows, egRows, ccFilter, year, moneda) {
   // Pre-poblar cada grupo con sus cuentas configuradas en 0 → se muestran aunque no tengan monto.
   const grupos = {};
@@ -414,7 +419,7 @@ function buildPnLSede(inRows, egRows, ccFilter, year, moneda) {
   const sinClasificar = {};
   const add = (rows) => {
     for (const row of rows) {
-      if (!row.fecha || row.fecha.slice(0,4) !== String(year)) continue;
+      if (!row.fecha || row.fecha < PNL_INICIO || row.fecha.slice(0,4) !== String(year)) continue;
       if ((row.moneda ?? "ARS") !== moneda) continue;
       if (ccFilter !== "todos") {
         const cc = row.centro_costo ?? "";
@@ -748,7 +753,7 @@ function buildPnLHuergo(inRows, egRows, ccFilter, year, moneda) {
   const ingresos = {}, costos = {};
   const add = (rows, bucket) => {
     for (const row of rows) {
-      if (!row.fecha || row.fecha.slice(0, 4) !== String(year)) continue;
+      if (!row.fecha || row.fecha < PNL_INICIO || row.fecha.slice(0, 4) !== String(year)) continue;
       if ((row.moneda ?? "ARS") !== moneda) continue;
       const cc = row.centro_costo ?? "";
       if (!(Array.isArray(ccFilter) ? ccFilter.includes(cc) : cc === ccFilter)) continue;
@@ -887,7 +892,7 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
   const sinClasificar = {};
   const add = (rows, forcedSide) => {
     for (const row of rows) {
-      if (!row.fecha || row.fecha.slice(0, 4) !== String(year)) continue;
+      if (!row.fecha || row.fecha < PNL_INICIO || row.fecha.slice(0, 4) !== String(year)) continue;
       if ((row.moneda ?? "ARS") !== moneda) continue;
       const m = parseInt(row.fecha.slice(5, 7), 10) - 1;
       if (m < 0 || m > 11) continue;
@@ -2540,7 +2545,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     for (const r of inConFranq) {
       if (_nkSede(r.cuenta_contable) !== _nkSede("Fee de Gestion y Adm")) continue;
       if (!nucleoEmpresas.has((r.sociedad ?? "").trim())) continue;
-      if (!r.fecha || r.fecha.slice(0, 4) !== String(year)) continue;
+      if (!r.fecha || r.fecha < PNL_INICIO || r.fecha.slice(0, 4) !== String(year)) continue;
       if ((r.moneda ?? "ARS") !== monedaPL) continue;
       const m = parseInt(r.fecha.slice(5, 7), 10) - 1; if (m >= 0 && m < 12) t[m] += Number(r.total) || 0;
     }
