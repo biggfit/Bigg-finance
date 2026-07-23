@@ -1222,7 +1222,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           )}
                           <span style={{ color: T.muted }}>{p.concepto ? ` · ${p.concepto}` : ""}{p.nota ? ` · ${p.nota}` : ""}{p.nroComp ? ` · ${p.nroComp}` : ""}</span>
                         </td>
-                        <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: T.mono, fontWeight: 700, whiteSpace: "nowrap", color: p.subtipo === "INGRESO" ? "#0284c7" : "#16a34a" }}>{money(p.total, p.moneda)}</td>
+                        <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: T.mono, fontWeight: 700, whiteSpace: "nowrap", color: p.subtipo === "INGRESO" ? "#16a34a" : "#dc2626" }}>{p.subtipo === "INGRESO" ? "+" : "−"} {money(p.total, p.moneda)}</td>
                         <td style={{ padding: "8px 14px", textAlign: "right", minWidth: 130 }}>
                           <button onClick={() => setReconocerFor(p)}
                             style={{ background: T.accent, border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 12.5, fontWeight: 800, color: "#000", cursor: "pointer", fontFamily: T.font }}>
