@@ -800,24 +800,23 @@ const _r2 = n => Math.round((Number(n) || 0) * 100);   // monto a centavos, para
 const _norm = s => String(s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 const _refField = (m, k) => { const x = String(m.referencia || "").match(new RegExp(`(?:^|;)${k}=([^;]*)`)); return x ? x[1] : ""; };
 
-// HUELLA DE CONTENIDO de una línea del extracto = su identidad ESTABLE entre descargas. Excluye
-// fecha Y saldo a propósito: Galicia RE-FECHA y RE-NUMERA el saldo entre descargas, así que si la clave
-// usara cualquiera de los dos, re-subir el mismo extracto duplicaría. Usa lo que NO cambia: monto +
-// descripción + razón social (Leyenda 1) + código de concepto + CUIT/nº de operación. La ingesta dedupea
-// por MULTISET (conteo) de esta huella → banca las líneas legítimamente repetidas (ej. 5 comisiones iguales
-// el mismo día) y hace la re-subida IDEMPOTENTE (si ya hay N copias, no agrega más).
-const _fp = ({ monto, desc, ley1, cuit, cod, op }) =>
-  [_r2(monto), _norm(desc), _norm(ley1), _norm(cuit), _norm(cod), _norm(op)].join("|");
-const _lineaFP = l => _fp({ monto: l.monto, desc: l.descripcion, ley1: l.ley1 || l.contraparte, cuit: l.ley2 || l.cuit, cod: l.codigoConcepto, op: l.nro_operacion });
-// Huella de un movimiento ya cargado. Se guarda en `extracto_saldo` (sobrevive a que se reescriba
-// `referencia` al contabilizar). Filas nuevas la traen estampada (contiene "|"); filas viejas de extracto
-// (extracto_saldo numérico) se recalculan de sus campos → misma huella. Un manual viejo ya matcheado (sin
-// huella) devuelve "" y no dedupea por contenido (lo cubre la alarma "posible duplicado" por monto+fecha).
+// HUELLA DE CONTENIDO de una línea del extracto = su identidad ESTABLE entre descargas. Usa SOLO los tres
+// campos que Galicia reproduce igual en cada descarga: **monto + descripción + código de concepto**.
+// Se excluyen a propósito: fecha y saldo (Galicia re-fecha/re-numera) Y TAMBIÉN razón social (Leyenda 1),
+// CUIT y nº de operación → ⚠️ verificado en vivo que Galicia los VARÍA para líneas internas (una misma
+// comisión/IVA viene con ley1="Banco Galicia"/"AFIP" en una descarga y VACÍA en otra) → si estuvieran en la
+// clave, la misma línea daría dos huellas y el dedup fallaría. La ingesta dedupea por MULTISET (conteo) de
+// esta huella → banca las repetidas legítimas (ej. N comisiones iguales) y hace la re-subida IDEMPOTENTE.
+const _fp = ({ monto, desc, cod }) => [_r2(monto), _norm(desc), _norm(cod)].join("|");
+const _lineaFP = l => _fp({ monto: l.monto, desc: l.descripcion, cod: l.codigoConcepto });
+// Huella de un movimiento ya cargado. Para filas de extracto se RECALCULA siempre de sus campos (los 3 son
+// estables y están guardados: monto, concepto=descripción, cod en `referencia`) → no depende del stamp (que
+// puede estar en formato viejo). Manual ya matcheado: usa la huella estampada en `extracto_saldo` (sobrevive
+// a que se reescriba `referencia`); si no la tiene, "" y lo cubre la alarma "posible duplicado" por monto+fecha.
 const _movFP = m => {
+  if (m.origen === "extracto") return _fp({ monto: m.monto, desc: m.concepto, cod: _refField(m, "cod") });
   const es = String(m.extracto_saldo || "");
-  if (es.includes("|")) return es;
-  if (m.origen === "extracto") return _fp({ monto: m.monto, desc: m.concepto, ley1: m.contraparte_nombre, cuit: _refField(m, "cuit"), cod: _refField(m, "cod"), op: _refField(m, "op") });
-  return "";
+  return es.includes("|") ? es : "";
 };
 
 // Ingesta del extracto = "matchear o crear" (ya NO "crear o ignorar"):
