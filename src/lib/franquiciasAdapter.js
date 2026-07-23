@@ -66,6 +66,8 @@ export function franquiciasPendientesInterco(compsByFr, franchises, miCuit, miSo
         subtipo: def.doc === "NC" ? "INGRESO" : "EGRESO",             // NC (a mi favor) → ingreso; FACTURA → CxP
         concepto: def.cuenta || "", vendedor: EMPRESA_SOCIEDAD[emisora] ?? "", vendedorNombre: emisora,
         fecha: c.date, nroComp: c.invoice || "", moneda: compCurrency(c), total: monto,
+        neto: Math.abs(Number(c.amountNeto) || 0),                   // para el P&L sin-IVA (netear el IVA nocional)
+        iva:  Math.abs(Number(c.amountIVA)  || 0),
         nota: c.nota || "",                                          // hint red bigg / gympass (gestión)
         ...(esSede ? {
           tratamiento: "gestion",                                    // → reconocerInterusoGestion (no CxP)

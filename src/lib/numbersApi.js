@@ -1686,6 +1686,11 @@ export async function reconocerVentaInterco({ sociedad, ventaIdComp, vendedorId 
 export async function reconocerInterusoGestion(pend, { cuenta, centro = "" } = {}) {
   const t = toNum(pend.total);
   const esIngreso = String(pend.subtipo || "").toUpperCase() === "INGRESO";
+  // Desglose de IVA (nocional): monto = total bruto; se guarda iva_monto/iva_rate para que el P&L
+  // sin-IVA pueda netear y no reportar el interuso inflado. Si no vino desglose, iva=0 (neto=total).
+  const iva  = toNum(pend.iva);
+  const neto = toNum(pend.neto) || (t - iva);
+  const ivaRate = neto > 0 && iva > 0 ? Math.round((iva / neto) * 100) : 0;
   const id = newId("GEST");
   const f = String(pend.fecha || "");
   const fechaIso = /^\d{1,2}\/\d{1,2}\/\d{4}/.test(f)
@@ -1699,6 +1704,7 @@ export async function reconocerInterusoGestion(pend, { cuenta, centro = "" } = {
     centro_costo: centro || pend.sedeCentro || "",
     moneda: pend.moneda || "ARS",
     monto: esIngreso ? t : -t,
+    iva_rate: ivaRate, iva_monto: iva,
     contraparte_id: pend.vendedor || "", contraparte_nombre: pend.vendedorNombre || "",
     documento_id: `GEST-${id}`, origen: "interuso_gestion",
     concepto: `Interuso gestión${pend.sedeNombre ? " · " + pend.sedeNombre : ""}`,
