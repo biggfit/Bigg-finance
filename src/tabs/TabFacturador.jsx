@@ -290,7 +290,8 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
         contado: prefillComp?.type === "PAGO_PAUTA",
       });
     };
-    const usaFacturante  = isAR && currency === "ARS" && (doc === "FACTURA" || doc === "NC");
+    const esSedePropia   = fr?.esSedePropia === true;   // interuso de sede propia → gestión (no fiscal)
+    const usaFacturante  = isAR && currency === "ARS" && (doc === "FACTURA" || doc === "NC") && !esSedePropia;
     // Para NC: la FA referenciada (necesitamos su invoice label, ej "FA 0100-00000014")
     const refFAComp      = doc === "NC" ? (comps[String(fr?.id)] ?? []).find(c => c.id === refCompId) : null;
     const ncSinRef       = usaFacturante && doc === "NC" && !refFAComp?.invoice;
@@ -325,7 +326,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
           setEmitError(err.message ?? "Error al emitir ante ARCA");
           return;
         }
-      } else if (!usaFacturante && !skipFacturante && (doc === "FACTURA" || doc === "NC")) {
+      } else if (!usaFacturante && !skipFacturante && (doc === "FACTURA" || doc === "NC") && !esSedePropia) {
         // ── Invoice USA: asignar correlativo ──────────────────────────────
         setEmitState("emitting");
         setEmitError(null);
@@ -341,6 +342,10 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
         }
       }
 
+      // Sede propia: guardar como asiento de GESTIÓN (type GFAC|/GNC|) → no fiscal, no CxC/CxP.
+      if (esSedePropia && (doc === "FACTURA" || doc === "NC")) {
+        enriched = { ...enriched, type: makeType(doc === "NC" ? "GNC" : "GFAC", cuenta) };
+      }
       try {
         onAddComp(fr.id, enriched);
       } catch {
@@ -365,7 +370,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
             downloadTextAsPDF(buildFacturaPDF(fr, franchisor, enriched),
               `Factura_${fr.name}_${MONTHS[preview.month]}_${preview.year}.html`);
           });
-      } else if (isAR) {
+      } else if (isAR && !esSedePropia) {
         // AR guardada sin emitir: HTML de respaldo
         downloadTextAsPDF(buildFacturaPDF(fr, franchisor, enriched),
           `Factura_${fr.name}_${MONTHS[preview.month]}_${preview.year}.html`);
@@ -1630,6 +1635,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
     for (const r of activeRows) {
       const fr = franchises.find(f => f.id === r.franchiseId);
       const isAR = fr?.country === "Argentina";
+      const esSedePropia = fr?.esSedePropia === true;   // interuso de sede propia → asiento de gestión (no fiscal)
       const doc  = String(r.type ?? "").split("|")[0];
       const esComp = doc === "FACTURA" || doc === "NC";
       const applyIVA = !!(COMPANIES[activeCompany]?.applyIVA);
@@ -1650,7 +1656,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
       let invoice = null;
       let msg = r.franchiseName;
 
-      if (!skipFacturante && isAR && r.currency === "ARS" && esComp && fr && activeCompany === "ÑAKO SRL") {
+      if (!skipFacturante && isAR && r.currency === "ARS" && esComp && fr && activeCompany === "ÑAKO SRL" && !esSedePropia) {
         try {
           const result = await emitirComprobante({
             franchisor: franchisor?.ar ?? franchisor,
@@ -1665,7 +1671,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
           status = "error";
           msg = err.message ?? "Error ARCA";
         }
-      } else if (!skipFacturante && !isAR && esComp && fr) {
+      } else if (!skipFacturante && !isAR && esComp && fr && !esSedePropia) {
         try {
           const invoicePrefix = getInvoicePrefix(activeCompany);
           const res = await getNextInvoiceNum(r.franchiseId, invoicePrefix);
@@ -1679,7 +1685,13 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
         }
       } else {
         status = "ok";
-        msg = "guardado";
+        msg = esSedePropia && esComp ? "gestión (no fiscal)" : "guardado";
+      }
+
+      // Sede propia: guardar como asiento de GESTIÓN (type GFAC|/GNC|) → no fiscal, no CxC/CxP; se parkea
+      // en Numbers y se reconoce contra el P&L de la sede. Mismo criterio que el modal individual.
+      if (esSedePropia && esComp) {
+        comp = { ...comp, type: makeType(doc === "NC" ? "GNC" : "GFAC", String(r.type).split("|")[1] || "INTERUSOS") };
       }
 
       try {
