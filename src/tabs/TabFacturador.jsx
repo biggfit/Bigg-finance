@@ -2230,15 +2230,6 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
                 border: "rgba(96,165,250,.2)",
               },
               {
-                mode: EMIT_MODE.CRM,
-                icon: "📡",
-                title: "Desde CRM",
-                desc: "Cargá las ventas del mes por sede, aplicá descuentos comerciales y calculá el fee de royalty automáticamente.",
-                color: "var(--green)",
-                bg: "rgba(16,217,122,.06)",
-                border: "rgba(16,217,122,.2)",
-              },
-              {
                 mode: EMIT_MODE.EXCEL,
                 icon: "📊",
                 title: "Importar Excel",
@@ -2246,6 +2237,15 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
                 color: "var(--gold)",
                 bg: "rgba(222,251,151,.06)",
                 border: "rgba(222,251,151,.2)",
+              },
+              {
+                mode: EMIT_MODE.CRM,
+                icon: "📡",
+                title: "Desde CRM",
+                desc: "Cargá las ventas del mes por sede, aplicá descuentos comerciales y calculá el fee de royalty automáticamente.",
+                color: "var(--green)",
+                bg: "rgba(16,217,122,.06)",
+                border: "rgba(16,217,122,.2)",
               },
               // El extracto Galicia se importa SIEMPRE desde Numbers Conciliación (evita cargar
               // el mismo cobro por dos lados). Acceso retirado de Franquicias.
