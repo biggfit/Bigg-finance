@@ -1220,6 +1220,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           )}
                           <b>{p.vendedorNombre}</b> te {p.subtipo === "INGRESO" ? "acreditó" : "vendió"}
                           <span style={{ color: T.muted }}>{p.concepto ? ` · ${p.concepto}` : ""}{p.nroComp ? ` · ${p.nroComp}` : ""}</span>
+                          {p.nota && <div style={{ fontSize: 11.5, color: T.dim, marginTop: 2 }}>{p.nota}</div>}
                         </td>
                         <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: T.mono, fontWeight: 700, whiteSpace: "nowrap", color: p.subtipo === "INGRESO" ? "#0284c7" : "#16a34a" }}>{money(p.total, p.moneda)}</td>
                         <td style={{ padding: "8px 14px", textAlign: "right", minWidth: 130 }}>
