@@ -411,6 +411,11 @@ const IMPUESTOS_FOND = ["IVA", "Ganancias"];   // match por nombre de cuenta (in
 // (metida en cualquier cuenta/centro) y NO es resultado del período → se excluye de TODOS los P&L. Los
 // saldos iniciales de verdad viven como filas SALDO_INICIAL en nb_movimientos (Balance/Tesorería, nunca P&L).
 const PNL_INICIO = "2026-07-01";
+const PNL_INICIO_ANIO = 2026;
+const PNL_INICIO_MES  = 6;   // julio (0-based): en el año del go-live no se muestran los meses previos
+// En el año del go-live, oculta las columnas de meses anteriores al go-live (Ene–Jun 2026 = vacías).
+const mesesVisibles = (activeMonths, year) =>
+  Number(year) === PNL_INICIO_ANIO ? activeMonths.filter(m => m >= PNL_INICIO_MES) : activeMonths;
 
 function buildPnLSede(inRows, egRows, ccFilter, year, moneda) {
   // Pre-poblar cada grupo con sus cuentas configuradas en 0 → se muestran aunque no tengan monto.
@@ -554,7 +559,8 @@ function celdasSede(cols, cur, prev, pol, o) {
 }
 
 function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista = "evolucion", mes = 0, cesion = null, impuestos = null, netoLabel = "Resultado Neto" }) {
-  const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths } = sub;
+  const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths: _amRaw } = sub;
+  const activeMonths = mesesVisibles(_amRaw, year);
 
   // Cesión de utilidades (cola de apropiación, solo cuando el scope es la sede con cesión, ej. Barrio Norte).
   // Los retiros son la cuenta "Inversores" de sinClasificar → se saca de ahí para no mostrarla dos veces.
@@ -775,7 +781,8 @@ function computeSubtotalsHuergo(pnl) {
   return { totIng, totCos, margen, activeMonths: [...months].sort((a, b) => a - b) };
 }
 function PnLTableHuergo({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolucion", mes = 0 }) {
-  const { totIng, totCos, margen, activeMonths } = sub;
+  const { totIng, totCos, margen, activeMonths: _amRaw } = sub;
+  const activeMonths = mesesVisibles(_amRaw, year);
   if (activeMonths.length === 0) return (
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
       padding: "60px 24px", textAlign: "center", boxShadow: T.shadow }}>
@@ -987,7 +994,8 @@ function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) {
 // (ingresos − opex), y al final financieros + impuestos del grupo. `sub` = computeSubtotalsHolding.
 function PnLTableBigg({ pnl, sub, year, moneda }) {
   const { sar, fg, wre, hqAccounts, ghqAccounts, gpvAccounts, ingHQ, opexHQ,
-          resOperaciones, resOpMasIngHQ, margen, resOpGrupo, resAntesImp, resGrupo, activeMonths } = sub;
+          resOperaciones, resOpMasIngHQ, margen, resOpGrupo, resAntesImp, resGrupo, activeMonths: _amRaw } = sub;
+  const activeMonths = mesesVisibles(_amRaw, year);
   const ncols = activeMonths.length + 2;
   const ALLKEYS = ["sec_op", "sec_ing", "sec_gpv", "sec_opex", "sec_fin", "sec_imp"];
   const [collapsed, setCollapsed] = useState({});
