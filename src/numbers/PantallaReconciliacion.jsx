@@ -1309,10 +1309,8 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
             {reconocidosGestion.length > 0 && (
               <>
                 <button onClick={() => setHistGestionOpen(o => !o)}
-                  style={{ display: "flex", alignItems: "center", gap: 8, background: "transparent", border: "none", cursor: "pointer", padding: 0, margin: "28px 0 10px", fontFamily: T.font }}>
-                  <span style={{ fontSize: 13, color: T.muted, transform: histGestionOpen ? "rotate(90deg)" : "none", transition: "transform .15s", display: "inline-block" }}>▸</span>
-                  <span style={{ fontSize: 14, fontWeight: 800, color: T.text }}>Historial de gestión reconocida</span>
-                  <span style={{ fontSize: 11, color: T.muted }}>({reconocidosGestion.length})</span>
+                  style={{ display: "block", background: "transparent", border: "none", color: T.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: T.font, padding: 0, margin: "28px 0 10px" }}>
+                  {histGestionOpen ? "▾" : "▸"} Historial de gestión reconocida ({reconocidosGestion.length})
                 </button>
                 {histGestionOpen && (
                 <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10, overflowX: "auto", boxShadow: T.shadow, maxWidth: 720 }}>
