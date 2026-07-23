@@ -338,6 +338,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     try { await revertirInterusoGestion(m.id); const d = await fetchIntercoData(); setIntercoData(d); }
     catch (e) { alert("No se pudo revertir: " + (e?.message || e)); }
   };
+  const [histGestionOpen, setHistGestionOpen] = useState(false);   // historial de gestión reconocida (colapsable)
   // Avisa al sidebar los conteos de pendientes (badge en vivo): Banco (extracto sin conciliar) + Interco
   // (ventas a reconocer + CC a liquidar ida/vuelta).
   useEffect(() => { onPendientes?.({ banco: pendientes.length, interco: pendRecibir.length + pendInterco.length }); },
@@ -1212,9 +1213,8 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         const money = (n, mon) => `${mon} ${Math.round(Math.abs(n)).toLocaleString("es-AR")}`;
         return (
           <div className="fade" style={{ overflow: "auto" }}>
-            <div style={{ fontSize: 12, color: T.muted, marginBottom: 12 }}>
-              Documentos que otra sociedad te emitió y todavía no reconociste (ventas de otra sociedad + docs de franquicia hacia vos, ej. Segui). <b>Reconocer</b> = lo cargás con TUS cuentas: una factura (te la vendieron) queda por pagar; un crédito/NC (a tu favor, ej. interuso) queda a cobrar.
-            </div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: T.text, marginBottom: 3 }}>Facturas y asientos recibidos</div>
+            <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 12 }}>De otras sociedades, para reconocer con tus cuentas.</div>
             {pend.length === 0 ? (
               <div style={{ color: T.muted, fontSize: 13, padding: "24px 4px" }}>No hay ventas de otras sociedades pendientes de reconocer.</div>
             ) : (
@@ -1262,9 +1262,8 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
               </div>
             )}
             {/* CC interco pendiente de liquidar (ida y vuelta) */}
-            <div style={{ fontSize: 12, color: T.muted, margin: "22px 0 12px" }}>
-              Cuenta corriente interco pendiente de liquidar con otras sociedades <b>(ida y vuelta)</b>. Cada una muestra de qué cuenta/caja salió y a cuál entró. Lo que recibiste en caja → <b>Contabilizar recepción</b>; lo que enviaste se cierra al conciliar tu extracto (Banco).
-            </div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: T.text, margin: "28px 0 3px" }}>Transferencias a declarar</div>
+            <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 12 }}>Plata movida entre sociedades. Lo recibido lo contabilizás acá; lo enviado se cierra en tu Banco.</div>
             {pendRecibir.length === 0 ? (
               <div style={{ color: T.muted, fontSize: 13, padding: "8px 4px" }}>No hay interco pendientes de liquidar.</div>
             ) : (
@@ -1309,9 +1308,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
             )}
             {reconocidosGestion.length > 0 && (
               <>
-                <div style={{ fontSize: 12, color: T.muted, margin: "22px 0 12px" }}>
-                  Asientos de <b>gestión</b> ya reconocidos (interusos de sedes propias, solo P&L). Si te equivocaste, <b>Revertir</b> borra el asiento y la NC/FC vuelve a quedar pendiente arriba.
-                </div>
+                <button onClick={() => setHistGestionOpen(o => !o)}
+                  style={{ display: "flex", alignItems: "center", gap: 8, background: "transparent", border: "none", cursor: "pointer", padding: 0, margin: "28px 0 10px", fontFamily: T.font }}>
+                  <span style={{ fontSize: 13, color: T.muted, transform: histGestionOpen ? "rotate(90deg)" : "none", transition: "transform .15s", display: "inline-block" }}>▸</span>
+                  <span style={{ fontSize: 14, fontWeight: 800, color: T.text }}>Historial de gestión reconocida</span>
+                  <span style={{ fontSize: 11, color: T.muted }}>({reconocidosGestion.length})</span>
+                </button>
+                {histGestionOpen && (
                 <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10, overflowX: "auto", boxShadow: T.shadow, maxWidth: 720 }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, color: T.text }}>
                     <thead>
@@ -1344,6 +1347,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                     </tbody>
                   </table>
                 </div>
+                )}
               </>
             )}
           </div>
