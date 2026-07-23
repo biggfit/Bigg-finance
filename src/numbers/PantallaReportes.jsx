@@ -29,6 +29,15 @@ function normCat(raw) {
   return s;
 }
 
+// Match de id de centro de costo CASE-INSENSITIVE. El maestro tiene ids con caja inconsistente
+// (ej. "CC-2026-88265" vs "cc-2026-88265") y el lookup sensible a mayúsculas hacía que un CECO no
+// resolviera → la fila caía en la línea/bucket equivocado. Normalizar a minúsculas lo evita.
+const ccKey = s => String(s ?? "").trim().toLowerCase();
+const ccEnFiltro = (ccFilter, cc) => {
+  const k = ccKey(cc);
+  return Array.isArray(ccFilter) ? ccFilter.some(f => ccKey(f) === k) : ccKey(ccFilter) === k;
+};
+
 // ─── Pivot P&L estructurado ───────────────────────────────────────────────────
 function buildPnL(inRows, egRows, cuentaMap, ccFilter, year, moneda) {
   const cats = { ventas:{}, costo_venta:{}, gastos_operativos:{}, gastos_financieros:{}, impuestos:{}, sin_categoria:{} };
@@ -36,10 +45,7 @@ function buildPnL(inRows, egRows, cuentaMap, ccFilter, year, moneda) {
     for (const row of rows) {
       if (!row.fecha || row.fecha.slice(0,4) !== String(year)) continue;
       if ((row.moneda ?? "ARS") !== moneda) continue;
-      if (ccFilter !== "todos") {
-        const cc = row.centro_costo ?? "";
-        if (Array.isArray(ccFilter) ? !ccFilter.includes(cc) : cc !== ccFilter) continue;
-      }
+      if (ccFilter !== "todos" && !ccEnFiltro(ccFilter, row.centro_costo)) continue;
       const m = parseInt(row.fecha.slice(5,7), 10) - 1;
       if (m < 0 || m > 11) continue;
       const nombre = (row.cuenta_contable ?? "").trim() || "Sin cuenta";
@@ -426,10 +432,7 @@ function buildPnLSede(inRows, egRows, ccFilter, year, moneda) {
     for (const row of rows) {
       if (!row.fecha || row.fecha < PNL_INICIO || row.fecha.slice(0,4) !== String(year)) continue;
       if ((row.moneda ?? "ARS") !== moneda) continue;
-      if (ccFilter !== "todos") {
-        const cc = row.centro_costo ?? "";
-        if (Array.isArray(ccFilter) ? !ccFilter.includes(cc) : cc !== ccFilter) continue;
-      }
+      if (ccFilter !== "todos" && !ccEnFiltro(ccFilter, row.centro_costo)) continue;
       const m = parseInt(row.fecha.slice(5,7), 10) - 1;
       if (m < 0 || m > 11) continue;
       const nombre = (row.cuenta_contable ?? "").trim() || "Sin cuenta";
@@ -761,8 +764,7 @@ function buildPnLHuergo(inRows, egRows, ccFilter, year, moneda) {
     for (const row of rows) {
       if (!row.fecha || row.fecha < PNL_INICIO || row.fecha.slice(0, 4) !== String(year)) continue;
       if ((row.moneda ?? "ARS") !== moneda) continue;
-      const cc = row.centro_costo ?? "";
-      if (!(Array.isArray(ccFilter) ? ccFilter.includes(cc) : cc === ccFilter)) continue;
+      if (!ccEnFiltro(ccFilter, row.centro_costo)) continue;
       const m = parseInt(row.fecha.slice(5, 7), 10) - 1; if (m < 0 || m > 11) continue;
       const nombre = (row.cuenta_contable ?? "").trim() || "Sin cuenta";
       (bucket[nombre] ??= new Array(12).fill(0))[m] += Number(row.total) || 0;
@@ -903,7 +905,7 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
       if ((row.moneda ?? "ARS") !== moneda) continue;
       const m = parseInt(row.fecha.slice(5, 7), 10) - 1;
       if (m < 0 || m > 11) continue;
-      const cc = ccMap.get(row.centro_costo ?? "");
+      const cc = ccMap.get(ccKey(row.centro_costo));
       const emp = (cc?.empresa ?? "").trim();
       if (emp && !nucleoEmpresas.has(emp)) continue;   // fuera del núcleo (anillo 2/3) → no consolida
       const fam = familiaCentro(cc);
@@ -1560,7 +1562,7 @@ function clasificarFlujo(m, { ccMap, nucleoEmpresas, docCentro } = {}) {
     return { act: "inversion", concepto: "Movimientos intercompañía" };
   // Resolver el centro: el del movimiento o el de la factura que paga/cobra (cobros/pagos no traen centro).
   const centroId = String(m.centro_costo || "").trim() || (doc && docCentro ? (docCentro.get(doc) || "") : "");
-  const cc = centroId && ccMap ? ccMap.get(centroId) : null;
+  const cc = centroId && ccMap ? ccMap.get(ccKey(centroId)) : null;
   const empresa = String(cc?.empresa || "").trim();
   const grupo   = String(cc?.grupo || "").toLowerCase();
   // Inversión — fondeo: gasto/ingreso a un centro cuya sociedad dueña está FUERA del núcleo.
@@ -2087,7 +2089,7 @@ const TIPO_COMP_LABEL = { EGRESO: "Compra", GASTO: "Gasto", INGRESO: "Venta", NC
 function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedades = [] }) {
   const esEg = tipo === "EGRESO";
   const contraLabel = esEg ? "Proveedor" : "Cliente";
-  const ccMap  = useMemo(() => new Map(ccs.map(c => [String(c.id), c.nombre])), [ccs]);
+  const ccMap  = useMemo(() => new Map(ccs.map(c => [ccKey(c.id), c.nombre])), [ccs]);
   const socMap = useMemo(() => new Map(sociedades.map(s => [String(s.id), s.nombre])), [sociedades]);
 
   const [q, setQ]           = useState("");
@@ -2238,7 +2240,7 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
                   <td style={{ ...td, color: T.muted, fontSize: 12 }}>{socMap.get(String(r.sociedad)) || r.sociedad || "—"}</td>
                   <td style={{ ...td, color: T.text, fontWeight: 600 }} title={r.contraparte_nombre || ""}>{r.contraparte_nombre || "—"}</td>
                   <td style={{ ...td, color: T.text }} title={r.cuenta_contable || ""}>{r.cuenta_contable || "—"}</td>
-                  <td style={{ ...td, color: T.muted, fontSize: 12 }} title={ccMap.get(String(r.centro_costo)) || r.centro_costo || ""}>{ccMap.get(String(r.centro_costo)) || r.centro_costo || "—"}</td>
+                  <td style={{ ...td, color: T.muted, fontSize: 12 }} title={ccMap.get(ccKey(r.centro_costo)) || r.centro_costo || ""}>{ccMap.get(ccKey(r.centro_costo)) || r.centro_costo || "—"}</td>
                   <td style={{ ...td, textAlign: "right", fontFamily: T.mono, fontWeight: 700, color: esEg ? T.red : T.green }}>
                     {MONEDA_SYM[r.moneda || "ARS"] ?? (r.moneda || "ARS")} {fmtN(Math.abs(Number(r.total) || 0))}
                   </td>
@@ -2425,7 +2427,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     familiaCentro(c) === scopeFamilia
   ), [ccs, scopeEmpresas, scopeFamilia]);
 
-  const ccMap = useMemo(() => new Map(ccs.map(c => [c.id, c])), [ccs]);
+  const ccMap = useMemo(() => new Map(ccs.map(c => [ccKey(c.id), c])), [ccs]);
 
   // Sedes agrupadas por `operacion` (lo carga el usuario en nb_centros_costo). La operación es el
   // agrupador (categoría) y la sede la subcategoría → un solo filtro jerárquico. Sin `operacion` → grupo aparte.
@@ -2450,7 +2452,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   // aplicar el % sobre un agregado de varias sedes sería incorrecto.
   const cesionSede = useMemo(() => {
     if (resolvedCCSede.length !== 1) return null;
-    const cc = ccMap.get(resolvedCCSede[0]);
+    const cc = ccMap.get(ccKey(resolvedCCSede[0]));
     return cc && _nkSede(cc.nombre).includes(_nkSede(CESION.matchNombre)) ? CESION : null;
   }, [resolvedCCSede, ccMap]);
 
