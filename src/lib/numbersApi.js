@@ -1731,8 +1731,11 @@ export async function revertirInterusoGestion(movId) {
 //      directos / conciliación contabilizada en nb_movimientos)
 //   2. Préstamos/transferencias del núcleo (pares INTERCOMPANIA).
 // Si `sociedad` viene → solo las posiciones de esa sociedad (mirada propia).
-export function lecturaInterco({ movs = [], comps = [], centros = [] } = {}, { sociedad = null } = {}) {
+export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades = [] } = {}, { sociedad = null } = {}) {
   const empresaDe = new Map((centros || []).map(c => [String(c.id), c.empresa]));
+  // Sociedades del núcleo (por anillo) → para decidir si un interuso de gestión cross-society deja
+  // posición: núcleo↔núcleo NO (Hektor); hacia una fondeada/externa SÍ (Wellness).
+  const nucleo = new Set((sociedades || []).filter(s => /n[úu]cleo/i.test(String(s.anillo || ""))).map(s => String(s.id)));
   const acc = {};  // acc[sociedad][contraparte][moneda] = neto
   const accIni = {};  // solo el componente de APERTURA (saldo inicial), misma clave
   const add = (s, c, moneda, delta) => {
@@ -1796,6 +1799,21 @@ export function lecturaInterco({ movs = [], comps = [], centros = [] } = {}, { s
     if (!A || !B || String(A) === String(B) || Math.abs(contrib) < 0.01) continue;
     add(A, B, m.moneda || "ARS", contrib);
     add(B, A, m.moneda || "ARS", -contrib);
+  }
+  // 5. Interusos de GESTIÓN cross-society (sede propia de OTRA sociedad, ej. BIGG Fit LLC → sede de
+  //    Wellness por Gympass). NO dejan CxC comercial (son movimientos no-caja), pero SÍ suman a la
+  //    posición interco. Monto firmado desde la óptica de la sede: INGRESO (+) = el emisor le debe a
+  //    la sede (baja lo que la sociedad de la sede le debe al emisor); EGRESO (−) = la sede le debe al
+  //    emisor. Los de MISMA sociedad (A, clearing España interno) tienen sociedad == contraparte → el
+  //    guard s===c de add() los saltea (netean en el P&L de esa sociedad, sin crear posición).
+  for (const m of movs) {
+    if (m.origen !== "interuso_gestion" || esIgnorado(m)) continue;
+    const A = String(m.sociedad || ""), B = String(m.contraparte_id || ""), mm = toNum(m.monto);
+    if (!A || !B || A === B || Math.abs(mm) < 0.01) continue;
+    if (!nucleo.size) continue;              // sin datos de anillo no arriesgo posiciones espurias
+    if (nucleo.has(A) && nucleo.has(B)) continue;   // núcleo↔núcleo (ej. Ñako→sede Hektor) = gestión pura, sin posición
+    add(A, B, m.moneda || "ARS", +mm);
+    add(B, A, m.moneda || "ARS", -mm);
   }
   const soc = sociedad ? String(sociedad).toLowerCase() : null;
   const out = [];
