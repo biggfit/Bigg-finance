@@ -1829,6 +1829,87 @@ export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades
   return out;
 }
 
+// Extracto (ledger) de la posición interco de UNA sociedad contra UNA contraparte+moneda: cada
+// movimiento por fecha con su +/− y saldo corriente, más el saldo de apertura. Mismas reglas y
+// convención de signo que lecturaInterco (quien pone la plata = acreedor) → el saldo final coincide
+// con el `neto` de esa posición. Read-only, no toca datos.
+export function intercoLedger({ movs = [], comps = [], centros = [], sociedades = [] } = {}, { sociedad, contraparte, moneda = "ARS" } = {}) {
+  const S = String(sociedad || "").toLowerCase();
+  const C = String(contraparte || "").toLowerCase();
+  const empresaDe = new Map((centros || []).map(c => [String(c.id), c.empresa]));
+  const nombreCentro = new Map((centros || []).map(c => [String(c.id), c.nombre]));
+  const nombreSoc = new Map((sociedades || []).map(s => [String(s.id), s.nombre || s.id]));
+  const nucleo = new Set((sociedades || []).filter(s => /n[úu]cleo/i.test(String(s.anillo || ""))).map(s => String(s.id)));
+  const mine = (s, c, mon) => String(s || "").toLowerCase() === S && String(c || "").toLowerCase() === C && (mon || "ARS") === moneda;
+  const cc = id => nombreCentro.get(String(id || "")) || "";
+  const soc = id => nombreSoc.get(String(id || "")) || String(id || "");
+  const entries = [];
+  let opening = 0;
+  // meta = { prov/tipo, cuenta, centro (nombre), ref (id para ubicarlo en la base) } — todo opcional.
+  const push = (fecha, concepto, delta, meta = {}) => { if (Math.abs(delta) >= 0.01) entries.push({ fecha: String(fecha || ""), concepto: concepto || "—", delta, ...meta }); };
+  // Emite las dos direcciones de un hecho: si la posición mía es (A→B) suma +amount; si es (B→A) resta.
+  const pair = (A, B, mon, fecha, concepto, amount, meta) => {
+    if (mine(A, B, mon)) push(fecha, concepto, +amount, meta);
+    if (mine(B, A, mon)) push(fecha, concepto, -amount, meta);
+  };
+  // 1a. Fondeo vía comprobantes de gasto (A paga el centro de B → A acreedor).
+  for (const r of comps) {
+    const sub = String(r.subtipo || "").toUpperCase();
+    if (sub !== "EGRESO" && sub !== "GASTO" && sub !== "EGRESO_FC") continue;
+    const B = empresaDe.get(String(r.centro_costo || "")); if (!B) continue;
+    const A = r.sociedad, m = Math.abs(toNum(r.total)); if (m < 0.01 || String(A) === String(B)) continue;
+    const flujo = `Pago ${soc(A)} x ${soc(B)}`;   // A (pagador) pagó por B (dueño del centro)
+    const meta = { prov: r.proveedor || r.contraparte_nombre || r.contraparte || "", cuenta: r.cuenta_contable || "", centro: cc(r.centro_costo), ref: r.id_comp || r.id || "", docSoc: String(A), refKind: "comp" };
+    pair(A, B, r.moneda, r.fecha, flujo, m, meta);
+  }
+  // 1b. Fondeo vía gastos directos / conciliación contabilizada (nb_movimientos).
+  for (const m of movs) {
+    if (esIgnorado(m)) continue;
+    const tipo = String(m.tipo || "").toUpperCase(); if (tipo === "INGRESO" || tipo === "COBRO") continue;
+    const esGasto = m.origen === "gasto_directo" || String(m.documento_id || "").startsWith("CONTAB-"); if (!esGasto) continue;
+    const B = empresaDe.get(String(m.centro_costo || "")); if (!B) continue;
+    const A = m.sociedad, val = Math.abs(toNum(m.monto)); if (val < 0.01 || String(A) === String(B)) continue;
+    const flujo = `Pago ${soc(A)} x ${soc(B)}`;   // A (pagador) pagó por B (dueño del centro)
+    const meta = { prov: m.contraparte_nombre || "", cuenta: m.cuenta_contable || "", centro: cc(m.centro_costo), ref: m.documento_id || m.id || "", docSoc: String(A), refKind: "mov" };
+    pair(A, B, m.moneda, m.fecha, flujo, val, meta);
+  }
+  // 2. Préstamos / transferencias del núcleo (pares INTERCOMPANIA).
+  for (const { salida, entrada } of _pairMovs(movs, "INTERCOMPANIA")) {
+    if (!salida || !entrada) continue;
+    const ref = salida.documento_id || salida.id || "";
+    if (mine(salida.sociedad, entrada.sociedad, salida.moneda)) push(salida.fecha, salida.concepto || "Transferencia enviada", +Math.abs(toNum(salida.monto)), { tipo: "Transferencia", ref });
+    if (mine(entrada.sociedad, salida.sociedad, entrada.moneda)) push(entrada.fecha, entrada.concepto || "Transferencia recibida", -Math.abs(toNum(entrada.monto)), { tipo: "Transferencia", ref });
+  }
+  // 3. Saldos de APERTURA → saldo inicial (no es un movimiento del extracto).
+  for (const m of movs) {
+    if (m.origen !== "interco_apertura" || esIgnorado(m)) continue;
+    const A = m.sociedad, B = m.contraparte_id, mm = toNum(m.monto); if (Math.abs(mm) < 0.01) continue;
+    if (mine(A, B, m.moneda)) opening += mm;
+    if (mine(B, A, m.moneda)) opening += -mm;
+  }
+  // 4. Interco PARKEADAS (una pata, con caja). Signo por la caja: salida (pagué) → acreedor.
+  for (const m of movs) {
+    if (m.origen !== "interco_park" || esIgnorado(m)) continue;
+    const A = m.sociedad, B = m.contraparte_id, contrib = -toNum(m.monto); if (Math.abs(contrib) < 0.01) continue;
+    const meta = { tipo: "Interco parkeada", cuenta: m.cuenta_contable || "", centro: cc(m.centro_costo), ref: m.documento_id || m.id || "" };
+    pair(A, B, m.moneda, m.fecha, m.concepto || "Interco parkeada", contrib, meta);
+  }
+  // 5. Interusos de gestión cross-society (no núcleo↔núcleo).
+  for (const m of movs) {
+    if (m.origen !== "interuso_gestion" || esIgnorado(m)) continue;
+    const A = String(m.sociedad || ""), B = String(m.contraparte_id || ""), mm = toNum(m.monto);
+    if (!A || !B || A === B || Math.abs(mm) < 0.01) continue;
+    if (!nucleo.size || (nucleo.has(A) && nucleo.has(B))) continue;
+    const meta = { tipo: "Interuso gestión", cuenta: m.cuenta_contable || "", centro: cc(m.centro_costo), ref: m.documento_id || m.id || "" };
+    pair(A, B, m.moneda, m.fecha, m.concepto || "Interuso gestión", mm, meta);
+  }
+  const key = f => { const s = String(f || ""); if (/^\d{4}-/.test(s)) return s.slice(0, 10); const [d, mm, y] = s.split("/"); return y ? `${y}-${String(mm).padStart(2, "0")}-${String(d).padStart(2, "0")}` : s; };
+  entries.sort((a, b) => key(a.fecha).localeCompare(key(b.fecha)));
+  let run = opening;
+  for (const e of entries) { run += e.delta; e.saldo = run; }
+  return { opening, entries, final: run, moneda };
+}
+
 // ── Integridad referencial de maestros ────────────────────────────────────────
 // Cuenta cuántos registros (comprobantes + movimientos) referencian a un maestro, para decidir
 // antes de borrar: si tiene usos → soft-delete (activo:false); si no → borrado físico seguro.

@@ -19,10 +19,12 @@ export const sociedadNombreMap = (sociedades = []) =>
   new Map(sociedades.map(s => [String(s.id), s.nombre || String(s.id)]));
 
 // Una posición interco → item de Activo (neto>0, nos deben) o Pasivo (neto<0, les debemos).
-const intercoItem = (neto, moneda, nombre) => ({
+// `ref` (opcional) = { sociedadId, contraparteId } → habilita el drill-down al extracto interco.
+const intercoItem = (neto, moneda, nombre, ref = null) => ({
   label: `Intercompañía · ${nombre}`, moneda, saldo: Math.abs(neto),
   docs: [{ contraparte: nombre, vto: "", saldo: Math.abs(neto), moneda }],
   headerColor: neto > 0 ? "#16a34a" : "#dc2626",
+  ...(ref ? { intercoLedger: true, sociedadId: ref.sociedadId, contraparteId: ref.contraparteId } : {}),
 });
 
 // Vista CONSOLIDADA del interco sobre un set de sociedades: las posiciones núcleo↔núcleo internas
@@ -77,7 +79,7 @@ export function derivarSaldos({
     const nom = id => sociedadesMap?.get?.(String(id)) || String(id);
     for (const p of lecturaInterco(intercoData, { sociedad })) {
       if (Math.abs(p.neto) < 0.01) continue;
-      (p.neto > 0 ? intercoAct : intercoPas).push(intercoItem(p.neto, p.moneda, nom(p.contraparte)));
+      (p.neto > 0 ? intercoAct : intercoPas).push(intercoItem(p.neto, p.moneda, nom(p.contraparte), { sociedadId: p.sociedad, contraparteId: p.contraparte }));
     }
   }
 

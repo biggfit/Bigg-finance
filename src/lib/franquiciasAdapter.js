@@ -58,6 +58,9 @@ export function franquiciasPendientesInterco(compsByFr, franchises, miCuit, miSo
     for (const c of (compsByFr?.[String(fr.id)] ?? [])) {
       const def = defComp(c.type);
       if (!def || (def.doc !== "FACTURA" && def.doc !== "NC")) continue;
+      // Sede propia: SOLO docs de gestión (GFAC/GNC). Su historia comercial (FEE/interusos/pauta de
+      // cuando era/es franquicia común) NO debe inundar el inbox de gestión.
+      if (esSede && !def.gestion) continue;
       const monto = Math.abs(Number(c.amount) || 0);
       if (!monto) continue;
       const emisora = compEmpresa(c);

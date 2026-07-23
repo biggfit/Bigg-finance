@@ -80,90 +80,9 @@ const sel = { fontSize: 11, padding: "4px 6px", border: "1px solid #94a3b8", bor
 const fld = (lleno, w = 150) => ({ fontSize: 11, padding: "4px 6px", borderRadius: 6, fontFamily: T.font, color: "#111827", width: w, boxSizing: "border-box",
   background: lleno ? "#dcfce7" : "#fff7ed", border: `1px solid ${lleno ? "#4ade80" : "#fb923c"}` });
 
-// Modal para RECONOCER una venta interco: registra mi compra (con mis cuenta+centro) → FC por pagar.
-// La nota sugiere la cuenta de interuso (int_bigg "Interusos" / int_corp "Coorporativos"),
-// pero al reconocer el usuario puede elegir CUALQUIER cuenta del plan.
+// La nota de un interuso de gestión sugiere la cuenta (int_bigg "Interusos" / int_corp "Coorporativos");
+// al reconocer, el usuario puede elegir CUALQUIER cuenta del plan. Usado por el reconocer inline del carril.
 const cuentaGestionPorNota = (nota) => /gympass|corpo/i.test(String(nota || "")) ? "Coorporativos" : "Interusos";
-
-function ReconocerIntercoModal({ pend, sociedad, cuentas = [], centros = [], onClose, onDone }) {
-  const esGestion = pend?.tratamiento === "gestion";
-  // gestión: pre-selecciona la cuenta sugerida por la nota SOLO si existe en el plan; igual se puede elegir cualquiera.
-  const cuentaSugerida = esGestion && (cuentas || []).some(c => c.nombre === cuentaGestionPorNota(pend?.nota)) ? cuentaGestionPorNota(pend?.nota) : "";
-  const [cuenta, setCuenta] = useState(cuentaSugerida);
-  const [centro, setCentro] = useState(esGestion ? (pend?.sedeCentro || "") : "");
-  const [total, setTotal]   = useState(String(pend?.total ?? ""));
-  const [fecha, setFecha]   = useState(new Date().toISOString().slice(0, 10));
-  const [busy, setBusy]     = useState(false);
-  // NC de interuso (a mi favor) → la reconozco como INGRESO a una cuenta de venta/ingreso (CxC). El resto
-  // (FACTURA que debo) → EGRESO a una cuenta de gasto (CxP). Se filtra la lista de cuentas según el caso.
-  const esIngreso = pend?.subtipo === "INGRESO";
-  const esVentaTipo = c => /^(venta|ventas|ingreso|ingresos)$/i.test(String(c.tipo || ""));
-  const cuentasGasto = (cuentas || []).filter(c => esIngreso ? esVentaTipo(c) : !esVentaTipo(c))
-    .sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
-  const centrosOrd = (centros || []).slice().sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
-  const canSave = cuenta && Number(total) > 0 && !busy;
-
-  const guardar = async () => {
-    if (!canSave) return;
-    setBusy(true);
-    try {
-      if (esGestion) {
-        // Asiento de gestión (sede propia): pata de la sede en nb_movimientos, SIN caja, SIN CxP.
-        await reconocerInterusoGestion({ ...pend, total: Number(total), fecha }, { cuenta, centro });
-      } else {
-        await reconocerVentaInterco({
-          sociedad, ventaIdComp: pend.id_comp, vendedorId: pend.vendedor, vendedorNombre: pend.vendedorNombre,
-          cuenta_contable: cuenta, centro_costo: centro, total: Number(total), moneda: pend.moneda, fecha, nroComp: pend.nroComp,
-          subtipo: pend.subtipo || "EGRESO",
-        });
-      }
-      await onDone();
-    } catch (e) { setBusy(false); alert("No se pudo reconocer: " + (e?.message || e)); }
-  };
-
-  const inp = MODAL_INP, lbl = MODAL_LBL;
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} style={{ background: "#f1f5f9", borderRadius: 16, width: 480, maxWidth: "97vw", overflow: "hidden", boxShadow: T.shadowMd }}>
-        <div style={{ background: T.accentDark, padding: "16px 22px" }}>
-          <div style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>{esGestion ? "Asiento de gestión" : (esIngreso ? "Reconocer crédito" : "Reconocer compra")}</div>
-          <div style={{ fontSize: 12, color: "rgba(255,255,255,.6)", marginTop: 2 }}>
-            {pend?.vendedorNombre} te {esIngreso ? "acreditó" : "vendió"} {pend?.moneda} {Math.round(pend?.total || 0).toLocaleString("es-AR")}{pend?.concepto ? ` · ${pend.concepto}` : ""}{pend?.nroComp ? ` · ${pend.nroComp}` : ""}
-          </div>
-        </div>
-        <div style={{ padding: 22, display: "flex", flexDirection: "column", gap: 14 }}>
-          <div><label style={lbl}>Cuenta contable *</label>
-            <select value={cuenta} onChange={e => setCuenta(e.target.value)} style={inp}>
-              <option value="">— Elegí la cuenta —</option>
-              {(esGestion ? (cuentas || []).slice().sort((a, b) => String(a.nombre).localeCompare(String(b.nombre))) : cuentasGasto)
-                .map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
-            </select></div>
-          <div><label style={lbl}>Centro de costo</label>
-            <select value={centro} onChange={e => setCentro(e.target.value)} style={inp}>
-              <option value="">— Sin centro —</option>
-              {centrosOrd.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-            </select></div>
-          <div style={{ display: "flex", gap: 12 }}>
-            <div style={{ flex: 1 }}><label style={lbl}>Importe *</label>
-              <input value={total} onChange={e => setTotal(e.target.value)} style={inp} /></div>
-            <div style={{ flex: 1 }}><label style={lbl}>Fecha</label>
-              <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={inp} /></div>
-          </div>
-          <div style={{ fontSize: 11.5, color: T.muted }}>{esGestion
-            ? <>Reconocimiento de <b>resultado</b> en el P&L de la sede (línea de interusos), <b>sin caja</b> y <b>sin cuenta por cobrar/pagar</b>. La contrapartida ya pega en el P&L de {pend?.vendedorNombre}.</>
-            : esIngreso
-            ? <>Se registra como <b>ingreso</b> en tu sociedad → queda como <b>cuenta por cobrar</b> a {pend?.vendedorNombre}.</>
-            : <>Se registra como compra en tu sociedad → queda como <b>factura por pagar</b> a {pend?.vendedorNombre}.</>}</div>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-            <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${T.cardBorder}`, borderRadius: 999, padding: "8px 18px", fontSize: 13, fontWeight: 700, color: T.muted, cursor: "pointer", fontFamily: T.font }}>Cancelar</button>
-            <button onClick={guardar} disabled={!canSave} style={{ background: T.accent, border: "none", borderRadius: 999, padding: "8px 20px", fontSize: 13, fontWeight: 800, color: "#000", cursor: canSave ? "pointer" : "default", opacity: canSave ? 1 : .5, fontFamily: T.font }}>{busy ? "Guardando…" : (esIngreso ? "Reconocer y registrar ingreso" : "Reconocer y registrar compra")}</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // Modal para DECLARAR una interco recibida (lado receptor): la plata que entró a mi banco/caja → fondeo,
 // sin P&L, sin posición nueva. Costo de clearing opcional → Perdidas Financieras (P&L). Marca la pata parkeada.
@@ -304,7 +223,6 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
 
 
   const [intercoData, setIntercoData] = useState({ movs: [], comps: [], centros: [], clientes: [], sociedades: [] });  // fuentes interco (read-only)
-  const [reconocerFor, setReconocerFor] = useState(null);  // pendiente interco que se está reconociendo
   // fetchIntercoData trae TODAS las sociedades (payload pesado): lo necesitan tanto Interco (mapa/pendientes)
   // como Banco (al conciliar una línea interco hay que detectar la pata parkeada de la contraparte,
   // "matchear o parkear"). No depende de `mundo` → se carga una vez por sociedad, no en cada toggle.
@@ -341,6 +259,47 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const [histGestionOpen, setHistGestionOpen] = useState(false);   // historial de gestión reconocida (colapsable)
   const [confirmRevert, setConfirmRevert]     = useState(null);    // mov.id del asiento a revertir (confirmación inline)
   const [confirmDescartar, setConfirmDescartar] = useState(null);  // id_comp del pendiente a descartar (confirmación inline)
+  // ── Reconocer gestión INLINE (como el motor de banco): cuenta+centro sugeridos en la tabla + Aceptar ──
+  const [gestEdits, setGestEdits] = useState({});   // id_comp → { cuenta, centro } (overrides del usuario)
+  const [busyGest,  setBusyGest]  = useState(null);  // id_comp en curso (o "__all__" para el bulk)
+  // cuenta sugerida: la que insinúa la nota (red bigg → Interusos / gympass → Coorporativos), si existe en el plan.
+  // Cuenta sugerida SOLO para gestión (la insinúa la nota: red bigg → Interusos / gympass → Coorporativos).
+  // Interco real (factura/NC de Segui, etc.) no tiene sugerencia → arranca vacía y la elegís.
+  const planCuentaNombres = useMemo(() => new Set((planCuentas || []).map(c => c.nombre)), [planCuentas]);
+  const gestCuentaDef = (p) => (p.tratamiento === "gestion" && planCuentaNombres.has(cuentaGestionPorNota(p?.nota))) ? cuentaGestionPorNota(p?.nota) : "";
+  const gestVal = (p, field) => {
+    const e = gestEdits[p.id_comp] || {};
+    if (e[field] !== undefined) return e[field];
+    if (field === "cuenta") return gestCuentaDef(p);
+    return p.tratamiento === "gestion" ? (p.sedeCentro || "") : "";   // centro: gestión sugiere la sede
+  };
+  const setGestVal = (id_comp, field, v) => setGestEdits(s => ({ ...s, [id_comp]: { ...s[id_comp], [field]: v } }));
+  const gestListos = () => (pendInterco || []).filter(p => gestVal(p, "cuenta"));
+  // Reconoce una fila del inbox interco INLINE (sin modal): gestión → asiento de gestión (solo P&L, no CxP);
+  // factura/NC real → CxP/CxC con la cuenta+centro elegidos (mismo writer que usaba el modal).
+  const aceptarIntercoInline = async (p) => {
+    const cuenta = gestVal(p, "cuenta");
+    if (!cuenta) return;
+    const centro = gestVal(p, "centro");
+    if (p.tratamiento === "gestion") await reconocerInterusoGestion(p, { cuenta, centro });
+    else await reconocerVentaInterco({
+      sociedad, ventaIdComp: p.id_comp, vendedorId: p.vendedor, vendedorNombre: p.vendedorNombre,
+      cuenta_contable: cuenta, centro_costo: centro, total: p.total, moneda: p.moneda,
+      fecha: new Date().toISOString().slice(0, 10), nroComp: p.nroComp, subtipo: p.subtipo || "EGRESO",
+    });
+  };
+  const aceptarUno = async (p) => {
+    setBusyGest(p.id_comp);
+    try { await aceptarIntercoInline(p); const d = await fetchIntercoData(); setIntercoData(d); }
+    catch (e) { alert("No se pudo reconocer: " + (e?.message || e)); }
+    finally { setBusyGest(null); }
+  };
+  const aceptarTodosGestion = async () => {
+    setBusyGest("__all__");
+    try { for (const p of gestListos()) await aceptarIntercoInline(p); const d = await fetchIntercoData(); setIntercoData(d); }
+    catch (e) { alert("No se pudo reconocer todo: " + (e?.message || e)); }
+    finally { setBusyGest(null); }
+  };
   // Avisa al sidebar los conteos de pendientes (badge en vivo): Banco (extracto sin conciliar) + Interco
   // (ventas a reconocer + CC a liquidar ida/vuelta).
   useEffect(() => { onPendientes?.({ banco: pendientes.length, interco: pendRecibir.length + pendInterco.length }); },
@@ -1213,10 +1172,21 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       {mundo === "interco" && (() => {
         const pend = pendInterco;
         const money = (n, mon) => `${mon} ${Math.round(Math.abs(n)).toLocaleString("es-AR")}`;
+        const planCuentasOrd = (planCuentas || []).slice().sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
+        const centrosOrd     = (centros || []).slice().sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
+        const listosGest     = gestListos();
         return (
           <div className="fade" style={{ overflow: "auto", display: "flex", flexDirection: "column", minHeight: "78vh" }}>
-            <div style={{ fontSize: 14, fontWeight: 800, color: T.text, marginBottom: 3 }}>Facturas y asientos recibidos</div>
-            <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 12 }}>De otras sociedades, para reconocer con tus cuentas.</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 3 }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: T.text }}>Facturas y asientos recibidos</div>
+              {listosGest.length > 0 && (
+                <button onClick={aceptarTodosGestion} disabled={busyGest != null}
+                  style={{ marginLeft: "auto", background: "#16a34a", border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 12.5, fontWeight: 700, color: "#fff", cursor: busyGest != null ? "default" : "pointer", fontFamily: T.font, opacity: busyGest != null ? .6 : 1 }}>
+                  {busyGest === "__all__" ? "Reconociendo…" : `Aceptar ${listosGest.length} listo${listosGest.length !== 1 ? "s" : ""} ✓`}
+                </button>
+              )}
+            </div>
+            <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 12 }}>De otras sociedades, para reconocer con tus cuentas. Las de gestión traen cuenta y centro sugeridos: revisá y aceptá.</div>
             {pend.length === 0 ? (
               <div style={{ color: T.muted, fontSize: 13, padding: "24px 4px" }}>No hay ventas de otras sociedades pendientes de reconocer.</div>
             ) : (
@@ -1226,46 +1196,69 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                     <tr style={{ color: T.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em", textAlign: "left", borderBottom: `1px solid ${T.cardBorder}` }}>
                       <th style={{ padding: "9px 14px", fontWeight: 700 }}>Fecha</th>
                       <th style={{ padding: "9px 14px", fontWeight: 700 }}>Documento</th>
+                      <th style={{ padding: "9px 14px", fontWeight: 700 }}>Cuenta</th>
+                      <th style={{ padding: "9px 14px", fontWeight: 700 }}>Centro</th>
                       <th style={{ padding: "9px 14px", fontWeight: 700, textAlign: "right" }}>Monto</th>
                       <th style={{ padding: "9px 14px" }} />
                     </tr>
                   </thead>
                   <tbody>
-                    {pend.map((p, i) => (
+                    {pend.map((p, i) => {
+                      const gest = p.tratamiento === "gestion";
+                      // Concepto real = la nota del documento (lo que se puso en el Excel). El bucket de cuenta
+                      // (p.concepto) ya no se muestra acá: aparece como cuenta sugerida en su columna.
+                      // Descripción: partes reales del documento, omitiendo las que repiten el emisor
+                      // (dato basura de test viejo, ej. nota "Ñako SRL" == vendedor). Gestión solo la nota.
+                      const vend = String(p.vendedorNombre || "").trim().toLowerCase();
+                      const desc = (gest ? [p.nota] : [p.concepto, p.nota, p.nroComp])
+                        .filter(x => x && String(x).trim().toLowerCase() !== vend).join(" · ");
+                      const cuentaVal = gestVal(p, "cuenta"), centroVal = gestVal(p, "centro");
+                      const bloqueado = busyGest != null || !cuentaVal;
+                      return (
                       <tr key={p.id_comp} style={{ borderTop: i ? `1px solid ${T.cardBorder}` : "none" }}>
-                        <td style={{ padding: "11px 14px", color: T.muted, whiteSpace: "nowrap" }}>{p.fecha}</td>
-                        <td style={{ padding: "11px 14px", whiteSpace: "nowrap" }}>
-                          {p.tratamiento === "gestion" ? (
+                        <td style={{ padding: "5px 14px", color: T.muted, whiteSpace: "nowrap" }}>{p.fecha}</td>
+                        <td style={{ padding: "5px 14px", whiteSpace: "nowrap" }}>
+                          {gest ? (
                             <span style={{ display: "inline-block", marginRight: 6, padding: "1px 7px", borderRadius: 999, fontSize: 9.5, fontWeight: 800, letterSpacing: ".05em", color: "#7c3aed", background: "rgba(167,139,250,.15)" }}
                               title="Interuso de sede propia: asiento de gestión (solo P&L, sin caja ni CxC/CxP)">◆ {p.sedeNombre || "Gestión"}</span>
                           ) : (
                             <b>{p.vendedorNombre}</b>
                           )}
-                          <span style={{ color: T.muted }}>{p.concepto ? ` · ${p.concepto}` : ""}{p.nota ? ` · ${p.nota}` : ""}{p.nroComp ? ` · ${p.nroComp}` : ""}</span>
+                          <span style={{ color: T.muted }}>{desc ? ` · ${desc}` : ""}</span>
+                          {gest && <span style={{ color: T.dim, fontSize: 11 }}> · de {p.vendedorNombre}</span>}
                         </td>
-                        <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: T.mono, fontWeight: 700, whiteSpace: "nowrap", color: p.subtipo === "INGRESO" ? "#16a34a" : "#dc2626" }}>{p.subtipo === "INGRESO" ? "+" : "−"} {money(p.total, p.moneda)}</td>
-                        <td style={{ padding: "8px 14px", textAlign: "right", minWidth: 130, whiteSpace: "nowrap" }}>
-                          <button onClick={() => setReconocerFor(p)}
-                            style={{ background: T.accent, border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 12.5, fontWeight: 800, color: "#000", cursor: "pointer", fontFamily: T.font }}>
-                            Reconocer
+                        <td style={{ padding: "4px 14px", whiteSpace: "nowrap" }}>
+                          <select value={cuentaVal} onChange={e => setGestVal(p.id_comp, "cuenta", e.target.value)} style={fld(!!cuentaVal, 170)}>
+                            <option value="">— cuenta —</option>
+                            {planCuentasOrd.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
+                          </select>
+                        </td>
+                        <td style={{ padding: "4px 14px", whiteSpace: "nowrap" }}>
+                          <select value={centroVal} onChange={e => setGestVal(p.id_comp, "centro", e.target.value)} style={fld(!!centroVal, 160)}>
+                            <option value="">— centro —</option>
+                            {centrosOrd.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                          </select>
+                        </td>
+                        <td style={{ padding: "4px 14px", textAlign: "right", fontFamily: T.mono, fontWeight: 700, whiteSpace: "nowrap", color: p.subtipo === "INGRESO" ? "#16a34a" : "#dc2626" }}>{p.subtipo === "INGRESO" ? "+" : "−"} {money(p.total, p.moneda)}</td>
+                        <td style={{ padding: "4px 14px", textAlign: "right", minWidth: 150, whiteSpace: "nowrap" }}>
+                          <button onClick={() => aceptarUno(p)} disabled={bloqueado}
+                            title={!cuentaVal ? "Elegí una cuenta" : (gest ? "Reconocer como asiento de gestión (solo P&L)" : "Reconocer la factura/NC (crea CxP/CxC)")}
+                            style={{ background: "#16a34a", border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 12.5, fontWeight: 800, color: "#fff", cursor: bloqueado ? "default" : "pointer", fontFamily: T.font, opacity: bloqueado ? .5 : 1 }}>
+                            {busyGest === p.id_comp ? "…" : "Aceptar ✓"}
                           </button>
-                          {p.tratamiento === "gestion" && (
-                            confirmDescartar === p.id_comp ? (
-                              <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>
-                                <button onClick={() => descartarGestion(p)} style={{ background: "#dc2626", border: "none", borderRadius: 8, padding: "6px 12px", fontSize: 11.5, fontWeight: 800, color: "#fff", cursor: "pointer", fontFamily: T.font }}>Borrar</button>
-                                <button onClick={() => setConfirmDescartar(null)} style={{ marginLeft: 6, background: "transparent", border: "none", fontSize: 11.5, fontWeight: 700, color: T.muted, cursor: "pointer", fontFamily: T.font }}>No</button>
-                              </span>
-                            ) : (
-                              <button onClick={() => setConfirmDescartar(p.id_comp)}
-                                title="Borrar la NC/FC de gestión emitida (mal cargada)"
-                                style={{ marginLeft: 8, background: "transparent", border: "none", fontSize: 11.5, fontWeight: 700, color: "#dc2626", cursor: "pointer", fontFamily: T.font }}>
-                                Descartar
-                              </button>
-                            )
-                          )}
+                          {gest && (confirmDescartar === p.id_comp ? (
+                            <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>
+                              <button onClick={() => descartarGestion(p)} style={{ background: "#dc2626", border: "none", borderRadius: 8, padding: "6px 12px", fontSize: 11.5, fontWeight: 800, color: "#fff", cursor: "pointer", fontFamily: T.font }}>Borrar</button>
+                              <button onClick={() => setConfirmDescartar(null)} style={{ marginLeft: 6, background: "transparent", border: "none", fontSize: 11.5, fontWeight: 700, color: T.muted, cursor: "pointer", fontFamily: T.font }}>No</button>
+                            </span>
+                          ) : (
+                            <button onClick={() => setConfirmDescartar(p.id_comp)}
+                              title="Descartar: borrar la NC/FC de gestión mal cargada"
+                              style={{ marginLeft: 6, background: "transparent", border: "none", fontSize: 17, fontWeight: 800, color: T.muted, cursor: "pointer", fontFamily: T.font, lineHeight: 1, verticalAlign: "middle" }}>⋯</button>
+                          ))}
                         </td>
                       </tr>
-                    ))}
+                    );})}
                   </tbody>
                 </table>
               </div>
@@ -1898,17 +1891,6 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
           onClose={() => setReglaModal(null)} onSave={handleSaveRegla} />
       )}
       </>)}
-
-      {reconocerFor && (
-        <ReconocerIntercoModal
-          pend={reconocerFor}
-          sociedad={sociedad}
-          cuentas={planCuentas}
-          centros={centros}
-          onClose={() => setReconocerFor(null)}
-          onDone={async () => { setReconocerFor(null); try { const d = await fetchIntercoData(); setIntercoData(d); } catch {} }}
-        />
-      )}
 
       {declararFor && (
         <DeclararRecibidaModal
