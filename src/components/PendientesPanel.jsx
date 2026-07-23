@@ -576,15 +576,8 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
     setSelectedPagoIds(new Set());
   };
 
-  if (sinAfipAll.length === 0 && sinAsignar.length === 0 && pagosSinFactura.length === 0 && fcRecibidasPendientes.length === 0) return null;
-
-  const selS = { background: "var(--bg)", border: "1px solid var(--border2)", color: "var(--text)", borderRadius: 6, padding: "4px 8px", fontSize: 11, fontFamily: "var(--font)", cursor: "pointer" };
-  const thS  = { fontSize: 10, fontWeight: 700, color: "var(--muted)", padding: "6px 10px", letterSpacing: ".04em", textAlign: "left", borderBottom: "1px solid var(--border)" };
-  const tdS  = { fontSize: 12, padding: "7px 10px", borderBottom: "1px solid rgba(255,255,255,.04)" };
-
-  const batchDone = batchProgress && !batchRunning;
-
-  // frId → todos los envíos "solicitud_factura" (para mostrar un dot por envío)
+  // frId → todos los envíos "solicitud_factura" (para mostrar un dot por envío). DEBE ir ANTES del
+  // early return (Rules of Hooks): si va después, al cambiar de sociedad varía el nº de hooks y crashea.
   const fcReminderSent = useMemo(() => {
     const m = new Map();
     for (const { fr } of [...sinAsignar, ...fcRecibidasPendientes]) {
@@ -594,6 +587,14 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
     }
     return m;
   }, [sinAsignar, fcRecibidasPendientes, recordatorios]);
+
+  if (sinAfipAll.length === 0 && sinAsignar.length === 0 && pagosSinFactura.length === 0 && fcRecibidasPendientes.length === 0) return null;
+
+  const selS = { background: "var(--bg)", border: "1px solid var(--border2)", color: "var(--text)", borderRadius: 6, padding: "4px 8px", fontSize: 11, fontFamily: "var(--font)", cursor: "pointer" };
+  const thS  = { fontSize: 10, fontWeight: 700, color: "var(--muted)", padding: "6px 10px", letterSpacing: ".04em", textAlign: "left", borderBottom: "1px solid var(--border)" };
+  const tdS  = { fontSize: 12, padding: "7px 10px", borderBottom: "1px solid rgba(255,255,255,.04)" };
+
+  const batchDone = batchProgress && !batchRunning;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
