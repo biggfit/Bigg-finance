@@ -1199,23 +1199,39 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
             {pend.length === 0 ? (
               <div style={{ color: T.muted, fontSize: 13, padding: "24px 4px" }}>No hay ventas de otras sociedades pendientes de reconocer.</div>
             ) : (
-              <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10, overflow: "hidden", boxShadow: T.shadow, maxWidth: 720 }}>
-                {pend.map((p, i) => (
-                  <div key={p.id_comp} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", borderTop: i ? `1px solid ${T.cardBorder}` : "none", fontSize: 13, color: T.text }}>
-                    <div style={{ flex: 1 }}>
-                      {p.tratamiento === "gestion" && (
-                        <span style={{ display: "inline-block", marginRight: 6, padding: "1px 7px", borderRadius: 999, fontSize: 9.5, fontWeight: 800, letterSpacing: ".05em", color: "#7c3aed", background: "rgba(167,139,250,.15)" }}
-                          title="Interuso de sede propia: asiento de gestión (solo P&L, sin caja ni CxC/CxP)">◆ GESTIÓN{p.sedeNombre ? " · " + p.sedeNombre : ""}</span>
-                      )}
-                      <b>{p.vendedorNombre}</b> te {p.subtipo === "INGRESO" ? "acreditó" : "vendió"} <b style={{ color: p.subtipo === "INGRESO" ? "#0284c7" : "#16a34a", fontFamily: T.mono }}>{money(p.total, p.moneda)}</b>
-                      <span style={{ color: T.muted }}>{p.concepto ? ` · ${p.concepto}` : ""}{p.nroComp ? ` · ${p.nroComp}` : ""}{p.fecha ? ` · ${p.fecha}` : ""}</span>
-                    </div>
-                    <button onClick={() => setReconocerFor(p)}
-                      style={{ background: T.accent, border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 12.5, fontWeight: 800, color: "#000", cursor: "pointer", fontFamily: T.font }}>
-                      Reconocer
-                    </button>
-                  </div>
-                ))}
+              <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10, overflowX: "auto", boxShadow: T.shadow }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, color: T.text }}>
+                  <thead>
+                    <tr style={{ color: T.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em", textAlign: "left", borderBottom: `1px solid ${T.cardBorder}` }}>
+                      <th style={{ padding: "9px 14px", fontWeight: 700 }}>Fecha</th>
+                      <th style={{ padding: "9px 14px", fontWeight: 700 }}>Documento</th>
+                      <th style={{ padding: "9px 14px", fontWeight: 700, textAlign: "right" }}>Monto</th>
+                      <th style={{ padding: "9px 14px" }} />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pend.map((p, i) => (
+                      <tr key={p.id_comp} style={{ borderTop: i ? `1px solid ${T.cardBorder}` : "none" }}>
+                        <td style={{ padding: "11px 14px", color: T.muted, whiteSpace: "nowrap" }}>{p.fecha}</td>
+                        <td style={{ padding: "11px 14px" }}>
+                          {p.tratamiento === "gestion" && (
+                            <span style={{ display: "inline-block", marginRight: 6, padding: "1px 7px", borderRadius: 999, fontSize: 9.5, fontWeight: 800, letterSpacing: ".05em", color: "#7c3aed", background: "rgba(167,139,250,.15)" }}
+                              title="Interuso de sede propia: asiento de gestión (solo P&L, sin caja ni CxC/CxP)">◆ GESTIÓN{p.sedeNombre ? " · " + p.sedeNombre : ""}</span>
+                          )}
+                          <b>{p.vendedorNombre}</b> te {p.subtipo === "INGRESO" ? "acreditó" : "vendió"}
+                          <span style={{ color: T.muted }}>{p.concepto ? ` · ${p.concepto}` : ""}{p.nroComp ? ` · ${p.nroComp}` : ""}</span>
+                        </td>
+                        <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: T.mono, fontWeight: 700, whiteSpace: "nowrap", color: p.subtipo === "INGRESO" ? "#0284c7" : "#16a34a" }}>{money(p.total, p.moneda)}</td>
+                        <td style={{ padding: "8px 14px", textAlign: "right", minWidth: 130 }}>
+                          <button onClick={() => setReconocerFor(p)}
+                            style={{ background: T.accent, border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 12.5, fontWeight: 800, color: "#000", cursor: "pointer", fontFamily: T.font }}>
+                            Reconocer
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
             {/* CC interco pendiente de liquidar (ida y vuelta) */}
