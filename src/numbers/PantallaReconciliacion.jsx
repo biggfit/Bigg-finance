@@ -81,14 +81,15 @@ const fld = (lleno, w = 150) => ({ fontSize: 11, padding: "4px 6px", borderRadiu
   background: lleno ? "#dcfce7" : "#fff7ed", border: `1px solid ${lleno ? "#4ade80" : "#fb923c"}` });
 
 // Modal para RECONOCER una venta interco: registra mi compra (con mis cuenta+centro) → FC por pagar.
-// Cuentas de interuso para el asiento de gestión (sede propia). Los NOMBRES matchean las líneas
-// del P&L Sede (int_bigg "Interusos" / int_corp "Coorporativos"). El default sale de la nota.
-const GESTION_CUENTAS = ["Interusos", "Coorporativos"];
+// La nota sugiere la cuenta de interuso (int_bigg "Interusos" / int_corp "Coorporativos"),
+// pero al reconocer el usuario puede elegir CUALQUIER cuenta del plan.
 const cuentaGestionPorNota = (nota) => /gympass|corpo/i.test(String(nota || "")) ? "Coorporativos" : "Interusos";
 
 function ReconocerIntercoModal({ pend, sociedad, cuentas = [], centros = [], onClose, onDone }) {
   const esGestion = pend?.tratamiento === "gestion";
-  const [cuenta, setCuenta] = useState(esGestion ? cuentaGestionPorNota(pend?.nota) : "");
+  // gestión: pre-selecciona la cuenta sugerida por la nota SOLO si existe en el plan; igual se puede elegir cualquiera.
+  const cuentaSugerida = esGestion && (cuentas || []).some(c => c.nombre === cuentaGestionPorNota(pend?.nota)) ? cuentaGestionPorNota(pend?.nota) : "";
+  const [cuenta, setCuenta] = useState(cuentaSugerida);
   const [centro, setCentro] = useState(esGestion ? (pend?.sedeCentro || "") : "");
   const [total, setTotal]   = useState(String(pend?.total ?? ""));
   const [fecha, setFecha]   = useState(new Date().toISOString().slice(0, 10));
@@ -132,12 +133,11 @@ function ReconocerIntercoModal({ pend, sociedad, cuentas = [], centros = [], onC
           </div>
         </div>
         <div style={{ padding: 22, display: "flex", flexDirection: "column", gap: 14 }}>
-          <div><label style={lbl}>{esGestion ? "Concepto de interuso *" : "Cuenta contable *"}</label>
+          <div><label style={lbl}>Cuenta contable *</label>
             <select value={cuenta} onChange={e => setCuenta(e.target.value)} style={inp}>
               <option value="">— Elegí la cuenta —</option>
-              {esGestion
-                ? GESTION_CUENTAS.map(n => <option key={n} value={n}>{n === "Coorporativos" ? "Coorporativos (Gympass)" : "Interusos (Red BIGG)"}</option>)
-                : cuentasGasto.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
+              {(esGestion ? (cuentas || []).slice().sort((a, b) => String(a.nombre).localeCompare(String(b.nombre))) : cuentasGasto)
+                .map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
             </select></div>
           <div><label style={lbl}>Centro de costo</label>
             <select value={centro} onChange={e => setCentro(e.target.value)} style={inp}>
@@ -1213,14 +1213,14 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                     {pend.map((p, i) => (
                       <tr key={p.id_comp} style={{ borderTop: i ? `1px solid ${T.cardBorder}` : "none" }}>
                         <td style={{ padding: "11px 14px", color: T.muted, whiteSpace: "nowrap" }}>{p.fecha}</td>
-                        <td style={{ padding: "11px 14px" }}>
-                          {p.tratamiento === "gestion" && (
+                        <td style={{ padding: "11px 14px", whiteSpace: "nowrap" }}>
+                          {p.tratamiento === "gestion" ? (
                             <span style={{ display: "inline-block", marginRight: 6, padding: "1px 7px", borderRadius: 999, fontSize: 9.5, fontWeight: 800, letterSpacing: ".05em", color: "#7c3aed", background: "rgba(167,139,250,.15)" }}
-                              title="Interuso de sede propia: asiento de gestión (solo P&L, sin caja ni CxC/CxP)">◆ GESTIÓN{p.sedeNombre ? " · " + p.sedeNombre : ""}</span>
+                              title="Interuso de sede propia: asiento de gestión (solo P&L, sin caja ni CxC/CxP)">◆ {p.sedeNombre || "Gestión"}</span>
+                          ) : (
+                            <b>{p.vendedorNombre}</b>
                           )}
-                          <b>{p.vendedorNombre}</b> te {p.subtipo === "INGRESO" ? "acreditó" : "vendió"}
-                          <span style={{ color: T.muted }}>{p.concepto ? ` · ${p.concepto}` : ""}{p.nroComp ? ` · ${p.nroComp}` : ""}</span>
-                          {p.nota && <div style={{ fontSize: 11.5, color: T.dim, marginTop: 2 }}>{p.nota}</div>}
+                          <span style={{ color: T.muted }}>{p.concepto ? ` · ${p.concepto}` : ""}{p.nota ? ` · ${p.nota}` : ""}{p.nroComp ? ` · ${p.nroComp}` : ""}</span>
                         </td>
                         <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: T.mono, fontWeight: 700, whiteSpace: "nowrap", color: p.subtipo === "INGRESO" ? "#0284c7" : "#16a34a" }}>{money(p.total, p.moneda)}</td>
                         <td style={{ padding: "8px 14px", textAlign: "right", minWidth: 130 }}>
