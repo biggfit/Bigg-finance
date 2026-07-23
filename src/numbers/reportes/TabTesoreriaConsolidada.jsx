@@ -8,12 +8,12 @@ import {
   fetchSociedades,
   fetchMovTesoreria, fetchEgresos, fetchIngresos, fetchPagosCobros,
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto,
-  fetchFinanciaciones, fetchSocios, fetchSociosCC, fetchIntercoData,
+  fetchFinanciaciones, fetchSocios, fetchSociosCC, fetchIntercoData, intercoLedger,
 } from "../../lib/numbersApi";
 import { fetchLiquidacionesCerradas } from "../../lib/sueldosApi";
 import { fetchAll } from "../../lib/sheetsApi";        // Franquicias (read-only)
 import { derivarSaldos, franqFirst, intercoConsolidado } from "../tesoreriaDerive";
-import { TabSaldos, TabMovimientos, PaginaAging } from "../PantallaTesoreria";
+import { TabSaldos, TabMovimientos, PaginaAging, PaginaIntercoLedger } from "../PantallaTesoreria";
 
 // Fusiona los items de Activo/Pasivo de varias sociedades por label+moneda (suma saldo, une docs).
 function mergeItems(arrays) {
@@ -34,6 +34,7 @@ export default function TabTesoreriaConsolidada() {
   const [filtroMoneda, setFiltroMoneda] = useState("ALL");
   const [fechaCorte,   setFechaCorte]   = useState("");
   const [filtroCuenta, setFiltroCuenta] = useState(null);
+  const [filtroRef,    setFiltroRef]    = useState(null);   // "ir al movimiento" desde el extracto interco
   const [drillDownItem, setDrillDownItem] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
@@ -136,6 +137,17 @@ export default function TabTesoreriaConsolidada() {
   });
 
   if (drillDownItem) {
+    // Interco → estado de cuenta corriente con saldo (mismo modelo que la Tesorería por sociedad),
+    // no un aging. Cada posición consolidada es un par (sociedad, contraparte) → su ledger directo.
+    if (drillDownItem.intercoLedger && intercoData) {
+      const ledger = intercoLedger(intercoData, {
+        sociedad: drillDownItem.sociedadId,
+        contraparte: drillDownItem.contraparteId,
+        moneda: drillDownItem.moneda,
+      });
+      return <PaginaIntercoLedger item={drillDownItem} ledger={ledger} onBack={() => setDrillDownItem(null)}
+        onGoToMov={e => { setDrillDownItem(null); setFiltroCuenta(null); setFiltroRef(e?.ref || null); setActiveTab("movimientos"); }} />;
+    }
     return (
       <PaginaAging item={drillDownItem} fechaCorte={fechaCorte}
         headerColor={drillDownItem.headerColor ?? "#374151"} onBack={() => setDrillDownItem(null)} />
@@ -278,8 +290,8 @@ export default function TabTesoreriaConsolidada() {
           onItemClick={setDrillDownItem} />
       )}
       {!loading && !error && activeTab === "movimientos" && (
-        <TabMovimientos movimientos={movimientos} cuentas={cuentas} filtroCuenta={filtroCuenta}
-          onLimpiarFiltro={() => setFiltroCuenta(null)} centrosCosto={data.centrosCosto} />
+        <TabMovimientos movimientos={movimientos} cuentas={cuentas} filtroCuenta={filtroCuenta} filtroRef={filtroRef}
+          onLimpiarFiltro={() => { setFiltroCuenta(null); setFiltroRef(null); }} centrosCosto={data.centrosCosto} />
       )}
     </div>
   );

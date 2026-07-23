@@ -41,8 +41,8 @@ export function intercoConsolidado(intercoData, selectedIds, sociedades = []) {
     const s = String(p.sociedad), c = String(p.contraparte);
     const sIn = sel.has(s), cIn = sel.has(c);
     if (esNucleo(s) && esNucleo(c) && sIn && cIn) continue;   // núcleo↔núcleo interno → netea
-    if (sIn)      activo.push(intercoItem(+p.neto, p.moneda, nom(c)));   // una del set es acreedora
-    else if (cIn) pasivo.push(intercoItem(-p.neto, p.moneda, nom(s)));   // una del set es deudora
+    if (sIn)      activo.push(intercoItem(+p.neto, p.moneda, nom(c), { sociedadId: s, contraparteId: c }));   // una del set es acreedora
+    else if (cIn) pasivo.push(intercoItem(-p.neto, p.moneda, nom(s), { sociedadId: c, contraparteId: s }));   // una del set es deudora
   }
   return { activo, pasivo };
 }

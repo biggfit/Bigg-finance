@@ -612,7 +612,7 @@ export function PaginaAging({ item, fechaCorte, headerColor, onBack }) {
 
 // Extracto de una posición interco (como una cuenta de tesorería): saldo de apertura + cada movimiento
 // por fecha con su +/− y saldo corriente. Más reciente arriba, apertura abajo de todo.
-function PaginaIntercoLedger({ item, ledger, onBack, onGoToMov }) {
+export function PaginaIntercoLedger({ item, ledger, onBack, onGoToMov }) {
   const mon = item.moneda ?? "ARS";
   const nosDeben = (ledger.final ?? 0) >= 0;   // + = nos deben (activo) / − = les debemos
   const headerColor = nosDeben ? "#16a34a" : "#dc2626";
