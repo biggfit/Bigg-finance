@@ -1212,7 +1212,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         const pend = pendInterco;
         const money = (n, mon) => `${mon} ${Math.round(Math.abs(n)).toLocaleString("es-AR")}`;
         return (
-          <div className="fade" style={{ overflow: "auto" }}>
+          <div className="fade" style={{ overflow: "auto", display: "flex", flexDirection: "column", minHeight: "78vh" }}>
             <div style={{ fontSize: 14, fontWeight: 800, color: T.text, marginBottom: 3 }}>Facturas y asientos recibidos</div>
             <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 12 }}>De otras sociedades, para reconocer con tus cuentas.</div>
             {pend.length === 0 ? (
@@ -1307,13 +1307,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
               </div>
             )}
             {reconocidosGestion.length > 0 && (
-              <>
+              <div style={{ marginTop: "auto", paddingTop: 16, borderTop: `1px solid ${T.cardBorder}` }}>
                 <button onClick={() => setHistGestionOpen(o => !o)}
-                  style={{ display: "block", background: "transparent", border: "none", color: T.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: T.font, padding: 0, margin: "28px 0 10px" }}>
+                  style={{ display: "block", background: "transparent", border: "none", color: T.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: T.font, padding: 0, margin: "4px 0 10px" }}>
                   {histGestionOpen ? "▾" : "▸"} Historial de gestión reconocida ({reconocidosGestion.length})
                 </button>
                 {histGestionOpen && (
-                <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10, overflowX: "auto", boxShadow: T.shadow, maxWidth: 720 }}>
+                <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10, overflowX: "auto", boxShadow: T.shadow }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, color: T.text }}>
                     <thead>
                       <tr style={{ color: T.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em", textAlign: "left", borderBottom: `1px solid ${T.cardBorder}` }}>
@@ -1346,7 +1346,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                   </table>
                 </div>
                 )}
-              </>
+              </div>
             )}
           </div>
         );
