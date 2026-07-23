@@ -82,7 +82,7 @@ function Placeholder({ section }) {
 }
 
 export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, onCerrarSesion }) {
-  const [activeId,       setActiveId]       = useState("tesoreria");
+  const [activeId,       setActiveId]       = useState(() => localStorage.getItem("nb_activeId") || "tesoreria");
   const [egresoSubView,  setEgresoSubView]  = useState(null);
   const [ingresoSubView, setIngresoSubView] = useState(null);
   // Pulso de navegación: se incrementa al tocar un ítem del sidebar. Las pantallas lo observan
@@ -100,7 +100,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
   const [socIdx,         setSocIdx]         = useState(0);
   const [showSocDrop,    setShowSocDrop]    = useState(false);
   const [socReady,       setSocReady]       = useState(false);
-  const [activeSpecial,  setActiveSpecial]  = useState(null);
+  const [activeSpecial,  setActiveSpecial]  = useState(() => localStorage.getItem("nb_activeSpecial") || null);
   // Deep-link a un comprobante: desde Tesorería, "Editar" de un PAGO/COBRO abre el detalle del
   // Egreso/Ingreso que salda (ahí vive el editor de pago). { section, id }.
   const [deepDoc,        setDeepDoc]        = useState(null);
@@ -149,6 +149,15 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
   const socDropRef = useRef(null);
   const activeSoc = sociedades[socIdx] ?? sociedades[0];
 
+  // Persistir sociedad + pantalla activa → al recargar (Ctrl+Shift+R) se vuelve donde estabas (AD-307).
+  // Gate en socReady: al montar, activeSoc es el fallback (Ñako) y escribiría "nako" pisando el id
+  // guardado ANTES de que el restore (dentro de fetchSociedades) lo lea. Recién persistimos post-carga.
+  useEffect(() => { if (socReady && activeSoc?.id) localStorage.setItem("nb_soc", activeSoc.id); }, [socReady, activeSoc?.id]);
+  useEffect(() => { localStorage.setItem("nb_activeId", activeId); }, [activeId]);
+  useEffect(() => {
+    if (activeSpecial) localStorage.setItem("nb_activeSpecial", activeSpecial);
+    else localStorage.removeItem("nb_activeSpecial");
+  }, [activeSpecial]);
 
   // Cerrar dropdown al hacer click afuera
   useEffect(() => {
@@ -172,7 +181,15 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
             if (a === false || a === 0 || a === "FALSE" || a === "false" || a === "0" || a === "") return false;
             return true;
           }) : [];
-        if (activas.length > 0) setSociedades(activas);
+        if (activas.length > 0) {
+          setSociedades(activas);
+          // Restaurar la sociedad activa por id (robusto ante reordenamientos de la lista).
+          const savedId = localStorage.getItem("nb_soc");
+          if (savedId) {
+            const idx = activas.findIndex(s => String(s.id) === savedId);
+            if (idx >= 0) setSocIdx(idx);
+          }
+        }
       })
       .catch(err => console.error("[Numbers] fetchSociedades error:", err))
       .finally(() => setSocReady(true));
