@@ -1714,6 +1714,14 @@ export async function reconocerInterusoGestion(pend, { cuenta, centro = "" } = {
   return { ok: true, id };
 }
 
+// Revertir un asiento de gestión reconocido: borra la fila de nb_movimientos → la NC/FC vuelve a
+// aparecer como pendiente en el inbox interco (el dedup por interco_ref ya no la encuentra). No hay
+// caja que deshacer (el asiento era no-cash). Reversible.
+export async function revertirInterusoGestion(movId) {
+  await post({ action: "del", sheet: "nb_movimientos", id: movId });
+  return { ok: true };
+}
+
 // Deriva las posiciones intercompañía por (sociedad, contraparte, moneda) leyendo TODAS
 // las fuentes (no solo transferencias). Convención: quien PONE la plata queda ACREEDOR
 // (le deben → neto +); quien la recibe queda DEUDOR (debe → neto −).

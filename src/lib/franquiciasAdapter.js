@@ -63,6 +63,7 @@ export function franquiciasPendientesInterco(compsByFr, franchises, miCuit, miSo
       const emisora = compEmpresa(c);
       out.push({
         id_comp: `FR-${c.id}`, origen: "franquicia",
+        frId: String(fr.id), compId: String(c.id),                   // para Descartar (borrar el comprobante emitido)
         subtipo: def.doc === "NC" ? "INGRESO" : "EGRESO",             // NC (a mi favor) → ingreso; FACTURA → CxP
         concepto: def.cuenta || "", vendedor: EMPRESA_SOCIEDAD[emisora] ?? "", vendedorNombre: emisora,
         fecha: c.date, nroComp: c.invoice || "", moneda: compCurrency(c), total: monto,

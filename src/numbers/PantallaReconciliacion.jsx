@@ -9,13 +9,13 @@ import {
   appendIngreso, fetchClientes, appendCliente,
   appendBancoRegla, fetchIngresos, imputarCobroIngreso,
   fetchFinanciaciones, imputarCuota, pagarTarjeta, esCuentaCredito, fetchMovTesoreria,
-  fetchIntercoData, pendientesInterco, reconocerVentaInterco, reconocerInterusoGestion, normCuit,
+  fetchIntercoData, pendientesInterco, reconocerVentaInterco, reconocerInterusoGestion, revertirInterusoGestion, normCuit,
   pendientesIntercoRecibir, declararIntercoRecibida, declararIntercoEnviada, intercoMatchCandidato,
   esCuentaMercadoPago,
 } from "../lib/numbersApi";
 import { BancoReglaModal } from "./PantallaMaestros";
 import MundoTarjeta from "./reconciliacion/MundoTarjeta";
-import { fetchAll } from "../lib/sheetsApi";
+import { fetchAll, removeComp } from "../lib/sheetsApi";
 import { franquiciasPendientesInterco } from "../lib/franquiciasAdapter";
 import { groupCentrosCosto, makeCrearMaestro } from "./formUtils";
 import NuevoEgresoModal from "./NuevoEgresoModal";
@@ -319,6 +319,25 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     [frComps, franquicias, sociedades, sociedad]);
   const pendInterco = useMemo(() => pendientesInterco({ ...intercoData, franqPend }, { sociedad }), [intercoData, franqPend, sociedad]);
   const pendRecibir = useMemo(() => pendientesIntercoRecibir(intercoData, { sociedad }), [intercoData, sociedad]);
+  // Asientos de gestión YA reconocidos (interusos de sedes propias) de esta sociedad → para poder Revertir.
+  const reconocidosGestion = useMemo(
+    () => (intercoData.movs || []).filter(m => m.origen === "interuso_gestion" && String(m.sociedad) === String(sociedad)),
+    [intercoData, sociedad]);
+  // Descartar: borra la NC/FC de gestión emitida (comprobante Franquicias) → sale del inbox y del P&L de Ñako.
+  const descartarGestion = async (p) => {
+    if (!window.confirm(`¿Borrar la NC/FC de gestión de ${p.sedeNombre || "la sede"} por ${p.moneda} ${Math.round(p.total).toLocaleString("es-AR")}? Se elimina el comprobante emitido.`)) return;
+    try {
+      await removeComp(p.frId, p.compId);
+      const { franchises, comps, saldos } = await fetchAll();
+      setFranquicias(franchises || []); setFrComps(comps || {}); setFrSaldos(saldos || {});
+    } catch (e) { alert("No se pudo descartar: " + (e?.message || e)); }
+  };
+  // Revertir: borra el asiento reconocido (nb_movimientos) → la NC/FC vuelve a pendiente.
+  const revertirGestion = async (m) => {
+    if (!window.confirm(`¿Revertir este asiento de gestión (${m.moneda || "ARS"} ${Math.round(Math.abs(Number(m.monto) || 0)).toLocaleString("es-AR")})? Vuelve a quedar pendiente de reconocer.`)) return;
+    try { await revertirInterusoGestion(m.id); const d = await fetchIntercoData(); setIntercoData(d); }
+    catch (e) { alert("No se pudo revertir: " + (e?.message || e)); }
+  };
   // Avisa al sidebar los conteos de pendientes (badge en vivo): Banco (extracto sin conciliar) + Interco
   // (ventas a reconocer + CC a liquidar ida/vuelta).
   useEffect(() => { onPendientes?.({ banco: pendientes.length, interco: pendRecibir.length + pendInterco.length }); },
@@ -1223,11 +1242,18 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           <span style={{ color: T.muted }}>{p.concepto ? ` · ${p.concepto}` : ""}{p.nota ? ` · ${p.nota}` : ""}{p.nroComp ? ` · ${p.nroComp}` : ""}</span>
                         </td>
                         <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: T.mono, fontWeight: 700, whiteSpace: "nowrap", color: p.subtipo === "INGRESO" ? "#16a34a" : "#dc2626" }}>{p.subtipo === "INGRESO" ? "+" : "−"} {money(p.total, p.moneda)}</td>
-                        <td style={{ padding: "8px 14px", textAlign: "right", minWidth: 130 }}>
+                        <td style={{ padding: "8px 14px", textAlign: "right", minWidth: 130, whiteSpace: "nowrap" }}>
                           <button onClick={() => setReconocerFor(p)}
                             style={{ background: T.accent, border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 12.5, fontWeight: 800, color: "#000", cursor: "pointer", fontFamily: T.font }}>
                             Reconocer
                           </button>
+                          {p.tratamiento === "gestion" && (
+                            <button onClick={() => descartarGestion(p)}
+                              title="Borrar la NC/FC de gestión emitida (mal cargada)"
+                              style={{ marginLeft: 8, background: "transparent", border: "none", fontSize: 11.5, fontWeight: 700, color: "#dc2626", cursor: "pointer", fontFamily: T.font }}>
+                              Descartar
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -1280,6 +1306,45 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                   </tbody>
                 </table>
               </div>
+            )}
+            {reconocidosGestion.length > 0 && (
+              <>
+                <div style={{ fontSize: 12, color: T.muted, margin: "22px 0 12px" }}>
+                  Asientos de <b>gestión</b> ya reconocidos (interusos de sedes propias, solo P&L). Si te equivocaste, <b>Revertir</b> borra el asiento y la NC/FC vuelve a quedar pendiente arriba.
+                </div>
+                <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10, overflowX: "auto", boxShadow: T.shadow, maxWidth: 720 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, color: T.text }}>
+                    <thead>
+                      <tr style={{ color: T.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em", textAlign: "left", borderBottom: `1px solid ${T.cardBorder}` }}>
+                        <th style={{ padding: "9px 14px", fontWeight: 700 }}>Fecha</th>
+                        <th style={{ padding: "9px 14px", fontWeight: 700 }}>Concepto</th>
+                        <th style={{ padding: "9px 14px", fontWeight: 700 }}>Cuenta</th>
+                        <th style={{ padding: "9px 14px", fontWeight: 700, textAlign: "right" }}>Monto</th>
+                        <th style={{ padding: "9px 14px" }} />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reconocidosGestion.map((m, i) => {
+                        const pos = (Number(m.monto) || 0) >= 0;
+                        return (
+                          <tr key={m.id} style={{ borderTop: i ? `1px solid ${T.cardBorder}` : "none" }}>
+                            <td style={{ padding: "11px 14px", color: T.muted, whiteSpace: "nowrap" }}>{m.fecha}</td>
+                            <td style={{ padding: "11px 14px" }}>{m.concepto || "Interuso gestión"}</td>
+                            <td style={{ padding: "11px 14px", color: T.muted }}>{m.cuenta_contable || "—"}</td>
+                            <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: T.mono, fontWeight: 700, whiteSpace: "nowrap", color: pos ? "#16a34a" : "#dc2626" }}>{pos ? "+" : "−"} {money(m.monto, m.moneda)}</td>
+                            <td style={{ padding: "8px 14px", textAlign: "right" }}>
+                              <button onClick={() => revertirGestion(m)}
+                                style={{ background: "transparent", border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 700, color: "#dc2626", cursor: "pointer", fontFamily: T.font }}>
+                                Revertir
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </div>
         );
