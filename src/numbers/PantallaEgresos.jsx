@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import { T, ESTADO_EGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
-import { fetchEgresos, appendEgreso, deleteEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, deleteMovTesoreria, updateMovTesoreria, shortId, appendProveedor, appendCuenta } from "../lib/numbersApi";
+import { fetchEgresos, appendEgreso, deleteEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, deleteMovTesoreria, updateMovTesoreria, shortId, appendProveedor, appendCuenta, buscarExtractoPendienteMatch } from "../lib/numbersApi";
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 import { makeResolveCC, makeResolveCB, inputStyle, CCSelectOptions, makeCrearMaestro, stripForDuplicate } from "./formUtils";
 import NuevoEgresoModal from "./NuevoEgresoModal";
@@ -927,6 +927,14 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
   const handlePago = async (data) => {
     const egreso = egresos.find(e => e.id === data.egresoId);
     const ccHeredado = egreso?.lineas?.find(l => l.cc)?.cc ?? "";
+    // Aviso anti-duplicado: ¿ya hay una línea del banco pendiente por este monto+fecha en esa cuenta?
+    // (el extracto se subió antes que este pago) → mejor matchearla en Conciliaciones que crear un pago nuevo.
+    try {
+      const dup = await buscarExtractoPendienteMatch({ sociedad, cuenta_bancaria: data.medioPago, monto: data.monto, fecha: data.fecha });
+      if (dup.length && !confirm(
+        `⚠ Ya hay ${dup.length} línea${dup.length > 1 ? "s" : ""} del banco pendiente${dup.length > 1 ? "s" : ""} por este monto (~${data.fecha}) en esa cuenta.\n\n` +
+        `Puede ser EL MISMO pago. Para no duplicarlo, cancelá y matcheá esa línea desde Conciliaciones.\n\n¿Crear el pago igual?`)) return;
+    } catch { /* si el chequeo falla, no bloquea el pago */ }
     try {
       await appendPago({
         documento_id:    data.egresoId,

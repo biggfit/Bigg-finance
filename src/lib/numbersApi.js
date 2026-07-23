@@ -907,6 +907,23 @@ export async function fetchMovimientosPendientes(sociedad) {
   return rows.filter(m => m.origen === "extracto" && !m.documento_id);
 }
 
+// Complemento INVERSO del auto-match de ingestarExtracto: cuando el tesorero está por cargar un movimiento
+// A MANO (pago/transferencia/gasto), busca líneas del EXTRACTO ya cargadas y PENDIENTES que matcheen por
+// mismo monto (abs) + cuenta + fecha ±ventana. Cubre el orden "subí el extracto y DESPUÉS Santi carga":
+// sin esto la línea del banco queda pendiente y la carga manual la duplica. La UI avisa antes de crear.
+export async function buscarExtractoPendienteMatch({ sociedad, cuenta_bancaria, monto, fecha, ventanaDias = 3 } = {}) {
+  if (!cuenta_bancaria || !fecha) return [];
+  const rows = await get("nb_movimientos", { sociedad });
+  const cents = Math.round(Math.abs(Number(monto) || 0) * 100);
+  if (!cents) return [];
+  const ts = +new Date(fecha);
+  return rows.filter(m =>
+    m.origen === "extracto" && !m.documento_id &&
+    String(m.cuenta_bancaria) === String(cuenta_bancaria) &&
+    Math.round(Math.abs(Number(m.monto) || 0) * 100) === cents &&
+    Math.abs((+new Date(m.fecha) - ts) / 86400000) <= ventanaDias);
+}
+
 // ── RESUMEN DE TARJETA → bandeja (mundo Tarjeta de Conciliaciones) ───────────────
 // El resumen es "un extracto más": precarga cada consumo como PENDIENTE en nb_movimientos
 // (origen "tarjeta"), contra la cuenta-tarjeta de su moneda, con la propuesta (cuenta/centro)
