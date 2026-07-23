@@ -1054,7 +1054,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
           <thead>
             <tr style={{ background:T.tableHead }}>
               <th style={{ width:36 }} />
-              {["ID","Estado","Emisión","Vencimiento","Proveedor","Importe","N° FC","Cuenta","Centros de Costo","Pagado","Pendiente","Medio de Pago","Nota"].map(h => (
+              {["ID","Estado","Emisión","Vencimiento","Proveedor","Importe","N° FC","Cuenta","Centros de Costo","Pagado","Pendiente","Medio de Pago","Nota","Registró"].map(h => (
                 <th key={h} style={{ padding:"10px 14px", fontSize:11, fontWeight:700,
                   letterSpacing:".08em", textTransform:"uppercase", whiteSpace:"nowrap",
                   color:T.tableHeadText, textAlign: ["Importe","Pagado","Pendiente"].includes(h) ? "right" : "left" }}>{h}</th>
@@ -1063,7 +1063,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
           </thead>
           <tbody>
             {rows.length === 0
-              ? <tr><td colSpan={11} style={{ padding:32, textAlign:"center", color:T.dim, fontSize:13 }}>Sin resultados</td></tr>
+              ? <tr><td colSpan={15} style={{ padding:32, textAlign:"center", color:T.dim, fontSize:13 }}>Sin resultados</td></tr>
               : rows.map((e, i) => (
                 <tr key={e.id} style={{ borderBottom:`1px solid ${T.cardBorder}`,
                   background: i%2===0 ? T.card : "#fafbfc", transition:"background .1s" }}
@@ -1120,6 +1120,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
                     {!(e.pagosVinculados??[]).length && <span style={{ color:T.dim, fontSize:11 }}>—</span>}
                   </td>
                   <td style={{ padding:"10px 14px", fontSize:12, color:T.muted, maxWidth:180, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.nota || "—"}</td>
+                  <td style={{ padding:"10px 14px", fontSize:12, color:T.muted, whiteSpace:"nowrap" }}>{e.registrado_por || "—"}</td>
                 </tr>
               ))
             }

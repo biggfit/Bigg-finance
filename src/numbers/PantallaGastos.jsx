@@ -406,7 +406,7 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
         <table style={{ width:"100%", borderCollapse:"collapse", minWidth:700 }}>
           <thead>
             <tr style={{ background:T.tableHead }}>
-              {["Fecha","Proveedor","Cuenta Contable","Centro de Costo","Monto","Forma de Pago",""].map(h => (
+              {["Fecha","Proveedor","Cuenta Contable","Centro de Costo","Monto","Forma de Pago","Registró",""].map(h => (
                 <th key={h} style={{ padding:"10px 14px", fontSize:11, fontWeight:700,
                   letterSpacing:".08em", textTransform:"uppercase", color:T.tableHeadText,
                   textAlign: h === "Monto" ? "right" : "left", whiteSpace:"nowrap" }}>{h}</th>
@@ -415,7 +415,7 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
           </thead>
           <tbody>
             {rows.length === 0
-              ? <tr><td colSpan={7} style={{ padding:32, textAlign:"center", color:T.dim, fontSize:13 }}>
+              ? <tr><td colSpan={8} style={{ padding:32, textAlign:"center", color:T.dim, fontSize:13 }}>
                   {gastos.length === 0 ? "Sin gastos registrados" : "Sin resultados"}
                 </td></tr>
               : rows.map((g, i) => (
@@ -459,6 +459,10 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
                           return `${icon} ${cb?.nombre ?? g.cuentaBancaria}`;
                         })()
                       : <span style={{ color:T.dim }}>—</span>}
+                  </td>
+
+                  <td style={{ padding:"9px 14px", fontSize:12, color:T.muted, whiteSpace:"nowrap" }}>
+                    {g.registrado_por || <span style={{ color:T.dim }}>—</span>}
                   </td>
 
                   <td style={{ padding:"9px 10px", textAlign:"center", whiteSpace:"nowrap" }}>

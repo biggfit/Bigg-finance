@@ -1335,6 +1335,7 @@ export async function fetchGastos(sociedad) {
         proveedor:       m.contraparte_nombre ?? "",
         nota:            m.concepto ?? "",
         cuentaBancaria:  m.cuenta_bancaria ?? "",
+        registrado_por:  m.registrado_por ?? "",
       };
     })
     .sort((a, b) => (b.fecha > a.fecha ? 1 : -1));
@@ -1405,6 +1406,7 @@ function _agruparPorComp(rows, subtipo) {
         cuentaId: row.cuenta_contable_id ?? "",
         nota:     row.nota,
         cc:       row.centro_costo,   // alias rápido de la primera línea
+        registrado_por: row.registrado_por ?? "",   // quién cargó el comprobante (primera línea del grupo)
         subtipo:  row.subtipo ?? subtipo,
         ...(subtipo === "EGRESO" || subtipo === "GASTO" ? { proveedor: row.contraparte_nombre ?? "", proveedorId: row.contraparte_id ?? "" } : {}),
         ...(subtipo === "INGRESO" ? { cliente: row.contraparte_nombre, clienteId: row.contraparte_id ?? "" } : {}),

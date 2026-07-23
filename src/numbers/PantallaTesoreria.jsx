@@ -1214,7 +1214,7 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
           <thead>
             <tr style={{ background:T.tableHead }}>
               <th style={{ width:36 }} />
-              {["Tipo","Fecha","Cuenta","Concepto","Cta. Contable","C. Costo","Moneda","Importe","Saldo"].map(h => (
+              {["Tipo","Fecha","Cuenta","Concepto","Cta. Contable","C. Costo","Moneda","Importe","Saldo","Registró"].map(h => (
                 <th key={h} style={{ padding:"10px 14px", fontSize:11, fontWeight:700,
                   letterSpacing:".08em", textTransform:"uppercase", color:T.tableHeadText,
                   textAlign: (h === "Importe" || h === "Saldo") ? "right" : "left" }}>{h}</th>
@@ -1289,6 +1289,7 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
                     color: (saldoByRow.get(m) ?? 0) < 0 ? T.red : T.text, textAlign:"right", whiteSpace:"nowrap" }}>
                     {fmtSaldo(saldoByRow.get(m) ?? 0, m.moneda)}
                   </td>
+                  <td style={{ padding:"10px 14px", fontSize:12, color:T.muted, whiteSpace:"nowrap" }}>{m.registrado_por || "—"}</td>
                 </tr>
               );
             })}
