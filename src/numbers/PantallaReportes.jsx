@@ -658,11 +658,11 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
         boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
         <table style={{ width: "100%", borderCollapse: "collapse",
           ...(vista === "evolucion"
-            ? { minWidth: 230 + activeMonths.length * 122 + 150, tableLayout: "fixed" }
+            ? { minWidth: 280 + activeMonths.length * 122 + 150, tableLayout: "fixed" }
             : { minWidth: 260 + cols.length * 120 }) }}>
           {vista === "evolucion" && (
             <colgroup>
-              <col style={{ width: 230 }} />
+              <col style={{ width: 280 }} />
               {activeMonths.map(m => <col key={m} style={{ width: 122 }} />)}
               <col style={{ width: 150 }} />
             </colgroup>
@@ -803,9 +803,9 @@ function PnLTableHuergo({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evo
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
       boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
       <table style={{ width: "100%", borderCollapse: "collapse",
-        ...(vista === "evolucion" ? { minWidth: 230 + activeMonths.length * 122 + 150, tableLayout: "fixed" } : { minWidth: 260 + cols.length * 120 }) }}>
+        ...(vista === "evolucion" ? { minWidth: 280 + activeMonths.length * 122 + 150, tableLayout: "fixed" } : { minWidth: 260 + cols.length * 120 }) }}>
         {vista === "evolucion" && (
-          <colgroup><col style={{ width: 230 }} />{activeMonths.map(m => <col key={m} style={{ width: 122 }} />)}<col style={{ width: 150 }} /></colgroup>
+          <colgroup><col style={{ width: 280 }} />{activeMonths.map(m => <col key={m} style={{ width: 122 }} />)}<col style={{ width: 150 }} /></colgroup>
         )}
         <thead><tr>
           <th style={{ ...thStyle, textAlign: "left", whiteSpace: "nowrap", ...stickyCol, background: T.tableHead, zIndex: 4 }}>Cuenta</th>
@@ -1018,9 +1018,9 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
   return (
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
       boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
-      <table style={{ width: "100%", minWidth: 230 + activeMonths.length * 122 + 150, borderCollapse: "collapse", tableLayout: "fixed" }}>
+      <table style={{ width: "100%", minWidth: 280 + activeMonths.length * 122 + 150, borderCollapse: "collapse", tableLayout: "fixed" }}>
         <colgroup>
-          <col style={{ width: 230 }} />
+          <col style={{ width: 280 }} />
           {activeMonths.map(m => <col key={m} style={{ width: 122 }} />)}
           <col style={{ width: 150 }} />
         </colgroup>
