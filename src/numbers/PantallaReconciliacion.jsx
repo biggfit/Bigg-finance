@@ -480,12 +480,16 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     const ed = edits[mov.id] || {}, meta = parseMeta(mov.referencia);
     return ed.fc_prov ?? (meta.prov ? String(meta.prov) : "");   // preselecciona SIEMPRE el proveedor reconocido
   };
-  // FC efectiva: la editada, o la única del proveedor si hay exactamente una.
+  // FC efectiva: la editada, o la única del proveedor si hay exactamente una. Si hay varias, se
+  // preselecciona la que tenga saldo == importe del movimiento (± centavos); si empatan dos, ninguna.
   const fcIdDe = (mov) => {
     const ed = edits[mov.id] || {};
     if (ed.fc_id != null) return ed.fc_id;
     const fcs = fcsDeProv(fcProvDe(mov));
-    return fcs.length === 1 ? String(fcs[0].id) : "";
+    if (fcs.length === 1) return String(fcs[0].id);
+    const target = Math.abs(Number(mov.monto) || 0);
+    const exactas = fcs.filter(f => Math.abs((Number(f.saldo) || 0) - target) < 0.01);
+    return exactas.length === 1 ? String(exactas[0].id) : "";
   };
 
   // ── Cobro de venta: facturas de venta con saldo pendiente (espejo de facturasPendientes).
