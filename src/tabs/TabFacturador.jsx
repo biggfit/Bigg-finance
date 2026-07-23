@@ -1642,7 +1642,8 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
       let comp = {
         id: uid(), type: r.type, date: r.date,
         amount: r.amount, ref: r.ref || `${loteId} — importado`,
-        nota: `${COMP_TYPES[r.type]?.label ?? r.type} — ${r.franchiseName}`,
+        // El concepto del Excel (r.ref = columna "concepto") es la nota; si vino vacío, fallback al label.
+        nota: r.ref || `${COMP_TYPES[r.type]?.label ?? r.type} — ${r.franchiseName}`,
         month: r.month, year: r.year, loteId,
         currency: r.currency,
         empresa: activeCompany,
