@@ -937,6 +937,10 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
 
   const aceptar = async (mov) => {
     if (!puedeAceptarMov(mov)) { setMsg("Completá la imputación antes de aceptar."); return; }
+    if (dupTransfer(mov) && !window.confirm(
+      `⚠ Posible duplicado.\n\nYa hay un movimiento contabilizado en esta cuenta con la misma fecha (${mov.fecha}) y el mismo importe. ` +
+      `Si esto ya está cargado, aceptarlo lo duplica.\n\n¿Cargarlo igual?`
+    )) return;
     try { await doAceptar(mov); } catch (e) { setMsg("Error al aceptar: " + e.message); }
   };
 
@@ -957,12 +961,18 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
 
   // Aceptar masivo: todas las filas listas de la cuenta activa (resiliente).
   const aceptarTodos = async () => {
-    const listos = filtered.filter(puedeAceptarMov);
-    if (!listos.length) { setMsg("No hay movimientos listos para aceptar."); return; }
+    const todosListos = filtered.filter(puedeAceptarMov);
+    // No aceptar posibles duplicados en masa: se dejan afuera para revisar/aceptar de a uno (con confirmación).
+    const dups = todosListos.filter(dupTransfer);
+    const listos = todosListos.filter(m => !dupTransfer(m));
+    if (!listos.length) {
+      setMsg(dups.length ? `No hay movimientos para aceptar en masa · ⚠ ${dups.length} posible(s) duplicado(s) quedaron para revisar de a uno.` : "No hay movimientos listos para aceptar.");
+      return;
+    }
     setUploading(true); let ok = 0, err = 0;
     for (const m of listos) { try { await doAceptar(m); ok++; } catch (e) { err++; } }
     setUploading(false);
-    setMsg(`✓ ${ok} aceptados${err ? ` · ⚠ ${err} con error` : ""}.`);
+    setMsg(`✓ ${ok} aceptados${err ? ` · ⚠ ${err} con error` : ""}${dups.length ? ` · ⚠ ${dups.length} posible(s) duplicado(s) dejados para revisar` : ""}.`);
   };
 
   // Ignorar: descarta la línea sin contabilizar (soft-mark IGN-). Sale de pendientes y no cuenta
@@ -1576,7 +1586,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           <span style={{ fontSize: 11, fontWeight: 700, color: T.text }}>{interco ? "Transferencia interco" : "Transferencia"}</span>
                           {meta.op && <span style={{ fontSize: 9, color: T.dim, marginLeft: 5 }}>op {meta.op}</span>}
                           {dupTransfer(m)
-                            ? <div style={{ fontSize: 10, color: "#b45309" }}>⚠ posible duplicado — ya está en la caja (ignorá con ⋯)</div>
+                            ? <span title="posible duplicado — ya está en la caja (ignorá con ⋯)" style={{ fontSize: 16, color: "#e11212", fontWeight: 800, marginLeft: 5, cursor: "help" }}>⚠</span>
                             : <div style={{ fontSize: 10, color: T.muted }}>{destinoSel ? "→ destino elegido" : "elegí destino o ignorá (⋯)"}</div>}
                         </div>
                       ) : (
@@ -1584,7 +1594,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           <span style={{ fontSize: 11, fontWeight: 700, color: T.text }}>{TIPO_LABEL[tipo] || tipo || "—"}</span>
                           {meta.regla && <span style={{ fontSize: 9, color: T.dim, marginLeft: 5 }}>({meta.regla})</span>}
                           {meta.op && <div style={{ fontSize: 10, color: T.muted }}>op {meta.op}</div>}
-                          {dupTransfer(m) && <div style={{ fontSize: 10, color: "#b45309" }}>⚠ posible duplicado — ya hay un movimiento igual en la caja (¿pago ya cargado? ignorá con ⋯)</div>}
+                          {dupTransfer(m) && <span title="posible duplicado — ya hay un movimiento igual en la caja (¿pago ya cargado? ignorá con ⋯)" style={{ fontSize: 16, color: "#e11212", fontWeight: 800, marginLeft: 5, cursor: "help" }}>⚠</span>}
                         </>
                       )}
                     </td>
@@ -1717,12 +1727,22 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                     </td>
                     <td style={{ padding: "8px 12px 8px 4px", whiteSpace: "nowrap", position: "relative" }}>
                       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                        <button onClick={() => aceptar(m)} disabled={!puedeAceptar}
-                          title={puedeAceptar ? "" : "Completá la imputación"}
-                          style={{ background: puedeAceptar ? "#16a34a" : "#cbd5e1", border: "none", borderRadius: 6, padding: "5px 12px",
-                            fontSize: 11, fontWeight: 700, color: "#fff", cursor: puedeAceptar ? "pointer" : "default", fontFamily: T.font }}>
-                          Aceptar ✓
-                        </button>
+                        {dupTransfer(m) ? (
+                          // Posible duplicado: la acción primaria es Ignorar (rojo, un click; reversible desde "Ignorados"); Aceptar pasa al ⋯.
+                          <button onClick={() => ignorar(m)}
+                            title="Posible duplicado — ignorar sin contabilizar (reversible)"
+                            style={{ background: "#e11212", border: "none", borderRadius: 6, padding: "5px 12px",
+                              fontSize: 11, fontWeight: 700, color: "#fff", cursor: "pointer", fontFamily: T.font }}>
+                            🚫 Ignorar
+                          </button>
+                        ) : (
+                          <button onClick={() => aceptar(m)} disabled={!puedeAceptar}
+                            title={puedeAceptar ? "" : "Completá la imputación"}
+                            style={{ background: puedeAceptar ? "#16a34a" : "#cbd5e1", border: "none", borderRadius: 6, padding: "5px 12px",
+                              fontSize: 11, fontWeight: 700, color: "#fff", cursor: puedeAceptar ? "pointer" : "default", fontFamily: T.font }}>
+                            Aceptar ✓
+                          </button>
+                        )}
                         <button onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === m.id ? null : m.id); }} title="Más acciones"
                           style={{ background: menuFor === m.id ? T.accent : T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "4px 8px",
                             fontSize: 12, fontWeight: 800, color: T.text, cursor: "pointer", lineHeight: 1 }}>⋯</button>
@@ -1730,6 +1750,11 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                       {menuFor === m.id && (
                         <div onClick={(e) => e.stopPropagation()} style={{ position: "absolute", right: 6, top: "calc(100% - 2px)", zIndex: 30,
                           background: "#fff", border: "1px solid #cbd5e1", borderRadius: 8, boxShadow: "0 6px 18px rgba(0,0,0,.14)", minWidth: 220, overflow: "hidden" }}>
+                          {/* Posible duplicado: la acción primaria es Ignorar (botón rojo), así que Aceptar vive acá. */}
+                          {dupTransfer(m) && (
+                            <button style={{ ...MENU_ITEM, color: "#16a34a", fontWeight: 700 }} disabled={!puedeAceptar}
+                              onClick={() => { setMenuFor(null); if (!puedeAceptarMov(m)) { setMsg("Completá la imputación antes de aceptar."); return; } doAceptar(m).catch(e => setMsg("Error al aceptar: " + e.message)); }}>✓ Aceptar igual (no es duplicado)</button>
+                          )}
                           {/* Acciones primarias (se ocultan cuando la fila ya está en un modo) */}
                           {!fr.es && !modoTransfer && !modoInterco && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoTransfer: true, noTransfer: false, modoFranquicia: false, modoInterco: false, noFranquicia: true }); setMenuFor(null); }}>⇄ Transferencia entre cuentas</button>
@@ -1793,7 +1818,10 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                             <button style={{ ...MENU_ITEM, color: "#7c3aed", fontWeight: 700 }} onClick={() => { ignorar(m, `haberes:${hMatch.lote}`); setMenuFor(null); }}>✓ Ya está en Sueldos — descartar</button>
                           )}
                           <button style={MENU_ITEM} onClick={() => { setReglaModal({ prefill: prefillRegla(m) }); setMenuFor(null); }}>⚙ Crear regla</button>
-                          <button style={{ ...MENU_ITEM, color: "#b45309" }} onClick={() => { if (window.confirm(`Ignorar esta línea (no se contabiliza)?\n${m.concepto || ""} · $${fmt(total)}`)) ignorar(m); setMenuFor(null); }}>🚫 Ignorar</button>
+                          {/* Ignorar en el menú solo si NO es duplicado (en duplicados el botón rojo de afuera ya es Ignorar). */}
+                          {!dupTransfer(m) && (
+                            <button style={{ ...MENU_ITEM, color: "#b45309" }} onClick={() => { if (window.confirm(`Ignorar esta línea (no se contabiliza)?\n${m.concepto || ""} · $${fmt(total)}`)) ignorar(m); setMenuFor(null); }}>🚫 Ignorar</button>
+                          )}
                         </div>
                       )}
                     </td>
@@ -1862,7 +1890,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
               {verIgnorados ? "▾" : "▸"} Ignorados ({ign.length})
             </button>
             {verIgnorados && (
-              <div style={{ marginTop: 6, background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 8, overflow: "hidden" }}>
+              <div style={{ marginTop: 6, background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 8, maxHeight: 360, overflowY: "auto" }}>
                 {ign.map(m => {
                   const ig = parseMeta(m.referencia).ign || "";
                   return (
