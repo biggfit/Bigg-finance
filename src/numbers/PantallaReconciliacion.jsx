@@ -639,6 +639,17 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       const cta = cuentas.find(c => c.id === cuentaTab);
       const banco = String(cta?.banco || "");
       const moneda = cta?.moneda || "ARS";
+      // Anti-carrera: si los datos de clasificación aún no cargaron (fetch async), traerlos AHORA antes de
+      // clasificar. Sin esto, subir apenas abre la pantalla ingería "en blanco" → todo sin_clasificar
+      // (parecía que el motor "no reconocía" reglas/planes). Solo re-fetch si faltan (no penaliza el caso normal).
+      const reglasNow = reglas.length ? reglas : await fetchBancoReglas().catch(() => reglas);
+      const provNow   = proveedores.length ? proveedores : await fetchProveedores().catch(() => proveedores);
+      const finNow    = financiaciones.length ? financiaciones : await fetchFinanciaciones(sociedad).catch(() => financiaciones);
+      if (reglasNow !== reglas) setReglas(reglasNow);
+      if (provNow !== proveedores) setProveedores(provNow);
+      if (finNow !== financiaciones) setFinanciaciones(finNow);
+      const cuotasPendNow = [];
+      for (const p of finNow) { if (p.moneda && p.moneda !== moneda) continue; for (const cu of (p.cuotas || [])) if (cu.estado === "pendiente") cuotasPendNow.push({ plan_id: p.plan_id, nro_plan: p.nro_plan, acreedor_cuit: p.acreedor_cuit, acreedor_nombre: p.acreedor_nombre, nro_cuota: cu.nro_cuota, row_id: cu.rowId, total: cu.total, total_tardio: cu.total_tardio, vto: cu.vto, moneda: p.moneda }); }
       let lineas;
       if (/mercado\s*pago/i.test(banco)) {
         // Mercado Pago: el archivo depurado ya viene clasificado (tipo/cuenta/centro por columna).
@@ -663,8 +674,8 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         const data = /interaudi/i.test(banco) ? await parseInterAudi(file)
           : /caixa/i.test(banco) ? await parseCaixa(file)
           : await parseGalicia(file);
-        const ctx = { banco: cta?.banco, sociedad, pais: "", franquicias, sociedades, cuentas: cuentasAll, moneda, cuotasPendientes };
-        lineas = clasificarLineas(data.lineas, reglas, proveedores, ctx);
+        const ctx = { banco: cta?.banco, sociedad, pais: "", franquicias, sociedades, cuentas: cuentasAll, moneda, cuotasPendientes: cuotasPendNow };
+        lineas = clasificarLineas(data.lineas, reglasNow, provNow, ctx);
       }
       setProgreso({ done: 0, total: lineas.length });
       const { creados, matcheados = 0, dups, errores, fallidas } = await ingestarExtracto({ sociedad, cuenta_bancaria: cuentaTab, moneda, lineas,
@@ -1118,6 +1129,9 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
           // Regla interco (ej. Tigre Loco / Wellness) → parkear: sociedad derivada de la cuenta única del otro lado.
           const acc = (cuentasAll || []).find(c => String(c.id) === String(p.cuenta_destino));
           next[m.id] = { ...next[m.id], modoInterco: true, interco_soc: acc?.sociedad || "", interco_acc: p.cuenta_destino || "", modoTransfer: false, modoFranquicia: false, modoFC: false, modoCobro: false, noFranquicia: true, noTransfer: true };
+        } else if (p.tipo === "cuota_financiacion" && p.plan_id) {
+          // Cuota de plan (AFIP/crédito) → modo cuota con plan+cuota pre-seleccionados (el usuario confirma).
+          next[m.id] = { ...next[m.id], modoCuota: true, noCuota: false, cuota_plan: p.plan_id, cuota_row: p.cuota_row_id, modoTransfer: false, modoFranquicia: false, modoFC: false, modoCobro: false, modoInterco: false, noFranquicia: true };
         } else if (p.cuenta_contable) {
           next[m.id] = { ...next[m.id], cuenta_contable: p.cuenta_contable, centro_costo: p.centro_costo || next[m.id]?.centro_costo, proveedor_id: p.proveedor_id || next[m.id]?.proveedor_id };
         } else continue;
