@@ -206,6 +206,7 @@ const EMPTY_FR_BUF = {
   name:"", razonSocial:"", cuit:"", condIVA:"Responsable Inscripto",
   sociedad:"ÑAKO SRL", currency:"ARS", currencies:["ARS"], country:"Argentina",
   applyIVA:true, paysFee:true, activa:true,
+  esSedePropia:false, sedeSociedad:"", sedeCentro:"",
   feeImporte:"", feeMoneda:"ARS",
   contrato:"", fechaInicio:"", fechaVto:"", fechaApertura:"", aniosContrato:"",
   renovacionAuto:false, periodoRenovacion:"1 año",
@@ -231,6 +232,9 @@ function frToBuf(fr) {
     country:         fr.country         ?? "Argentina",
     applyIVA:        fr.applyIVA        ?? true,
     paysFee:         fr.paysFee         ?? true,
+    esSedePropia:    fr.esSedePropia    ?? false,
+    sedeSociedad:    fr.sedeSociedad    ?? "",
+    sedeCentro:      fr.sedeCentro      ?? "",
     activa:          fr.activa          !== false,
     feeImporte:      fr.feeImporte      ?? "",
     feeMoneda:       fr.feeMoneda       ?? fr.moneda ?? "ARS",
@@ -1177,7 +1181,34 @@ export default function MaestrosModal({ franchises, franchisor, comps, tiposCamb
                         {buf.paysFee !== false ? "$ PAGA FEE" : "○ SIN FEE"}
                       </button>
                     )}
+                    {!newMode && (
+                      <button onClick={() => setBuf(b => ({ ...b, esSedePropia: !b.esSedePropia, paysFee: !b.esSedePropia ? false : b.paysFee }))}
+                        style={{
+                          padding:"2px 8px", borderRadius:20, fontSize:9, fontWeight:800, cursor:"pointer", border:"none",
+                          color:       buf.esSedePropia ? "var(--purple, #a78bfa)" : "var(--muted)",
+                          background:  buf.esSedePropia ? "rgba(167,139,250,.12)" : "rgba(255,255,255,.05)",
+                          letterSpacing:".06em",
+                        }} title={buf.esSedePropia ? "Sede propia (interusos = asiento de gestión). Click para desmarcar." : "Click para marcarla como SEDE PROPIA (interusos por gestión, no fiscal)"}>
+                        {buf.esSedePropia ? "◆ SEDE PROPIA" : "◇ franquicia"}
+                      </button>
+                    )}
                   </div>
+                  {!newMode && buf.esSedePropia && (
+                    <div style={{ display:"flex", gap:8, marginTop:6, flexWrap:"wrap" }}>
+                      <label style={{ fontSize:9, color:"var(--muted)", display:"flex", flexDirection:"column", gap:2 }}>
+                        Sociedad Numbers
+                        <input value={buf.sedeSociedad || ""} onChange={e => setBuf(b => ({ ...b, sedeSociedad: e.target.value.trim() }))}
+                          placeholder="hektor / wellness / segui-fit"
+                          style={{ fontSize:11, padding:"3px 6px", borderRadius:4, border:"1px solid var(--border2)", background:"var(--bg2, #1a1e22)", color:"var(--text)", minWidth:180 }} />
+                      </label>
+                      <label style={{ fontSize:9, color:"var(--muted)", display:"flex", flexDirection:"column", gap:2 }}>
+                        Centro de costo (id Numbers)
+                        <input value={buf.sedeCentro || ""} onChange={e => setBuf(b => ({ ...b, sedeCentro: e.target.value.trim() }))}
+                          placeholder="cc-2026-…"
+                          style={{ fontSize:11, padding:"3px 6px", borderRadius:4, border:"1px solid var(--border2)", background:"var(--bg2, #1a1e22)", color:"var(--text)", minWidth:180 }} />
+                      </label>
+                    </div>
+                  )}
                   {/* Menu ... con Eliminar */}
                   {!newMode && (
                     <div style={{ position:"relative" }}>

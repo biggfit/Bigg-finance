@@ -9,7 +9,7 @@ import {
   appendIngreso, fetchClientes, appendCliente,
   appendBancoRegla, fetchIngresos, imputarCobroIngreso,
   fetchFinanciaciones, imputarCuota, pagarTarjeta, esCuentaCredito, fetchMovTesoreria,
-  fetchIntercoData, pendientesInterco, reconocerVentaInterco, normCuit,
+  fetchIntercoData, pendientesInterco, reconocerVentaInterco, reconocerInterusoGestion, normCuit,
   pendientesIntercoRecibir, declararIntercoRecibida, declararIntercoEnviada, intercoMatchCandidato,
   esCuentaMercadoPago,
 } from "../lib/numbersApi";
@@ -81,9 +81,15 @@ const fld = (lleno, w = 150) => ({ fontSize: 11, padding: "4px 6px", borderRadiu
   background: lleno ? "#dcfce7" : "#fff7ed", border: `1px solid ${lleno ? "#4ade80" : "#fb923c"}` });
 
 // Modal para RECONOCER una venta interco: registra mi compra (con mis cuenta+centro) → FC por pagar.
+// Cuentas de interuso para el asiento de gestión (sede propia). Los NOMBRES matchean las líneas
+// del P&L Sede (int_bigg "Interusos" / int_corp "Coorporativos"). El default sale de la nota.
+const GESTION_CUENTAS = ["Interusos", "Coorporativos"];
+const cuentaGestionPorNota = (nota) => /gympass|corpo/i.test(String(nota || "")) ? "Coorporativos" : "Interusos";
+
 function ReconocerIntercoModal({ pend, sociedad, cuentas = [], centros = [], onClose, onDone }) {
-  const [cuenta, setCuenta] = useState("");
-  const [centro, setCentro] = useState("");
+  const esGestion = pend?.tratamiento === "gestion";
+  const [cuenta, setCuenta] = useState(esGestion ? cuentaGestionPorNota(pend?.nota) : "");
+  const [centro, setCentro] = useState(esGestion ? (pend?.sedeCentro || "") : "");
   const [total, setTotal]   = useState(String(pend?.total ?? ""));
   const [fecha, setFecha]   = useState(new Date().toISOString().slice(0, 10));
   const [busy, setBusy]     = useState(false);
@@ -100,11 +106,16 @@ function ReconocerIntercoModal({ pend, sociedad, cuentas = [], centros = [], onC
     if (!canSave) return;
     setBusy(true);
     try {
-      await reconocerVentaInterco({
-        sociedad, ventaIdComp: pend.id_comp, vendedorId: pend.vendedor, vendedorNombre: pend.vendedorNombre,
-        cuenta_contable: cuenta, centro_costo: centro, total: Number(total), moneda: pend.moneda, fecha, nroComp: pend.nroComp,
-        subtipo: pend.subtipo || "EGRESO",
-      });
+      if (esGestion) {
+        // Asiento de gestión (sede propia): pata de la sede en nb_movimientos, SIN caja, SIN CxP.
+        await reconocerInterusoGestion({ ...pend, total: Number(total), fecha }, { cuenta, centro });
+      } else {
+        await reconocerVentaInterco({
+          sociedad, ventaIdComp: pend.id_comp, vendedorId: pend.vendedor, vendedorNombre: pend.vendedorNombre,
+          cuenta_contable: cuenta, centro_costo: centro, total: Number(total), moneda: pend.moneda, fecha, nroComp: pend.nroComp,
+          subtipo: pend.subtipo || "EGRESO",
+        });
+      }
       await onDone();
     } catch (e) { setBusy(false); alert("No se pudo reconocer: " + (e?.message || e)); }
   };
@@ -115,16 +126,18 @@ function ReconocerIntercoModal({ pend, sociedad, cuentas = [], centros = [], onC
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={onClose}>
       <div onClick={e => e.stopPropagation()} style={{ background: "#f1f5f9", borderRadius: 16, width: 480, maxWidth: "97vw", overflow: "hidden", boxShadow: T.shadowMd }}>
         <div style={{ background: T.accentDark, padding: "16px 22px" }}>
-          <div style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>{esIngreso ? "Reconocer crédito" : "Reconocer compra"}</div>
+          <div style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>{esGestion ? "Asiento de gestión" : (esIngreso ? "Reconocer crédito" : "Reconocer compra")}</div>
           <div style={{ fontSize: 12, color: "rgba(255,255,255,.6)", marginTop: 2 }}>
             {pend?.vendedorNombre} te {esIngreso ? "acreditó" : "vendió"} {pend?.moneda} {Math.round(pend?.total || 0).toLocaleString("es-AR")}{pend?.concepto ? ` · ${pend.concepto}` : ""}{pend?.nroComp ? ` · ${pend.nroComp}` : ""}
           </div>
         </div>
         <div style={{ padding: 22, display: "flex", flexDirection: "column", gap: 14 }}>
-          <div><label style={lbl}>Cuenta contable *</label>
+          <div><label style={lbl}>{esGestion ? "Concepto de interuso *" : "Cuenta contable *"}</label>
             <select value={cuenta} onChange={e => setCuenta(e.target.value)} style={inp}>
               <option value="">— Elegí la cuenta —</option>
-              {cuentasGasto.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
+              {esGestion
+                ? GESTION_CUENTAS.map(n => <option key={n} value={n}>{n === "Coorporativos" ? "Coorporativos (Gympass)" : "Interusos (Red BIGG)"}</option>)
+                : cuentasGasto.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
             </select></div>
           <div><label style={lbl}>Centro de costo</label>
             <select value={centro} onChange={e => setCentro(e.target.value)} style={inp}>
@@ -137,7 +150,9 @@ function ReconocerIntercoModal({ pend, sociedad, cuentas = [], centros = [], onC
             <div style={{ flex: 1 }}><label style={lbl}>Fecha</label>
               <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={inp} /></div>
           </div>
-          <div style={{ fontSize: 11.5, color: T.muted }}>{esIngreso
+          <div style={{ fontSize: 11.5, color: T.muted }}>{esGestion
+            ? <>Reconocimiento de <b>resultado</b> en el P&L de la sede (línea de interusos), <b>sin caja</b> y <b>sin cuenta por cobrar/pagar</b>. La contrapartida ya pega en el P&L de {pend?.vendedorNombre}.</>
+            : esIngreso
             ? <>Se registra como <b>ingreso</b> en tu sociedad → queda como <b>cuenta por cobrar</b> a {pend?.vendedorNombre}.</>
             : <>Se registra como compra en tu sociedad → queda como <b>factura por pagar</b> a {pend?.vendedorNombre}.</>}</div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
@@ -300,7 +315,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   // el de la sociedad activa). Los docs viven en el backend de Franquicias (frComps) → los surteamos al mismo
   // inbox de reconocer. FACTURA (le debo: pauta/sponsoreo) → EGRESO/CxP; NC (a mi favor: interuso) → INGRESO/CxC.
   const franqPend = useMemo(
-    () => franquiciasPendientesInterco(frComps, franquicias, (sociedades.find(s => String(s.id) === String(sociedad)) || {}).cuit),
+    () => franquiciasPendientesInterco(frComps, franquicias, (sociedades.find(s => String(s.id) === String(sociedad)) || {}).cuit, sociedad),
     [frComps, franquicias, sociedades, sociedad]);
   const pendInterco = useMemo(() => pendientesInterco({ ...intercoData, franqPend }, { sociedad }), [intercoData, franqPend, sociedad]);
   const pendRecibir = useMemo(() => pendientesIntercoRecibir(intercoData, { sociedad }), [intercoData, sociedad]);
@@ -1188,6 +1203,10 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                 {pend.map((p, i) => (
                   <div key={p.id_comp} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", borderTop: i ? `1px solid ${T.cardBorder}` : "none", fontSize: 13, color: T.text }}>
                     <div style={{ flex: 1 }}>
+                      {p.tratamiento === "gestion" && (
+                        <span style={{ display: "inline-block", marginRight: 6, padding: "1px 7px", borderRadius: 999, fontSize: 9.5, fontWeight: 800, letterSpacing: ".05em", color: "#7c3aed", background: "rgba(167,139,250,.15)" }}
+                          title="Interuso de sede propia: asiento de gestión (solo P&L, sin caja ni CxC/CxP)">◆ GESTIÓN{p.sedeNombre ? " · " + p.sedeNombre : ""}</span>
+                      )}
                       <b>{p.vendedorNombre}</b> te {p.subtipo === "INGRESO" ? "acreditó" : "vendió"} <b style={{ color: p.subtipo === "INGRESO" ? "#0284c7" : "#16a34a", fontFamily: T.mono }}>{money(p.total, p.moneda)}</b>
                       <span style={{ color: T.muted }}>{p.concepto ? ` · ${p.concepto}` : ""}{p.nroComp ? ` · ${p.nroComp}` : ""}{p.fecha ? ` · ${p.fecha}` : ""}</span>
                     </div>

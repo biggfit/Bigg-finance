@@ -24,19 +24,39 @@ const EMPRESA_SOCIEDAD = Object.fromEntries(Object.entries(SOCIEDAD_EMPRESA).map
 const FRANQ_CUENTA = { FEE: "Regalias s/Ventas", INTERUSOS: "Interusos", PAUTA: "Acciones de Mkt", SPONSORS: "Sponsor", SPONSOR: "Sponsor", OTROS: "Otros Ingresos" };
 const MONEDAS = ["ARS", "USD", "EUR"];
 
+// Tipos de GESTIÓN (interusos de sedes propias). A propósito NO están en COMP_TYPES:
+// así todas las funciones de saldo de franquicia (computeSaldo/Real, buildCuentaCorriente,
+// TabResumenMes) los ignoran solas — el doc de gestión NO deja CxC/CxP. El prefijo de doc
+// propio conserva el signo: GFAC|<cuenta> (+, cargo) / GNC|<cuenta> (−, crédito/NC).
+export const GESTION_TIPOS = { GFAC: { doc: "FACTURA", sign: +1 }, GNC: { doc: "NC", sign: -1 } };
+export const esTipoGestion = (type) => String(type || "").split("|")[0] in GESTION_TIPOS;
+// def unificada de un comprobante: COMP_TYPES (comercial) o el mapa de gestión.
+function defComp(type) {
+  if (COMP_TYPES[type]) return COMP_TYPES[type];
+  const [pref, cuenta] = String(type || "").split("|");
+  const g = GESTION_TIPOS[pref];
+  return g ? { doc: g.doc, sign: g.sign, cuenta: cuenta || "INTERUSOS", gestion: true } : null;
+}
+
 // Documentos de franquicia (FACTURA/NC) que una franquicia cuyo CUIT es el de la sociedad activa me emitió
 // → pendientes para reconocer en la Conciliación interco de esa sociedad (ej. Segui, que es sociedad Y
 // franquicia). FACTURA (le debo: pauta/sponsoreo) → EGRESO/CxP; NC (a mi favor: interuso) → INGRESO/CxC.
 // Mismo shape que un pendiente de venta interco; el dedup por interco_ref (id_comp "FR-…") lo aplica
 // pendientesInterco. Reusa COMP_TYPES/compEmpresa/compCurrency/EMPRESA_SOCIEDAD (no re-deriva los internals).
-export function franquiciasPendientesInterco(compsByFr, franchises, miCuit) {
+export function franquiciasPendientesInterco(compsByFr, franchises, miCuit, miSociedad = "") {
   const cuit = normCuit(miCuit);
-  if (!cuit) return [];
+  const soc  = (miSociedad || "").toLowerCase();
   const out = [];
   for (const fr of (franchises ?? [])) {
-    if (normCuit(fr.cuit) !== cuit) continue;                        // solo la franquicia que ES esta sociedad
+    const esSede    = fr.esSedePropia === true;
+    // Sede propia → parkea en su sociedad operadora (sedeSociedad), NO por CUIT (evita
+    // que caiga también por el camino comercial y deje una CxP fantasma).
+    // Franquicia normal (incl. Segui) → por CUIT, como siempre.
+    const matchSede = esSede && soc && (fr.sedeSociedad || "").toLowerCase() === soc;
+    const matchCuit = cuit && normCuit(fr.cuit) === cuit;
+    if (esSede ? !matchSede : !matchCuit) continue;
     for (const c of (compsByFr?.[String(fr.id)] ?? [])) {
-      const def = COMP_TYPES[c.type];
+      const def = defComp(c.type);
       if (!def || (def.doc !== "FACTURA" && def.doc !== "NC")) continue;
       const monto = Math.abs(Number(c.amount) || 0);
       if (!monto) continue;
@@ -46,6 +66,13 @@ export function franquiciasPendientesInterco(compsByFr, franchises, miCuit) {
         subtipo: def.doc === "NC" ? "INGRESO" : "EGRESO",             // NC (a mi favor) → ingreso; FACTURA → CxP
         concepto: def.cuenta || "", vendedor: EMPRESA_SOCIEDAD[emisora] ?? "", vendedorNombre: emisora,
         fecha: c.date, nroComp: c.invoice || "", moneda: compCurrency(c), total: monto,
+        nota: c.nota || "",                                          // hint red bigg / gympass (gestión)
+        ...(esSede ? {
+          tratamiento: "gestion",                                    // → reconocerInterusoGestion (no CxP)
+          sedeCentro:  fr.sedeCentro || "",
+          sedeSociedad:(fr.sedeSociedad || "").toLowerCase(),
+          sedeNombre:  fr.name || "",
+        } : {}),
       });
     }
   }
@@ -59,7 +86,7 @@ export function franquiciasIngresoPnLRows(compsByFr, sociedad, ventasCcId) {
   const out = [];
   for (const list of Object.values(compsByFr ?? {})) {
     for (const c of (list ?? [])) {
-      const def = COMP_TYPES[c.type];
+      const def = defComp(c.type);   // incluye gestión (GFAC/GNC) → pata 1 del asiento de gestión (P&L del emisor)
       if (!def || (def.doc !== "FACTURA" && def.doc !== "NC")) continue;
       const cSoc = EMPRESA_SOCIEDAD[compEmpresa(c)] ?? null;
       if (soc && cSoc !== soc) continue;

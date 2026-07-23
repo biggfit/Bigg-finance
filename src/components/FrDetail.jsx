@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useStore } from "../lib/context";
-import { computeSaldo, computeSaldoPrevMes, computePautaPendiente, compEmpresa, COMP_TYPES, fmt, fmtS } from "../lib/helpers";
+import { computeSaldo, computeSaldoPrevMes, computePautaPendiente, compEmpresa, COMP_TYPES, SKIP_CC_TYPES, fmt, fmtS } from "../lib/helpers";
 import { dmyToIso, isoToDmy, inPeriod, cmpDate, COMPANIES, todayDmy } from "../data/franchisor";
 import { TypePill } from "./atoms";
 import AddCompModal from "./AddCompModal";
@@ -42,7 +42,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
   const isCurrentMonth = localMonth === _now.getMonth() && localYear === _now.getFullYear();
 
   const frComps = useMemo(() => {
-    const base = (comps[key] ?? []).filter(c => compEmpresa(c) === activeCompany);
+    const base = (comps[key] ?? []).filter(c => compEmpresa(c) === activeCompany && !SKIP_CC_TYPES.has(c.type));
     // Mostrar solo el mes seleccionado: 01/MM/YYYY → último día del mes (o hoy si es mes actual)
     const from = `01/${String(localMonth + 1).padStart(2,"0")}/${localYear}`;
     const lastDay = new Date(localYear, localMonth + 1, 0).getDate();

@@ -79,14 +79,20 @@ function movimientoToPnLRows(movs, sociedad, cuentaMap) {
     if (soc && (m.sociedad ?? "").toLowerCase() !== soc) continue;
     const nombre = (m.cuenta_contable ?? "").trim();
     if (!nombre) continue;
-    // Entra al P&L: gasto/ingreso contado-conciliado (CONTAB-) o retención sufrida. La retención
-    // lleva documento_id de la factura (netea la CxC), por eso se la reconoce por origen.
-    if (!String(m.documento_id ?? "").startsWith("CONTAB-") && m.origen !== "retencion") continue;
+    // Entra al P&L: gasto/ingreso contado-conciliado (CONTAB-), retención sufrida, o interuso de
+    // gestión (asiento de gestión de sede propia, pata 2). La retención lleva documento_id de la
+    // factura (netea la CxC), por eso se la reconoce por origen; el interuso de gestión NO tiene caja.
+    if (!String(m.documento_id ?? "").startsWith("CONTAB-") && m.origen !== "retencion" && m.origen !== "interuso_gestion") continue;
     const monto = Number(m.monto) || 0;
     let total, _tipo;
     if (m.origen === "retencion") {
       total = Math.abs(monto);
       _tipo = "Retención";
+    } else if (m.origen === "interuso_gestion") {
+      // El writer ya firmó el monto desde la óptica de la sede (NC → ingreso +, FACTURA → cargo −)
+      // sobre su línea de interusos → pass-through directo, sin re-signar por categoría.
+      total = monto;
+      _tipo = "Interuso gestión";
     } else {
       const esIngreso = normCat(cuentaMap?.get(nombre)?.categoria_pnl) === "ventas";
       total = esIngreso ? monto : -monto;

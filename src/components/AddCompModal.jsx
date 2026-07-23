@@ -56,6 +56,7 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
   const allowedCurrencies = getCompanyCurrencies(activeCompany, franchisor);
   const applyIVA = !!(COMPANIES[activeCompany]?.applyIVA);
   const isAR     = selectedFr?.country === "Argentina";
+  const isSedePropia = selectedFr?.esSedePropia === true;   // interusos = asiento de gestión (no fiscal, no CxC/CxP)
 
   const initCur = () => {
     const def = COMPANIES[activeCompany]?.currency ?? selectedFr?.currency ?? "ARS";
@@ -129,7 +130,8 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
   const autoMovConcepto = `${COMP_TYPES[movTipo]?.label ?? movTipo} - ${MONTHS[mesMovComp]} ${anioMovComp}`;
 
   // ── flags de emisión ──
-  const usaFacturante = mode === "comprobante" && isAR && currency === "ARS" && (doc === "FACTURA" || doc === "NC");
+  // Sede propia: interuso NO fiscal → nunca ARCA (además el type de gestión no es FACTURA/NC).
+  const usaFacturante = mode === "comprobante" && isAR && currency === "ARS" && (doc === "FACTURA" || doc === "NC") && !isSedePropia;
   const refFAComp     = doc === "NC" ? (comps[String(selectedFr?.id)] ?? []).find(c => c.id === refCompId) : null;
   const ncSinRef      = usaFacturante && doc === "NC" && !refFAComp?.invoice;
 
@@ -178,7 +180,7 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
       } catch (err) {
         setEmitState("error"); setEmitError(err.message ?? "Error al emitir ante ARCA"); return;
       }
-    } else if (!usaFacturante && !skipFacturante && mode === "comprobante") {
+    } else if (!usaFacturante && !skipFacturante && mode === "comprobante" && !isSedePropia) {
       // Invoice USA/ESP
       setEmitState("emitting"); setEmitError(null);
       try {
@@ -191,6 +193,11 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
       }
     }
 
+    // Sede propia: guardar con type de GESTIÓN (GFAC|/GNC|) → asiento de gestión. Se emitió
+    // arriba con el type normal para el preview/labels; acá se remapea al persistir en comprobantes.
+    if (isSedePropia && mode === "comprobante") {
+      enriched = { ...enriched, type: makeType(doc === "NC" ? "GNC" : "GFAC", cuenta) };
+    }
     try { onAdd(selectedFr?.id, enriched); } catch {
       setEmitState("error"); setEmitError(afipSaveFailedMsg(enriched.invoice, enriched.facturanteId)); return;
     }
@@ -206,7 +213,7 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
           setTimeout(() => URL.revokeObjectURL(url), 100);
         })
         .catch(() => downloadTextAsPDF(buildFacturaPDF(selectedFr, franchisor, enriched), `Factura_${selectedFr?.name}.html`));
-    } else if (isAR) {
+    } else if (isAR && !isSedePropia) {
       downloadTextAsPDF(buildFacturaPDF(selectedFr, franchisor, enriched), `Factura_${selectedFr?.name}.html`);
     } else if (enriched.invoice) {
       downloadInvoicePdf(selectedFr, franchisor, enriched).catch(console.error);

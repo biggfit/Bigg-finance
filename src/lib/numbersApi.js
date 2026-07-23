@@ -1622,18 +1622,20 @@ export const normCuit = s => String(s ?? "").replace(/\D/g, "").replace(/^0+/, "
 // registró con MI sociedad como cliente (match por CUIT), que yo todavía NO reconocí con mi
 // compra. Reconocer crea una compra en mi sociedad con nota "interco_ref=<id_comp de la venta>".
 // Fuente: comprobantes INGRESO (ventas) de otras sociedades cuyo cliente tiene MI CUIT.
-export function pendientesInterco({ comps = [], clientes = [], sociedades = [], franqPend = [] } = {}, { sociedad } = {}) {
+export function pendientesInterco({ comps = [], clientes = [], sociedades = [], franqPend = [], movs = [] } = {}, { sociedad } = {}) {
   const miCuit = normCuit((sociedades.find(s => String(s.id) === String(sociedad)) || {}).cuit);
-  if (!miCuit) return [];  // sin CUIT propio no puedo saber quién me vendió
+  // Los pendientes de franquicia de sede propia (gestión) se rutean por sociedad, no por CUIT →
+  // no dependen de miCuit. Las ventas interco por CUIT sí; si no tengo CUIT, solo devuelvo franqPend.
   const cliById = new Map(clientes.map(c => [String(c.id), c]));
   const socNombre = id => (sociedades.find(s => String(s.id) === String(id))?.nombre) || id;
-  // Ya reconocidas: compras en MI sociedad con nota interco_ref=<id_comp>
+  // Ya reconocidas: compras en MI sociedad con nota interco_ref=<id_comp> (comercial en nb_comprobantes)
+  // + asientos de gestión en MI sociedad (origen interuso_gestion en nb_movimientos, misma nota).
   const reconocidos = new Set();
-  for (const c of comps) {
-    if (String(c.sociedad) !== String(sociedad)) continue;
-    const m = String(c.nota || "").match(/interco_ref=([^\s;|]+)/);
-    if (m) reconocidos.add(m[1]);
-  }
+  const addRef = (nota) => { const m = String(nota || "").match(/interco_ref=([^\s;|]+)/); if (m) reconocidos.add(m[1]); };
+  for (const c of comps) { if (String(c.sociedad) === String(sociedad)) addRef(c.nota); }
+  for (const m of movs) { if (m.origen === "interuso_gestion" && String(m.sociedad) === String(sociedad)) addRef(m.nota); }
+  if (!miCuit) return franqPend.filter(v => !reconocidos.has(v.id_comp))
+    .sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
   // Ventas interco hacia mí, agrupadas por id_comp (una venta = varias líneas)
   const ventas = new Map();
   for (const c of comps) {
@@ -1672,6 +1674,38 @@ export async function reconocerVentaInterco({ sociedad, ventaIdComp, vendedorId 
     created_at: new Date().toISOString(),
   }});
   return { ok: true, id_comp };
+}
+
+// Reconocer un INTERUSO DE GESTIÓN (sede propia) = pata 2 del asiento de gestión: escribe UNA
+// fila en nb_movimientos SIN caja (cuenta_bancaria="") en la sociedad de la sede, imputada a la
+// cuenta+centro elegidos. NO crea comprobante → NO deja CxC/CxP; NO mueve caja (cuenta_bancaria
+// vacía → invisible a Tesorería/Cash Flow); NO es interco (lecturaInterco no lee este origen).
+// Solo pega en el P&L de la sede (vía movimientoToPnLRows). La pata 1 (Ñako) ya la toma el adapter
+// franquiciasIngresoPnLRows desde la NC/FC emitida. subtipo del pendiente: INGRESO (NC → ingreso a
+// la sede, +) / EGRESO (FACTURA → cargo a la sede, −). Dedup por interco_ref=<id_comp del pendiente>.
+export async function reconocerInterusoGestion(pend, { cuenta, centro = "" } = {}) {
+  const t = toNum(pend.total);
+  const esIngreso = String(pend.subtipo || "").toUpperCase() === "INGRESO";
+  const id = newId("GEST");
+  const f = String(pend.fecha || "");
+  const fechaIso = /^\d{1,2}\/\d{1,2}\/\d{4}/.test(f)
+    ? (() => { const [d, m, y] = f.split("/"); return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`; })()
+    : f;
+  await post({ action: "add", sheet: "nb_movimientos", row: {
+    id, sociedad: pend.sedeSociedad || "", fecha: fechaIso,
+    tipo: esIngreso ? "INGRESO" : "EGRESO",
+    cuenta_bancaria: "",                                                  // ← sin caja
+    cuenta_contable: String(cuenta || "").replace(/^CUENTA_/, ""),
+    centro_costo: centro || pend.sedeCentro || "",
+    moneda: pend.moneda || "ARS",
+    monto: esIngreso ? t : -t,
+    contraparte_id: pend.vendedor || "", contraparte_nombre: pend.vendedorNombre || "",
+    documento_id: `GEST-${id}`, origen: "interuso_gestion",
+    concepto: `Interuso gestión${pend.sedeNombre ? " · " + pend.sedeNombre : ""}`,
+    nota: `interco_ref=${pend.id_comp}${pend.nota ? " · " + pend.nota : ""}`,
+    created_at: new Date().toISOString(),
+  }});
+  return { ok: true, id };
 }
 
 // Deriva las posiciones intercompañía por (sociedad, contraparte, moneda) leyendo TODAS

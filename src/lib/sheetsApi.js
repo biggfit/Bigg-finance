@@ -82,6 +82,9 @@ function parseFranchise(f) {
     activa:      f.activa === true || f.activa === "TRUE" || f.activa === "true",
     applyIVA:    f.applyIVA === true || f.applyIVA === "TRUE" || f.applyIVA === "true",
     paysFee:     f.paysFee === false || f.paysFee === "FALSE" || f.paysFee === "false" ? false : true,
+    esSedePropia: f.esSedePropia === true || f.esSedePropia === "TRUE" || f.esSedePropia === "true",
+    sedeSociedad: (f.sedeSociedad ?? "").toString().trim(),   // id de sociedad Numbers (hektor/wellness/segui-fit)
+    sedeCentro:   (f.sedeCentro ?? "").toString().trim(),     // id del centro de costo de la sede en Numbers
     taxExempt:   f.taxExempt === true || f.taxExempt === "TRUE" || f.taxExempt === "true",
     biggEyeId:   f.biggEyeId != null && String(f.biggEyeId).trim() !== "" && Number(f.biggEyeId) > 0 ? Number(f.biggEyeId) : null,
     currencies:  deriveCurrencies(f),

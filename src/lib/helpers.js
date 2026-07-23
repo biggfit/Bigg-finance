@@ -2,8 +2,16 @@ import { upToPeriod, COMPANIES, cmpDate, dateYear, dateMonth } from "../data/fra
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 export const CURRENCIES = ["ARS", "USD", "EUR"];
-// Tipos que NO afectan el saldo de cuenta corriente (son movimientos de caja, no deuda)
-export const SKIP_CC_TYPES = new Set([]); // todos los tipos se muestran en el detalle
+// Tipos que NO se muestran ni cuentan en la cuenta corriente de franquicias.
+// Los tipos de GESTIÓN (interusos de sedes propias: prefijo GFAC|/GNC|) son asientos
+// internos de Numbers, no docs de franquicia → se ocultan de TODAS las vistas/saldos
+// de la app de Franquicias. Objeto con `.has()` prefijo-aware para que los consumidores
+// que ya llaman SKIP_CC_TYPES.has(type) los salteen sin cambiar su código. Un type
+// comercial (FACTURA|/NC|/PAGO…) devuelve false → comportamiento idéntico al anterior.
+export const SKIP_CC_TYPES = {
+  _prefijos: ["GFAC|", "GNC|"],
+  has(type) { const t = String(type || ""); return this._prefijos.some(p => t.startsWith(p)); },
+};
 export const SYM        = { ARS: "$", USD: "U$D", EUR: "€" };
 export const MONTHS     = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 
