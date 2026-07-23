@@ -1707,7 +1707,7 @@ export async function reconocerInterusoGestion(pend, { cuenta, centro = "" } = {
     iva_rate: ivaRate, iva_monto: iva,
     contraparte_id: pend.vendedor || "", contraparte_nombre: pend.vendedorNombre || "",
     documento_id: `GEST-${id}`, origen: "interuso_gestion",
-    concepto: `Interuso gestión${pend.sedeNombre ? " · " + pend.sedeNombre : ""}`,
+    concepto: ["Gestión", pend.sedeNombre, pend.concepto].filter(Boolean).join(" · "),
     nota: `interco_ref=${pend.id_comp}${pend.nota ? " · " + pend.nota : ""}`,
     created_at: new Date().toISOString(),
   }});
