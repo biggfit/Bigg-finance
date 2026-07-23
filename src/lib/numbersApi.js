@@ -796,51 +796,33 @@ export const esIgnorado = m => String(m?.documento_id || "").startsWith("IGN-");
 export const esCuentaCredito = c => (c?.tipo ?? "").toLowerCase() === "tarjeta";
 
 // Ingesta: crea movimientos pendientes con dedupe (no duplica al re-subir).
-const _r2 = n => Math.round((Number(n) || 0) * 100);   // monto a centavos, para comparar sin ruido de float
-const _norm = s => String(s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
-const _refField = (m, k) => { const x = String(m.referencia || "").match(new RegExp(`(?:^|;)${k}=([^;]*)`)); return x ? x[1] : ""; };
+const _saldoDe = m => { const x = String(m.referencia || "").match(/saldo=([^;]*)/); return x ? x[1] : ""; };
 
-// HUELLA DE CONTENIDO de una línea del extracto = su identidad ESTABLE entre descargas. Usa SOLO los tres
-// campos que Galicia reproduce igual en cada descarga: **monto + descripción + código de concepto**.
-// Se excluyen a propósito: fecha y saldo (Galicia re-fecha/re-numera) Y TAMBIÉN razón social (Leyenda 1),
-// CUIT y nº de operación → ⚠️ verificado en vivo que Galicia los VARÍA para líneas internas (una misma
-// comisión/IVA viene con ley1="Banco Galicia"/"AFIP" en una descarga y VACÍA en otra) → si estuvieran en la
-// clave, la misma línea daría dos huellas y el dedup fallaría. La ingesta dedupea por MULTISET (conteo) de
-// esta huella → banca las repetidas legítimas (ej. N comisiones iguales) y hace la re-subida IDEMPOTENTE.
-const _fp = ({ monto, desc, cod }) => [_r2(monto), _norm(desc), _norm(cod)].join("|");
-const _lineaFP = l => _fp({ monto: l.monto, desc: l.descripcion, cod: l.codigoConcepto });
-// Huella de un movimiento ya cargado. Se RECALCULA de sus campos (monto+concepto+código) para toda fila que
-// VINO DEL BANCO: origen "extracto" (pendiente) O cualquier fila ya aceptada/imputada que conserva el código
-// de concepto en `referencia` — imputarCuota/imputarPagoFC/aceptar editan la fila IN-PLACE (cambian tipo/
-// origen/documento_id) pero NO borran `referencia` ni el concepto. Así una línea YA contabilizada (cuota,
-// pago, gasto) se reconoce al re-subir y NO vuelve como pendiente. (Era el bug: la cuota 1 ya paga volvía y
-// el motor proponía la cuota 2.) Manual matcheado sin código: usa la huella estampada en `extracto_saldo`.
-const _movFP = m => {
-  const cod = _refField(m, "cod");
-  if (m.origen === "extracto" || cod) return _fp({ monto: m.monto, desc: m.concepto, cod });
-  const es = String(m.extracto_saldo || "");
-  return es.includes("|") ? es : "";
-};
+// Identidad ÚNICA de una línea del extracto = el SALDO (running balance). NO se incluye la fecha:
+// el banco RE-FECHA una misma línea entre descargas (fecha valor vs operación, pendiente vs confirmada)
+// → si la clave llevara fecha, la re-descarga duplicaría. El saldo es el cursor propio del banco: estable.
+// Vive en la columna propia `extracto_saldo` (NO en `referencia`) → contabilizar una línea
+// (aceptarMovimiento/imputarPagoFC, que reescriben `referencia`) ya NO borra la clave de dedup.
+// Fallback para filas viejas: el `saldo=` que quedó embebido en `referencia`.
+const _extractoRef = m => String(m.extracto_saldo || "") || String(_saldoDe(m) || "");
+const _r2 = n => Math.round((Number(n) || 0) * 100);   // monto a centavos, para comparar sin ruido de float
 
 // Ingesta del extracto = "matchear o crear" (ya NO "crear o ignorar"):
-//  1) DEDUP idempotente por HUELLA DE CONTENIDO (monto+desc+razón social+código+CUIT/op), con CONTEO:
-//     si el archivo trae N copias de una huella y ya hay N cargadas → 0 nuevas. Re-subir el mismo extracto
-//     (aunque Galicia re-feche o re-numere el saldo) NO duplica; si aparece 1 línea nueva, entra solo esa.
-//  2) AUTO-MATCH: si hay un movimiento YA cargado a mano (mismo monto + cuenta + fecha ±ventana, sin atar a
-//     una línea de banco) → se le ESTAMPA la huella en `extracto_saldo` (queda conciliado; futuras re-subidas
-//     lo reconocen por contenido). NO crea fila, NO pide ignorar.
-//  3) Si no hay match → crea la pendiente.
+//  1) DEDUP: si la línea del banco ya existe (mismo `saldo` en `extracto_saldo`) → se saltea.
+//  2) AUTO-MATCH: si hay un movimiento YA cargado por el tesorero/otro módulo (mismo monto + cuenta +
+//     fecha ±ventana, todavía sin atar a una línea de banco) → se le ESTAMPA el `extracto_saldo` del banco
+//     (queda conciliado; futuras re-subidas lo reconocen). NO crea fila, NO pide ignorar.
+//  3) Si no hay match → crea la pendiente (como antes).
 export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "ARS", lineas = [], onProgress } = {}) {
   const VENTANA_DIAS = 3;   // tolerancia de fecha para el auto-match (banco liquida ±días de la operación)
   const todos = await get("nb_movimientos", { sociedad });
   const dela  = todos.filter(m => String(m.cuenta_bancaria) === String(cuenta_bancaria));
-  // Multiset de huellas ya cargadas (líneas de banco creadas + manuales matcheados con huella estampada).
-  const existCount = new Map();
-  for (const m of dela) { const k = _movFP(m); if (k) existCount.set(k, (existCount.get(k) || 0) + 1); }
-  // Candidatos a auto-match: cargados a mano, sin atar a línea de banco (extracto_saldo vacío), no ignorados.
+  const seen  = new Set(dela.map(_extractoRef).filter(Boolean));   // dedup vs DB + dentro del archivo
+  // Candidatos a auto-match: cargados por un humano/otro módulo, sin atar a línea de banco, no ignorados.
+  // Se excluye origen="extracto" (esas YA son líneas de banco; las rotas sin ref se sanean aparte, no acá).
   // Precomputo ts/centavos una vez por candidato (evita re-parsear fechas L×C veces en el loop).
   const disponibles = dela
-    .filter(m => !m.extracto_saldo && !esIgnorado(m) && m.origen !== "extracto")
+    .filter(m => !_extractoRef(m) && !esIgnorado(m) && m.origen !== "extracto")
     .map(m => ({ mov: m, ts: +new Date(m.fecha), cents: _r2(m.monto) }));
   const usados = new Set();
   const buscarMatch = (l) => {
@@ -855,12 +837,10 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
   };
 
   const nuevas = [], matches = []; let dups = 0;
-  const seenUp = new Map();   // conteo de huellas ya vistas en ESTE archivo → dedup por multiset
   for (const l of lineas) {
-    const ref = _lineaFP(l);   // identidad = huella de contenido (estable entre descargas)
-    const have = existCount.get(ref) || 0, used = seenUp.get(ref) || 0;
-    seenUp.set(ref, used + 1);
-    if (used < have) { dups++; continue; }   // ya hay suficientes copias cargadas → no re-crear
+    const ref = String(l.saldo);   // identidad estable = saldo (NO fecha: el banco re-fecha entre descargas)
+    if (seen.has(ref)) { dups++; continue; }
+    seen.add(ref);
     const m = buscarMatch(l);
     if (m) { usados.add(m.id); matches.push({ mov: m, ref, linea: l }); continue; }
     const p = l.propuesta || {};
@@ -873,7 +853,7 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
       iva_rate: Number(l.iva_rate) || 0, iva_monto: Number(l.iva_monto) || 0,
       concepto: l.descripcion || "",
       contraparte_id: "", contraparte_nombre: l.ley1 || l.contraparte || "",   // razón social del banco (Leyenda 1)
-      extracto_saldo: ref,   // ← HUELLA de contenido (clave de dedup); en columna propia → sobrevive a que se reescriba `referencia`
+      extracto_saldo: ref,   // ← clave de dedup en columna propia (inmune a que se reescriba `referencia`)
       referencia: `cod=${l.codigoConcepto || ""};tipo=${p.tipo || ""};regla=${p.regla_id || ""};prov=${p.proveedor_id || ""};cli=${p.cliente_id || ""};idest=${p.cuenta_destino || ""};fr=${p.franquicia_id || ""};frops=${(p.franquicia_opciones || []).join("|")};plan=${p.plan_id || ""};pcuota=${p.cuota_row_id || ""};op=${l.nro_operacion || ""};cuit=${l.ley2 || l.cuit || ""};saldo=${l.saldo || ""}`,
       origen: "extracto",
       created_at: new Date().toISOString(),
@@ -908,23 +888,6 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
 export async function fetchMovimientosPendientes(sociedad) {
   const rows = await get("nb_movimientos", { sociedad });
   return rows.filter(m => m.origen === "extracto" && !m.documento_id);
-}
-
-// Complemento INVERSO del auto-match de ingestarExtracto: cuando el tesorero está por cargar un movimiento
-// A MANO (pago/transferencia/gasto), busca líneas del EXTRACTO ya cargadas y PENDIENTES que matcheen por
-// mismo monto (abs) + cuenta + fecha ±ventana. Cubre el orden "subí el extracto y DESPUÉS Santi carga":
-// sin esto la línea del banco queda pendiente y la carga manual la duplica. La UI avisa antes de crear.
-export async function buscarExtractoPendienteMatch({ sociedad, cuenta_bancaria, monto, fecha, ventanaDias = 3 } = {}) {
-  if (!cuenta_bancaria || !fecha) return [];
-  const rows = await get("nb_movimientos", { sociedad });
-  const cents = Math.round(Math.abs(Number(monto) || 0) * 100);
-  if (!cents) return [];
-  const ts = +new Date(fecha);
-  return rows.filter(m =>
-    m.origen === "extracto" && !m.documento_id &&
-    String(m.cuenta_bancaria) === String(cuenta_bancaria) &&
-    Math.round(Math.abs(Number(m.monto) || 0) * 100) === cents &&
-    Math.abs((+new Date(m.fecha) - ts) / 86400000) <= ventanaDias);
 }
 
 // ── RESUMEN DE TARJETA → bandeja (mundo Tarjeta de Conciliaciones) ───────────────
