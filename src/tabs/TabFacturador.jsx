@@ -2218,7 +2218,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
           <div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 24 }}>
             Seleccioná cómo querés cargar los datos para este lote.
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 14, maxWidth: 600 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, maxWidth: 920 }}>
             {[
               {
                 mode: EMIT_MODE.MANUAL,
