@@ -1755,6 +1755,12 @@ export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades
   const fondeo = (A, centroId, moneda, monto) => {
     const B = empresaDe.get(String(centroId || ""));
     if (!A || !B || String(A) === String(B)) return;
+    // Núcleo↔núcleo: que A pague un gasto imputado a un CECO de B (ambas del núcleo) NO es interco —
+    // no se movió plata entre las entidades. Queda solo como gasto en ese CECO + salida de caja de A.
+    // La posición interco del núcleo existe SOLO por transferencias/préstamos reales (pares
+    // INTERCOMPANIA, fuente 2). Hacia una fondeada/externa (anillo 2/3) el fondeo SÍ deja posición
+    // (inversión/activo). Mismo criterio que ya aplica el interuso de gestión (fuente 5).
+    if (nucleo.size && nucleo.has(String(A)) && nucleo.has(String(B))) return;
     const m = Math.abs(toNum(monto));
     if (m < 0.01) return;
     add(A, B, moneda || "ARS", +m);   // A acreedor (le puso plata a B)
@@ -1860,6 +1866,7 @@ export function intercoLedger({ movs = [], comps = [], centros = [], sociedades 
     if (sub !== "EGRESO" && sub !== "GASTO" && sub !== "EGRESO_FC") continue;
     const B = empresaDe.get(String(r.centro_costo || "")); if (!B) continue;
     const A = r.sociedad, m = Math.abs(toNum(r.total)); if (m < 0.01 || String(A) === String(B)) continue;
+    if (nucleo.size && nucleo.has(String(A)) && nucleo.has(String(B))) continue;   // núcleo↔núcleo = gasto en el CECO, no interco
     const flujo = `Pago ${soc(A)} x ${soc(B)}`;   // A (pagador) pagó por B (dueño del centro)
     const meta = { prov: r.proveedor || r.contraparte_nombre || r.contraparte || "", cuenta: r.cuenta_contable || "", centro: cc(r.centro_costo), ref: r.id_comp || r.id || "", docSoc: String(A), refKind: "comp" };
     pair(A, B, r.moneda, r.fecha, flujo, m, meta);
@@ -1871,6 +1878,7 @@ export function intercoLedger({ movs = [], comps = [], centros = [], sociedades 
     const esGasto = m.origen === "gasto_directo" || String(m.documento_id || "").startsWith("CONTAB-"); if (!esGasto) continue;
     const B = empresaDe.get(String(m.centro_costo || "")); if (!B) continue;
     const A = m.sociedad, val = Math.abs(toNum(m.monto)); if (val < 0.01 || String(A) === String(B)) continue;
+    if (nucleo.size && nucleo.has(String(A)) && nucleo.has(String(B))) continue;   // núcleo↔núcleo = gasto en el CECO, no interco
     const flujo = `Pago ${soc(A)} x ${soc(B)}`;   // A (pagador) pagó por B (dueño del centro)
     const meta = { prov: m.contraparte_nombre || "", cuenta: m.cuenta_contable || "", centro: cc(m.centro_costo), ref: m.documento_id || m.id || "", docSoc: String(A), refKind: "mov" };
     pair(A, B, m.moneda, m.fecha, flujo, val, meta);
