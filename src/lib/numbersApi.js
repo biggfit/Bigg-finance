@@ -809,12 +809,15 @@ const _refField = (m, k) => { const x = String(m.referencia || "").match(new Reg
 // esta huella → banca las repetidas legítimas (ej. N comisiones iguales) y hace la re-subida IDEMPOTENTE.
 const _fp = ({ monto, desc, cod }) => [_r2(monto), _norm(desc), _norm(cod)].join("|");
 const _lineaFP = l => _fp({ monto: l.monto, desc: l.descripcion, cod: l.codigoConcepto });
-// Huella de un movimiento ya cargado. Para filas de extracto se RECALCULA siempre de sus campos (los 3 son
-// estables y están guardados: monto, concepto=descripción, cod en `referencia`) → no depende del stamp (que
-// puede estar en formato viejo). Manual ya matcheado: usa la huella estampada en `extracto_saldo` (sobrevive
-// a que se reescriba `referencia`); si no la tiene, "" y lo cubre la alarma "posible duplicado" por monto+fecha.
+// Huella de un movimiento ya cargado. Se RECALCULA de sus campos (monto+concepto+código) para toda fila que
+// VINO DEL BANCO: origen "extracto" (pendiente) O cualquier fila ya aceptada/imputada que conserva el código
+// de concepto en `referencia` — imputarCuota/imputarPagoFC/aceptar editan la fila IN-PLACE (cambian tipo/
+// origen/documento_id) pero NO borran `referencia` ni el concepto. Así una línea YA contabilizada (cuota,
+// pago, gasto) se reconoce al re-subir y NO vuelve como pendiente. (Era el bug: la cuota 1 ya paga volvía y
+// el motor proponía la cuota 2.) Manual matcheado sin código: usa la huella estampada en `extracto_saldo`.
 const _movFP = m => {
-  if (m.origen === "extracto") return _fp({ monto: m.monto, desc: m.concepto, cod: _refField(m, "cod") });
+  const cod = _refField(m, "cod");
+  if (m.origen === "extracto" || cod) return _fp({ monto: m.monto, desc: m.concepto, cod });
   const es = String(m.extracto_saldo || "");
   return es.includes("|") ? es : "";
 };
