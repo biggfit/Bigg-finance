@@ -325,7 +325,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     [intercoData, sociedad]);
   // Descartar: borra la NC/FC de gestión emitida (comprobante Franquicias) → sale del inbox y del P&L de Ñako.
   const descartarGestion = async (p) => {
-    if (!window.confirm(`¿Borrar la NC/FC de gestión de ${p.sedeNombre || "la sede"} por ${p.moneda} ${Math.round(p.total).toLocaleString("es-AR")}? Se elimina el comprobante emitido.`)) return;
+    setConfirmDescartar(null);
     try {
       await removeComp(p.frId, p.compId);
       const { franchises, comps, saldos } = await fetchAll();
@@ -334,11 +334,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   };
   // Revertir: borra el asiento reconocido (nb_movimientos) → la NC/FC vuelve a pendiente.
   const revertirGestion = async (m) => {
-    if (!window.confirm(`¿Revertir este asiento de gestión (${m.moneda || "ARS"} ${Math.round(Math.abs(Number(m.monto) || 0)).toLocaleString("es-AR")})? Vuelve a quedar pendiente de reconocer.`)) return;
+    setConfirmRevert(null);
     try { await revertirInterusoGestion(m.id); const d = await fetchIntercoData(); setIntercoData(d); }
     catch (e) { alert("No se pudo revertir: " + (e?.message || e)); }
   };
   const [histGestionOpen, setHistGestionOpen] = useState(false);   // historial de gestión reconocida (colapsable)
+  const [confirmRevert, setConfirmRevert]     = useState(null);    // mov.id del asiento a revertir (confirmación inline)
+  const [confirmDescartar, setConfirmDescartar] = useState(null);  // id_comp del pendiente a descartar (confirmación inline)
   // Avisa al sidebar los conteos de pendientes (badge en vivo): Banco (extracto sin conciliar) + Interco
   // (ventas a reconocer + CC a liquidar ida/vuelta).
   useEffect(() => { onPendientes?.({ banco: pendientes.length, interco: pendRecibir.length + pendInterco.length }); },
@@ -1248,11 +1250,18 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                             Reconocer
                           </button>
                           {p.tratamiento === "gestion" && (
-                            <button onClick={() => descartarGestion(p)}
-                              title="Borrar la NC/FC de gestión emitida (mal cargada)"
-                              style={{ marginLeft: 8, background: "transparent", border: "none", fontSize: 11.5, fontWeight: 700, color: "#dc2626", cursor: "pointer", fontFamily: T.font }}>
-                              Descartar
-                            </button>
+                            confirmDescartar === p.id_comp ? (
+                              <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>
+                                <button onClick={() => descartarGestion(p)} style={{ background: "#dc2626", border: "none", borderRadius: 8, padding: "6px 12px", fontSize: 11.5, fontWeight: 800, color: "#fff", cursor: "pointer", fontFamily: T.font }}>Borrar</button>
+                                <button onClick={() => setConfirmDescartar(null)} style={{ marginLeft: 6, background: "transparent", border: "none", fontSize: 11.5, fontWeight: 700, color: T.muted, cursor: "pointer", fontFamily: T.font }}>No</button>
+                              </span>
+                            ) : (
+                              <button onClick={() => setConfirmDescartar(p.id_comp)}
+                                title="Borrar la NC/FC de gestión emitida (mal cargada)"
+                                style={{ marginLeft: 8, background: "transparent", border: "none", fontSize: 11.5, fontWeight: 700, color: "#dc2626", cursor: "pointer", fontFamily: T.font }}>
+                                Descartar
+                              </button>
+                            )
                           )}
                         </td>
                       </tr>
@@ -1333,11 +1342,18 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                             <td style={{ padding: "11px 14px" }}>{m.concepto || "Interuso gestión"}</td>
                             <td style={{ padding: "11px 14px", color: T.muted }}>{m.cuenta_contable || "—"}</td>
                             <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: T.mono, fontWeight: 700, whiteSpace: "nowrap", color: pos ? "#16a34a" : "#dc2626" }}>{pos ? "+" : "−"} {money(m.monto, m.moneda)}</td>
-                            <td style={{ padding: "8px 14px", textAlign: "right" }}>
-                              <button onClick={() => revertirGestion(m)}
-                                style={{ background: "transparent", border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 700, color: "#dc2626", cursor: "pointer", fontFamily: T.font }}>
-                                Revertir
-                              </button>
+                            <td style={{ padding: "8px 14px", textAlign: "right", whiteSpace: "nowrap" }}>
+                              {confirmRevert === m.id ? (
+                                <>
+                                  <button onClick={() => revertirGestion(m)} style={{ background: "#dc2626", border: "none", borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 800, color: "#fff", cursor: "pointer", fontFamily: T.font }}>Confirmar</button>
+                                  <button onClick={() => setConfirmRevert(null)} style={{ marginLeft: 6, background: "transparent", border: "none", fontSize: 12, fontWeight: 700, color: T.muted, cursor: "pointer", fontFamily: T.font }}>No</button>
+                                </>
+                              ) : (
+                                <button onClick={() => setConfirmRevert(m.id)}
+                                  style={{ background: "transparent", border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 700, color: "#dc2626", cursor: "pointer", fontFamily: T.font }}>
+                                  Revertir
+                                </button>
+                              )}
                             </td>
                           </tr>
                         );
