@@ -688,7 +688,13 @@ function PasoSueldos({ liqStaff, liqOwners, liqExternos, sueldosDraft, onChangeD
   const diff        = totalNuevo - totalActual;
 
   const handlePct = (liq, rawPct) => {
-    const nuevoTotal = rawPct !== "" ? redondear(liq.sueldo_total_legajo * (1 + parseFloat(rawPct) / 100)) : liq.sueldo_total_legajo;
+    // Sin aumento (vacío, 0% o inválido) → base EXACTA, sin redondear (redondear a 500
+    // sobre un sueldo que no es múltiplo de 500 metía un +$X fantasma). El redondeo
+    // solo aplica cuando hay un aumento real.
+    const p = parseFloat(rawPct);
+    const nuevoTotal = (rawPct !== "" && !Number.isNaN(p) && p !== 0)
+      ? redondear(liq.sueldo_total_legajo * (1 + p / 100))
+      : liq.sueldo_total_legajo;
     onChangeDraft(liq.legajo_id, { pct: rawPct, total: nuevoTotal });
   };
 
