@@ -59,6 +59,9 @@ export default function PantallaResumen({ pais = "AR" }) {
   const [legajos, setLegajos] = useState([]);
   const [selId, setSelId] = useState("");
   const [loading, setLoading] = useState(true);
+  const [showSel, setShowSel]   = useState(false);   // modal de selección "imprimir todo"
+  const [checkSel, setCheckSel] = useState({});      // { [id]: bool }
+  const [idsPrint, setIdsPrint] = useState(null);    // ids a imprimir (activa el modo #ficha-todos)
 
   useEffect(() => {
     let cancel = false;
@@ -109,105 +112,64 @@ export default function PantallaResumen({ pais = "AR" }) {
   }, [sel, legajos]);
 
   // Pagos individuales del empleado seleccionado (nb_movimientos origen sueldos), ordenados por forma y fecha.
-  const pagosEmpleado = useMemo(() => {
-    if (!sel) return [];
-    return pagos
-      .filter(p => p.legajo_id === sel.id || p.legajo_nombre === sel.nombre)
-      .sort((a, b) =>
-        ordenForma(a.tipo_componente) - ordenForma(b.tipo_componente) ||
-        (a.fecha || "").localeCompare(b.fecha || ""));
-  }, [pagos, sel]);
+  const pagosEmpleado = useMemo(() => (sel ? pagosDe(sel, pagos) : []), [pagos, sel]);
 
-  // Desglose Sedes: suma sobre las filas por sede, recalcula importes con tarifas.
-  const resumenSedes = useMemo(() => {
-    if (vista !== "sedes" || !sel) return null;
-    const acc = {
-      fijo: 0, horasCant: 0, horasMonto: 0,
-      cdpCoachCant: 0, cdpFrontCant: 0, cdpMonto: 0,
-      oneShotCant: 0, oneShotMonto: 0, asignaciones: 0, objGrupalMonto: 0,
-      feriadosCant: 0, feriadosMonto: 0, domingosCant: 0, domingosMonto: 0,
-      yogaCant: 0, yogaMonto: 0, runningCant: 0, runningMonto: 0, redondeo: 0, sueldoVariable: 0,
-    };
-    const fijoVistos = new Set();   // no duplicar el sueldo base si hay varias filas (multi-sede)
-    const sedes = [];
-    const novedades = [];           // novedades congeladas de la(s) liquidación(es)
-    let tarifas = {};
-    const porSede = {};             // sede → total (para elegir la principal)
-    const cs = { horas: new Set(), feriado: new Set(), domingo: new Set(),
-                 cdpCoach: new Set(), cdpFront: new Set(), oneShot: new Set() };  // sedes que aportan a cada concepto
-    for (const row of sel.rows) {
-      const d = desglosarLiquidacion(row, categorias);
-      tarifas = { tarifaHora: d.tarifaHora, tCdpCoach: d.tCdpCoach, tCdpFront: d.tCdpFront,
-        tarifaOS: d.tarifaOS, tarifaDomingo: d.tarifaDomingo, tarifaYoga: d.tarifaYoga };
-      if (!fijoVistos.has(sel.id)) { acc.fijo += d.fijo; fijoVistos.add(sel.id); }
-      for (const k of ["horasCant","horasMonto","cdpCoachCant","cdpFrontCant","cdpMonto",
-                       "oneShotCant","oneShotMonto","asignaciones","objGrupalMonto",
-                       "feriadosCant","feriadosMonto","domingosCant","domingosMonto",
-                       "yogaCant","yogaMonto","runningCant","runningMonto","redondeo","sueldoVariable"]) {
-        acc[k] += d[k] || 0;
-      }
-      const sn = row.sede_nombre || "—";
-      porSede[sn] = (porSede[sn] || 0) + (Number(d.totalLiquidar) || 0);
-      if ((d.horasCant || 0) + (d.yogaCant || 0) > 0) cs.horas.add(sn);
-      if (d.feriadosCant > 0) cs.feriado.add(sn);
-      if (d.domingosCant > 0) cs.domingo.add(sn);
-      if (d.cdpCoachCant > 0) cs.cdpCoach.add(sn);
-      if (d.cdpFrontCant > 0) cs.cdpFront.add(sn);
-      if (d.oneShotCant  > 0) cs.oneShot.add(sn);
-      sedes.push({ sede: sn, horas: d.horasCant, total: d.totalLiquidar });
-      for (const n of (row.novedades || [])) novedades.push({ cuenta: n.cuenta_contable_nombre || "Novedad", descripcion: n.descripcion || "", monto: Number(n.monto) || 0 });
-    }
-    const principalSede = Object.entries(porSede).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
-    const conceptoSedes = Object.fromEntries(Object.entries(cs).map(([k, set]) => [k, [...set]]));
-    // El desglose de la ficha (FichaSedes) arma sus propios subtotales; acá solo el total.
-    const totalNov = novedades.reduce((s, n) => s + n.monto, 0);
-    const totalLiquidar = acc.fijo + acc.horasMonto + acc.sueldoVariable + totalNov;
-    return { ...acc, ...tarifas, sedes, novedades, totalNov, principalSede, conceptoSedes, totalLiquidar };
-  }, [vista, sel, categorias]);
+  // Desglose Sedes / HQ del empleado seleccionado (los builders son puros → se reusan en "imprimir todo").
+  const resumenSedes = useMemo(
+    () => (vista === "sedes" && sel) ? buildResumenSedes(sel, categorias) : null,
+    [vista, sel, categorias]);
 
-  // Desglose HQ: sueldo base + novedades por cuenta + split de formas de pago.
-  const resumenHQ = useMemo(() => {
-    if (vista !== "hq" || !sel) return null;
-    let sueldo = 0, totalBruto = 0;
-    const novedades = [];
-    for (const row of sel.rows) {
-      sueldo     += Number(row.sueldo_base) || 0;
-      totalBruto += Number(row.total_bruto) || 0;
-      for (const n of (row.novedades || [])) {
-        novedades.push({ cuenta: n.cuenta_contable_nombre || "Novedad", monto: Number(n.monto) || 0 });
-      }
-    }
-    const sueldoFinal = totalBruto || sueldo;
-    const totalNov = novedades.reduce((s, n) => s + n.monto, 0);
-    return {
-      sueldo: sueldoFinal,
-      novedades,
-      totalNov,
-      totalLiquidar: sueldoFinal + totalNov,
-    };
-  }, [vista, sel]);
+  const resumenHQ = useMemo(
+    () => (vista === "hq" && sel) ? buildResumenHQ(sel) : null,
+    [vista, sel]);
 
   const prevMes = () => { if (mes === 1) { setMes(12); setAnio(a => a - 1); } else setMes(m => m - 1); };
   const nextMes = () => { if (mes === 12) { setMes(1); setAnio(a => a + 1); } else setMes(m => m + 1); };
+
+  // Imprimir todo: modal de selección (todos tildados por defecto) → imprime uno por hoja.
+  const idsSeleccionados = empleados.filter(e => checkSel[e.id]).map(e => e.id);
+  const abrirImprimirTodo = () => {
+    setCheckSel(Object.fromEntries(empleados.map(e => [e.id, true])));
+    setShowSel(true);
+  };
+  const confirmarImprimirTodo = () => {
+    setShowSel(false);
+    if (idsSeleccionados.length) setIdsPrint(idsSeleccionados);
+  };
+  // Al fijar los ids, esperar el render de #ficha-todos y disparar la impresión; luego limpiar.
+  useEffect(() => {
+    if (!idsPrint) return;
+    const raf = requestAnimationFrame(() => { window.print(); setIdsPrint(null); });
+    return () => cancelAnimationFrame(raf);
+  }, [idsPrint]);
 
   const resumen = vista === "hq" ? resumenHQ : resumenSedes;
 
   const periodo = `${MESES[mes - 1]} ${anio}`;
 
   return (
-    <div style={{ padding: 24, fontFamily: T.font, color: T.text, maxWidth: 860, margin: "0 auto" }}>
-      <style>{`@media print {
-        @page { size: A4 portrait; margin: 10mm; }
-        body * { visibility: hidden; }
-        #ficha-print, #ficha-print * { visibility: visible; }
-        /* Escala el recibo para que entre completo en una sola hoja. */
-        #ficha-print {
-          position: absolute; left: 0; top: 0; width: 100%;
-          zoom: 0.82; border: none !important; box-shadow: none !important;
+    <div className={idsPrint ? "print-todos" : "print-solo"}
+      style={{ padding: 24, fontFamily: T.font, color: T.text, maxWidth: 860, margin: "0 auto" }}>
+      <style>{`
+        #ficha-todos { display: none; }
+        @media print {
+          @page { size: A4 portrait; margin: 10mm; }
+          body * { visibility: hidden; }
+          .no-print { display: none !important; }
+          .ficha { border: none !important; box-shadow: none !important; }
+          .ficha, .ficha * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+          /* Individual: el recibo elegido, escalado para entrar en una hoja. */
+          .print-solo #ficha-solo, .print-solo #ficha-solo * { visibility: visible; }
+          .print-solo #ficha-solo { position: absolute; left: 0; top: 0; width: 100%; zoom: 0.8; }
+
+          /* Todos: un recibo por hoja. */
+          .print-todos #ficha-todos { display: block; position: absolute; left: 0; top: 0; width: 100%; }
+          .print-todos #ficha-todos, .print-todos #ficha-todos * { visibility: visible; }
+          .print-todos .ficha-pagina { zoom: 0.8; break-after: page; page-break-after: always; }
+          .print-todos .ficha-pagina:last-child { break-after: auto; page-break-after: auto; }
         }
-        #ficha-print, #ficha-print * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-        .no-print { display: none !important; }
-      }`}</style>
+      `}</style>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
         <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>Resumen de liquidación</h2>
@@ -229,6 +191,9 @@ export default function PantallaResumen({ pais = "AR" }) {
             {empleados.length === 0 && <option value="">— sin empleados —</option>}
             {empleados.map(e => <option key={e.id} value={e.id}>{e.nombre}</option>)}
           </select>
+          <button onClick={abrirImprimirTodo} disabled={!empleados.length}
+            style={{ ...fichaBtn, marginLeft: 6, opacity: empleados.length ? 1 : 0.5,
+              cursor: empleados.length ? "pointer" : "not-allowed" }}>🖨 Imprimir todo</button>
         </div>
       </div>
 
@@ -238,11 +203,158 @@ export default function PantallaResumen({ pais = "AR" }) {
         <div style={{ border: `1px dashed ${T.border}`, borderRadius: 8, padding: 40, textAlign: "center", color: T.muted, fontSize: 13 }}>
           No hay liquidaciones de {vista === "hq" ? "HQ" : "Sedes"} para {MESES[mes - 1]} {anio}.
         </div>
-      ) : vista === "hq" ? (
-        <FichaHQ sel={sel} resumen={resumen} pagos={pagosEmpleado} email={emailSel} periodo={periodo} />
       ) : (
-        <FichaSedes sel={sel} resumen={resumen} pagos={pagosEmpleado} email={emailSel} periodo={periodo} />
+        <div id="ficha-solo">
+          {vista === "hq"
+            ? <FichaHQ sel={sel} resumen={resumen} pagos={pagosEmpleado} email={emailSel} periodo={periodo} />
+            : <FichaSedes sel={sel} resumen={resumen} pagos={pagosEmpleado} email={emailSel} periodo={periodo} />}
+        </div>
       )}
+
+      {/* Contenedor oculto (solo impresión) con un recibo por empleado seleccionado, uno por hoja. */}
+      {idsPrint && (
+        <div id="ficha-todos">
+          {idsPrint.map(id => {
+            const emp = empleados.find(e => e.id === id);
+            if (!emp) return null;
+            const r = vista === "hq" ? buildResumenHQ(emp) : buildResumenSedes(emp, categorias);
+            if (!r) return null;
+            const pg = pagosDe(emp, pagos);
+            return (
+              <div className="ficha-pagina" key={id}>
+                {vista === "hq"
+                  ? <FichaHQ sel={emp} resumen={r} pagos={pg} email="" periodo={periodo} />
+                  : <FichaSedes sel={emp} resumen={r} pagos={pg} email="" periodo={periodo} />}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {showSel && (
+        <SeleccionImprimir
+          empleados={empleados} checkSel={checkSel} count={idsSeleccionados.length}
+          onToggle={id => setCheckSel(c => ({ ...c, [id]: !c[id] }))}
+          onAll={val => setCheckSel(Object.fromEntries(empleados.map(e => [e.id, val])))}
+          onCancel={() => setShowSel(false)} onConfirm={confirmarImprimirTodo}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Builders puros (reusados en la vista individual y en "imprimir todo") ─────
+function pagosDe(emp, pagos) {
+  return pagos
+    .filter(p => p.legajo_id === emp.id || p.legajo_nombre === emp.nombre)
+    .sort((a, b) =>
+      ordenForma(a.tipo_componente) - ordenForma(b.tipo_componente) ||
+      (a.fecha || "").localeCompare(b.fecha || ""));
+}
+
+// Desglose Sedes: suma sobre las filas por sede, recalcula importes con tarifas.
+function buildResumenSedes(emp, categorias) {
+  const acc = {
+    fijo: 0, horasCant: 0, horasMonto: 0,
+    cdpCoachCant: 0, cdpFrontCant: 0, cdpMonto: 0,
+    oneShotCant: 0, oneShotMonto: 0, asignaciones: 0, objGrupalMonto: 0,
+    feriadosCant: 0, feriadosMonto: 0, domingosCant: 0, domingosMonto: 0,
+    yogaCant: 0, yogaMonto: 0, runningCant: 0, runningMonto: 0, redondeo: 0, sueldoVariable: 0,
+  };
+  const fijoVistos = new Set();   // no duplicar el sueldo base si hay varias filas (multi-sede)
+  const sedes = [];
+  const novedades = [];
+  let tarifas = {};
+  const porSede = {};
+  const cs = { horas: new Set(), feriado: new Set(), domingo: new Set(),
+               cdpCoach: new Set(), cdpFront: new Set(), oneShot: new Set() };
+  for (const row of emp.rows) {
+    const d = desglosarLiquidacion(row, categorias);
+    tarifas = { tarifaHora: d.tarifaHora, tCdpCoach: d.tCdpCoach, tCdpFront: d.tCdpFront,
+      tarifaOS: d.tarifaOS, tarifaDomingo: d.tarifaDomingo, tarifaYoga: d.tarifaYoga };
+    if (!fijoVistos.has(emp.id)) { acc.fijo += d.fijo; fijoVistos.add(emp.id); }
+    for (const k of ["horasCant","horasMonto","cdpCoachCant","cdpFrontCant","cdpMonto",
+                     "oneShotCant","oneShotMonto","asignaciones","objGrupalMonto",
+                     "feriadosCant","feriadosMonto","domingosCant","domingosMonto",
+                     "yogaCant","yogaMonto","runningCant","runningMonto","redondeo","sueldoVariable"]) {
+      acc[k] += d[k] || 0;
+    }
+    const sn = row.sede_nombre || "—";
+    porSede[sn] = (porSede[sn] || 0) + (Number(d.totalLiquidar) || 0);
+    if ((d.horasCant || 0) + (d.yogaCant || 0) > 0) cs.horas.add(sn);
+    if (d.feriadosCant > 0) cs.feriado.add(sn);
+    if (d.domingosCant > 0) cs.domingo.add(sn);
+    if (d.cdpCoachCant > 0) cs.cdpCoach.add(sn);
+    if (d.cdpFrontCant > 0) cs.cdpFront.add(sn);
+    if (d.oneShotCant  > 0) cs.oneShot.add(sn);
+    sedes.push({ sede: sn, horas: d.horasCant, total: d.totalLiquidar });
+    for (const n of (row.novedades || [])) novedades.push({ cuenta: n.cuenta_contable_nombre || "Novedad", descripcion: n.descripcion || "", monto: Number(n.monto) || 0 });
+  }
+  const principalSede = Object.entries(porSede).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+  const conceptoSedes = Object.fromEntries(Object.entries(cs).map(([k, set]) => [k, [...set]]));
+  const totalNov = novedades.reduce((s, n) => s + n.monto, 0);
+  const totalLiquidar = acc.fijo + acc.horasMonto + acc.sueldoVariable + totalNov;
+  return { ...acc, ...tarifas, sedes, novedades, totalNov, principalSede, conceptoSedes, totalLiquidar };
+}
+
+// Desglose HQ: sueldo base + novedades por cuenta.
+function buildResumenHQ(emp) {
+  let sueldo = 0, totalBruto = 0;
+  const novedades = [];
+  for (const row of emp.rows) {
+    sueldo     += Number(row.sueldo_base) || 0;
+    totalBruto += Number(row.total_bruto) || 0;
+    for (const n of (row.novedades || [])) {
+      novedades.push({ cuenta: n.cuenta_contable_nombre || "Novedad", monto: Number(n.monto) || 0 });
+    }
+  }
+  const sueldoFinal = totalBruto || sueldo;
+  const totalNov = novedades.reduce((s, n) => s + n.monto, 0);
+  return { sueldo: sueldoFinal, novedades, totalNov, totalLiquidar: sueldoFinal + totalNov };
+}
+
+// Modal de selección para "imprimir todo": todos tildados; se destildan los que no se quieren.
+function SeleccionImprimir({ empleados, checkSel, count, onToggle, onAll, onCancel, onConfirm }) {
+  return (
+    <div className="no-print" onClick={onCancel} style={{ position: "fixed", inset: 0,
+      background: "rgba(15,23,42,.45)", display: "flex", alignItems: "center",
+      justifyContent: "center", zIndex: 1000 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12,
+        width: 440, maxWidth: "92vw", maxHeight: "82vh", display: "flex", flexDirection: "column",
+        boxShadow: "0 20px 60px rgba(0,0,0,.3)", fontFamily: T.font }}>
+        <div style={{ padding: "16px 20px", borderBottom: `1px solid ${T.border}` }}>
+          <div style={{ fontSize: 16, fontWeight: 800, color: T.text }}>Imprimir recibos</div>
+          <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>
+            Destildá los que no querés imprimir. Cada recibo sale en una hoja.
+          </div>
+        </div>
+        <div style={{ padding: "6px 18px", display: "flex", gap: 14, borderBottom: `1px solid ${T.border}` }}>
+          <button onClick={() => onAll(true)}  style={linkBtn}>Todos</button>
+          <button onClick={() => onAll(false)} style={linkBtn}>Ninguno</button>
+        </div>
+        <div style={{ overflowY: "auto", padding: "6px 8px", flex: 1 }}>
+          {empleados.map(e => (
+            <label key={e.id} style={{ display: "flex", alignItems: "center", gap: 10,
+              padding: "7px 12px", borderRadius: 7, cursor: "pointer", fontSize: 13 }}>
+              <input type="checkbox" checked={!!checkSel[e.id]} onChange={() => onToggle(e.id)} />
+              <span style={{ fontWeight: 600, color: T.text }}>{e.nombre}</span>
+              <span style={{ fontSize: 11, color: T.dim, marginLeft: "auto" }}>{ROL_LABEL[e.rol] ?? e.rol}</span>
+            </label>
+          ))}
+        </div>
+        <div style={{ padding: "12px 20px", borderTop: `1px solid ${T.border}`,
+          display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 12, color: T.muted }}>{count} seleccionado{count !== 1 ? "s" : ""}</span>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button onClick={onCancel} style={fichaBtn}>Cancelar</button>
+            <button onClick={onConfirm} disabled={!count}
+              style={{ ...fichaBtn, background: T.blue, color: "#fff", border: "none",
+                opacity: count ? 1 : 0.5, cursor: count ? "pointer" : "not-allowed" }}>
+              🖨 Imprimir {count || ""}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -265,7 +377,7 @@ function FichaShell({ sel, subtitulo, totalLiquidar, pagos, email, periodo, tag,
     window.location.href = `mailto:${encodeURIComponent(email || "")}?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(cuerpo)}`;
   };
   return (
-    <div id="ficha-print" style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden" }}>
+    <div className="ficha" style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden" }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12,
         padding: "16px 20px", borderBottom: `1px solid ${T.border}`, background: "#e2e8f0" }}>
         <div>
@@ -477,6 +589,7 @@ function Subtotal({ label, importe, fuerte }) {
 
 const navBtn = { background: "none", border: `1px solid ${T.border}`, borderRadius: 5, padding: "4px 9px", cursor: "pointer", fontSize: 13, color: T.muted };
 const fichaBtn = { background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600, color: T.text, fontFamily: T.font, whiteSpace: "nowrap" };
+const linkBtn  = { background: "none", border: "none", color: T.blue, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font, padding: "4px 2px" };
 const toggleBtn = (active) => ({
   background: active ? T.card : "transparent", border: "none", borderRadius: 5,
   padding: "5px 14px", cursor: "pointer", fontSize: 12, fontWeight: active ? 700 : 500,
