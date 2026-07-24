@@ -197,9 +197,15 @@ export default function PantallaResumen({ pais = "AR" }) {
   return (
     <div style={{ padding: 24, fontFamily: T.font, color: T.text, maxWidth: 860, margin: "0 auto" }}>
       <style>{`@media print {
+        @page { size: A4 portrait; margin: 10mm; }
         body * { visibility: hidden; }
         #ficha-print, #ficha-print * { visibility: visible; }
-        #ficha-print { position: absolute; left: 0; top: 0; width: 100%; }
+        /* Escala el recibo para que entre completo en una sola hoja. */
+        #ficha-print {
+          position: absolute; left: 0; top: 0; width: 100%;
+          zoom: 0.82; border: none !important; box-shadow: none !important;
+        }
+        #ficha-print, #ficha-print * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         .no-print { display: none !important; }
       }`}</style>
       {/* Header */}
