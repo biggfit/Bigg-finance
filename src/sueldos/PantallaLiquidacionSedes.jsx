@@ -969,6 +969,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
               legajos={legajosFijos}
               sedes={sedes}
               originalRows={originalRows}
+              novsByRowKey={novsByRowKey}
               updateRow={updateRow}
               removeRow={removeRow}
               showAddForm={showAddForm}
@@ -991,6 +992,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
               allLegajos={legajos}
               sedes={sedes}
               calcTotal={calcTotal}
+              novsByRowKey={novsByRowKey}
               updateRow={updateRow}
               removeRow={removeRow}
               showAddForm={showAddForm}
@@ -1018,6 +1020,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
               mes={mes}
               anio={anio}
               pais={pais}
+              novsByRowKey={novsByRowKey}
               updateRow={updateRow}
               removeRow={removeRow}
               showAddForm={showAddForm}
@@ -1137,7 +1140,23 @@ function StepsIndicator({ paso, onPaso }) {
 
 // ── Paso 1: Sueldos fijos (Front Desk + Limpieza) ─────────────────────────────
 
-function PasoFijos({ rowsFijos, legajos, sedes, originalRows, updateRow, removeRow,
+// Chip verde de novedades al lado del nombre (espejo de HQ). Total + detalle en tooltip.
+function NovChip({ novs }) {
+  const list = novs || [];
+  const total = list.reduce((s, n) => s + (Number(n.monto) || 0), 0);
+  if (!total) return null;
+  const detalle = list
+    .map(n => `${n.descripcion || n.cuenta_contable_nombre || "Novedad"}: ${fmtMoney(Number(n.monto) || 0)}`)
+    .join("\n");
+  return (
+    <span title={detalle} style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: "#16a34a",
+      background: "#dcfce7", borderRadius: 6, padding: "1px 7px", cursor: "help", whiteSpace: "nowrap" }}>
+      +{fmtMoney(total)}
+    </span>
+  );
+}
+
+function PasoFijos({ rowsFijos, legajos, sedes, originalRows, novsByRowKey, updateRow, removeRow,
   showAddForm, setShowAddForm, addForm, setAddForm, handleAddRow,
   actualizarLegs, onChangeActualizar, onContinuar, onSiguiente, saving }) {
 
@@ -1247,7 +1266,7 @@ function PasoFijos({ rowsFijos, legajos, sedes, originalRows, updateRow, removeR
               const pctM1    = sueldoM1 ? (base - sueldoM1) / sueldoM1 * 100 : null;
               return (
                 <tr key={row._id} style={{ background: bucketBg(row, i % 2 === 0 ? T.card : T.bg), borderBottom: `1px solid ${T.border}` }}>
-                  <td style={{ padding: "5px 8px", fontWeight: 600 }}>{row.legajo_nombre}</td>
+                  <td style={{ padding: "5px 8px", fontWeight: 600 }}>{row.legajo_nombre}<NovChip novs={novsByRowKey[rowKeyDe(row.legajo_id, row.sede_id)]} /></td>
                   <td style={{ padding: "5px 8px", color: T.muted, fontSize: 11 }}>{row.rol}</td>
                   <td style={{ padding: "5px 8px", color: T.muted }}>{row.sede_nombre || "—"}</td>
                   <td style={{ padding: "5px 8px", textAlign: "right", color: T.dim }}>{fmtMoney(sueldoM1)}</td>
@@ -1312,7 +1331,7 @@ function PasoFijos({ rowsFijos, legajos, sedes, originalRows, updateRow, removeR
 
 // ── Paso 2: Horas (solo coaches) ──────────────────────────────────────────────
 
-function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, updateRow, removeRow, updateDetalle,
+function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByRowKey, updateRow, removeRow, updateDetalle,
   showAddForm, setShowAddForm, addForm, setAddForm, handleAddRow,
   mes, anio, pais, onResyncEye,
   onAtras, onContinuar, onSiguiente, saving }) {
@@ -1459,7 +1478,7 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, updateR
                     : <span style={{ color: T.dim }}>—</span>;
                   return (
                     <tr key={row._id + "-" + di} style={{ background: bg, borderBottom: last ? `1px solid ${T.border}` : "none" }}>
-                      <td style={{ padding: "5px 8px", fontWeight: 600 }}>{first ? row.legajo_nombre : ""}</td>
+                      <td style={{ padding: "5px 8px", fontWeight: 600 }}>{first ? row.legajo_nombre : ""}{first && <NovChip novs={novsByRowKey[rowKeyDe(row.legajo_id, row.sede_id)]} />}</td>
                       <td style={{ padding: "4px 6px" }}>
                         {first && (
                           <select value={row.rol} onChange={e => updateRow(row._id, "rol", e.target.value)}
@@ -1518,7 +1537,7 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, updateR
 
 // ── Paso 3: Incentivos y comisiones (todos los empleados) ─────────────────────
 
-function PasoIncentivos({ rows, legajos, sedes, mes, anio, pais, updateRow, removeRow,
+function PasoIncentivos({ rows, legajos, sedes, mes, anio, pais, novsByRowKey, updateRow, removeRow,
   showAddForm, setShowAddForm, addForm, setAddForm, handleAddRow,
   onApplyEyeCdp, onAtras, onContinuar, onSiguiente, saving }) {
 
@@ -1672,7 +1691,7 @@ function PasoIncentivos({ rows, legajos, sedes, mes, anio, pais, updateRow, remo
               const canCdp      = !isLimp;   // todos menos limpieza
               return (
                 <tr key={row._id} style={{ background: bucketBg(row, i % 2 === 0 ? T.card : T.bg), borderBottom: `1px solid ${T.border}` }}>
-                  <td style={{ padding: "5px 8px", fontWeight: 600 }}>{row.legajo_nombre}</td>
+                  <td style={{ padding: "5px 8px", fontWeight: 600 }}>{row.legajo_nombre}<NovChip novs={novsByRowKey[rowKeyDe(row.legajo_id, row.sede_id)]} /></td>
                   <td style={{ padding: "5px 8px", color: T.muted, fontSize: 11 }}>
                     {ROL_CONCEPTO[row.rol] ?? row.rol}
                   </td>
