@@ -32,6 +32,7 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
     subtotal:        "",
     ivaRate:         "0",
     medioPago:       "",
+    nota:            "",
   });
 
   const _savingRef = useRef(false);
@@ -47,6 +48,7 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
       subtotal:        String(editGasto.subtotal),
       ivaRate:         String(editGasto.ivaRate),
       medioPago:       editGasto.cuentaBancaria,
+      nota:            editGasto.nota ?? "",
     }];
   });
   const [saving, setSaving] = useState(false);
@@ -57,6 +59,9 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
   const getMoneda = (medioPagoId) => cuentasSoc.find(c => c.id === medioPagoId)?.moneda ?? "ARS";
   const calcTotal = (r) => (Number(r.subtotal) || 0) * (1 + (Number(r.ivaRate) || 0) / 100);
   const isValid   = (r) => r.fecha && r.cuenta_contable && r.cc && r.medioPago && Number(r.subtotal) > 0;
+  // Nota final: la que escribe el usuario, o la etiqueta automática (cuenta · caja) como fallback.
+  const notaAuto  = (r) => [r.cuenta_contable, cuentasSoc.find(c => c.id === r.medioPago)?.nombre].filter(Boolean).join(" · ");
+  const notaFinal = (r) => (r.nota || "").trim() || notaAuto(r);
   const validRows = rows.filter(isValid);
   const canSave   = validRows.length > 0;
 
@@ -76,7 +81,7 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
           moneda:             getMoneda(r.medioPago) || editGasto.moneda,
           subtotal:           Number(r.subtotal) || 0,
           ivaRate:            Number(r.ivaRate) || 0,
-          nota:               [r.cuenta_contable, cuentasSoc.find(c => c.id === r.medioPago)?.nombre].filter(Boolean).join(" · "),
+          nota:               notaFinal(r),
           cuenta_bancaria:    r.medioPago,
           proveedor_id:       prov?.id ?? "",
           proveedor_nombre:   prov?.nombre ?? "",
@@ -93,7 +98,7 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
             moneda:             getMoneda(r.medioPago),
             subtotal:           Number(r.subtotal) || 0,
             ivaRate:            Number(r.ivaRate) || 0,
-            nota:               [r.cuenta_contable, cuentasSoc.find(c => c.id === r.medioPago)?.nombre].filter(Boolean).join(" · "),
+            nota:               notaFinal(r),
             cuenta_bancaria:    r.medioPago,
             proveedor_id:       prov?.id ?? "",
             proveedor_nombre:   prov?.nombre ?? "",
@@ -139,7 +144,7 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
         overflow:"hidden", boxShadow:T.shadow }}>
         <div style={{ overflowX:"auto" }}>
           <table style={{ width:"100%", borderCollapse:"collapse", tableLayout:"fixed" }}>
-            <colgroup>{[110, 0, 0, 0, 92, 66, 102, 0, 36].map((w, i) => (
+            <colgroup>{[110, 0, 0, 0, 92, 66, 102, 0, 150, 36].map((w, i) => (
               <col key={i} style={w ? { width:w } : {}} />
             ))}</colgroup>
             <thead>
@@ -148,7 +153,7 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
                   ["Fecha","left"], ["Proveedor / Concepto","left"],
                   ["Cuenta Contable","left"], ["Centro de Costo","left"],
                   ["Subtotal","right"], ["IVA","center"],
-                  ["Total","right"], ["Forma de Pago","left"], ["","left"],
+                  ["Total","right"], ["Forma de Pago","left"], ["Nota","left"], ["","left"],
                 ].map(([h, align]) => (
                   <th key={h} style={{ padding:"10px 10px", fontSize:11, fontWeight:700,
                     color:"#fbbf24", textAlign:align, letterSpacing:".06em",
@@ -224,6 +229,11 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
                           </option>
                         ))}
                       </select>
+                    </td>
+
+                    <td style={{ padding:"6px 8px" }}>
+                      <input type="text" value={r.nota} placeholder="Nota…"
+                        onChange={e => upd(r._id, "nota", e.target.value)} style={ci} />
                     </td>
 
                     <td style={{ padding:"6px 4px", textAlign:"center" }}>
