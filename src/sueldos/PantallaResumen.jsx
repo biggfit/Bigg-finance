@@ -427,7 +427,7 @@ function FichaSedes({ sel, resumen, pagos, email, periodo }) {
           <thead><tr><Th>Concepto</Th><Th right>Cant.</Th><Th right>Valor u.</Th><Th right>Importe</Th></tr></thead>
           <tbody>
             {/* Sueldo Fijo: base + horas (base/feriado/domingo) + asignaciones */}
-            <Linea label="Sueldo fijo"   importe={resumen.fijo} />
+            <Linea label="Sueldo Fijo"   importe={resumen.fijo} />
             <Linea label={`Horas base${extra("horas")}`}
               cant={resumen.horasCant + resumen.yogaCant}
               valor={resumen.horasCant > 0 ? resumen.tarifaHora : resumen.tarifaYoga}
