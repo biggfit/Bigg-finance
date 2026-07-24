@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { fetchLiquidaciones, fetchCategorias, fetchPagos, fetchLegajos, desglosarLiquidacion, ROLES_SEDES, ROLES_HQ } from "../lib/sueldosApi";
+import { fetchLiquidaciones, fetchCategorias, fetchPagos, fetchLegajos, fetchNovedades, desglosarLiquidacion, isCerrada, ROLES_SEDES, ROLES_HQ } from "../lib/sueldosApi";
 
 const T = {
   bg:     "#f8fafc",
@@ -57,6 +57,7 @@ export default function PantallaResumen({ pais = "AR" }) {
   const [categorias, setCategorias] = useState([]);
   const [pagos, setPagos] = useState([]);
   const [legajos, setLegajos] = useState([]);
+  const [novedades, setNovedades] = useState([]);
   const [selId, setSelId] = useState("");
   const [loading, setLoading] = useState(true);
   const [showSel, setShowSel]   = useState(false);   // modal de selección "imprimir todo"
@@ -68,17 +69,19 @@ export default function PantallaResumen({ pais = "AR" }) {
     (async () => {
       setLoading(true);
       try {
-        const [ls, cats, pgs, lgs] = await Promise.all([
+        const [ls, cats, pgs, lgs, novs] = await Promise.all([
           fetchLiquidaciones(mes, anio).catch(() => []),
           fetchCategorias(mes, anio, pais).catch(() => []),
           fetchPagos(mes, anio).catch(() => []),
           fetchLegajos().catch(() => []),
+          fetchNovedades(mes, anio).catch(() => []),
         ]);
         if (cancel) return;
         setLiqs(Array.isArray(ls) ? ls : []);
         setCategorias(Array.isArray(cats) ? cats : []);
         setPagos(Array.isArray(pgs) ? pgs : []);
         setLegajos(Array.isArray(lgs) ? lgs : []);
+        setNovedades(Array.isArray(novs) ? novs : []);
       } finally { if (!cancel) setLoading(false); }
     })();
     return () => { cancel = true; };
@@ -116,12 +119,12 @@ export default function PantallaResumen({ pais = "AR" }) {
 
   // Desglose Sedes / HQ del empleado seleccionado (los builders son puros → se reusan en "imprimir todo").
   const resumenSedes = useMemo(
-    () => (vista === "sedes" && sel) ? buildResumenSedes(sel, categorias) : null,
-    [vista, sel, categorias]);
+    () => (vista === "sedes" && sel) ? buildResumenSedes(sel, categorias, novedades) : null,
+    [vista, sel, categorias, novedades]);
 
   const resumenHQ = useMemo(
-    () => (vista === "hq" && sel) ? buildResumenHQ(sel) : null,
-    [vista, sel]);
+    () => (vista === "hq" && sel) ? buildResumenHQ(sel, novedades) : null,
+    [vista, sel, novedades]);
 
   const prevMes = () => { if (mes === 1) { setMes(12); setAnio(a => a - 1); } else setMes(m => m - 1); };
   const nextMes = () => { if (mes === 12) { setMes(1); setAnio(a => a + 1); } else setMes(m => m + 1); };
@@ -191,9 +194,6 @@ export default function PantallaResumen({ pais = "AR" }) {
             {empleados.length === 0 && <option value="">— sin empleados —</option>}
             {empleados.map(e => <option key={e.id} value={e.id}>{e.nombre}</option>)}
           </select>
-          <button onClick={abrirImprimirTodo} disabled={!empleados.length}
-            style={{ ...fichaBtn, marginLeft: 6, opacity: empleados.length ? 1 : 0.5,
-              cursor: empleados.length ? "pointer" : "not-allowed" }}>🖨 Imprimir todo</button>
         </div>
       </div>
 
@@ -206,8 +206,8 @@ export default function PantallaResumen({ pais = "AR" }) {
       ) : (
         <div id="ficha-solo">
           {vista === "hq"
-            ? <FichaHQ sel={sel} resumen={resumen} pagos={pagosEmpleado} email={emailSel} periodo={periodo} />
-            : <FichaSedes sel={sel} resumen={resumen} pagos={pagosEmpleado} email={emailSel} periodo={periodo} />}
+            ? <FichaHQ sel={sel} resumen={resumen} pagos={pagosEmpleado} email={emailSel} periodo={periodo} onImprimirTodo={abrirImprimirTodo} />
+            : <FichaSedes sel={sel} resumen={resumen} pagos={pagosEmpleado} email={emailSel} periodo={periodo} onImprimirTodo={abrirImprimirTodo} />}
         </div>
       )}
 
@@ -217,7 +217,7 @@ export default function PantallaResumen({ pais = "AR" }) {
           {idsPrint.map(id => {
             const emp = empleados.find(e => e.id === id);
             if (!emp) return null;
-            const r = vista === "hq" ? buildResumenHQ(emp) : buildResumenSedes(emp, categorias);
+            const r = vista === "hq" ? buildResumenHQ(emp, novedades) : buildResumenSedes(emp, categorias, novedades);
             if (!r) return null;
             const pg = pagosDe(emp, pagos);
             return (
@@ -253,7 +253,7 @@ function pagosDe(emp, pagos) {
 }
 
 // Desglose Sedes: suma sobre las filas por sede, recalcula importes con tarifas.
-function buildResumenSedes(emp, categorias) {
+function buildResumenSedes(emp, categorias, novList = []) {
   const acc = {
     fijo: 0, horasCant: 0, horasMonto: 0,
     cdpCoachCant: 0, cdpFrontCant: 0, cdpMonto: 0,
@@ -288,7 +288,12 @@ function buildResumenSedes(emp, categorias) {
     if (d.cdpFrontCant > 0) cs.cdpFront.add(sn);
     if (d.oneShotCant  > 0) cs.oneShot.add(sn);
     sedes.push({ sede: sn, horas: d.horasCant, total: d.totalLiquidar });
-    for (const n of (row.novedades || [])) novedades.push({ cuenta: n.cuenta_contable_nombre || "Novedad", descripcion: n.descripcion || "", monto: Number(n.monto) || 0 });
+    // Cerrada → novedades congeladas en la liquidación; borrador → las de su_novedades (por legajo+sede).
+    const novsR = isCerrada(row.estado)
+      ? (row.novedades || [])
+      : novList.filter(n => n.tipo === "extra" && n.sede_id &&
+          String(n.sede_id) === String(row.sede_id) && String(n.legajo_id) === String(row.legajo_id));
+    for (const n of novsR) novedades.push({ cuenta: n.cuenta_contable_nombre || "Novedad", descripcion: n.descripcion || "", monto: Number(n.monto) || 0 });
   }
   const principalSede = Object.entries(porSede).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
   const conceptoSedes = Object.fromEntries(Object.entries(cs).map(([k, set]) => [k, [...set]]));
@@ -298,14 +303,20 @@ function buildResumenSedes(emp, categorias) {
 }
 
 // Desglose HQ: sueldo base + novedades por cuenta.
-function buildResumenHQ(emp) {
+function buildResumenHQ(emp, novList = []) {
   let sueldo = 0, totalBruto = 0;
   const novedades = [];
+  let addedOpen = false;   // las de su_novedades se agregan una sola vez por empleado
   for (const row of emp.rows) {
     sueldo     += Number(row.sueldo_base) || 0;
     totalBruto += Number(row.total_bruto) || 0;
-    for (const n of (row.novedades || [])) {
-      novedades.push({ cuenta: n.cuenta_contable_nombre || "Novedad", monto: Number(n.monto) || 0 });
+    if (isCerrada(row.estado)) {
+      for (const n of (row.novedades || []))
+        novedades.push({ cuenta: n.cuenta_contable_nombre || "Novedad", monto: Number(n.monto) || 0 });
+    } else if (!addedOpen) {
+      addedOpen = true;
+      for (const n of novList.filter(n => n.tipo === "extra" && !n.sede_id && String(n.legajo_id) === String(row.legajo_id)))
+        novedades.push({ cuenta: n.cuenta_contable_nombre || "Novedad", monto: Number(n.monto) || 0 });
     }
   }
   const sueldoFinal = totalBruto || sueldo;
@@ -360,22 +371,8 @@ function SeleccionImprimir({ empleados, checkSel, count, onToggle, onAll, onCanc
 }
 
 // Marco compartido de la ficha: header + componentes (children) + total + pagos.
-function FichaShell({ sel, subtitulo, totalLiquidar, pagos, email, periodo, tag, children }) {
+function FichaShell({ sel, subtitulo, totalLiquidar, pagos, periodo, tag, onImprimirTodo, children }) {
   const imprimir = () => window.print();
-  const enviarMail = () => {
-    const asunto = `Liquidación ${periodo} — ${sel.nombre}`;
-    const lineas = pagos.map(p => `· ${fmtFecha(p.fecha)}  ${FP_LABEL[p.tipo_componente] ?? p.tipo_componente}  ${notaDePago(p)}  ${fmt(p.monto)}`);
-    const cuerpo = [
-      `${sel.nombre} — ${subtitulo}`,
-      `Período: ${periodo}`,
-      ``,
-      `Total a liquidar: ${fmt(totalLiquidar)}`,
-      ``,
-      `Pagos:`,
-      ...lineas,
-    ].join("\n");
-    window.location.href = `mailto:${encodeURIComponent(email || "")}?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(cuerpo)}`;
-  };
   return (
     <div className="ficha" style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden" }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12,
@@ -389,8 +386,7 @@ function FichaShell({ sel, subtitulo, totalLiquidar, pagos, email, periodo, tag,
         </div>
         <div className="no-print" style={{ display: "flex", gap: 8, flexShrink: 0 }}>
           <button onClick={imprimir} style={fichaBtn}>🖨 Imprimir</button>
-          <button onClick={enviarMail} disabled={!email} title={email ? `Enviar a ${email}` : "El legajo no tiene email cargado"}
-            style={{ ...fichaBtn, opacity: email ? 1 : 0.5, cursor: email ? "pointer" : "not-allowed" }}>✉ Enviar por mail</button>
+          {onImprimirTodo && <button onClick={onImprimirTodo} style={fichaBtn}>🖨 Imprimir todo</button>}
         </div>
       </div>
 
@@ -408,44 +404,44 @@ function FichaShell({ sel, subtitulo, totalLiquidar, pagos, email, periodo, tag,
 }
 
 // ── Ficha Sedes ──────────────────────────────────────────────────────────────
-function FichaSedes({ sel, resumen, pagos, email, periodo }) {
+function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo }) {
   const sedes = resumen.sedes.length;
   const subtitulo = `${ROL_LABEL[sel.rol] ?? sel.rol} · ${sedes} sede${sedes !== 1 ? "s" : ""} · ${fmtNum(resumen.horasCant)} hs`;
   // Fijo = base + horas (base/feriado/domingo/yoga) + asignaciones (la base sobre la que pega la comisión grupal).
-  const sueldoFijo  = resumen.fijo + resumen.horasMonto + resumen.yogaMonto + resumen.feriadosMonto + resumen.domingosMonto + resumen.asignaciones;
-  const incentivos  = resumen.cdpMonto + resumen.oneShotMonto;
-  const totalSueldo = sueldoFijo + resumen.objGrupalMonto + incentivos;
+  const sueldoFijo  = resumen.fijo + resumen.horasMonto + resumen.yogaMonto + resumen.feriadosMonto + resumen.domingosMonto;
+  // Sueldo Variable: asignaciones + one shot + CDP (front + coach) + comisión grupal.
+  const sueldoVariable = resumen.asignaciones + resumen.oneShotMonto + resumen.cdpMonto + resumen.objGrupalMonto;
+  const totalSueldo = sueldoFijo + sueldoVariable;
   // Sedes extra (≠ principal) que aportan a un concepto → se muestran entre paréntesis.
   const extra = (key) => {
     const list = (resumen.conceptoSedes?.[key] || []).filter(s => s !== resumen.principalSede);
     return list.length ? ` (${list.join(", ")})` : "";
   };
   return (
-    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={resumen.principalSede}>
+    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={resumen.principalSede} onImprimirTodo={onImprimirTodo}>
       <Section titulo="Componentes">
         <table style={tbl}>
           <thead><tr><Th>Concepto</Th><Th right>Cant.</Th><Th right>Valor u.</Th><Th right>Importe</Th></tr></thead>
           <tbody>
             {/* Sueldo Fijo: base + horas (base/feriado/domingo) + asignaciones */}
             <Linea label="Sueldo Fijo"   importe={resumen.fijo} />
-            <Linea label={`Horas base${extra("horas")}`}
+            <Linea label={`Horas Base${extra("horas")}`}
               cant={resumen.horasCant + resumen.yogaCant}
               valor={resumen.horasCant > 0 ? resumen.tarifaHora : resumen.tarifaYoga}
               importe={resumen.horasMonto + resumen.yogaMonto} />
-            <Linea label={`Horas feriado${extra("feriado")}`} cant={resumen.feriadosCant} valor={resumen.tarifaHora}    importe={resumen.feriadosMonto} />
-            <Linea label={`Horas domingo${extra("domingo")}`} cant={resumen.domingosCant} valor={resumen.tarifaDomingo} importe={resumen.domingosMonto} />
-            <Linea label="Asignaciones"  importe={resumen.asignaciones} />
+            <Linea label={`Horas Feriado${extra("feriado")}`} cant={resumen.feriadosCant} valor={resumen.tarifaHora}    importe={resumen.feriadosMonto} />
+            <Linea label={`Horas Domingo${extra("domingo")}`} cant={resumen.domingosCant} valor={resumen.tarifaDomingo} importe={resumen.domingosMonto} />
             <Subtotal label="Sueldo Fijo" importe={sueldoFijo} />
 
-            <Linea label="Comisión grupal"  importe={resumen.objGrupalMonto} />
-
-            {/* Incentivos: todo CDP */}
-            <Linea label={`CDP coach${extra("cdpCoach")}`}      cant={resumen.cdpCoachCant} valor={resumen.tCdpCoach}     importe={resumen.cdpCoachCant * resumen.tCdpCoach} />
-            <Linea label={`CDP front desk${extra("cdpFront")}`} cant={resumen.cdpFrontCant} valor={resumen.tCdpFront}     importe={resumen.cdpFrontCant * resumen.tCdpFront} />
+            {/* Sueldo Variable: asignaciones + one shot + CDP (front + coach) + comisión grupal */}
+            <Linea label="Asignaciones"  importe={resumen.asignaciones} />
             <Linea label={`One Shot${extra("oneShot")}`}        cant={resumen.oneShotCant}  valor={resumen.tarifaOS}      importe={resumen.oneShotMonto} />
-            <Subtotal label="Incentivos" importe={incentivos} />
+            <Linea label={`CDP Front Desk${extra("cdpFront")}`} cant={resumen.cdpFrontCant} valor={resumen.tCdpFront}     importe={resumen.cdpFrontCant * resumen.tCdpFront} />
+            <Linea label={`CDP Coach${extra("cdpCoach")}`}      cant={resumen.cdpCoachCant} valor={resumen.tCdpCoach}     importe={resumen.cdpCoachCant * resumen.tCdpCoach} />
+            <Linea label="Comisión Grupal"  importe={resumen.objGrupalMonto} />
+            <Subtotal label="Sueldo Variable" importe={sueldoVariable} />
 
-            <Subtotal label="Total sueldo" importe={totalSueldo} fuerte />
+            <Subtotal label="Total Sueldo" importe={totalSueldo} fuerte />
 
             {/* Adicionales sobre el sueldo */}
             {resumen.novedades.map((n, i) => (
@@ -453,7 +449,7 @@ function FichaSedes({ sel, resumen, pagos, email, periodo }) {
             ))}
             <Linea label="Redondeo"         importe={resumen.redondeo} />
 
-            <Subtotal label="Total a liquidar" importe={resumen.totalLiquidar} fuerte />
+            <Subtotal label="Total a Liquidar" importe={resumen.totalLiquidar} fuerte />
           </tbody>
         </table>
       </Section>
@@ -462,10 +458,10 @@ function FichaSedes({ sel, resumen, pagos, email, periodo }) {
 }
 
 // ── Ficha HQ ─────────────────────────────────────────────────────────────────
-function FichaHQ({ sel, resumen, pagos, email, periodo }) {
+function FichaHQ({ sel, resumen, pagos, email, periodo, onImprimirTodo }) {
   const subtitulo = `${ROL_LABEL[sel.rol] ?? sel.rol}${sel.sociedad ? ` · ${sel.sociedad}` : ""}`;
   return (
-    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo}>
+    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} onImprimirTodo={onImprimirTodo}>
       <Section titulo="Componentes">
         <table style={tbl}>
           <thead><tr><Th>Concepto</Th><Th right>Importe</Th></tr></thead>
