@@ -21,6 +21,7 @@ function AgregarPagoModal({ egreso, saldoPendiente, cuentas, onClose, onSave }) 
     fecha:     new Date().toISOString().slice(0, 10),
     monto:     String(saldoPendiente ?? egreso.importe ?? ""),
     medioPago: "",
+    nota:      "",
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const montoNum = Number(form.monto) || 0;
@@ -112,6 +113,16 @@ function AgregarPagoModal({ egreso, saldoPendiente, cuentas, onClose, onSave }) 
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Nota (opcional) */}
+          <div>
+            <label style={{ fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:5 }}>Nota</label>
+            <textarea value={form.nota} onChange={e => set("nota", e.target.value)} rows={2}
+              placeholder="Nota del pago (opcional)"
+              style={{ width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`,
+                borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text,
+                fontFamily:T.font, outline:"none", boxSizing:"border-box", resize:"vertical" }} />
           </div>
 
           {/* Botones */}
