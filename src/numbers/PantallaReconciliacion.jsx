@@ -1824,7 +1824,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           <button style={MENU_ITEM} onClick={() => { setReglaModal({ prefill: prefillRegla(m) }); setMenuFor(null); }}>⚙ Crear regla</button>
                           {/* Ignorar en el menú solo si NO es duplicado (en duplicados el botón rojo de afuera ya es Ignorar). */}
                           {!dupTransfer(m) && (
-                            <button style={{ ...MENU_ITEM, color: "#b45309" }} onClick={() => { if (window.confirm(`Ignorar esta línea (no se contabiliza)?\n${m.concepto || ""} · $${fmt(total)}`)) ignorar(m); setMenuFor(null); }}>🚫 Ignorar</button>
+                            <button style={{ ...MENU_ITEM, color: "#b45309" }} onClick={() => { setMenuFor(null); ignorar(m); }}>🚫 Ignorar</button>
                           )}
                         </div>
                       )}
