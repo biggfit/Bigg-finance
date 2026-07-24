@@ -80,6 +80,7 @@ export default function PantallaNovedades({ pais = "" }) {
   const [loaded,   setLoaded]   = useState([]);   // snapshot persistido (para diff)
   const [legajos,  setLegajos]  = useState([]);
   const [cuentas,  setCuentas]  = useState([]);
+  const [prevMap,  setPrevMap]  = useState(() => new Map());  // monto del mes anterior por legajo+cuenta
   const [loading,  setLoading]  = useState(true);
   const [saving,   setSaving]   = useState(false);
   const [dirty,    setDirty]    = useState(false);
@@ -89,8 +90,11 @@ export default function PantallaNovedades({ pais = "" }) {
     if (!p) return;
     setLoading(true);
     try {
-      const [novs, legs, ccs] = await Promise.all([
+      const pm = m === 1 ? 12 : m - 1;
+      const pa = m === 1 ? a - 1 : a;
+      const [novs, prevNovs, legs, ccs] = await Promise.all([
         fetchNovedades(m, a),
+        fetchNovedades(pm, pa),
         fetchLegajos(),
         fetchCuentasContablesNumbers(),
       ]);
@@ -98,6 +102,13 @@ export default function PantallaNovedades({ pais = "" }) {
       const extras = novs.filter(n => n.tipo === "extra" && !n.sede_id);
       setRows(extras.map(n => ({ ...novToRow(n), concepto: conceptoDeNovedad(n) })));
       setLoaded(extras);
+      // Monto del mes anterior por legajo+cuenta → alimenta la columna comparativa.
+      const prev = new Map();
+      for (const n of prevNovs.filter(x => x.tipo === "extra" && !x.sede_id)) {
+        const k = `${n.legajo_id}|${norm(n.cuenta_contable_nombre)}`;
+        prev.set(k, (prev.get(k) || 0) + (Number(n.monto) || 0));
+      }
+      setPrevMap(prev);
       setLegajos(legs.filter(l => l.activo && ROLES_HQ.includes(l.rol) && l.pais === p));
       setCuentas(ccs);
       setDirty(false);
@@ -145,8 +156,10 @@ export default function PantallaNovedades({ pais = "" }) {
   const handleCopiarMesAnterior = async () => {
     const mAnt = mes === 1 ? 12 : mes - 1;
     const aAnt = mes === 1 ? anio - 1 : anio;
-    const novs = (await fetchNovedades(mAnt, aAnt)).filter(n => n.tipo === "extra");
-    if (!novs.length) { alert("No hay novedades en el mes anterior."); return; }
+    // Solo novedades de HQ (sin sede). Copiar las de Sedes acá les borraría el sede_id
+    // y las duplicaría como novedades de HQ (bug de fuga a HQ).
+    const novs = (await fetchNovedades(mAnt, aAnt)).filter(n => n.tipo === "extra" && !n.sede_id);
+    if (!novs.length) { alert("No hay novedades de HQ en el mes anterior."); return; }
     // Filas nuevas (sin id) para revisar y guardar.
     setRows(novs.map(n => ({ ...newRow(novToRow(n)), id: null, _id: Date.now() + Math.random(), concepto: conceptoDeNovedad(n) })));
     setDirty(true);
@@ -207,7 +220,19 @@ export default function PantallaNovedades({ pais = "" }) {
     color: T.muted, fontSize: 11, letterSpacing: ".04em",
     borderBottom: `1px solid ${T.border}` };
 
-  const totalTab = tabRows.reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
+  // Monto del mismo legajo+cuenta el mes anterior (0 si no tenía novedad de ese concepto).
+  const montoAnterior = (row) => {
+    const cta = resolveCuenta(row).cuenta_contable_nombre;
+    return prevMap.get(`${row.legajo_id}|${norm(cta)}`) || 0;
+  };
+  const fmtAr   = (n) => (Number(n) || 0).toLocaleString("es-AR");
+  const fmt     = (n) => `$${fmtAr(n)}`;
+  const fmtDiff = (n) => `${n < 0 ? "−" : n > 0 ? "+" : ""}$${fmtAr(Math.abs(n))}`;
+  const diffCol = (n) => (n > 0 ? T.green : n < 0 ? T.red : T.dim);
+
+  const totalTab  = tabRows.reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
+  const totalPrev = tabRows.reduce((s, r) => s + montoAnterior(r), 0);
+  const totalDiff = totalTab - totalPrev;
   const esOtros = tab === "otros";
 
   return (
@@ -266,7 +291,9 @@ export default function PantallaNovedades({ pais = "" }) {
             <thead>
               <tr style={{ background: T.bg }}>
                 <th style={thStyle}>Legajo</th>
+                <th style={{ ...thStyle, width: 120, textAlign: "right" }}>Mes anterior</th>
                 <th style={{ ...thStyle, width: 130 }}>Monto $</th>
+                <th style={{ ...thStyle, width: 120, textAlign: "right" }}>Diferencia</th>
                 <th style={{ ...thStyle, width: 150 }}>Forma de pago</th>
                 {esOtros && <th style={{ ...thStyle, width: 170 }}>Cuenta contable</th>}
                 <th style={thStyle}>Nota</th>
@@ -275,11 +302,14 @@ export default function PantallaNovedades({ pais = "" }) {
             </thead>
             <tbody>
               {tabRows.length === 0 && (
-                <tr><td colSpan={esOtros ? 6 : 5} style={{ padding: "14px 10px", color: T.dim, fontSize: 13 }}>
+                <tr><td colSpan={esOtros ? 8 : 7} style={{ padding: "14px 10px", color: T.dim, fontSize: 13 }}>
                   Sin novedades en esta solapa. Agregá una fila abajo.
                 </td></tr>
               )}
-              {tabRows.map(r => (
+              {tabRows.map(r => {
+                const prev = montoAnterior(r);
+                const diff = (parseFloat(r.monto) || 0) - prev;
+                return (
                 <tr key={r._id} style={{ borderBottom: `1px solid ${T.border}` }}>
                   <td style={{ padding: "6px 10px" }}>
                     <select style={iStyle} value={r.legajo_id} onChange={e => setLegajo(r._id, e.target.value)}>
@@ -287,10 +317,12 @@ export default function PantallaNovedades({ pais = "" }) {
                       {legajos.map(l => <option key={l.id} value={l.id}>{l.nombre}</option>)}
                     </select>
                   </td>
+                  <td style={{ padding: "6px 10px", textAlign: "right", color: T.muted }}>{fmt(prev)}</td>
                   <td style={{ padding: "6px 10px" }}>
                     <input style={{ ...iStyle, textAlign: "right" }} value={r.monto} placeholder="0"
                       onChange={e => setRow(r._id, { monto: e.target.value })} />
                   </td>
+                  <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600, color: diffCol(diff) }}>{fmtDiff(diff)}</td>
                   <td style={{ padding: "6px 10px" }}>
                     <select style={iStyle} value={r.forma_pago} onChange={e => setRow(r._id, { forma_pago: e.target.value })}>
                       {FP_TIPOS.map(t => <option key={t} value={t}>{FP_TIPO_LABEL[t]}</option>)}
@@ -313,14 +345,14 @@ export default function PantallaNovedades({ pais = "" }) {
                       style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: T.dim, padding: 2 }}>🗑</button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
             <tfoot>
               <tr style={{ background: T.bg, fontWeight: 700 }}>
-                <td style={{ padding: "8px 10px" }}>Total</td>
-                <td style={{ padding: "8px 10px", textAlign: "right" }}>
-                  ${totalTab.toLocaleString("es-AR")}
-                </td>
+                <td colSpan={2} style={{ padding: "8px 10px" }}>Total</td>
+                <td style={{ padding: "8px 10px", textAlign: "right" }}>{fmt(totalTab)}</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", color: diffCol(totalDiff) }}>{fmtDiff(totalDiff)}</td>
                 <td colSpan={esOtros ? 4 : 3}></td>
               </tr>
             </tfoot>
