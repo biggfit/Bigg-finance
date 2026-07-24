@@ -1863,7 +1863,9 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                       <tr style={{ background: bg, borderBottom: `1px solid ${T.cardBorder}`, borderLeft: `3px solid ${T.accent}` }}>
                         <td /><td />
                         <td style={{ padding: "4px 12px", textAlign: "right", fontSize: 10, fontWeight: 700, color: splitOk ? "#16a34a" : "#dc2626" }}>
-                          {fmt(splitSum)} / {fmt(total)} {splitOk ? "✓" : "⚠"}
+                          {fmt(splitSum)} / {fmt(total)} {splitOk
+                            ? "✓"
+                            : <>⚠ {(() => { const d = total - splitSum; return `${d > 0 ? "faltan" : "sobran"} ${fmt(Math.abs(d))}`; })()}</>}
                         </td>
                         <td />
                         <td />
