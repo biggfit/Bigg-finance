@@ -67,6 +67,16 @@ async function fetchJsonDebug(url) {
   return { ok: res.ok, status: res.status, data, raw: text.slice(0, 500) };
 }
 
+// Fetch REST report_json/<id>/ por sede — la ruta que SÍ funciona con el token
+// (el worker MCP quedó obsoleto/roto). Devuelve array de filas.
+async function fetchReportJson(id, locId, start, end) {
+  const url = `${BIGG_EYE_API}/report_json/${id}/?location_id=${locId}&start_date=${start}&end_date=${end}`;
+  const res = await fetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${TOKEN}` } });
+  if (!res.ok) return [];
+  const data = await res.json().catch(() => null);
+  return Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : []);
+}
+
 function extractRows(data) {
   if (Array.isArray(data))          return data;
   if (Array.isArray(data?.data))    return data.data;
@@ -216,20 +226,21 @@ export default async function handler(req, res) {
 
   // ── 1. REST API fallback — ambas fuentes en paralelo ────────────────────────
   const start   = `${yr}-${pad(mo)}-01`;
-  const lastDay = new Date(yr, mo, 0).getDate();
-  const end     = `${yr}-${pad(mo)}-${pad(lastDay)}`;
+  const nextM   = mo === 12 ? 1 : mo + 1;
+  const nextY   = mo === 12 ? yr + 1 : yr;
+  const end     = `${nextY}-${pad(nextM)}-01`;  // 1er día del mes siguiente (igual que la UI Eye)
 
   // Fuente CDP: report 9 "Clases de prueba" (= la UI "Socios con Clase de Prueba").
   // Por cada socio que ASISTIÓ y CONVIRTIÓ: cdp_coach al coach (coach_cdp) y
   // cdp_front al vendedor que cerró (seller). One-shots: report 20 (cdp='One Shot').
   // Se traen por el MCP de Cloudflare Workers (el REST /report del token está roto).
   try {
-    // Un request POR SEDE por reporte: el worker exige location_id (con null tira "undefined method id for nil").
+    // Un request POR SEDE por reporte vía report_json (REST que anda con el token).
     const pull = async (report_id) => {
       const per = await Promise.all(
-        sedesTarget.map(s => fetchViaWorkerMcp(report_id, s.id, start, end).catch(() => null))
+        sedesTarget.map(s => fetchReportJson(report_id, s.id, start, end).catch(() => []))
       );
-      return per.filter(Array.isArray).flat();
+      return per.flat();
     };
     const [cdpRows, oneShotRows] = await Promise.all([pull(9), pull(20)]);
     const cdpResult     = { data: cdpRows || [],     status: 200, raw: "" };

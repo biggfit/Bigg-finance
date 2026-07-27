@@ -68,6 +68,16 @@ async function fetchJson(url) {
   catch { throw new Error(`Respuesta no-JSON (${res.status}): ${text.slice(0, 200)}`); }
 }
 
+// Fetch REST report_json/<id>/ por sede — la ruta que SÍ funciona con el token
+// (el /report?id= y el worker MCP quedaron obsoletos/rotos). Devuelve array de filas.
+async function fetchReportJson(id, locId, start, end) {
+  const url = `${BIGG_EYE_API}/report_json/${id}/?location_id=${locId}&start_date=${start}&end_date=${end}`;
+  const res = await fetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${TOKEN}` } });
+  if (!res.ok) return [];
+  const data = await res.json().catch(() => null);
+  return Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : []);
+}
+
 // Igual que fetchJson pero también devuelve el texto crudo para debug
 async function fetchJsonDebug(url) {
   const res  = await fetch(url, {
@@ -307,101 +317,36 @@ export default async function handler(req, res) {
     return;
   }
 
-  // ── 1. REST API + MCP fallback (si no hay cache para este mes) ───────────
-  // Set de location_ids operados para filtrar client-side
+  // ── 1. Fetch en vivo: report_json/12 por sede (REST que SÍ anda con el token) ──
   const sedesTargetIds = new Set(sedesTarget.map(s => s.id));
   const sedesById      = Object.fromEntries(sedesTarget.map(s => [s.id, s]));
-
-  // Candidatos de URL para probar SIN filtro de location_id.
-  // El token no tiene acceso al report con location_id filter →
-  // buscamos todas las sedes y filtramos por nuestros IDs client-side.
-  const CANDIDATES = [
-    // Sin location_id — el más probable que devuelva algo
-    `${BIGG_EYE_API}/report?id=12&start_date=${start}&end_date=${end}`,
-    `${BIGG_EYE_API}/report?id=12&date_month=${dateMes}`,
-    `${BIGG_EYE_API}/report?id=12&start=${start}&end=${end}`,
-  ];
-
-  // Función auxiliar para extraer rows de la respuesta JSON
-  function extractRows(data) {
-    if (Array.isArray(data)) return data;
-    if (Array.isArray(data?.data)) return data.data;
-    if (Array.isArray(data?.results)) return data.results;
-    return [];
-  }
+  // Rango: [1er día del mes, 1er día del mes siguiente] — igual que la UI de Bigg Eye.
+  const nextM = mo === 12 ? 1 : mo + 1;
+  const nextY = mo === 12 ? yr + 1 : yr;
+  const endExcl = `${nextY}-${pad(nextM)}-01`;
 
   try {
-    // Probar los formatos de URL sin location_id
-    const probes = await Promise.all(CANDIDATES.map(url => fetchJsonDebug(url)));
-    const working = probes.findIndex(p => {
-      const rows = extractRows(p.data);
-      return rows.length > 0;
-    });
+    const perSede = await Promise.all(
+      sedesTarget.map(s => fetchReportJson(12, s.id, start, endExcl).catch(() => []))
+    );
+    const allRows = perSede.flat();
+    const items   = eyeLineasDe(allRows, sedesTargetIds, sedesById);
 
-    const probesSummary = CANDIDATES.map((url, i) => ({
-      url,
-      status: probes[i].status,
-      type:   Array.isArray(probes[i].data) ? `array(${probes[i].data?.length})` : typeof probes[i].data,
-      raw:    probes[i].raw?.slice(0, 150),
-    }));
-
-    // — — — Fallback: Cloudflare Workers MCP server — — —
-    if (working === -1) {
-      // REST sin location_id no devolvió datos. Intentar el MCP server de Cloudflare Workers.
-      let mcpRows = [];
-      try {
-        // Un request POR SEDE: el worker exige location_id (con null tira "undefined method id for nil").
-        const perSede = await Promise.all(
-          sedesTarget.map(s => fetchViaWorkerMcp(s.id, start, end).catch(() => null))
-        );
-        mcpRows = perSede.filter(Array.isArray).flat();
-      } catch {}
-
-      const mcpItems = eyeLineasDe(mcpRows, sedesTargetIds, sedesById);
-
-      if (mcpItems.length > 0) {
-        res.statusCode = 200;
-        res.end(JSON.stringify({
-          items:           mcpItems,
-          locations_count: sedesTarget.length,
-          total_locations: sedesTarget.length,
-          location_names:  sedesTarget.map(s => `${s.id}:${s.nombre}`),
-          rejected_count:  0, rejected_msgs: [],
-          _sample_url:     "en vivo · MCP por sede",
-          _sample_resp:    { raw: `${mcpItems.length} items en vivo (worker por sede)` },
-        }));
-        return;
-      }
-
-      // En vivo no devolvió nada. Si hay cache del mes, devolverlo (no dejar la pantalla vacía).
-      if (Array.isArray(cachedItems) && cachedItems.length > 0) {
-        const filtered = eyeLineasDe(cachedItems, sedesTargetIds, sedesById);
-        res.statusCode = 200;
-        res.end(JSON.stringify({
-          items:           filtered,
-          locations_count: sedesTarget.length,
-          total_locations: sedesTarget.length,
-          location_names:  sedesTarget.map(s => `${s.id}:${s.nombre}`),
-          rejected_count:  0, rejected_msgs: [],
-          _sample_url:     `cache-fallback:${cacheKey}`,
-          _sample_resp:    { raw: `${filtered.length} coaches desde cache (en vivo no respondió)` },
-        }));
-        return;
-      }
-
-      // Todo fallido — devolver debug con estado de las 3 capas
-      const restDebug = probesSummary.map(p => `${p.url.split('?')[0]}?... → ${p.status} ${p.raw?.slice(0,60)}`).join(' | ');
+    // Si en vivo no devolvió nada, caer a la cache del mes (no dejar la pantalla vacía).
+    if (items.length === 0 && Array.isArray(cachedItems) && cachedItems.length > 0) {
+      const filtered = eyeLineasDe(cachedItems, sedesTargetIds, sedesById);
       res.statusCode = 200;
-      res.end(JSON.stringify({ items: [], locations_count: 0, total_locations: sedesTarget.length,
-        location_names: [], rejected_count: 0, rejected_msgs: [],
-        _sample_url: "ninguno funcionó (REST + MCP)",
-        _sample_resp: { raw: `REST: ${restDebug}` } }));
+      res.end(JSON.stringify({
+        items:           filtered,
+        locations_count: sedesTarget.length,
+        total_locations: sedesTarget.length,
+        location_names:  sedesTarget.map(s => `${s.id}:${s.nombre}`),
+        rejected_count:  0, rejected_msgs: [],
+        _sample_url:     `cache-fallback:${cacheKey}`,
+        _sample_resp:    { raw: `${filtered.length} coaches desde cache (en vivo no respondió)` },
+      }));
       return;
     }
-
-    // Hay una URL que funciona — normalizar a líneas por clase/día y filtrar a nuestras sedes
-    const allRows = extractRows(probes[working].data);
-    const items = eyeLineasDe(allRows, sedesTargetIds, sedesById);
 
     res.statusCode = 200;
     res.end(JSON.stringify({
@@ -411,8 +356,8 @@ export default async function handler(req, res) {
       location_names:   sedesTarget.map(s => `${s.id}:${s.nombre}`),
       rejected_count:   0,
       rejected_msgs:    [],
-      _sample_url:  CANDIDATES[working],
-      _sample_resp: { raw: `URL que funcionó: ${CANDIDATES[working]} · ${allRows.length} rows totales → ${items.length} de nuestras sedes` },
+      _sample_url:  `report_json/12 en vivo (${start}→${endExcl})`,
+      _sample_resp: { raw: `${allRows.length} filas totales → ${items.length} de nuestras sedes` },
     }));
   } catch (err) {
     res.statusCode = 500;
