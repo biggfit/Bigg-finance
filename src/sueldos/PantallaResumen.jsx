@@ -41,6 +41,12 @@ const ordenForma = (tipo) => {
   return i === -1 ? FP_ORDEN.length : i;
 };
 
+// Agrupa un array de a 2 (para imprimir dos recibos por hoja).
+const chunkPares = (arr) => arr.reduce((acc, x, i) => {
+  if (i % 2 === 0) acc.push([x]); else acc[acc.length - 1].push(x);
+  return acc;
+}, []);
+
 const fmt = (n) => "$ " + Math.round(Number(n) || 0).toLocaleString("es-AR");
 const fmtNum = (n) => (Number(n) || 0).toLocaleString("es-AR");
 const fmtFecha = (s) => {
@@ -156,21 +162,30 @@ export default function PantallaResumen({ pais = "AR" }) {
       <style>{`
         #ficha-todos { display: none; }
         @media print {
-          @page { size: A4 portrait; margin: 10mm; }
+          @page { size: A4 landscape; margin: 12mm; }
           body * { visibility: hidden; }
           .no-print { display: none !important; }
-          .ficha { border: none !important; box-shadow: none !important; }
+          .ficha { border: 1.5px solid #94a3b8 !important; box-shadow: none !important; }
           .ficha, .ficha * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          /* En pantalla los grises son suaves a propósito; en papel quedan casi invisibles.
+             Al imprimir, forzar todo el texto a un tono oscuro (la jerarquía la dan negritas + bandas). */
+          .ficha, .ficha * { color: #111827 !important; }
+          /* Los separadores/cabeceras usan un gris muy claro que en papel desaparece → oscurecerlos. */
+          .ficha, .ficha *, .ficha td, .ficha th, .ficha tr { border-color: #94a3b8 !important; }
+          /* Bandas grises: el texto va en negro (más específico que el override de arriba). */
+          .ficha .banda-oscura, .ficha .banda-oscura * { color: #000 !important; }
 
-          /* Individual: el recibo elegido, escalado para entrar en una hoja. */
+          /* Individual: el recibo elegido entra en la MITAD IZQUIERDA de la hoja apaisada. */
           .print-solo #ficha-solo, .print-solo #ficha-solo * { visibility: visible; }
-          .print-solo #ficha-solo { position: absolute; left: 0; top: 0; width: 100%; zoom: 0.8; }
+          .print-solo #ficha-solo { position: absolute; left: 0; top: 0; width: 48%; zoom: 0.78; }
 
-          /* Todos: un recibo por hoja. */
+          /* Todos: DOS recibos por hoja apaisada (una columna cada uno). */
           .print-todos #ficha-todos { display: block; position: absolute; left: 0; top: 0; width: 100%; }
           .print-todos #ficha-todos, .print-todos #ficha-todos * { visibility: visible; }
-          .print-todos .ficha-pagina { zoom: 0.8; break-after: page; page-break-after: always; }
-          .print-todos .ficha-pagina:last-child { break-after: auto; page-break-after: auto; }
+          .print-todos .hoja-todos { display: flex; gap: 4%; align-items: flex-start;
+            break-after: page; page-break-after: always; break-inside: avoid; }
+          .print-todos .hoja-todos:last-child { break-after: auto; page-break-after: auto; }
+          .print-todos .ficha-col { width: 48%; zoom: 0.78; }
         }
       `}</style>
       {/* Header */}
@@ -214,20 +229,24 @@ export default function PantallaResumen({ pais = "AR" }) {
       {/* Contenedor oculto (solo impresión) con un recibo por empleado seleccionado, uno por hoja. */}
       {idsPrint && (
         <div id="ficha-todos">
-          {idsPrint.map(id => {
-            const emp = empleados.find(e => e.id === id);
-            if (!emp) return null;
-            const r = vista === "hq" ? buildResumenHQ(emp, novedades) : buildResumenSedes(emp, categorias, novedades);
-            if (!r) return null;
-            const pg = pagosDe(emp, pagos);
-            return (
-              <div className="ficha-pagina" key={id}>
-                {vista === "hq"
-                  ? <FichaHQ sel={emp} resumen={r} pagos={pg} email="" periodo={periodo} />
-                  : <FichaSedes sel={emp} resumen={r} pagos={pg} email="" periodo={periodo} />}
-              </div>
-            );
-          })}
+          {chunkPares(idsPrint).map((par, i) => (
+            <div className="hoja-todos" key={i}>
+              {par.map(id => {
+                const emp = empleados.find(e => e.id === id);
+                if (!emp) return null;
+                const r = vista === "hq" ? buildResumenHQ(emp, novedades) : buildResumenSedes(emp, categorias, novedades);
+                if (!r) return null;
+                const pg = pagosDe(emp, pagos);
+                return (
+                  <div className="ficha-col" key={id}>
+                    {vista === "hq"
+                      ? <FichaHQ sel={emp} resumen={r} pagos={pg} email="" periodo={periodo} />
+                      : <FichaSedes sel={emp} resumen={r} pagos={pg} email="" periodo={periodo} />}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
         </div>
       )}
 
@@ -257,7 +276,7 @@ function buildResumenSedes(emp, categorias, novList = []) {
   const acc = {
     fijo: 0, horasCant: 0, horasMonto: 0,
     cdpCoachCant: 0, cdpFrontCant: 0, cdpMonto: 0,
-    oneShotCant: 0, oneShotMonto: 0, asignaciones: 0, objGrupalMonto: 0,
+    oneShotCant: 0, oneShotMonto: 0, asignaciones: 0, objGrupalMonto: 0, objGrupalPct: 0,
     feriadosCant: 0, feriadosMonto: 0, domingosCant: 0, domingosMonto: 0,
     yogaCant: 0, yogaMonto: 0, runningCant: 0, runningMonto: 0, redondeo: 0, sueldoVariable: 0,
   };
@@ -279,6 +298,7 @@ function buildResumenSedes(emp, categorias, novList = []) {
                      "yogaCant","yogaMonto","runningCant","runningMonto","redondeo","sueldoVariable"]) {
       acc[k] += d[k] || 0;
     }
+    if (d.objGrupalPct) acc.objGrupalPct = d.objGrupalPct;   // % (no se suma entre sedes; es la tasa aplicada)
     const sn = row.sede_nombre || "—";
     porSede[sn] = (porSede[sn] || 0) + (Number(d.totalLiquidar) || 0);
     if ((d.horasCant || 0) + (d.yogaCant || 0) > 0) cs.horas.add(sn);
@@ -333,7 +353,7 @@ function SeleccionImprimir({ empleados, checkSel, count, onToggle, onAll, onCanc
       <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12,
         width: 440, maxWidth: "92vw", maxHeight: "82vh", display: "flex", flexDirection: "column",
         boxShadow: "0 20px 60px rgba(0,0,0,.3)", fontFamily: T.font }}>
-        <div style={{ padding: "16px 20px", borderBottom: `1px solid ${T.border}` }}>
+        <div style={{ padding: "11px 20px", borderBottom: `1px solid ${T.border}` }}>
           <div style={{ fontSize: 16, fontWeight: 800, color: T.text }}>Imprimir recibos</div>
           <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>
             Destildá los que no querés imprimir. Cada recibo sale en una hoja.
@@ -375,14 +395,14 @@ function FichaShell({ sel, subtitulo, totalLiquidar, pagos, periodo, tag, onImpr
   const imprimir = () => window.print();
   return (
     <div className="ficha" style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden" }}>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12,
-        padding: "16px 20px", borderBottom: `1px solid ${T.border}`, background: "#e2e8f0" }}>
+      <div className="banda-oscura" style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12,
+        padding: "11px 20px", background: "#BFBFBF" }}>
         <div>
-          <div style={{ fontSize: 17, fontWeight: 800 }}>
+          <div style={{ fontSize: 17, fontWeight: 800, color: "#000000" }}>
             {sel.nombre}
-            {tag && <span style={{ fontSize: 12, fontWeight: 600, color: T.muted, marginLeft: 8 }}>· {tag}</span>}
+            {tag && <span style={{ fontSize: 12, fontWeight: 600, color: "#000000", marginLeft: 8 }}>· {tag}</span>}
           </div>
-          <div style={{ fontSize: 13, color: T.muted, marginTop: 2 }}>{subtitulo}</div>
+          <div style={{ fontSize: 13, color: "#000000", marginTop: 2 }}>{subtitulo}</div>
         </div>
         <div className="no-print" style={{ display: "flex", gap: 8, flexShrink: 0 }}>
           <button onClick={imprimir} style={fichaBtn}>🖨 Imprimir</button>
@@ -406,7 +426,9 @@ function FichaShell({ sel, subtitulo, totalLiquidar, pagos, periodo, tag, onImpr
 // ── Ficha Sedes ──────────────────────────────────────────────────────────────
 function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo }) {
   const sedes = resumen.sedes.length;
-  const subtitulo = `${ROL_LABEL[sel.rol] ?? sel.rol} · ${sedes} sede${sedes !== 1 ? "s" : ""} · ${fmtNum(resumen.horasCant)} hs`;
+  // Nombre → mes (tag); subtítulo → sede(s) · rol.
+  const sedeTxt = resumen.principalSede + (sedes > 1 ? ` +${sedes - 1}` : "");
+  const subtitulo = `${sedeTxt} · ${ROL_LABEL[sel.rol] ?? sel.rol}`;
   // Fijo = base + horas (base/feriado/domingo/yoga) + asignaciones (la base sobre la que pega la comisión grupal).
   const sueldoFijo  = resumen.fijo + resumen.horasMonto + resumen.yogaMonto + resumen.feriadosMonto + resumen.domingosMonto;
   // Sueldo Variable: asignaciones + one shot + CDP (front + coach) + comisión grupal.
@@ -418,8 +440,8 @@ function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo }) {
     return list.length ? ` (${list.join(", ")})` : "";
   };
   return (
-    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={resumen.principalSede} onImprimirTodo={onImprimirTodo}>
-      <Section titulo="Componentes">
+    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={periodo} onImprimirTodo={onImprimirTodo}>
+      <Section>
         <table style={tbl}>
           <thead><tr><Th>Concepto</Th><Th right>Cant.</Th><Th right>Valor u.</Th><Th right>Importe</Th></tr></thead>
           <tbody>
@@ -438,7 +460,7 @@ function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo }) {
             <Linea label={`One Shot${extra("oneShot")}`}        cant={resumen.oneShotCant}  valor={resumen.tarifaOS}      importe={resumen.oneShotMonto} />
             <Linea label={`CDP Front Desk${extra("cdpFront")}`} cant={resumen.cdpFrontCant} valor={resumen.tCdpFront}     importe={resumen.cdpFrontCant * resumen.tCdpFront} />
             <Linea label={`CDP Coach${extra("cdpCoach")}`}      cant={resumen.cdpCoachCant} valor={resumen.tCdpCoach}     importe={resumen.cdpCoachCant * resumen.tCdpCoach} />
-            <Linea label="Comisión Grupal"  importe={resumen.objGrupalMonto} />
+            <Linea label={`Comisión Grupal${resumen.objGrupalPct ? ` (${fmtNum(resumen.objGrupalPct)}%)` : ""}`}  importe={resumen.objGrupalMonto} />
             <Subtotal label="Sueldo Variable" importe={sueldoVariable} />
 
             <Subtotal label="Total Sueldo" importe={totalSueldo} fuerte />
@@ -461,8 +483,8 @@ function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo }) {
 function FichaHQ({ sel, resumen, pagos, email, periodo, onImprimirTodo }) {
   const subtitulo = `${ROL_LABEL[sel.rol] ?? sel.rol}${sel.sociedad ? ` · ${sel.sociedad}` : ""}`;
   return (
-    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} onImprimirTodo={onImprimirTodo}>
-      <Section titulo="Componentes">
+    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={periodo} onImprimirTodo={onImprimirTodo}>
+      <Section>
         <table style={tbl}>
           <thead><tr><Th>Concepto</Th><Th right>Importe</Th></tr></thead>
           <tbody>
@@ -520,15 +542,15 @@ function FormaPagoTabla({ pagos }) {
 function PagosTotales({ pagos, totalLiquidar }) {
   const totalPagado = pagos.reduce((s, p) => s + (Number(p.monto) || 0), 0);
   const pendiente   = (Number(totalLiquidar) || 0) - totalPagado;
-  const pendColor   = pendiente > 0 ? T.red : pendiente < 0 ? T.blue : T.text;
+  const pendColor   = "#000000";
   const fila = (label, valor, color) => (
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0" }}>
-      <span style={{ fontSize: 14, fontWeight: 800 }}>{label}</span>
-      <span style={{ fontSize: 16, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: color ?? T.text }}>{valor}</span>
+      <span style={{ fontSize: 14, fontWeight: 800, color: "#000000" }}>{label}</span>
+      <span style={{ fontSize: 16, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: color ?? "#000000" }}>{valor}</span>
     </div>
   );
   return (
-    <div style={{ background: "#e2e8f0", borderTop: `2px solid ${T.dim}`, padding: "9px 20px" }}>
+    <div className="banda-oscura" style={{ background: "#BFBFBF", padding: "7px 20px" }}>
       {fila("Total pagado", fmt(totalPagado))}
       {fila("Pendiente", fmt(pendiente), pendColor)}
     </div>
@@ -538,28 +560,28 @@ function PagosTotales({ pagos, totalLiquidar }) {
 // ── Subcomponentes ──────────────────────────────────────────────────────────
 function TotalLiquidar({ importe }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
-      padding: "14px 20px", background: "#bfdbfe", borderTop: `2px solid ${T.blue}` }}>
-      <span style={{ fontSize: 14, fontWeight: 800 }}>Total a Liquidar</span>
-      <span style={{ fontSize: 18, fontWeight: 800, color: T.blue }}>{fmt(importe)}</span>
+    <div className="banda-oscura" style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+      padding: "10px 20px", background: "#BFBFBF" }}>
+      <span style={{ fontSize: 15, fontWeight: 800, color: "#000000" }}>Total a Liquidar</span>
+      <span style={{ fontSize: 18, fontWeight: 800, color: "#000000" }}>{fmt(importe)}</span>
     </div>
   );
 }
 function Section({ titulo, children }) {
   return (
     <div style={{ borderTop: `1px solid ${T.border}` }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: T.muted, letterSpacing: ".05em",
-        textTransform: "uppercase", padding: "10px 20px 4px" }}>{titulo}</div>
+      {titulo && <div style={{ fontSize: 11, fontWeight: 700, color: T.muted, letterSpacing: ".05em",
+        textTransform: "uppercase", padding: "10px 20px 4px" }}>{titulo}</div>}
       <div style={{ padding: "0 20px 12px" }}>{children}</div>
     </div>
   );
 }
 function Th({ children, right }) {
-  return <th style={{ textAlign: right ? "right" : "left", fontSize: 11, fontWeight: 600,
-    color: T.muted, padding: "6px 4px" }}>{children}</th>;
+  return <th style={{ textAlign: right ? "right" : "left", fontSize: 13, fontWeight: 700,
+    color: T.muted, padding: "6px 4px", borderBottom: `2px solid ${T.dim}` }}>{children}</th>;
 }
 function Td({ children, right, dim }) {
-  return <td style={{ textAlign: right ? "right" : "left", fontSize: 13, padding: "6px 4px",
+  return <td style={{ textAlign: right ? "right" : "left", fontSize: 14, padding: "4px 4px",
     color: dim ? T.dim : T.text, fontVariantNumeric: "tabular-nums" }}>{children}</td>;
 }
 function Linea({ label, cant, valor, importe }) {
@@ -568,17 +590,17 @@ function Linea({ label, cant, valor, importe }) {
     <tr style={{ borderTop: `1px solid ${T.border}` }}>
       <Td>{label}</Td>
       <Td right dim={!cant}>{cant ? fmtNum(cant) : "—"}</Td>
-      <Td right dim>{Number(cant) > 0 && Number(valor) ? fmt(valor) : "—"}</Td>
+      <Td right dim={!(Number(cant) > 0 && Number(valor))}>{Number(cant) > 0 && Number(valor) ? fmt(valor) : "—"}</Td>
       <Td right dim={!hay}>{Number(importe) ? fmt(importe) : "—"}</Td>
     </tr>
   );
 }
 function Subtotal({ label, importe, fuerte }) {
   return (
-    <tr style={{ borderTop: `1px solid ${T.border}`, background: fuerte ? "#dbeafe" : "#e2e8f0" }}>
-      <td colSpan={3} style={{ fontSize: 13, fontWeight: fuerte ? 800 : 700, padding: "7px 4px" }}>{label}</td>
-      <td style={{ textAlign: "right", fontSize: 13, fontWeight: fuerte ? 800 : 700, padding: "7px 4px",
-        fontVariantNumeric: "tabular-nums" }}>{fmt(importe)}</td>
+    <tr className="banda-oscura" style={{ background: "#BFBFBF" }}>
+      <td colSpan={3} style={{ fontSize: fuerte ? 16 : 14, fontWeight: 800, padding: "6px 4px", color: "#000000" }}>{label}</td>
+      <td style={{ textAlign: "right", fontSize: fuerte ? 16 : 14, fontWeight: 800, padding: "6px 4px",
+        fontVariantNumeric: "tabular-nums", color: "#000000" }}>{fmt(importe)}</td>
     </tr>
   );
 }

@@ -91,14 +91,86 @@ function detalleDesde5(row) {
   return d;
 }
 
-const ROL_ORDEN = { ENCARGADO: 0, VENTAS: 1, LIMPIEZA: 2, COACH_SENIOR: 3, COACH: 4, BOTANICO: 5, YOGA: 6 };
+// Ranking de rol: Encargado → Vendedor → Coach Senior → Coach Junior → resto → Limpieza (última).
+const ROL_ORDEN = { ENCARGADO: 0, VENTAS: 1, COACH_SENIOR: 2, COACH: 3, LIMPIEZA: 9 };
+const rolRank = (rol) => ROL_ORDEN[rol] ?? 5;  // resto (Botánico/Yoga/Running/…) entre junior y limpieza
+// Orden por defecto: primero por SEDE, luego por ROL (ranking), luego por nombre.
 const sortByRol = (arr) => [...arr].sort((a, b) => {
-  const ro = (ROL_ORDEN[a.rol] ?? 9) - (ROL_ORDEN[b.rol] ?? 9);
-  if (ro !== 0) return ro;
   const se = (a.sede_nombre || "").localeCompare(b.sede_nombre || "", "es", { numeric: true });
   if (se !== 0) return se;
+  const ro = rolRank(a.rol) - rolRank(b.rol);
+  if (ro !== 0) return ro;
   return (a.legajo_nombre || "").localeCompare(b.legajo_nombre || "");
 });
+
+// Separador fuerte cuando la fila i arranca una sede distinta a la anterior (lista ya ordenada por sede).
+const SEDE_SEP = "4px solid #334155";
+const sedeCambia = (arr, i) => i > 0 && (arr[i - 1]?.sede_nombre || "") !== (arr[i]?.sede_nombre || "");
+
+// Header con filtro embebido (ícono ⌕ + popover). mode="multi" (checkboxes, Set) o "text" (búsqueda).
+// Espejo del patrón de TabContabilidad, con el theme de Sueldos. La etiqueta sigue siendo ordenable si se pasa onSort.
+const ghostBtn = { flex: 1, fontSize: 10, background: "transparent", border: `1px solid ${T.border}`,
+  borderRadius: 5, padding: "3px 6px", cursor: "pointer", color: T.muted, fontFamily: T.font };
+function HeaderFilter({ label, align = "left", minWidth, mode = "multi", options = [],
+  selected, onToggle, onSetAll, textValue = "", onText, labelFn = (x) => x, onSort, sortDir }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
+  const active = mode === "text" ? !!textValue : selected.size > 0;
+  const opts   = options.filter(o => labelFn(o).toLowerCase().includes(q.toLowerCase()));
+  const allSel = mode === "multi" && options.length > 0 && options.every(o => selected.has(o));
+  const thStyle = { padding: "7px 8px", textAlign: align, fontWeight: 600, color: T.muted, fontSize: 11,
+    letterSpacing: ".04em", borderBottom: `1px solid ${T.border}`, whiteSpace: "nowrap",
+    background: T.bg, minWidth, position: "relative" };
+  return (
+    <th style={thStyle} ref={ref}>
+      <span onClick={onSort} style={{ cursor: onSort ? "pointer" : "default", userSelect: "none" }}>
+        {label}{onSort && sortDir ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
+      </span>
+      <span onClick={() => setOpen(o => !o)}
+        style={{ marginLeft: 5, cursor: "pointer", fontSize: 11, opacity: active ? 1 : 0.4, color: active ? T.blue : "inherit" }}>⌕</span>
+      {mode === "multi" && selected.size > 0 && (
+        <span style={{ marginLeft: 4, fontSize: 9, background: T.blue, color: "#fff", borderRadius: 99, padding: "1px 5px", fontWeight: 800 }}>{selected.size}</span>
+      )}
+      {open && (
+        <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 30, background: "#fff",
+          border: `1px solid ${T.border}`, borderRadius: 8, boxShadow: "0 10px 30px rgba(0,0,0,.18)",
+          padding: 8, minWidth: 210, fontWeight: 400, textTransform: "none", letterSpacing: 0, textAlign: "left" }}>
+          {mode === "text" ? (
+            <input autoFocus value={textValue} onChange={e => onText(e.target.value)} placeholder="Buscar…"
+              style={{ ...iStyle, fontSize: 12 }} />
+          ) : (
+            <>
+              <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar…"
+                style={{ ...iStyle, fontSize: 12, marginBottom: 6 }} />
+              <div style={{ display: "flex", gap: 6, marginBottom: 6, paddingBottom: 6, borderBottom: `1px solid ${T.border}` }}>
+                <button onClick={() => onSetAll(allSel ? [] : options)} style={ghostBtn}>{allSel ? "✕ Ninguno" : "✓ Todos"}</button>
+                {selected.size > 0 && !allSel && <button onClick={() => onSetAll([])} style={ghostBtn}>✕ Limpiar</button>}
+              </div>
+              <div style={{ maxHeight: 220, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
+                {opts.map(o => (
+                  <label key={o} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, cursor: "pointer",
+                    padding: "4px 6px", borderRadius: 5, background: selected.has(o) ? "#eff6ff" : "transparent" }}>
+                    <input type="checkbox" checked={selected.has(o)} onChange={() => onToggle(o)} style={{ accentColor: T.blue, cursor: "pointer" }} />
+                    <span style={{ color: selected.has(o) ? T.blue : T.text }}>{labelFn(o)}</span>
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </th>
+  );
+}
+// Helper: toggle de un valor dentro de un Set en estado.
+const toggleEnSet = (setter) => (val) => setter(prev => { const n = new Set(prev); n.has(val) ? n.delete(val) : n.add(val); return n; });
 
 function fmtMoney(n) {
   if (!n && n !== 0) return "—";
@@ -213,6 +285,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   const deepLinkPasoRef = useRef(false);  // consumir initialPaso (deep-link) una sola vez
 
   const [legajos,    setLegajos]    = useState([]);
+  const [legajosInactivos, setLegajosInactivos] = useState([]);  // dados de baja (para reconocer check-ins de ex/suplentes)
   const [liqsSaved,  setLiqsSaved]  = useState([]);  // su_liquidaciones guardadas (se mergean en rosterBase)
   const [eyeItems,   setEyeItems]   = useState([]);  // items de BIGG Eye (coach × sede × horas)
   const [edits,      setEdits]      = useState({});  // overlay editable: { [rowKey]: { campo: val, _deleted? } }
@@ -265,6 +338,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       // Los check-ins de Eye salen de estas sedes que tengan bigg_eye_id (ver eyeIds más abajo).
       const sedesArr = ccs.filter(c => !c.pais || c.pais === p);
       setLegajos(legs.filter(l => l.activo && (!l.pais || l.pais === p)));
+      setLegajosInactivos(legs.filter(l => !l.activo && (!l.pais || l.pais === p)));
       setSedes(sedesArr);
       setCuentas(ctas.filter(c => !c.sociedad || socIds.includes(c.sociedad)));
       setCategorias(cats);
@@ -473,6 +547,16 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       // nombre de pila en común (score 0.8) NO alcanza: varios "Facundo …" se fusionaban mal.
       return bestScore >= 1.5 ? best : null;
     };
+    // Match contra legajos DADOS DE BAJA (para reconocer check-ins de ex/suplentes que volvieron).
+    const normInactivos = legajosInactivos.map(leg => ({ leg, norm: normNombreM(leg.nombre) }));
+    const matchInactivo = (normName) => {
+      let best = null, bestScore = 0;
+      for (const { leg, norm } of normInactivos) {
+        const ns = nameScoreM(norm, normName);
+        if (ns > bestScore) { bestScore = ns; best = leg; }
+      }
+      return bestScore >= 1.5 ? best : null;
+    };
 
     const byKey = new Map();
     const matchedLegIds = new Set();
@@ -495,9 +579,21 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
           // de otro ámbito (HQ, etc.), en Sedes cobra SOLO sus horas, no su sueldo.
           sueldo_base: ROLES_SEDES_ALL.includes(leg.rol) ? (Number(leg.sueldo_total) || 0) : 0 };
       } else {
-        key  = `eye__${normCoach}__${sede.id}`;
-        seed = { _id: key, bucket: "sin_legajo",
-          legajo_nombre: item.coach_name, sede_id: sede.id, sede_nombre: sede.nombre, rol: "COACH" };
+        const legInact = matchInactivo(normCoach);
+        if (legInact) {
+          // Está en la base pero dado de baja (ex/suplente). Se reconoce y puede pagarse/reactivarse.
+          key  = `${legInact.id}__${sede.id}`;
+          seed = { _id: key, bucket: "inactivo",
+            legajo_id: legInact.id, legajo_nombre: legInact.nombre,
+            sociedad_id: legInact.sociedad_id ?? "", sociedad_nombre: legInact.sociedad_nombre ?? "",
+            sede_id: sede.id, sede_nombre: sede.nombre,
+            rol: legInact.rol || "COACH",
+            sueldo_base: ROLES_SEDES_ALL.includes(legInact.rol) ? (Number(legInact.sueldo_total) || 0) : 0 };
+        } else {
+          key  = `eye__${normCoach}__${sede.id}`;
+          seed = { _id: key, bucket: "sin_legajo",
+            legajo_nombre: item.coach_name, sede_id: sede.id, sede_nombre: sede.nombre, rol: "COACH" };
+        }
       }
       if (!byKey.has(key)) byKey.set(key, baseRow(seed));
       // 1 línea de detalle por clase × asistió (espejo del reporte). El pago sale de acá (ver normalización).
@@ -552,7 +648,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     }
 
     return applyObjetivosToRows([...byKey.values()], objetivos);
-  }, [eyeItems, legajos, liqsSaved, sedes, objetivos, mes, anio, pais]);
+  }, [eyeItems, legajos, legajosInactivos, liqsSaved, sedes, objetivos, mes, anio, pais]);
 
   // Snapshot de base salarial derivada (baseline del % aumento en Paso 1).
   useEffect(() => {
@@ -580,13 +676,14 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
 
   // Conciliación: contadores por bucket para el banner.
   const conc = useMemo(() => {
-    let match = 0, sinCheckin = 0, sinLegajo = 0;
+    let match = 0, sinCheckin = 0, sinLegajo = 0, inactivo = 0;
     for (const r of rows) {
-      if (r.bucket === "sin_legajo")      sinLegajo++;
+      if (r.bucket === "sin_legajo")       sinLegajo++;
       else if (r.bucket === "sin_checkin") sinCheckin++;
+      else if (r.bucket === "inactivo")    inactivo++;
       else                                 match++;
     }
-    return { match, sinCheckin, sinLegajo };
+    return { match, sinCheckin, sinLegajo, inactivo };
   }, [rows]);
 
   // Paso 1: employees with a negotiated base salary (role-agnostic, covers other countries)
@@ -1083,9 +1180,10 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
 
 function ConciliacionBanner({ conc }) {
   const items = [
-    { n: conc.match,      label: "con actividad",            color: T.green,  bg: "#f0fdf4", bd: "#86efac" },
-    { n: conc.sinCheckin, label: "en nómina sin check-in",   color: "#92400e", bg: "#fffbeb", bd: "#fde68a" },
-    { n: conc.sinLegajo,  label: "check-in sin legajo",      color: T.yellow, bg: "#fefce8", bd: "#fde68a" },
+    { n: conc.match,      label: "con actividad",            color: "#16a34a", bg: "#dcfce7", bd: "#86efac" },  // 🟢
+    { n: conc.sinCheckin, label: "en nómina sin check-in",   color: "#b45309", bg: "#fef9c3", bd: "#fde68a" },  // 🟡
+    ...(conc.inactivo ? [{ n: conc.inactivo, label: "inactivo con check-in", color: "#b45309", bg: "#fef9c3", bd: "#fde68a" }] : []),  // 🟡
+    { n: conc.sinLegajo,  label: "check-in sin legajo",      color: "#dc2626", bg: "#fee2e2", bd: "#fca5a5" },  // 🔴
   ];
   return (
     <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
@@ -1104,9 +1202,10 @@ function ConciliacionBanner({ conc }) {
 
 // ── Color de fila según bucket de conciliación ─────────────────────────────────
 function bucketBg(row, fallback) {
-  if (row.bucket === "sin_legajo")  return "#fef9c3";  // amarillo: check-in sin legajo
-  if (row.bucket === "sin_checkin" && row.revisar) return "#ffedd5";  // naranja: coach en nómina sin check-in
-  return fallback;
+  if (row.bucket === "sin_legajo")  return "#fee2e2";  // 🔴 rojo: check-in sin legajo (no está en la base)
+  if (row.bucket === "sin_checkin" && row.revisar) return "#fef9c3";  // 🟡 amarillo: en nómina sin check-in
+  if (row.bucket === "inactivo")    return "#fef9c3";  // 🟡 amarillo: legajo dado de baja con check-in
+  return fallback;  // 🟢 verde/OK: no pinta
 }
 
 // ── Indicador de pasos ─────────────────────────────────────────────────────────
@@ -1171,9 +1270,20 @@ function PasoFijos({ rowsFijos, legajos, sedes, originalRows, novsByRowKey, upda
     else { setSortKey(key); setSortDir("asc"); }
   };
 
+  const [fNombre, setFNombre] = useState("");
+  const [fRol,    setFRol]    = useState(() => new Set());
+  const [fSede,   setFSede]   = useState(() => new Set());
+  const rolesDisp = useMemo(() => [...new Set(rowsFijos.map(r => r.rol).filter(Boolean))].sort(), [rowsFijos]);
+  const sedesDisp = useMemo(() => [...new Set(rowsFijos.map(r => r.sede_nombre).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, "es", { numeric: true })), [rowsFijos]);
+  const fijosFilt = useMemo(() => rowsFijos.filter(r =>
+    (!fNombre || (r.legajo_nombre || "").toLowerCase().includes(fNombre.toLowerCase())) &&
+    (fRol.size === 0  || fRol.has(r.rol)) &&
+    (fSede.size === 0 || fSede.has(r.sede_nombre))
+  ), [rowsFijos, fNombre, fRol, fSede]);
   const sortedFijos = useMemo(
-    () => (sortKey ? sortRows(rowsFijos, sortKey, sortDir) : sortByRol(rowsFijos)),
-    [rowsFijos, sortKey, sortDir]
+    () => (sortKey ? sortRows(fijosFilt, sortKey, sortDir) : sortByRol(fijosFilt)),
+    [fijosFilt, sortKey, sortDir]
   );
 
   const thSort = (key, label, extra = {}) => (
@@ -1226,9 +1336,14 @@ function PasoFijos({ rowsFijos, legajos, sedes, originalRows, novsByRowKey, upda
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr style={{ background: T.bg }}>
-              {thSort("legajo_nombre", "Nombre",       { minWidth: 140 })}
-              {thSort("rol",          "Rol",           { minWidth: 80 })}
-              {thSort("sede_nombre",  "Centro de costo",{ minWidth: 110 })}
+              <HeaderFilter label="Nombre" minWidth={140} mode="text" textValue={fNombre} onText={setFNombre}
+                onSort={() => toggleSort("legajo_nombre")} sortDir={sortKey === "legajo_nombre" ? sortDir : undefined} />
+              <HeaderFilter label="Rol" minWidth={80} options={rolesDisp} selected={fRol}
+                onToggle={toggleEnSet(setFRol)} onSetAll={arr => setFRol(new Set(arr))} labelFn={r => ROL_CONCEPTO[r] ?? r}
+                onSort={() => toggleSort("rol")} sortDir={sortKey === "rol" ? sortDir : undefined} />
+              <HeaderFilter label="Centro de costo" minWidth={110} options={sedesDisp} selected={fSede}
+                onToggle={toggleEnSet(setFSede)} onSetAll={arr => setFSede(new Set(arr))}
+                onSort={() => toggleSort("sede_nombre")} sortDir={sortKey === "sede_nombre" ? sortDir : undefined} />
               <th style={TH({ width: 100, textAlign: "right" })}>Sueldo M-1</th>
               {thSort("sueldo_base",  "Sueldo actual", { width: 110, textAlign: "right" })}
               <th style={TH({ width: 60, textAlign: "right" })} title="Variación M-1 vs sueldo actual">↑ %</th>
@@ -1265,8 +1380,8 @@ function PasoFijos({ rowsFijos, legajos, sedes, originalRows, novsByRowKey, upda
               const sueldoM1 = 0;   // placeholder hasta leer la liquidación cerrada de M-1
               const pctM1    = sueldoM1 ? (base - sueldoM1) / sueldoM1 * 100 : null;
               return (
-                <tr key={row._id} style={{ background: bucketBg(row, i % 2 === 0 ? T.card : T.bg), borderBottom: `1px solid ${T.border}` }}>
-                  <td style={{ padding: "5px 8px", fontWeight: 600 }}>{row.legajo_nombre}<NovChip novs={novsByRowKey[rowKeyDe(row.legajo_id, row.sede_id)]} /></td>
+                <tr key={row._id} style={{ background: bucketBg(row, i % 2 === 0 ? T.card : T.bg), borderBottom: `1px solid ${T.border}`, borderTop: sedeCambia(sortedFijos, i) ? "2px solid #94a3b8" : undefined }}>
+                  <td style={{ padding: "5px 8px", fontWeight: 800 }}>{row.legajo_nombre}<NovChip novs={novsByRowKey[rowKeyDe(row.legajo_id, row.sede_id)]} /></td>
                   <td style={{ padding: "5px 8px", color: T.muted, fontSize: 11 }}>{row.rol}</td>
                   <td style={{ padding: "5px 8px", color: T.muted }}>{row.sede_nombre || "—"}</td>
                   <td style={{ padding: "5px 8px", textAlign: "right", color: T.dim }}>{fmtMoney(sueldoM1)}</td>
@@ -1344,18 +1459,27 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByR
     { field: "horas_running",  label: "Running",    w: 75 },
   ];
 
-  const [sortKey,    setSortKey]    = useState("sede_nombre");
+  const [sortKey,    setSortKey]    = useState(null);   // null = orden por sede → rol
   const [sortDir,    setSortDir]    = useState("asc");
   const [openDet,    setOpenDet]    = useState(null);   // _id del coach con el detalle de Eye abierto
   const [eyeLoading, setEyeLoading] = useState(false);
-  const [eyeResult,  setEyeResult]  = useState(null);
-  // { items: N, matched: N, eyeOnly: [coach_name, ...] }
 
   const toggleSort = (key) => {
     if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
     else { setSortKey(key); setSortDir("asc"); }
   };
-  const sortedRows = useMemo(() => sortRows(rowsCoaches, sortKey, sortDir), [rowsCoaches, sortKey, sortDir]);
+  const [fNombre, setFNombre] = useState("");
+  const [fRol,    setFRol]    = useState(() => new Set());
+  const [fSede,   setFSede]   = useState(() => new Set());
+  const rolesDisp = useMemo(() => [...new Set(rowsCoaches.map(r => r.rol).filter(Boolean))].sort(), [rowsCoaches]);
+  const sedesDisp = useMemo(() => [...new Set(rowsCoaches.map(r => r.sede_nombre).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, "es", { numeric: true })), [rowsCoaches]);
+  const filtered = useMemo(() => rowsCoaches.filter(r =>
+    (!fNombre || (r.legajo_nombre || "").toLowerCase().includes(fNombre.toLowerCase())) &&
+    (fRol.size === 0  || fRol.has(r.rol)) &&
+    (fSede.size === 0 || fSede.has(r.sede_nombre))
+  ), [rowsCoaches, fNombre, fRol, fSede]);
+  const sortedRows = useMemo(() => (sortKey ? sortRows(filtered, sortKey, sortDir) : sortByRol(filtered)), [filtered, sortKey, sortDir]);
 
   const thSort = (key, label, extra = {}) => (
     <th key={key} style={{ ...TH(extra), cursor: "pointer", userSelect: "none" }}
@@ -1368,34 +1492,25 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByR
   // (horas + filas sin legajo). El cruce vive en `rosterBase`, no acá.
   const handleCargarEye = async () => {
     setEyeLoading(true);
-    setEyeResult(null);
     try {
       const eyeIds = sedes.filter(s => s.bigg_eye_id).map(s => s.bigg_eye_id);
       const eyeData = await fetchHorasDesdeEye(mes, anio, pais, eyeIds, true);  // fresh: baja en vivo, saltea cache
-      const items = eyeData.items ?? [];
-      onResyncEye(items);
-
-      const matchLeg = (normName) => {
-        let best = 0;
-        for (const leg of (allLegajos ?? [])) {
-          const ns = nameScoreM(normNombreM(leg.nombre), normName);
-          if (ns > best) best = ns;
-        }
-        return best >= 0.8;
-      };
-      let matched = 0;
-      const eyeOnly = new Set();
-      for (const it of items) {
-        if (matchLeg(normNombreM(it.coach_name))) matched++;
-        else eyeOnly.add(it.coach_name);
-      }
-      setEyeResult({ items: items.length, matched, eyeOnly: [...eyeOnly] });
+      onResyncEye(eyeData.items ?? []);
     } catch (e) {
       alert("Error al cargar desde BIGG Eye: " + e.message);
     } finally {
       setEyeLoading(false);
     }
   };
+
+  // Resumen de conciliación derivado de los MISMOS buckets que pintan las filas
+  // (así el conteo del banner y los colores siempre coinciden).
+  const nombresUnicos  = (rows) => [...new Set(rows.map(r => r.legajo_nombre).filter(Boolean))];
+  const sinLegajoNom   = nombresUnicos(rowsCoaches.filter(r => r.bucket === "sin_legajo"));
+  const sinCheckinNom  = nombresUnicos(rowsCoaches.filter(r => r.bucket === "sin_checkin" && r.revisar));
+  const inactivoNom    = nombresUnicos(rowsCoaches.filter(r => r.bucket === "inactivo"));
+  const matchCount     = rowsCoaches.filter(r => r.bucket === "match").length;
+  const hayAlertas     = sinLegajoNom.length > 0 || sinCheckinNom.length > 0 || inactivoNom.length > 0;
 
   return (
     <div>
@@ -1419,32 +1534,45 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByR
         </button>
       </div>
 
-      {/* BIGG Eye result summary */}
-      {eyeResult && (
-        <div style={{
-          background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 8,
-          padding: "10px 14px", marginBottom: 12, fontSize: 12,
-        }}>
-          <strong style={{ color: T.green }}>
-            ✓ BIGG Eye: {eyeResult.items} check-in{eyeResult.items !== 1 ? "s" : ""}
-            {" · "}{eyeResult.matched} con legajo
-          </strong>
-          {eyeResult.eyeOnly?.length > 0 && (
-            <div style={{ marginTop: 6, color: "#92400e" }}>
-              <strong>Sin legajo ({eyeResult.eyeOnly.length}):</strong>{" "}
-              {eyeResult.eyeOnly.join(", ")} — verificá que tengan legajo creado
-            </div>
-          )}
-        </div>
-      )}
+      {/* Conciliación BIGG Eye × Legajos — mismos buckets que pintan las filas */}
+      <div style={{
+        background: hayAlertas ? "#fffbeb" : "#f0fdf4",
+        border: `1px solid ${hayAlertas ? "#fde68a" : "#86efac"}`, borderRadius: 8,
+        padding: "10px 14px", marginBottom: 12, fontSize: 12,
+      }}>
+        <strong style={{ color: "#16a34a" }}>🟢 {matchCount} con legajo y check-in</strong>
+        {sinCheckinNom.length > 0 && (
+          <div style={{ marginTop: 6, color: "#b45309" }}>
+            <strong>🟡 En nómina sin check-in ({sinCheckinNom.length}):</strong>{" "}
+            {sinCheckinNom.join(", ")} — no vinieron horas de BIGG Eye este mes
+          </div>
+        )}
+        {inactivoNom.length > 0 && (
+          <div style={{ marginTop: 6, color: "#b45309" }}>
+            <strong>🟡 Inactivo con check-in ({inactivoNom.length}):</strong>{" "}
+            {inactivoNom.join(", ")} — está en la base pero dado de baja; reactivá el legajo si volvió
+          </div>
+        )}
+        {sinLegajoNom.length > 0 && (
+          <div style={{ marginTop: 6, color: "#dc2626" }}>
+            <strong>🔴 Sin legajo ({sinLegajoNom.length}):</strong>{" "}
+            {sinLegajoNom.join(", ")} — no está en la base; falta crear el legajo
+          </div>
+        )}
+      </div>
 
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr style={{ background: T.bg }}>
-              {thSort("legajo_nombre", "Nombre", { minWidth: 130 })}
-              {thSort("rol",          "Rol",    { minWidth: 95 })}
-              {thSort("sede_nombre",  "Sede",   { minWidth: 100 })}
+              <HeaderFilter label="Nombre" minWidth={130} mode="text" textValue={fNombre} onText={setFNombre}
+                onSort={() => toggleSort("legajo_nombre")} sortDir={sortKey === "legajo_nombre" ? sortDir : undefined} />
+              <HeaderFilter label="Rol" minWidth={95} options={rolesDisp} selected={fRol}
+                onToggle={toggleEnSet(setFRol)} onSetAll={arr => setFRol(new Set(arr))} labelFn={r => ROL_CONCEPTO[r] ?? r}
+                onSort={() => toggleSort("rol")} sortDir={sortKey === "rol" ? sortDir : undefined} />
+              <HeaderFilter label="Sede" minWidth={100} options={sedesDisp} selected={fSede}
+                onToggle={toggleEnSet(setFSede)} onSetAll={arr => setFSede(new Set(arr))}
+                onSort={() => toggleSort("sede_nombre")} sortDir={sortKey === "sede_nombre" ? sortDir : undefined} />
               <th style={TH({ minWidth: 90 })}>Clase</th>
               <th style={TH({ width: 80, textAlign: "right" })}>Regulares</th>
               <th style={TH({ width: 70, textAlign: "right" })}>Feriado</th>
@@ -1467,6 +1595,7 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByR
                   ? row.horas_detalle
                   : [{ clase: "BIGG CLASS", asistio: "Presentes", regulares: 0, feriado: 0, domingo: 0 }];
                 const bg = bucketBg(row, i % 2 === 0 ? T.card : T.bg);
+                const sedeSep = sedeCambia(sortedRows, i);
                 return det.map((l, di) => {
                   const pres  = l.asistio !== "Ausentes";
                   const esBigg = !/YOGA|RUNNING/i.test(l.clase || "");   // feriado/domingo solo en BIGG CLASS
@@ -1477,7 +1606,7 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByR
                         onChange={e => updateDetalle(row._id, di, field, e.target.value)} />
                     : <span style={{ color: T.dim }}>—</span>;
                   return (
-                    <tr key={row._id + "-" + di} style={{ background: bg, borderBottom: last ? `1px solid ${T.border}` : "none" }}>
+                    <tr key={row._id + "-" + di} style={{ background: bg, borderBottom: last ? `1px solid ${T.border}` : "none", borderTop: (first && sedeSep) ? SEDE_SEP : undefined }}>
                       <td style={{ padding: "5px 8px", fontWeight: 600 }}>{first ? row.legajo_nombre : ""}{first && <NovChip novs={novsByRowKey[rowKeyDe(row.legajo_id, row.sede_id)]} />}</td>
                       <td style={{ padding: "4px 6px" }}>
                         {first && (
@@ -1552,10 +1681,21 @@ function PasoIncentivos({ rows, legajos, sedes, mes, anio, pais, novsByRowKey, u
     else { setSortKey(key); setSortDir("asc"); }
   };
 
+  const [fNombre, setFNombre] = useState("");
+  const [fRol,    setFRol]    = useState(() => new Set());
+  const [fSede,   setFSede]   = useState(() => new Set());
+  const rolesDisp = useMemo(() => [...new Set(rows.map(r => r.rol).filter(Boolean))].sort(), [rows]);
+  const sedesDisp = useMemo(() => [...new Set(rows.map(r => r.sede_nombre).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, "es", { numeric: true })), [rows]);
+  const filtered = useMemo(() => rows.filter(r =>
+    (!fNombre || (r.legajo_nombre || "").toLowerCase().includes(fNombre.toLowerCase())) &&
+    (fRol.size === 0  || fRol.has(r.rol)) &&
+    (fSede.size === 0 || fSede.has(r.sede_nombre))
+  ), [rows, fNombre, fRol, fSede]);
   const sortedRows = useMemo(() => {
-    if (!sortKey) return sortByRol(rows);
-    return sortRows(rows, sortKey, sortDir);
-  }, [rows, sortKey, sortDir]);
+    if (!sortKey) return sortByRol(filtered);
+    return sortRows(filtered, sortKey, sortDir);
+  }, [filtered, sortKey, sortDir]);
 
   const thSort = (key, label, extra = {}) => (
     <th key={key} style={{ ...TH(extra), cursor: "pointer", userSelect: "none" }}
@@ -1668,9 +1808,13 @@ function PasoIncentivos({ rows, legajos, sedes, mes, anio, pais, novsByRowKey, u
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr style={{ background: T.bg }}>
-              {thSort("legajo_nombre", "Nombre",  { minWidth: 140 })}
-              <th style={TH({ minWidth: 90 })}>Rol</th>
-              {thSort("sede_nombre",  "Sede",     { minWidth: 110 })}
+              <HeaderFilter label="Nombre" minWidth={140} mode="text" textValue={fNombre} onText={setFNombre}
+                onSort={() => toggleSort("legajo_nombre")} sortDir={sortKey === "legajo_nombre" ? sortDir : undefined} />
+              <HeaderFilter label="Rol" minWidth={90} options={rolesDisp} selected={fRol}
+                onToggle={toggleEnSet(setFRol)} onSetAll={arr => setFRol(new Set(arr))} labelFn={r => ROL_CONCEPTO[r] ?? r} />
+              <HeaderFilter label="Sede" minWidth={110} options={sedesDisp} selected={fSede}
+                onToggle={toggleEnSet(setFSede)} onSetAll={arr => setFSede(new Set(arr))}
+                onSort={() => toggleSort("sede_nombre")} sortDir={sortKey === "sede_nombre" ? sortDir : undefined} />
               <th style={TH({ width: 90, textAlign: "right" })}>Asignado $</th>
               <th style={TH({ width: 80, textAlign: "right" })}>C. Grupo %</th>
               <th style={TH({ width: 70, textAlign: "right", borderLeft: `1px solid ${T.border}` })}>CDP coach (u)</th>
@@ -1690,7 +1834,7 @@ function PasoIncentivos({ rows, legajos, sedes, mes, anio, pais, novsByRowKey, u
               const isLimp      = row.rol === "LIMPIEZA";
               const canCdp      = !isLimp;   // todos menos limpieza
               return (
-                <tr key={row._id} style={{ background: bucketBg(row, i % 2 === 0 ? T.card : T.bg), borderBottom: `1px solid ${T.border}` }}>
+                <tr key={row._id} style={{ background: bucketBg(row, i % 2 === 0 ? T.card : T.bg), borderBottom: `1px solid ${T.border}`, borderTop: sedeCambia(sortedRows, i) ? SEDE_SEP : undefined }}>
                   <td style={{ padding: "5px 8px", fontWeight: 600 }}>{row.legajo_nombre}<NovChip novs={novsByRowKey[rowKeyDe(row.legajo_id, row.sede_id)]} /></td>
                   <td style={{ padding: "5px 8px", color: T.muted, fontSize: 11 }}>
                     {ROL_CONCEPTO[row.rol] ?? row.rol}
@@ -1760,6 +1904,18 @@ function PasoFormaPago({ empls, pagoDraft, onChangePago, onAtras, onContinuar, o
   // Stats del split en vivo (lo que se está repartiendo en esta pantalla).
   const stats = useMemo(() => statsDesdePagoDraft(empls, pagoDraft), [empls, pagoDraft]);
 
+  const [fNombre, setFNombre] = useState("");
+  const [fRol,    setFRol]    = useState(() => new Set());
+  const [fSede,   setFSede]   = useState(() => new Set());
+  const rolesDisp = useMemo(() => [...new Set(empls.map(e => e.rol).filter(Boolean))].sort(), [empls]);
+  const sedesDisp = useMemo(() => [...new Set(empls.flatMap(e => e.sedes || []).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, "es", { numeric: true })), [empls]);
+  const emplsFilt = useMemo(() => empls.filter(e =>
+    (!fNombre || (e.legajo_nombre || "").toLowerCase().includes(fNombre.toLowerCase())) &&
+    (fRol.size === 0  || fRol.has(e.rol)) &&
+    (fSede.size === 0 || (e.sedes || []).some(s => fSede.has(s)))
+  ), [empls, fNombre, fRol, fSede]);
+
   return (
     <div>
       {/* Necesidades por forma de pago: cuánto hay que tener en banco y en efectivo. */}
@@ -1769,9 +1925,11 @@ function PasoFormaPago({ empls, pagoDraft, onChangePago, onAtras, onContinuar, o
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr style={{ background: T.bg }}>
-              <th style={TH({ minWidth: 160 })}>Empleado</th>
-              <th style={TH({ minWidth: 80 })}>Rol</th>
-              <th style={TH({ minWidth: 90 })}>Sedes</th>
+              <HeaderFilter label="Empleado" minWidth={160} mode="text" textValue={fNombre} onText={setFNombre} />
+              <HeaderFilter label="Rol" minWidth={80} options={rolesDisp} selected={fRol}
+                onToggle={toggleEnSet(setFRol)} onSetAll={arr => setFRol(new Set(arr))} labelFn={r => ROL_CONCEPTO[r] ?? r} />
+              <HeaderFilter label="Sedes" minWidth={90} options={sedesDisp} selected={fSede}
+                onToggle={toggleEnSet(setFSede)} onSetAll={arr => setFSede(new Set(arr))} />
               <th style={TH({ width: 110, textAlign: "right" })}>Total</th>
               <th style={TH({ width: 100, textAlign: "right" })}>Haberes</th>
               <th style={TH({ width: 100, textAlign: "right" })}>Monotributo</th>
@@ -1779,7 +1937,7 @@ function PasoFormaPago({ empls, pagoDraft, onChangePago, onAtras, onContinuar, o
             </tr>
           </thead>
           <tbody>
-            {empls.map((empl, i) => {
+            {emplsFilt.map((empl, i) => {
               const d    = pagoDraft[empl.legajo_id] || {};
               const hab  = Number(d.monto_haberes)       || 0;
               // "Monotributo" se persiste en la columna monto_transferencia (factura monotributo).
@@ -2001,6 +2159,15 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid }) 
     return { pendientesMap: pending, hayAlgoMap: hayAlgo, tipoStats: stats };
   }, [empls]);
 
+  const [fNombre, setFNombre] = useState("");
+  const [fSede,   setFSede]   = useState(() => new Set());
+  const sedesDisp = useMemo(() => [...new Set(empls.flatMap(e => e.sedes || []).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, "es", { numeric: true })), [empls]);
+  const emplsFilt = useMemo(() => empls.filter(e =>
+    (!fNombre || (e.legajo_nombre || "").toLowerCase().includes(fNombre.toLowerCase())) &&
+    (fSede.size === 0 || (e.sedes || []).some(s => fSede.has(s)))
+  ), [empls, fNombre, fSede]);
+
   return (
     <div>
       {/* Totales y pendientes por forma de pago. */}
@@ -2010,8 +2177,9 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid }) 
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginBottom: 8 }}>
           <thead>
             <tr>
-              <th style={TH()}>Nombre</th>
-              <th style={TH({ fontSize: 11, color: T.dim })}>Sedes</th>
+              <HeaderFilter label="Nombre" mode="text" textValue={fNombre} onText={setFNombre} />
+              <HeaderFilter label="Sedes" options={sedesDisp} selected={fSede}
+                onToggle={toggleEnSet(setFSede)} onSetAll={arr => setFSede(new Set(arr))} />
               <th style={TH({ textAlign: "right" })}>Total</th>
               {TIPOS_PAGO.map(({ id, label }) => {
                 const pend       = pendientesMap[id];
@@ -2042,7 +2210,7 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid }) 
             </tr>
           </thead>
           <tbody>
-            {empls.map((empl, i) => (
+            {emplsFilt.map((empl, i) => (
               <tr key={empl.legajo_id} style={{ background: i % 2 === 0 ? "#fff" : T.bg }}>
                 <td style={TD({ fontWeight: 600 })}>
                   <div>
@@ -2483,6 +2651,7 @@ function ModalPagoSede({ mes, anio, liq, onClose, onSaved }) {
     fecha:           new Date().toISOString().slice(0, 10),
     sociedad_id:     "",
     cuenta_id:       "",
+    nota:            "",
   });
   const [cuentas,     setCuentas]     = useState([]);
   const [sociedades,  setSociedades]  = useState([]);
@@ -2523,13 +2692,17 @@ function ModalPagoSede({ mes, anio, liq, onClose, onSaved }) {
     savingRef.current = true; setSaving(true);
     try {
       const cta = cuentas.find(c => c.id === form.cuenta_id);
+      // La sociedad del pago = la dueña de la CAJA que paga (efectivo → Beta, monotributo → la elegida,
+      // haberes → la del legajo). NO la del legajo por defecto, o el efectivo caería en Hektor.
+      const socId  = cta?.sociedad || socFiltro || liq.sociedad_id;
+      const socNom = sociedades.find(s => s.id === socId)?.nombre || liq.sociedad_nombre;
       await appendPago({
         mes, anio,
         lote_pago:              nuevoLote(),
         legajo_id:              liq.legajo_id,
         legajo_nombre:          liq.legajo_nombre,
-        sociedad_id:            liq.sociedad_id,
-        sociedad_nombre:        liq.sociedad_nombre,
+        sociedad_id:            socId,
+        sociedad_nombre:        socNom,
         tipo_componente:        form.tipo_componente,
         monto:                  parseFloat(form.monto) || 0,
         fecha:                  form.fecha,
@@ -2538,6 +2711,7 @@ function ModalPagoSede({ mes, anio, liq, onClose, onSaved }) {
         cuenta_contable_id:     "CUENTA_Sueldos",
         cuenta_contable_nombre: "Sueldos",
         ambito:                 "sedes",
+        nota:                   form.nota.trim(),
       });
       await onSaved();
     } catch (e) { alert("Error: " + e.message); setSaving(false); } finally { savingRef.current = false; }
@@ -2592,6 +2766,11 @@ function ModalPagoSede({ mes, anio, liq, onClose, onSaved }) {
                   ))}
                 </select>
             }
+          </div>
+          <div>
+            <ModalLabel>Nota (opcional)</ModalLabel>
+            <input style={MODAL_INPUT} value={form.nota} placeholder="Ej: adelanto a cuenta"
+              onChange={e => set("nota", e.target.value)} />
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>

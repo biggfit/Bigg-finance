@@ -53,7 +53,7 @@ const rowSig = (r) => [r.legajo_id, r.sede_id, r.monto, r.forma_pago, r.nota, r.
 
 const iStyle = {
   border: `1px solid ${T.border}`, borderRadius: 5, padding: "5px 8px",
-  fontSize: 13, fontFamily: T.font, background: "#fff", color: T.text,
+  fontSize: 13, fontFamily: T.font, background: "#eceff3", color: T.text,
   width: "100%", boxSizing: "border-box",
 };
 

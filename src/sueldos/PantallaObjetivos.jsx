@@ -28,7 +28,7 @@ function newObjRow(overrides = {}) {
 
 const iStyle = {
   border: `1px solid ${T.border}`, borderRadius: 5, padding: "5px 8px",
-  fontSize: 13, fontFamily: T.font, background: "#fff", color: T.text,
+  fontSize: 13, fontFamily: T.font, background: "#eceff3", color: T.text,
   width: "100%", boxSizing: "border-box",
 };
 
@@ -126,7 +126,7 @@ export default function PantallaObjetivos({ pais = "" }) {
   };
 
   return (
-    <div style={{ padding: 24, fontFamily: T.font, color: T.text, maxWidth: 700 }}>
+    <div style={{ padding: 24, fontFamily: T.font, color: T.text }}>
 
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24, flexWrap: "wrap" }}>

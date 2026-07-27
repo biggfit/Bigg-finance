@@ -38,12 +38,15 @@ const CONCEPTOS_DEFAULT = [
 ];
 
 function newRow(overrides = {}) {
-  return { _id: Date.now() + Math.random(), concepto: "", monto: "", ...overrides };
+  return { _id: Date.now() + Math.random(), concepto: "", monto: "", pct: "", ...overrides };
 }
+
+const normC = (s) => String(s || "").trim().toUpperCase();
+const fmtMonto = (n) => (Number(n) || 0).toLocaleString("es-AR");
 
 const iStyle = {
   border: `1px solid ${T.border}`, borderRadius: 5, padding: "5px 8px",
-  fontSize: 13, fontFamily: T.font, background: "#fff", color: T.text,
+  fontSize: 13, fontFamily: T.font, background: "#eceff3", color: T.text,
   width: "100%", boxSizing: "border-box",
 };
 
@@ -56,19 +59,28 @@ export default function PantallaCategorias({ pais = "" }) {
   const [loading,   setLoading]   = useState(true);
   const [saving,    setSaving]    = useState(false);
   const [dirty,     setDirty]     = useState(false);
+  const [prevPorConcepto, setPrevPorConcepto] = useState({});  // valor del mes anterior por concepto
+  const [pctGlobal, setPctGlobal] = useState("");
   const savingRef = useRef(false);
 
   const load = useCallback(async (m, a, p) => {
     if (!p) return;
     setLoading(true);
     try {
-      const [cats, conceptosHist] = await Promise.all([
+      const mAnt = m === 1 ? 12 : m - 1;
+      const aAnt = m === 1 ? a - 1 : a;
+      const [cats, conceptosHist, prevCats] = await Promise.all([
         fetchCategorias(m, a, p),
         fetchAllConceptos(p),
+        fetchCategorias(mAnt, aAnt, p).catch(() => []),
       ]);
       const merged = [...new Set([...CONCEPTOS_DEFAULT, ...conceptosHist])].sort();
       setConceptos(merged);
-      setTarifas(cats.length ? cats.map(c => ({ ...c, _id: c.id, monto: String(c.monto) })) : [newRow()]);
+      const prevMap = {};
+      for (const c of (prevCats || [])) prevMap[normC(c.concepto)] = Number(c.monto) || 0;
+      setPrevPorConcepto(prevMap);
+      setPctGlobal("");
+      setTarifas(cats.length ? cats.map(c => ({ ...newRow(), concepto: c.concepto, _id: c.id, monto: String(c.monto) })) : [newRow()]);
       setDirty(false);
     } finally { setLoading(false); }
   }, []);
@@ -90,6 +102,34 @@ export default function PantallaCategorias({ pais = "" }) {
   };
   const addTarifa = () => { setTarifas(prev => [...prev, newRow()]); setDirty(true); };
   const delTarifa = (idx) => { setTarifas(prev => prev.filter((_, i) => i !== idx)); setDirty(true); };
+
+  // Valor del mismo concepto el mes anterior (base del % de ajuste).
+  const montoAnteriorDe = (concepto) => prevPorConcepto[normC(concepto)];
+
+  // % por fila: valor nuevo = valor mes anterior × (1 + %). Vacío → no toca el valor.
+  const aplicarPctFila = (idx, rawPct) => {
+    setTarifas(prev => prev.map((r, i) => {
+      if (i !== idx) return r;
+      const base = montoAnteriorDe(r.concepto) ?? (parseFloat(r.monto) || 0);
+      const p = parseFloat(rawPct);
+      const monto = (rawPct !== "" && !Number.isNaN(p)) ? String(Math.round(base * (1 + p / 100))) : r.monto;
+      return { ...r, pct: rawPct, monto };
+    }));
+    setDirty(true);
+  };
+
+  // % a todas: aplica sobre el valor del mes anterior de cada fila (las sin M-1 no se tocan).
+  const aplicarPctGlobal = (rawPct) => {
+    setPctGlobal(rawPct);
+    const p = parseFloat(rawPct);
+    if (rawPct === "" || Number.isNaN(p)) return;
+    setTarifas(prev => prev.map(r => {
+      const base = montoAnteriorDe(r.concepto);
+      if (base == null) return r;
+      return { ...r, pct: rawPct, monto: String(Math.round(base * (1 + p / 100))) };
+    }));
+    setDirty(true);
+  };
 
   const handleCopiarMesAnterior = async () => {
     const mAnt = mes === 1 ? 12 : mes - 1;
@@ -133,7 +173,7 @@ export default function PantallaCategorias({ pais = "" }) {
     borderBottom: `1px solid ${T.border}` };
 
   return (
-    <div style={{ padding: 24, fontFamily: T.font, color: T.text, maxWidth: 700 }}>
+    <div style={{ padding: 24, fontFamily: T.font, color: T.text }}>
 
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24, flexWrap: "wrap" }}>
@@ -173,20 +213,46 @@ export default function PantallaCategorias({ pais = "" }) {
               <thead>
                 <tr style={{ background: T.bg }}>
                   <th style={thStyle}>Concepto</th>
-                  <th style={{ ...thStyle, width: 140 }}>Valor $</th>
+                  <th style={{ ...thStyle, width: 120, textAlign: "right" }}>Valor mes ant.</th>
+                  <th style={{ ...thStyle, width: 120 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                      <span>% a todas</span>
+                      <input
+                        style={{ ...iStyle, width: 56, textAlign: "right", padding: "3px 6px" }}
+                        value={pctGlobal}
+                        placeholder="0"
+                        title="Ajusta todas las filas sobre el valor del mes anterior"
+                        onChange={e => aplicarPctGlobal(e.target.value)}
+                      />
+                    </div>
+                  </th>
+                  <th style={{ ...thStyle, width: 140, textAlign: "right" }}>Valor $</th>
                   <th style={{ ...thStyle, width: 40 }}></th>
                 </tr>
               </thead>
               <tbody>
-                {tarifas.map((r, i) => (
+                {tarifas.map((r, i) => {
+                  const ant = montoAnteriorDe(r.concepto);
+                  return (
                   <tr key={r._id} style={{ borderBottom: `1px solid ${T.border}` }}>
                     <td style={{ padding: "6px 10px" }}>
                       <input
-                        style={iStyle}
+                        style={{ ...iStyle, maxWidth: 420 }}
                         list="conceptos-list"
                         value={r.concepto}
                         placeholder="Ej: BIGG COACH"
                         onChange={e => setTarifa(i, "concepto", e.target.value)}
+                      />
+                    </td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", color: T.muted, fontVariantNumeric: "tabular-nums" }}>
+                      {ant != null ? `$ ${fmtMonto(ant)}` : "—"}
+                    </td>
+                    <td style={{ padding: "6px 10px" }}>
+                      <input
+                        style={{ ...iStyle, width: 64, textAlign: "right" }}
+                        value={r.pct ?? ""}
+                        placeholder="%"
+                        onChange={e => aplicarPctFila(i, e.target.value)}
                       />
                     </td>
                     <td style={{ padding: "6px 10px" }}>
@@ -203,7 +269,8 @@ export default function PantallaCategorias({ pais = "" }) {
                           fontSize: 13, color: T.dim, padding: 2 }}>🗑</button>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
             <div style={{ padding: "8px 10px" }}>

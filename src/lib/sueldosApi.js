@@ -897,7 +897,9 @@ export function desglosarLiquidacion(liq, categorias = []) {
   const tarifa = (concepto) =>
     concepto ? (categorias.find(c => (c.concepto || "").toUpperCase() === String(concepto).toUpperCase())?.monto ?? 0) : 0;
   const isCoach  = ROLES_COACHES.includes(liq.rol);
-  const tarifaHora = isCoach ? tarifa(ROL_CONCEPTO[liq.rol] ?? liq.rol) : 0;
+  // Coaches → tarifa de su rol; cualquier no-coach que dé clases (horas de Eye) se paga a
+  // tarifa COACH SENIOR (misma regla que tarifaHoraRow en la pantalla de liquidación).
+  const tarifaHora = tarifa(isCoach ? (ROL_CONCEPTO[liq.rol] ?? liq.rol) : ROL_CONCEPTO.COACH_SENIOR);
   const tCdpCoach = tarifa("CDP COACHES");
   const tCdpFront = tarifa("CDP FRONT DESK");
   const tarifaOS      = tarifa("ONE SHOT");
