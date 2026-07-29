@@ -833,7 +833,11 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
   }).sort((a, b) => String(b.fecha ?? "").localeCompare(String(a.fecha ?? ""))), [busqueda, filtroEstado, egresos, filtroFecha.inRange]);
 
   const totalesPorMoneda = useMemo(() => {
-    const enPeriodo = egresos.filter(e => filtroFecha.inRange(e.fecha));
+    // Los totales acompañan la BÚSQUEDA (proveedor/cuenta/CC) pero NO las pestañas de estado
+    // (esas tarjetas SON el desglose por estado). Así, al buscar un proveedor, muestran su total.
+    const q = busqueda.toLowerCase();
+    const matchQ = e => !q || (e.proveedor ?? "").toLowerCase().includes(q) || (e.cuenta ?? "").toLowerCase().includes(q) || (e.cc ?? "").toLowerCase().includes(q);
+    const enPeriodo = egresos.filter(e => filtroFecha.inRange(e.fecha) && matchQ(e));
     const monedas = [...new Set(enPeriodo.map(e => e.moneda))].filter(Boolean).sort();
     return monedas.map(moneda => {
       const docs = enPeriodo.filter(e => e.moneda === moneda);
@@ -846,7 +850,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
         vencido: docs.filter(e => e.estado === "vencido").reduce((s,e) => s + (e.saldoPendiente ?? e.importe), 0),
       };
     });
-  }, [egresos, filtroFecha.inRange]);
+  }, [egresos, filtroFecha.inRange, busqueda]);
 
   // Cuando egresos se recarga, sincronizar showDetalle con datos frescos
   useEffect(() => {

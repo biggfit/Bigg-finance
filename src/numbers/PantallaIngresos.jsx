@@ -1023,7 +1023,10 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
   }).sort((a, b) => String(b.fecha ?? "").localeCompare(String(a.fecha ?? ""))), [busqueda, filtroEstado, ingresos, filtroFecha.inRange]);
 
   const totalesPorMoneda = useMemo(() => {
-    const enPeriodo = ingresos.filter(e => filtroFecha.inRange(e.fecha));
+    // Los totales acompañan la BÚSQUEDA (cliente/cuenta/CC) pero NO las pestañas de estado.
+    const q = busqueda.toLowerCase();
+    const matchQ = e => !q || (e.cliente ?? "").toLowerCase().includes(q) || (e.cuenta ?? "").toLowerCase().includes(q) || (e.cc ?? "").toLowerCase().includes(q);
+    const enPeriodo = ingresos.filter(e => filtroFecha.inRange(e.fecha) && matchQ(e));
     const monedas = [...new Set(enPeriodo.map(e => e.moneda))].filter(Boolean).sort();
     return monedas.map(moneda => {
       const docs = enPeriodo.filter(e => e.moneda === moneda);
@@ -1036,7 +1039,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
         vencido: docs.filter(e => e.estado === "vencido").reduce((s,e) => s + (e.saldoPendiente ?? e.importe), 0),
       };
     });
-  }, [ingresos, filtroFecha.inRange]);
+  }, [ingresos, filtroFecha.inRange, busqueda]);
 
   // ── Detalle como página ──────────────────────────────────────────────────────
   if (showDetalle && subView !== "new-venta") {
