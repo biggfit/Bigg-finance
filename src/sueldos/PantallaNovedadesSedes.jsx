@@ -69,7 +69,13 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
   const [loading, setLoading] = useState(true);
   const [saving,  setSaving]  = useState(false);
   const [dirty,   setDirty]   = useState(false);
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState("asc");
   const savingRef = useRef(false);
+  const toggleSort = (k) => {
+    if (sortKey === k) setSortDir(d => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(k); setSortDir("asc"); }
+  };
 
   const load = useCallback(async (m, a, p) => {
     if (!p) return;
@@ -197,6 +203,24 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
 
   const total = rows.filter(r => r.legajo_id && r.sede_id).reduce((s, r) => s + Math.abs(parseFloat(r.monto) || 0), 0);
 
+  // Orden por header (vista derivada; los edits siguen mapeando por _id).
+  const nombreDe = (arr, id) => arr.find(x => x.id === id)?.nombre || "";
+  const valOrden = (r, k) => ({
+    legajo: nombreDe(legajos, r.legajo_id),
+    sede:   nombreDe(sedes, r.sede_id),
+    monto:  parseFloat(r.monto) || 0,
+    forma_pago: r.forma_pago || "",
+    cuenta: nombreDe(cuentas, r.cuenta_contable_id),
+    nota:   r.nota || "",
+  }[k]);
+  const vista = sortKey
+    ? [...rows].sort((a, b) => {
+        const va = valOrden(a, sortKey), vb = valOrden(b, sortKey);
+        const cmp = typeof va === "number" ? va - vb : String(va).localeCompare(String(vb), "es", { numeric: true, sensitivity: "base" });
+        return sortDir === "asc" ? cmp : -cmp;
+      })
+    : rows;
+
   return (
     <div style={{ padding: 24, fontFamily: T.font, color: T.text }}>
 
@@ -237,12 +261,16 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: T.bg }}>
-                <th style={thStyle}>Legajo</th>
-                <th style={{ ...thStyle, width: 170 }}>Sede</th>
-                <th style={{ ...thStyle, width: 120 }}>Monto $</th>
-                <th style={{ ...thStyle, width: 150 }}>Forma de pago</th>
-                <th style={{ ...thStyle, width: 170 }}>Cuenta contable</th>
-                <th style={thStyle}>Nota</th>
+                {[
+                  { h: "Legajo", k: "legajo", w: null }, { h: "Sede", k: "sede", w: 170 },
+                  { h: "Monto $", k: "monto", w: 120 }, { h: "Forma de pago", k: "forma_pago", w: 150 },
+                  { h: "Cuenta contable", k: "cuenta", w: 170 }, { h: "Nota", k: "nota", w: null },
+                ].map(({ h, k, w }) => (
+                  <th key={k} onClick={() => toggleSort(k)}
+                    style={{ ...thStyle, ...(w ? { width: w } : {}), cursor: "pointer", userSelect: "none" }}>
+                    {h}{sortKey === k ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
+                  </th>
+                ))}
                 <th style={{ ...thStyle, width: 40 }}></th>
               </tr>
             </thead>
@@ -252,7 +280,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
                   Sin novedades de Sedes este mes. Agregá una fila abajo.
                 </td></tr>
               )}
-              {rows.map(r => (
+              {vista.map(r => (
                 <tr key={r._id} style={{ borderBottom: `1px solid ${T.border}` }}>
                   <td style={{ padding: "6px 10px" }}>
                     <select style={iStyle} value={r.legajo_id} onChange={e => setLegajo(r._id, e.target.value)}>

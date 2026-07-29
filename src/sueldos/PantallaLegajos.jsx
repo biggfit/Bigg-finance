@@ -74,6 +74,12 @@ export default function PantallaLegajos({ pais = "" }) {
   const [filtroSede,     setFiltroSede]     = useState("todos");
   const [filtroActivo,  setFiltroActivo]  = useState("activos");
   const [busqueda,      setBusqueda]      = useState("");
+  const [sortKey,       setSortKey]       = useState(null);
+  const [sortDir,       setSortDir]       = useState("asc");
+  const toggleSort = (k) => {
+    if (sortKey === k) setSortDir(d => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(k); setSortDir("asc"); }
+  };
 
   useEffect(() => { load(); }, []);
 
@@ -101,6 +107,14 @@ export default function PantallaLegajos({ pais = "" }) {
     if (busqueda && !l.nombre.toLowerCase().includes(busqueda.toLowerCase())) return false;
     return true;
   });
+
+  const ordenados = sortKey
+    ? [...visibles].sort((a, b) => {
+        const va = String(a[sortKey] ?? ""), vb = String(b[sortKey] ?? "");
+        const cmp = va.localeCompare(vb, "es", { numeric: true, sensitivity: "base" });
+        return sortDir === "asc" ? cmp : -cmp;
+      })
+    : visibles;
 
   function handleNuevo() { setEditing(null); setShowForm(true); }
   function handleEditar(l) { setEditing(l); setShowForm(true); }
@@ -193,17 +207,23 @@ export default function PantallaLegajos({ pais = "" }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: T.bg }}>
-                {["Nombre", "Rol", "Contratación", "Sociedad", "Centro de costo", "Ingreso", "Alta", ""].map(h => (
-                  <th key={h} style={{
+                {[
+                  { h: "Nombre", k: "nombre" }, { h: "Rol", k: "rol" },
+                  { h: "Contratación", k: "tipo_contratacion" }, { h: "Sociedad", k: "sociedad_nombre" },
+                  { h: "Centro de costo", k: "sede_nombre" }, { h: "Ingreso", k: "fecha_ingreso" },
+                  { h: "Alta", k: "fecha_alta" }, { h: "", k: null },
+                ].map(({ h, k }) => (
+                  <th key={h || "acc"} onClick={k ? () => toggleSort(k) : undefined} style={{
                     padding: "8px 12px", textAlign: "left", fontWeight: 600,
                     color: T.muted, fontSize: 11, letterSpacing: ".04em",
                     borderBottom: `1px solid ${T.border}`, whiteSpace: "nowrap",
-                  }}>{h}</th>
+                    cursor: k ? "pointer" : "default", userSelect: "none",
+                  }}>{h}{k && sortKey === k ? (sortDir === "asc" ? " ▲" : " ▼") : ""}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {visibles.map((l, i) => (
+              {ordenados.map((l, i) => (
                 <tr key={l.id} style={{ background: i % 2 === 0 ? T.card : T.bg, opacity: l.activo ? 1 : 0.5 }}>
                   <td style={{ padding: "9px 12px", fontWeight: 600 }}>{l.nombre}</td>
                   <td style={{ padding: "9px 12px" }}>{rolChip(l.rol)}</td>
