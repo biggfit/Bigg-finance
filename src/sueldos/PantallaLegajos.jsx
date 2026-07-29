@@ -71,6 +71,7 @@ export default function PantallaLegajos({ pais = "" }) {
   const [editing,    setEditing]    = useState(null);
   const [filtroRol,     setFiltroRol]     = useState("todos");
   const [filtroSociedad, setFiltroSociedad] = useState("todas");
+  const [filtroSede,     setFiltroSede]     = useState("todos");
   const [filtroActivo,  setFiltroActivo]  = useState("activos");
   const [busqueda,      setBusqueda]      = useState("");
 
@@ -96,6 +97,7 @@ export default function PantallaLegajos({ pais = "" }) {
     if (filtroActivo === "inactivos" && l.activo)  return false;
     if (filtroRol !== "todos" && l.rol !== filtroRol) return false;
     if (filtroSociedad !== "todas" && l.sociedad_id !== filtroSociedad) return false;
+    if (filtroSede !== "todos" && l.sede_id !== filtroSede) return false;
     if (busqueda && !l.nombre.toLowerCase().includes(busqueda.toLowerCase())) return false;
     return true;
   });
@@ -155,6 +157,13 @@ export default function PantallaLegajos({ pais = "" }) {
           style={{ border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 10px", fontSize: 13, fontFamily: T.font }}>
           <option value="todas">Todas las empresas</option>
           {sociedades.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+        </select>
+        <select
+          value={filtroSede}
+          onChange={e => setFiltroSede(e.target.value)}
+          style={{ border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 10px", fontSize: 13, fontFamily: T.font }}>
+          <option value="todos">Todos los centros</option>
+          {centrosCosto.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
         </select>
         <select
           value={filtroRol}
