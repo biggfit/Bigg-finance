@@ -310,6 +310,7 @@ export function computePautaPendiente(frId, comps, upToYear, upToMonth, frCurren
 
   let total = 0;
   for (const pago of pagos) {
+    if (pago.invoice) continue; // vinculado manualmente a un comprobante ya existente
     const match = factsPool.find(f => !f._used && Math.round(Math.abs(f.amount - pago.amount) * 100) <= 1);
     if (match) { match._used = true; }
     else { total += pago.amount; }
