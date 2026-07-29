@@ -246,6 +246,7 @@ export default function App({ onVolverNumbers } = {}) {
         monto: signo * Math.abs(Number(m.amount) || 0),
         moneda: m.currency, fecha: dmyToIso(m.date),
         concepto: m.nota || m.ref || "",
+        documento_id: m.invoice || "",
       }).catch(err => console.error('Numbers updateMov:', err));
       return;
     }

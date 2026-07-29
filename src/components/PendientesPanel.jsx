@@ -84,6 +84,36 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
   const [pagoAdjuntarErr, setPagoAdjuntarErr] = useState({}); // { [compId]: string }
   const [pagoAdjuntarSaving, setPagoAdjuntarSaving] = useState({});
 
+  // "Ya cubierto" para PAGO_PAUTA — vincular a una factura de OTRO importe que ya lo
+  // contempló (ej. facturada contra saldo acumulado). Solo marca comp.invoice; no crea
+  // ninguna factura nueva ni toca el saldo de la CC.
+  const [pagoVincular, setPagoVincular] = useState({}); // { [compId]: true }
+  const [pagoVincularVal, setPagoVincularVal] = useState({}); // { [compId]: string }
+  const [pagoVincularErr, setPagoVincularErr] = useState({}); // { [compId]: string }
+  const [pagoVincularSaving, setPagoVincularSaving] = useState({});
+
+  const handlePagoAbrirVincular = (compId) => {
+    setPagoVincular(p => ({ ...p, [compId]: true }));
+    setPagoVincularVal(p => ({ ...p, [compId]: "" }));
+    setPagoVincularErr(p => { const n = { ...p }; delete n[compId]; return n; });
+  };
+  const handlePagoCerrarVincular = (compId) => {
+    setPagoVincular(p => { const n = { ...p }; delete n[compId]; return n; });
+  };
+  const handlePagoConfirmVincular = async (fr, pagoComp) => {
+    const invoice = (pagoVincularVal[pagoComp.id] ?? "").trim();
+    if (!invoice) { setPagoVincularErr(p => ({ ...p, [pagoComp.id]: "Ingresá el número de factura" })); return; }
+    setPagoVincularSaving(p => ({ ...p, [pagoComp.id]: true }));
+    try {
+      await editComp(fr.id, pagoComp.id, { invoice });
+      handlePagoCerrarVincular(pagoComp.id);
+    } catch (err) {
+      setPagoVincularErr(p => ({ ...p, [pagoComp.id]: err.message ?? "Error al guardar" }));
+    } finally {
+      setPagoVincularSaving(p => { const n = { ...p }; delete n[pagoComp.id]; return n; });
+    }
+  };
+
   const handlePagoAbrirAdjuntar = (compId) => {
     setPagoAdjuntando(p => ({ ...p, [compId]: true }));
     setPagoAdjuntarVal(p => ({ ...p, [compId]: "" }));
@@ -407,18 +437,19 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
 
   // 3. Pagos a cuenta sin factura de pauta
   // Matching por importe exacto: cada PAGO_PAUTA necesita una FACTURA|PAUTA del mismo monto.
-  // Una FACTURA|PAUTA de distinto importe (ej. contra saldo acumulado) no cancela el pago.
+  // Una FACTURA|PAUTA de distinto importe (ej. contra saldo acumulado) no cancela el pago —
+  // salvo que se lo haya vinculado a mano (comp.invoice) a la factura que ya lo cubrió.
   const pagosSinFactura = useMemo(() => {
     return franchises.filter(f => f.activa !== false).flatMap(fr => {
       const frComps = comps[fr.id] ?? [];
       const pagos = frComps
-        .filter(c => c.type === "PAGO_PAUTA" && (!activeCompany || compEmpresa(c) === activeCompany))
+        .filter(c => c.type === "PAGO_PAUTA" && !c.invoice && (!activeCompany || compEmpresa(c) === activeCompany))
         .sort((a, b) => cmpDate(a.date, b.date));
       const factsPool = frComps
         .filter(c => c.type === makeType("FACTURA","PAUTA") && (!activeCompany || compEmpresa(c) === activeCompany))
         .map(c => ({ ...c, _used: false }));
       return pagos.filter(pago => {
-        const match = factsPool.find(f => !f._used && Math.abs(f.amount - pago.amount) < 0.01);
+        const match = factsPool.find(f => !f._used && Math.round(Math.abs(f.amount - pago.amount) * 100) <= 1);
         if (match) { match._used = true; return false; }
         return true;
       }).map(c => ({ fr, comp: c }));
@@ -1310,9 +1341,13 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                 const openPagoAdj = !!pagoAdjuntando[comp.id];
                 const pagoAdjErr  = pagoAdjuntarErr[comp.id];
                 const pagoSaving  = !!pagoAdjuntarSaving[comp.id];
+                const openPagoVinc = !!pagoVincular[comp.id];
+                const pagoVincErr  = pagoVincularErr[comp.id];
+                const pagoVincSaving = !!pagoVincularSaving[comp.id];
+                const anyPanelOpen = openPagoAdj || pagoAdjErr || openPagoVinc || pagoVincErr;
                 return (
                 <div key={i}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12, background: "var(--bg2)", borderRadius: openPagoAdj || pagoAdjErr ? "7px 7px 0 0" : 7, padding: "8px 12px", opacity: pagoBatchRunning ? 0.6 : 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, background: "var(--bg2)", borderRadius: anyPanelOpen ? "7px 7px 0 0" : 7, padding: "8px 12px", opacity: pagoBatchRunning ? 0.6 : 1 }}>
                   {!pagoBatchRunning && (
                     <input
                       type="checkbox"
@@ -1339,11 +1374,20 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                       title="La factura ya existe en Facturante — adjuntar número sin re-emitir"
                       style={{ fontSize: 10, padding: "2px 8px", color: openPagoAdj ? "var(--muted)" : "var(--cyan)", whiteSpace: "nowrap" }}
                       disabled={pagoBatchRunning}
-                      onClick={() => openPagoAdj ? handlePagoCerrarAdjuntar(comp.id) : handlePagoAbrirAdjuntar(comp.id)}
+                      onClick={() => { if (openPagoVinc) handlePagoCerrarVincular(comp.id); openPagoAdj ? handlePagoCerrarAdjuntar(comp.id) : handlePagoAbrirAdjuntar(comp.id); }}
                     >
                       {openPagoAdj ? "Cancelar" : "Ya emitida →"}
                     </button>
                   )}
+                  <button
+                    className="ghost"
+                    title="Ya está contemplado en una factura de otro importe (ej. contra saldo acumulado) — no requiere factura propia"
+                    style={{ fontSize: 10, padding: "2px 8px", color: openPagoVinc ? "var(--muted)" : "var(--green)", whiteSpace: "nowrap" }}
+                    disabled={pagoBatchRunning}
+                    onClick={() => { if (openPagoAdj) handlePagoCerrarAdjuntar(comp.id); openPagoVinc ? handlePagoCerrarVincular(comp.id) : handlePagoAbrirVincular(comp.id); }}
+                  >
+                    {openPagoVinc ? "Cancelar" : "Ya cubierto →"}
+                  </button>
                   <button
                     className="ghost"
                     style={{ fontSize: 11, padding: "0 5px", color: "var(--text2)" }}
@@ -1352,6 +1396,32 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                     onClick={() => deleteComp(fr.id, comp.id)}
                   >✕</button>
                   </div>
+                  {openPagoVinc && (
+                    <div style={{ background: "rgba(173,255,25,.05)", border: "1px solid rgba(173,255,25,.2)", borderTop: "none", borderRadius: pagoVincErr ? 0 : "0 0 7px 7px", padding: "8px 12px", display: "flex", gap: 8, alignItems: "center" }}>
+                      <span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>Factura que ya lo cubrió:</span>
+                      <input
+                        autoFocus
+                        value={pagoVincularVal[comp.id] ?? ""}
+                        onChange={e => setPagoVincularVal(p => ({ ...p, [comp.id]: e.target.value }))}
+                        onKeyDown={e => { if (e.key === "Enter") handlePagoConfirmVincular(fr, comp); if (e.key === "Escape") handlePagoCerrarVincular(comp.id); }}
+                        placeholder="Ej: FA 0004-00000171"
+                        style={{ flex: 1, background: "var(--bg)", border: "1px solid var(--border2)", borderRadius: 5, padding: "4px 8px", fontSize: 12, color: "var(--text)", fontFamily: "var(--font)" }}
+                      />
+                      <button
+                        className="btn"
+                        style={{ fontSize: 11, padding: "3px 12px", background: "rgba(173,255,25,.15)", color: "var(--green)", border: "1px solid rgba(173,255,25,.3)", opacity: pagoVincSaving ? 0.5 : 1 }}
+                        disabled={pagoVincSaving}
+                        onClick={() => handlePagoConfirmVincular(fr, comp)}
+                      >
+                        {pagoVincSaving ? "Guardando…" : "Guardar"}
+                      </button>
+                    </div>
+                  )}
+                  {pagoVincErr && (
+                    <div style={{ background: "rgba(255,107,122,.08)", border: "1px solid rgba(255,107,122,.2)", borderTop: "none", borderRadius: "0 0 7px 7px", padding: "6px 12px", fontSize: 11, color: "var(--red)" }}>
+                      ✕ {pagoVincErr}
+                    </div>
+                  )}
                   {openPagoAdj && (
                     <div style={{ background: "rgba(34,211,238,.05)", border: "1px solid rgba(34,211,238,.2)", borderTop: "none", borderRadius: pagoAdjErr ? 0 : "0 0 7px 7px", padding: "8px 12px", display: "flex", gap: 8, alignItems: "center" }}>
                       <span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>Nro. factura AFIP:</span>
