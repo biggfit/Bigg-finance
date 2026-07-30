@@ -356,7 +356,7 @@ function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClos
               <table style={{ width:"100%", borderCollapse:"collapse" }}>
                 <thead>
                   <tr style={{ borderBottom:`1px solid ${T.cardBorder}`, background:"#fafafa" }}>
-                    {["ID","Fecha","Medio de Pago","Monto",""].map(h => (
+                    {["ID","Fecha","Medio de Pago","Nota","Monto",""].map(h => (
                       <th key={h} style={{ padding:"8px 14px", fontSize:11, fontWeight:700,
                         color:T.muted, textAlign:h==="Monto"?"right":"left",
                         letterSpacing:".06em", textTransform:"uppercase" }}>{h}</th>
@@ -365,7 +365,7 @@ function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClos
                 </thead>
                 <tbody>
                   {(egreso.pagosVinculados?.length ?? 0) === 0
-                    ? <tr><td colSpan={5} style={{ padding:"12px 14px", fontSize:13,
+                    ? <tr><td colSpan={6} style={{ padding:"12px 14px", fontSize:13,
                         color:T.dim, fontStyle:"italic" }}>Sin pagos registrados</td></tr>
                     : egreso.pagosVinculados.map((p, pi) => (
                       <tr key={p.id} style={{ borderBottom:`1px solid ${T.cardBorder}`,
@@ -382,6 +382,8 @@ function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClos
                               </button>
                             : resolveCB(p.cuenta_bancaria)}
                         </td>
+                        <td style={{ padding:"8px 14px", fontSize:12, color:"#555", maxWidth:120,
+                          overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={p.nota || ""}>{p.nota || "—"}</td>
                         <td style={{ padding:"8px 14px", fontSize:13, fontFamily:"var(--mono)",
                           fontWeight:700, color:T.green, textAlign:"right" }}>
                           {fmtMoney(Math.abs(Number(p.monto)||0), egreso.moneda)}
