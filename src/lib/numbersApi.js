@@ -647,7 +647,10 @@ export async function appendSaldoInicial({ sociedad, cuentaId, moneda, monto, fe
 // ─── CUENTAS (Plan de Cuentas) ────────────────────────────────────────────────
 
 export async function fetchCuentas() {
-  return get("nb_cuentas");
+  const rows = await get("nb_cuentas");
+  // Orden alfabético por nombre → todos los desplegables de cuenta contable salen ordenados.
+  return (Array.isArray(rows) ? rows : [])
+    .sort((a, b) => String(a.nombre ?? a.id ?? "").localeCompare(String(b.nombre ?? b.id ?? ""), "es"));
 }
 
 export async function appendCuenta(cuenta) {

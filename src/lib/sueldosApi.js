@@ -1004,7 +1004,7 @@ export async function fetchCuentasContablesNumbers() {
     id:     r.id ?? "",
     nombre: r.nombre ?? r.id ?? "",
     tipo:   r.tipo ?? "",
-  }));
+  })).sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));  // orden alfabético para los desplegables
 }
 
 export async function fetchCuentasBancariasNumbers() {
