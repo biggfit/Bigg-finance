@@ -682,17 +682,6 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   }, [baseDetalle]);
 
   // Conciliación: contadores por bucket para el banner.
-  const conc = useMemo(() => {
-    let match = 0, sinCheckin = 0, sinLegajo = 0, inactivo = 0;
-    for (const r of rows) {
-      if (r.bucket === "sin_legajo")       sinLegajo++;
-      else if (r.bucket === "sin_checkin") sinCheckin++;
-      else if (r.bucket === "inactivo")    inactivo++;
-      else                                 match++;
-    }
-    return { match, sinCheckin, sinLegajo, inactivo };
-  }, [rows]);
-
   // Paso 1: employees with a negotiated base salary (role-agnostic, covers other countries)
   const rowsFijos   = useMemo(() => rows.filter(r => Number(r.sueldo_base) > 0),       [rows]);
   // Coaches por rol + cualquier persona que vino de un check-in de Eye (bucket match/sin_legajo,
@@ -1063,8 +1052,6 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         </div>
       ) : (
         <>
-          {paso <= 3 && <ConciliacionBanner conc={conc} />}
-
           <StepsIndicator paso={paso} onPaso={p => p < paso && setPaso(p)} />
 
           {paso === 1 && (
@@ -1185,28 +1172,6 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
 }
 
 // ── Banner de conciliación (BIGG Eye × legajos) ────────────────────────────────
-
-function ConciliacionBanner({ conc }) {
-  const items = [
-    { n: conc.match,      label: "con actividad",            color: "#16a34a", bg: "#dcfce7", bd: "#86efac" },  // 🟢
-    { n: conc.sinCheckin, label: "en nómina sin check-in",   color: "#b45309", bg: "#fef9c3", bd: "#fde68a" },  // 🟡
-    ...(conc.inactivo ? [{ n: conc.inactivo, label: "inactivo con check-in", color: "#b45309", bg: "#fef9c3", bd: "#fde68a" }] : []),  // 🟡
-    { n: conc.sinLegajo,  label: "check-in sin legajo",      color: "#dc2626", bg: "#fee2e2", bd: "#fca5a5" },  // 🔴
-  ];
-  return (
-    <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-      {items.map(({ n, label, color, bg, bd }) => (
-        <div key={label} style={{
-          flex: "1 1 0", minWidth: 150, background: bg, border: `1px solid ${bd}`,
-          borderRadius: 8, padding: "8px 12px",
-        }}>
-          <span style={{ fontSize: 18, fontWeight: 700, color }}>{n}</span>
-          <span style={{ fontSize: 12, color: T.muted, marginLeft: 6 }}>{label}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 // ── Color de fila según bucket de conciliación ─────────────────────────────────
 function bucketBg(row, fallback) {
