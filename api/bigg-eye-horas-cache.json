@@ -1,12 +1,13 @@
 {
   "_meta": {
-    "generado": "2026-07-20",
+    "generado": "2026-07-30",
     "nota": "Cache manual vía MCP get_report(12). Regenerar cada mes al liquidar sueldos. Desde 2026-07 el reporte trae parent_class_name + regular/holiday/sunday_hours + has_attended (el endpoint normaliza ambas formas).",
     "2026-06-AR": {
       "rows": 39,
       "source": "Report 12 vía MCP BIGG Eye",
       "regen": "2026-07 (junio)"
-    }
+    },
+    "huergo_82": "Agregada location 82 (Huergo) via report_json — no estaba en el MCP catalog."
   },
   "2026-05-AR": [
     {
@@ -224,6 +225,76 @@
       "location_id": 32,
       "location_name": "Botánico",
       "hours": 41
+    },
+    {
+      "location_id": 82,
+      "location_name": "Huergo",
+      "coach_name": "Facundo Fernandez",
+      "parent_class_name": "BIGG CLASS",
+      "regular_hours": 13,
+      "holiday_hours": 0,
+      "sunday_hours": 0,
+      "has_attended": false
+    },
+    {
+      "location_id": 82,
+      "location_name": "Huergo",
+      "coach_name": "Facundo Fernandez",
+      "parent_class_name": "BIGG CLASS",
+      "regular_hours": 39,
+      "holiday_hours": 0,
+      "sunday_hours": 0,
+      "has_attended": true
+    },
+    {
+      "location_id": 82,
+      "location_name": "Huergo",
+      "coach_name": "Gianluca Musitano",
+      "parent_class_name": "BIGG CLASS",
+      "regular_hours": 18,
+      "holiday_hours": 0,
+      "sunday_hours": 9,
+      "has_attended": false
+    },
+    {
+      "location_id": 82,
+      "location_name": "Huergo",
+      "coach_name": "Gianluca Musitano",
+      "parent_class_name": "BIGG CLASS",
+      "regular_hours": 22,
+      "holiday_hours": 0,
+      "sunday_hours": 11,
+      "has_attended": true
+    },
+    {
+      "location_id": 82,
+      "location_name": "Huergo",
+      "coach_name": "Ignacio Pelaez",
+      "parent_class_name": "BIGG CLASS",
+      "regular_hours": 6,
+      "holiday_hours": 0,
+      "sunday_hours": 0,
+      "has_attended": false
+    },
+    {
+      "location_id": 82,
+      "location_name": "Huergo",
+      "coach_name": "Ignacio Pelaez",
+      "parent_class_name": "BIGG CLASS",
+      "regular_hours": 2,
+      "holiday_hours": 0,
+      "sunday_hours": 0,
+      "has_attended": true
+    },
+    {
+      "location_id": 82,
+      "location_name": "Huergo",
+      "coach_name": "Vicky  Bedini",
+      "parent_class_name": "BIGG YOGA",
+      "regular_hours": 5,
+      "holiday_hours": 0,
+      "sunday_hours": 0,
+      "has_attended": true
     }
   ],
   "2026-07-AR": [
@@ -906,6 +977,76 @@
       "holiday_hours": 4,
       "sunday_hours": 9,
       "has_attended": true
+    },
+    {
+      "location_id": 82,
+      "location_name": "Huergo",
+      "coach_name": "Facundo Fernandez",
+      "parent_class_name": "BIGG CLASS",
+      "regular_hours": 6,
+      "holiday_hours": 0,
+      "sunday_hours": 0,
+      "has_attended": false
+    },
+    {
+      "location_id": 82,
+      "location_name": "Huergo",
+      "coach_name": "Facundo Fernandez",
+      "parent_class_name": "BIGG CLASS",
+      "regular_hours": 64,
+      "holiday_hours": 0,
+      "sunday_hours": 0,
+      "has_attended": true
+    },
+    {
+      "location_id": 82,
+      "location_name": "Huergo",
+      "coach_name": "Gianluca Musitano",
+      "parent_class_name": "BIGG CLASS",
+      "regular_hours": 6,
+      "holiday_hours": 0,
+      "sunday_hours": 0,
+      "has_attended": false
+    },
+    {
+      "location_id": 82,
+      "location_name": "Huergo",
+      "coach_name": "Gianluca Musitano",
+      "parent_class_name": "BIGG CLASS",
+      "regular_hours": 10,
+      "holiday_hours": 0,
+      "sunday_hours": 0,
+      "has_attended": true
+    },
+    {
+      "location_id": 82,
+      "location_name": "Huergo",
+      "coach_name": "Ignacio Pelaez",
+      "parent_class_name": "BIGG CLASS",
+      "regular_hours": 6,
+      "holiday_hours": 0,
+      "sunday_hours": 9,
+      "has_attended": false
+    },
+    {
+      "location_id": 82,
+      "location_name": "Huergo",
+      "coach_name": "Ignacio Pelaez",
+      "parent_class_name": "BIGG CLASS",
+      "regular_hours": 8,
+      "holiday_hours": 0,
+      "sunday_hours": 3,
+      "has_attended": true
+    },
+    {
+      "location_id": 82,
+      "location_name": "Huergo",
+      "coach_name": "Vicky  Bedini",
+      "parent_class_name": "BIGG YOGA",
+      "regular_hours": 4,
+      "holiday_hours": 0,
+      "sunday_hours": 0,
+      "has_attended": true
     }
   ],
   "2026-06-AR": [
@@ -1295,6 +1436,56 @@
       "coach_name": "Tomas Bustos Barrón",
       "parent_class_name": "BIGG CLASS",
       "regular_hours": 46,
+      "holiday_hours": 0,
+      "sunday_hours": 0,
+      "has_attended": true
+    },
+    {
+      "location_id": 82,
+      "location_name": "Huergo",
+      "coach_name": "Facundo Fernandez",
+      "parent_class_name": "BIGG CLASS",
+      "regular_hours": 54,
+      "holiday_hours": 0,
+      "sunday_hours": 0,
+      "has_attended": true
+    },
+    {
+      "location_id": 82,
+      "location_name": "Huergo",
+      "coach_name": "Gianluca Musitano",
+      "parent_class_name": "BIGG CLASS",
+      "regular_hours": 2,
+      "holiday_hours": 0,
+      "sunday_hours": 0,
+      "has_attended": false
+    },
+    {
+      "location_id": 82,
+      "location_name": "Huergo",
+      "coach_name": "Gianluca Musitano",
+      "parent_class_name": "BIGG CLASS",
+      "regular_hours": 40,
+      "holiday_hours": 0,
+      "sunday_hours": 12,
+      "has_attended": true
+    },
+    {
+      "location_id": 82,
+      "location_name": "Huergo",
+      "coach_name": "Ignacio Pelaez",
+      "parent_class_name": "BIGG CLASS",
+      "regular_hours": 4,
+      "holiday_hours": 0,
+      "sunday_hours": 0,
+      "has_attended": true
+    },
+    {
+      "location_id": 82,
+      "location_name": "Huergo",
+      "coach_name": "Vicky  Bedini",
+      "parent_class_name": "BIGG YOGA",
+      "regular_hours": 4,
       "holiday_hours": 0,
       "sunday_hours": 0,
       "has_attended": true

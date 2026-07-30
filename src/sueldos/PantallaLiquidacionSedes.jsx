@@ -288,6 +288,12 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   const [legajosInactivos, setLegajosInactivos] = useState([]);  // dados de baja (para reconocer check-ins de ex/suplentes)
   const [liqsSaved,  setLiqsSaved]  = useState([]);  // su_liquidaciones guardadas (se mergean en rosterBase)
   const [eyeItems,   setEyeItems]   = useState([]);  // items de BIGG Eye (coach × sede × horas)
+  const [eyeSource,  setEyeSource]  = useState(null); // { source: "vivo"|"cache"|"cache-fallback"|"error", ts }
+  // Aplica la respuesta de Eye (items + de dónde vinieron, para el cartel en vivo/cache).
+  const applyEyeData = useCallback((data) => {
+    setEyeItems(data?.items ?? []);
+    setEyeSource({ source: data?._source ?? null, ts: data?._cache_ts ?? null });
+  }, []);
   const [edits,      setEdits]      = useState({});  // overlay editable: { [rowKey]: { campo: val, _deleted? } }
   const [manualRows, setManualRows] = useState([]);  // filas agregadas a mano (alta manual)
   const [categorias, setCategorias] = useState([]);
@@ -377,9 +383,10 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       const eyeIds = sedesArr.filter(s => s.bigg_eye_id).map(s => s.bigg_eye_id);
       try {
         const eyeData = await fetchHorasDesdeEye(m, a, p, eyeIds);
-        setEyeItems(eyeData.items ?? []);
+        applyEyeData(eyeData);
       } catch {
         setEyeItems([]);
+        setEyeSource({ source: "error", ts: null });
       }
     } finally { setLoading(false); }
   }, []);
@@ -1101,7 +1108,8 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
               anio={anio}
               pais={pais}
               updateDetalle={updateDetalle}
-              onResyncEye={setEyeItems}
+              onResyncEye={applyEyeData}
+              eyeSource={eyeSource}
               onAtras={() => setPaso(1)}
               onContinuar={() => setPaso(3)}
               onSiguiente={handleConfirmarHoras}
@@ -1448,7 +1456,7 @@ function PasoFijos({ rowsFijos, legajos, sedes, originalRows, novsByRowKey, upda
 
 function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByRowKey, updateRow, removeRow, updateDetalle,
   showAddForm, setShowAddForm, addForm, setAddForm, handleAddRow,
-  mes, anio, pais, onResyncEye,
+  mes, anio, pais, onResyncEye, eyeSource,
   onAtras, onContinuar, onSiguiente, saving }) {
 
   const HORA_COLS = [
@@ -1495,7 +1503,7 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByR
     try {
       const eyeIds = sedes.filter(s => s.bigg_eye_id).map(s => s.bigg_eye_id);
       const eyeData = await fetchHorasDesdeEye(mes, anio, pais, eyeIds, true);  // fresh: baja en vivo, saltea cache
-      onResyncEye(eyeData.items ?? []);
+      onResyncEye(eyeData);
     } catch (e) {
       alert("Error al cargar desde BIGG Eye: " + e.message);
     } finally {
@@ -1519,6 +1527,16 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByR
         <span style={{ fontSize: 12, color: T.muted, flexGrow: 1 }}>
           {rowsCoaches.length} coach{rowsCoaches.length !== 1 ? "s" : ""}
         </span>
+        {eyeSource?.source && (() => {
+          const vivo = eyeSource.source === "vivo";
+          const err  = eyeSource.source === "error";
+          const bg   = vivo ? "#dcfce7" : err ? "#fee2e2" : "#fef9c3";
+          const fg   = vivo ? "#166534" : err ? "#991b1b" : "#854d0e";
+          const txt  = vivo ? "🟢 En vivo desde BIGG Eye"
+                     : err  ? "🔴 No se pudo conectar a BIGG Eye"
+                     : `🟡 Datos del cache${eyeSource.ts ? ` (${eyeSource.ts})` : ""}${eyeSource.source === "cache-fallback" ? " — Eye no respondió" : ""}`;
+          return <span title="De dónde salen las horas mostradas" style={{ fontSize: 11, fontWeight: 700, padding: "4px 9px", borderRadius: 999, background: bg, color: fg }}>{txt}</span>;
+        })()}
         <button
           onClick={handleCargarEye}
           disabled={eyeLoading}

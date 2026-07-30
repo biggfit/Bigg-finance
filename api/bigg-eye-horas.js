@@ -311,6 +311,8 @@ export default async function handler(req, res) {
       location_names:  sedesTarget.map(s => `${s.id}:${s.nombre}`),
       rejected_count:  0,
       rejected_msgs:   [],
+      _source:         "cache",
+      _cache_ts:       cacheData?._meta?.generado ?? null,
       _sample_url:     `cache:${cacheKey}`,
       _sample_resp:    { raw: `${filtered.length} coaches desde cache MCP` },
     }));
@@ -342,6 +344,8 @@ export default async function handler(req, res) {
         total_locations: sedesTarget.length,
         location_names:  sedesTarget.map(s => `${s.id}:${s.nombre}`),
         rejected_count:  0, rejected_msgs: [],
+        _source:         "cache-fallback",
+        _cache_ts:       cacheData?._meta?.generado ?? null,
         _sample_url:     `cache-fallback:${cacheKey}`,
         _sample_resp:    { raw: `${filtered.length} coaches desde cache (en vivo no respondió)` },
       }));
@@ -356,6 +360,7 @@ export default async function handler(req, res) {
       location_names:   sedesTarget.map(s => `${s.id}:${s.nombre}`),
       rejected_count:   0,
       rejected_msgs:    [],
+      _source:      "vivo",
       _sample_url:  `report_json/12 en vivo (${start}→${endExcl})`,
       _sample_resp: { raw: `${allRows.length} filas totales → ${items.length} de nuestras sedes` },
     }));

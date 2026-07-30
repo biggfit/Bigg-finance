@@ -875,8 +875,8 @@ export async function fetchCdpDesdeEye(mes, anio, pais = "", locationIds = [], f
 
 // ── CONSTANTES ────────────────────────────────────────────────────────────────
 
-export const ROLES_SEDES   = ["COACH_SENIOR", "COACH", "BOTANICO", "YOGA", "ENCARGADO", "VENTAS", "LIMPIEZA"];
-export const ROLES_COACHES = ["COACH_SENIOR", "COACH", "BOTANICO", "YOGA"];
+export const ROLES_SEDES   = ["COACH_SENIOR", "COACH", "YOGA", "HUERGO_A", "HUERGO_B", "ENCARGADO", "VENTAS", "LIMPIEZA"];
+export const ROLES_COACHES = ["COACH_SENIOR", "COACH", "YOGA", "HUERGO_A", "HUERGO_B"];
 export const ROLES_FRONT   = ["ENCARGADO", "VENTAS"];
 export const ROLES_LIMP    = ["LIMPIEZA"];
 export const ROLES_HQ      = ["HQ", "HQ_OWNER", "HQ_EXT"];
@@ -885,8 +885,9 @@ export const ROLES_HQ      = ["HQ", "HQ_OWNER", "HQ_EXT"];
 export const ROL_CONCEPTO = {
   COACH_SENIOR: "COACH SENIOR",
   COACH:        "BIGG COACH",
-  BOTANICO:     "BOTÁNICO",
   YOGA:         "YOGA",
+  HUERGO_A:     "HUERGO A",   // tarifas de hora específicas de Huergo (workaround por-línea; big picture = tarifa por sede)
+  HUERGO_B:     "HUERGO B",
 };
 
 // Desglose por concepto de una liquidación (para la ficha de Resumen, solo lectura).

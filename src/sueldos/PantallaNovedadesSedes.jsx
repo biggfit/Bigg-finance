@@ -56,6 +56,8 @@ const iStyle = {
   fontSize: 13, fontFamily: T.font, background: "#eceff3", color: T.text,
   width: "100%", boxSizing: "border-box",
 };
+// Resalta un campo requerido sin completar (rojito).
+const invStyle = { border: "1px solid #ef4444", background: "#fee2e2" };
 
 export default function PantallaNovedadesSedes({ pais = "" }) {
   const [mes,  setMes]  = useState(MES_DEF);
@@ -283,19 +285,19 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
               {vista.map(r => (
                 <tr key={r._id} style={{ borderBottom: `1px solid ${T.border}` }}>
                   <td style={{ padding: "6px 10px" }}>
-                    <select style={iStyle} value={r.legajo_id} onChange={e => setLegajo(r._id, e.target.value)}>
+                    <select style={{ ...iStyle, ...(r.legajo_id ? {} : invStyle) }} value={r.legajo_id} onChange={e => setLegajo(r._id, e.target.value)}>
                       <option value="">— Elegir legajo —</option>
                       {legajos.map(l => <option key={l.id} value={l.id}>{l.nombre}</option>)}
                     </select>
                   </td>
                   <td style={{ padding: "6px 10px" }}>
-                    <select style={iStyle} value={r.sede_id} onChange={e => setSede(r._id, e.target.value)}>
+                    <select style={{ ...iStyle, ...(r.sede_id ? {} : invStyle) }} value={r.sede_id} onChange={e => setSede(r._id, e.target.value)}>
                       <option value="">— Elegir sede —</option>
                       {sedes.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
                     </select>
                   </td>
                   <td style={{ padding: "6px 10px" }}>
-                    <input style={{ ...iStyle, textAlign: "right" }} value={r.monto} placeholder="0"
+                    <input style={{ ...iStyle, textAlign: "right", ...(Number(r.monto) ? {} : invStyle) }} value={r.monto} placeholder="0"
                       onChange={e => setRow(r._id, { monto: e.target.value })} />
                   </td>
                   <td style={{ padding: "6px 10px" }}>
@@ -304,7 +306,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
                     </select>
                   </td>
                   <td style={{ padding: "6px 10px" }}>
-                    <select style={iStyle} value={r.cuenta_contable_id} onChange={e => setCuenta(r._id, e.target.value)}>
+                    <select style={{ ...iStyle, ...(r.cuenta_contable_id ? {} : invStyle) }} value={r.cuenta_contable_id} onChange={e => setCuenta(r._id, e.target.value)}>
                       <option value="">— Cuenta —</option>
                       {cuentas.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                     </select>
