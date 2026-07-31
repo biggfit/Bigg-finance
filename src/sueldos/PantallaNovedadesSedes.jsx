@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   fetchNovedades, appendNovedad, updateNovedad, deleteNovedad,
   fetchLegajos, fetchCentrosCostoNumbers, fetchCuentasContablesNumbers,
@@ -206,22 +206,27 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
   const total = rows.filter(r => r.legajo_id && r.sede_id).reduce((s, r) => s + Math.abs(parseFloat(r.monto) || 0), 0);
 
   // Orden por header (vista derivada; los edits siguen mapeando por _id).
-  const nombreDe = (arr, id) => arr.find(x => x.id === id)?.nombre || "";
-  const valOrden = (r, k) => ({
-    legajo: nombreDe(legajos, r.legajo_id),
-    sede:   nombreDe(sedes, r.sede_id),
-    monto:  parseFloat(r.monto) || 0,
-    forma_pago: r.forma_pago || "",
-    cuenta: nombreDe(cuentas, r.cuenta_contable_id),
-    nota:   r.nota || "",
-  }[k]);
-  const vista = sortKey
-    ? [...rows].sort((a, b) => {
-        const va = valOrden(a, sortKey), vb = valOrden(b, sortKey);
-        const cmp = typeof va === "number" ? va - vb : String(va).localeCompare(String(vb), "es", { numeric: true, sensitivity: "base" });
-        return sortDir === "asc" ? cmp : -cmp;
-      })
-    : rows;
+  // Mapas id→nombre precomputados una vez (antes se hacía arr.find en CADA comparación del sort).
+  const nombreMaps = useMemo(() => ({
+    legajo: new Map(legajos.map(x => [x.id, x.nombre])),
+    sede:   new Map(sedes.map(x => [x.id, x.nombre])),
+    cuenta: new Map(cuentas.map(x => [x.id, x.nombre])),
+  }), [legajos, sedes, cuentas]);
+  const valOrden = (r, k) =>
+      k === "legajo"     ? (nombreMaps.legajo.get(r.legajo_id) || "")
+    : k === "sede"       ? (nombreMaps.sede.get(r.sede_id) || "")
+    : k === "cuenta"     ? (nombreMaps.cuenta.get(r.cuenta_contable_id) || "")
+    : k === "monto"      ? (parseFloat(r.monto) || 0)
+    : k === "forma_pago" ? (r.forma_pago || "")
+    :                      (r.nota || "");
+  const vista = useMemo(() => {
+    if (!sortKey) return rows;
+    return [...rows].sort((a, b) => {
+      const va = valOrden(a, sortKey), vb = valOrden(b, sortKey);
+      const cmp = typeof va === "number" ? va - vb : String(va).localeCompare(String(vb), "es", { numeric: true, sensitivity: "base" });
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+  }, [rows, sortKey, sortDir, nombreMaps]);
 
   return (
     <div style={{ padding: 24, fontFamily: T.font, color: T.text }}>
