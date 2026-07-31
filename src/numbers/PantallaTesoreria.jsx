@@ -506,7 +506,8 @@ export function PaginaAging({ item, fechaCorte, headerColor, onBack }) {
     const key = doc.contraparte || "Sin nombre";
     if (!grouped[key]) grouped[key] = { avencer:0, d0_30:0, d31_60:0, d61_90:0, dmas90:0, total:0 };
     const vto  = doc.vto ? new Date(doc.vto + (doc.vto.length === 10 ? "T00:00:00" : "")) : null;
-    const dias = vto ? Math.floor((hoy - vto) / 86400000) : -1;
+    // vto inválido o ausente → "a vencer" (NO +90). Antes un Date inválido daba NaN y caía en el else = dmas90.
+    const dias = (vto && !isNaN(vto)) ? Math.floor((hoy - vto) / 86400000) : -1;
     const g    = grouped[key];
     g.total += doc.saldo;
     if      (dias <  0)  g.avencer += doc.saldo;
@@ -565,7 +566,11 @@ export function PaginaAging({ item, fechaCorte, headerColor, onBack }) {
       {/* Tabla */}
       <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`,
         borderRadius:T.radius, boxShadow:T.shadow, overflow:"hidden" }}>
-        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", tableLayout:"fixed" }}>
+          <colgroup>
+            <col style={{ width:"22%" }} />
+            {["","","","","",""].map((_, i) => <col key={i} style={{ width:"13%" }} />)}
+          </colgroup>
           <thead>
             <tr style={{ background:headerColor }}>
               <th style={{ ...thS, textAlign:"left" }}>{contraparteLabel}</th>
@@ -581,7 +586,8 @@ export function PaginaAging({ item, fechaCorte, headerColor, onBack }) {
             {rows.map((r, i) => (
               <tr key={i} style={{ borderBottom:`1px solid ${T.cardBorder}`,
                 background: i % 2 === 0 ? T.card : "#fafbfc" }}>
-                <td style={{ padding:"10px 16px", fontSize:13, color:T.text, fontWeight:600 }}>
+                <td style={{ padding:"10px 16px", fontSize:13, color:T.text, fontWeight:600,
+                  overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={r.contraparte}>
                   {r.contraparte}
                 </td>
                 <td style={tdS}>{fmt(r.avencer)}</td>

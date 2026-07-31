@@ -103,7 +103,7 @@ export default function TabCxPProveedores() {
       const saldo = calcSaldoPendiente(eg.importe, pagosByDoc.get(String(eg.id)) || []);
       if (saldo <= 0.01) continue;
       const vto  = parseVto(eg.vto);
-      const dias = vto ? Math.floor((hoy - vto) / 86400000) : -1;   // sin vto → a vencer
+      const dias = (vto && !isNaN(vto)) ? Math.floor((hoy - vto) / 86400000) : -1;   // sin vto o inválido → a vencer, no +90
       const banda = bandaDe(dias);
       // Clave por id de proveedor (estable entre sociedades); fallback al nombre.
       const key = eg.proveedorId || `N:${(eg.proveedor || "").trim().toLowerCase()}`;
@@ -253,7 +253,11 @@ export default function TabCxPProveedores() {
         ) : (
           <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:T.radius, boxShadow:T.shadow, overflow:"hidden" }}>
             <div style={{ overflowX:"auto" }}>
-            <table style={{ width:"100%", borderCollapse:"collapse", minWidth:920 }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", minWidth:920, tableLayout:"fixed" }}>
+              <colgroup>
+                <col style={{ width:"20%" }} /><col style={{ width:"16%" }} />
+                {[...BANDAS, { key:"total" }].map(b => <col key={b.key} style={{ width:"10.6%" }} />)}
+              </colgroup>
               <thead><tr style={{ background:HEADER }}>
                 <th style={{ ...thS, textAlign:"left" }}>Proveedor</th>
                 <th style={{ ...thS, textAlign:"left" }}>Sociedad(es)</th>

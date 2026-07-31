@@ -134,7 +134,10 @@ export function derivarSaldos({
     for (const leg of porLegajo) for (const it of leg.items) {
       if (normSoc(it.sociedad) !== soc) continue;
       total += it.monto;
-      docs.push({ contraparte: leg.legajo, vto: `${String(it.mes).padStart(2, "0")}/${it.anio}`, saldo: it.monto, moneda: "ARS" });
+      // Vencimiento real del sueldo: se paga entre el 1 y 5 del mes SIGUIENTE (mes vencido) → vto = 05 del mes M+1 (ISO).
+      const _m2 = Number(it.mes) === 12 ? 1 : Number(it.mes) + 1;
+      const _a2 = Number(it.mes) === 12 ? Number(it.anio) + 1 : Number(it.anio);
+      docs.push({ contraparte: leg.legajo, vto: `${_a2}-${String(_m2).padStart(2, "0")}-05`, saldo: it.monto, moneda: "ARS" });
     }
     docs.sort((a, b) => b.saldo - a.saldo);
     return { total, docs };

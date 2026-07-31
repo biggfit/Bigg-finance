@@ -99,7 +99,7 @@ export default function TabCxCClientes() {
       const saldo = calcSaldoPendiente(ing.importe, cobrosByDoc.get(String(ing.id)) || []);
       if (saldo <= 0.01) continue;
       const vto  = parseVto(ing.vto);
-      const dias = vto ? Math.floor((hoy - vto) / 86400000) : -1;
+      const dias = (vto && !isNaN(vto)) ? Math.floor((hoy - vto) / 86400000) : -1;  // vto inválido → a vencer, no +90
       const banda = bandaDe(dias);
       const key = ing.clienteId || `N:${(ing.cliente || "").trim().toLowerCase()}`;
       let c = clis.get(key);
@@ -247,7 +247,11 @@ export default function TabCxCClientes() {
         ) : (
           <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:T.radius, boxShadow:T.shadow, overflow:"hidden" }}>
             <div style={{ overflowX:"auto" }}>
-            <table style={{ width:"100%", borderCollapse:"collapse", minWidth:920 }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", minWidth:920, tableLayout:"fixed" }}>
+              <colgroup>
+                <col style={{ width:"20%" }} /><col style={{ width:"16%" }} />
+                {[...BANDAS, { key:"total" }].map(b => <col key={b.key} style={{ width:"10.6%" }} />)}
+              </colgroup>
               <thead><tr style={{ background:HEADER }}>
                 <th style={{ ...thS, textAlign:"left" }}>Cliente</th>
                 <th style={{ ...thS, textAlign:"left" }}>Sociedad(es)</th>
