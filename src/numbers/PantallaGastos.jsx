@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { T, fmtMoney, fmtDate, PageHeader, Btn } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
 import {
-  fetchGastos, deleteGasto, appendGastoDirecto, updateGastoDirecto,
+  fetchGastos, deleteGasto, appendGastoDirecto, appendGastosDirectos, updateGastoDirecto,
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto, fetchProveedores,
 } from "../lib/numbersApi";
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
@@ -87,23 +87,26 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
           proveedor_nombre:   prov?.nombre ?? "",
         });
       } else {
-        await Promise.all(validRows.map(r => {
-          const prov = proveedores.find(p => p.id === r.proveedorId);
-          return appendGastoDirecto({
-            sociedad,
-            fecha:              r.fecha,
-            cuenta_contable:    r.cuenta_contable,
-            cuenta_contable_id: cuentasGasto.find(c => c.nombre === r.cuenta_contable)?.id ?? "",
-            cc:                 r.cc,
-            moneda:             getMoneda(r.medioPago),
-            subtotal:           Number(r.subtotal) || 0,
-            ivaRate:            Number(r.ivaRate) || 0,
-            nota:               notaFinal(r),
-            cuenta_bancaria:    r.medioPago,
-            proveedor_id:       prov?.id ?? "",
-            proveedor_nombre:   prov?.nombre ?? "",
-          });
-        }));
+        // Una sola escritura atómica (add_batch): N filas en un request → sin carrera de appends
+        // concurrentes en Sheets (que perdía filas con Promise.all).
+        await appendGastosDirectos({
+          sociedad,
+          items: validRows.map(r => {
+            const prov = proveedores.find(p => p.id === r.proveedorId);
+            return {
+              fecha:            r.fecha,
+              cuenta_contable:  r.cuenta_contable,
+              cc:               r.cc,
+              moneda:           getMoneda(r.medioPago),
+              subtotal:         Number(r.subtotal) || 0,
+              ivaRate:          Number(r.ivaRate) || 0,
+              nota:             notaFinal(r),
+              cuenta_bancaria:  r.medioPago,
+              proveedor_id:     prov?.id ?? "",
+              proveedor_nombre: prov?.nombre ?? "",
+            };
+          }),
+        });
       }
       onSaved();
     } catch (e) {

@@ -829,6 +829,26 @@ export async function appendGastoDirecto({ sociedad, fecha, cuenta_contable, cue
   return { ok: true, id };
 }
 
+// Alta de VARIOS gastos directos en UNA sola escritura (add_batch) → atómico, sin carrera de
+// appends concurrentes en Sheets (un Promise.all de N filas perdía filas).
+export async function appendGastosDirectos({ sociedad, items = [] }) {
+  const created_at = new Date().toISOString();
+  const rows = items.map(it => {
+    const sub = Number(it.subtotal) || 0, rate = Number(it.ivaRate) || 0, iva = sub * (rate / 100), total = sub + iva;
+    const id = newId("GD");
+    return {
+      id, sociedad, fecha: it.fecha, tipo: "EGRESO_GASTO", cuenta_bancaria: it.cuenta_bancaria, cuenta_destino: "",
+      cuenta_contable: it.cuenta_contable, centro_costo: it.cc || "", moneda: it.moneda || "ARS",
+      monto: -total, documento_id: "CONTAB-" + id, concepto: it.nota || `Gasto directo: ${it.cuenta_contable}`,
+      contraparte_id: it.proveedor_id || "", contraparte_nombre: it.proveedor_nombre || "",
+      iva_rate: rate, iva_monto: iva, referencia: it.referencia || "", origen: "gasto_directo", created_at,
+    };
+  });
+  if (!rows.length) return { ok: true, n: 0 };
+  await post({ action: "add_batch", sheet: "nb_movimientos", rows });
+  return { ok: true, n: rows.length };
+}
+
 // ─── INGRESO DIRECTO ─────────────────────────────────────────────────────────
 //
 // Espejo del gasto directo para el lado ingreso: una cobranza sin factura (venta contada,
@@ -869,6 +889,26 @@ export async function appendIngresoDirecto({ sociedad, fecha, cuenta_contable, c
   });
 
   return { ok: true, id };
+}
+
+// Alta de VARIOS ingresos directos en UNA sola escritura (add_batch) → atómico, sin carrera de
+// appends concurrentes en Sheets (el motivo por el que un Promise.all de N filas perdía filas).
+export async function appendIngresosDirectos({ sociedad, items = [] }) {
+  const created_at = new Date().toISOString();
+  const rows = items.map(it => {
+    const sub = Number(it.subtotal) || 0, rate = Number(it.ivaRate) || 0, iva = sub * (rate / 100), total = sub + iva;
+    const id = newId("ID");
+    return {
+      id, sociedad, fecha: it.fecha, tipo: "INGRESO", cuenta_bancaria: it.cuenta_bancaria, cuenta_destino: "",
+      cuenta_contable: it.cuenta_contable, centro_costo: it.cc || "", moneda: it.moneda || "ARS",
+      monto: total, documento_id: "CONTAB-" + id, concepto: it.nota || `Ingreso directo: ${it.cuenta_contable}`,
+      contraparte_id: it.proveedor_id || "", contraparte_nombre: it.proveedor_nombre || "",
+      iva_rate: rate, iva_monto: iva, referencia: it.referencia || "", origen: "ingreso_directo", created_at,
+    };
+  });
+  if (!rows.length) return { ok: true, n: 0 };
+  await post({ action: "add_batch", sheet: "nb_movimientos", rows });
+  return { ok: true, n: rows.length };
 }
 
 // ─── CONCILIACIÓN v2: bandeja persistida ─────────────────────────────────────
