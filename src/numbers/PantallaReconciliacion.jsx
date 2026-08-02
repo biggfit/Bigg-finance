@@ -1134,10 +1134,26 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         ley1: m.contraparte_nombre || "", ley2: meta.cuit || "", cuit: meta.cuit || "",
         codigoConcepto: meta.cod || "", grupoCodigo: meta.cod || "", saldo: meta.saldo || "" };
     };
+    const esStripe = /stripe/i.test(String(cta?.banco || ""));
     let n = 0;
     setEdits(prev => {
       const next = { ...prev };
       for (const m of pendCuenta) {
+        // Stripe depurado: mismo criterio que la ingesta, pero leyendo la glosa del movimiento ya
+        // pendiente → reclasifica lo cargado antes del fix, sin re-subir. Comisiones → Aranceles y
+        // Otros Financieros; ventas/devolución → Ing.Stripe; centro ← la sede de la glosa. Fuerza
+        // modoCobro:false para que la venta caiga como ingreso rápido y no como cobro-contra-factura.
+        if (esStripe) {
+          const glosa = String(m.concepto || "");
+          const cuentaId = cuentaIdPorNombre(/comision/i.test(glosa) ? "Aranceles y Otros Financieros" : "Ing.Stripe");
+          const centroId = centroIdPorNombre(glosa.split("·")[1]?.trim() || "");
+          if (cuentaId) {
+            next[m.id] = { ...next[m.id], cuenta_contable: cuentaId, centro_costo: centroId || next[m.id]?.centro_costo,
+              modoCobro: false, modoTransfer: false, modoFC: false, noFranquicia: true };
+            n++;
+          }
+          continue;
+        }
         const p = clasificarLinea(lineaDeMov(m), reglasFrescas, proveedores, ctx);
         if (!p || p.tipo === "sin_clasificar") continue;
         if (p.tipo === "transferencia_interna") {
