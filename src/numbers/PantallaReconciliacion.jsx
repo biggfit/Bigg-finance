@@ -403,9 +403,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const centroIdPorNombre = useMemo(() => {
     const norm = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/^\s*\d+\s*-\s*/, "").replace(/[^a-z0-9]/g, "");
     const m = new Map();
-    centros.forEach(c => m.set(norm(c.nombre), String(c.id)));
+    // Solo centros ACTIVOS entran a las propuestas automáticas (un centro dado de baja no se sugiere).
+    centros.forEach(c => { if (String(c.activo).trim().toLowerCase() === "false") return; m.set(norm(c.nombre), String(c.id)); });
     return name => m.get(norm(name)) || "";
   }, [centros]);
+  // Stripe factura una sede "HQ" cuyo centro (10 - HQ) está inactivo → sus ventas/comisiones/devoluciones
+  // van al centro de la sede Wellness (16 - Wellness).
+  const sedeStripe = (s) => (String(s || "").trim().toLowerCase() === "hq" ? "Wellness" : s);
 
   // ── Pago de haberes: el débito del banco ya está en los movs origen=sueldos (doble conteo).
   // Agrupamos esos movs por lote_pago (un lote = una tanda de pago) → matcheamos el débito
@@ -669,7 +673,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
           let cuentaNom = l.cuentaNombre, centroNom = l.centroNombre;
           if (esStripe && !esTransfer) {
             if (!cuentaNom) cuentaNom = /comision/.test(String(l.tipo)) ? "Aranceles y Otros Financieros" : "Ing.Stripe";
-            if (!centroNom) centroNom = String(l.descripcion || "").split("·")[1]?.trim() || "";   // sede
+            if (!centroNom) centroNom = sedeStripe(String(l.descripcion || "").split("·")[1]?.trim() || "");   // sede (HQ→Wellness)
           }
           return { ...l, saldo: dedupKey, propuesta: {
             tipo:            esTransfer ? "transferencia_interna" : l.tipo,
@@ -1135,43 +1139,42 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         codigoConcepto: meta.cod || "", grupoCodigo: meta.cod || "", saldo: meta.saldo || "" };
     };
     const esStripe = /stripe/i.test(String(cta?.banco || ""));
-    let n = 0;
-    setEdits(prev => {
-      const next = { ...prev };
-      for (const m of pendCuenta) {
-        // Stripe depurado: mismo criterio que la ingesta, pero leyendo la glosa del movimiento ya
-        // pendiente → reclasifica lo cargado antes del fix, sin re-subir. Comisiones → Aranceles y
-        // Otros Financieros; ventas/devolución → Ing.Stripe; centro ← la sede de la glosa. Fuerza
-        // modoCobro:false para que la venta caiga como ingreso rápido y no como cobro-contra-factura.
-        if (esStripe) {
-          const glosa = String(m.concepto || "");
-          const cuentaId = cuentaIdPorNombre(/comision/i.test(glosa) ? "Aranceles y Otros Financieros" : "Ing.Stripe");
-          const centroId = centroIdPorNombre(glosa.split("·")[1]?.trim() || "");
-          if (cuentaId) {
-            next[m.id] = { ...next[m.id], cuenta_contable: cuentaId, centro_costo: centroId || next[m.id]?.centro_costo,
-              modoCobro: false, modoTransfer: false, modoFC: false, noFranquicia: true };
-            n++;
-          }
-          continue;
+    // Se arma el patch fuera de setEdits para contar `n` en el acto (si se contara dentro del updater,
+    // el updater corre después del setMsg y el mensaje siempre mostraría 0).
+    const patch = {};
+    for (const m of pendCuenta) {
+      const base = edits[m.id] || {};
+      // Stripe depurado: mismo criterio que la ingesta, pero leyendo la glosa del movimiento ya
+      // pendiente → reclasifica lo cargado antes del fix, sin re-subir. Comisiones → Aranceles y
+      // Otros Financieros; ventas/devolución → Ing.Stripe; centro ← la sede de la glosa (HQ→Wellness).
+      // Fuerza modoCobro:false para que la venta caiga como ingreso rápido y no como cobro-contra-factura.
+      if (esStripe) {
+        const glosa = String(m.concepto || "");
+        const cuentaId = cuentaIdPorNombre(/comision/i.test(glosa) ? "Aranceles y Otros Financieros" : "Ing.Stripe");
+        const centroId = centroIdPorNombre(sedeStripe(glosa.split("·")[1]?.trim() || ""));
+        if (cuentaId) {
+          patch[m.id] = { ...base, cuenta_contable: cuentaId, centro_costo: centroId || base.centro_costo,
+            modoCobro: false, modoTransfer: false, modoFC: false, noFranquicia: true };
         }
-        const p = clasificarLinea(lineaDeMov(m), reglasFrescas, proveedores, ctx);
-        if (!p || p.tipo === "sin_clasificar") continue;
-        if (p.tipo === "transferencia_interna") {
-          next[m.id] = { ...next[m.id], modoTransfer: true, modoFranquicia: false, modoFC: false, modoCobro: false, noFranquicia: true, cuenta_destino: p.cuenta_destino || next[m.id]?.cuenta_destino };
-        } else if (p.tipo === "cobro_cliente" && p.cliente_id) {
-          // Regla de cliente (ej. Gympass) → modo cobro con el cliente pre-seleccionado (la FC la elige el usuario).
-          next[m.id] = { ...next[m.id], modoCobro: true, cob_cli: p.cliente_id, cob_id: undefined, modoTransfer: false, modoFranquicia: false, modoFC: false, noFranquicia: true };
-        } else if (p.tipo === "interco_park") {
-          // Regla interco (ej. Tigre Loco / Wellness) → parkear: sociedad derivada de la cuenta única del otro lado.
-          const acc = (cuentasAll || []).find(c => String(c.id) === String(p.cuenta_destino));
-          next[m.id] = { ...next[m.id], modoInterco: true, interco_soc: acc?.sociedad || "", interco_acc: p.cuenta_destino || "", modoTransfer: false, modoFranquicia: false, modoFC: false, modoCobro: false, noFranquicia: true, noTransfer: true };
-        } else if (p.cuenta_contable) {
-          next[m.id] = { ...next[m.id], cuenta_contable: p.cuenta_contable, centro_costo: p.centro_costo || next[m.id]?.centro_costo, proveedor_id: p.proveedor_id || next[m.id]?.proveedor_id };
-        } else continue;
-        n++;
+        continue;
       }
-      return next;
-    });
+      const p = clasificarLinea(lineaDeMov(m), reglasFrescas, proveedores, ctx);
+      if (!p || p.tipo === "sin_clasificar") continue;
+      if (p.tipo === "transferencia_interna") {
+        patch[m.id] = { ...base, modoTransfer: true, modoFranquicia: false, modoFC: false, modoCobro: false, noFranquicia: true, cuenta_destino: p.cuenta_destino || base.cuenta_destino };
+      } else if (p.tipo === "cobro_cliente" && p.cliente_id) {
+        // Regla de cliente (ej. Gympass) → modo cobro con el cliente pre-seleccionado (la FC la elige el usuario).
+        patch[m.id] = { ...base, modoCobro: true, cob_cli: p.cliente_id, cob_id: undefined, modoTransfer: false, modoFranquicia: false, modoFC: false, noFranquicia: true };
+      } else if (p.tipo === "interco_park") {
+        // Regla interco (ej. Tigre Loco / Wellness) → parkear: sociedad derivada de la cuenta única del otro lado.
+        const acc = (cuentasAll || []).find(c => String(c.id) === String(p.cuenta_destino));
+        patch[m.id] = { ...base, modoInterco: true, interco_soc: acc?.sociedad || "", interco_acc: p.cuenta_destino || "", modoTransfer: false, modoFranquicia: false, modoFC: false, modoCobro: false, noFranquicia: true, noTransfer: true };
+      } else if (p.cuenta_contable) {
+        patch[m.id] = { ...base, cuenta_contable: p.cuenta_contable, centro_costo: p.centro_costo || base.centro_costo, proveedor_id: p.proveedor_id || base.proveedor_id };
+      }
+    }
+    const n = Object.keys(patch).length;
+    setEdits(prev => ({ ...prev, ...patch }));
     setMsg(`Re-evaluado con reglas: ${n} con propuesta actualizada. Revisá y aceptá.`);
   };
 
