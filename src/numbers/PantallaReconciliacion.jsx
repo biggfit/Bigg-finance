@@ -652,6 +652,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         // No hay reglas de banco: la propuesta sale del propio archivo, resolviendo nombre→id
         // contra los maestros vivos. Transferencias → modo transferencia interna (manual).
         const data = await parseMercadoPago(file);
+        const esStripe = /stripe/i.test(banco);
         lineas = data.lineas.map((l) => {
           const esTransfer = l.tipo === "transferencia";
           // Clave de dedup estable y única por fila. Incluye tipo+cuenta+centro+operación+monto:
@@ -659,10 +660,21 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
           // se pisarían entre sí. Sin índice → idempotente: re-subir el mismo archivo solo completa
           // lo que falta (no duplica).
           const dedupKey = `${l.tipo}|${l.cuentaNombre}|${l.centroNombre}|${l.nro_operacion || ""}|${l.monto}`;
+          // Stripe depurado: el archivo trae tipo (ventas/devolucion/comisiones) y la SEDE en la glosa
+          // ("Ventas Stripe · Chamberí · 07/2026"), pero no cuenta/centro. Los resolvemos como una regla:
+          // ventas y devolución → Ing.Stripe (la devolución es una venta con signo contrario → netea en el
+          // P&L); comisiones → Aranceles y Otros Financieros. El centro sale de la sede de la glosa. Con
+          // cuenta+centro resueltos, la venta cae sola como ingreso rápido (no cobro-contra-factura). MP ya
+          // trae cuenta/centro por columna, así que esto solo aplica a Stripe.
+          let cuentaNom = l.cuentaNombre, centroNom = l.centroNombre;
+          if (esStripe && !esTransfer) {
+            if (!cuentaNom) cuentaNom = /comision/.test(String(l.tipo)) ? "Aranceles y Otros Financieros" : "Ing.Stripe";
+            if (!centroNom) centroNom = String(l.descripcion || "").split("·")[1]?.trim() || "";   // sede
+          }
           return { ...l, saldo: dedupKey, propuesta: {
             tipo:            esTransfer ? "transferencia_interna" : l.tipo,
-            cuenta_contable: esTransfer ? "" : cuentaIdPorNombre(l.cuentaNombre),
-            centro_costo:    esTransfer ? "" : centroIdPorNombre(l.centroNombre),
+            cuenta_contable: esTransfer ? "" : cuentaIdPorNombre(cuentaNom),
+            centro_costo:    esTransfer ? "" : centroIdPorNombre(centroNom),
           } };
         });
       } else {
