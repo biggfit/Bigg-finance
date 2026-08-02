@@ -9,10 +9,13 @@ const BASE    = "/api/sueldos";
 const TOKEN   = import.meta.env.VITE_SHEETS_TOKEN ?? "";
 const BASE_NB = "/api/numbers"; // para crear movimientos en Tesorería de Numbers
 
-// ── Cache simple (TTL 30s) ────────────────────────────────────────────────────
+// ── Cache simple ──────────────────────────────────────────────────────────────
+// El backend (Apps Script) cobra ~2,5-4s FIJOS por request → conviene re-pedir menos.
+// TTL más largo; toda escritura invalida su hoja (ver post()), así que las propias ediciones
+// se ven al instante y solo lo que carga otro usuario tarda hasta el TTL.
 const _cache   = new Map();
 const _inflight = new Map();
-const TTL = 30_000;
+const TTL = 90_000;   // 90 s (antes 30 s)
 
 function cacheGet(key) {
   const entry = _cache.get(key);

@@ -11,10 +11,21 @@ const BASE       = "/api/numbers";
 
 // ─── Helpers internos ────────────────────────────────────────────────────────
 
-// Cache de GETs: evita refetch al navegar entre tabs y deduplica requests simultáneos
+// Cache de GETs: evita refetch al navegar entre tabs y deduplica requests simultáneos.
+// El backend (Apps Script) cobra ~2,5-4s FIJOS por request sin importar el tamaño de la hoja,
+// y cada pantalla pide ~20 recursos (muchos repetidos) → la lentitud es la CANTIDAD de requests.
+// Cache más largo = se re-piden mucho menos al navegar. Toda escritura invalida su hoja (_invalidate),
+// así que las propias ediciones se ven al instante; solo lo que carga OTRO usuario tarda hasta el TTL.
 const _cache    = new Map(); // key → { data, ts }
 const _inflight = new Map(); // key → Promise
-const CACHE_TTL = 30_000;    // 30 segundos
+const CACHE_TTL        = 90_000;    // transaccional (movimientos/comprobantes/…): 90 s
+const CACHE_TTL_MASTER = 600_000;   // maestros (casi nunca cambian en una sesión): 10 min
+// Recursos "maestro" = catálogos estables; se re-piden en casi toda pantalla pero cambian rarísimo.
+const MASTER_RES = new Set([
+  "nb_cuentas", "nb_centros_costo", "nb_proveedores", "nb_clientes",
+  "nb_sociedades", "nb_cuentas_bancarias", "nb_banco_reglas", "nb_usuarios",
+]);
+const ttlDe = resource => (MASTER_RES.has(resource) ? CACHE_TTL_MASTER : CACHE_TTL);
 
 function _invalidate(sheet) {
   for (const key of _cache.keys()) {
@@ -27,9 +38,9 @@ async function get(resource, params = {}) {
   const qs  = new URLSearchParams({ resource, token: TOKEN, ...params }).toString();
   const key = qs;
 
-  // Devolver cache si es fresco
+  // Devolver cache si es fresco (TTL según sea maestro o transaccional)
   const cached = _cache.get(key);
-  if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.data;
+  if (cached && Date.now() - cached.ts < ttlDe(resource)) return cached.data;
 
   // Deduplicar: si ya hay un request en vuelo para la misma key, reutilizar
   if (_inflight.has(key)) return _inflight.get(key);
