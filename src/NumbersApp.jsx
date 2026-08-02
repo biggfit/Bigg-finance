@@ -5,6 +5,7 @@ import LOGO_SRC from "./assets/biggLogo";
 import PantallaDashboard from "./numbers/PantallaDashboard";
 import PantallaEgresos   from "./numbers/PantallaEgresos";
 import PantallaIngresos  from "./numbers/PantallaIngresos";
+import PantallaIngresosDirectos from "./numbers/PantallaIngresosDirectos";
 import PantallaMaestros  from "./numbers/PantallaMaestros";
 import PantallaTesoreria from "./numbers/PantallaTesoreria";
 import PantallaReportes      from "./numbers/PantallaReportes";
@@ -456,7 +457,6 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
 
               // ── Ingresos: tiene sub-items ───────────────────────────────────
               if (s.id === "ingresos") {
-                const ingSel = activeId === "ingresos" && !activeSpecial && !showMaestros;
                 return (
                   <div key={s.id}>
                     <button onClick={() => { setIngresoOpen(o => !o); }}
@@ -468,41 +468,50 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
                         <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                       </svg>
                     </button>
-                    {ingresoOpen && (
-                      <div style={{ display:"flex", alignItems:"center", minHeight:32,
-                        margin:"1px 6px", borderRadius:8,
-                        background: ingSel ? "rgba(173,255,25,.08)" : "rgba(0,0,0,.35)",
-                        transition:"background .12s" }}
-                        onMouseEnter={e=>{ if(!ingSel) e.currentTarget.style.background="rgba(0,0,0,.5)"; }}
-                        onMouseLeave={e=>{ if(!ingSel) e.currentTarget.style.background="rgba(0,0,0,.35)"; }}>
-                        <button
-                          onClick={() => { setActiveId("ingresos"); setIngresoSubView(null); setIngresoOpen(true); setActiveMaestrosTab(null); setActiveSpecial(null); bumpNav(); }}
-                          aria-current={ingSel ? "page" : undefined}
-                          style={{
-                            flex:1, background:"transparent", border:"none", borderRadius:8,
-                            color: ingSel ? T.accent : "rgba(255,255,255,.45)",
-                            textAlign:"left", padding:"7px 8px 7px 38px",
-                            fontSize:12, fontFamily:T.font, cursor:"pointer",
-                            fontWeight: ingSel ? 700 : 400,
-                          }}>
-                          Ventas
-                        </button>
-                        <button
-                          onClick={() => { setActiveId("ingresos"); setIngresoSubView("new-venta"); setIngresoOpen(true); setActiveMaestrosTab(null); setActiveSpecial(null); bumpNav(); }}
-                          aria-label="Agregar venta"
-                          title="Agregar venta"
-                          style={{
-                            background:"transparent", border:"none", borderRadius:6, flexShrink:0,
-                            color:T.accent, fontSize:16, lineHeight:1,
-                            minWidth:32, minHeight:32, display:"flex", alignItems:"center", justifyContent:"center",
-                            cursor:"pointer", fontFamily:T.font, transition:"background .12s",
-                          }}
-                          onMouseEnter={e=>e.currentTarget.style.background="rgba(173,255,25,.12)"}
-                          onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                          +
-                        </button>
-                      </div>
-                    )}
+                    {ingresoOpen && [
+                      { id:"new-venta",   label:"Ventas",         listId:null,                ariaAdd:"Agregar venta"   },
+                      { id:"new-ingreso", label:"Ingreso rápido", listId:"ingresos-directos", ariaAdd:"Agregar ingreso" },
+                    ].map(sub => {
+                      const subActive = activeId === "ingresos" && !activeSpecial && !showMaestros && (
+                        sub.listId === null
+                          ? (ingresoSubView === null || ingresoSubView === "new-venta")
+                          : (ingresoSubView === sub.listId || ingresoSubView === sub.id));
+                      return (
+                        <div key={sub.id} style={{ display:"flex", alignItems:"center",
+                          margin:"1px 6px", borderRadius:8,
+                          background: subActive ? "rgba(173,255,25,.08)" : "rgba(0,0,0,.35)",
+                          transition:"background .12s" }}
+                          onMouseEnter={e=>{ if(!subActive) e.currentTarget.style.background="rgba(0,0,0,.5)"; }}
+                          onMouseLeave={e=>{ if(!subActive) e.currentTarget.style.background=subActive?"rgba(173,255,25,.08)":"rgba(0,0,0,.35)"; }}>
+                          <button
+                            onClick={() => { setActiveId("ingresos"); setIngresoSubView(sub.listId); setIngresoOpen(true); setActiveMaestrosTab(null); setActiveSpecial(null); bumpNav(); }}
+                            aria-current={subActive ? "page" : undefined}
+                            style={{
+                              flex:1, background:"transparent", border:"none", borderRadius:8,
+                              color: subActive ? T.accent : "rgba(255,255,255,.45)",
+                              textAlign:"left", padding:"7px 8px 7px 38px",
+                              fontSize:12, fontFamily:T.font, cursor:"pointer",
+                              fontWeight: subActive ? 700 : 400,
+                            }}>
+                            {sub.label}
+                          </button>
+                          <button
+                            onClick={() => { setActiveId("ingresos"); setIngresoSubView(sub.id); setIngresoOpen(true); setActiveMaestrosTab(null); setActiveSpecial(null); bumpNav(); }}
+                            aria-label={sub.ariaAdd}
+                            title={sub.ariaAdd}
+                            style={{
+                              background:"transparent", border:"none", borderRadius:6, flexShrink:0,
+                              color:T.accent, fontSize:16, lineHeight:1,
+                              minWidth:32, minHeight:32, display:"flex", alignItems:"center", justifyContent:"center",
+                              cursor:"pointer", fontFamily:T.font, transition:"background .12s",
+                            }}
+                            onMouseEnter={e=>e.currentTarget.style.background="rgba(173,255,25,.12)"}
+                            onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                            +
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
                 );
               }
@@ -728,6 +737,8 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
               : egresoSubView  === "new-gasto"  ? "Gastos › Nuevo Gasto"
               : egresoSubView  === "gastos"     ? "Gastos"
               : ingresoSubView === "new-venta"  ? "Ingresos › Nueva Venta"
+              : ingresoSubView === "new-ingreso"      ? "Ingresos › Nuevo Ingreso"
+              : ingresoSubView === "ingresos-directos" ? "Ingresos Directos"
               : activeId === "financiaciones"   ? `Financiaciones › ${finTab === "prestamo" ? "Préstamos" : finTab === "anticipo" ? "Anticipos" : "Planes"}`
               : section?.label ?? ""
           ).split(" › ").flatMap((part, i) => [
@@ -773,6 +784,8 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
               : section.id === "egresos"
               ? <PantallaEgresos  sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView} navPulse={navPulse}
                   openDocId={deepDoc?.section === "egresos" ? deepDoc.id : null} onDocOpened={() => setDeepDoc(null)} onIrACaja={irACaja} />
+              : section.id === "ingresos" && (ingresoSubView === "ingresos-directos" || ingresoSubView === "new-ingreso")
+              ? <PantallaIngresosDirectos sociedad={activeSoc.id} subView={ingresoSubView} onSubViewChange={setIngresoSubView} navPulse={navPulse} />
               : section.id === "ingresos"
               ? <PantallaIngresos sociedad={activeSoc.id} subView={ingresoSubView} onSubViewChange={setIngresoSubView} navPulse={navPulse}
                   openDocId={deepDoc?.section === "ingresos" ? deepDoc.id : null} onDocOpened={() => setDeepDoc(null)} onIrACaja={irACaja} />

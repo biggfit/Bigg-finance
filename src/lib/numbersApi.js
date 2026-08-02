@@ -57,23 +57,66 @@ async function get(resource, params = {}) {
   return req;
 }
 
+// Lee una hoja SIN cache (para la verificación de idempotencia en un reintento de escritura).
+async function _fetchRowsRaw(sheet) {
+  const qs  = new URLSearchParams({ resource: sheet, token: TOKEN }).toString();
+  const res = await fetch(`${BASE}?${qs}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  return Array.isArray(data) ? data : (data.rows || data.data || []);
+}
+
 async function post(body) {
   if (!CONFIGURED) throw new Error("VITE_NUMBERS_API_URL no configurada");
   // Sello de autoría: estampa `registrado_por` en cada asiento nuevo (add/add_batch)
   // sin tocar los ~20 writers. GAS descarta la columna en las hojas sin ese header,
   // así que los maestros no se ven afectados. No pisa un valor explícito.
   stamp(body);
-  const res = await fetch(BASE, {
-    method:  "POST",
-    headers: { "Content-Type": "application/json" },
-    body:    JSON.stringify({ ...body, token: TOKEN }),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  if (data.error) throw new Error(data.error);
-  // Invalidar cache del sheet afectado
-  if (body.sheet) _invalidate(body.sheet);
-  return data;
+
+  // Reintento con espera ante cortes transitorios de red (el GAS es lento y a veces la respuesta se
+  // pierde DESPUÉS de que la escritura ya entró → antes daba "error" con el dato ya guardado, o dejaba
+  // una transferencia a medias). Un rechazo lógico del backend (data.error) NO se reintenta: es
+  // definitivo. Los add/add_batch son idempotentes en el reintento: si las filas ya existen (id
+  // explícito), no se re-agregan → cero duplicados. edit/del son idempotentes por naturaleza.
+  const isAdd  = body.action === "add" || body.action === "add_batch";
+  const addIds = body.action === "add"       ? [body.row?.id].filter(Boolean)
+               : body.action === "add_batch" ? (body.rows || []).map(r => r?.id).filter(Boolean)
+               : [];
+  const totalRows = body.action === "add" ? 1 : (body.rows || []).length;
+
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    // En un reintento de un add: si la escritura anterior YA entró, no re-agregar (evita duplicados).
+    if (attempt > 0 && isAdd) {
+      // Solo se puede deduplicar con id explícito en TODAS las filas; si no, no se reintenta.
+      if (!addIds.length || addIds.length !== totalRows) throw lastErr;
+      try {
+        const existentes = new Set((await _fetchRowsRaw(body.sheet)).map(r => String(r.id)));
+        const faltan = addIds.filter(id => !existentes.has(String(id)));
+        if (!faltan.length) { _invalidate(body.sheet); return { ok: true, deduped: true }; }
+        // Batch parcialmente escrito: no se puede re-mandar solo lo que falta sin duplicar lo que entró.
+        if (faltan.length !== addIds.length) throw lastErr;
+      } catch { throw lastErr; }   // ante la duda, no arriesgar un duplicado
+    }
+    try {
+      const res = await fetch(BASE, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ ...body, token: TOKEN }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.error) { const e = new Error(data.error); e._serverReject = true; throw e; }
+      if (body.sheet) _invalidate(body.sheet);
+      return data;
+    } catch (e) {
+      lastErr = e;
+      if (e._serverReject) throw e;   // rechazo del backend → reintentar no cambia nada
+      if (attempt < 2) await new Promise(r => setTimeout(r, (attempt + 1) * 600));
+    }
+  }
+  throw lastErr;
 }
 
 // ─── Generador de IDs ────────────────────────────────────────────────────────
@@ -786,6 +829,48 @@ export async function appendGastoDirecto({ sociedad, fecha, cuenta_contable, cue
   return { ok: true, id };
 }
 
+// ─── INGRESO DIRECTO ─────────────────────────────────────────────────────────
+//
+// Espejo del gasto directo para el lado ingreso: una cobranza sin factura (venta contada,
+// reintegro, ingreso vario) es devengado y caja a la vez → UNA fila en nb_movimientos
+// (tipo=INGRESO, origen="ingreso_directo"), imputada. El P&L la lee vía adapter (si la cuenta
+// contable tiene categoria_pnl="ventas" cuenta como ingreso); Tesorería/Cash Flow ya la ven.
+// Misma mecánica que `aceptarMovimiento` contabiliza un crédito sin FC desde Conciliación.
+export async function appendIngresoDirecto({ sociedad, fecha, cuenta_contable, cuenta_contable_id = "", cc = "", moneda = "ARS", subtotal, ivaRate = 0, nota = "", cuenta_bancaria, referencia = "", proveedor_id = "", proveedor_nombre = "" }) {
+  const created_at = new Date().toISOString();
+  const sub  = Number(subtotal) || 0;
+  const rate = Number(ivaRate) || 0;       // entero (ej. 21), no fracción
+  const iva  = sub * (rate / 100);
+  const total = sub + iva;
+
+  const id = newId("ID");
+  await post({
+    action: "add", sheet: "nb_movimientos",
+    row: {
+      id,
+      sociedad, fecha,
+      tipo:               "INGRESO",
+      cuenta_bancaria,
+      cuenta_destino:     "",
+      cuenta_contable,                       // NOMBRE (buildPnL busca por nombre)
+      centro_costo:       cc,
+      moneda,
+      monto:              total,             // POSITIVO: entra a la caja
+      documento_id:       "CONTAB-" + id,    // marca devengado-vía-movimiento (lo lee el P&L)
+      concepto:           nota || `Ingreso directo: ${cuenta_contable}`,
+      contraparte_id:     proveedor_id,
+      contraparte_nombre: proveedor_nombre,
+      iva_rate:           rate,
+      iva_monto:          iva,
+      referencia,
+      origen:             "ingreso_directo",
+      created_at,
+    },
+  });
+
+  return { ok: true, id };
+}
+
 // ─── CONCILIACIÓN v2: bandeja persistida ─────────────────────────────────────
 // Al subir el extracto, cada línea entra como nb_movimientos PENDIENTE
 // (origen="extracto", conciliado=""). Aceptar la pasa a conciliado.
@@ -1363,6 +1448,65 @@ export async function updateGastoDirecto(movId, { fecha, cuenta_contable, cuenta
     moneda,
     monto:              -total,
     concepto:           nota || `Gasto directo: ${cuenta_contable}`,
+    contraparte_id:     proveedor_id,
+    contraparte_nombre: proveedor_nombre,
+    iva_rate:           rate,
+    iva_monto:          iva,
+    referencia,
+  }});
+}
+
+/**
+ * Trae todos los ingresos directos de una sociedad (nb_movimientos tipo=INGRESO imputados).
+ * Alta manual (origen "ingreso_directo") O crédito sin FC contabilizado desde Conciliación
+ * (tipo INGRESO + documento_id "CONTAB-…"). Espejo de fetchGastos.
+ */
+export async function fetchIngresosDirectos(sociedad) {
+  const movRows = await get("nb_movimientos", { sociedad });
+  return movRows
+    .filter(m => !esIgnorado(m) && m.tipo === "INGRESO" &&
+      (m.origen === "ingreso_directo" || String(m.documento_id || "").startsWith("CONTAB-")))
+    .map(m => {
+      const total = Math.abs(toNum(m.monto));
+      const iva   = toNum(m.iva_monto);
+      return {
+        id:              m.id,
+        _movId:          m.id,
+        fecha:           m.fecha ?? "",
+        cuenta_contable: m.cuenta_contable ?? "",
+        cc:              m.centro_costo ?? "",
+        moneda:          m.moneda ?? "ARS",
+        subtotal:        total - iva,
+        ivaRate:         toNum(m.iva_rate),
+        total,
+        proveedor:       m.contraparte_nombre ?? "",
+        nota:            m.concepto ?? "",
+        cuentaBancaria:  m.cuenta_bancaria ?? "",
+        registrado_por:  m.registrado_por ?? "",
+      };
+    })
+    .sort((a, b) => (b.fecha > a.fecha ? 1 : -1));
+}
+
+/** Elimina un ingreso directo (solo el movimiento). */
+export async function deleteIngresoDirecto(movId) {
+  await post({ action: "del", sheet: "nb_movimientos", id: movId });
+}
+
+/** Actualiza un ingreso directo existente (solo el movimiento). */
+export async function updateIngresoDirecto(movId, { fecha, cuenta_contable, cuenta_contable_id = "", cc = "", moneda = "ARS", subtotal, ivaRate = 0, nota = "", cuenta_bancaria, referencia = "", proveedor_id = "", proveedor_nombre = "" }) {
+  const sub   = Number(subtotal) || 0;
+  const rate  = Number(ivaRate) || 0;
+  const iva   = sub * (rate / 100);
+  const total = sub + iva;
+  await post({ action: "edit", sheet: "nb_movimientos", id: movId, patch: {
+    fecha,
+    cuenta_bancaria,
+    cuenta_contable,
+    centro_costo:       cc,
+    moneda,
+    monto:              total,
+    concepto:           nota || `Ingreso directo: ${cuenta_contable}`,
     contraparte_id:     proveedor_id,
     contraparte_nombre: proveedor_nombre,
     iva_rate:           rate,

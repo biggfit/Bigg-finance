@@ -644,8 +644,11 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       const banco = String(cta?.banco || "");
       const moneda = cta?.moneda || "ARS";
       let lineas;
-      if (/mercado\s*pago/i.test(banco)) {
-        // Mercado Pago: el archivo depurado ya viene clasificado (tipo/cuenta/centro por columna).
+      if (/mercado\s*pago|stripe/i.test(banco)) {
+        // Mercado Pago / Stripe: el archivo depurado ya viene clasificado (tipo/cuenta/centro por columna).
+        // parseMercadoPago es genérico (detecta el header por fecha/monto/tipo), así que sirve para
+        // cualquier Excel armado con ese formato. Cablear por nombre de banco es la vía mínima; la
+        // generalización (flag "archivo depurado" en la cuenta) queda pendiente para post-go-live.
         // No hay reglas de banco: la propuesta sale del propio archivo, resolviendo nombre→id
         // contra los maestros vivos. Transferencias → modo transferencia interna (manual).
         const data = await parseMercadoPago(file);
@@ -973,10 +976,12 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       setMsg(dups.length ? `No hay movimientos para aceptar en masa · ⚠ ${dups.length} posible(s) duplicado(s) quedaron para revisar de a uno.` : "No hay movimientos listos para aceptar.");
       return;
     }
-    setUploading(true); let ok = 0, err = 0;
-    for (const m of listos) { try { await doAceptar(m); ok++; } catch (e) { err++; } }
+    setUploading(true); let ok = 0; const errs = [];
+    for (const m of listos) { try { await doAceptar(m); ok++; } catch (e) { errs.push(e.message || String(e)); } }
     setUploading(false);
-    setMsg(`✓ ${ok} aceptados${err ? ` · ⚠ ${err} con error` : ""}${dups.length ? ` · ⚠ ${dups.length} posible(s) duplicado(s) dejados para revisar` : ""}.`);
+    const err = errs.length;
+    // Mostrar el motivo real del 1er error (antes se tragaba y el corte transitorio parecía fallo grave).
+    setMsg(`✓ ${ok} aceptados${err ? ` · ⚠ ${err} con error: ${errs[0]}` : ""}${dups.length ? ` · ⚠ ${dups.length} posible(s) duplicado(s) dejados para revisar` : ""}.`);
   };
 
   // Ignorar: descarta la línea sin contabilizar (soft-mark IGN-). Sale de pendientes y no cuenta
