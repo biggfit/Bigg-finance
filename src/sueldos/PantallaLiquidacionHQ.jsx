@@ -199,6 +199,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
   const [novedades,     setNovedades]     = useState([]);
   const [sociedades,    setSociedades]    = useState([]);
   const [loading,       setLoading]       = useState(true);
+  const [loadError,     setLoadError]     = useState(false);  // el fetch esencial (legajos) falló → no confundir con "no hay empleados"
   const [saving,        setSaving]        = useState(false);
 
   // Wizard state
@@ -215,24 +216,41 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
   async function load() {
     setLoading(true);
     try {
-      const [legs, liqs, pags, novs, socs] = await Promise.all([
-        fetchLegajos(),
-        fetchLiquidaciones(mes, anio),
-        fetchPagos(mes, anio),
-        fetchNovedades(mes, anio),
-        fetchSociedadesNumbers().catch(() => []),
+      // ── OLA 1: lo esencial para mostrar el roster (legajos + liquidaciones). allSettled: si una
+      // falla transitoriamente bajo carga del GAS, NO blanquea toda la pantalla (bug "vino vacío").
+      const w1 = await Promise.allSettled([
+        fetchLegajos(),               // 0  (esencial: sin esto no hay roster)
+        fetchLiquidaciones(mes, anio), // 1
       ]);
+      // Si el fetch esencial de legajos falló, marcar error y NO mostrar el falso "no hay empleados".
+      if (w1[0].status === "rejected") {
+        console.warn("[HQ] falló fetchLegajos:", w1[0].reason);
+        setLoadError(true);
+        return;
+      }
+      setLoadError(false);
+      const legs = w1[0].value;
+      const liqs = w1[1].status === "fulfilled" ? w1[1].value : [];
       const legsHQ = legs.filter(l => ROLES_HQ.includes(l.rol) && l.activo);
       const descartados = legs.filter(l => l.activo && !ROLES_HQ.includes(l.rol));
       if (descartados.length)
         console.warn("[HQ] Legajos activos descartados por rol desconocido:", descartados.map(l => `${l.nombre} → "${l.rol}"`));
       setLegajos(legsHQ);
       setLiquidaciones(liqs.filter(l => ROLES_HQ.includes(l.rol)));
+    } finally { setLoading(false); }   // el roster ya puede mostrarse; lo demás llega en segundo plano.
+
+    // ── OLA 2: secundario (pagos/novedades/sociedades) en background, sin bloquear la pantalla.
+    Promise.allSettled([
+      fetchPagos(mes, anio),
+      fetchNovedades(mes, anio),
+      fetchSociedadesNumbers(),
+    ]).then(w2 => {
+      const [pags, novs, socs] = w2.map(r => (r.status === "fulfilled" ? r.value : []));
       // Excluir pagos de Sedes (un legajo con liquidación en ambos: el pago de Sedes no es de HQ).
       setPagos(pags.filter(p => p.ambito !== "sedes"));
       setNovedades(novs.filter(n => n.tipo === "extra" && !n.sede_id));
-      setSociedades(Array.isArray(socs) ? socs : []);
-    } finally { setLoading(false); }
+      setSociedades(socs);
+    });
   }
 
   // Cerrar = congelar los números del mes (no bloquea pagos). Es el ÚNICO punto que
@@ -472,7 +490,12 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
         </button>
       </div>
 
-      {liqs.length === 0 ? (
+      {loadError ? (
+        <div style={{ border: `1px solid ${T.red}`, borderRadius: 8, padding: 40, textAlign: "center", color: T.red, fontSize: 13 }}>
+          No se pudieron cargar los legajos (la base tardó o dio error).<br />
+          <button onClick={() => load()} style={{ marginTop: 12, ...BTN_PRIMARY(false) }}>Reintentar</button>
+        </div>
+      ) : liqs.length === 0 ? (
         <div style={{ border: `1px dashed ${T.border}`, borderRadius: 8, padding: 40, textAlign: "center", color: T.muted, fontSize: 13 }}>
           No hay empleados HQ activos para {MESES[mes - 1]} {anio}.
         </div>
