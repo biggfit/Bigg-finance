@@ -386,15 +386,11 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       const legIds = new Set(liqs.map(l => l.legajo_id));
       setPagos(pags.filter(pg => pg.ambito === "sedes" || (!pg.ambito && legIds.has(pg.legajo_id))));
 
-      // BIGG Eye: traer horas por sede. No bloquea la carga si el servicio falla.
-      const eyeIds = sedesArr.filter(s => s.bigg_eye_id).map(s => s.bigg_eye_id);
-      try {
-        const eyeData = await fetchHorasDesdeEye(m, a, p, eyeIds);
-        applyEyeData(eyeData);
-      } catch {
-        setEyeItems([]);
-        setEyeSource({ source: "error", ts: null });
-      }
+      // BIGG Eye NO se trae en la carga: es una llamada EN VIVO lenta y el Paso 1 (sueldos fijos) no la
+      // necesita. Queda MANUAL → se baja con el botón "Re-sincronizar BIGG Eye" al llegar a Horas.
+      // Así la pantalla abre al toque con los legajos y no espera al servicio externo.
+      setEyeItems([]);
+      setEyeSource({ source: "pendiente", ts: null });
     } finally { setLoading(false); }
   }, []);
 
@@ -1509,10 +1505,12 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByR
         {eyeSource?.source && (() => {
           const vivo = eyeSource.source === "vivo";
           const err  = eyeSource.source === "error";
-          const bg   = vivo ? "#dcfce7" : err ? "#fee2e2" : "#fef9c3";
-          const fg   = vivo ? "#166534" : err ? "#991b1b" : "#854d0e";
+          const pend = eyeSource.source === "pendiente";
+          const bg   = vivo ? "#dcfce7" : err ? "#fee2e2" : pend ? "#f1f5f9" : "#fef9c3";
+          const fg   = vivo ? "#166534" : err ? "#991b1b" : pend ? "#475569" : "#854d0e";
           const txt  = vivo ? "🟢 En vivo desde BIGG Eye"
                      : err  ? "🔴 No se pudo conectar a BIGG Eye"
+                     : pend ? "⚪ BIGG Eye sin sincronizar — apretá Re-sincronizar"
                      : `🟡 Datos del cache${eyeSource.ts ? ` (${eyeSource.ts})` : ""}${eyeSource.source === "cache-fallback" ? " — Eye no respondió" : ""}`;
           return <span title="De dónde salen las horas mostradas" style={{ fontSize: 11, fontWeight: 700, padding: "4px 9px", borderRadius: 999, background: bg, color: fg }}>{txt}</span>;
         })()}
