@@ -1369,6 +1369,28 @@ function exportarTransferenciaFinanciera(liqs, mes, anio) {
   descargarExcelDetalle(filas, `Transferencias_HQ_${String(mes).padStart(2,"0")}_${anio}.xlsx`);
 }
 
+// Monotributo + Efectivo juntos (caja / pago en mano). Lleva columna "Forma" para distinguirlos.
+const MONO_EF_HEADERS = ["Legajo", "Forma", "Titular", "Importe", "Banco", "Tipo de cta", "Cuenta", "CBU", "CUIT", "Nota interna"];
+function exportarMonotributoEfectivo(liqs, mes, anio) {
+  const TIPOS = ["monotributo", "efectivo"];
+  const filas = [];
+  for (const liq of liqs) {
+    for (const l of liq.lineas || []) {
+      if (!TIPOS.includes(l.tipo) || !(Number(l.importe) > 0)) continue;
+      filas.push([liq.legajo_nombre, FP_TIPO_LABEL[l.tipo] || l.tipo, l.titular || liq.legajo_nombre || "",
+        Number(l.importe), l.banco || "", l.tipo_cuenta || "", l.cuenta || "", l.cbu || "", l.cuit || "", l.nota || ""]);
+    }
+    for (const n of liq.novedades || []) {
+      if (!TIPOS.includes(n.forma_pago) || !(Number(n.monto) > 0)) continue;
+      filas.push([liq.legajo_nombre, FP_TIPO_LABEL[n.forma_pago] || n.forma_pago, liq.legajo_nombre || "",
+        Number(n.monto), "", "", "", "", "", n.cuenta_contable_nombre || n.descripcion || ""]);
+    }
+  }
+  if (!filas.length) { alert("No hay líneas de Monotributo / Efectivo con importe cargado."); return; }
+  descargarExcelHoja({ headers: MONO_EF_HEADERS, anchos: [24, 14, 26, 14, 14, 12, 18, 26, 16, 26], hoja: "Sheet1", filas,
+    nombreArchivo: `Monotributo_Efectivo_HQ_${String(mes).padStart(2, "0")}_${anio}.xlsx` });
+}
+
 // ── Paso 3: Registrar pagos ───────────────────────────────────────────────────
 
 // Líneas con id sintético (derivadas del legajo, no persistidas): leg-/auto-/fp-.
@@ -1522,13 +1544,21 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onReg
             {todos.map((liq, i) => {
               const sums = sumByFormaPago(liq.lineas, liq.novedades);
               const open = expandido === liq.legajo_id;
-              const bucketPaid = (col) => {
+              // Estado por columna: null (no aplica) | "none" | "partial" | "full".
+              // Parcial-aware: suma pagos vs total, no solo "¿tiene algún pago?".
+              const abs = (ps) => ps.reduce((a, p) => a + Math.abs(Number(p.monto) || 0), 0);
+              const bucketState = (col) => {
                 const ls   = liq.lineas.filter(l => l.tipo === col);
                 const novs = (liq.novedades || []).filter(n => n.forma_pago === col);
                 if (!ls.length && !novs.length) return null;
-                return ls.every(l => getPagosLinea(liq, l).length > 0)
-                    && novs.every(n => getPagosNovedad(liq, n).length > 0);
+                const total  = ls.reduce((s, l) => s + (Number(l.importe) || 0), 0)
+                             + novs.reduce((s, n) => s + Math.abs(Number(n.monto) || 0), 0);
+                const pagado = ls.reduce((s, l) => s + abs(getPagosLinea(liq, l)), 0)
+                             + novs.reduce((s, n) => s + abs(getPagosNovedad(liq, n)), 0);
+                if (pagado <= 0.5) return "none";
+                return (total - pagado <= 0.5) ? "full" : "partial";
               };
+              const hayParcial = COLS.some(c => bucketState(c.id) === "partial");
               return (
                 <Fragment key={liq.legajo_id}>
                   <tr onClick={() => setExpandido(open ? null : liq.legajo_id)}
@@ -1537,15 +1567,20 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onReg
                       <span style={{ color: T.dim, marginRight: 6, fontSize: 11 }}>{open ? "▾" : "▸"}</span>
                       {liq.legajo_nombre}
                       <EstadoBadge estado={liq.estado} />
+                      {hayParcial && <span title="Tiene un pago parcial pendiente"
+                        style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: T.yellow, background: "#fefce8", border: `1px solid ${T.yellow}`, borderRadius: 4, padding: "1px 5px" }}>◐ parcial</span>}
                     </td>
                     <td style={TD({ textAlign: "right", fontWeight: 700, color: T.blue })}>{fmtMoney(liq.total_liquidacion)}</td>
                     {COLS.map(c => {
                       const monto = sums[c.id];
-                      const paid  = bucketPaid(c.id);
+                      const st    = bucketState(c.id);
                       if (!monto) return <td key={c.id} style={TD({ textAlign: "right", color: T.dim })}>—</td>;
+                      const color = st === "full" ? T.green : st === "partial" ? T.yellow : FP_TIPO_COLOR[c.id] || T.text;
                       return (
-                        <td key={c.id} style={TD({ textAlign: "right", color: paid ? T.green : FP_TIPO_COLOR[c.id] || T.text })}>
-                          {fmtMoney(monto)}{paid && <span style={{ marginLeft: 4, fontWeight: 700 }}>✓</span>}
+                        <td key={c.id} style={TD({ textAlign: "right", color })}>
+                          {fmtMoney(monto)}
+                          {st === "full"    && <span style={{ marginLeft: 4, fontWeight: 700 }}>✓</span>}
+                          {st === "partial" && <span style={{ marginLeft: 4, fontSize: 10, fontWeight: 700 }}>parc.</span>}
                         </td>
                       );
                     })}
@@ -1576,6 +1611,9 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onReg
         </button>
         <button style={BTN_EXPORT("#7c3aed")} onClick={() => exportarTransferenciaFinanciera(todos, mes, anio)}>
           📥 Excel Trf. financiera
+        </button>
+        <button style={BTN_EXPORT("#ca8a04")} onClick={() => exportarMonotributoEfectivo(todos, mes, anio)}>
+          📥 Excel Monotributo + Efectivo
         </button>
         <div style={{ flex: 1 }} />
         <button onClick={onAtras} style={BTN_SECONDARY}>← Atrás</button>
