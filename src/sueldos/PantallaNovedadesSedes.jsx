@@ -9,6 +9,15 @@ import {
 // Incluye TODOS los legajos activos (un HQ que presta servicios en una sede se elige acá).
 const ROL_ORDEN = [...ROLES_FRONT, ...ROLES_COACHES, ...ROLES_LIMP, ...ROLES_HQ];
 const rolRank = (rol) => { const i = ROL_ORDEN.indexOf(rol); return i === -1 ? ROL_ORDEN.length : i; };
+// Grupos para el <optgroup> (división visual en el picker), en el mismo orden.
+const ROL_GRUPOS = [
+  { label: "Encargados y Vendedores", roles: ROLES_FRONT },
+  { label: "Coaches",                 roles: ROLES_COACHES },
+  { label: "Limpieza",                roles: ROLES_LIMP },
+  { label: "HQ",                      roles: ROLES_HQ },
+  { label: "Otros",                   roles: [] },   // cualquier rol no contemplado
+];
+const grupoDeRol = (rol) => ROL_GRUPOS.find(g => g.roles.includes(rol))?.label || "Otros";
 
 const T = {
   bg:     "#f8fafc",
@@ -310,7 +319,14 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
                   <td style={{ padding: "6px 10px" }}>
                     <select style={{ ...iStyle, ...(r.legajo_id ? {} : invStyle) }} value={r.legajo_id} onChange={e => setLegajo(r._id, e.target.value)}>
                       <option value="">— Elegir legajo —</option>
-                      {legajos.map(l => <option key={l.id} value={l.id}>{l.nombre}</option>)}
+                      {ROL_GRUPOS.map(g => {
+                        const items = legajos.filter(l => grupoDeRol(l.rol) === g.label);
+                        return items.length ? (
+                          <optgroup key={g.label} label={g.label}>
+                            {items.map(l => <option key={l.id} value={l.id}>{l.nombre}</option>)}
+                          </optgroup>
+                        ) : null;
+                      })}
                     </select>
                   </td>
                   <td style={{ padding: "6px 10px" }}>
