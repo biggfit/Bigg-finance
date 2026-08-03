@@ -1860,6 +1860,11 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
   const tipo       = cell.tipo;
   const montoItem  = (it) => (it.kind === "linea" ? Number(it.ref.importe) : Number(it.ref.monto)) || 0;
   const montoTotal = cell.items.reduce((s, it) => s + montoItem(it), 0);
+  // Pago PARCIAL solo cuando la celda es UNA sola línea (caso normal). El resto queda pendiente
+  // (el neteo es por suma). Con varios movimientos se paga completo (no se reparte el parcial).
+  const editable = cell.items.length === 1;
+  const [montoImputar, setMontoImputar] = useState(montoTotal);
+  const parcial = editable && montoImputar > 0 && montoImputar < montoTotal;
   const [form, setForm] = useState({
     fecha:              new Date().toISOString().slice(0, 10),
     sociedad_id:        "",   // solo para transferencia
@@ -1902,6 +1907,10 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
   const handleSave = async () => {
     if (savingRef.current) return;
     if (!form.cuenta_id) { alert("Seleccioná una cuenta bancaria."); return; }
+    if (editable) {
+      const m = Number(montoImputar) || 0;
+      if (m <= 0 || m > montoTotal + 0.5) { alert("El monto a imputar debe ser mayor a 0 y no superar el total de la línea."); return; }
+    }
     savingRef.current = true; setSaving(true);
     try {
       const cta = cuentas.find(c => c.id === form.cuenta_id);
@@ -1926,7 +1935,8 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
       // Un nb_movimiento por ítem (granularidad por línea). Secuencial a propósito:
       // el backend GAS pierde escrituras concurrentes a nb_movimientos (appendRow colisiona).
       for (const it of cell.items) {
-        await appendPago({ ...comunes, forma_pago_id: it.ref.id, monto: montoItem(it), concepto: conceptoPago(it, liq, mes, anio), nota: notaPago(it), ambito: "hq" });
+        const monto = editable ? (Number(montoImputar) || 0) : montoItem(it);
+        await appendPago({ ...comunes, forma_pago_id: it.ref.id, monto, concepto: conceptoPago(it, liq, mes, anio), nota: notaPago(it), ambito: "hq" });
       }
       await onSaved();
     } catch (e) { alert("Error: " + e.message); setSaving(false); } finally { savingRef.current = false; }
@@ -1944,10 +1954,22 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
             <strong style={{ color: FP_TIPO_COLOR[tipo] || T.text }}>{FP_TIPO_LABEL[tipo] || tipo}</strong>
             {cell.items.length > 1 && <span> · {cell.items.length} movimientos</span>}
           </div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", background: T.bg, borderRadius: 5, padding: "8px 10px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: T.bg, borderRadius: 5, padding: "8px 10px" }}>
             <span style={{ fontSize: 12, color: T.muted }}>Total a imputar</span>
-            <strong style={{ fontSize: 16, color: T.text }}>{fmtMoney(montoTotal)}</strong>
+            {editable ? (
+              <input type="text" inputMode="numeric"
+                value={montoImputar ? Math.round(montoImputar).toLocaleString("es-AR") : ""}
+                onChange={e => { const v = Number(String(e.target.value).replace(/\./g, "").replace(/[^\d]/g, "")) || 0; setMontoImputar(Math.min(v, montoTotal)); }}
+                style={{ ...MODAL_INPUT, width: 130, textAlign: "right", fontWeight: 700, fontSize: 15, margin: 0 }} />
+            ) : (
+              <strong style={{ fontSize: 16, color: T.text }}>{fmtMoney(montoTotal)}</strong>
+            )}
           </div>
+          {parcial && (
+            <div style={{ fontSize: 12, color: T.yellow, background: "#fefce8", borderRadius: 5, padding: "6px 10px" }}>
+              Pago parcial: quedan <strong>{fmtMoney(montoTotal - montoImputar)}</strong> pendientes en esta línea.
+            </div>
+          )}
           <div>
             <ModalLabel>Fecha</ModalLabel>
             <input style={MODAL_INPUT} type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)} />
