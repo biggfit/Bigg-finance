@@ -1391,25 +1391,33 @@ function exportarTransferenciaFinanciera(liqs, mes, anio) {
   descargarExcelDetalle(filas, `Transferencias_HQ_${String(mes).padStart(2,"0")}_${anio}.xlsx`);
 }
 
-// Monotributo + Efectivo juntos (caja / pago en mano). Lleva columna "Forma" para distinguirlos.
-const MONO_EF_HEADERS = ["Legajo", "Forma", "Titular", "Importe", "Banco", "Tipo de cta", "Cuenta", "CBU", "CUIT", "Nota interna"];
+// Monotributo + Efectivo: UNA línea por legajo × FORMA (no se mezclan efectivo y monotributo,
+// son destinos distintos: plata en mano vs transferencia al monotributista). Suma los conceptos
+// (Monotributo/Obra Social/Otros Gastos/Viáticos) y marca Estado (PAGADO/PARCIAL/PENDIENTE).
+const MONO_EF_HEADERS = ["Legajo", "Forma", "Estado", "Titular", "Importe", "Pagado", "Pendiente", "CBU", "CUIT", "Incluye"];
 function exportarMonotributoEfectivo(liqs, mes, anio) {
-  const TIPOS = ["monotributo", "efectivo"];
+  const FORMAS = [["efectivo", "Efectivo"], ["monotributo", "Monotributo"]];
+  const abs = (ps) => ps.reduce((a, p) => a + Math.abs(Number(p.monto) || 0), 0);
   const filas = [];
   for (const liq of liqs) {
-    for (const l of liq.lineas || []) {
-      if (!TIPOS.includes(l.tipo) || !(Number(l.importe) > 0)) continue;
-      filas.push([liq.legajo_nombre, FP_TIPO_LABEL[l.tipo] || l.tipo, l.titular || liq.legajo_nombre || "",
-        Number(l.importe), l.banco || "", l.tipo_cuenta || "", l.cuenta || "", l.cbu || "", l.cuit || "", l.nota || ""]);
-    }
-    for (const n of liq.novedades || []) {
-      if (!TIPOS.includes(n.forma_pago) || !(Number(n.monto) > 0)) continue;
-      filas.push([liq.legajo_nombre, FP_TIPO_LABEL[n.forma_pago] || n.forma_pago, liq.legajo_nombre || "",
-        Number(n.monto), "", "", "", "", "", n.cuenta_contable_nombre || n.descripcion || ""]);
+    for (const [tipo, label] of FORMAS) {
+      const ls   = (liq.lineas || []).filter(l => l.tipo === tipo && Number(l.importe) > 0);
+      const novs = (liq.novedades || []).filter(n => n.forma_pago === tipo && Number(n.monto) > 0);
+      if (!ls.length && !novs.length) continue;
+      const total  = ls.reduce((s, l) => s + Number(l.importe), 0) + novs.reduce((s, n) => s + Math.abs(Number(n.monto)), 0);
+      const pagado = ls.reduce((s, l) => s + abs(getPagosLinea(liq, l)), 0) + novs.reduce((s, n) => s + abs(getPagosNovedad(liq, n)), 0);
+      const estado = pagado <= 0.5 ? "PENDIENTE" : (total - pagado <= 0.5 ? "PAGADO" : "PARCIAL");
+      const base   = ls.find(l => l.cbu || l.cuenta) || ls[0] || {};
+      const incluye = [...new Set([
+        ...ls.map(l => l.nota).filter(Boolean),
+        ...novs.map(n => n.cuenta_contable_nombre || n.descripcion || ""),
+      ].filter(Boolean))].join(", ");
+      filas.push([liq.legajo_nombre, label, estado, base.titular || liq.legajo_nombre || "",
+        total, pagado, total - pagado, base.cbu || liq.cbu || "", base.cuit || "", incluye]);
     }
   }
   if (!filas.length) { alert("No hay líneas de Monotributo / Efectivo con importe cargado."); return; }
-  descargarExcelHoja({ headers: MONO_EF_HEADERS, anchos: [24, 14, 26, 14, 14, 12, 18, 26, 16, 26], hoja: "Sheet1", filas,
+  descargarExcelHoja({ headers: MONO_EF_HEADERS, anchos: [24, 12, 12, 26, 14, 14, 14, 26, 16, 30], hoja: "Sheet1", filas,
     nombreArchivo: `Monotributo_Efectivo_HQ_${String(mes).padStart(2, "0")}_${anio}.xlsx` });
 }
 
