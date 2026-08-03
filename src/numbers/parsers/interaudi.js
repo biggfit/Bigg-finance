@@ -1,18 +1,27 @@
 // Extracto InterAudi (BigFit LLC, cuentas USD/EUR) — CSV con cabecera:
 //   Date, Id, Currency, AccoutType, AccountNumber, DebitCredit, Description1, Description2, Amount
-// Distinto a Galicia: fecha ya ISO, monto positivo (el signo lo da DebitCredit), sin saldo
-// corriente pero con un Id ÚNICO por fila → lo usamos como clave de dedup (fecha|Id).
+// separado por "," o ";" según la exportación (se detecta solo). La fecha puede venir ya en
+// ISO o como texto D/M/AAAA — toISO(..., dayFirst=true) normaliza ambos casos. Monto positivo
+// (el signo lo da DebitCredit), sin saldo corriente pero con un Id ÚNICO por fila → lo usamos
+// como clave de dedup (fecha|Id).
 //
 // Se parsea el CSV como TEXTO (no XLSX): XLSX coacciona "2026-06-29" a serial Excel y mete
-// líos de timezone/epoch (off-by-one). El texto crudo preserva la fecha ISO exacta.
+// líos de timezone/epoch (off-by-one). El texto crudo preserva la fecha exacta.
 
-import { num } from "./galicia";   // parser de número robusto (tolera separador de miles)
+import { num, toISO } from "./galicia";   // parser de número robusto y normalizador de fecha (tolera separador de miles / fecha no-ISO)
 
 const IA_REQ = ["Date", "DebitCredit", "Amount", "Description1"];
 
-// CSV → array de arrays, respetando comillas con comas internas ("ATLASSIAN,SF,CA").
+// CSV → array de arrays, respetando comillas con separadores internos ("ATLASSIAN,SF,CA").
+// Detecta el delimitador real (algunas exportaciones de InterAudi usan ";" en vez de ",")
+// mirando cuál aparece más veces en la cabecera.
 function parseCSV(text) {
-  return text.split(/\r?\n/).filter(l => l.trim().length).map(line => {
+  const lines     = text.split(/\r?\n/).filter(l => l.trim().length);
+  const firstLine = lines[0] ?? "";
+  const semis     = (firstLine.match(/;/g)  ?? []).length;
+  const commas    = (firstLine.match(/,/g) ?? []).length;
+  const delim     = semis > commas ? ";" : ",";
+  return lines.map(line => {
     const out = []; let cur = "", inQ = false;
     for (let i = 0; i < line.length; i++) {
       const ch = line[i];
@@ -20,7 +29,7 @@ function parseCSV(text) {
         if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false; }
         else cur += ch;
       } else if (ch === '"') inQ = true;
-      else if (ch === ',') { out.push(cur); cur = ""; }
+      else if (ch === delim) { out.push(cur); cur = ""; }
       else cur += ch;
     }
     out.push(cur);
@@ -65,7 +74,7 @@ export function parseInterAudi(file) {
             const contraparte = feeM ? feeM[1].trim() : d1;
             return {
               idx,
-              fecha:          String(r[ci.date]).trim().slice(0, 10),
+              fecha:          toISO(r[ci.date], true) || String(r[ci.date]).trim().slice(0, 10),
               descripcion:    d2 ? `${d1} · ${d2}` : d1,   // glosa completa (conserva "WIRE FEE" para la regla)
               monto:          isDebit ? -amount : amount,
               ley1:           contraparte,
