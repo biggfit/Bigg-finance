@@ -726,6 +726,10 @@ function _pagosDeMovs(rows, { mes, anio } = {}) {
     // Solo pagos de sueldo REALES (tipo SUELDO). El pago del F931 (pagarCargasSociales) también es
     // origen "sueldos" pero tipo PAGO y sin legajo/mes → si entrara acá generaría un "adelanto" fantasma.
     .filter(m => m.origen === "sueldos" && m.tipo === "SUELDO")
+    // Excluir movimientos ignorados (IGN-): un pago de sueldo marcado como ignorado NO debe
+    // restar de la deuda. Empareja con fetchMovTesoreria (Tesorería ya los excluía en la fuente),
+    // así "Sueldos por pagar" y Tesorería consolidada dan el mismo pendiente.
+    .filter(m => !String(m.documento_id || "").startsWith("IGN-"))
     .filter(m => mes  == null || Number(m.mes)  === Number(mes))
     .filter(m => anio == null || Number(m.anio) === Number(anio))
     .map(parsePagoFromMov);
