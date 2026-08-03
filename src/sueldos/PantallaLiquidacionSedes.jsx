@@ -959,12 +959,19 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       // entre las sedes del empleado según el total de cada una (cada id_liq queda balanceado
       // y el devengado se imputa al centro de costo donde se ganó). Secuencial: GAS pierde
       // escrituras concurrentes.
+      // Base del prorrateo = suma de los totales de fila SIN redondeo (mismo criterio que rowTotal).
+      // Usar empl.total_sueldo (que INCLUYE el redondeo del efectivo) daba share<1 en un empleado de
+      // una sola sede → escalaba mal los haberes (200.000 → 199.994). Con esto, una sola sede = share 1.
+      const totalSueldoPorLegajo = {};
+      for (const r of rows) {
+        totalSueldoPorLegajo[r.legajo_id] = (totalSueldoPorLegajo[r.legajo_id] || 0) + lineasConceptoDeRow(r, "cerrado").total;
+      }
       const entries = [];
       for (const r of rows) {
         const { lineas, total: rowTotal, header } = lineasConceptoDeRow(r, "cerrado");
         const empl      = empls.find(e => e.legajo_id === r.legajo_id);
-        // El reparto de forma de pago es del SUELDO (total_sueldo), no de las novedades.
-        const emplTotal = empl?.total_sueldo ?? rowTotal;
+        // El reparto de forma de pago es del SUELDO (sin redondeo), no de las novedades.
+        const emplTotal = totalSueldoPorLegajo[r.legajo_id] || rowTotal;
         const share     = emplTotal > 0 ? rowTotal / emplTotal : 0;
         const d    = pagoDraft[r.legajo_id] || {};
         const habRow   = Math.round((Number(d.monto_haberes)       || 0) * share);
