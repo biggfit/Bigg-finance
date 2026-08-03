@@ -65,6 +65,17 @@ function novToRow(n) {
 // Firma para detectar cambios entre la fila editada y la persistida.
 const rowSig = (r) => [r.legajo_id, r.monto, r.forma_pago, r.nota, r.cuenta_contable_id].join("|");
 
+// Monto: se GUARDA limpio (dígitos + "." decimal, parseFloat-friendly) y solo se MUESTRA con
+// separador de miles es-AR (punto miles, coma decimal). El punto es visual, nunca entra a r.monto.
+const fmtMiles = (s) => {
+  const str = String(s ?? "");
+  if (str === "") return "";
+  const [ent, dec] = str.split(".");
+  const entFmt = ent.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return dec != null ? `${entFmt},${dec}` : entFmt;
+};
+const limpiarMonto = (v) => String(v).replace(/\./g, "").replace(",", ".").replace(/[^\d.]/g, "");
+
 const iStyle = {
   border: `1px solid ${T.border}`, borderRadius: 5, padding: "5px 8px",
   fontSize: 13, fontFamily: T.font, background: "#eceff3", color: T.text,
@@ -319,8 +330,9 @@ export default function PantallaNovedades({ pais = "" }) {
                   </td>
                   <td style={{ padding: "6px 10px", textAlign: "right", color: T.muted }}>{fmt(prev)}</td>
                   <td style={{ padding: "6px 10px" }}>
-                    <input style={{ ...iStyle, textAlign: "right" }} value={r.monto} placeholder="0"
-                      onChange={e => setRow(r._id, { monto: e.target.value })} />
+                    <input style={{ ...iStyle, textAlign: "right" }} value={fmtMiles(r.monto)} placeholder="0"
+                      inputMode="decimal"
+                      onChange={e => setRow(r._id, { monto: limpiarMonto(e.target.value) })} />
                   </td>
                   <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600, color: diffCol(diff) }}>{fmtDiff(diff)}</td>
                   <td style={{ padding: "6px 10px" }}>

@@ -2,8 +2,22 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   fetchNovedades, appendNovedad, updateNovedad, deleteNovedad,
   fetchLegajos, fetchCentrosCostoNumbers, fetchCuentasContablesNumbers,
-  FP_TIPOS, FP_TIPO_LABEL, ROLES_SEDES,
+  FP_TIPOS, FP_TIPO_LABEL, ROLES_FRONT, ROLES_COACHES, ROLES_LIMP, ROLES_HQ,
 } from "../lib/sueldosApi";
+
+// Orden del picker de legajos (pedido del usuario): encargado/vendedor → coach → limpieza → HQ.
+// Incluye TODOS los legajos activos (un HQ que presta servicios en una sede se elige acá).
+const ROL_ORDEN = [...ROLES_FRONT, ...ROLES_COACHES, ...ROLES_LIMP, ...ROLES_HQ];
+const rolRank = (rol) => { const i = ROL_ORDEN.indexOf(rol); return i === -1 ? ROL_ORDEN.length : i; };
+// Grupos para el <optgroup> (división visual en el picker), en el mismo orden.
+const ROL_GRUPOS = [
+  { label: "Encargados y Vendedores", roles: ROLES_FRONT },
+  { label: "Coaches",                 roles: ROLES_COACHES },
+  { label: "Limpieza",                roles: ROLES_LIMP },
+  { label: "HQ",                      roles: ROLES_HQ },
+  { label: "Otros",                   roles: [] },   // cualquier rol no contemplado
+];
+const grupoDeRol = (rol) => ROL_GRUPOS.find(g => g.roles.includes(rol))?.label || "Otros";
 
 const T = {
   bg:     "#f8fafc",
@@ -51,6 +65,17 @@ function novToRow(n) {
 // Firma para detectar cambios entre la fila editada y la persistida.
 const rowSig = (r) => [r.legajo_id, r.sede_id, r.monto, r.forma_pago, r.nota, r.cuenta_contable_id].join("|");
 
+// Monto: se GUARDA limpio (dígitos + "." decimal, parseFloat-friendly) y solo se MUESTRA con
+// separador de miles es-AR (punto miles, coma decimal). El punto es visual, nunca entra a r.monto.
+const fmtMiles = (s) => {
+  const str = String(s ?? "");
+  if (str === "") return "";
+  const [ent, dec] = str.split(".");
+  const entFmt = ent.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return dec != null ? `${entFmt},${dec}` : entFmt;
+};
+const limpiarMonto = (v) => String(v).replace(/\./g, "").replace(",", ".").replace(/[^\d.]/g, "");
+
 const iStyle = {
   border: `1px solid ${T.border}`, borderRadius: 5, padding: "5px 8px",
   fontSize: 13, fontFamily: T.font, background: "#eceff3", color: T.text,
@@ -93,7 +118,9 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
       const sedesNovs = novs.filter(n => n.tipo === "extra" && n.sede_id);
       setRows(sedesNovs.map(novToRow));
       setLoaded(sedesNovs);
-      setLegajos(legs.filter(l => l.activo && ROLES_SEDES.includes(l.rol) && (!l.pais || l.pais === p)));
+      setLegajos(legs
+        .filter(l => l.activo && (!l.pais || l.pais === p))
+        .sort((a, b) => rolRank(a.rol) - rolRank(b.rol) || a.nombre.localeCompare(b.nombre, "es")));
       setSedes(ccs.filter(c => !c.pais || c.pais === p));
       setCuentas(ctas);
       setDirty(false);
@@ -292,7 +319,14 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
                   <td style={{ padding: "6px 10px" }}>
                     <select style={{ ...iStyle, ...(r.legajo_id ? {} : invStyle) }} value={r.legajo_id} onChange={e => setLegajo(r._id, e.target.value)}>
                       <option value="">— Elegir legajo —</option>
-                      {legajos.map(l => <option key={l.id} value={l.id}>{l.nombre}</option>)}
+                      {ROL_GRUPOS.map(g => {
+                        const items = legajos.filter(l => grupoDeRol(l.rol) === g.label);
+                        return items.length ? (
+                          <optgroup key={g.label} label={g.label}>
+                            {items.map(l => <option key={l.id} value={l.id}>{l.nombre}</option>)}
+                          </optgroup>
+                        ) : null;
+                      })}
                     </select>
                   </td>
                   <td style={{ padding: "6px 10px" }}>
@@ -302,8 +336,9 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
                     </select>
                   </td>
                   <td style={{ padding: "6px 10px" }}>
-                    <input style={{ ...iStyle, textAlign: "right", ...(Number(r.monto) ? {} : invStyle) }} value={r.monto} placeholder="0"
-                      onChange={e => setRow(r._id, { monto: e.target.value })} />
+                    <input style={{ ...iStyle, textAlign: "right", ...(Number(r.monto) ? {} : invStyle) }} value={fmtMiles(r.monto)} placeholder="0"
+                      inputMode="decimal"
+                      onChange={e => setRow(r._id, { monto: limpiarMonto(e.target.value) })} />
                   </td>
                   <td style={{ padding: "6px 10px" }}>
                     <select style={iStyle} value={r.forma_pago} onChange={e => setRow(r._id, { forma_pago: e.target.value })}>

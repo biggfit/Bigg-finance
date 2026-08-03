@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, Fragment } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "react";
 import * as XLSX from "xlsx";
 import {
   fetchLegajos, fetchLiquidaciones, updateLegajo,
@@ -201,6 +201,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
   const [loading,       setLoading]       = useState(true);
   const [loadError,     setLoadError]     = useState(false);  // el fetch esencial (legajos) falló → no confundir con "no hay empleados"
   const [saving,        setSaving]        = useState(false);
+  const [progreso,      setProgreso]      = useState("");     // "Guardando 4/10…" durante los updates masivos de legajo
 
   // Wizard state
   const [paso,             setPaso]             = useState(initialPaso ?? 1);
@@ -253,6 +254,36 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
     });
   }
 
+  // Refresh LIVIANO tras cerrar/pagar: re-trae SOLO liquidaciones + pagos (lo único que cambió),
+  // sin re-descargar legajos/novedades/sociedades ni bloquear la pantalla con "Cargando…".
+  const refreshLiqs = useCallback(async () => {
+    const [liqs, pags] = await Promise.all([
+      fetchLiquidaciones(mes, anio).catch(() => []),
+      fetchPagos(mes, anio).catch(() => []),
+    ]);
+    setLiquidaciones(liqs.filter(l => ROLES_HQ.includes(l.rol)));
+    setPagos(pags.filter(p => p.ambito !== "sedes"));
+  }, [mes, anio]);
+
+  // Update de legajo con reintento + TIMEOUT: el GAS a veces responde "Token inválido"/HTML bajo
+  // carga (transitorio) o directamente CUELGA el request (fetch sin timeout → await eterno). El
+  // timeout por intento corta el cuelgue y reintenta. `upd` es idempotente → reintentar (o que un
+  // request colgado termine tarde en el server) es seguro, no duplica. 3 intentos, timeout 12s.
+  async function updateLegajoRetry(id, data, intentos = 3, timeoutMs = 12000) {
+    let lastErr;
+    for (let a = 0; a < intentos; a++) {
+      if (a) await new Promise(r => setTimeout(r, 800 * a));
+      try {
+        await Promise.race([
+          updateLegajo(id, data),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), timeoutMs)),
+        ]);
+        return;
+      } catch (e) { lastErr = e; }
+    }
+    throw lastErr;
+  }
+
   // Cerrar = congelar los números del mes (no bloquea pagos). Es el ÚNICO punto que
   // escribe su_liquidaciones: materializa filas virtuales con el borrador actual.
   // Recibe los legajos seleccionados a cerrar; el resto queda en borrador (p. ej.
@@ -297,7 +328,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
         }
         await saveLiquidacionLines(idLiqDe(liq.legajo_id, mes, anio, liq.sede_id), lineas);
       }
-      await load();
+      await refreshLiqs();
       setShowCerrar(false);
     } catch (e) {
       alert("Error al cerrar la liquidación: " + e.message);
@@ -390,19 +421,31 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
   // Solo arma el borrador en memoria; opcionalmente empuja el sueldo al legajo maestro.
   async function handleConfirmarSueldos() {
     if (actualizarLegs) {
-      setSaving(true);
-      try {
-        for (const liq of liqs) {
-          const nuevoTotal = getDraftTotal(liq);
-          if (nuevoTotal !== liq.sueldo_total_legajo)
-            await updateLegajo(liq.legajo_id, { sueldo_total: nuevoTotal });
+      // Solo los que cambiaron. Resiliente: reintenta cada uno, NO aborta el lote si uno falla,
+      // parchea legajos en memoria (sin load() completo) y avisa si quedó alguno pendiente.
+      const cambios = liqs
+        .map(liq => ({ liq, total: getDraftTotal(liq) }))
+        .filter(({ liq, total }) => total !== liq.sueldo_total_legajo);
+      if (cambios.length) {
+        setSaving(true);
+        const ok = [], fallidos = [];
+        try {
+          for (let i = 0; i < cambios.length; i++) {
+            const { liq, total } = cambios[i];
+            setProgreso(`Guardando ${i + 1}/${cambios.length}…`);
+            try { await updateLegajoRetry(liq.legajo_id, { sueldo_total: total }); ok.push({ id: liq.legajo_id, total }); }
+            catch { fallidos.push(liq.legajo_nombre); }
+          }
+          if (ok.length) {
+            const m = new Map(ok.map(x => [x.id, x.total]));
+            setLegajos(ls => ls.map(l => m.has(l.id) ? { ...l, sueldo_total: m.get(l.id) } : l));
+          }
+        } finally { setSaving(false); setProgreso(""); }
+        if (fallidos.length) {
+          alert(`Se guardaron ${ok.length} de ${cambios.length}. Falló(aron) ${fallidos.length}: ${fallidos.join(", ")}.\nReintentá "Siguiente" — los ya guardados no se re-envían.`);
+          return;   // no avanzar: los borradores quedan para reintentar solo lo que faltó
         }
-        await load();
-      } catch (e) {
-        alert("Error al actualizar legajos: " + e.message);
-        setSaving(false);
-        return;
-      } finally { setSaving(false); }
+      }
     }
     setFormasDraft(() => {
       const d = {};
@@ -422,18 +465,27 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
   // Opcionalmente actualiza la receta del legajo (aplica a meses futuros).
   async function handleConfirmarPago() {
     if (actualizarRecetas) {
+      const items = liqs.map(liq => ({
+        liq, formas_pago: (formasDraft[liq.legajo_id] || []).map(l => ({ ...l, importe: Number(l.importe) || 0 })),
+      }));
       setSaving(true);
+      const ok = [], fallidos = [];
       try {
-        for (const liq of liqs) {
-          const formas_pago = (formasDraft[liq.legajo_id] || []).map(l => ({ ...l, importe: Number(l.importe) || 0 }));
-          await updateLegajo(liq.legajo_id, { formas_pago });
+        for (let i = 0; i < items.length; i++) {
+          const { liq, formas_pago } = items[i];
+          setProgreso(`Guardando ${i + 1}/${items.length}…`);
+          try { await updateLegajoRetry(liq.legajo_id, { formas_pago }); ok.push({ id: liq.legajo_id, formas_pago }); }
+          catch { fallidos.push(liq.legajo_nombre); }
         }
-        await load();
-      } catch (e) {
-        alert("Error al actualizar recetas: " + e.message);
-        setSaving(false);
+        if (ok.length) {
+          const m = new Map(ok.map(x => [x.id, x.formas_pago]));
+          setLegajos(ls => ls.map(l => m.has(l.id) ? { ...l, formas_pago: m.get(l.id) } : l));
+        }
+      } finally { setSaving(false); setProgreso(""); }
+      if (fallidos.length) {
+        alert(`Se guardaron ${ok.length} de ${items.length} recetas. Falló(aron) ${fallidos.length}: ${fallidos.join(", ")}.\nReintentá — los ya guardados no se re-envían.`);
         return;
-      } finally { setSaving(false); }
+      }
     }
     setPaso(3);
   }
@@ -515,6 +567,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
               onChangeActualizar={setActualizarLegs}
               onSiguiente={handleConfirmarSueldos}
               saving={saving}
+              progreso={progreso}
             />
           )}
 
@@ -565,7 +618,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
             liq={liqSel}
             cell={showPago.cell}
             onClose={() => setShowPago(null)}
-            onSaved={async () => { setShowPago(null); await load(); }}
+            onSaved={async () => { setShowPago(null); await refreshLiqs(); }}
           />
         );
       })()}
@@ -698,7 +751,7 @@ function NovedadesDetalle({ novedades }) {
 
 // ── Paso 1: Confirmar liquidación ─────────────────────────────────────────────
 
-function PasoSueldos({ liqStaff, liqOwners, liqExternos, sueldosDraft, onChangeDraft, actualizarLegs, onChangeActualizar, onSiguiente, saving }) {
+function PasoSueldos({ liqStaff, liqOwners, liqExternos, sueldosDraft, onChangeDraft, actualizarLegs, onChangeActualizar, onSiguiente, saving, progreso }) {
   const [expandido, setExpandido] = useState(null); // legajo_id desplegado
   const [pctGlobal, setPctGlobal] = useState("");
   // Por defecto, ordenado por sueldo actual de mayor a menor.
@@ -868,7 +921,7 @@ function PasoSueldos({ liqStaff, liqOwners, liqExternos, sueldosDraft, onChangeD
           Actualizar sueldo en todos los legajos con los nuevos valores
         </label>
         <button onClick={onSiguiente} disabled={saving} style={BTN_PRIMARY(saving)}>
-          {saving ? "Guardando…" : "Siguiente →"}
+          {saving ? (progreso || "Guardando…") : "Siguiente →"}
         </button>
       </div>
     </div>
