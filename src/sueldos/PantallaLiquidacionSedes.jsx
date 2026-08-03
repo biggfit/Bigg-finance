@@ -903,7 +903,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       const entries = dirty.map(r => ({
         id_liq:  idLiqDe(r.legajo_id, mes, anio, r.sede_id),
         lineas:  lineasConceptoDeRow(r, "borrador").lineas,
-        replace: !!r.id,
+        replace: true,   // idempotente: borrar-y-reescribir siempre (r.id no es confiable si la carga falló → duplicaba)
       }));
       await saveLiquidacionesLinesBatch(entries);
       await refreshLiqs();   // refresh liviano (no re-descarga todo ni bloquea la pantalla)
@@ -996,9 +996,11 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         const lineasFin = redondeo > 0
           ? [...lineas, lineaLiq(header, { tipo: "concepto", concepto: "Redondeo", cuenta_contable: "Sueldos", cantidad: 0, monto_unit: 0, monto: redondeo })]
           : lineas;
-        // replace SOLO si esta liquidación ya estaba guardada (tiene id): así un cierre sin borrador
-        // previo NO dispara del_comp (que igual toma el candado ~3s por legajo aunque no borre nada).
-        entries.push({ id_liq: idLiqDe(r.legajo_id, mes, anio, r.sede_id), lineas: [...lineasFin, ...pagos, ...novLineas], replace: !!r.id });
+        // replace SIEMPRE true: el cierre debe ser IDEMPOTENTE (borrar-y-reescribir), aunque sea lento.
+        // Confiar en r.id era peligroso: si la consulta de liquidaciones falló al cargar, r.id venía
+        // vacío → no borraba → el add_batch duplicaba sobre lo ya guardado. La velocidad la resuelve el
+        // del_comp_batch en el GAS (pendiente), no saltear el borrado.
+        entries.push({ id_liq: idLiqDe(r.legajo_id, mes, anio, r.sede_id), lineas: [...lineasFin, ...pagos, ...novLineas], replace: true });
       }
       // Un solo add_batch para todas las liquidaciones (replace: reescribe el borrador como "cerrado").
       await saveLiquidacionesLinesBatch(entries);
