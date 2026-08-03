@@ -1648,29 +1648,36 @@ function EmpleadoPagosLineas({ liq, cols, onPagar, onVerPago }) {
               const items = f.items(c.id);
               if (!items.length) return <td key={c.id} style={TD({ ...tdBase, textAlign: "right", color: T.dim })}>—</td>;
               const monto      = items.reduce((s, it) => s + montoItem(it), 0);
-              const pagosCelda = items.map(pagosItem);
-              const paid       = pagosCelda.every(p => p.length > 0);
-              if (paid) {
-                const primerPago = pagosCelda.find(p => p.length > 0)[0];
-                return (
-                  <td key={c.id} style={TD({ ...tdBase, textAlign: "right" })}>
-                    <button onClick={() => onVerPago(primerPago)} title="Ver / anular este pago"
-                      style={{ ...btn, color: T.green }}>
-                      {fmtMoney(monto)} ✓
-                    </button>
-                  </td>
-                );
-              }
-              const pendientes = items.filter(it => pagosItem(it).length === 0);
+              // Pagado de la celda = suma de TODOS los pagos de sus ítems (soporta parciales acumulados).
+              const pagado     = items.reduce((s, it) => s + pagosItem(it).reduce((a, p) => a + Math.abs(Number(p.monto) || 0), 0), 0);
+              const pend       = monto - pagado;
+              const primerPago = items.flatMap(pagosItem)[0];
+              const pagar = () => onPagar({
+                tipo: c.id, esSueldo: f.esSueldo,
+                cuenta_contable_id: f.cuenta_contable_id,
+                cuenta_contable_nombre: f.cuenta_contable_nombre,
+                items, yaPagado: pagado,
+              });
+              // 1) Pago completo → ✓ verde. 2) Parcial (0<pagado<total) → falta en ámbar, clickeable
+              //    para pagar el resto. 3) Sin pagar → total clickeable.
+              if (pagado > 0.5 && pend <= 0.5) return (
+                <td key={c.id} style={TD({ ...tdBase, textAlign: "right" })}>
+                  <button onClick={() => onVerPago(primerPago)} title="Ver / anular este pago" style={{ ...btn, color: T.green }}>
+                    {fmtMoney(monto)} ✓
+                  </button>
+                </td>
+              );
+              if (pagado > 0.5) return (
+                <td key={c.id} style={TD({ ...tdBase, textAlign: "right" })}>
+                  <button onClick={pagar} title={`Parcial: pagó ${fmtMoney(pagado)} · falta ${fmtMoney(pend)}. Click para pagar el resto`}
+                    style={{ ...btn, color: T.yellow, textDecoration: "underline", textDecorationStyle: "dotted" }}>
+                    {fmtMoney(pend)} <span style={{ fontSize: 10, fontWeight: 700 }}>parc.</span>
+                  </button>
+                </td>
+              );
               return (
                 <td key={c.id} style={TD({ ...tdBase, textAlign: "right" })}>
-                  <button title={`Imputar ${FP_TIPO_LABEL[c.id] || c.id} → ${f.cuenta_contable_nombre}`}
-                    onClick={() => onPagar({
-                      tipo: c.id, esSueldo: f.esSueldo,
-                      cuenta_contable_id: f.cuenta_contable_id,
-                      cuenta_contable_nombre: f.cuenta_contable_nombre,
-                      items: pendientes,
-                    })}
+                  <button title={`Imputar ${FP_TIPO_LABEL[c.id] || c.id} → ${f.cuenta_contable_nombre}`} onClick={pagar}
                     style={{ ...btn, color: FP_TIPO_COLOR[c.id] || T.text, textDecoration: "underline", textDecorationStyle: "dotted" }}>
                     {fmtMoney(monto)}
                   </button>
@@ -1866,8 +1873,11 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
   // Pago PARCIAL solo cuando la celda es UNA sola línea (caso normal). El resto queda pendiente
   // (el neteo es por suma). Con varios movimientos se paga completo (no se reparte el parcial).
   const editable = cell.items.length === 1;
-  const [montoImputar, setMontoImputar] = useState(montoTotal);
-  const parcial = editable && montoImputar > 0 && montoImputar < montoTotal;
+  const yaPagado = Number(cell.yaPagado) || 0;          // parciales previos de esta línea
+  const pendienteLinea = Math.max(0, montoTotal - yaPagado);
+  const tope = editable ? pendienteLinea : montoTotal;  // no se puede imputar más que lo que falta
+  const [montoImputar, setMontoImputar] = useState(tope);
+  const parcial = editable && montoImputar > 0 && montoImputar < pendienteLinea;
   const [form, setForm] = useState({
     fecha:              new Date().toISOString().slice(0, 10),
     sociedad_id:        "",   // solo para transferencia
@@ -1912,7 +1922,7 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
     if (!form.cuenta_id) { alert("Seleccioná una cuenta bancaria."); return; }
     if (editable) {
       const m = Number(montoImputar) || 0;
-      if (m <= 0 || m > montoTotal + 0.5) { alert("El monto a imputar debe ser mayor a 0 y no superar el total de la línea."); return; }
+      if (m <= 0 || m > tope + 0.5) { alert(`El monto a imputar debe ser mayor a 0 y no superar lo pendiente (${fmtMoney(tope)}).`); return; }
     }
     savingRef.current = true; setSaving(true);
     try {
@@ -1957,12 +1967,18 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
             <strong style={{ color: FP_TIPO_COLOR[tipo] || T.text }}>{FP_TIPO_LABEL[tipo] || tipo}</strong>
             {cell.items.length > 1 && <span> · {cell.items.length} movimientos</span>}
           </div>
+          {yaPagado > 0 && (
+            <div style={{ fontSize: 12, color: T.muted, background: T.bg, borderRadius: 5, padding: "6px 10px", display: "flex", justifyContent: "space-between" }}>
+              <span>Ya pagado: <strong style={{ color: T.green }}>{fmtMoney(yaPagado)}</strong> de {fmtMoney(montoTotal)}</span>
+              <span>Pendiente: <strong style={{ color: T.text }}>{fmtMoney(pendienteLinea)}</strong></span>
+            </div>
+          )}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: T.bg, borderRadius: 5, padding: "8px 10px" }}>
             <span style={{ fontSize: 12, color: T.muted }}>Total a imputar</span>
             {editable ? (
               <input type="text" inputMode="numeric"
                 value={montoImputar ? Math.round(montoImputar).toLocaleString("es-AR") : ""}
-                onChange={e => { const v = Number(String(e.target.value).replace(/\./g, "").replace(/[^\d]/g, "")) || 0; setMontoImputar(Math.min(v, montoTotal)); }}
+                onChange={e => { const v = Number(String(e.target.value).replace(/\./g, "").replace(/[^\d]/g, "")) || 0; setMontoImputar(Math.min(v, tope)); }}
                 style={{ ...MODAL_INPUT, width: 130, textAlign: "right", fontWeight: 700, fontSize: 15, margin: 0 }} />
             ) : (
               <strong style={{ fontSize: 16, color: T.text }}>{fmtMoney(montoTotal)}</strong>
@@ -1970,7 +1986,7 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
           </div>
           {parcial && (
             <div style={{ fontSize: 12, color: T.yellow, background: "#fefce8", borderRadius: 5, padding: "6px 10px" }}>
-              Pago parcial: quedan <strong>{fmtMoney(montoTotal - montoImputar)}</strong> pendientes en esta línea.
+              Pago parcial: quedan <strong>{fmtMoney(pendienteLinea - montoImputar)}</strong> pendientes en esta línea.
             </div>
           )}
           <div>
