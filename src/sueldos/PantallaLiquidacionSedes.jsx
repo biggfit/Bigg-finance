@@ -2048,6 +2048,24 @@ function exportarHaberes(empls, mes, anio) {
   descargarExcelGalicia(filas, `Haberes_Sedes_${String(mes).padStart(2,"0")}_${anio}.xlsx`);
 }
 
+// Efectivo + Monotributo (plata en mano / monotributistas): una fila por empleado × forma.
+function exportarEfectivoSedes(empls, mes, anio) {
+  const filas = [];
+  for (const e of empls) {
+    const sede = (e.sedes || []).join(", ");
+    const ef   = Math.round(Number(e.monto_efectivo)      || 0);
+    const mono = Math.round(Number(e.monto_transferencia) || 0);   // "transferencia" = monotributo en Sedes
+    if (ef > 0)   filas.push([e.legajo_nombre, sede, "Efectivo", ef]);
+    if (mono > 0) filas.push([e.legajo_nombre, sede, "Monotributo", mono]);
+  }
+  if (!filas.length) { alert("No hay pagos en efectivo / monotributo cargados."); return; }
+  const ws = XLSX.utils.aoa_to_sheet([["Legajo", "Sede", "Forma", "Importe"], ...filas]);
+  ws["!cols"] = [{ wch: 26 }, { wch: 22 }, { wch: 14 }, { wch: 14 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Efectivo");
+  XLSX.writeFile(wb, `Efectivo_Monotributo_Sedes_${String(mes).padStart(2, "0")}_${anio}.xlsx`);
+}
+
 // ── Helpers de pago ───────────────────────────────────────────────────────────
 
 // Sedes paga 3 componentes; reusa los labels/colores compartidos con HQ.
@@ -2303,6 +2321,9 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid }) 
       <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "16px 0", borderTop: `1px solid ${T.border}`, marginTop: 8 }}>
         <button style={BTN_EXPORT("#16a34a")} onClick={() => exportarHaberes(empls, mes, anio)}>
           📥 Excel Haberes (banco)
+        </button>
+        <button style={BTN_EXPORT("#ca8a04")} onClick={() => exportarEfectivoSedes(empls, mes, anio)}>
+          📥 Excel Monotributo + Efectivo
         </button>
         <div style={{ flex: 1 }} />
         <button onClick={onAtras} style={BTN_SECONDARY}>← Atrás</button>
