@@ -4,7 +4,7 @@ import {
   fetchLegajos, fetchCategorias, fetchObjetivos,
   fetchLiquidacionesSedes, deleteLiquidacionSede,
   fetchCentrosCostoNumbers, fetchSociedadesNumbers, fetchCuentasBancariasNumbers,
-  fetchPagos, appendPago, deletePago, nuevoLote, updateLegajo, fetchHorasDesdeEye, fetchCdpDesdeEye,
+  fetchPagos, appendPago, appendPagos, deletePago, nuevoLote, updateLegajo, fetchHorasDesdeEye, fetchCdpDesdeEye,
   fetchNovedades,
   ROLES_COACHES, ROLES_FRONT, ROLES_LIMP, ROL_CONCEPTO,
   FP_TIPO_LABEL, FP_TIPO_COLOR, esTransferencia,
@@ -2347,25 +2347,24 @@ function ModalBatchPago({ tipo, empls, mes, anio, onClose, onSaved }) {
       const ctaNombre = cuentas.find(c => c.id === form.cuenta_id)?.nombre ?? form.cuenta_id;
       const socNombre = sociedades.find(s => s.id === form.sociedad_id)?.nombre ?? form.sociedad_id;
       const lote_pago = nuevoLote();   // un lote por tanda → Conciliación matchea el débito contra su total
-      for (const empl of emplsSelec) {
-        const soc_id     = tipo === "haberes" ? empl.sociedad_id     : (form.sociedad_id || "beta");
-        const soc_nombre = tipo === "haberes" ? empl.sociedad_nombre : socNombre;
-        await appendPago({
-          mes, anio, lote_pago,
-          legajo_id:              empl.legajo_id,
-          legajo_nombre:          empl.legajo_nombre,
-          sociedad_id:            soc_id,
-          sociedad_nombre:        soc_nombre,
-          tipo_componente:        tipo,
-          monto:                  getMontoTipo(empl, tipo),
-          fecha:                  form.fecha,
-          cuenta_bancaria_id:     form.cuenta_id,
-          cuenta_bancaria_nombre: ctaNombre,
-          cuenta_contable_id:     "CUENTA_Sueldos",   // movimiento de Tesorería → cuenta Sueldos (no "Sin clasificar")
-          cuenta_contable_nombre: "Sueldos",
-          ambito:                 "sedes",
-        });
-      }
+      // Una sola escritura (add_batch) para toda la tanda, en vez de un request por empleado
+      // (evita el "línea por línea" lento: cada request al GAS cuesta ~3s).
+      const items = emplsSelec.map(empl => ({
+        mes, anio, lote_pago,
+        legajo_id:              empl.legajo_id,
+        legajo_nombre:          empl.legajo_nombre,
+        sociedad_id:            tipo === "haberes" ? empl.sociedad_id     : (form.sociedad_id || "beta"),
+        sociedad_nombre:        tipo === "haberes" ? empl.sociedad_nombre : socNombre,
+        tipo_componente:        tipo,
+        monto:                  getMontoTipo(empl, tipo),
+        fecha:                  form.fecha,
+        cuenta_bancaria_id:     form.cuenta_id,
+        cuenta_bancaria_nombre: ctaNombre,
+        cuenta_contable_id:     "CUENTA_Sueldos",   // movimiento de Tesorería → cuenta Sueldos (no "Sin clasificar")
+        cuenta_contable_nombre: "Sueldos",
+        ambito:                 "sedes",
+      }));
+      await appendPagos(items);
       await onSaved();
     } catch (e) {
       alert("Error: " + e.message);

@@ -755,6 +755,42 @@ export async function appendPago({
   return { id: nb_movimiento_id, nb_movimiento_id };
 }
 
+// Registra VARIOS pagos de sueldo en UNA sola escritura (add_batch) → una request en vez de N.
+// Cada fila es idéntica a la de appendPago; evita el "línea por línea" lento (cada request al GAS
+// cuesta ~3s). Devuelve los ids generados en el mismo orden que `items`.
+export async function appendPagos(items = []) {
+  const rows = (items || []).map(p => {
+    const {
+      mes, anio, legajo_id, legajo_nombre, sociedad_id,
+      tipo_componente, monto, fecha, cuenta_bancaria_id,
+      cuenta_contable_id = "", forma_pago_id = "", lote_pago = "",
+      centro_costo = "", concepto = "", nota = "", ambito = "",
+    } = p;
+    const nb_concepto = concepto || `Sueldo ${legajo_nombre} ${mes}/${anio} · ${tipo_componente}`;
+    const documento_id = idLiqDe(legajo_id, mes, anio, ambito === "sedes" ? centro_costo : "");
+    return {
+      id:              newId("MOV"),
+      sociedad:        sociedad_id,
+      fecha,
+      tipo:            "SUELDO",
+      cuenta_bancaria: cuenta_bancaria_id,
+      cuenta_contable: cuenta_contable_id,
+      moneda:          "ARS",
+      monto:           -Math.abs(monto),
+      documento_id,
+      concepto:        nb_concepto,
+      centro_costo,
+      origen:          "sueldos",
+      mes, anio, legajo_id, legajo_nombre,
+      tipo_componente, forma_pago_id, lote_pago, ambito, nota,
+      created_at:      new Date().toISOString(),
+    };
+  });
+  if (!rows.length) return { ok: true, n: 0, ids: [] };
+  await post({ action: "add_batch", sheet: "nb_movimientos", rows }, BASE_NB);
+  return { ok: true, n: rows.length, ids: rows.map(r => r.id) };
+}
+
 export async function deletePago(id, nb_movimiento_id) {
   const movId = nb_movimiento_id || id;
   if (movId) await post({ action: "del", sheet: "nb_movimientos", id: movId }, BASE_NB);
