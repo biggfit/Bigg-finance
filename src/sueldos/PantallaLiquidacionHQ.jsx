@@ -924,7 +924,7 @@ function PasoSueldos({ liqStaff, liqOwners, liqExternos, sueldosDraft, onChangeD
           Actualizar sueldo en todos los legajos con los nuevos valores
         </label>
         <button onClick={onSiguiente} disabled={saving} style={BTN_PRIMARY(saving)}>
-          {saving ? (progreso || "Guardando…") : "Siguiente →"}
+          {saving ? (progreso || "Guardando…") : (actualizarLegs ? "Guardar y continuar →" : "Continuar →")}
         </button>
       </div>
     </div>
