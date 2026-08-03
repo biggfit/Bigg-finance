@@ -842,12 +842,17 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
   const { franchises, activeCompany } = useStore();
   const activeFr = useMemo(() => franchises.filter(f => f.activa !== false).sort((a,b) => a.name.localeCompare(b.name, "es")), [franchises]);
   const activeCurrency    = COMPANIES[activeCompany]?.currency ?? "ARS";
-  const allowedCurrencies = getCompanyCurrencies(activeCompany, franchisor);
 
-  // Solo las sedes cuya moneda solapa con las habilitadas para la sociedad activa
+  // El fee se factura siempre según el país de la sede (AR → ÑAKO, resto → BIGG FIT LLC
+  // o la sociedad de España si es país EUR) — NUNCA según las monedas habilitadas de la
+  // sede (esas son para comprobantes manuales tipo Pauta, no para el batch de fee/CRM).
+  const feeCompanyFor = (fr) => {
+    if (fr.country === "Argentina") return "ÑAKO SRL";
+    return getCountryCur(fr.country).code === "EUR" ? "Gestión Deportiva y Wellness SL" : "BIGG FIT LLC";
+  };
   const frForCompany = useMemo(() =>
-    activeFr.filter(f => getFranchiseCurrencies(f).some(c => allowedCurrencies.includes(c))),
-  [activeFr, allowedCurrencies]); // eslint-disable-line react-hooks/exhaustive-deps
+    activeFr.filter(f => feeCompanyFor(f) === activeCompany),
+  [activeFr, activeCompany]);
 
   const [crmMonth, setCrmMonth] = useState(monthProp);
   const [crmYear,  setCrmYear]  = useState(yearProp);
