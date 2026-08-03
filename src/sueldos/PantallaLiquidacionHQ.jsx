@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, Fragment } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "react";
 import * as XLSX from "xlsx";
 import {
   fetchLegajos, fetchLiquidaciones, updateLegajo,
@@ -253,6 +253,17 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
     });
   }
 
+  // Refresh LIVIANO tras cerrar/pagar: re-trae SOLO liquidaciones + pagos (lo único que cambió),
+  // sin re-descargar legajos/novedades/sociedades ni bloquear la pantalla con "Cargando…".
+  const refreshLiqs = useCallback(async () => {
+    const [liqs, pags] = await Promise.all([
+      fetchLiquidaciones(mes, anio).catch(() => []),
+      fetchPagos(mes, anio).catch(() => []),
+    ]);
+    setLiquidaciones(liqs.filter(l => ROLES_HQ.includes(l.rol)));
+    setPagos(pags.filter(p => p.ambito !== "sedes"));
+  }, [mes, anio]);
+
   // Cerrar = congelar los números del mes (no bloquea pagos). Es el ÚNICO punto que
   // escribe su_liquidaciones: materializa filas virtuales con el borrador actual.
   // Recibe los legajos seleccionados a cerrar; el resto queda en borrador (p. ej.
@@ -297,7 +308,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
         }
         await saveLiquidacionLines(idLiqDe(liq.legajo_id, mes, anio, liq.sede_id), lineas);
       }
-      await load();
+      await refreshLiqs();
       setShowCerrar(false);
     } catch (e) {
       alert("Error al cerrar la liquidación: " + e.message);
@@ -565,7 +576,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
             liq={liqSel}
             cell={showPago.cell}
             onClose={() => setShowPago(null)}
-            onSaved={async () => { setShowPago(null); await load(); }}
+            onSaved={async () => { setShowPago(null); await refreshLiqs(); }}
           />
         );
       })()}
