@@ -325,7 +325,10 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     if (!p) return;
     setLoading(true);
     try {
-      const [legs, cats, objs, liqs, socs, ccs, ctas, pags, novs] = await Promise.all([
+      // allSettled (no all): en el GAS de Sueldos una consulta falla/tarda seguido; con Promise.all
+      // UNA falla tumbaba TODA la carga → la pantalla quedaba vacía ("no hay legajos") aunque sí hay.
+      // Ahora cada fuente que falla cae a [] y el resto (legajos incluido → Paso 1) carga igual.
+      const _res = await Promise.allSettled([
         fetchLegajos(),
         fetchCategorias(m, a, p),
         fetchObjetivos(m, a, p),
@@ -336,6 +339,10 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         fetchPagos(m, a),
         fetchNovedades(m, a),
       ]);
+      const _fallidas = _res.filter(r => r.status === "rejected").length;
+      if (_fallidas) console.warn(`[Liquidación Sedes] ${_fallidas}/9 consultas fallaron y cayeron a vacío`);
+      const [legs, cats, objs, liqs, socs, ccs, ctas, pags, novs] =
+        _res.map(r => (r.status === "fulfilled" ? r.value : []));
       // Solo novedades de Sedes: extra + con sede (las de HQ no tienen sede_id).
       setNovedades(novs.filter(n => n.tipo === "extra" && n.sede_id));
       const socIds   = socs.filter(s => s.pais === p).map(s => s.id);
