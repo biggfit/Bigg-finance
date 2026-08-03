@@ -2269,7 +2269,6 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid }) 
                 {TIPOS_PAGO.map(({ id, color }) => {
                   const monto = getMontoTipo(empl, id);
                   const pagos = getPagosTipo(empl, id);
-                  const dup   = pagos.length > 1;
                   if (!monto) return (
                     <td key={id} style={TD({ textAlign: "right" })}>
                       <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
@@ -2278,18 +2277,30 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid }) 
                       </div>
                     </td>
                   );
-                  const totalPagadoTipo = pagos.reduce((s, p) => s + p.monto, 0);
+                  // Parcial-aware: suma de pagos vs esperado. 4 estados: sin pagar / parcial (falta X,
+                  // ámbar) / completo (✓ verde) / sobrepagado (rojo). Varios pagos que suman el total =
+                  // completo (no es anomalía: puede ser un parcial + el resto).
+                  const pagado  = pagos.reduce((s, p) => s + Math.abs(Number(p.monto) || 0), 0);
+                  const pend    = monto - pagado;
+                  const over    = pagado > monto + 0.5;
+                  const full    = !over && pagado > 0.5 && pend <= 0.5;
+                  const parcial = !over && !full && pagado > 0.5;
+                  const cellCol = over ? T.red : full ? T.green : parcial ? T.yellow : color;
+                  const shown   = over ? pagado : parcial ? pend : monto;   // parcial muestra lo que FALTA
                   return (
-                    <td key={id} style={TD({ textAlign: "right", color: dup ? T.red : pagos.length ? T.green : color })}>
+                    <td key={id} style={TD({ textAlign: "right", color: cellCol })}>
                       <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
-                        {dup ? fmtMoney(totalPagadoTipo) : fmtMoney(monto)}
+                        {fmtMoney(shown)}
+                        {parcial && <span style={{ fontSize: 9, fontWeight: 700, color: T.yellow }}>parc.</span>}
                         <span style={{ display: "inline-flex", justifyContent: "center", width: 20, fontSize: 11, fontWeight: 700 }}>
                           {pagos[0]
                             ? <button
                                 onClick={() => setAnularModal(pagos[0])}
-                                title={dup ? `⚠️ ${pagos.length} pagos — total ${fmtMoney(totalPagadoTipo)} (esperado ${fmtMoney(monto)})` : "Ver / anular este pago"}
-                                style={{ background: "none", border: "none", cursor: "pointer", color: dup ? T.red : T.green, fontSize: 12, fontWeight: 700, padding: 0, lineHeight: 1 }}>
-                                {dup ? `×${pagos.length}` : "✓"}
+                                title={over ? `⚠️ ${pagos.length} pagos — total ${fmtMoney(pagado)} (esperado ${fmtMoney(monto)})`
+                                     : parcial ? `Parcial: pagó ${fmtMoney(pagado)} de ${fmtMoney(monto)} · falta ${fmtMoney(pend)}. Ver / anular`
+                                     : "Ver / anular este pago"}
+                                style={{ background: "none", border: "none", cursor: "pointer", color: cellCol, fontSize: 12, fontWeight: 700, padding: 0, lineHeight: 1 }}>
+                                {over ? `×${pagos.length}` : full ? "✓" : "◐"}
                               </button>
                             : ""
                           }
@@ -2691,9 +2702,14 @@ function ModalAnularPago({ pago, onClose, onAnulado }) {
 // ── Modal pago individual ─────────────────────────────────────────────────────
 
 function ModalPagoSede({ mes, anio, liq, onClose, onSaved }) {
+  // Pago PARCIAL: el monto arranca en el REMANENTE de cada componente (total − ya pagado),
+  // así se puede pagar el resto sin re-tipear. Los parciales se acumulan.
+  const montoFullDe = (t) => Number({ haberes: liq?.monto_haberes, monotributo: liq?.monto_transferencia, efectivo: liq?.monto_efectivo }[t]) || 0;
+  const pagadoDe    = (t) => (liq?.pagos || []).filter(p => p.tipo_componente === t).reduce((s, p) => s + Math.abs(Number(p.monto) || 0), 0);
+  const remanenteDe = (t) => Math.max(0, montoFullDe(t) - pagadoDe(t));
   const [form, setForm] = useState({
     tipo_componente: "haberes",
-    monto:           liq?.monto_haberes || liq?.total || "",
+    monto:           remanenteDe("haberes") || liq?.total || "",
     fecha:           new Date().toISOString().slice(0, 10),
     sociedad_id:     "",
     cuenta_id:       "",
@@ -2723,18 +2739,17 @@ function ModalPagoSede({ mes, anio, liq, onClose, onSaved }) {
   [cuentas, socFiltro]);
 
   const handleTipo = (tipo) => {
-    const montos = {
-      haberes:     liq?.monto_haberes       || "",
-      monotributo: liq?.monto_transferencia || "",
-      efectivo:    liq?.monto_efectivo      || "",
-    };
-    setForm(f => ({ ...f, tipo_componente: tipo, cuenta_id: "", sociedad_id: "", ...(montos[tipo] ? { monto: montos[tipo] } : {}) }));
+    setForm(f => ({ ...f, tipo_componente: tipo, cuenta_id: "", sociedad_id: "", monto: remanenteDe(tipo) }));
   };
 
   const handleSave = async () => {
     if (savingRef.current) return;
     if (!form.monto)    { alert("Completá el monto."); return; }
     if (!form.cuenta_id){ alert("Seleccioná una cuenta bancaria."); return; }
+    const rem = remanenteDe(form.tipo_componente);
+    if (rem > 0 && (parseFloat(form.monto) || 0) > rem + 0.5) {
+      alert(`El monto no puede superar lo pendiente de ${FP_TIPO_LABEL[form.tipo_componente] || form.tipo_componente} (${fmtMoney(rem)}).`); return;
+    }
     savingRef.current = true; setSaving(true);
     try {
       const cta = cuentas.find(c => c.id === form.cuenta_id);
@@ -2780,6 +2795,11 @@ function ModalPagoSede({ mes, anio, liq, onClose, onSaved }) {
           <div>
             <ModalLabel>Monto (ARS)</ModalLabel>
             <input style={MODAL_INPUT} type="number" value={form.monto} onChange={e => set("monto", e.target.value)} />
+            {pagadoDe(form.tipo_componente) > 0.5 && (
+              <div style={{ fontSize: 11, color: T.yellow, marginTop: 4 }}>
+                Ya pagado {fmtMoney(pagadoDe(form.tipo_componente))} de {fmtMoney(montoFullDe(form.tipo_componente))} · pendiente <strong>{fmtMoney(remanenteDe(form.tipo_componente))}</strong>
+              </div>
+            )}
           </div>
           <div>
             <ModalLabel>Fecha</ModalLabel>
