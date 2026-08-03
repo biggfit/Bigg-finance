@@ -341,11 +341,6 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
   // Reabrir = borrar las líneas congeladas de su_liquidaciones (vuelve a "borrador" para reeditar
   // y volver a cerrar). NO toca los pagos (viven en nb_movimientos), así que no se pierde lo cobrado.
   async function handleReabrir(liq) {
-    if (!window.confirm(
-      `Reabrir la liquidación de ${liq.legajo_nombre}?\n\n` +
-      `Vuelve a BORRADOR para reeditarla y cerrarla de nuevo. ` +
-      `Los pagos ya registrados NO se tocan (podés seguir pagando).`
-    )) return;
     setSaving(true);
     try {
       await delLiquidacionComp(idLiqDe(liq.legajo_id, mes, anio, liq.sede_id));
@@ -1480,6 +1475,7 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onReg
   const [anularModal, setAnularModal] = useState(null); // pago object
   const [expandido,   setExpandido]   = useState(null); // legajo_id desplegado
   const [batchModal,  setBatchModal]  = useState(null); // { tipo }
+  const [reabrirLiq,  setReabrirLiq]  = useState(null); // liq a reabrir (confirm)
 
   // Cerradas arriba, borradores abajo; dentro de cada grupo, por total de mayor a menor.
   const todos = useMemo(() => {
@@ -1614,14 +1610,13 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onReg
                     <td style={TD({ fontWeight: 600 })}>
                       <span style={{ color: T.dim, marginRight: 6, fontSize: 11 }}>{open ? "▾" : "▸"}</span>
                       {liq.legajo_nombre}
-                      <EstadoBadge estado={liq.estado} />
-                      {isCerrada(liq.estado) && onReabrir && (
-                        <button onClick={(e) => { e.stopPropagation(); onReabrir(liq); }}
-                          title="Reabrir: vuelve a borrador para reeditar y cerrar de nuevo. No toca los pagos."
-                          style={{ marginLeft: 6, fontSize: 10, fontWeight: 600, color: T.blue, background: T.blueLt, border: `1px solid ${T.blue}`, borderRadius: 4, padding: "1px 6px", cursor: "pointer", fontFamily: T.font }}>
-                          🔓 Reabrir
+                      {isCerrada(liq.estado) && onReabrir ? (
+                        <button onClick={(e) => { e.stopPropagation(); setReabrirLiq(liq); }}
+                          title="Cerrada — click para reabrir (vuelve a borrador; no toca los pagos)"
+                          style={{ marginLeft: 8, fontSize: 12, color: T.green, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+                          🔒
                         </button>
-                      )}
+                      ) : <EstadoBadge estado={liq.estado} />}
                       {hayParcial && <span title="Tiene un pago parcial pendiente"
                         style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: T.yellow, background: "#fefce8", border: `1px solid ${T.yellow}`, borderRadius: 4, padding: "1px 5px" }}>◐ parcial</span>}
                     </td>
@@ -1673,6 +1668,25 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onReg
         <div style={{ flex: 1 }} />
         <button onClick={onAtras} style={BTN_SECONDARY}>← Atrás</button>
       </div>
+
+      {reabrirLiq && (
+        <div onClick={() => setReabrirLiq(null)} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, fontFamily: T.font }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: 420, padding: 22, boxShadow: "0 12px 40px rgba(0,0,0,.25)" }}>
+            <h3 style={{ margin: "0 0 8px", fontSize: 16, fontWeight: 700, color: T.text }}>🔓 Reabrir liquidación — {reabrirLiq.legajo_nombre}</h3>
+            <p style={{ margin: "0 0 16px", fontSize: 13, color: T.muted, lineHeight: 1.5 }}>
+              Vuelve a <strong>borrador</strong> para reeditarla y cerrarla de nuevo. Los pagos ya
+              registrados <strong>no se tocan</strong> (podés seguir pagando).
+            </p>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={() => setReabrirLiq(null)} style={BTN_SECONDARY}>Cancelar</button>
+              <button onClick={async () => { const l = reabrirLiq; setReabrirLiq(null); await onReabrir(l); }}
+                style={{ background: T.blue, color: "#fff", border: "none", borderRadius: 7, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                Reabrir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {anularModal && (
         <ModalAnularPago
