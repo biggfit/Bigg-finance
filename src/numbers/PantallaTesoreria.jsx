@@ -1428,6 +1428,13 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
       intercoData, sociedadesMap]
   );
 
+  // El filtro "Al día" (fechaCorte) recorta también el ledger de Movimientos, no solo los Saldos.
+  // Mismo criterio que derivarSaldos: (m.fecha ?? "") <= corte.
+  const movsHastaFecha = useMemo(
+    () => fechaCorte ? movimientos.filter(m => (m.fecha ?? "") <= fechaCorte) : movimientos,
+    [movimientos, fechaCorte]
+  );
+
   const monedas = useMemo(() => [...new Set(cuentas.map(c => c.moneda))], [cuentas]);
   const subtitle = `${cuentas.length} cuenta${cuentas.length !== 1 ? "s" : ""}`
     + (monedas.length ? ` · ${monedas.join(", ")}` : "");
@@ -1603,7 +1610,7 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
   const yearTag = new Date().getFullYear();
   const TESORERIA_TABS = [
     { id: "saldos", label: "Saldos" },
-    { id: "movimientos", label: `Movimientos${movimientos.length ? ` (${movimientos.length})` : ""}` },
+    { id: "movimientos", label: `Movimientos${movsHastaFecha.length ? ` (${movsHastaFecha.length})` : ""}` },
   ];
 
   return (
@@ -1771,7 +1778,7 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
           )}
           {activeTab === "movimientos" && (
             <TabMovimientos
-              movimientos={movimientos}
+              movimientos={movsHastaFecha}
               cuentas={cuentas}
               filtroCuenta={filtroCuenta}
               filtroRef={filtroRef}
