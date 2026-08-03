@@ -394,6 +394,27 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     } finally { setLoading(false); }
   }, []);
 
+  // Refresh LIVIANO tras guardar/pagar: solo re-trae liquidaciones + pagos (lo único que cambió),
+  // sin re-descargar las 9 fuentes ni bloquear la pantalla con "Cargando…". Reusa `sedes` de estado.
+  const refreshLiqs = useCallback(async () => {
+    const [liqs, pags] = await Promise.all([
+      fetchLiquidacionesSedes(mes, anio, pais).catch(() => []),
+      fetchPagos(mes, anio).catch(() => []),
+    ]);
+    const byId = new Map(sedes.map(s => [s.id, s]));
+    const norm = (sedeId, sedeName) => {
+      const hit = byId.get(sedeId);
+      if (hit) return hit.nombre;
+      const byName = sedes.find(s =>
+        s.nombre.toLowerCase().includes((sedeName ?? "").toLowerCase()) ||
+        (sedeName ?? "").toLowerCase().includes(s.nombre.toLowerCase().replace(/^\d+\s*-\s*/, "")));
+      return byName?.nombre ?? sedeName ?? "";
+    };
+    setLiqsSaved(liqs.map(r => ({ ...r, sede_nombre: norm(r.sede_id, r.sede_nombre) })));
+    const legIds = new Set(liqs.map(l => l.legajo_id));
+    setPagos(pags.filter(pg => pg.ambito === "sedes" || (!pg.ambito && legIds.has(pg.legajo_id))));
+  }, [mes, anio, pais, sedes]);
+
   useEffect(() => { load(mes, anio, pais); }, [mes, anio, pais, load]);
 
   const draftKey = `sedesDraft:${pais}:${anio}-${mes}`;
@@ -902,7 +923,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         replace: !!r.id,
       }));
       await saveLiquidacionesLinesBatch(entries);
-      await load(mes, anio, pais);
+      await refreshLiqs();   // refresh liviano (no re-descarga todo ni bloquea la pantalla)
     } catch (e) {
       alert("Error al guardar borrador: " + e.message);
     } finally {
@@ -996,7 +1017,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       }
       // Un solo add_batch para todas las liquidaciones (replace: reescribe el borrador como "cerrado").
       await saveLiquidacionesLinesBatch(entries);
-      await load(mes, anio, pais);
+      await refreshLiqs();   // refresh liviano (no bloquea la pantalla)
       setPaso(5);
     } catch (e) {
       alert("Error al guardar: " + e.message);
@@ -1170,7 +1191,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
               anio={anio}
               onAtras={() => setPaso(4)}
               onRegistrarPago={setShowPago}
-              onBatchPaid={() => load(mes, anio, pais)}
+              onBatchPaid={() => refreshLiqs()}
             />
           )}
         </>
@@ -1184,7 +1205,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
             mes={mes} anio={anio}
             liq={empl}
             onClose={() => setShowPago(null)}
-            onSaved={async () => { setShowPago(null); await load(mes, anio, pais); }}
+            onSaved={async () => { setShowPago(null); await refreshLiqs(); }}
           />
         );
       })()}
