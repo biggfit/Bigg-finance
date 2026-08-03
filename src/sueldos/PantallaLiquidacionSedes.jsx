@@ -54,6 +54,7 @@ const rowKeyDe = (legajo_id, sede_id) => `${legajo_id || ""}__${sede_id || ""}`;
 // El feriado del front se carga como novedad (no es campo de la fila), así que su monto NO
 // entra acá; para front la base efectiva es el sueldo básico.
 function baseGrupalDe(rol, { horasMonto, feriadosMonto, asignado, sueldoBase }) {
+  if (ROLES_LIMP.includes(rol)) return 0;   // LIMPIEZA está EXENTA de objetivos (individual y grupal)
   return ROLES_COACHES.includes(rol)
     ? horasMonto + feriadosMonto + asignado
     : sueldoBase + feriadosMonto;
@@ -270,6 +271,7 @@ function applyObjetivosToRows(rowsArr, objetivosArr) {
   if (!objetivosArr?.length) return rowsArr;
   const objBySede = Object.fromEntries(objetivosArr.map(o => [o.sede_id, o.porcentaje]));
   return rowsArr.map(r => {
+    if (ROLES_LIMP.includes(r.rol)) return r;    // limpieza exenta: no auto-aplicar objetivo grupal
     if (Number(r.c_grupo_pct) !== 0) return r;   // no pisar valores ya ingresados
     const pct = objBySede[r.sede_id];
     return pct != null ? { ...r, c_grupo_pct: pct } : r;
@@ -1866,14 +1868,15 @@ function PasoIncentivos({ rows, legajos, sedes, mes, anio, pais, novsByRowKey, u
                     {!isLimp ? inp(row, "asignado") : dash}
                   </td>
                   <td style={{ padding: "4px 6px" }}>
-                    {/* Objetivo grupal: aplica a TODOS los roles (baseGrupalDe: coaches sobre horas,
-                        fijos/limpieza sobre sueldo básico + feriado). Antes se ocultaba para limpieza
-                        → no se podía cargar el % y no multiplicaba. */}
-                    <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
-                      <input style={{ ...iStyle, width: 44 }} value={row.c_grupo_pct || ""} placeholder="0"
-                        onChange={e => updateRow(row._id, "c_grupo_pct", e.target.value)} />
-                      <span style={{ fontSize: 10, color: T.muted }}>%</span>
-                    </div>
+                    {/* Objetivo grupal: coaches (sobre horas) y fijos no-limpieza (sobre sueldo básico).
+                        LIMPIEZA exenta → sin campo (baseGrupalDe devuelve 0 igual). */}
+                    {!isLimp ? (
+                      <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+                        <input style={{ ...iStyle, width: 44 }} value={row.c_grupo_pct || ""} placeholder="0"
+                          onChange={e => updateRow(row._id, "c_grupo_pct", e.target.value)} />
+                        <span style={{ fontSize: 10, color: T.muted }}>%</span>
+                      </div>
+                    ) : dash}
                   </td>
                   <td style={{ padding: "4px 6px", borderLeft: `1px solid ${T.border}` }}>
                     {canCdp ? inp(row, "q_cdp_coach") : dash}
