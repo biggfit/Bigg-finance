@@ -2,8 +2,13 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   fetchNovedades, appendNovedad, updateNovedad, deleteNovedad,
   fetchLegajos, fetchCentrosCostoNumbers, fetchCuentasContablesNumbers,
-  FP_TIPOS, FP_TIPO_LABEL, ROLES_SEDES,
+  FP_TIPOS, FP_TIPO_LABEL, ROLES_FRONT, ROLES_COACHES, ROLES_LIMP, ROLES_HQ,
 } from "../lib/sueldosApi";
+
+// Orden del picker de legajos (pedido del usuario): encargado/vendedor → coach → limpieza → HQ.
+// Incluye TODOS los legajos activos (un HQ que presta servicios en una sede se elige acá).
+const ROL_ORDEN = [...ROLES_FRONT, ...ROLES_COACHES, ...ROLES_LIMP, ...ROLES_HQ];
+const rolRank = (rol) => { const i = ROL_ORDEN.indexOf(rol); return i === -1 ? ROL_ORDEN.length : i; };
 
 const T = {
   bg:     "#f8fafc",
@@ -104,7 +109,9 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
       const sedesNovs = novs.filter(n => n.tipo === "extra" && n.sede_id);
       setRows(sedesNovs.map(novToRow));
       setLoaded(sedesNovs);
-      setLegajos(legs.filter(l => l.activo && ROLES_SEDES.includes(l.rol) && (!l.pais || l.pais === p)));
+      setLegajos(legs
+        .filter(l => l.activo && (!l.pais || l.pais === p))
+        .sort((a, b) => rolRank(a.rol) - rolRank(b.rol) || a.nombre.localeCompare(b.nombre, "es")));
       setSedes(ccs.filter(c => !c.pais || c.pais === p));
       setCuentas(ctas);
       setDirty(false);
