@@ -683,6 +683,16 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       return { ...prev, [_id]: { ...(prev[_id] || {}), horas_detalle: detalle, ...sumar5(detalle) } };
     });
   }, [baseDetalle]);
+  // Borra UNA línea de detalle (clase×asistió), ej. la de Ausentes, sin tocar al coach. Recalcula el pago.
+  // Si era la última, deja una línea BIGG CLASS en 0 (para no romper el editor).
+  const removeDetalle = useCallback((_id, idx) => {
+    setEdits(prev => {
+      const cur = prev[_id]?.horas_detalle ?? baseDetalle.get(_id) ?? [];
+      const rest = cur.filter((_, i) => i !== idx);
+      const detalle = rest.length ? rest : [{ clase: "BIGG CLASS", asistio: "Presentes", regulares: 0, feriado: 0, domingo: 0 }];
+      return { ...prev, [_id]: { ...(prev[_id] || {}), horas_detalle: detalle, ...sumar5(detalle) } };
+    });
+  }, [baseDetalle]);
 
   // Conciliación: contadores por bucket para el banner.
   // Paso 1: employees with a negotiated base salary (role-agnostic, covers other countries)
@@ -1105,6 +1115,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
               anio={anio}
               pais={pais}
               updateDetalle={updateDetalle}
+              removeDetalle={removeDetalle}
               onResyncEye={applyEyeData}
               eyeSource={eyeSource}
               onAtras={() => setPaso(1)}
@@ -1429,7 +1440,7 @@ function PasoFijos({ rowsFijos, legajos, sedes, originalRows, novsByRowKey, upda
 
 // ── Paso 2: Horas (solo coaches) ──────────────────────────────────────────────
 
-function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByRowKey, updateRow, removeRow, updateDetalle,
+function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByRowKey, updateRow, removeRow, updateDetalle, removeDetalle,
   showAddForm, setShowAddForm, addForm, setAddForm, handleAddRow,
   mes, anio, pais, onResyncEye, eyeSource,
   onAtras, onContinuar, onSiguiente, saving }) {
@@ -1626,10 +1637,11 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByR
                         </span>
                       </td>
                       <td style={{ padding: "4px", textAlign: "center" }}>
-                        {first && (
-                          <button onClick={() => removeRow(row._id)}
-                            style={{ background: "none", border: "none", cursor: "pointer", color: T.dim, fontSize: 12, padding: 2 }}>🗑</button>
-                        )}
+                        {first
+                          ? <button onClick={() => removeRow(row._id)} title="Borrar el coach entero"
+                              style={{ background: "none", border: "none", cursor: "pointer", color: T.dim, fontSize: 12, padding: 2 }}>🗑</button>
+                          : <button onClick={() => removeDetalle(row._id, di)} title="Borrar esta línea (ej. Ausentes)"
+                              style={{ background: "none", border: "none", cursor: "pointer", color: T.dim, fontSize: 12, padding: 2 }}>🗑</button>}
                       </td>
                     </tr>
                   );
