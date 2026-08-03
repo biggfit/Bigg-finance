@@ -257,12 +257,15 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
   // Refresh LIVIANO tras cerrar/pagar: re-trae SOLO liquidaciones + pagos (lo único que cambió),
   // sin re-descargar legajos/novedades/sociedades ni bloquear la pantalla con "Cargando…".
   const refreshLiqs = useCallback(async () => {
+    // Sentinela null en el catch (NO []): si el GAS tiene un hipo transitorio, se CONSERVAN
+    // los pagos/liquidaciones ya cargados en vez de blanquearlos (que hacía ver "sin pagar"
+    // lo que ya estaba pago, ej. un pago recién registrado que "no tildaba").
     const [liqs, pags] = await Promise.all([
-      fetchLiquidaciones(mes, anio).catch(() => []),
-      fetchPagos(mes, anio).catch(() => []),
+      fetchLiquidaciones(mes, anio).catch(() => null),
+      fetchPagos(mes, anio).catch(() => null),
     ]);
-    setLiquidaciones(liqs.filter(l => ROLES_HQ.includes(l.rol)));
-    setPagos(pags.filter(p => p.ambito !== "sedes"));
+    if (liqs) setLiquidaciones(liqs.filter(l => ROLES_HQ.includes(l.rol)));
+    if (pags) setPagos(pags.filter(p => p.ambito !== "sedes"));
   }, [mes, anio]);
 
   // Update de legajo con reintento + TIMEOUT: el GAS a veces responde "Token inválido"/HTML bajo
