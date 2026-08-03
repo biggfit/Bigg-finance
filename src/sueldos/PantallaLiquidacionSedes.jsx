@@ -8,7 +8,7 @@ import {
   fetchNovedades,
   ROLES_COACHES, ROLES_FRONT, ROLES_LIMP, ROL_CONCEPTO,
   FP_TIPO_LABEL, FP_TIPO_COLOR, esTransferencia,
-  idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionLines, isCerrada,
+  idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionesLinesBatch, isCerrada,
 } from "../lib/sueldosApi";
 
 const T = {
@@ -881,10 +881,14 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     savingRef.current = true;
     setSaving(true);
     try {
-      for (const r of dirty) {
-        const { lineas } = lineasConceptoDeRow(r, "borrador");
-        await saveLiquidacionLines(idLiqDe(r.legajo_id, mes, anio, r.sede_id), lineas);
-      }
+      // Una sola escritura para todos los legajos (add_batch). `replace` solo en los ya guardados:
+      // el primer guardado del mes va todo nuevo → 0 borrados → un único request.
+      const entries = dirty.map(r => ({
+        id_liq:  idLiqDe(r.legajo_id, mes, anio, r.sede_id),
+        lineas:  lineasConceptoDeRow(r, "borrador").lineas,
+        replace: !!r.id,
+      }));
+      await saveLiquidacionesLinesBatch(entries);
       await load(mes, anio, pais);
     } catch (e) {
       alert("Error al guardar borrador: " + e.message);
@@ -938,6 +942,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       // entre las sedes del empleado según el total de cada una (cada id_liq queda balanceado
       // y el devengado se imputa al centro de costo donde se ganó). Secuencial: GAS pierde
       // escrituras concurrentes.
+      const entries = [];
       for (const r of rows) {
         const { lineas, total: rowTotal, header } = lineasConceptoDeRow(r, "cerrado");
         const empl      = empls.find(e => e.legajo_id === r.legajo_id);
@@ -974,8 +979,10 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         const lineasFin = redondeo > 0
           ? [...lineas, lineaLiq(header, { tipo: "concepto", concepto: "Redondeo", cuenta_contable: "Sueldos", cantidad: 0, monto_unit: 0, monto: redondeo })]
           : lineas;
-        await saveLiquidacionLines(idLiqDe(r.legajo_id, mes, anio, r.sede_id), [...lineasFin, ...pagos, ...novLineas]);
+        entries.push({ id_liq: idLiqDe(r.legajo_id, mes, anio, r.sede_id), lineas: [...lineasFin, ...pagos, ...novLineas], replace: true });
       }
+      // Un solo add_batch para todas las liquidaciones (replace: reescribe el borrador como "cerrado").
+      await saveLiquidacionesLinesBatch(entries);
       await load(mes, anio, pais);
       setPaso(5);
     } catch (e) {

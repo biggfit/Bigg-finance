@@ -466,6 +466,31 @@ export async function saveLiquidacionLines(id_liq, lineas) {
   return rows.map(r => r.id);
 }
 
+// Reescribe VARIAS liquidaciones en UN solo add_batch (en vez de uno por legajo → "línea por línea").
+// entries = [{ id_liq, lineas, replace }]. `replace` borra las líneas viejas de ese id_liq (solo hace
+// falta si ya estaba guardada; en un primer guardado va todo nuevo → 0 borrados → una sola escritura).
+// Ids determinísticos por id_liq (`<id_liq>-L01`…) → el borrado+add re-escribe sin duplicar.
+export async function saveLiquidacionesLinesBatch(entries = []) {
+  const created_at = new Date().toISOString();
+  // Limpiar lo viejo SOLO de las que ya existían (secuencial: el borrado no se puede juntar sin tocar el GAS).
+  for (const e of entries) {
+    if (e.replace) await delLiquidacionComp(e.id_liq);
+  }
+  const rows = [];
+  for (const e of entries) {
+    (e.lineas || []).forEach((l, i) => {
+      rows.push({ id: `${e.id_liq}-L${String(i + 1).padStart(2, "0")}`, id_liq: e.id_liq, ...l, created_at });
+    });
+  }
+  if (!rows.length) return { ok: true, n: 0 };
+  try {
+    await post({ action: "add_batch", sheet: "su_liquidaciones", rows });
+  } catch {
+    for (const row of rows) await post({ action: "add", sheet: "su_liquidaciones", row });
+  }
+  return { ok: true, n: rows.length };
+}
+
 // ── Devengado de sueldos para el P&L (Numbers) ────────────────────────────────
 // Una liquidación CERRADA es gasto devengado. El P&L de Numbers la lee y la une a
 // nb_comprobantes (Opción A: su_liquidaciones es la única fuente de verdad del sueldo).
