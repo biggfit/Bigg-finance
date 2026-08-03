@@ -324,74 +324,57 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   const load = useCallback(async (m, a, p) => {
     if (!p) return;
     setLoading(true);
+    // Sede canónica: matchea por id; si no, por nombre parcial (Eye guarda "Recoleta" vs "01 - Recoleta").
+    const mkNorm = (sedesArr) => (sedeId, sedeName) => {
+      const byId = sedesArr.find(s => s.id === sedeId);
+      if (byId) return byId.nombre;
+      const byName = sedesArr.find(s =>
+        s.nombre.toLowerCase().includes((sedeName ?? "").toLowerCase()) ||
+        (sedeName ?? "").toLowerCase().includes(s.nombre.toLowerCase().replace(/^\d+\s*-\s*/, "")));
+      return byName?.nombre ?? sedeName ?? "";
+    };
+    let socIds = [], legIds = new Set();
     try {
-      // allSettled (no all): en el GAS de Sueldos una consulta falla/tarda seguido; con Promise.all
-      // UNA falla tumbaba TODA la carga → la pantalla quedaba vacía ("no hay legajos") aunque sí hay.
-      // Ahora cada fuente que falla cae a [] y el resto (legajos incluido → Paso 1) carga igual.
-      const _res = await Promise.allSettled([
-        fetchLegajos(),
-        fetchCategorias(m, a, p),
-        fetchObjetivos(m, a, p),
-        fetchLiquidacionesSedes(m, a, p),
-        fetchSociedadesNumbers(),
-        fetchCentrosCostoNumbers(),
-        fetchCuentasBancariasNumbers(),
-        fetchPagos(m, a),
-        fetchNovedades(m, a),
+      // ── OLA 1: lo esencial para mostrar el Paso 1 (roster + país + sedes + tarifas + estado guardado).
+      // Menos consultas concurrentes = el GAS no se satura (con 9 juntas algunas fallaban) y no esperamos
+      // al tapón de 20s (cuentas), que no se necesita hasta Paso 4. allSettled: si una falla, cae a [].
+      const w1 = await Promise.allSettled([
+        fetchLegajos(),                    // 0
+        fetchCategorias(m, a, p),          // 1
+        fetchLiquidacionesSedes(m, a, p),  // 2  (r.id → evita duplicar al guardar)
+        fetchSociedadesNumbers(),          // 3
+        fetchCentrosCostoNumbers(),        // 4
       ]);
-      const _fallidas = _res.filter(r => r.status === "rejected").length;
-      if (_fallidas) console.warn(`[Liquidación Sedes] ${_fallidas}/9 consultas fallaron y cayeron a vacío`);
-      const [legs, cats, objs, liqs, socs, ccs, ctas, pags, novs] =
-        _res.map(r => (r.status === "fulfilled" ? r.value : []));
-      // Solo novedades de Sedes: extra + con sede (las de HQ no tienen sede_id).
-      setNovedades(novs.filter(n => n.tipo === "extra" && n.sede_id));
-      const socIds   = socs.filter(s => s.pais === p).map(s => s.id);
-      // Sedes del país. nb_centros_costo tiene `pais` (no `sociedad`): antes filtraba por
-      // c.sociedad (columna inexistente) → traía TODAS las sedes (incl. ES/CL). Ahora por país.
-      // Los check-ins de Eye salen de estas sedes que tengan bigg_eye_id (ver eyeIds más abajo).
+      const f1 = w1.filter(r => r.status === "rejected").length;
+      if (f1) console.warn(`[Liquidación Sedes] ola 1: ${f1}/5 consultas fallaron`);
+      const [legs, cats, liqs, socs, ccs] = w1.map(r => (r.status === "fulfilled" ? r.value : []));
+      socIds = socs.filter(s => s.pais === p).map(s => s.id);
       const sedesArr = ccs.filter(c => !c.pais || c.pais === p);
       setLegajos(legs.filter(l => l.activo && (!l.pais || l.pais === p)));
       setLegajosInactivos(legs.filter(l => !l.activo && (!l.pais || l.pais === p)));
       setSedes(sedesArr);
-      setCuentas(ctas.filter(c => !c.sociedad || socIds.includes(c.sociedad)));
       setCategorias(cats);
-      setObjetivos(objs);
-
-      // Normalize sede_nombre: rows imported from BIGG Eye may have the short name
-      // ("Recoleta") instead of the CC canonical name ("01 - Recoleta").
-      // Match by bigg_eye_id first, then fallback to partial-name lookup.
-      const eyeIdToCc = Object.fromEntries(
-        sedesArr.filter(s => s.bigg_eye_id).map(s => [s.bigg_eye_id, s])
-      );
-      const normSedeNombre = (sedeId, sedeName) => {
-        // If stored sedeId matches a CC id → use that CC nombre
-        const byId = sedesArr.find(s => s.id === sedeId);
-        if (byId) return byId.nombre;
-        // Fallback: find CC whose nombre contains the stored sedeName
-        const byName = sedesArr.find(s =>
-          s.nombre.toLowerCase().includes((sedeName ?? "").toLowerCase()) ||
-          (sedeName ?? "").toLowerCase().includes(s.nombre.toLowerCase().replace(/^\d+\s*-\s*/, ""))
-        );
-        return byName?.nombre ?? sedeName ?? "";
-      };
-
-      const mapped = liqs.map(r => ({
-        ...r,
-        sede_nombre: normSedeNombre(r.sede_id, r.sede_nombre),
-      }));
-      setLiqsSaved(mapped);
-      // Pagos de Sedes: los nuevos llevan ambito="sedes". Fallback para legacy (sin ambito):
-      // los de legajos de rol Sedes. Un legajo con liquidación en HQ y Sedes (ej. HQ que da clases)
-      // se distingue por ambito → su pago de HQ no se cuenta acá y viceversa.
-      const legIds = new Set(liqs.map(l => l.legajo_id));
-      setPagos(pags.filter(pg => pg.ambito === "sedes" || (!pg.ambito && legIds.has(pg.legajo_id))));
-
-      // BIGG Eye NO se trae en la carga: es una llamada EN VIVO lenta y el Paso 1 (sueldos fijos) no la
-      // necesita. Queda MANUAL → se baja con el botón "Re-sincronizar BIGG Eye" al llegar a Horas.
-      // Así la pantalla abre al toque con los legajos y no espera al servicio externo.
+      const norm = mkNorm(sedesArr);
+      setLiqsSaved(liqs.map(r => ({ ...r, sede_nombre: norm(r.sede_id, r.sede_nombre) })));
+      legIds = new Set(liqs.map(l => l.legajo_id));
+      // BIGG Eye NO se trae en la carga (llamada en vivo lenta, el Paso 1 no la necesita): manual.
       setEyeItems([]);
       setEyeSource({ source: "pendiente", ts: null });
-    } finally { setLoading(false); }
+    } finally { setLoading(false); }   // Paso 1 ya puede mostrarse; lo demás llega en segundo plano.
+
+    // ── OLA 2: secundario (Paso 3/4/5), en segundo plano, sin bloquear la pantalla ni el Paso 1.
+    Promise.allSettled([
+      fetchPagos(m, a),
+      fetchNovedades(m, a),
+      fetchObjetivos(m, a, p),
+      fetchCuentasBancariasNumbers(),   // el tapón de 20s — ya no bloquea la carga
+    ]).then(w2 => {
+      const [pags, novs, objs, ctas] = w2.map(r => (r.status === "fulfilled" ? r.value : []));
+      setPagos(pags.filter(pg => pg.ambito === "sedes" || (!pg.ambito && legIds.has(pg.legajo_id))));
+      setNovedades(novs.filter(n => n.tipo === "extra" && n.sede_id));
+      setObjetivos(objs);
+      setCuentas(ctas.filter(c => !c.sociedad || socIds.includes(c.sociedad)));
+    });
   }, []);
 
   // Refresh LIVIANO tras guardar/pagar: solo re-trae liquidaciones + pagos (lo único que cambió),
