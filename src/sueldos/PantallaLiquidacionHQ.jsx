@@ -265,15 +265,21 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
     setPagos(pags.filter(p => p.ambito !== "sedes"));
   }, [mes, anio]);
 
-  // Update de legajo con reintento: el GAS a veces responde "Token inválido"/HTML bajo carga
-  // (transitorio — las lecturas del mismo token andan). `upd` es idempotente → reintentar es seguro
-  // (a diferencia de un `add`, que duplicaría). 3 intentos con backoff.
-  async function updateLegajoRetry(id, data, intentos = 3) {
+  // Update de legajo con reintento + TIMEOUT: el GAS a veces responde "Token inválido"/HTML bajo
+  // carga (transitorio) o directamente CUELGA el request (fetch sin timeout → await eterno). El
+  // timeout por intento corta el cuelgue y reintenta. `upd` es idempotente → reintentar (o que un
+  // request colgado termine tarde en el server) es seguro, no duplica. 3 intentos, timeout 12s.
+  async function updateLegajoRetry(id, data, intentos = 3, timeoutMs = 12000) {
     let lastErr;
     for (let a = 0; a < intentos; a++) {
       if (a) await new Promise(r => setTimeout(r, 800 * a));
-      try { await updateLegajo(id, data); return; }
-      catch (e) { lastErr = e; }
+      try {
+        await Promise.race([
+          updateLegajo(id, data),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), timeoutMs)),
+        ]);
+        return;
+      } catch (e) { lastErr = e; }
     }
     throw lastErr;
   }
