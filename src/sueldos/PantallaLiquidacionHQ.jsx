@@ -1357,8 +1357,30 @@ function lineasDetalle(liqs, tipo) {
   return filas;
 }
 
+// Depósito: UNA línea por legajo (todo va a la misma cuenta del empleado → se suman
+// depósito base + novedades ruteadas a depósito, ej. Monotributo/Obra Social). La nota
+// aclara qué conceptos se incluyen. (Trf. financiera NO se agrupa: varias cuentas destino.)
 function exportarDeposito(liqs, mes, anio) {
-  const filas = lineasDetalle(liqs, "deposito");
+  const filas = [];
+  for (const liq of liqs) {
+    const deps = (liq.lineas || []).filter(l => l.tipo === "deposito" && Number(l.importe) > 0);
+    const novs = (liq.novedades || []).filter(n => n.forma_pago === "deposito" && Number(n.monto) > 0);
+    if (!deps.length && !novs.length) continue;
+    const total = deps.reduce((s, l) => s + Number(l.importe), 0) + novs.reduce((s, n) => s + Math.abs(Number(n.monto)), 0);
+    const base  = deps.find(l => l.cbu || l.cuenta) || deps[0] || {};   // datos bancarios de la cuenta
+    const incluye = novs.length ? "Incluye: " + [...new Set(novs.map(n => n.cuenta_contable_nombre || n.descripcion || "novedad"))].join(", ") : "";
+    filas.push([
+      liq.legajo_nombre,
+      base.titular || liq.legajo_nombre || "",
+      total,
+      base.banco || "",
+      base.tipo_cuenta || "",
+      base.cuenta || "",
+      base.cbu || liq.cbu || "",
+      base.cuit || "",
+      incluye,
+    ]);
+  }
   if (!filas.length) { alert("No hay líneas de Depósito con importe cargado."); return; }
   descargarExcelDetalle(filas, `Deposito_HQ_${String(mes).padStart(2,"0")}_${anio}.xlsx`);
 }
