@@ -5,7 +5,7 @@ import {
   fetchPagos, appendPago, deletePago, nuevoLote, fetchNovedades, ROLES_HQ,
   FP_TIPOS, FP_TIPO_LABEL, FP_TIPO_COLOR,
   fetchSociedadesNumbers, fetchCuentasBancariasNumbers, fetchCuentasContablesNumbers,
-  idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionLines, isCerrada,
+  idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionLines, delLiquidacionComp, isCerrada,
 } from "../lib/sueldosApi";
 
 // ── Estilos compartidos ───────────────────────────────────────────────────────
@@ -338,6 +338,23 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
     } finally { setSaving(false); }
   }
 
+  // Reabrir = borrar las líneas congeladas de su_liquidaciones (vuelve a "borrador" para reeditar
+  // y volver a cerrar). NO toca los pagos (viven en nb_movimientos), así que no se pierde lo cobrado.
+  async function handleReabrir(liq) {
+    if (!window.confirm(
+      `Reabrir la liquidación de ${liq.legajo_nombre}?\n\n` +
+      `Vuelve a BORRADOR para reeditarla y cerrarla de nuevo. ` +
+      `Los pagos ya registrados NO se tocan (podés seguir pagando).`
+    )) return;
+    setSaving(true);
+    try {
+      await delLiquidacionComp(idLiqDe(liq.legajo_id, mes, anio, liq.sede_id));
+      await refreshLiqs();
+    } catch (e) {
+      alert("Error al reabrir la liquidación: " + e.message);
+    } finally { setSaving(false); }
+  }
+
   // La pantalla se deriva del LEGAJO (no de un "inicializar"). Cada legajo HQ activo
   // aparece siempre; si ya tiene liquidación persistida la mergeamos, si no es una
   // fila virtual (sin id) que se materializa lazily al avanzar/pagar.
@@ -598,6 +615,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
               onAtras={() => setPaso(2)}
               onRegistrarPago={setShowPago}
               onBatchPaid={load}
+              onReabrir={handleReabrir}
             />
           )}
         </>
@@ -1458,7 +1476,7 @@ function describirDestino(l, nombreEmpleado = "") {
   return detalle ? `${base} — ${detalle}` : base;
 }
 
-function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onRegistrarPago, onBatchPaid }) {
+function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onRegistrarPago, onBatchPaid, onReabrir }) {
   const [anularModal, setAnularModal] = useState(null); // pago object
   const [expandido,   setExpandido]   = useState(null); // legajo_id desplegado
   const [batchModal,  setBatchModal]  = useState(null); // { tipo }
@@ -1597,6 +1615,13 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onReg
                       <span style={{ color: T.dim, marginRight: 6, fontSize: 11 }}>{open ? "▾" : "▸"}</span>
                       {liq.legajo_nombre}
                       <EstadoBadge estado={liq.estado} />
+                      {isCerrada(liq.estado) && onReabrir && (
+                        <button onClick={(e) => { e.stopPropagation(); onReabrir(liq); }}
+                          title="Reabrir: vuelve a borrador para reeditar y cerrar de nuevo. No toca los pagos."
+                          style={{ marginLeft: 6, fontSize: 10, fontWeight: 600, color: T.blue, background: T.blueLt, border: `1px solid ${T.blue}`, borderRadius: 4, padding: "1px 6px", cursor: "pointer", fontFamily: T.font }}>
+                          🔓 Reabrir
+                        </button>
+                      )}
                       {hayParcial && <span title="Tiene un pago parcial pendiente"
                         style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: T.yellow, background: "#fefce8", border: `1px solid ${T.yellow}`, borderRadius: 4, padding: "1px 5px" }}>◐ parcial</span>}
                     </td>
