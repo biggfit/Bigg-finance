@@ -344,6 +344,10 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
     setSaving(true);
     try {
       await delLiquidacionComp(idLiqDe(liq.legajo_id, mes, anio, liq.sede_id));
+      // Update OPTIMISTA: sacamos la liquidación del estado local → la fila vuelve a "borrador"
+      // en el acto, sin depender de la re-lectura (que si pega en un hipo del GAS dejaría el
+      // candado colgado). El refresh de abajo solo reconcilia pagos/lo demás.
+      setLiquidaciones(prev => prev.filter(l => l.legajo_id !== liq.legajo_id));
       await refreshLiqs();
     } catch (e) {
       alert("Error al reabrir la liquidación: " + e.message);
