@@ -1075,7 +1075,7 @@ function PasoPago({ liqStaff, liqOwners, liqExternos, sueldosDraft, formasDraft,
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={onAtras} style={BTN_SECONDARY}>← Atrás</button>
           <button onClick={onSiguiente} disabled={saving} style={BTN_PRIMARY(saving)}>
-            {saving ? "Guardando…" : "Guardar y continuar →"}
+            {saving ? "Guardando…" : (actualizarRecetas ? "Guardar y continuar →" : "Guardar")}
           </button>
         </div>
       </div>
