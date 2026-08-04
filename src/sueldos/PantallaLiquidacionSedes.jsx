@@ -2056,17 +2056,23 @@ function exportarHaberes(empls, mes, anio) {
 
 // Efectivo + Monotributo (plata en mano / monotributistas): una fila por empleado × forma.
 function exportarEfectivoSedes(empls, mes, anio) {
+  const ESTADO_LBL = { none: "PENDIENTE", partial: "PARCIAL", full: "PAGADO" };
+  const abs = (ps) => ps.reduce((a, p) => a + Math.abs(Number(p.monto) || 0), 0);
   const filas = [];
   for (const e of empls) {
     const sede = (e.sedes || []).join(", ");
-    const ef   = Math.round(Number(e.monto_efectivo)      || 0);
-    const mono = Math.round(Number(e.monto_transferencia) || 0);   // "transferencia" = monotributo en Sedes
-    if (ef > 0)   filas.push([e.legajo_nombre, sede, "Efectivo", ef]);
-    if (mono > 0) filas.push([e.legajo_nombre, sede, "Monotributo", mono]);
+    // "transferencia" persiste el monotributo en Sedes; el tipo_componente del pago es "monotributo".
+    for (const [tipo, label] of [["efectivo", "Efectivo"], ["monotributo", "Monotributo"]]) {
+      const total = Math.round(getMontoTipo(e, tipo) || 0);
+      if (total <= 0) continue;
+      const pagado = abs(getPagosTipo(e, tipo));
+      filas.push([e.legajo_nombre, sede, label, ESTADO_LBL[estadoPago(total, pagado)],
+        total, Math.round(pagado), Math.round(remanentePago(total, pagado))]);
+    }
   }
   if (!filas.length) { alert("No hay pagos en efectivo / monotributo cargados."); return; }
-  const ws = XLSX.utils.aoa_to_sheet([["Legajo", "Sede", "Forma", "Importe"], ...filas]);
-  ws["!cols"] = [{ wch: 26 }, { wch: 22 }, { wch: 14 }, { wch: 14 }];
+  const ws = XLSX.utils.aoa_to_sheet([["Legajo", "Sede", "Forma", "Estado", "Importe", "Pagado", "Pendiente"], ...filas]);
+  ws["!cols"] = [{ wch: 26 }, { wch: 22 }, { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Efectivo");
   XLSX.writeFile(wb, `Efectivo_Monotributo_Sedes_${String(mes).padStart(2, "0")}_${anio}.xlsx`);
