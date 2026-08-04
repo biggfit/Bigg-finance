@@ -271,6 +271,19 @@ function pagosDe(emp, pagos) {
       (a.fecha || "").localeCompare(b.fecha || ""));
 }
 
+// Composición del valor unitario de una línea que combina varias tarifas (horas + yoga, o multi-sede).
+// Agrupa las contribuciones por tarifa y devuelve " (48×$11.000 + 56×$6.000)". Si hay una sola tarifa,
+// devuelve "" → Cant × Valor ya cuadra y no hace falta aclarar.
+function composicionValor(contribs = []) {
+  const porTarifa = new Map();
+  for (const c of contribs) {
+    if (!(Number(c.cant) > 0)) continue;
+    porTarifa.set(c.tarifa, (porTarifa.get(c.tarifa) || 0) + c.cant);
+  }
+  if (porTarifa.size <= 1) return "";
+  return " (" + [...porTarifa].map(([t, c]) => `${fmtNum(c)}×${fmt(t)}`).join(" + ") + ")";
+}
+
 // Desglose Sedes: suma sobre las filas por sede, recalcula importes con tarifas.
 function buildResumenSedes(emp, categorias, novList = []) {
   const acc = {
@@ -285,6 +298,10 @@ function buildResumenSedes(emp, categorias, novList = []) {
   const novedades = [];
   let tarifas = {};
   const porSede = {};
+  // Composición del valor unitario de "Horas Base": la línea combina horas normales + yoga (y varias
+  // sedes), cada una con su tarifa → el Importe suma todas pero la col. "Valor u." muestra una sola.
+  // Guardamos las contribuciones (cant × tarifa) para explicar el importe entre paréntesis.
+  const desgloseHoras = [];
   const cs = { horas: new Set(), feriado: new Set(), domingo: new Set(),
                cdpCoach: new Set(), cdpFront: new Set(), oneShot: new Set() };
   for (const row of emp.rows) {
@@ -300,6 +317,8 @@ function buildResumenSedes(emp, categorias, novList = []) {
     }
     if (d.objGrupalPct) acc.objGrupalPct = d.objGrupalPct;   // % (no se suma entre sedes; es la tasa aplicada)
     const sn = row.sede_nombre || "—";
+    if (d.horasCant > 0) desgloseHoras.push({ sede: sn, cant: d.horasCant, tarifa: d.tarifaHora });
+    if (d.yogaCant  > 0) desgloseHoras.push({ sede: sn, cant: d.yogaCant,  tarifa: d.tarifaYoga });
     porSede[sn] = (porSede[sn] || 0) + (Number(d.totalLiquidar) || 0);
     if ((d.horasCant || 0) + (d.yogaCant || 0) > 0) cs.horas.add(sn);
     if (d.feriadosCant > 0) cs.feriado.add(sn);
@@ -319,7 +338,7 @@ function buildResumenSedes(emp, categorias, novList = []) {
   const conceptoSedes = Object.fromEntries(Object.entries(cs).map(([k, set]) => [k, [...set]]));
   const totalNov = novedades.reduce((s, n) => s + n.monto, 0);
   const totalLiquidar = acc.fijo + acc.horasMonto + acc.sueldoVariable + totalNov;
-  return { ...acc, ...tarifas, sedes, novedades, totalNov, principalSede, conceptoSedes, totalLiquidar };
+  return { ...acc, ...tarifas, sedes, novedades, totalNov, principalSede, conceptoSedes, desgloseHoras, totalLiquidar };
 }
 
 // Desglose HQ: sueldo base + novedades por cuenta.
@@ -439,6 +458,10 @@ function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo }) {
     const list = (resumen.conceptoSedes?.[key] || []).filter(s => s !== resumen.principalSede);
     return list.length ? ` (${list.join(", ")})` : "";
   };
+  // "Horas Base" combina horas + yoga (y varias sedes) a tarifas distintas → Cant × Valor u. ≠ Importe.
+  // Si hay más de una tarifa, el paréntesis explica cómo se compone (cant × $tarifa + …); si es una sola,
+  // se cae al annotate de sedes (extra) porque Cant × Valor ya cuadra.
+  const compHoras = composicionValor(resumen.desgloseHoras) || extra("horas");
   return (
     <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={periodo} onImprimirTodo={onImprimirTodo}>
       <Section>
@@ -447,7 +470,7 @@ function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo }) {
           <tbody>
             {/* Sueldo Fijo: base + horas (base/feriado/domingo) + asignaciones */}
             <Linea label="Sueldo Fijo"   importe={resumen.fijo} />
-            <Linea label={`Horas Base${extra("horas")}`}
+            <Linea label={`Horas Base${compHoras}`}
               cant={resumen.horasCant + resumen.yogaCant}
               valor={resumen.horasCant > 0 ? resumen.tarifaHora : resumen.tarifaYoga}
               importe={resumen.horasMonto + resumen.yogaMonto} />
