@@ -271,17 +271,17 @@ function pagosDe(emp, pagos) {
       (a.fecha || "").localeCompare(b.fecha || ""));
 }
 
-// Composición del valor unitario de una línea que combina varias tarifas (horas + yoga, o multi-sede).
-// Agrupa las contribuciones por tarifa y devuelve " (48×$11.000 + 56×$6.000)". Si hay una sola tarifa,
-// devuelve "" → Cant × Valor ya cuadra y no hace falta aclarar.
+// Composición de una línea de horas cuando el coach trabaja en varias sedes: muestra cuántas horas
+// aporta cada sede → " (04 - Plaza Libertad 100hs + 06 - Palermo Rosedal 45hs)". Con una sola sede
+// devuelve "" (no hace falta aclarar). Explica por qué la Cant total no es Cant × un solo Valor.
 function composicionValor(contribs = []) {
-  const porTarifa = new Map();
+  const porSede = new Map();
   for (const c of contribs) {
     if (!(Number(c.cant) > 0)) continue;
-    porTarifa.set(c.tarifa, (porTarifa.get(c.tarifa) || 0) + c.cant);
+    porSede.set(c.sede, (porSede.get(c.sede) || 0) + c.cant);
   }
-  if (porTarifa.size <= 1) return "";
-  return " (" + [...porTarifa].map(([t, c]) => `${fmtNum(c)}×${fmt(t)}`).join(" + ") + ")";
+  if (porSede.size <= 1) return "";
+  return " (" + [...porSede].map(([s, c]) => `${s} ${fmtNum(c)}hs`).join(" + ") + ")";
 }
 
 // Desglose Sedes: suma sobre las filas por sede, recalcula importes con tarifas.
