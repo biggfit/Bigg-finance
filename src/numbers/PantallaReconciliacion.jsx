@@ -1177,7 +1177,10 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         const acc = (cuentasAll || []).find(c => String(c.id) === String(p.cuenta_destino));
         patch[m.id] = { ...base, modoInterco: true, interco_soc: acc?.sociedad || "", interco_acc: p.cuenta_destino || "", modoTransfer: false, modoFranquicia: false, modoFC: false, modoCobro: false, noFranquicia: true, noTransfer: true };
       } else if (p.cuenta_contable) {
-        patch[m.id] = { ...base, cuenta_contable: p.cuenta_contable, centro_costo: p.centro_costo || base.centro_costo, proveedor_id: p.proveedor_id || base.proveedor_id };
+        // modoCobro:false → sin esto, un crédito (ingreso) queda en "Cobro de venta" (pide cliente/factura)
+        // aunque la regla ya le haya resuelto la cuenta: modoCobroDe() sólo mira `mov.cuenta_contable`
+        // (el valor persistido, no `edits`) para decidir si sale de ese modo. Mismo criterio que Stripe arriba.
+        patch[m.id] = { ...base, cuenta_contable: p.cuenta_contable, centro_costo: p.centro_costo || base.centro_costo, proveedor_id: p.proveedor_id || base.proveedor_id, modoCobro: false };
       }
     }
     const n = Object.keys(patch).length;
