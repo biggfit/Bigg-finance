@@ -196,6 +196,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const [erroresIngesta, setErroresIngesta] = useState(null); // { lineas, cuenta_bancaria, moneda } que fallaron al subir
   const [progreso,   setProgreso]   = useState(null); // { done, total } mientras sube el extracto
   const [filtroTipo, setFiltroTipo] = useState("");   // filtro por grupo de Propuesta (para aprobar por grupos)
+  const [busqueda,   setBusqueda]   = useState("");   // texto libre: filtra por descripción/proveedor (ej. juntar todo un proveedor)
   const [verIgnorados,setVerIgnorados]= useState(false);
   const [reglaModal, setReglaModal] = useState(null);  // {prefill} para crear regla desde una línea
   const [loading,    setLoading]    = useState(true);
@@ -1113,9 +1114,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     const o = {}; pendCuenta.forEach(m => { const g = grupoDe(m); o[g] = (o[g] || 0) + 1; });
     return Object.entries(o).sort((a, b) => b[1] - a[1]);
   }, [pendCuenta, franquicias, pagosSueldos, cuotasPendientes, edits]);
-  const filtered = useMemo(
-    () => filtroTipo ? pendCuenta.filter(m => grupoDe(m) === filtroTipo) : pendCuenta,
-    [pendCuenta, filtroTipo, franquicias, pagosSueldos, cuotasPendientes, edits]);
+  const filtered = useMemo(() => {
+    let list = filtroTipo ? pendCuenta.filter(m => grupoDe(m) === filtroTipo) : pendCuenta;
+    const q = busqueda.trim().toLowerCase();
+    if (q) list = list.filter(m =>
+      (m.concepto ?? "").toLowerCase().includes(q) || (m.contraparte_nombre ?? "").toLowerCase().includes(q));
+    return list;
+  }, [pendCuenta, filtroTipo, busqueda, franquicias, pagosSueldos, cuotasPendientes, edits]);
   const countByCuenta = useMemo(() => {
     const o = {}; pendientes.forEach(m => { o[m.cuenta_bancaria] = (o[m.cuenta_bancaria] || 0) + 1; }); return o;
   }, [pendientes]);
@@ -1188,6 +1193,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
           <span style={{ fontSize: 12, color: T.muted }}>
             {pendientes.length} movimientos sin conciliar
           </span>
+        )}
+        {mundo === "banco" && (
+          <input value={busqueda} onChange={e => setBusqueda(e.target.value)}
+            placeholder="🔎 Buscar proveedor / descripción…"
+            style={{ fontSize: 12, padding: "7px 10px", borderRadius: 8, minWidth: 220,
+              border: `1px solid ${busqueda ? T.accent : T.cardBorder}`, background: "#fff",
+              color: T.text, fontFamily: T.font, outline: "none" }} />
         )}
         {mundo === "banco" && (
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>

@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import { T, ESTADO_EGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
-import { fetchEgresos, appendEgreso, deleteEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, deleteMovTesoreria, updateMovTesoreria, shortId, appendProveedor, appendCuenta } from "../lib/numbersApi";
+import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, deleteMovTesoreria, updateMovTesoreria, shortId, appendProveedor, appendCuenta } from "../lib/numbersApi";
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 import { makeResolveCC, makeResolveCB, inputStyle, CCSelectOptions, makeCrearMaestro, stripForDuplicate } from "./formUtils";
 import NuevoEgresoModal from "./NuevoEgresoModal";
@@ -879,10 +879,9 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
 
   const handleSave = async (egreso) => {
     try {
-      if (egreso._isEdit) {
-        await deleteEgreso(egreso.id);
-      }
-      const result = await appendEgreso({ ...egreso, sociedad });
+      const result = egreso._isEdit
+        ? await updateEgreso(egreso.id, { ...egreso, sociedad })
+        : await appendEgreso({ ...egreso, sociedad });
       // Volver a la lista y abrir el detalle como página
       if (subView === "new-compra" && onSubViewChange) {
         onSubViewChange(null);

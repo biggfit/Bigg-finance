@@ -244,6 +244,66 @@ export async function deleteEgreso(id_comp) {
 }
 
 /**
+ * Sincroniza las líneas de un comprobante EXISTENTE contra su versión editada, línea a línea
+ * (edit/add/del por índice) en vez de borrar todo y recrear. Si una escritura falla a mitad de
+ * camino, el comprobante queda parcialmente actualizado — nunca vacío, a diferencia del viejo
+ * patrón deleteEgreso()+appendEgreso() que perdía el comprobante entero ante cualquier fallo del
+ * segundo paso (ver handleSave de Egresos/Ingresos). Mantiene el mismo id_comp, así que los
+ * pagos/cobros ya vinculados (documento_id=id_comp) siguen apuntando al comprobante correcto.
+ */
+async function _syncLineasComprobante(id_comp, subtipo, header, lineas, idKey, nombreKey) {
+  const rows = await get("nb_comprobantes", {});
+  const actuales = rows
+    .filter(r => String(r.id_comp) === String(id_comp))
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  const created_at = new Date().toISOString();
+  const n = Math.max(lineas.length, actuales.length);
+
+  for (let i = 0; i < n; i++) {
+    const rowId = `${id_comp}-L${pad(i + 1)}`;
+    if (i >= lineas.length) {
+      await post({ action: "del", sheet: "nb_comprobantes", id: rowId });
+      continue;
+    }
+    const l   = lineas[i];
+    const sub = round2(Number(l.subtotal) || 0);
+    const iva = round2(sub * ((Number(l.ivaRate) || 0) / 100));
+    const row = {
+      id: rowId, id_comp,
+      sociedad:            header.sociedad,
+      fecha:               header.fecha,
+      vto:                 header.vto ?? "",
+      subtipo,
+      contraparte_id:      header[idKey]     ?? "",
+      contraparte_nombre:  header[nombreKey] ?? "",
+      cuenta_contable:     header.cuenta      ?? "",
+      cuenta_contable_id:  header.cuentaId    ?? "",
+      moneda:              header.moneda ?? "ARS",
+      centro_costo:        l.cc ?? "",
+      subtotal:            sub,
+      iva_rate:            Number(l.ivaRate) || 0,
+      iva_monto:           iva,
+      total:               round2(sub + iva),
+      nro_comp:            header.nroComp ?? "",
+      nota:                header.nota    ?? "",
+      created_at,
+    };
+    if (i < actuales.length) {
+      await post({ action: "edit", sheet: "nb_comprobantes", id: rowId, patch: row });
+    } else {
+      await post({ action: "add", sheet: "nb_comprobantes", row });
+    }
+  }
+  return { ok: true, id_comp };
+}
+
+/** Edita un egreso existente sin borrar-y-recrear (ver _syncLineasComprobante). */
+export async function updateEgreso(id_comp, egreso) {
+  const { lineas = [], ...header } = egreso;
+  return _syncLineasComprobante(id_comp, "EGRESO", header, lineas, "proveedorId", "proveedor");
+}
+
+/**
  * Migra un comprobante (egreso o ingreso) a otra sociedad: cambia el campo `sociedad` en todas
  * sus líneas. La cuenta contable y el centro de costo son maestros group-level, así que siguen
  * válidos. `comp.lineas[].id` ya trae la clave de fila (ver _agruparPorComp), así que no hace
@@ -374,6 +434,12 @@ export async function appendIngreso(ingreso) {
 
 export async function deleteIngreso(id_comp) {
   return post({ action: "del_comp", sheet: "nb_comprobantes", id_comp });
+}
+
+/** Edita un ingreso existente sin borrar-y-recrear (ver _syncLineasComprobante, junto a updateEgreso). */
+export async function updateIngreso(id_comp, ingreso) {
+  const { lineas = [], ...header } = ingreso;
+  return _syncLineasComprobante(id_comp, "INGRESO", header, lineas, "clienteId", "cliente");
 }
 
 // ─── PAGOS / COBROS ──────────────────────────────────────────────────────────

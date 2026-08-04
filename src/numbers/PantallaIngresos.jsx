@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import { T, ESTADO_INGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
-import { fetchIngresos, appendIngreso, deleteIngreso, appendCobro, fetchPagosCobros, calcSaldoPendiente, calcEstadoIngreso, fetchClientes, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, deleteMovTesoreria, updateMovTesoreria, shortId, agruparAnticipos, cobrarContraAnticipo, appendRetenciones, appendCliente, appendCuenta } from "../lib/numbersApi";
+import { fetchIngresos, appendIngreso, deleteIngreso, updateIngreso, appendCobro, fetchPagosCobros, calcSaldoPendiente, calcEstadoIngreso, fetchClientes, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, deleteMovTesoreria, updateMovTesoreria, shortId, agruparAnticipos, cobrarContraAnticipo, appendRetenciones, appendCliente, appendCuenta } from "../lib/numbersApi";
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 import { makeResolveCC, makeResolveCB, byNombre, makeCrearMaestro, stripForDuplicate } from "./formUtils";
 import NuevoIngresoModal from "./NuevoIngresoModal";
@@ -914,10 +914,9 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
 
   const handleSave = async (ingreso) => {
     try {
-      if (ingreso._isEdit) {
-        await deleteIngreso(ingreso.id);
-      }
-      const result = await appendIngreso({ ...ingreso, sociedad });
+      const result = ingreso._isEdit
+        ? await updateIngreso(ingreso.id, { ...ingreso, sociedad })
+        : await appendIngreso({ ...ingreso, sociedad });
       if (subView === "new-venta" && onSubViewChange) {
         onSubViewChange(null);
         const nuevoIngreso = {
