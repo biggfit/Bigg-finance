@@ -98,6 +98,27 @@ function newId(prefix = "SU") {
 // contra el total del lote (no del mes), evitando el doble conteo de la caja de sueldos.
 export function nuevoLote() { return newId("LOTE"); }
 
+// ── Monto: helpers de máscara de miles ────────────────────────────────────────
+// Se GUARDA limpio (dígitos + "." decimal, parseFloat-friendly) y solo se MUESTRA con
+// separador es-AR (punto miles, coma decimal). El punto es visual, nunca entra al valor.
+export const fmtMiles = (s) => {
+  const str = String(s ?? "");
+  if (str === "") return "";
+  const [ent, dec] = str.split(".");
+  const entFmt = ent.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return dec != null ? `${entFmt},${dec}` : entFmt;
+};
+export const limpiarMonto = (v) => String(v).replace(/\./g, "").replace(",", ".").replace(/[^\d.]/g, "");
+
+// ── Estado de pago de una línea/columna (tolerancia ±$0,50 por redondeo) ──────
+export const PAGO_EPS = 0.5;
+export const remanentePago = (total, pagado) => Math.max(0, (Number(total) || 0) - (Number(pagado) || 0));
+export const estadoPago = (total, pagado) => {
+  const t = Number(total) || 0, p = Number(pagado) || 0;
+  if (p <= PAGO_EPS) return "none";
+  return (t - p <= PAGO_EPS) ? "full" : "partial";
+};
+
 // ── Formas de pago (receta de cobro por empleado) ─────────────────────────────
 // Cada línea: { id, tipo, importe, banco, tipo_cuenta, cuenta, cbu, cuit, nota }
 // tipo ∈ haberes | deposito | transferencia | efectivo

@@ -6,6 +6,7 @@ import {
   FP_TIPOS, FP_TIPO_LABEL, FP_TIPO_COLOR,
   fetchSociedadesNumbers, fetchCuentasBancariasNumbers, fetchCuentasContablesNumbers,
   idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionLines, delLiquidacionComp, isCerrada,
+  estadoPago, remanentePago, PAGO_EPS,
 } from "../lib/sueldosApi";
 
 // ── Estilos compartidos ───────────────────────────────────────────────────────
@@ -1423,14 +1424,14 @@ function exportarMonotributoEfectivo(liqs, mes, anio) {
       if (!ls.length && !novs.length) continue;
       const total  = ls.reduce((s, l) => s + Number(l.importe), 0) + novs.reduce((s, n) => s + Math.abs(Number(n.monto)), 0);
       const pagado = ls.reduce((s, l) => s + abs(getPagosLinea(liq, l)), 0) + novs.reduce((s, n) => s + abs(getPagosNovedad(liq, n)), 0);
-      const estado = pagado <= 0.5 ? "PENDIENTE" : (total - pagado <= 0.5 ? "PAGADO" : "PARCIAL");
+      const estado = { none: "PENDIENTE", partial: "PARCIAL", full: "PAGADO" }[estadoPago(total, pagado)];
       const base   = ls.find(l => l.cbu || l.cuenta) || ls[0] || {};
       const incluye = [...new Set([
         ...ls.map(l => l.nota).filter(Boolean),
         ...novs.map(n => n.cuenta_contable_nombre || n.descripcion || ""),
       ].filter(Boolean))].join(", ");
       filas.push([liq.legajo_nombre, label, estado, base.titular || liq.legajo_nombre || "",
-        total, pagado, total - pagado, base.cbu || liq.cbu || "", base.cuit || "", incluye]);
+        total, pagado, remanentePago(total, pagado), base.cbu || liq.cbu || "", base.cuit || "", incluye]);
     }
   }
   if (!filas.length) { alert("No hay líneas de Monotributo / Efectivo con importe cargado."); return; }
@@ -1595,7 +1596,7 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onReg
               // Estado por columna: null (no aplica) | "none" | "partial" | "full".
               // Parcial-aware: suma pagos vs total, no solo "¿tiene algún pago?".
               const abs = (ps) => ps.reduce((a, p) => a + Math.abs(Number(p.monto) || 0), 0);
-              const bucketState = (col) => {
+              const colState = (col) => {
                 const ls   = liq.lineas.filter(l => l.tipo === col);
                 const novs = (liq.novedades || []).filter(n => n.forma_pago === col);
                 if (!ls.length && !novs.length) return null;
@@ -1603,10 +1604,10 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onReg
                              + novs.reduce((s, n) => s + Math.abs(Number(n.monto) || 0), 0);
                 const pagado = ls.reduce((s, l) => s + abs(getPagosLinea(liq, l)), 0)
                              + novs.reduce((s, n) => s + abs(getPagosNovedad(liq, n)), 0);
-                if (pagado <= 0.5) return "none";
-                return (total - pagado <= 0.5) ? "full" : "partial";
+                return estadoPago(total, pagado);
               };
-              const hayParcial = COLS.some(c => bucketState(c.id) === "partial");
+              const colStates  = Object.fromEntries(COLS.map(c => [c.id, colState(c.id)]));
+              const hayParcial = COLS.some(c => colStates[c.id] === "partial");
               return (
                 <Fragment key={liq.legajo_id}>
                   <tr onClick={() => setExpandido(open ? null : liq.legajo_id)}
@@ -1627,7 +1628,7 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onReg
                     <td style={TD({ textAlign: "right", fontWeight: 700, color: T.blue })}>{fmtMoney(liq.total_liquidacion)}</td>
                     {COLS.map(c => {
                       const monto = sums[c.id];
-                      const st    = bucketState(c.id);
+                      const st    = colStates[c.id];
                       if (!monto) return <td key={c.id} style={TD({ textAlign: "right", color: T.dim })}>—</td>;
                       const color = st === "full" ? T.green : st === "partial" ? T.yellow : FP_TIPO_COLOR[c.id] || T.text;
                       return (
@@ -1761,7 +1762,8 @@ function EmpleadoPagosLineas({ liq, cols, onPagar, onVerPago }) {
               const monto      = items.reduce((s, it) => s + montoItem(it), 0);
               // Pagado de la celda = suma de TODOS los pagos de sus ítems (soporta parciales acumulados).
               const pagado     = items.reduce((s, it) => s + pagosItem(it).reduce((a, p) => a + Math.abs(Number(p.monto) || 0), 0), 0);
-              const pend       = monto - pagado;
+              const pend       = remanentePago(monto, pagado);
+              const st         = estadoPago(monto, pagado);
               const primerPago = items.flatMap(pagosItem)[0];
               const pagar = () => onPagar({
                 tipo: c.id, esSueldo: f.esSueldo,
@@ -1771,14 +1773,14 @@ function EmpleadoPagosLineas({ liq, cols, onPagar, onVerPago }) {
               });
               // 1) Pago completo → ✓ verde. 2) Parcial (0<pagado<total) → falta en ámbar, clickeable
               //    para pagar el resto. 3) Sin pagar → total clickeable.
-              if (pagado > 0.5 && pend <= 0.5) return (
+              if (st === "full") return (
                 <td key={c.id} style={TD({ ...tdBase, textAlign: "right" })}>
                   <button onClick={() => onVerPago(primerPago)} title="Ver / anular este pago" style={{ ...btn, color: T.green }}>
                     {fmtMoney(monto)} ✓
                   </button>
                 </td>
               );
-              if (pagado > 0.5) return (
+              if (st === "partial") return (
                 <td key={c.id} style={TD({ ...tdBase, textAlign: "right" })}>
                   <button onClick={pagar} title={`Parcial: pagó ${fmtMoney(pagado)} · falta ${fmtMoney(pend)}. Click para pagar el resto`}
                     style={{ ...btn, color: T.yellow, textDecoration: "underline", textDecorationStyle: "dotted" }}>
@@ -1985,7 +1987,7 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
   // (el neteo es por suma). Con varios movimientos se paga completo (no se reparte el parcial).
   const editable = cell.items.length === 1;
   const yaPagado = Number(cell.yaPagado) || 0;          // parciales previos de esta línea
-  const pendienteLinea = Math.max(0, montoTotal - yaPagado);
+  const pendienteLinea = remanentePago(montoTotal, yaPagado);
   const tope = editable ? pendienteLinea : montoTotal;  // no se puede imputar más que lo que falta
   const [montoImputar, setMontoImputar] = useState(tope);
   const parcial = editable && montoImputar > 0 && montoImputar < pendienteLinea;
@@ -2033,7 +2035,7 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
     if (!form.cuenta_id) { alert("Seleccioná una cuenta bancaria."); return; }
     if (editable) {
       const m = Number(montoImputar) || 0;
-      if (m <= 0 || m > tope + 0.5) { alert(`El monto a imputar debe ser mayor a 0 y no superar lo pendiente (${fmtMoney(tope)}).`); return; }
+      if (m <= 0 || m > tope + PAGO_EPS) { alert(`El monto a imputar debe ser mayor a 0 y no superar lo pendiente (${fmtMoney(tope)}).`); return; }
     }
     savingRef.current = true; setSaving(true);
     try {

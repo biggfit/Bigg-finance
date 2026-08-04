@@ -9,6 +9,7 @@ import {
   ROLES_COACHES, ROLES_FRONT, ROLES_LIMP, ROL_CONCEPTO,
   FP_TIPO_LABEL, FP_TIPO_COLOR, esTransferencia,
   idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionesLinesBatch, isCerrada,
+  estadoPago, remanentePago, PAGO_EPS,
 } from "../lib/sueldosApi";
 
 const T = {
@@ -2286,10 +2287,11 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid }) 
                   // ámbar) / completo (✓ verde) / sobrepagado (rojo). Varios pagos que suman el total =
                   // completo (no es anomalía: puede ser un parcial + el resto).
                   const pagado  = pagos.reduce((s, p) => s + Math.abs(Number(p.monto) || 0), 0);
-                  const pend    = monto - pagado;
-                  const over    = pagado > monto + 0.5;
-                  const full    = !over && pagado > 0.5 && pend <= 0.5;
-                  const parcial = !over && !full && pagado > 0.5;
+                  const pend    = remanentePago(monto, pagado);
+                  const over    = pagado > monto + PAGO_EPS;
+                  const st      = over ? "over" : estadoPago(monto, pagado);
+                  const full    = st === "full";
+                  const parcial = st === "partial";
                   const cellCol = over ? T.red : full ? T.green : parcial ? T.yellow : color;
                   const shown   = over ? pagado : parcial ? pend : monto;   // parcial muestra lo que FALTA
                   return (
@@ -2711,7 +2713,7 @@ function ModalPagoSede({ mes, anio, liq, onClose, onSaved }) {
   // así se puede pagar el resto sin re-tipear. Los parciales se acumulan.
   const montoFullDe = (t) => Number({ haberes: liq?.monto_haberes, monotributo: liq?.monto_transferencia, efectivo: liq?.monto_efectivo }[t]) || 0;
   const pagadoDe    = (t) => (liq?.pagos || []).filter(p => p.tipo_componente === t).reduce((s, p) => s + Math.abs(Number(p.monto) || 0), 0);
-  const remanenteDe = (t) => Math.max(0, montoFullDe(t) - pagadoDe(t));
+  const remanenteDe = (t) => remanentePago(montoFullDe(t), pagadoDe(t));
   const [form, setForm] = useState({
     tipo_componente: "haberes",
     monto:           remanenteDe("haberes") || liq?.total || "",
@@ -2752,7 +2754,7 @@ function ModalPagoSede({ mes, anio, liq, onClose, onSaved }) {
     if (!form.monto)    { alert("Completá el monto."); return; }
     if (!form.cuenta_id){ alert("Seleccioná una cuenta bancaria."); return; }
     const rem = remanenteDe(form.tipo_componente);
-    if (rem > 0 && (parseFloat(form.monto) || 0) > rem + 0.5) {
+    if (rem > 0 && (parseFloat(form.monto) || 0) > rem + PAGO_EPS) {
       alert(`El monto no puede superar lo pendiente de ${FP_TIPO_LABEL[form.tipo_componente] || form.tipo_componente} (${fmtMoney(rem)}).`); return;
     }
     savingRef.current = true; setSaving(true);
