@@ -78,6 +78,14 @@ function buildPnL(inRows, egRows, cuentaMap, ccFilter, year, moneda) {
 //     crédito (+) resta (reintegro, ej. Intereses Ganados en "Financieros" → mejora el resultado).
 //   · Retención sufrida: siempre costo (se guarda con monto +) → valor absoluto.
 // Requiere cuentaMap (nombre→cuenta) para leer la categoría de la cuenta.
+// Período contable (P&L) vs fecha de caja: un gasto pagado en un mes puede "pertenecer" a otro
+// (ej. nómina de julio pagada el 3/8) → override opcional embebido en `referencia` (sin columna
+// nueva en la sheet, mismo patrón que el resto de la metadata empacada ahí: cod=/tipo=/regla=…).
+// Cash Flow/Tesorería siguen usando `m.fecha` (la plata se movió ese día); sólo el P&L respeta esto.
+const periodoPnLDe = (m) => {
+  const hit = String(m.referencia ?? "").match(/(?:^|;)periodo=([^;]*)/);
+  return hit && hit[1] ? `${hit[1]}-01` : m.fecha;
+};
 function movimientoToPnLRows(movs, sociedad, cuentaMap) {
   const soc = (sociedad ?? "").toLowerCase();
   const out = [];
@@ -105,7 +113,7 @@ function movimientoToPnLRows(movs, sociedad, cuentaMap) {
       _tipo = esIngreso ? "Ingreso" : "Gasto";
     }
     out.push({
-      fecha:           m.fecha,
+      fecha:           periodoPnLDe(m),
       sociedad:        m.sociedad,
       centro_costo:    m.centro_costo ?? "",
       cuenta_contable: m.cuenta_contable ?? "",

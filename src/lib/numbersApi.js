@@ -1253,6 +1253,10 @@ export async function aceptarMovimiento(mov, prop = {}) {
     contraparte_id:     prop.proveedor_id || "",
     contraparte_nombre: prop.proveedor_nombre || mov.contraparte_nombre || "",
     documento_id:       "CONTAB-" + mov.id,
+    // Período P&L ≠ fecha de caja (ej. nómina devengada el mes anterior al pago) → se empaca en
+    // `referencia` (sin columna nueva; movimientoToPnLRows en Reportes lo lee de ahí). Sin override,
+    // `referencia` queda como estaba (no se pisa la metadata de la regla que clasificó la línea).
+    ...(prop.periodo_contable ? { referencia: `${mov.referencia || ""};periodo=${prop.periodo_contable}` } : {}),
     ...firma(),
   }});
 }
