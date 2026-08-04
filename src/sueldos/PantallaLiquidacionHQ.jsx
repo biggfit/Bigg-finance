@@ -5,7 +5,8 @@ import {
   fetchPagos, appendPago, deletePago, nuevoLote, fetchNovedades, ROLES_HQ,
   FP_TIPOS, FP_TIPO_LABEL, FP_TIPO_COLOR,
   fetchSociedadesNumbers, fetchCuentasBancariasNumbers, fetchCuentasContablesNumbers,
-  idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionLines, isCerrada,
+  idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionLines, delLiquidacionComp, isCerrada,
+  estadoPago, remanentePago, PAGO_EPS,
 } from "../lib/sueldosApi";
 
 // ── Estilos compartidos ───────────────────────────────────────────────────────
@@ -257,12 +258,15 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
   // Refresh LIVIANO tras cerrar/pagar: re-trae SOLO liquidaciones + pagos (lo único que cambió),
   // sin re-descargar legajos/novedades/sociedades ni bloquear la pantalla con "Cargando…".
   const refreshLiqs = useCallback(async () => {
+    // Sentinela null en el catch (NO []): si el GAS tiene un hipo transitorio, se CONSERVAN
+    // los pagos/liquidaciones ya cargados en vez de blanquearlos (que hacía ver "sin pagar"
+    // lo que ya estaba pago, ej. un pago recién registrado que "no tildaba").
     const [liqs, pags] = await Promise.all([
-      fetchLiquidaciones(mes, anio).catch(() => []),
-      fetchPagos(mes, anio).catch(() => []),
+      fetchLiquidaciones(mes, anio).catch(() => null),
+      fetchPagos(mes, anio).catch(() => null),
     ]);
-    setLiquidaciones(liqs.filter(l => ROLES_HQ.includes(l.rol)));
-    setPagos(pags.filter(p => p.ambito !== "sedes"));
+    if (liqs) setLiquidaciones(liqs.filter(l => ROLES_HQ.includes(l.rol)));
+    if (pags) setPagos(pags.filter(p => p.ambito !== "sedes"));
   }, [mes, anio]);
 
   // Update de legajo con reintento + TIMEOUT: el GAS a veces responde "Token inválido"/HTML bajo
@@ -332,6 +336,22 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
       setShowCerrar(false);
     } catch (e) {
       alert("Error al cerrar la liquidación: " + e.message);
+    } finally { setSaving(false); }
+  }
+
+  // Reabrir = borrar las líneas congeladas de su_liquidaciones (vuelve a "borrador" para reeditar
+  // y volver a cerrar). NO toca los pagos (viven en nb_movimientos), así que no se pierde lo cobrado.
+  async function handleReabrir(liq) {
+    setSaving(true);
+    try {
+      await delLiquidacionComp(idLiqDe(liq.legajo_id, mes, anio, liq.sede_id));
+      // Update OPTIMISTA: sacamos la liquidación del estado local → la fila vuelve a "borrador"
+      // en el acto, sin depender de la re-lectura (que si pega en un hipo del GAS dejaría el
+      // candado colgado). El refresh de abajo solo reconcilia pagos/lo demás.
+      setLiquidaciones(prev => prev.filter(l => l.legajo_id !== liq.legajo_id));
+      await refreshLiqs();
+    } catch (e) {
+      alert("Error al reabrir la liquidación: " + e.message);
     } finally { setSaving(false); }
   }
 
@@ -595,6 +615,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
               onAtras={() => setPaso(2)}
               onRegistrarPago={setShowPago}
               onBatchPaid={load}
+              onReabrir={handleReabrir}
             />
           )}
         </>
@@ -921,7 +942,7 @@ function PasoSueldos({ liqStaff, liqOwners, liqExternos, sueldosDraft, onChangeD
           Actualizar sueldo en todos los legajos con los nuevos valores
         </label>
         <button onClick={onSiguiente} disabled={saving} style={BTN_PRIMARY(saving)}>
-          {saving ? (progreso || "Guardando…") : "Siguiente →"}
+          {saving ? (progreso || "Guardando…") : (actualizarLegs ? "Guardar y continuar →" : "Continuar →")}
         </button>
       </div>
     </div>
@@ -1072,7 +1093,7 @@ function PasoPago({ liqStaff, liqOwners, liqExternos, sueldosDraft, formasDraft,
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={onAtras} style={BTN_SECONDARY}>← Atrás</button>
           <button onClick={onSiguiente} disabled={saving} style={BTN_PRIMARY(saving)}>
-            {saving ? "Guardando…" : "Guardar y continuar →"}
+            {saving ? "Guardando…" : (actualizarRecetas ? "Guardar y continuar →" : "Continuar →")}
           </button>
         </div>
       </div>
@@ -1354,8 +1375,30 @@ function lineasDetalle(liqs, tipo) {
   return filas;
 }
 
+// Depósito: UNA línea por legajo (todo va a la misma cuenta del empleado → se suman
+// depósito base + novedades ruteadas a depósito, ej. Monotributo/Obra Social). La nota
+// aclara qué conceptos se incluyen. (Trf. financiera NO se agrupa: varias cuentas destino.)
 function exportarDeposito(liqs, mes, anio) {
-  const filas = lineasDetalle(liqs, "deposito");
+  const filas = [];
+  for (const liq of liqs) {
+    const deps = (liq.lineas || []).filter(l => l.tipo === "deposito" && Number(l.importe) > 0);
+    const novs = (liq.novedades || []).filter(n => n.forma_pago === "deposito" && Number(n.monto) > 0);
+    if (!deps.length && !novs.length) continue;
+    const total = deps.reduce((s, l) => s + Number(l.importe), 0) + novs.reduce((s, n) => s + Math.abs(Number(n.monto)), 0);
+    const base  = deps.find(l => l.cbu || l.cuenta) || deps[0] || {};   // datos bancarios de la cuenta
+    const incluye = novs.length ? "Incluye: " + [...new Set(novs.map(n => n.cuenta_contable_nombre || n.descripcion || "novedad"))].join(", ") : "";
+    filas.push([
+      liq.legajo_nombre,
+      base.titular || liq.legajo_nombre || "",
+      total,
+      base.banco || "",
+      base.tipo_cuenta || "",
+      base.cuenta || "",
+      base.cbu || liq.cbu || "",
+      base.cuit || "",
+      incluye,
+    ]);
+  }
   if (!filas.length) { alert("No hay líneas de Depósito con importe cargado."); return; }
   descargarExcelDetalle(filas, `Deposito_HQ_${String(mes).padStart(2,"0")}_${anio}.xlsx`);
 }
@@ -1364,6 +1407,36 @@ function exportarTransferenciaFinanciera(liqs, mes, anio) {
   const filas = lineasDetalle(liqs, "transferencia_financiera");
   if (!filas.length) { alert("No hay líneas de Trf. financiera con importe cargado."); return; }
   descargarExcelDetalle(filas, `Transferencias_HQ_${String(mes).padStart(2,"0")}_${anio}.xlsx`);
+}
+
+// Monotributo + Efectivo: UNA línea por legajo × FORMA (no se mezclan efectivo y monotributo,
+// son destinos distintos: plata en mano vs transferencia al monotributista). Suma los conceptos
+// (Monotributo/Obra Social/Otros Gastos/Viáticos) y marca Estado (PAGADO/PARCIAL/PENDIENTE).
+const MONO_EF_HEADERS = ["Legajo", "Forma", "Estado", "Titular", "Importe", "Pagado", "Pendiente", "CBU", "CUIT", "Incluye"];
+function exportarMonotributoEfectivo(liqs, mes, anio) {
+  const FORMAS = [["efectivo", "Efectivo"], ["monotributo", "Monotributo"]];
+  const abs = (ps) => ps.reduce((a, p) => a + Math.abs(Number(p.monto) || 0), 0);
+  const filas = [];
+  for (const liq of liqs) {
+    for (const [tipo, label] of FORMAS) {
+      const ls   = (liq.lineas || []).filter(l => l.tipo === tipo && Number(l.importe) > 0);
+      const novs = (liq.novedades || []).filter(n => n.forma_pago === tipo && Number(n.monto) > 0);
+      if (!ls.length && !novs.length) continue;
+      const total  = ls.reduce((s, l) => s + Number(l.importe), 0) + novs.reduce((s, n) => s + Math.abs(Number(n.monto)), 0);
+      const pagado = ls.reduce((s, l) => s + abs(getPagosLinea(liq, l)), 0) + novs.reduce((s, n) => s + abs(getPagosNovedad(liq, n)), 0);
+      const estado = { none: "PENDIENTE", partial: "PARCIAL", full: "PAGADO" }[estadoPago(total, pagado)];
+      const base   = ls.find(l => l.cbu || l.cuenta) || ls[0] || {};
+      const incluye = [...new Set([
+        ...ls.map(l => l.nota).filter(Boolean),
+        ...novs.map(n => n.cuenta_contable_nombre || n.descripcion || ""),
+      ].filter(Boolean))].join(", ");
+      filas.push([liq.legajo_nombre, label, estado, base.titular || liq.legajo_nombre || "",
+        total, pagado, remanentePago(total, pagado), base.cbu || liq.cbu || "", base.cuit || "", incluye]);
+    }
+  }
+  if (!filas.length) { alert("No hay líneas de Monotributo / Efectivo con importe cargado."); return; }
+  descargarExcelHoja({ headers: MONO_EF_HEADERS, anchos: [24, 12, 12, 26, 14, 14, 14, 26, 16, 30], hoja: "Sheet1", filas,
+    nombreArchivo: `Monotributo_Efectivo_HQ_${String(mes).padStart(2, "0")}_${anio}.xlsx` });
 }
 
 // ── Paso 3: Registrar pagos ───────────────────────────────────────────────────
@@ -1403,10 +1476,11 @@ function describirDestino(l, nombreEmpleado = "") {
   return detalle ? `${base} — ${detalle}` : base;
 }
 
-function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onRegistrarPago, onBatchPaid }) {
+function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onRegistrarPago, onBatchPaid, onReabrir }) {
   const [anularModal, setAnularModal] = useState(null); // pago object
   const [expandido,   setExpandido]   = useState(null); // legajo_id desplegado
   const [batchModal,  setBatchModal]  = useState(null); // { tipo }
+  const [reabrirLiq,  setReabrirLiq]  = useState(null); // liq a reabrir (confirm)
 
   // Cerradas arriba, borradores abajo; dentro de cada grupo, por total de mayor a menor.
   const todos = useMemo(() => {
@@ -1519,13 +1593,21 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onReg
             {todos.map((liq, i) => {
               const sums = sumByFormaPago(liq.lineas, liq.novedades);
               const open = expandido === liq.legajo_id;
-              const bucketPaid = (col) => {
+              // Estado por columna: null (no aplica) | "none" | "partial" | "full".
+              // Parcial-aware: suma pagos vs total, no solo "¿tiene algún pago?".
+              const abs = (ps) => ps.reduce((a, p) => a + Math.abs(Number(p.monto) || 0), 0);
+              const colState = (col) => {
                 const ls   = liq.lineas.filter(l => l.tipo === col);
                 const novs = (liq.novedades || []).filter(n => n.forma_pago === col);
                 if (!ls.length && !novs.length) return null;
-                return ls.every(l => getPagosLinea(liq, l).length > 0)
-                    && novs.every(n => getPagosNovedad(liq, n).length > 0);
+                const total  = ls.reduce((s, l) => s + (Number(l.importe) || 0), 0)
+                             + novs.reduce((s, n) => s + Math.abs(Number(n.monto) || 0), 0);
+                const pagado = ls.reduce((s, l) => s + abs(getPagosLinea(liq, l)), 0)
+                             + novs.reduce((s, n) => s + abs(getPagosNovedad(liq, n)), 0);
+                return estadoPago(total, pagado);
               };
+              const colStates  = Object.fromEntries(COLS.map(c => [c.id, colState(c.id)]));
+              const hayParcial = COLS.some(c => colStates[c.id] === "partial");
               return (
                 <Fragment key={liq.legajo_id}>
                   <tr onClick={() => setExpandido(open ? null : liq.legajo_id)}
@@ -1533,16 +1615,27 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onReg
                     <td style={TD({ fontWeight: 600 })}>
                       <span style={{ color: T.dim, marginRight: 6, fontSize: 11 }}>{open ? "▾" : "▸"}</span>
                       {liq.legajo_nombre}
-                      <EstadoBadge estado={liq.estado} />
+                      {isCerrada(liq.estado) && onReabrir ? (
+                        <button onClick={(e) => { e.stopPropagation(); setReabrirLiq(liq); }}
+                          title="Cerrada — click para reabrir (vuelve a borrador; no toca los pagos)"
+                          style={{ marginLeft: 8, fontSize: 12, color: T.green, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+                          🔒
+                        </button>
+                      ) : <EstadoBadge estado={liq.estado} />}
+                      {hayParcial && <span title="Tiene un pago parcial pendiente"
+                        style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: T.yellow, background: "#fefce8", border: `1px solid ${T.yellow}`, borderRadius: 4, padding: "1px 5px" }}>◐ parcial</span>}
                     </td>
                     <td style={TD({ textAlign: "right", fontWeight: 700, color: T.blue })}>{fmtMoney(liq.total_liquidacion)}</td>
                     {COLS.map(c => {
                       const monto = sums[c.id];
-                      const paid  = bucketPaid(c.id);
+                      const st    = colStates[c.id];
                       if (!monto) return <td key={c.id} style={TD({ textAlign: "right", color: T.dim })}>—</td>;
+                      const color = st === "full" ? T.green : st === "partial" ? T.yellow : FP_TIPO_COLOR[c.id] || T.text;
                       return (
-                        <td key={c.id} style={TD({ textAlign: "right", color: paid ? T.green : FP_TIPO_COLOR[c.id] || T.text })}>
-                          {fmtMoney(monto)}{paid && <span style={{ marginLeft: 4, fontWeight: 700 }}>✓</span>}
+                        <td key={c.id} style={TD({ textAlign: "right", color })}>
+                          {fmtMoney(monto)}
+                          {st === "full"    && <span style={{ marginLeft: 4, fontWeight: 700 }}>✓</span>}
+                          {st === "partial" && <span style={{ marginLeft: 4, fontSize: 10, fontWeight: 700 }}>parc.</span>}
                         </td>
                       );
                     })}
@@ -1574,9 +1667,31 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onReg
         <button style={BTN_EXPORT("#7c3aed")} onClick={() => exportarTransferenciaFinanciera(todos, mes, anio)}>
           📥 Excel Trf. financiera
         </button>
+        <button style={BTN_EXPORT("#ca8a04")} onClick={() => exportarMonotributoEfectivo(todos, mes, anio)}>
+          📥 Excel Monotributo + Efectivo
+        </button>
         <div style={{ flex: 1 }} />
         <button onClick={onAtras} style={BTN_SECONDARY}>← Atrás</button>
       </div>
+
+      {reabrirLiq && (
+        <div onClick={() => setReabrirLiq(null)} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, fontFamily: T.font }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: 420, padding: 22, boxShadow: "0 12px 40px rgba(0,0,0,.25)" }}>
+            <h3 style={{ margin: "0 0 8px", fontSize: 16, fontWeight: 700, color: T.text }}>🔓 Reabrir liquidación — {reabrirLiq.legajo_nombre}</h3>
+            <p style={{ margin: "0 0 16px", fontSize: 13, color: T.muted, lineHeight: 1.5 }}>
+              Vuelve a <strong>borrador</strong> para reeditarla y cerrarla de nuevo. Los pagos ya
+              registrados <strong>no se tocan</strong> (podés seguir pagando).
+            </p>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={() => setReabrirLiq(null)} style={BTN_SECONDARY}>Cancelar</button>
+              <button onClick={async () => { const l = reabrirLiq; setReabrirLiq(null); await onReabrir(l); }}
+                style={{ background: T.blue, color: "#fff", border: "none", borderRadius: 7, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                Reabrir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {anularModal && (
         <ModalAnularPago
@@ -1645,29 +1760,37 @@ function EmpleadoPagosLineas({ liq, cols, onPagar, onVerPago }) {
               const items = f.items(c.id);
               if (!items.length) return <td key={c.id} style={TD({ ...tdBase, textAlign: "right", color: T.dim })}>—</td>;
               const monto      = items.reduce((s, it) => s + montoItem(it), 0);
-              const pagosCelda = items.map(pagosItem);
-              const paid       = pagosCelda.every(p => p.length > 0);
-              if (paid) {
-                const primerPago = pagosCelda.find(p => p.length > 0)[0];
-                return (
-                  <td key={c.id} style={TD({ ...tdBase, textAlign: "right" })}>
-                    <button onClick={() => onVerPago(primerPago)} title="Ver / anular este pago"
-                      style={{ ...btn, color: T.green }}>
-                      {fmtMoney(monto)} ✓
-                    </button>
-                  </td>
-                );
-              }
-              const pendientes = items.filter(it => pagosItem(it).length === 0);
+              // Pagado de la celda = suma de TODOS los pagos de sus ítems (soporta parciales acumulados).
+              const pagado     = items.reduce((s, it) => s + pagosItem(it).reduce((a, p) => a + Math.abs(Number(p.monto) || 0), 0), 0);
+              const pend       = remanentePago(monto, pagado);
+              const st         = estadoPago(monto, pagado);
+              const primerPago = items.flatMap(pagosItem)[0];
+              const pagar = () => onPagar({
+                tipo: c.id, esSueldo: f.esSueldo,
+                cuenta_contable_id: f.cuenta_contable_id,
+                cuenta_contable_nombre: f.cuenta_contable_nombre,
+                items, yaPagado: pagado,
+              });
+              // 1) Pago completo → ✓ verde. 2) Parcial (0<pagado<total) → falta en ámbar, clickeable
+              //    para pagar el resto. 3) Sin pagar → total clickeable.
+              if (st === "full") return (
+                <td key={c.id} style={TD({ ...tdBase, textAlign: "right" })}>
+                  <button onClick={() => onVerPago(primerPago)} title="Ver / anular este pago" style={{ ...btn, color: T.green }}>
+                    {fmtMoney(monto)} ✓
+                  </button>
+                </td>
+              );
+              if (st === "partial") return (
+                <td key={c.id} style={TD({ ...tdBase, textAlign: "right" })}>
+                  <button onClick={pagar} title={`Parcial: pagó ${fmtMoney(pagado)} · falta ${fmtMoney(pend)}. Click para pagar el resto`}
+                    style={{ ...btn, color: T.yellow, textDecoration: "underline", textDecorationStyle: "dotted" }}>
+                    {fmtMoney(pend)} <span style={{ fontSize: 10, fontWeight: 700 }}>parc.</span>
+                  </button>
+                </td>
+              );
               return (
                 <td key={c.id} style={TD({ ...tdBase, textAlign: "right" })}>
-                  <button title={`Imputar ${FP_TIPO_LABEL[c.id] || c.id} → ${f.cuenta_contable_nombre}`}
-                    onClick={() => onPagar({
-                      tipo: c.id, esSueldo: f.esSueldo,
-                      cuenta_contable_id: f.cuenta_contable_id,
-                      cuenta_contable_nombre: f.cuenta_contable_nombre,
-                      items: pendientes,
-                    })}
+                  <button title={`Imputar ${FP_TIPO_LABEL[c.id] || c.id} → ${f.cuenta_contable_nombre}`} onClick={pagar}
                     style={{ ...btn, color: FP_TIPO_COLOR[c.id] || T.text, textDecoration: "underline", textDecorationStyle: "dotted" }}>
                     {fmtMoney(monto)}
                   </button>
@@ -1860,6 +1983,14 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
   const tipo       = cell.tipo;
   const montoItem  = (it) => (it.kind === "linea" ? Number(it.ref.importe) : Number(it.ref.monto)) || 0;
   const montoTotal = cell.items.reduce((s, it) => s + montoItem(it), 0);
+  // Pago PARCIAL solo cuando la celda es UNA sola línea (caso normal). El resto queda pendiente
+  // (el neteo es por suma). Con varios movimientos se paga completo (no se reparte el parcial).
+  const editable = cell.items.length === 1;
+  const yaPagado = Number(cell.yaPagado) || 0;          // parciales previos de esta línea
+  const pendienteLinea = remanentePago(montoTotal, yaPagado);
+  const tope = editable ? pendienteLinea : montoTotal;  // no se puede imputar más que lo que falta
+  const [montoImputar, setMontoImputar] = useState(tope);
+  const parcial = editable && montoImputar > 0 && montoImputar < pendienteLinea;
   const [form, setForm] = useState({
     fecha:              new Date().toISOString().slice(0, 10),
     sociedad_id:        "",   // solo para transferencia
@@ -1902,6 +2033,10 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
   const handleSave = async () => {
     if (savingRef.current) return;
     if (!form.cuenta_id) { alert("Seleccioná una cuenta bancaria."); return; }
+    if (editable) {
+      const m = Number(montoImputar) || 0;
+      if (m <= 0 || m > tope + PAGO_EPS) { alert(`El monto a imputar debe ser mayor a 0 y no superar lo pendiente (${fmtMoney(tope)}).`); return; }
+    }
     savingRef.current = true; setSaving(true);
     try {
       const cta = cuentas.find(c => c.id === form.cuenta_id);
@@ -1926,7 +2061,8 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
       // Un nb_movimiento por ítem (granularidad por línea). Secuencial a propósito:
       // el backend GAS pierde escrituras concurrentes a nb_movimientos (appendRow colisiona).
       for (const it of cell.items) {
-        await appendPago({ ...comunes, forma_pago_id: it.ref.id, monto: montoItem(it), concepto: conceptoPago(it, liq, mes, anio), nota: notaPago(it), ambito: "hq" });
+        const monto = editable ? (Number(montoImputar) || 0) : montoItem(it);
+        await appendPago({ ...comunes, forma_pago_id: it.ref.id, monto, concepto: conceptoPago(it, liq, mes, anio), nota: notaPago(it), ambito: "hq" });
       }
       await onSaved();
     } catch (e) { alert("Error: " + e.message); setSaving(false); } finally { savingRef.current = false; }
@@ -1944,10 +2080,28 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
             <strong style={{ color: FP_TIPO_COLOR[tipo] || T.text }}>{FP_TIPO_LABEL[tipo] || tipo}</strong>
             {cell.items.length > 1 && <span> · {cell.items.length} movimientos</span>}
           </div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", background: T.bg, borderRadius: 5, padding: "8px 10px" }}>
+          {yaPagado > 0 && (
+            <div style={{ fontSize: 12, color: T.muted, background: T.bg, borderRadius: 5, padding: "6px 10px", display: "flex", justifyContent: "space-between" }}>
+              <span>Ya pagado: <strong style={{ color: T.green }}>{fmtMoney(yaPagado)}</strong> de {fmtMoney(montoTotal)}</span>
+              <span>Pendiente: <strong style={{ color: T.text }}>{fmtMoney(pendienteLinea)}</strong></span>
+            </div>
+          )}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: T.bg, borderRadius: 5, padding: "8px 10px" }}>
             <span style={{ fontSize: 12, color: T.muted }}>Total a imputar</span>
-            <strong style={{ fontSize: 16, color: T.text }}>{fmtMoney(montoTotal)}</strong>
+            {editable ? (
+              <input type="text" inputMode="numeric"
+                value={montoImputar ? Math.round(montoImputar).toLocaleString("es-AR") : ""}
+                onChange={e => { const v = Number(String(e.target.value).replace(/\./g, "").replace(/[^\d]/g, "")) || 0; setMontoImputar(Math.min(v, tope)); }}
+                style={{ ...MODAL_INPUT, width: 130, textAlign: "right", fontWeight: 700, fontSize: 15, margin: 0 }} />
+            ) : (
+              <strong style={{ fontSize: 16, color: T.text }}>{fmtMoney(montoTotal)}</strong>
+            )}
           </div>
+          {parcial && (
+            <div style={{ fontSize: 12, color: T.yellow, background: "#fefce8", borderRadius: 5, padding: "6px 10px" }}>
+              Pago parcial: quedan <strong>{fmtMoney(pendienteLinea - montoImputar)}</strong> pendientes en esta línea.
+            </div>
+          )}
           <div>
             <ModalLabel>Fecha</ModalLabel>
             <input style={MODAL_INPUT} type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)} />

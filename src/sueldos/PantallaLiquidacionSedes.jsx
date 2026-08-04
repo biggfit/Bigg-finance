@@ -9,6 +9,7 @@ import {
   ROLES_COACHES, ROLES_FRONT, ROLES_LIMP, ROL_CONCEPTO,
   FP_TIPO_LABEL, FP_TIPO_COLOR, esTransferencia,
   idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionesLinesBatch, isCerrada,
+  estadoPago, remanentePago, PAGO_EPS,
 } from "../lib/sueldosApi";
 
 const T = {
@@ -54,6 +55,7 @@ const rowKeyDe = (legajo_id, sede_id) => `${legajo_id || ""}__${sede_id || ""}`;
 // El feriado del front se carga como novedad (no es campo de la fila), así que su monto NO
 // entra acá; para front la base efectiva es el sueldo básico.
 function baseGrupalDe(rol, { horasMonto, feriadosMonto, asignado, sueldoBase }) {
+  if (ROLES_LIMP.includes(rol)) return 0;   // LIMPIEZA está EXENTA de objetivos (individual y grupal)
   return ROLES_COACHES.includes(rol)
     ? horasMonto + feriadosMonto + asignado
     : sueldoBase + feriadosMonto;
@@ -270,6 +272,7 @@ function applyObjetivosToRows(rowsArr, objetivosArr) {
   if (!objetivosArr?.length) return rowsArr;
   const objBySede = Object.fromEntries(objetivosArr.map(o => [o.sede_id, o.porcentaje]));
   return rowsArr.map(r => {
+    if (ROLES_LIMP.includes(r.rol)) return r;    // limpieza exenta: no auto-aplicar objetivo grupal
     if (Number(r.c_grupo_pct) !== 0) return r;   // no pisar valores ya ingresados
     const pct = objBySede[r.sede_id];
     return pct != null ? { ...r, c_grupo_pct: pct } : r;
@@ -583,11 +586,16 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       let key, seed;
       if (leg) {
         matchedLegIds.add(leg.id);
-        key  = `${leg.id}__${sede.id}`;
+        // Un FIJO (encargado/vendedor/limpieza) liquida SIEMPRE en la sede de su LEGAJO, no donde
+        // Eye lo matcheó (puede haber cubierto un turno). Su base/objetivo van a su sede. Los coaches
+        // sí van a la sede del check-in de Eye. Evita el enredo tipo Candela (base a la sede ajena).
+        const legSede = ROLES_FIJOS.includes(leg.rol) && leg.sede_id ? sedes.find(s => s.id === leg.sede_id) : null;
+        const sedeF   = legSede ? { id: legSede.id, nombre: legSede.nombre } : sede;
+        key  = `${leg.id}__${sedeF.id}`;
         seed = { _id: key, bucket: "match",
           legajo_id: leg.id, legajo_nombre: leg.nombre,
           sociedad_id: leg.sociedad_id ?? "", sociedad_nombre: leg.sociedad_nombre ?? "",
-          sede_id: sede.id, sede_nombre: sede.nombre,
+          sede_id: sedeF.id, sede_nombre: sedeF.nombre,
           rol: leg.rol || "COACH",
           // El sueldo base de Sedes solo aplica a roles de Sedes. Si quien dio la clase es
           // de otro ámbito (HQ, etc.), en Sedes cobra SOLO sus horas, no su sueldo.
@@ -959,12 +967,19 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       // entre las sedes del empleado según el total de cada una (cada id_liq queda balanceado
       // y el devengado se imputa al centro de costo donde se ganó). Secuencial: GAS pierde
       // escrituras concurrentes.
+      // Base del prorrateo = suma de los totales de fila SIN redondeo (mismo criterio que rowTotal).
+      // Usar empl.total_sueldo (que INCLUYE el redondeo del efectivo) daba share<1 en un empleado de
+      // una sola sede → escalaba mal los haberes (200.000 → 199.994). Con esto, una sola sede = share 1.
+      const totalSueldoPorLegajo = {};
+      for (const r of rows) {
+        totalSueldoPorLegajo[r.legajo_id] = (totalSueldoPorLegajo[r.legajo_id] || 0) + lineasConceptoDeRow(r, "cerrado").total;
+      }
       const entries = [];
       for (const r of rows) {
         const { lineas, total: rowTotal, header } = lineasConceptoDeRow(r, "cerrado");
         const empl      = empls.find(e => e.legajo_id === r.legajo_id);
-        // El reparto de forma de pago es del SUELDO (total_sueldo), no de las novedades.
-        const emplTotal = empl?.total_sueldo ?? rowTotal;
+        // El reparto de forma de pago es del SUELDO (sin redondeo), no de las novedades.
+        const emplTotal = totalSueldoPorLegajo[r.legajo_id] || rowTotal;
         const share     = emplTotal > 0 ? rowTotal / emplTotal : 0;
         const d    = pagoDraft[r.legajo_id] || {};
         const habRow   = Math.round((Number(d.monto_haberes)       || 0) * share);
@@ -1859,6 +1874,8 @@ function PasoIncentivos({ rows, legajos, sedes, mes, anio, pais, novsByRowKey, u
                     {!isLimp ? inp(row, "asignado") : dash}
                   </td>
                   <td style={{ padding: "4px 6px" }}>
+                    {/* Objetivo grupal: coaches (sobre horas) y fijos no-limpieza (sobre sueldo básico).
+                        LIMPIEZA exenta → sin campo (baseGrupalDe devuelve 0 igual). */}
                     {!isLimp ? (
                       <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
                         <input style={{ ...iStyle, width: 44 }} value={row.c_grupo_pct || ""} placeholder="0"
@@ -2035,6 +2052,30 @@ function exportarHaberes(empls, mes, anio) {
     .map(e => [e.cbu, e.monto_haberes, "acreditamiento de haberes", desc, "", ""]);
   if (!filas.length) { alert("No hay empleados con Haberes y CBU cargado."); return; }
   descargarExcelGalicia(filas, `Haberes_Sedes_${String(mes).padStart(2,"0")}_${anio}.xlsx`);
+}
+
+// Efectivo + Monotributo (plata en mano / monotributistas): una fila por empleado × forma.
+function exportarEfectivoSedes(empls, mes, anio) {
+  const ESTADO_LBL = { none: "PENDIENTE", partial: "PARCIAL", full: "PAGADO" };
+  const abs = (ps) => ps.reduce((a, p) => a + Math.abs(Number(p.monto) || 0), 0);
+  const filas = [];
+  for (const e of empls) {
+    const sede = (e.sedes || []).join(", ");
+    // "transferencia" persiste el monotributo en Sedes; el tipo_componente del pago es "monotributo".
+    for (const [tipo, label] of [["efectivo", "Efectivo"], ["monotributo", "Monotributo"]]) {
+      const total = Math.round(getMontoTipo(e, tipo) || 0);
+      if (total <= 0) continue;
+      const pagado = abs(getPagosTipo(e, tipo));
+      filas.push([e.legajo_nombre, sede, label, ESTADO_LBL[estadoPago(total, pagado)],
+        total, Math.round(pagado), Math.round(remanentePago(total, pagado))]);
+    }
+  }
+  if (!filas.length) { alert("No hay pagos en efectivo / monotributo cargados."); return; }
+  const ws = XLSX.utils.aoa_to_sheet([["Legajo", "Sede", "Forma", "Estado", "Importe", "Pagado", "Pendiente"], ...filas]);
+  ws["!cols"] = [{ wch: 26 }, { wch: 22 }, { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Efectivo");
+  XLSX.writeFile(wb, `Efectivo_Monotributo_Sedes_${String(mes).padStart(2, "0")}_${anio}.xlsx`);
 }
 
 // ── Helpers de pago ───────────────────────────────────────────────────────────
@@ -2240,7 +2281,6 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid }) 
                 {TIPOS_PAGO.map(({ id, color }) => {
                   const monto = getMontoTipo(empl, id);
                   const pagos = getPagosTipo(empl, id);
-                  const dup   = pagos.length > 1;
                   if (!monto) return (
                     <td key={id} style={TD({ textAlign: "right" })}>
                       <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
@@ -2249,18 +2289,31 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid }) 
                       </div>
                     </td>
                   );
-                  const totalPagadoTipo = pagos.reduce((s, p) => s + p.monto, 0);
+                  // Parcial-aware: suma de pagos vs esperado. 4 estados: sin pagar / parcial (falta X,
+                  // ámbar) / completo (✓ verde) / sobrepagado (rojo). Varios pagos que suman el total =
+                  // completo (no es anomalía: puede ser un parcial + el resto).
+                  const pagado  = pagos.reduce((s, p) => s + Math.abs(Number(p.monto) || 0), 0);
+                  const pend    = remanentePago(monto, pagado);
+                  const over    = pagado > monto + PAGO_EPS;
+                  const st      = over ? "over" : estadoPago(monto, pagado);
+                  const full    = st === "full";
+                  const parcial = st === "partial";
+                  const cellCol = over ? T.red : full ? T.green : parcial ? T.yellow : color;
+                  const shown   = over ? pagado : parcial ? pend : monto;   // parcial muestra lo que FALTA
                   return (
-                    <td key={id} style={TD({ textAlign: "right", color: dup ? T.red : pagos.length ? T.green : color })}>
+                    <td key={id} style={TD({ textAlign: "right", color: cellCol })}>
                       <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
-                        {dup ? fmtMoney(totalPagadoTipo) : fmtMoney(monto)}
+                        {fmtMoney(shown)}
+                        {parcial && <span style={{ fontSize: 9, fontWeight: 700, color: T.yellow }}>parc.</span>}
                         <span style={{ display: "inline-flex", justifyContent: "center", width: 20, fontSize: 11, fontWeight: 700 }}>
                           {pagos[0]
                             ? <button
                                 onClick={() => setAnularModal(pagos[0])}
-                                title={dup ? `⚠️ ${pagos.length} pagos — total ${fmtMoney(totalPagadoTipo)} (esperado ${fmtMoney(monto)})` : "Ver / anular este pago"}
-                                style={{ background: "none", border: "none", cursor: "pointer", color: dup ? T.red : T.green, fontSize: 12, fontWeight: 700, padding: 0, lineHeight: 1 }}>
-                                {dup ? `×${pagos.length}` : "✓"}
+                                title={over ? `⚠️ ${pagos.length} pagos — total ${fmtMoney(pagado)} (esperado ${fmtMoney(monto)})`
+                                     : parcial ? `Parcial: pagó ${fmtMoney(pagado)} de ${fmtMoney(monto)} · falta ${fmtMoney(pend)}. Ver / anular`
+                                     : "Ver / anular este pago"}
+                                style={{ background: "none", border: "none", cursor: "pointer", color: cellCol, fontSize: 12, fontWeight: 700, padding: 0, lineHeight: 1 }}>
+                                {over ? `×${pagos.length}` : full ? "✓" : "◐"}
                               </button>
                             : ""
                           }
@@ -2292,6 +2345,9 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid }) 
       <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "16px 0", borderTop: `1px solid ${T.border}`, marginTop: 8 }}>
         <button style={BTN_EXPORT("#16a34a")} onClick={() => exportarHaberes(empls, mes, anio)}>
           📥 Excel Haberes (banco)
+        </button>
+        <button style={BTN_EXPORT("#ca8a04")} onClick={() => exportarEfectivoSedes(empls, mes, anio)}>
+          📥 Excel Monotributo + Efectivo
         </button>
         <div style={{ flex: 1 }} />
         <button onClick={onAtras} style={BTN_SECONDARY}>← Atrás</button>
@@ -2659,9 +2715,14 @@ function ModalAnularPago({ pago, onClose, onAnulado }) {
 // ── Modal pago individual ─────────────────────────────────────────────────────
 
 function ModalPagoSede({ mes, anio, liq, onClose, onSaved }) {
+  // Pago PARCIAL: el monto arranca en el REMANENTE de cada componente (total − ya pagado),
+  // así se puede pagar el resto sin re-tipear. Los parciales se acumulan.
+  const montoFullDe = (t) => Number({ haberes: liq?.monto_haberes, monotributo: liq?.monto_transferencia, efectivo: liq?.monto_efectivo }[t]) || 0;
+  const pagadoDe    = (t) => (liq?.pagos || []).filter(p => p.tipo_componente === t).reduce((s, p) => s + Math.abs(Number(p.monto) || 0), 0);
+  const remanenteDe = (t) => remanentePago(montoFullDe(t), pagadoDe(t));
   const [form, setForm] = useState({
     tipo_componente: "haberes",
-    monto:           liq?.monto_haberes || liq?.total || "",
+    monto:           remanenteDe("haberes") || liq?.total || "",
     fecha:           new Date().toISOString().slice(0, 10),
     sociedad_id:     "",
     cuenta_id:       "",
@@ -2691,18 +2752,17 @@ function ModalPagoSede({ mes, anio, liq, onClose, onSaved }) {
   [cuentas, socFiltro]);
 
   const handleTipo = (tipo) => {
-    const montos = {
-      haberes:     liq?.monto_haberes       || "",
-      monotributo: liq?.monto_transferencia || "",
-      efectivo:    liq?.monto_efectivo      || "",
-    };
-    setForm(f => ({ ...f, tipo_componente: tipo, cuenta_id: "", sociedad_id: "", ...(montos[tipo] ? { monto: montos[tipo] } : {}) }));
+    setForm(f => ({ ...f, tipo_componente: tipo, cuenta_id: "", sociedad_id: "", monto: remanenteDe(tipo) }));
   };
 
   const handleSave = async () => {
     if (savingRef.current) return;
     if (!form.monto)    { alert("Completá el monto."); return; }
     if (!form.cuenta_id){ alert("Seleccioná una cuenta bancaria."); return; }
+    const rem = remanenteDe(form.tipo_componente);
+    if (rem > 0 && (parseFloat(form.monto) || 0) > rem + PAGO_EPS) {
+      alert(`El monto no puede superar lo pendiente de ${FP_TIPO_LABEL[form.tipo_componente] || form.tipo_componente} (${fmtMoney(rem)}).`); return;
+    }
     savingRef.current = true; setSaving(true);
     try {
       const cta = cuentas.find(c => c.id === form.cuenta_id);
@@ -2748,6 +2808,11 @@ function ModalPagoSede({ mes, anio, liq, onClose, onSaved }) {
           <div>
             <ModalLabel>Monto (ARS)</ModalLabel>
             <input style={MODAL_INPUT} type="number" value={form.monto} onChange={e => set("monto", e.target.value)} />
+            {pagadoDe(form.tipo_componente) > 0.5 && (
+              <div style={{ fontSize: 11, color: T.yellow, marginTop: 4 }}>
+                Ya pagado {fmtMoney(pagadoDe(form.tipo_componente))} de {fmtMoney(montoFullDe(form.tipo_componente))} · pendiente <strong>{fmtMoney(remanenteDe(form.tipo_componente))}</strong>
+              </div>
+            )}
           </div>
           <div>
             <ModalLabel>Fecha</ModalLabel>

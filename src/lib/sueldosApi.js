@@ -98,6 +98,27 @@ function newId(prefix = "SU") {
 // contra el total del lote (no del mes), evitando el doble conteo de la caja de sueldos.
 export function nuevoLote() { return newId("LOTE"); }
 
+// ── Monto: helpers de máscara de miles ────────────────────────────────────────
+// Se GUARDA limpio (dígitos + "." decimal, parseFloat-friendly) y solo se MUESTRA con
+// separador es-AR (punto miles, coma decimal). El punto es visual, nunca entra al valor.
+export const fmtMiles = (s) => {
+  const str = String(s ?? "");
+  if (str === "") return "";
+  const [ent, dec] = str.split(".");
+  const entFmt = ent.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return dec != null ? `${entFmt},${dec}` : entFmt;
+};
+export const limpiarMonto = (v) => String(v).replace(/\./g, "").replace(",", ".").replace(/[^\d.]/g, "");
+
+// ── Estado de pago de una línea/columna (tolerancia ±$0,50 por redondeo) ──────
+export const PAGO_EPS = 0.5;
+export const remanentePago = (total, pagado) => Math.max(0, (Number(total) || 0) - (Number(pagado) || 0));
+export const estadoPago = (total, pagado) => {
+  const t = Number(total) || 0, p = Number(pagado) || 0;
+  if (p <= PAGO_EPS) return "none";
+  return (t - p <= PAGO_EPS) ? "full" : "partial";
+};
+
 // ── Formas de pago (receta de cobro por empleado) ─────────────────────────────
 // Cada línea: { id, tipo, importe, banco, tipo_cuenta, cuenta, cbu, cuit, nota }
 // tipo ∈ haberes | deposito | transferencia | efectivo
@@ -599,13 +620,23 @@ export const normSoc = (s) => {
 // (nb_movimientos origen sueldos), neteado por legajo+mes+sociedad y agregado por legajo.
 // La antigüedad (aging) se calcula en la pantalla con la fecha de hoy sobre `items`.
 // `ambito` (hq/sedes) sale del rol de la liquidación → sirve para el deep-link al wizard.
-// Neto por (legajo|mes-anio|sociedad) = devengado (liquidaciones cerradas) − pagado (movimientos).
+// Neto por (legajo|mes-anio|sociedad|ambito) = devengado (liquidaciones cerradas) − pagado (movimientos).
 // Incluye claves que SOLO tienen pago (adelanto sin liquidación aún) → quedan negativas.
+// PARCHE (medio desordenado, mejorar más adelante — ver [[project_pnl_sueldos]]): el `ambito`
+// va en la CLAVE. Un mismo legajo puede tener en el mismo mes una liquidación HQ y una de sede
+// (ej. Facundo/Ignacio: HQ + Huergo), y ambas caen en sociedad "beta" (efectivo/depósito) → sin el
+// ambito en la clave se colapsaban en una sola entrada y todo su efectivo de sede quedaba filado
+// bajo HQ (o viceversa). Con el ambito en la clave, la parte de sede va a Sedes y la de HQ a HQ, y
+// "Sueldos por pagar › Sedes" coincide con el Paso 5. LIMITACIÓN: el neteo del pago ahora es
+// ambito-sensible → depende de que el pago traiga `ambito` bien seteado (los handlers HQ/Sedes lo
+// estampan; un pago legacy sin ambito cae a "sedes" por defecto y podría no netear contra un
+// devengado HQ del mismo legajo). Solución prolija futura: derivar el ambito del pago de la
+// liquidación que salda, no de la columna del movimiento.
 function _netoSueldos(liqsCerradas, pagos, { pais } = {}) {
   const liqs = (liqsCerradas || []).filter(l => !pais || !l.pais || l.pais === pais);
-  const neto = new Map();   // legajo|anio-mes|soc → { legajo_id, legajo, mes, anio, sociedad, ambito, monto }
+  const neto = new Map();   // legajo|anio-mes|soc|ambito → { legajo_id, legajo, mes, anio, sociedad, ambito, monto }
   const ensure = (legajo_id, legajo, mes, anio, soc, ambito) => {
-    const key = `${legajo_id}|${anio}-${mes}|${soc}`;
+    const key = `${legajo_id}|${anio}-${mes}|${soc}|${ambito}`;
     let cur = neto.get(key);
     if (!cur) { cur = { legajo_id, legajo, mes, anio, sociedad: soc, ambito, monto: 0 }; neto.set(key, cur); }
     return cur;
@@ -726,6 +757,10 @@ function _pagosDeMovs(rows, { mes, anio } = {}) {
     // Solo pagos de sueldo REALES (tipo SUELDO). El pago del F931 (pagarCargasSociales) también es
     // origen "sueldos" pero tipo PAGO y sin legajo/mes → si entrara acá generaría un "adelanto" fantasma.
     .filter(m => m.origen === "sueldos" && m.tipo === "SUELDO")
+    // Excluir movimientos ignorados (IGN-): un pago de sueldo marcado como ignorado NO debe
+    // restar de la deuda. Empareja con fetchMovTesoreria (Tesorería ya los excluía en la fuente),
+    // así "Sueldos por pagar" y Tesorería consolidada dan el mismo pendiente.
+    .filter(m => !String(m.documento_id || "").startsWith("IGN-"))
     .filter(m => mes  == null || Number(m.mes)  === Number(mes))
     .filter(m => anio == null || Number(m.anio) === Number(anio))
     .map(parsePagoFromMov);

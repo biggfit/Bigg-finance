@@ -796,7 +796,14 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
     setLoading(true);
     setError(null);
     try {
-      const [docs, pagos] = await Promise.all([fetchEgresos(sociedad), fetchPagosCobros(sociedad)]);
+      // Reintento ante hipo transitorio del GAS: sin esto, un fallo en la re-lectura post-guardado
+      // dejaba la lista VIEJA (parecía que la edición "no se guardó" cuando en la base sí estaba).
+      let docs, pagos, lastErr;
+      for (let a = 0; a < 3; a++) {
+        try { [docs, pagos] = await Promise.all([fetchEgresos(sociedad), fetchPagosCobros(sociedad)]); lastErr = null; break; }
+        catch (e) { lastErr = e; if (a < 2) await new Promise(r => setTimeout(r, 800 * (a + 1))); }
+      }
+      if (lastErr) throw lastErr;
       // Enriquecer cada documento con saldo y estado derivado
       const pagosDocs = pagos.filter(p => p.tipo === "PAGO" || p.tipo === "EGRESO_GASTO");
       const enriched  = docs.map(doc => {

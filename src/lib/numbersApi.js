@@ -238,9 +238,18 @@ export async function appendEgreso(egreso) {
   return { ok: true, id_comp };
 }
 
-/** Elimina todas las líneas de un egreso (por id_comp). */
+/** Elimina todas las líneas de un egreso (por id_comp).
+ *  ROBUSTO: tras el del_comp, RE-LEE sin cache y borra por id cualquier fila que haya
+ *  quedado con ese id_comp. Visto en prod: al re-guardar una edición, una línea vieja
+ *  sobrevivía al del_comp → quedaba duplicada con la re-agregada. Este barrido garantiza
+ *  slate limpio antes del re-alta (appendEgreso corre después en el flujo de edición). */
 export async function deleteEgreso(id_comp) {
-  return post({ action: "del_comp", sheet: "nb_comprobantes", id_comp });
+  await post({ action: "del_comp", sheet: "nb_comprobantes", id_comp });
+  try {
+    const restos = (await _fetchRowsRaw("nb_comprobantes")).filter(r => String(r.id_comp) === String(id_comp));
+    for (const r of restos) if (r.id) await post({ action: "del", sheet: "nb_comprobantes", id: r.id });
+  } catch { /* la verificación es best-effort; el del_comp principal ya corrió */ }
+  return { ok: true };
 }
 
 /**
