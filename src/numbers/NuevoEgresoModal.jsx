@@ -7,7 +7,7 @@ import {
   InvoiceLineasTable, InvoiceNotaYTotales, InvoiceFormFooter,
   useCcGroups, initialFacturaLineas, facturaCanSave, runSaveThenMaybeClose,
   useDeferredEntityLookup, makeFacturaPartyChangeHandler, FACTURA_TOP_FIELDS_GRID,
-  FacturaMaestroCuentaFields, FacturaFormChrome, formatNroComp,
+  FacturaMaestroCuentaFields, FacturaFormChrome, useNroCompMask,
 } from "./formUtils";
 import { ProveedorModal, CuentaModal } from "./PantallaMaestros";
 import { useLineas } from "./useLineas";
@@ -42,6 +42,7 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
   const [fecha, setFecha] = useState(initialData?.fecha ?? todayISO());
   const [vto, setVto] = useState(initialData?.vto ?? addDays(todayISO(), 30));
   const [nroComp, setNroComp] = useState(initialData?.nroComp ?? "");
+  const nroMask = useNroCompMask(nroComp, setNroComp);
   const [nota, setNota] = useState(initialData?.nota ?? "");
   const { lineas, setLineas, updLinea, addLinea, delLinea } = useLineas(initLineas);
 
@@ -155,7 +156,8 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
           </select>
         </SoftField>
         <SoftField label="N° comprobante">
-          <input value={nroComp} onChange={e => setNroComp(formatNroComp(e.target.value))}
+          <input ref={nroMask.ref} value={nroComp}
+            onChange={nroMask.onChange}
             placeholder="FC-A 0001-00001234"
             style={{ ...inputStyle, ...(dupError ? { borderColor: "#dc2626", background: "#fef2f2" } : {}) }} />
           {dupError && (
