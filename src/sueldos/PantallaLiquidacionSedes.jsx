@@ -585,11 +585,16 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       let key, seed;
       if (leg) {
         matchedLegIds.add(leg.id);
-        key  = `${leg.id}__${sede.id}`;
+        // Un FIJO (encargado/vendedor/limpieza) liquida SIEMPRE en la sede de su LEGAJO, no donde
+        // Eye lo matcheó (puede haber cubierto un turno). Su base/objetivo van a su sede. Los coaches
+        // sí van a la sede del check-in de Eye. Evita el enredo tipo Candela (base a la sede ajena).
+        const legSede = ROLES_FIJOS.includes(leg.rol) && leg.sede_id ? sedes.find(s => s.id === leg.sede_id) : null;
+        const sedeF   = legSede ? { id: legSede.id, nombre: legSede.nombre } : sede;
+        key  = `${leg.id}__${sedeF.id}`;
         seed = { _id: key, bucket: "match",
           legajo_id: leg.id, legajo_nombre: leg.nombre,
           sociedad_id: leg.sociedad_id ?? "", sociedad_nombre: leg.sociedad_nombre ?? "",
-          sede_id: sede.id, sede_nombre: sede.nombre,
+          sede_id: sedeF.id, sede_nombre: sedeF.nombre,
           rol: leg.rol || "COACH",
           // El sueldo base de Sedes solo aplica a roles de Sedes. Si quien dio la clase es
           // de otro ámbito (HQ, etc.), en Sedes cobra SOLO sus horas, no su sueldo.
