@@ -41,10 +41,22 @@ export const dateStyle = { ...inputStyle, appearance: "auto", WebkitAppearance: 
 export function formatNroComp(raw) {
   const up      = String(raw ?? "").toUpperCase();
   const letras  = (up.match(/[A-Z]/g) || []).join("");
-  const digitos = (up.match(/\d/g) || []).join("");
-  const m       = letras.match(/^(FC|NC|ND|FA|RE|TK|TQ)([ABCEMT])$/);
-  const prefijo = m ? `${m[1]}-${m[2]}` : letras;
-  const num     = digitos.length > 4 ? `${digitos.slice(0, 4)}-${digitos.slice(4, 12)}` : digitos;
+  const digitos = (up.match(/\d/g) || []).join("").slice(0, 13);   // AFIP: hasta 5 (pto vta) + 8 (número)
+  // Prefijo: sólo tipos de comprobante válidos (AFIP/ARCA). Descarta letras inválidas
+  // en vez de tomarlas tal cual. Tipos: Factura/NC/ND/Recibo/Tique · Clases: A B C E M T.
+  const TIPOS_COMP  = ["FC", "FA", "NC", "ND", "RE", "TK", "TQ"];
+  const CLASES_COMP = "ABCEMT";
+  let prefijo = "";
+  if (letras) {
+    const t2 = letras.slice(0, 2);
+    if (TIPOS_COMP.includes(t2)) {
+      prefijo = CLASES_COMP.includes(letras[2]) ? `${t2}-${letras[2]}` : t2;
+    } else if (TIPOS_COMP.some(t => t.startsWith(letras[0]))) {
+      prefijo = letras[0];   // 1ª letra válida (va camino a un tipo) → se permite mientras tipea
+    }
+  }
+  // Punto de venta = hasta 5 dígitos · Número = 8 (AFIP moderno, ej. 00009-00003541).
+  const num     = digitos.length > 5 ? `${digitos.slice(0, 5)}-${digitos.slice(5, 13)}` : digitos;
   return [prefijo, num].filter(Boolean).join(" ");
 }
 
@@ -55,11 +67,28 @@ export function formatNroComp(raw) {
 export function useNroCompMask(value, setValue) {
   const ref   = useRef(null);
   const caret = useRef(null);
+  // Rechaza el cambio: revierte el DOM al valor anterior y deja el cursor donde estaba.
+  const revert = (el) => {
+    const back = Math.max(0, (el.selectionStart ?? value.length) - 1);
+    el.value = value;
+    try { el.setSelectionRange(back, back); } catch { /* input sin selección */ }
+  };
   const onChange = (e) => {
     const el = e.target, raw = el.value;
+    // AFIP: máx 5 (pto vta) + 8 (número) = 13 dígitos. Si ya está completo, no aceptar más.
+    if ((raw.match(/\d/g) || []).length > 13) { revert(el); return; }
+    const formatted = formatNroComp(raw);
+    // Si el cambio no produjo un valor válido nuevo (ej. una letra que no forma un tipo
+    // de comprobante válido), se rechaza la tecla en vez de dejar el carácter suelto.
+    if (formatted === value) { revert(el); return; }
+    // No pisar/borrar lo ya cargado: si se AGREGA un carácter pero el resultado PIERDE
+    // contenido (ej. una letra inválida al frente que descarta el prefijo FC-C), se rechaza.
+    // La corrección es borrar y reescribir (una tecla nueva nunca reduce lo cargado).
+    const alnum = (s) => (String(s).match(/[A-Za-z0-9]/g) || []).length;
+    if (alnum(raw) >= alnum(value) && alnum(formatted) < alnum(value)) { revert(el); return; }
     const pos = el.selectionStart ?? raw.length;
     caret.current = raw.slice(0, pos).replace(/[^A-Za-z0-9]/g, "").length;
-    setValue(formatNroComp(raw));
+    setValue(formatted);
   };
   useLayoutEffect(() => {
     if (caret.current == null || !ref.current) return;
