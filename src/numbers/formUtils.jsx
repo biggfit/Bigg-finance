@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useCallback } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useCallback } from "react";
 import { T } from "./theme";
 import { newLinea } from "./useLineas";
 
@@ -46,6 +46,32 @@ export function formatNroComp(raw) {
   const prefijo = m ? `${m[1]}-${m[2]}` : letras;
   const num     = digitos.length > 4 ? `${digitos.slice(0, 4)}-${digitos.slice(4, 12)}` : digitos;
   return [prefijo, num].filter(Boolean).join(" ");
+}
+
+// Hook para el input de N° de comprobante: formatea en vivo con la máscara AFIP
+// (formatNroComp) SIN mandar el cursor al final. Guarda cuántos alfanuméricos hay
+// antes del cursor y, tras reformatear, lo reubica en el mismo punto lógico.
+// Uso: const nro = useNroCompMask(value, setValue); <input ref={nro.ref} value={value} onChange={nro.onChange} />
+export function useNroCompMask(value, setValue) {
+  const ref   = useRef(null);
+  const caret = useRef(null);
+  const onChange = (e) => {
+    const el = e.target, raw = el.value;
+    const pos = el.selectionStart ?? raw.length;
+    caret.current = raw.slice(0, pos).replace(/[^A-Za-z0-9]/g, "").length;
+    setValue(formatNroComp(raw));
+  };
+  useLayoutEffect(() => {
+    if (caret.current == null || !ref.current) return;
+    const target = caret.current; caret.current = null;
+    let pos = 0, seen = 0;
+    while (pos < value.length && seen < target) {
+      if (/[A-Za-z0-9]/.test(value[pos])) seen++;
+      pos++;
+    }
+    ref.current.setSelectionRange(pos, pos);
+  }, [value]);
+  return { ref, onChange };
 }
 
 // ─── Lookup: busca primero por ID, luego por nombre ───────────────────────────
