@@ -620,13 +620,23 @@ export const normSoc = (s) => {
 // (nb_movimientos origen sueldos), neteado por legajo+mes+sociedad y agregado por legajo.
 // La antigüedad (aging) se calcula en la pantalla con la fecha de hoy sobre `items`.
 // `ambito` (hq/sedes) sale del rol de la liquidación → sirve para el deep-link al wizard.
-// Neto por (legajo|mes-anio|sociedad) = devengado (liquidaciones cerradas) − pagado (movimientos).
+// Neto por (legajo|mes-anio|sociedad|ambito) = devengado (liquidaciones cerradas) − pagado (movimientos).
 // Incluye claves que SOLO tienen pago (adelanto sin liquidación aún) → quedan negativas.
+// PARCHE (medio desordenado, mejorar más adelante — ver [[project_pnl_sueldos]]): el `ambito`
+// va en la CLAVE. Un mismo legajo puede tener en el mismo mes una liquidación HQ y una de sede
+// (ej. Facundo/Ignacio: HQ + Huergo), y ambas caen en sociedad "beta" (efectivo/depósito) → sin el
+// ambito en la clave se colapsaban en una sola entrada y todo su efectivo de sede quedaba filado
+// bajo HQ (o viceversa). Con el ambito en la clave, la parte de sede va a Sedes y la de HQ a HQ, y
+// "Sueldos por pagar › Sedes" coincide con el Paso 5. LIMITACIÓN: el neteo del pago ahora es
+// ambito-sensible → depende de que el pago traiga `ambito` bien seteado (los handlers HQ/Sedes lo
+// estampan; un pago legacy sin ambito cae a "sedes" por defecto y podría no netear contra un
+// devengado HQ del mismo legajo). Solución prolija futura: derivar el ambito del pago de la
+// liquidación que salda, no de la columna del movimiento.
 function _netoSueldos(liqsCerradas, pagos, { pais } = {}) {
   const liqs = (liqsCerradas || []).filter(l => !pais || !l.pais || l.pais === pais);
-  const neto = new Map();   // legajo|anio-mes|soc → { legajo_id, legajo, mes, anio, sociedad, ambito, monto }
+  const neto = new Map();   // legajo|anio-mes|soc|ambito → { legajo_id, legajo, mes, anio, sociedad, ambito, monto }
   const ensure = (legajo_id, legajo, mes, anio, soc, ambito) => {
-    const key = `${legajo_id}|${anio}-${mes}|${soc}`;
+    const key = `${legajo_id}|${anio}-${mes}|${soc}|${ambito}`;
     let cur = neto.get(key);
     if (!cur) { cur = { legajo_id, legajo, mes, anio, sociedad: soc, ambito, monto: 0 }; neto.set(key, cur); }
     return cur;
