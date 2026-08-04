@@ -117,9 +117,18 @@ export function facturaCanSave({ partyId, cuentaId, fecha, lineas }) {
   return !!(partyId && cuentaId && fecha && conMonto.length > 0 && conMonto.every(l => l.cc));
 }
 
-export function runSaveThenMaybeClose(onSave, payload, asPage, onClose) {
-  onSave?.(payload);
-  if (!asPage) onClose();
+// ANTES: onSave?.(payload) sin await + cierre inmediato del modal — un guardado que tarda
+// (varios POST secuenciales al GAS) o que falla a mitad de camino cerraba igual, sin avisar
+// nada: el usuario veía "guardó" cuando en realidad quedó a medio hacer (ej. factura creada
+// pero sin el pago vinculado). Ahora espera el resultado real y solo cierra si no hay error;
+// si onSave rechaza, el propio caller ya mostró su alert — acá solo se evita el cierre fantasma.
+export async function runSaveThenMaybeClose(onSave, payload, asPage, onClose) {
+  try {
+    await onSave?.(payload);
+    if (!asPage) onClose();
+  } catch {
+    // el modal queda abierto: el error ya se le avisó al usuario en el onSave del caller.
+  }
 }
 
 export function useDeferredEntityLookup({ initialData, currentId, setId, list, idKey, nameKey }) {

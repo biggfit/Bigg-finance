@@ -935,6 +935,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
       await cargarIngresos();
     } catch (e) {
       alert("Error al guardar: " + e.message);
+      throw e;   // el modal (runSaveThenMaybeClose) no debe cerrarse como si hubiera guardado
     }
   };
 

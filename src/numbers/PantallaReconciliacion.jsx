@@ -2028,15 +2028,28 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
             onClose={() => setCargarFacturaFor(null)}
             onSave={async (payload) => {
               // 1) crear la factura, 2) imputar el pago del extracto contra ella = conciliar la línea.
-              await appendEgreso(payload);
-              await imputarPagoFC(mov, {
-                documento_id: payload.id,
-                cuenta_contable: payload.cuentaId || payload.cuenta || "",
-                centro_costo: String(payload.cc || "").split(",")[0].trim(),
-                proveedor_id: payload.proveedorId || "",
-                proveedor_nombre: payload.proveedor || "",
-              });
-              setPendientes(prev => prev.filter(x => x.id !== mov.id));   // sale de la bandeja
+              // Dos pasos separados a propósito: si el 1° falla no se creó nada (reintentable sin
+              // riesgo); si el 1° ya creó la factura y el 2° falla (lock del GAS, red), NO hay que
+              // reintentar todo el alta (duplicaría la factura) — se avisa y se deja completar a mano
+              // con "Imputar a factura" sobre la misma fila.
+              try {
+                await appendEgreso(payload);
+              } catch (e) {
+                alert("No se pudo crear la factura: " + (e?.message || e));
+                throw e;   // nada se creó → el modal queda abierto para reintentar
+              }
+              try {
+                await imputarPagoFC(mov, {
+                  documento_id: payload.id,
+                  cuenta_contable: payload.cuentaId || payload.cuenta || "",
+                  centro_costo: String(payload.cc || "").split(",")[0].trim(),
+                  proveedor_id: payload.proveedorId || "",
+                  proveedor_nombre: payload.proveedor || "",
+                });
+                setPendientes(prev => prev.filter(x => x.id !== mov.id));   // sale de la bandeja
+              } catch (e) {
+                alert(`La factura ${payload.id} se creó, pero no se pudo vincular el pago automáticamente. Usá "Imputar a factura" en esta misma fila para completarlo. Detalle: ${e?.message || e}`);
+              }
               fetchEgresos(sociedad).then(e => setEgresos(e || [])).catch(() => {});   // refresca Compras
               setCargarFacturaFor(null);
             }}
@@ -2075,15 +2088,27 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
             onClose={() => setCargarIngresoFor(null)}
             onSave={async (payload) => {
               // 1) crear la factura de venta, 2) imputar el cobro del extracto contra ella = conciliar.
-              await appendIngreso(payload);
-              await imputarCobroIngreso(mov, {
-                documento_id: payload.id,
-                cuenta_contable: payload.cuentaId || payload.cuenta || "",
-                centro_costo: String(payload.cc || "").split(",")[0].trim(),
-                cliente_id: payload.clienteId || "", cliente_nombre: payload.cliente || "",
-                retenciones: [], retencion_centro: centroRetencion,
-              });
-              setPendientes(prev => prev.filter(x => x.id !== mov.id));   // sale de la bandeja
+              // Mismo criterio que "Cargar factura nueva" de Compras: si falla el paso 2 después de
+              // crear la factura, no reintentar el alta completa (duplicaría) — avisar y dejar
+              // completar a mano con "Imputar a factura" sobre la misma fila.
+              try {
+                await appendIngreso(payload);
+              } catch (e) {
+                alert("No se pudo crear la factura de venta: " + (e?.message || e));
+                throw e;   // nada se creó → el modal queda abierto para reintentar
+              }
+              try {
+                await imputarCobroIngreso(mov, {
+                  documento_id: payload.id,
+                  cuenta_contable: payload.cuentaId || payload.cuenta || "",
+                  centro_costo: String(payload.cc || "").split(",")[0].trim(),
+                  cliente_id: payload.clienteId || "", cliente_nombre: payload.cliente || "",
+                  retenciones: [], retencion_centro: centroRetencion,
+                });
+                setPendientes(prev => prev.filter(x => x.id !== mov.id));   // sale de la bandeja
+              } catch (e) {
+                alert(`La factura ${payload.id} se creó, pero no se pudo vincular el cobro automáticamente. Usá "Imputar a factura" en esta misma fila para completarlo. Detalle: ${e?.message || e}`);
+              }
               fetchIngresos(sociedad).then(i => setIngresos(i || [])).catch(() => {});   // refresca Ventas
               setCargarIngresoFor(null);
             }}
