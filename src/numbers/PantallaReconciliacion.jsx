@@ -24,6 +24,7 @@ import { computeSaldoReal } from "../lib/helpers";
 import { parseGalicia } from "./parsers/galicia";
 import { parseInterAudi } from "./parsers/interaudi";
 import { parseCaixa } from "./parsers/caixa";
+import { parseBBVA } from "./parsers/bbva";
 import { parseMercadoPago } from "./parsers/mercadopago";
 import { clasificarLineas, clasificarLinea, reconocerCuota } from "./reconciliacion/ruleEngine";
 
@@ -683,9 +684,10 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
           } };
         });
       } else {
-        // Extracto crudo: InterAudi = CSV propio; Caixa = .xls/.xlsx propio; el resto = Galicia. Clasifica por reglas.
+        // Extracto crudo: InterAudi = CSV propio; Caixa/BBVA = .xls/.xlsx propio; el resto = Galicia. Clasifica por reglas.
         const data = /interaudi/i.test(banco) ? await parseInterAudi(file)
           : /caixa/i.test(banco) ? await parseCaixa(file)
+          : /bbva/i.test(banco) ? await parseBBVA(file)
           : await parseGalicia(file);
         const ctx = { banco: cta?.banco, sociedad, pais: "", franquicias, sociedades, cuentas: cuentasAll, moneda, cuotasPendientes };
         lineas = clasificarLineas(data.lineas, reglas, proveedores, ctx);
