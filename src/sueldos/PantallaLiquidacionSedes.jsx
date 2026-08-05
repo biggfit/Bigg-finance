@@ -1017,8 +1017,10 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       // Usar empl.total_sueldo (que INCLUYE el redondeo del efectivo) daba share<1 en un empleado de
       // una sola sede → escalaba mal los haberes (200.000 → 199.994). Con esto, una sola sede = share 1.
       const totalSueldoPorLegajo = {};
+      const filasPorLegajo = {};
       for (const r of rows) {
         totalSueldoPorLegajo[r.legajo_id] = (totalSueldoPorLegajo[r.legajo_id] || 0) + lineasConceptoDeRow(r, "cerrado").total;
+        filasPorLegajo[r.legajo_id] = (filasPorLegajo[r.legajo_id] || 0) + 1;
       }
       const entries = [];
       for (const r of rows) {
@@ -1026,7 +1028,11 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         const empl      = empls.find(e => e.legajo_id === r.legajo_id);
         // El reparto de forma de pago es del SUELDO (sin redondeo), no de las novedades.
         const emplTotal = totalSueldoPorLegajo[r.legajo_id] || rowTotal;
-        const share     = emplTotal > 0 ? rowTotal / emplTotal : 0;
+        // Sin sueldo para prorratear (ej. alguien que solo cobra por novedad, sin base ni horas):
+        // share=0 pisaba Haberes/Monotributo con $0 aunque pagoDraft tuviera plata real cargada
+        // (esa plata quedaba en la novedad pero sin línea de pago que la respalde). Reparto
+        // parejo entre las filas del legajo en ese caso — con una sola fila, share=1 (paga todo ahí).
+        const share     = emplTotal > 0 ? rowTotal / emplTotal : 1 / (filasPorLegajo[r.legajo_id] || 1);
         const d    = pagoDraft[r.legajo_id] || {};
         const habRow   = Math.round((Number(d.monto_haberes)       || 0) * share);
         const monoRow  = Math.round((Number(d.monto_transferencia) || 0) * share);
