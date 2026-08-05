@@ -832,6 +832,10 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       // Novedades de esta fila (extra que suma). Van al total/pendiente del empleado y al
       // bucket de su forma de pago (para que aparezcan como pagables en Paso 5). El split del
       // sueldo (total_sueldo) NO las incluye: se congelan como líneas tipo "novedad" aparte.
+      // Una vez CERRADA la fila, el bucket ya no se toca acá: r.monto_haberes/deposito/
+      // transferencia salen de las líneas "pago" ya escritas al cerrar, que a esta altura YA
+      // incluyen lo que corresponde a la novedad (ver handleConfirmarFormaPago) — sumarla de
+      // nuevo la duplicaba (ej. Fornaroli: $360k de pago + $360k de novedad = $720k).
       const novsR = novsByRowKey[rowKeyDe(r.legajo_id, r.sede_id)];
       if (novsR?.length) {
         for (const n of novsR) {
@@ -839,7 +843,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
           map[ek].total     += monto;
           map[ek].total_nov += monto;
           const b = NOV_FP_BUCKET[n.forma_pago] || "efectivo";
-          if (b !== "efectivo") map[ek][`monto_${b}`] += monto;
+          if (b !== "efectivo" && !isCerrada(r.estado)) map[ek][`monto_${b}`] += monto;
         }
         map[ek].novedades.push(...novsR);
       }
