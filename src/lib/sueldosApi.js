@@ -525,6 +525,37 @@ export async function reabrirLiquidacion(id_liq) {
   return true;
 }
 
+// Reabre VARIAS liquidaciones de una: 1 sola lectura + 1 solo alta en lote (en vez de
+// 1 lectura + 1 borrado + 1 alta POR liquidación, que con "Reabrir todas" tardaba minutos).
+// Los borrados quedan secuenciales (el GAS pierde escrituras concurrentes, ver saveLiquidacionLines),
+// pero pasa de 3×N requests a N+2.
+export async function reabrirLiquidaciones(ids = []) {
+  const unique = [...new Set(ids)].filter(Boolean);
+  if (!unique.length) return { ok: true, n: 0 };
+  const rows = await get("su_liquidaciones", {});
+  const all = Array.isArray(rows) ? rows : [];
+  const created_at = new Date().toISOString();
+  const batchRows = [];
+  for (const id_liq of unique) {
+    const propias = all.filter(r => r.id_liq === id_liq);
+    if (!propias.length) continue;
+    await delLiquidacionComp(id_liq);
+    propias.forEach(({ id, id_liq: _idLiq, created_at: _ca, ...resto }, i) => {
+      batchRows.push({
+        id: `${id_liq}-L${String(i + 1).padStart(2, "0")}`, id_liq,
+        ...resto, estado: "borrador", created_at,
+      });
+    });
+  }
+  if (!batchRows.length) return { ok: true, n: 0 };
+  try {
+    await post({ action: "add_batch", sheet: "su_liquidaciones", rows: batchRows });
+  } catch {
+    for (const row of batchRows) await post({ action: "add", sheet: "su_liquidaciones", row });
+  }
+  return { ok: true, n: unique.length };
+}
+
 // ── Devengado de sueldos para el P&L (Numbers) ────────────────────────────────
 // Una liquidación CERRADA es gasto devengado. El P&L de Numbers la lee y la une a
 // nb_comprobantes (Opción A: su_liquidaciones es la única fuente de verdad del sueldo).

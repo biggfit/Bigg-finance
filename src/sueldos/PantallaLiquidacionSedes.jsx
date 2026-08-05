@@ -9,7 +9,7 @@ import {
   ROLES_COACHES, ROLES_FRONT, ROLES_LIMP, ROL_CONCEPTO,
   FP_TIPO_LABEL, FP_TIPO_COLOR, esTransferencia,
   idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionesLinesBatch, saveLiquidacionLines, isCerrada,
-  estadoPago, remanentePago, PAGO_EPS, reabrirLiquidacion,
+  estadoPago, remanentePago, PAGO_EPS, reabrirLiquidaciones,
 } from "../lib/sueldosApi";
 
 const T = {
@@ -411,8 +411,8 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     setReabriendo(true);
     try {
       const sedeIds = [...new Set(rows.filter(r => r.legajo_id === legajo_id).map(r => r.sede_id ?? ""))];
-      for (const sid of sedeIds) await reabrirLiquidacion(idLiqDe(legajo_id, mes, anio, sid));
-      await load(mes, anio, pais);
+      await reabrirLiquidaciones(sedeIds.map(sid => idLiqDe(legajo_id, mes, anio, sid)));
+      await refreshLiqs();
     } catch (e) {
       alert("Error al reabrir: " + e.message);
     } finally { setReabriendo(false); }
@@ -423,8 +423,8 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     if (!window.confirm(`¿Reabrir las ${idsLiqCerrados.length} liquidaciones cerradas de ${MESES[mes - 1]} ${anio}? Vuelven todas a borrador: vas a poder editar incentivos/novedades de cualquier empleado y después hay que volver a cerrarlas (Paso 4) para congelar los montos actualizados.`)) return;
     setReabriendo(true);
     try {
-      for (const id of idsLiqCerrados) await reabrirLiquidacion(id);
-      await load(mes, anio, pais);
+      await reabrirLiquidaciones(idsLiqCerrados);
+      await refreshLiqs();
     } catch (e) {
       alert("Error al reabrir: " + e.message);
     } finally { setReabriendo(false); }

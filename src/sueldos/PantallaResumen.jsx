@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { fetchLiquidaciones, fetchCategorias, fetchPagos, fetchLegajos, fetchNovedades, desglosarLiquidacion, isCerrada, idLiqDe, reabrirLiquidacion, ROLES_SEDES, ROLES_HQ } from "../lib/sueldosApi";
+import { fetchLiquidaciones, fetchCategorias, fetchPagos, fetchLegajos, fetchNovedades, desglosarLiquidacion, isCerrada, idLiqDe, reabrirLiquidaciones, ROLES_SEDES, ROLES_HQ } from "../lib/sueldosApi";
 
 const T = {
   bg:     "#f8fafc",
@@ -163,8 +163,11 @@ export default function PantallaResumen({ pais = "AR" }) {
     setReabriendo(true);
     try {
       const sedeIds = [...new Set(sel.rows.map(r => r.sede_id ?? ""))];
-      for (const sid of sedeIds) await reabrirLiquidacion(idLiqDe(sel.id, mes, anio, sid));
-      await load();
+      await reabrirLiquidaciones(sedeIds.map(sid => idLiqDe(sel.id, mes, anio, sid)));
+      // Refresh liviano: solo liquidaciones (lo único que cambió), sin re-descargar
+      // categorías/pagos/legajos/novedades ni bloquear la pantalla con "Cargando…".
+      const ls = await fetchLiquidaciones(mes, anio).catch(() => []);
+      setLiqs(Array.isArray(ls) ? ls : []);
     } catch (e) {
       alert("Error al reabrir: " + e.message);
     } finally { setReabriendo(false); }
