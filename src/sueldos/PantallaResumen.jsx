@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from "react";
-import { fetchLiquidaciones, fetchCategorias, fetchPagos, fetchLegajos, fetchNovedades, desglosarLiquidacion, isCerrada, ROLES_SEDES, ROLES_HQ } from "../lib/sueldosApi";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { fetchLiquidaciones, fetchCategorias, fetchPagos, fetchLegajos, fetchNovedades, desglosarLiquidacion, isCerrada, idLiqDe, reabrirLiquidacion, ROLES_SEDES, ROLES_HQ } from "../lib/sueldosApi";
 
 const T = {
   bg:     "#f8fafc",
@@ -70,28 +70,25 @@ export default function PantallaResumen({ pais = "AR" }) {
   const [checkSel, setCheckSel] = useState({});      // { [id]: bool }
   const [idsPrint, setIdsPrint] = useState(null);    // ids a imprimir (activa el modo #ficha-todos)
 
-  useEffect(() => {
-    let cancel = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const [ls, cats, pgs, lgs, novs] = await Promise.all([
-          fetchLiquidaciones(mes, anio).catch(() => []),
-          fetchCategorias(mes, anio, pais).catch(() => []),
-          fetchPagos(mes, anio).catch(() => []),
-          fetchLegajos().catch(() => []),
-          fetchNovedades(mes, anio).catch(() => []),
-        ]);
-        if (cancel) return;
-        setLiqs(Array.isArray(ls) ? ls : []);
-        setCategorias(Array.isArray(cats) ? cats : []);
-        setPagos(Array.isArray(pgs) ? pgs : []);
-        setLegajos(Array.isArray(lgs) ? lgs : []);
-        setNovedades(Array.isArray(novs) ? novs : []);
-      } finally { if (!cancel) setLoading(false); }
-    })();
-    return () => { cancel = true; };
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [ls, cats, pgs, lgs, novs] = await Promise.all([
+        fetchLiquidaciones(mes, anio).catch(() => []),
+        fetchCategorias(mes, anio, pais).catch(() => []),
+        fetchPagos(mes, anio).catch(() => []),
+        fetchLegajos().catch(() => []),
+        fetchNovedades(mes, anio).catch(() => []),
+      ]);
+      setLiqs(Array.isArray(ls) ? ls : []);
+      setCategorias(Array.isArray(cats) ? cats : []);
+      setPagos(Array.isArray(pgs) ? pgs : []);
+      setLegajos(Array.isArray(lgs) ? lgs : []);
+      setNovedades(Array.isArray(novs) ? novs : []);
+    } finally { setLoading(false); }
   }, [mes, anio, pais]);
+
+  useEffect(() => { load(); }, [load]);
 
   // Agrupar por empleado según la vista (los coaches de Sedes tienen una fila por sede).
   const empleados = useMemo(() => {
@@ -156,6 +153,23 @@ export default function PantallaResumen({ pais = "AR" }) {
 
   const periodo = `${MESES[mes - 1]} ${anio}`;
 
+  // Liquidación cerrada del empleado seleccionado → se puede reabrir para que
+  // novedades cargadas/editadas después del cierre vuelvan a reflejarse en el recibo.
+  const cerrada = useMemo(() => !!sel && sel.rows.some(r => isCerrada(r.estado)), [sel]);
+  const [reabriendo, setReabriendo] = useState(false);
+  const handleReabrir = async () => {
+    if (!sel) return;
+    if (!window.confirm(`¿Reabrir la liquidación de ${sel.nombre}? Vuelve a borrador: vas a poder editarla en Liquidación ${vista === "hq" ? "HQ" : "Sedes"} y tenés que volver a cerrarla para que los cambios (por ej. novedades nuevas) se congelen en el recibo.`)) return;
+    setReabriendo(true);
+    try {
+      const sedeIds = [...new Set(sel.rows.map(r => r.sede_id ?? ""))];
+      for (const sid of sedeIds) await reabrirLiquidacion(idLiqDe(sel.id, mes, anio, sid));
+      await load();
+    } catch (e) {
+      alert("Error al reabrir: " + e.message);
+    } finally { setReabriendo(false); }
+  };
+
   return (
     <div className={idsPrint ? "print-todos" : "print-solo"}
       style={{ padding: 24, fontFamily: T.font, color: T.text, maxWidth: 860, margin: "0 auto" }}>
@@ -192,6 +206,26 @@ export default function PantallaResumen({ pais = "AR" }) {
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
         <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>Resumen de liquidación</h2>
         <span style={{ fontSize: 12, color: T.dim, whiteSpace: "nowrap", flexShrink: 0 }}>· solo consulta</span>
+        {cerrada && (
+          resumen?.desyncItems?.length ? (
+            <span title={`Novedades cargadas/editadas después del cierre que NO están en este recibo — reabrí la liquidación para que se reflejen:\n${resumen.desyncItems.map(d => `• ${d.descripcion} (${fmt(d.monto)})`).join("\n")}`}
+              style={{ fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 5, background: "#fee2e2", color: "#b91c1c", flexShrink: 0, cursor: "help", whiteSpace: "nowrap" }}>
+              🔴 Faltan {resumen.desyncItems.length} novedad{resumen.desyncItems.length > 1 ? "es" : ""}
+            </span>
+          ) : (
+            <span title="Las novedades cargadas coinciden con las de este recibo"
+              style={{ fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 5, background: "#dcfce7", color: "#15803d", flexShrink: 0, whiteSpace: "nowrap" }}>
+              🟢 Al día
+            </span>
+          )
+        )}
+        {cerrada && (
+          <button onClick={handleReabrir} disabled={reabriendo}
+            title="Reabrir la liquidación de este empleado (vuelve a borrador para poder editarla)"
+            style={{ ...fichaBtn, flexShrink: 0, opacity: reabriendo ? 0.5 : 1, cursor: reabriendo ? "default" : "pointer" }}>
+            {reabriendo ? "Reabriendo…" : "🔓 Reabrir liquidación"}
+          </button>
+        )}
 
         {/* Toggle Sedes / HQ */}
         <div style={{ display: "flex", gap: 2, background: T.head, borderRadius: 7, padding: 3 }}>
@@ -291,11 +325,12 @@ function buildResumenSedes(emp, categorias, novList = []) {
     cdpCoachCant: 0, cdpFrontCant: 0, cdpMonto: 0,
     oneShotCant: 0, oneShotMonto: 0, asignaciones: 0, objGrupalMonto: 0, objGrupalPct: 0,
     feriadosCant: 0, feriadosMonto: 0, domingosCant: 0, domingosMonto: 0,
-    yogaCant: 0, yogaMonto: 0, runningCant: 0, runningMonto: 0, redondeo: 0, sueldoVariable: 0,
+    yogaCant: 0, yogaMonto: 0, runningCant: 0, runningMonto: 0, programaciones: 0, redondeo: 0, sueldoVariable: 0,
   };
   const fijoVistos = new Set();   // no duplicar el sueldo base si hay varias filas (multi-sede)
   const sedes = [];
   const novedades = [];
+  const desyncItems = [];   // novedades vivas que no están congeladas en el recibo cerrado
   let tarifas = {};
   const porSede = {};
   // Composición del valor unitario de "Horas Base": la línea combina horas normales + yoga (y varias
@@ -304,15 +339,20 @@ function buildResumenSedes(emp, categorias, novList = []) {
   const desgloseHoras = [];
   const cs = { horas: new Set(), feriado: new Set(), domingo: new Set(),
                cdpCoach: new Set(), cdpFront: new Set(), oneShot: new Set() };
+  // Sedes reales del empleado (todas sus filas). Una novedad cuya sede no es ninguna de
+  // estas (ej. un centro de costo administrativo tipo "HQ - Sport") cae en su primera fila:
+  // se paga junto con el sueldo normal, igual que hace el cierre en Liquidación Sedes.
+  const sedesDelEmpleadoLower = new Set(emp.rows.map(r => String(r.sede_id ?? "").toLowerCase()));
+  const primeraRow = emp.rows[0];
   for (const row of emp.rows) {
     const d = desglosarLiquidacion(row, categorias);
     tarifas = { tarifaHora: d.tarifaHora, tCdpCoach: d.tCdpCoach, tCdpFront: d.tCdpFront,
-      tarifaOS: d.tarifaOS, tarifaDomingo: d.tarifaDomingo, tarifaYoga: d.tarifaYoga };
+      tarifaOS: d.tarifaOS, tarifaDomingo: d.tarifaDomingo, tarifaYoga: d.tarifaYoga, tarifaRunning: d.tarifaRunning };
     if (!fijoVistos.has(emp.id)) { acc.fijo += d.fijo; fijoVistos.add(emp.id); }
     for (const k of ["horasCant","horasMonto","cdpCoachCant","cdpFrontCant","cdpMonto",
                      "oneShotCant","oneShotMonto","asignaciones","objGrupalMonto",
                      "feriadosCant","feriadosMonto","domingosCant","domingosMonto",
-                     "yogaCant","yogaMonto","runningCant","runningMonto","redondeo","sueldoVariable"]) {
+                     "yogaCant","yogaMonto","runningCant","runningMonto","programaciones","redondeo","sueldoVariable"]) {
       acc[k] += d[k] || 0;
     }
     if (d.objGrupalPct) acc.objGrupalPct = d.objGrupalPct;   // % (no se suma entre sedes; es la tasa aplicada)
@@ -327,40 +367,62 @@ function buildResumenSedes(emp, categorias, novList = []) {
     if (d.cdpFrontCant > 0) cs.cdpFront.add(sn);
     if (d.oneShotCant  > 0) cs.oneShot.add(sn);
     sedes.push({ sede: sn, horas: d.horasCant, total: d.totalLiquidar });
-    // Cerrada → novedades congeladas en la liquidación; borrador → las de su_novedades (por legajo+sede).
+    // Cerrada → novedades congeladas en la liquidación; borrador → las vivas de su_novedades:
+    // las de esta sede, más (solo en la primera fila) las de sedes que este empleado no tiene.
     const novsR = isCerrada(row.estado)
       ? (row.novedades || [])
-      : novList.filter(n => n.tipo === "extra" && n.sede_id &&
-          String(n.sede_id) === String(row.sede_id) && String(n.legajo_id) === String(row.legajo_id));
+      : novList.filter(n => {
+          if (n.tipo !== "extra" || !n.sede_id || String(n.legajo_id) !== String(row.legajo_id)) return false;
+          const sedeNov = String(n.sede_id).toLowerCase();
+          if (sedeNov === String(row.sede_id ?? "").toLowerCase()) return true;
+          return row === primeraRow && !sedesDelEmpleadoLower.has(sedeNov);
+        });
     for (const n of novsR) novedades.push({ cuenta: n.cuenta_contable_nombre || "Novedad", descripcion: n.descripcion || "", monto: Number(n.monto) || 0 });
+  }
+  // Alarma: TODAS las novedades vivas de este legajo vs. las efectivamente reflejadas arriba.
+  // Si algo no está (porque se cargó/editó después del cierre), avisa acá — reabrir y volver
+  // a cerrar alcanza siempre, ya no importa si la sede de la novedad coincide con alguna fila.
+  const hayFilaCerrada = emp.rows.some(r => isCerrada(r.estado));
+  if (hayFilaCerrada) {
+    const liveDelEmpleado = novList.filter(n => n.tipo === "extra" && n.sede_id && String(n.legajo_id) === String(emp.id));
+    for (const n of liveDelEmpleado) {
+      const yaReflejada = novedades.some(x => x.descripcion === (n.descripcion || "") && x.monto === (Number(n.monto) || 0));
+      if (yaReflejada) continue;
+      desyncItems.push({ sede: n.sede_nombre || "—", descripcion: n.descripcion || n.cuenta_contable_nombre || "Novedad", monto: Number(n.monto) || 0 });
+    }
   }
   const principalSede = Object.entries(porSede).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
   const conceptoSedes = Object.fromEntries(Object.entries(cs).map(([k, set]) => [k, [...set]]));
   const totalNov = novedades.reduce((s, n) => s + n.monto, 0);
   const totalLiquidar = acc.fijo + acc.horasMonto + acc.sueldoVariable + totalNov;
-  return { ...acc, ...tarifas, sedes, novedades, totalNov, principalSede, conceptoSedes, desgloseHoras, totalLiquidar };
+  return { ...acc, ...tarifas, sedes, novedades, totalNov, principalSede, conceptoSedes, desgloseHoras, totalLiquidar, desyncItems };
 }
 
 // Desglose HQ: sueldo base + novedades por cuenta.
 function buildResumenHQ(emp, novList = []) {
   let sueldo = 0, totalBruto = 0;
   const novedades = [];
+  const desyncItems = [];
   let addedOpen = false;   // las de su_novedades se agregan una sola vez por empleado
   for (const row of emp.rows) {
     sueldo     += Number(row.sueldo_base) || 0;
     totalBruto += Number(row.total_bruto) || 0;
+    const liveNovs = novList.filter(n => n.tipo === "extra" && !n.sede_id && String(n.legajo_id) === String(row.legajo_id));
     if (isCerrada(row.estado)) {
       for (const n of (row.novedades || []))
         novedades.push({ cuenta: n.cuenta_contable_nombre || "Novedad", monto: Number(n.monto) || 0 });
+      const faltantes = liveNovs.filter(n =>
+        !(row.novedades || []).some(f => (f.cuenta_contable_nombre || "") === (n.cuenta_contable_nombre || "") && Number(f.monto) === Number(n.monto)));
+      for (const n of faltantes) desyncItems.push({ descripcion: n.descripcion || n.cuenta_contable_nombre || "Novedad", monto: Number(n.monto) || 0 });
     } else if (!addedOpen) {
       addedOpen = true;
-      for (const n of novList.filter(n => n.tipo === "extra" && !n.sede_id && String(n.legajo_id) === String(row.legajo_id)))
+      for (const n of liveNovs)
         novedades.push({ cuenta: n.cuenta_contable_nombre || "Novedad", monto: Number(n.monto) || 0 });
     }
   }
   const sueldoFinal = totalBruto || sueldo;
   const totalNov = novedades.reduce((s, n) => s + n.monto, 0);
-  return { sueldo: sueldoFinal, novedades, totalNov, totalLiquidar: sueldoFinal + totalNov };
+  return { sueldo: sueldoFinal, novedades, totalNov, totalLiquidar: sueldoFinal + totalNov, desyncItems };
 }
 
 // Modal de selección para "imprimir todo": todos tildados; se destildan los que no se quieren.
@@ -450,8 +512,9 @@ function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo }) {
   const subtitulo = `${sedeTxt} · ${ROL_LABEL[sel.rol] ?? sel.rol}`;
   // Fijo = base + horas (base/feriado/domingo/yoga) + asignaciones (la base sobre la que pega la comisión grupal).
   const sueldoFijo  = resumen.fijo + resumen.horasMonto + resumen.yogaMonto + resumen.feriadosMonto + resumen.domingosMonto;
-  // Sueldo Variable: asignaciones + one shot + CDP (front + coach) + comisión grupal.
-  const sueldoVariable = resumen.asignaciones + resumen.oneShotMonto + resumen.cdpMonto + resumen.objGrupalMonto;
+  // Sueldo Variable: asignaciones + one shot + CDP (front + coach) + comisión grupal + running + programaciones.
+  const sueldoVariable = resumen.asignaciones + resumen.oneShotMonto + resumen.cdpMonto + resumen.objGrupalMonto
+    + resumen.runningMonto + resumen.programaciones;
   const totalSueldo = sueldoFijo + sueldoVariable;
   // Sedes extra (≠ principal) que aportan a un concepto → se muestran entre paréntesis.
   const extra = (key) => {
@@ -483,6 +546,8 @@ function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo }) {
             <Linea label={`One Shot${extra("oneShot")}`}        cant={resumen.oneShotCant}  valor={resumen.tarifaOS}      importe={resumen.oneShotMonto} />
             <Linea label={`CDP Front Desk${extra("cdpFront")}`} cant={resumen.cdpFrontCant} valor={resumen.tCdpFront}     importe={resumen.cdpFrontCant * resumen.tCdpFront} />
             <Linea label={`CDP Coach${extra("cdpCoach")}`}      cant={resumen.cdpCoachCant} valor={resumen.tCdpCoach}     importe={resumen.cdpCoachCant * resumen.tCdpCoach} />
+            <Linea label="Running" cant={resumen.runningCant} valor={resumen.tarifaRunning} importe={resumen.runningMonto} />
+            <Linea label="Programaciones" importe={resumen.programaciones} />
             <Linea label={`Comisión Grupal${resumen.objGrupalPct ? ` (${fmtNum(resumen.objGrupalPct)}%)` : ""}`}  importe={resumen.objGrupalMonto} />
             <Subtotal label="Sueldo Variable" importe={sueldoVariable} />
 

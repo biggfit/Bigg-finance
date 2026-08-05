@@ -512,6 +512,19 @@ export async function saveLiquidacionesLinesBatch(entries = []) {
   return { ok: true, n: rows.length };
 }
 
+// Reabre una liquidación cerrada: conserva todas sus líneas (concepto/pago/novedad)
+// pero vuelve el estado a "borrador". Así la pantalla vuelve a leer las novedades
+// EN VIVO de su_novedades (en vez de las congeladas al cerrar) y se puede volver a
+// cerrar para materializar los montos actualizados. No-op si no hay líneas.
+export async function reabrirLiquidacion(id_liq) {
+  const rows = await get("su_liquidaciones", {});
+  const propias = (Array.isArray(rows) ? rows : []).filter(r => r.id_liq === id_liq);
+  if (!propias.length) return false;
+  const lineas = propias.map(({ id, id_liq: _idLiq, created_at, ...resto }) => ({ ...resto, estado: "borrador" }));
+  await saveLiquidacionLines(id_liq, lineas);
+  return true;
+}
+
 // ── Devengado de sueldos para el P&L (Numbers) ────────────────────────────────
 // Una liquidación CERRADA es gasto devengado. El P&L de Numbers la lee y la une a
 // nb_comprobantes (Opción A: su_liquidaciones es la única fuente de verdad del sueldo).

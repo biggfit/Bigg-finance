@@ -8,8 +8,8 @@ import {
   fetchNovedades,
   ROLES_COACHES, ROLES_FRONT, ROLES_LIMP, ROL_CONCEPTO,
   FP_TIPO_LABEL, FP_TIPO_COLOR, esTransferencia,
-  idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionesLinesBatch, isCerrada,
-  estadoPago, remanentePago, PAGO_EPS,
+  idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionesLinesBatch, saveLiquidacionLines, isCerrada,
+  estadoPago, remanentePago, PAGO_EPS, reabrirLiquidacion,
 } from "../lib/sueldosApi";
 
 const T = {
@@ -403,6 +403,33 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
 
   useEffect(() => { load(mes, anio, pais); }, [mes, anio, pais, load]);
 
+  // Reabrir: vuelve a "borrador" TODAS las liquidaciones cerradas del legajo en el
+  // período (una por sede, coaches multi-sede incluidos) para poder editar/re-cerrar.
+  const [reabriendo, setReabriendo] = useState(false);
+  const handleReabrir = async (legajo_id, legajo_nombre) => {
+    if (!window.confirm(`¿Reabrir la liquidación de ${legajo_nombre}? Vuelve a borrador: vas a poder editarla y tenés que volver a cerrarla para que los cambios (por ej. novedades nuevas) se congelen en el recibo.`)) return;
+    setReabriendo(true);
+    try {
+      const sedeIds = [...new Set(rows.filter(r => r.legajo_id === legajo_id).map(r => r.sede_id ?? ""))];
+      for (const sid of sedeIds) await reabrirLiquidacion(idLiqDe(legajo_id, mes, anio, sid));
+      await load(mes, anio, pais);
+    } catch (e) {
+      alert("Error al reabrir: " + e.message);
+    } finally { setReabriendo(false); }
+  };
+
+  const handleReabrirTodas = async () => {
+    if (!idsLiqCerrados.length) return;
+    if (!window.confirm(`¿Reabrir las ${idsLiqCerrados.length} liquidaciones cerradas de ${MESES[mes - 1]} ${anio}? Vuelven todas a borrador: vas a poder editar incentivos/novedades de cualquier empleado y después hay que volver a cerrarlas (Paso 4) para congelar los montos actualizados.`)) return;
+    setReabriendo(true);
+    try {
+      for (const id of idsLiqCerrados) await reabrirLiquidacion(id);
+      await load(mes, anio, pais);
+    } catch (e) {
+      alert("Error al reabrir: " + e.message);
+    } finally { setReabriendo(false); }
+  };
+
   const draftKey = `sedesDraft:${pais}:${anio}-${mes}`;
 
   // Reset wizard when period or country changes; recover local draft if present.
@@ -683,6 +710,12 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       .filter(r => !r._deleted);
   }, [rosterBase, manualRows, edits]);
 
+  // Bulk: en Sedes el paso 4 (Forma de pago) cierra TODAS las filas de una — así que
+  // reabrirlas también es todo-o-nada. Recorre cada id_liq cerrado del período.
+  const idsLiqCerrados = useMemo(
+    () => [...new Set(rows.filter(r => isCerrada(r.estado)).map(r => idLiqDe(r.legajo_id, mes, anio, r.sede_id)))],
+    [rows, mes, anio]);
+
   // Detalle base (sin ediciones) por fila, para el editor de líneas de clase.
   const baseDetalle = useMemo(
     () => new Map([...rosterBase, ...manualRows].map(r => [r._id, r.horas_detalle || []])),
@@ -721,14 +754,27 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
 
   // Novedades de Sedes indexadas por fila (legajo×sede). Una novedad lleva UNA sede →
   // matchea exactamente una fila, así una persona con varias sedes no la cuenta doble.
+  // Si la sede de la novedad no es ninguna de las que tiene el empleado (ej. un centro de
+  // costo administrativo como "HQ - Sport", que no es un lugar donde da clases), cae en su
+  // primera fila: se paga junto con su sueldo normal, la sede/cuenta contable de la novedad
+  // sigue siendo la que se cargó (así el gasto se imputa correctamente en la contabilidad).
   const novsByRowKey = useMemo(() => {
+    const sedesPorLegajo = new Map();
+    for (const r of rows) {
+      if (!sedesPorLegajo.has(r.legajo_id)) sedesPorLegajo.set(r.legajo_id, []);
+      sedesPorLegajo.get(r.legajo_id).push(String(r.sede_id ?? "").toLowerCase());
+    }
     const m = {};
     for (const n of novedades) {
-      const k = rowKeyDe(n.legajo_id, n.sede_id);
+      const sedesDelLegajo = sedesPorLegajo.get(n.legajo_id) || [];
+      const sedeNov = String(n.sede_id ?? "").toLowerCase();
+      const idx = sedesDelLegajo.indexOf(sedeNov);
+      const sedeDestino = idx !== -1 ? n.sede_id : rows.find(r => r.legajo_id === n.legajo_id)?.sede_id;
+      const k = rowKeyDe(n.legajo_id, sedeDestino);
       (m[k] ??= []).push(n);
     }
     return m;
-  }, [novedades]);
+  }, [novedades, rows]);
 
   // One entry per unique legajo (coaches may have multiple sede-rows).
   // Includes payment distribution fields (monto_haberes etc.) summed from all rows,
@@ -1081,6 +1127,15 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
                 descartar
               </button>
             </span>
+          )}
+          {idsLiqCerrados.length > 0 && (
+            <button onClick={handleReabrirTodas} disabled={reabriendo}
+              title="Vuelve a borrador TODAS las liquidaciones cerradas de este período"
+              style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 7, padding: "7px 14px",
+                fontSize: 13, fontWeight: 600, color: T.blue, cursor: reabriendo ? "default" : "pointer",
+                fontFamily: T.font, opacity: reabriendo ? 0.5 : 1 }}>
+              {reabriendo ? "Reabriendo…" : `🔓 Reabrir ${idsLiqCerrados.length} cerradas`}
+            </button>
           )}
           <button onClick={handleGuardarBorrador} disabled={saving || !rows.length}
             style={{ ...BTN_PRIMARY(saving || !rows.length), padding: "7px 14px" }}>
@@ -1985,6 +2040,13 @@ function PasoFormaPago({ empls, pagoDraft, onChangePago, onAtras, onContinuar, o
                   <td style={{ padding: "5px 8px", fontWeight: 600 }}>
                     {empl.legajo_nombre}
                     {empl.cerrada && <span title="Liquidación cerrada" style={{ marginLeft: 6, fontSize: 11, color: T.green }}>🔒</span>}
+                    {empl.cerrada && (
+                      <button onClick={() => handleReabrir(empl.legajo_id, empl.legajo_nombre)} disabled={reabriendo}
+                        title="Reabrir liquidación (vuelve a borrador)"
+                        style={{ marginLeft: 4, background: "none", border: "none", cursor: reabriendo ? "default" : "pointer", fontSize: 11, color: T.blue, opacity: reabriendo ? 0.5 : 1 }}>
+                        🔓
+                      </button>
+                    )}
                   </td>
                   <td style={{ padding: "5px 8px", color: T.muted }}>{empl.rol}</td>
                   <td style={{ padding: "5px 8px", color: T.muted, fontSize: 11 }}>{empl.sedes.join(", ") || "—"}</td>
@@ -2272,6 +2334,13 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid }) 
                   <div>
                     {empl.legajo_nombre}
                     {empl.cerrada && <span title="Liquidación cerrada" style={{ marginLeft: 6, fontSize: 11, color: T.green }}>🔒</span>}
+                    {empl.cerrada && (
+                      <button onClick={() => handleReabrir(empl.legajo_id, empl.legajo_nombre)} disabled={reabriendo}
+                        title="Reabrir liquidación (vuelve a borrador)"
+                        style={{ marginLeft: 4, background: "none", border: "none", cursor: reabriendo ? "default" : "pointer", fontSize: 11, color: T.blue, opacity: reabriendo ? 0.5 : 1 }}>
+                        🔓
+                      </button>
+                    )}
                   </div>
                   {empl.cbu && <div style={{ fontSize: 10, color: T.dim }}>CBU: {empl.cbu}</div>}
                 </td>
