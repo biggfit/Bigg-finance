@@ -1238,6 +1238,8 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
               onContinuar={() => setPaso(5)}
               onSiguiente={handleConfirmarFormaPago}
               saving={saving}
+              onReabrir={handleReabrir}
+              reabriendo={reabriendo}
             />
           )}
 
@@ -1249,6 +1251,8 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
               onAtras={() => setPaso(4)}
               onRegistrarPago={setShowPago}
               onBatchPaid={() => refreshLiqs()}
+              onReabrir={handleReabrir}
+              reabriendo={reabriendo}
             />
           )}
         </>
@@ -1981,7 +1985,7 @@ function PasoIncentivos({ rows, legajos, sedes, mes, anio, pais, novsByRowKey, u
 
 // ── Paso 4: Forma de pago ──────────────────────────────────────────────────────
 
-function PasoFormaPago({ empls, pagoDraft, onChangePago, onAtras, onContinuar, onSiguiente, saving }) {
+function PasoFormaPago({ empls, pagoDraft, onChangePago, onAtras, onContinuar, onSiguiente, saving, onReabrir, reabriendo }) {
   const MON = (extra = {}) => ({
     border: `1px solid #cbd5e1`, borderRadius: 4, padding: "4px 8px",
     fontSize: 12, fontFamily: T.font, background: "#fff", color: T.text,
@@ -2041,7 +2045,7 @@ function PasoFormaPago({ empls, pagoDraft, onChangePago, onAtras, onContinuar, o
                     {empl.legajo_nombre}
                     {empl.cerrada && <span title="Liquidación cerrada" style={{ marginLeft: 6, fontSize: 11, color: T.green }}>🔒</span>}
                     {empl.cerrada && (
-                      <button onClick={() => handleReabrir(empl.legajo_id, empl.legajo_nombre)} disabled={reabriendo}
+                      <button onClick={() => onReabrir(empl.legajo_id, empl.legajo_nombre)} disabled={reabriendo}
                         title="Reabrir liquidación (vuelve a borrador)"
                         style={{ marginLeft: 4, background: "none", border: "none", cursor: reabriendo ? "default" : "pointer", fontSize: 11, color: T.blue, opacity: reabriendo ? 0.5 : 1 }}>
                         🔓
@@ -2254,7 +2258,7 @@ function FondeoBand({ stats }) {
 
 // ── Componente PasoPagos ──────────────────────────────────────────────────────
 
-function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid }) {
+function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, onReabrir, reabriendo }) {
   const [batchModal,  setBatchModal]  = useState(null);
   const [anularModal, setAnularModal] = useState(null);
 
@@ -2335,7 +2339,7 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid }) 
                     {empl.legajo_nombre}
                     {empl.cerrada && <span title="Liquidación cerrada" style={{ marginLeft: 6, fontSize: 11, color: T.green }}>🔒</span>}
                     {empl.cerrada && (
-                      <button onClick={() => handleReabrir(empl.legajo_id, empl.legajo_nombre)} disabled={reabriendo}
+                      <button onClick={() => onReabrir(empl.legajo_id, empl.legajo_nombre)} disabled={reabriendo}
                         title="Reabrir liquidación (vuelve a borrador)"
                         style={{ marginLeft: 4, background: "none", border: "none", cursor: reabriendo ? "default" : "pointer", fontSize: 11, color: T.blue, opacity: reabriendo ? 0.5 : 1 }}>
                         🔓
