@@ -1280,8 +1280,11 @@ export async function fetchLiquidacionesSedes(mes, anio, pais) {
   return out;
 }
 
+// `id` acá es en realidad el id_liq (liqFromLineas lo expone como `.id` para no romper
+// el resto de la pantalla): hay que borrar TODAS sus líneas, no una fila suelta por id
+// exacto (ese id nunca existe físicamente → "Registro no encontrado" y el borrado no hacía nada).
 export async function deleteLiquidacionSede(id) {
-  await post({ action: "del", sheet: "su_liquidaciones", id });
+  await delLiquidacionComp(id);
 }
 
 /** Calcula el total bruto de una liquidación de sedes sumando todos los conceptos. */
