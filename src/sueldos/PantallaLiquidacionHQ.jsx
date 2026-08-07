@@ -1984,15 +1984,16 @@ function ModalAnularPago({ pago, onClose, onAnulado }) {
 function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
   const tipo       = cell.tipo;
   const montoItem  = (it) => (it.kind === "linea" ? Number(it.ref.importe) : Number(it.ref.monto)) || 0;
+  const pagosItem  = (it) => it.kind === "linea" ? getPagosLinea(liq, it.ref) : getPagosNovedad(liq, it.ref);
+  const pagadoItem = (it) => pagosItem(it).reduce((s, p) => s + Math.abs(Number(p.monto) || 0), 0);
   const montoTotal = cell.items.reduce((s, it) => s + montoItem(it), 0);
-  // Pago PARCIAL solo cuando la celda es UNA sola línea (caso normal). El resto queda pendiente
-  // (el neteo es por suma). Con varios movimientos se paga completo (no se reparte el parcial).
-  const editable = cell.items.length === 1;
-  const yaPagado = Number(cell.yaPagado) || 0;          // parciales previos de esta línea
+  const yaPagado = Number(cell.yaPagado) || 0;          // parciales previos de esta celda (suma de ítems)
   const pendienteLinea = remanentePago(montoTotal, yaPagado);
-  const tope = editable ? pendienteLinea : montoTotal;  // no se puede imputar más que lo que falta
+  // Pago parcial: el monto ingresado se reparte en orden entre los ítems pendientes
+  // de la celda (llena el primero antes de tocar el siguiente) — ver handleSave.
+  const tope = pendienteLinea;  // no se puede imputar más que lo que falta
   const [montoImputar, setMontoImputar] = useState(tope);
-  const parcial = editable && montoImputar > 0 && montoImputar < pendienteLinea;
+  const parcial = montoImputar > 0 && montoImputar < pendienteLinea;
   const [form, setForm] = useState({
     fecha:              new Date().toISOString().slice(0, 10),
     sociedad_id:        "",   // solo para transferencia
@@ -2035,10 +2036,8 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
   const handleSave = async () => {
     if (savingRef.current) return;
     if (!form.cuenta_id) { alert("Seleccioná una cuenta bancaria."); return; }
-    if (editable) {
-      const m = Number(montoImputar) || 0;
-      if (m <= 0 || m > tope + PAGO_EPS) { alert(`El monto a imputar debe ser mayor a 0 y no superar lo pendiente (${fmtMoney(tope)}).`); return; }
-    }
+    const m = Number(montoImputar) || 0;
+    if (m <= 0 || m > tope + PAGO_EPS) { alert(`El monto a imputar debe ser mayor a 0 y no superar lo pendiente (${fmtMoney(tope)}).`); return; }
     savingRef.current = true; setSaving(true);
     try {
       const cta = cuentas.find(c => c.id === form.cuenta_id);
@@ -2060,10 +2059,18 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
         cuenta_contable_id:      form.cuenta_contable_id,
         cuenta_contable_nombre:  cuentasContables.find(c => c.id === form.cuenta_contable_id)?.nombre ?? "",
       };
-      // Un nb_movimiento por ítem (granularidad por línea). Secuencial a propósito:
-      // el backend GAS pierde escrituras concurrentes a nb_movimientos (appendRow colisiona).
+      // Un nb_movimiento por ítem (granularidad por línea). El monto ingresado se reparte
+      // en orden: llena el pendiente de cada ítem antes de pasar al siguiente (así un
+      // parcial en una celda de varios movimientos queda anclado a ítems concretos, no
+      // repartido a prorrata). Secuencial a propósito: el backend GAS pierde escrituras
+      // concurrentes a nb_movimientos (appendRow colisiona).
+      let restante = m;
       for (const it of cell.items) {
-        const monto = editable ? (Number(montoImputar) || 0) : montoItem(it);
+        if (restante <= PAGO_EPS) break;
+        const pendienteItem = remanentePago(montoItem(it), pagadoItem(it));
+        if (pendienteItem <= PAGO_EPS) continue;
+        const monto = Math.min(pendienteItem, restante);
+        restante -= monto;
         await appendPago({ ...comunes, forma_pago_id: it.ref.id, monto, concepto: conceptoPago(it, liq, mes, anio), nota: notaPago(it), ambito: "hq" });
       }
       await onSaved();
@@ -2090,14 +2097,10 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
           )}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: T.bg, borderRadius: 5, padding: "8px 10px" }}>
             <span style={{ fontSize: 12, color: T.muted }}>Total a imputar</span>
-            {editable ? (
-              <input type="text" inputMode="numeric"
-                value={montoImputar ? Math.round(montoImputar).toLocaleString("es-AR") : ""}
-                onChange={e => { const v = Number(String(e.target.value).replace(/\./g, "").replace(/[^\d]/g, "")) || 0; setMontoImputar(Math.min(v, tope)); }}
-                style={{ ...MODAL_INPUT, width: 130, textAlign: "right", fontWeight: 700, fontSize: 15, margin: 0 }} />
-            ) : (
-              <strong style={{ fontSize: 16, color: T.text }}>{fmtMoney(montoTotal)}</strong>
-            )}
+            <input type="text" inputMode="numeric"
+              value={montoImputar ? Math.round(montoImputar).toLocaleString("es-AR") : ""}
+              onChange={e => { const v = Number(String(e.target.value).replace(/\./g, "").replace(/[^\d]/g, "")) || 0; setMontoImputar(Math.min(v, tope)); }}
+              style={{ ...MODAL_INPUT, width: 130, textAlign: "right", fontWeight: 700, fontSize: 15, margin: 0 }} />
           </div>
           {parcial && (
             <div style={{ fontSize: 12, color: T.yellow, background: "#fefce8", borderRadius: 5, padding: "6px 10px" }}>
