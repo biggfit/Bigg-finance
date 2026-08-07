@@ -1489,7 +1489,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         </div>
       )}
 
-      <div style={{ flex: 1, overflow: "auto", background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10 }}>
+      <div className="nb-hscroll" style={{ flex: 1, overflow: "auto", background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10 }}>
         {loading ? (
           <div style={{ padding: 50, textAlign: "center", color: T.muted }}>Cargando…</div>
         ) : filtered.length === 0 ? (
