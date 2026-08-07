@@ -70,3 +70,17 @@ button:focus-visible {
     background-color: #f9f9f9;
   }
 }
+
+/* Barra de scroll estilada para tablas anchas (ej. Conciliación): más gruesa y
+   con contraste claro entre el track (gris muy claro) y el thumb (slate marcado). */
+.nb-hscroll::-webkit-scrollbar { height: 12px; width: 12px; }
+.nb-hscroll::-webkit-scrollbar-track { background: #eceff3; border-radius: 999px; }
+.nb-hscroll::-webkit-scrollbar-thumb {
+  background: #64748b;
+  border-radius: 999px;
+  border: 2px solid #eceff3;
+}
+.nb-hscroll::-webkit-scrollbar-thumb:hover { background: #475569; }
+.nb-hscroll::-webkit-scrollbar-corner { background: #eceff3; }
+/* Firefox */
+.nb-hscroll { scrollbar-width: auto; scrollbar-color: #64748b #eceff3; }
