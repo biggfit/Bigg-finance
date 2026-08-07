@@ -118,7 +118,7 @@ export default function PantallaResumen({ pais = "AR" }) {
   }, [sel, legajos]);
 
   // Pagos individuales del empleado seleccionado (nb_movimientos origen sueldos), ordenados por forma y fecha.
-  const pagosEmpleado = useMemo(() => (sel ? pagosDe(sel, pagos) : []), [pagos, sel]);
+  const pagosEmpleado = useMemo(() => (sel ? pagosDe(sel, pagos, vista) : []), [pagos, sel, vista]);
 
   // Desglose Sedes / HQ del empleado seleccionado (los builders son puros → se reusan en "imprimir todo").
   const resumenSedes = useMemo(
@@ -273,7 +273,7 @@ export default function PantallaResumen({ pais = "AR" }) {
                 if (!emp) return null;
                 const r = vista === "hq" ? buildResumenHQ(emp, novedades) : buildResumenSedes(emp, categorias, novedades);
                 if (!r) return null;
-                const pg = pagosDe(emp, pagos);
+                const pg = pagosDe(emp, pagos, vista);
                 return (
                   <div className="ficha-col" key={id}>
                     {vista === "hq"
@@ -300,9 +300,10 @@ export default function PantallaResumen({ pais = "AR" }) {
 }
 
 // ── Builders puros (reusados en la vista individual y en "imprimir todo") ─────
-function pagosDe(emp, pagos) {
+function pagosDe(emp, pagos, vista) {
   return pagos
-    .filter(p => p.legajo_id === emp.id || p.legajo_nombre === emp.nombre)
+    .filter(p => (p.legajo_id === emp.id || p.legajo_nombre === emp.nombre)
+      && (p.ambito === vista || (!p.ambito && vista === "sedes")))
     .sort((a, b) =>
       ordenForma(a.tipo_componente) - ordenForma(b.tipo_componente) ||
       (a.fecha || "").localeCompare(b.fecha || ""));
