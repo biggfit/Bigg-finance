@@ -1415,7 +1415,6 @@ function exportarTransferenciaFinanciera(liqs, mes, anio) {
 const MONO_EF_HEADERS = ["Legajo", "Forma", "Estado", "Titular", "Importe", "Pagado", "Pendiente", "CBU", "CUIT", "Incluye"];
 function exportarMonotributoEfectivo(liqs, mes, anio) {
   const FORMAS = [["efectivo", "Efectivo"], ["monotributo", "Monotributo"]];
-  const abs = (ps) => ps.reduce((a, p) => a + Math.abs(Number(p.monto) || 0), 0);
   const filas = [];
   for (const liq of liqs) {
     for (const [tipo, label] of FORMAS) {
@@ -1423,7 +1422,8 @@ function exportarMonotributoEfectivo(liqs, mes, anio) {
       const novs = (liq.novedades || []).filter(n => n.forma_pago === tipo && Number(n.monto) > 0);
       if (!ls.length && !novs.length) continue;
       const total  = ls.reduce((s, l) => s + Number(l.importe), 0) + novs.reduce((s, n) => s + Math.abs(Number(n.monto)), 0);
-      const pagado = ls.reduce((s, l) => s + abs(getPagosLinea(liq, l)), 0) + novs.reduce((s, n) => s + abs(getPagosNovedad(liq, n)), 0);
+      const pagado = sumPagosSinDuplicar(ls.map(l => getPagosLinea(liq, l)))
+                   + sumPagosSinDuplicar(novs.map(n => getPagosNovedad(liq, n)));
       const estado = { none: "PENDIENTE", partial: "PARCIAL", full: "PAGADO" }[estadoPago(total, pagado)];
       const base   = ls.find(l => l.cbu || l.cuenta) || ls[0] || {};
       const incluye = [...new Set([
@@ -1450,16 +1450,39 @@ const esLineaSintetica = (id) => /^(leg-|auto-|fp-)/.test(String(id));
 const esPagoDeNovedad = (id) => /^NOV-/.test(String(id));
 
 // Pagos asociados a una línea. Para líneas persistidas: match exacto por
-// forma_pago_id. Si no matchea (p. ej. la línea es sintética, o la liquidación se
-// reabrió y el id real al que apuntaba el pago ya no existe en su_liquidaciones):
-// match por tipo_componente, excluyendo solo pagos de novedades.
+// forma_pago_id. Si no matchea Y la línea es sintética (id inestable entre cargas,
+// p. ej. la liquidación se reabrió y el id real al que apuntaba el pago ya no existe):
+// match por tipo_componente, excluyendo pagos de novedades y pagos que ya tengan
+// dueño exacto en OTRA línea (evita contar el mismo pago dos veces cuando hay
+// varias líneas del mismo tipo, p. ej. dos transferencias a cuentas distintas).
+// Una línea con id persistido que simplemente no tiene pago propio NO hereda el
+// pago de una línea hermana del mismo tipo.
 function getPagosLinea(liq, linea) {
   const pagos = liq.pagos || [];
   const byId = linea.id ? pagos.filter(p => String(p.forma_pago_id) === String(linea.id)) : [];
   if (byId.length) return byId;
+  if (!esLineaSintetica(linea.id)) return [];
+  const idsPropios = new Set((liq.lineas || []).map(l => String(l.id)));
   return pagos.filter(p =>
     p.tipo_componente === linea.tipo &&
-    !esPagoDeNovedad(p.forma_pago_id));
+    !esPagoDeNovedad(p.forma_pago_id) &&
+    !idsPropios.has(String(p.forma_pago_id)));
+}
+
+// Suma pagos de varios ítems sin contar el mismo movimiento dos veces (defensa extra
+// ante ambigüedad de matching entre líneas hermanas del mismo tipo, ver getPagosLinea).
+function sumPagosSinDuplicar(gruposDePagos) {
+  const vistos = new Set();
+  let total = 0;
+  for (const pagos of gruposDePagos) {
+    for (const p of pagos) {
+      const key = p.id ?? p.nb_movimiento_id ?? p;
+      if (vistos.has(key)) continue;
+      vistos.add(key);
+      total += Math.abs(Number(p.monto) || 0);
+    }
+  }
+  return total;
 }
 
 // Pagos de una novedad: vinculados por forma_pago_id = id de la novedad (NOV…).
@@ -1604,8 +1627,8 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onReg
                 if (!ls.length && !novs.length) return null;
                 const total  = ls.reduce((s, l) => s + (Number(l.importe) || 0), 0)
                              + novs.reduce((s, n) => s + Math.abs(Number(n.monto) || 0), 0);
-                const pagado = ls.reduce((s, l) => s + abs(getPagosLinea(liq, l)), 0)
-                             + novs.reduce((s, n) => s + abs(getPagosNovedad(liq, n)), 0);
+                const pagado = sumPagosSinDuplicar(ls.map(l => getPagosLinea(liq, l)))
+                             + sumPagosSinDuplicar(novs.map(n => getPagosNovedad(liq, n)));
                 return estadoPago(total, pagado);
               };
               const colStates  = Object.fromEntries(COLS.map(c => [c.id, colState(c.id)]));
@@ -1751,7 +1774,7 @@ function EmpleadoPagosLineas({ liq, cols, onPagar, onVerPago }) {
       {filas.map((f, idx) => {
         const allItems = cols.flatMap(c => f.items(c.id));
         const total    = allItems.reduce((s, it) => s + montoItem(it), 0);
-        const pagado   = allItems.reduce((s, it) => s + pagosItem(it).reduce((a, p) => a + (Number(p.monto) || 0), 0), 0);
+        const pagado   = sumPagosSinDuplicar(allItems.map(pagosItem));
         const pend     = total - pagado;
         const last     = idx === filas.length - 1;
         return (
@@ -1762,8 +1785,9 @@ function EmpleadoPagosLineas({ liq, cols, onPagar, onVerPago }) {
               const items = f.items(c.id);
               if (!items.length) return <td key={c.id} style={TD({ ...tdBase, textAlign: "right", color: T.dim })}>—</td>;
               const monto      = items.reduce((s, it) => s + montoItem(it), 0);
-              // Pagado de la celda = suma de TODOS los pagos de sus ítems (soporta parciales acumulados).
-              const pagado     = items.reduce((s, it) => s + pagosItem(it).reduce((a, p) => a + Math.abs(Number(p.monto) || 0), 0), 0);
+              // Pagado de la celda = suma de TODOS los pagos de sus ítems (soporta parciales acumulados),
+              // sin duplicar un mismo movimiento si dos ítems lo matchean (ver sumPagosSinDuplicar).
+              const pagado     = sumPagosSinDuplicar(items.map(pagosItem));
               const pend       = remanentePago(monto, pagado);
               const st         = estadoPago(monto, pagado);
               const primerPago = items.flatMap(pagosItem)[0];
