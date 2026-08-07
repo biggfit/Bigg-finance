@@ -1445,19 +1445,21 @@ function exportarMonotributoEfectivo(liqs, mes, anio) {
 // Su id se regenera entre cargas, así que un pago no puede anclarse a él de forma
 // estable; se matchea por tipo de forma de pago.
 const esLineaSintetica = (id) => /^(leg-|auto-|fp-)/.test(String(id));
+// Pago de novedad: id con prefijo "NOV-" (ver newId("NOV") en sueldosApi). Estos
+// pertenecen a otra cuenta contable y nunca deben aparecer bajo una línea de sueldo.
+const esPagoDeNovedad = (id) => /^NOV-/.test(String(id));
 
 // Pagos asociados a una línea. Para líneas persistidas: match exacto por
-// forma_pago_id. Para líneas sintéticas: match por tipo_componente, excluyendo
-// pagos de novedades (forma_pago_id "NOV…", que pertenecen a otra cuenta contable).
+// forma_pago_id. Si no matchea (p. ej. la línea es sintética, o la liquidación se
+// reabrió y el id real al que apuntaba el pago ya no existe en su_liquidaciones):
+// match por tipo_componente, excluyendo solo pagos de novedades.
 function getPagosLinea(liq, linea) {
   const pagos = liq.pagos || [];
   const byId = linea.id ? pagos.filter(p => String(p.forma_pago_id) === String(linea.id)) : [];
   if (byId.length) return byId;
-  if (esLineaSintetica(linea.id))
-    return pagos.filter(p =>
-      p.tipo_componente === linea.tipo &&
-      (!p.forma_pago_id || esLineaSintetica(p.forma_pago_id)));
-  return [];
+  return pagos.filter(p =>
+    p.tipo_componente === linea.tipo &&
+    !esPagoDeNovedad(p.forma_pago_id));
 }
 
 // Pagos de una novedad: vinculados por forma_pago_id = id de la novedad (NOV…).
