@@ -1071,8 +1071,6 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
   const activeMonths = mesesVisibles(_amRaw, year);
   const ncols = activeMonths.length + 2;
   const Z12 = new Array(12).fill(0);
-  // IVA a pagar a Hacienda = Débito ventas − Crédito compras (ivaDeb=−D, ivaCred=+C → D−C = −(ivaDeb+ivaCred)).
-  const ivaAPagar = MESES.map((_, m) => -((sub.ivaDeb?.[m] || 0) + (sub.ivaCred?.[m] || 0)));
   const ALLKEYS = ["sec_op", "sec_ing", "sec_gpv", "sec_opex", "sec_fin", "sec_imp"];
   const [collapsed, setCollapsed] = useState({});
   const isCol  = k => !!collapsed[k];
@@ -1148,7 +1146,6 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
             <SubtotalRow label="Posición de IVA (informativa · no afecta el resultado)" values={Z12} activeMonths={activeMonths} color={SEDE_HDR} />
             <DataRow label="IVA Débito (ventas)"   values={sub.ivaDeb}  activeMonths={activeMonths} color={SEDE_HDR} />
             <DataRow label="IVA Crédito (compras)" values={sub.ivaCred} activeMonths={activeMonths} color={SEDE_HDR} />
-            <DataRow label="IVA a pagar (Hacienda) = Débito − Crédito" values={ivaAPagar} activeMonths={activeMonths} color={SEDE_HDR} />
           </>}
         </tbody>
       </table>
