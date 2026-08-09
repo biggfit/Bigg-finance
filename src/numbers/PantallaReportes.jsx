@@ -1043,10 +1043,12 @@ function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) {
   const ivaDeb = pnl.ivaDeb || Z(), ivaCred = pnl.ivaCred || Z();   // IVA embebido (sin IVA): débito ventas (−) / crédito compras (+)
   const ingHQ = sumG(hqAccounts), gpv = sumG(gpvAccounts), opexHQ = sumG(ghqAccounts),
         financieros = sumG(pnl.grupos.fin),
-        // Impuestos = tributos reales + IVA neto embebido (débito+crédito). El IVA restituye lo quitado a
-        // las operativas → Resultado del Grupo da IGUAL con/sin IVA. Las dos líneas se muestran aparte con
-        // su signo natural (crédito compras +, débito ventas −).
-        impuestos = MESES.map((_, m) => sumG(pnl.grupos.imp)[m] + ivaDeb[m] + ivaCred[m]);
+        // Impuestos = SOLO tributos reales. Las dos líneas de IVA (débito ventas / crédito compras) son
+        // INFORMATIVAS: muestran la posición de IVA (lo que se le va a pagar a Hacienda = débito − crédito),
+        // pero NO entran al Resultado. El IVA ya se sacó línea por línea en modo Sin IVA (resultado real /
+        // EBITDA real); sumar las líneas de nuevo lo restaría dos veces. Débito − Crédito = IVA a pagar
+        // (se netea a cero cuando se contabilice el pago a Hacienda; hoy ese pago no está cargado).
+        impuestos = sumG(pnl.grupos.imp);
   const resOperaciones = MESES.map((_, m) => sar[m] + fg[m] + wre[m]);
   const resOpMasIngHQ  = MESES.map((_, m) => resOperaciones[m] + ingHQ[m]);   // Total Ingresos (waterfall corriente)
   const margen         = MESES.map((_, m) => resOpMasIngHQ[m] - gpv[m]);      // Margen de Contribución
@@ -1068,6 +1070,9 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
           resOperaciones, resOpMasIngHQ, margen, resOpGrupo, resAntesImp, resGrupo, activeMonths: _amRaw } = sub;
   const activeMonths = mesesVisibles(_amRaw, year);
   const ncols = activeMonths.length + 2;
+  const Z12 = new Array(12).fill(0);
+  // IVA a pagar a Hacienda = Débito ventas − Crédito compras (ivaDeb=−D, ivaCred=+C → D−C = −(ivaDeb+ivaCred)).
+  const ivaAPagar = MESES.map((_, m) => -((sub.ivaDeb?.[m] || 0) + (sub.ivaCred?.[m] || 0)));
   const ALLKEYS = ["sec_op", "sec_ing", "sec_gpv", "sec_opex", "sec_fin", "sec_imp"];
   const [collapsed, setCollapsed] = useState({});
   const isCol  = k => !!collapsed[k];
@@ -1132,10 +1137,16 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
           {/* Debajo del operativo: financieros e impuestos del grupo, en una línea al final */}
           {sec("sec_fin", "Financieros", pnl.grupos.fin, BIGG_ORDEN_FIN, true)}
           <ResultadoRow label="Resultado antes de Impuestos" values={resAntesImp} activeMonths={activeMonths} />
-          {/* IVA embebido (solo modo sin IVA): débito ventas (−, sale) / crédito compras (+, entra), con
-              signo natural. Suman al resultado igual que hoy (restituyen el IVA → el fondo da igual). */}
-          {sub.ivaDeb?.some(v => v)  && <DataRow label="IVA Débito (ventas)"   values={sub.ivaDeb}  activeMonths={activeMonths} color={SEDE_HDR} />}
-          {sub.ivaCred?.some(v => v) && <DataRow label="IVA Crédito (compras)" values={sub.ivaCred} activeMonths={activeMonths} color={SEDE_HDR} />}
+          {/* Posición de IVA — INFORMATIVA (solo modo Sin IVA). El IVA ya se sacó de cada línea (el resultado
+              es real, sin IVA); estas dos líneas muestran cuánto IVA se cobró (débito ventas) vs cuánto se
+              pagó (crédito compras). NO entran al Resultado. La diferencia (Débito − Crédito) = IVA a pagar a
+              Hacienda, que se netea a cero cuando se contabilice ese pago. */}
+          {(sub.ivaDeb?.some(v => v) || sub.ivaCred?.some(v => v)) && <>
+            <SubtotalRow label="Posición de IVA (informativa · no afecta el resultado)" values={Z12} activeMonths={activeMonths} color={SEDE_HDR} />
+            <DataRow label="IVA Débito (ventas)"   values={sub.ivaDeb}  activeMonths={activeMonths} color={SEDE_HDR} />
+            <DataRow label="IVA Crédito (compras)" values={sub.ivaCred} activeMonths={activeMonths} color={SEDE_HDR} />
+            <DataRow label="IVA a pagar (Hacienda) = Débito − Crédito" values={ivaAPagar} activeMonths={activeMonths} color={SEDE_HDR} />
+          </>}
           {sec("sec_imp", "Impuestos", pnl.grupos.imp, BIGG_ORDEN_IMP, true)}
           <ResultadoRow strong label="Resultado del Grupo" values={resGrupo} activeMonths={activeMonths} />
         </tbody>
