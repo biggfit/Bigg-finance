@@ -119,6 +119,7 @@ function movimientoToPnLRows(movs, sociedad, cuentaMap) {
       cuenta_contable: m.cuenta_contable ?? "",
       moneda:          m.moneda ?? "ARS",
       total,
+      iva_monto:       Math.abs(Number(m.iva_monto) || 0),   // para la vista "sin IVA" (neto = total − iva)
       _tipo,                                          // para el detalle de Informes (tipo de egreso)
       contraparte_nombre: m.contraparte_nombre ?? "",
     });
@@ -431,7 +432,14 @@ const PNL_INICIO_MES  = 6;   // julio (0-based): en el año del go-live no se mu
 const mesesVisibles = (activeMonths, year) =>
   Number(year) === PNL_INICIO_ANIO ? activeMonths.filter(m => m >= PNL_INICIO_MES) : activeMonths;
 
-function buildPnLSede(inRows, egRows, ccFilter, year, moneda) {
+// Monto de una fila del P&L: bruto (con IVA) o NETO (sin IVA → resultado real / EBITDA). El neto resta
+// el iva_monto de la fila (facturas y movimientos imputados lo traen; sueldos/otros sin IVA → neto = total).
+const montoPnL = (row, sinIva) => {
+  const total = Number(row.total) || 0;
+  return sinIva ? total - (Number(row.iva_monto) || 0) : total;
+};
+
+function buildPnLSede(inRows, egRows, ccFilter, year, moneda, sinIva = false) {
   // Pre-poblar cada grupo con sus cuentas configuradas en 0 → se muestran aunque no tengan monto.
   const grupos = {};
   for (const g of SEDE_GRUPOS) { grupos[g.key] = {}; for (const c of g.cuentas) grupos[g.key][c] = new Array(12).fill(0); }
@@ -447,7 +455,7 @@ function buildPnLSede(inRows, egRows, ccFilter, year, moneda) {
       const gkey   = SEDE_CUENTA_A_GRUPO.get(_nkSede(nombre));
       const bucket = gkey ? grupos[gkey] : sinClasificar;
       if (!bucket[nombre]) bucket[nombre] = new Array(12).fill(0);
-      bucket[nombre][m] += Number(row.total) || 0;
+      bucket[nombre][m] += montoPnL(row, sinIva);
     }
   };
   add(inRows); add(egRows);
@@ -496,6 +504,28 @@ const VISTAS_SEDE = [
   { id: "mensual",   label: "Mensual" },
   { id: "ytd",       label: "YTD" },
 ];
+// Toggle Con IVA / Sin IVA (sin IVA = resultado real / EBITDA, cada línea neta de su IVA).
+function IvaToggle({ value, onChange }) {
+  const opts = [{ id: false, label: "Con IVA" }, { id: true, label: "Sin IVA" }];
+  return (
+    <div style={{ display: "inline-flex", gap: 2, background: "#f3f4f6", borderRadius: 9, padding: 3 }}>
+      {opts.map(o => {
+        const active = value === o.id;
+        return (
+          <button key={String(o.id)} onClick={() => onChange(o.id)} style={{
+            background: active ? T.accentDark : "transparent", border: "none", borderRadius: 7,
+            color: active ? T.accent : T.muted, fontFamily: T.font, fontSize: 12.5,
+            fontWeight: active ? 800 : 600, padding: "6px 14px", cursor: "pointer", transition: "all .15s ease" }}
+            onMouseEnter={e => { if (!active) e.currentTarget.style.background = "#e5e7eb"; }}
+            onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}>
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function VistaToggle({ value, onChange }) {
   return (
     <div style={{ display: "inline-flex", gap: 2, background: "#f3f4f6", borderRadius: 9, padding: 3 }}>
@@ -2292,10 +2322,12 @@ function WipReport({ tab }) {
 export default function PantallaReportes({ sociedad = "nako" }) {
   const [activeTab,      setActiveTab]      = useState(null);   // null = menú-landing de reportes
   const [vistaPnl,       setVistaPnl]       = useState("evolucion");   // P&L Sedes: evolucion | mensual | ytd
+  const [sinIva,         setSinIva]         = useState(() => { try { return localStorage.getItem("pnlSinIva") === "1"; } catch { return false; } });   // toggle Con/Sin IVA (recordado)
   const [mesSel,         setMesSel]         = useState(new Date().getMonth());   // mes para vistas mensual/ytd
   const [year,           setYear]           = useState(CUR_YEAR);
   const [selectedSedeCCs, setSelectedSedeCCs] = useState(null);   // null = todas · [] = ninguna · [ids] = subconjunto
   const [sedeOpen,        setSedeOpen]        = useState(false);
+  useEffect(() => { try { localStorage.setItem("pnlSinIva", sinIva ? "1" : "0"); } catch {} }, [sinIva]);
   const [monedaPL,       setMonedaPL]       = useState("ARS");
   const [monedaCF,       setMonedaCF]       = useState("ARS");
   const [rawEg,     setRawEg]     = useState([]);
@@ -2524,14 +2556,14 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const ingDetalle = useMemo(() => [...inConFranq, ...gastoMovRows.filter(r => r._tipo === "Ingreso" || r._tipo === "Retención")], [inConFranq, gastoMovRows]);
 
   const pnlSede = useMemo(
-    () => buildPnLSede(inConFranq, egConSueldos, resolvedCCSede, year, monedaPL),
-    [inConFranq, egConSueldos, resolvedCCSede, year, monedaPL]
+    () => buildPnLSede(inConFranq, egConSueldos, resolvedCCSede, year, monedaPL, sinIva),
+    [inConFranq, egConSueldos, resolvedCCSede, year, monedaPL, sinIva]
   );
 
   // Año anterior (mismos arrays, filtrados a year-1) → comparativas Mensual/YTD sin fetch extra.
   const pnlSedePrev = useMemo(
-    () => buildPnLSede(inConFranq, egConSueldos, resolvedCCSede, year - 1, monedaPL),
-    [inConFranq, egConSueldos, resolvedCCSede, year, monedaPL]
+    () => buildPnLSede(inConFranq, egConSueldos, resolvedCCSede, year - 1, monedaPL, sinIva),
+    [inConFranq, egConSueldos, resolvedCCSede, year, monedaPL, sinIva]
   );
   const subSede     = useMemo(() => computeSubtotalsSede(pnlSede), [pnlSede]);
   const subSedePrev = useMemo(() => computeSubtotalsSede(pnlSedePrev), [pnlSedePrev]);
@@ -2670,6 +2702,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         action={
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             {isPnlTiempo && <VistaToggle value={vistaPnl} onChange={setVistaPnl} />}
+            {isSedeLike && <IvaToggle value={sinIva} onChange={setSinIva} />}
             <button onClick={() => setActiveTab(null)} style={{
               display: "inline-flex", alignItems: "center", gap: 6,
               background: "#f3f4f6", border: `1px solid ${T.cardBorder}`, borderRadius: 8,
