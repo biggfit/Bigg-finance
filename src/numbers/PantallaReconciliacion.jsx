@@ -688,7 +688,9 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const recvSocDe = (mov) => edits[mov.id]?.recv_soc ?? "";
   // Opciones del <select> de centro de costo, agrupadas: Operaciones por país → HQ → Otros.
   const centroOptionsEls = useMemo(() => {
-    const { hq, ops, rest } = groupCentrosCosto(centros);   // clasificación hq/ops/rest compartida
+    // Solo centros ACTIVOS: uno dado de baja (ej. "10 - HQ", activo=false) no debe ofrecerse como opción.
+    const activos = centros.filter(c => String(c.activo).trim().toLowerCase() !== "false");
+    const { hq, ops, rest } = groupCentrosCosto(activos);   // clasificación hq/ops/rest compartida
     const porPais = {};
     for (const c of ops) { const p = c.pais || "Sin país"; (porPais[p] ||= []).push(c); }   // solo el sub-grupo por país es propio de esta pantalla
     const opt = c => <option key={c.id} value={c.id}>{c.nombre}</option>;
