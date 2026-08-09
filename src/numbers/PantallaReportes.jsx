@@ -2702,7 +2702,6 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         action={
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             {isPnlTiempo && <VistaToggle value={vistaPnl} onChange={setVistaPnl} />}
-            {isSedeLike && <IvaToggle value={sinIva} onChange={setSinIva} />}
             <button onClick={() => setActiveTab(null)} style={{
               display: "inline-flex", alignItems: "center", gap: 6,
               background: "#f3f4f6", border: `1px solid ${T.cardBorder}`, borderRadius: 8,
@@ -2724,7 +2723,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         padding: "12px 16px", boxShadow: "0 1px 3px rgba(0,0,0,.04)",
       }}>
         {/* Año */}
-        <div>
+        <div style={{ order: isSedeLike ? 2 : 0 }}>
           <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
             textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Año</label>
           <select value={year} onChange={e => setYear(Number(e.target.value))} style={selStyle}>
@@ -2732,9 +2731,9 @@ export default function PantallaReportes({ sociedad = "nako" }) {
           </select>
         </div>
 
-        {/* Moneda — P&L */}
+        {/* Moneda — P&L (en sede, arranca el grupo derecho) */}
         {showMonedaPL && (
-          <div>
+          <div style={{ order: isSedeLike ? 4 : 0, marginLeft: isSedeLike ? "auto" : undefined }}>
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Moneda</label>
             <select value={monedaPL} onChange={e => setMonedaPL(e.target.value)} style={selStyle}>
@@ -2742,6 +2741,15 @@ export default function PantallaReportes({ sociedad = "nako" }) {
                 <option key={k} value={k}>{v} {k}</option>
               ))}
             </select>
+          </div>
+        )}
+
+        {/* IVA — P&L Sedes: ver con IVA o neto (EBITDA real). A la derecha, junto a Moneda. */}
+        {isSedeLike && (
+          <div style={{ order: 5 }}>
+            <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
+              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>IVA</label>
+            <IvaToggle value={sinIva} onChange={setSinIva} />
           </div>
         )}
 
@@ -2766,7 +2774,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
         {/* Mes — solo para vistas comparativas (Mensual / YTD) */}
         {isPnlTiempo && vistaPnl !== "evolucion" && (
-          <div>
+          <div style={{ order: isSedeLike ? 3 : 0 }}>
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Mes</label>
             <select value={mesSel} onChange={e => setMesSel(Number(e.target.value))} style={selStyle}>
@@ -2777,7 +2785,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
         {/* Sedes dropdown — jerárquico: Operación (agrupador) › Sede */}
         {showSedes && (
-          <div ref={sedeRef} style={{ position: "relative" }}>
+          <div ref={sedeRef} style={{ position: "relative", order: isSedeLike ? 1 : 0 }}>
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Operaciones / Sedes</label>
             <button onClick={() => setSedeOpen(o => !o)} style={{
