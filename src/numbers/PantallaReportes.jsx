@@ -956,18 +956,20 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
       const catPnl  = normCat(meta?.categoria_pnl);                            // "ventas" | "costo_venta" | …
       const catRaw  = (meta?.categoria_pnl ?? "").toLowerCase();               // crudo, para financieros/impuestos
       const catSede = (meta?.categoria_pnl_sede ?? "").trim().toLowerCase();   // "ventas" | "otros ingresos" | "costo por venta"
-      // Posición de IVA (solo modo Sin IVA), INFORMATIVA. Se clasifica por si la CUENTA es de venta o de
-      // compra — NO por el lote (ingreso/egreso): las ventas de sede por Mercado Pago entran como
-      // movimientos de banco (lote egreso) pero su IVA es DÉBITO (ventas). Débito ventas (−) / crédito
-      // compras (+). Es display; no entra al Resultado (el IVA ya se saca línea por línea).
+      // Posición de IVA (solo modo Sin IVA), INFORMATIVA = la columna de IVA del núcleo, partida en
+      // ventas (débito) vs compras (crédito). Se clasifica por si la CUENTA es de venta o de compra —
+      // NO por el lote (ingreso/egreso): las ventas de sede por Mercado Pago entran como movimientos de
+      // banco (lote egreso) pero su IVA es DÉBITO (ventas); Interusos es la COMPRA del crédito Gympass
+      // (aunque venga por el lote ingreso como NC) → crédito. Débito (−) / crédito (+). Es display; no
+      // entra al Resultado (el IVA ya se saca línea por línea). Cruzable contra AFIP.
       if (sinIva) {
         const ivaRow = Math.abs(Number(row.iva_monto) || 0);
         if (ivaRow > 0) {
-          // Contra-costo de una cuenta intermediada (Interusos que netea en Coorporativos, compra de Pauta,
-          // costo por venta): aunque su categoría sea "ventas/otros ingresos", del lado egreso es COMPRA → crédito.
-          const esContraCosto = forcedSide !== "ingreso" &&
-            (ING_CONTRA_HQ.has(cuenta) || GPV_COSTO_EGRESO.has(cuenta) || catPnl === "costo_venta");
-          const esVenta = !esContraCosto && (forcedSide === "ingreso" ||
+          // Compra (crédito): cuentas intermediadas contra-venta (Interusos que netea en Coorporativos —
+          // siempre; compra de Pauta y costo por venta solo del lado egreso), y todo lo que no sea venta.
+          const esCompraIntermediada = ING_CONTRA_HQ.has(cuenta) ||
+            (forcedSide !== "ingreso" && (GPV_COSTO_EGRESO.has(cuenta) || catPnl === "costo_venta"));
+          const esVenta = !esCompraIntermediada && (forcedSide === "ingreso" ||
             catSede === "ventas" || catSede === "otros ingresos" || catPnl === "ventas");
           if (esVenta) ivaDeb[m]  -= ivaRow;   // ventas: débito (−)
           else         ivaCred[m] += ivaRow;   // compras: crédito (+)
