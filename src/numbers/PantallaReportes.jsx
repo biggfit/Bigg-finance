@@ -946,14 +946,16 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
       const cc = ccMap.get(ccKey(row.centro_costo));
       const emp = (cc?.empresa ?? "").trim();
       if (emp && !nucleoEmpresas.has(emp)) continue;   // fuera del núcleo (anillo 2/3) → no consolida
-      // Sin IVA: el IVA embebido de la factura se saca de cada línea (queda neta) y se acumula en dos
-      // líneas de Impuestos — Débito (ventas, +) neteado contra Crédito (compras, −). Distinto del IVA/
-      // percepciones que cobra el banco (cuenta "IVA", origen extracto), que sigue como su propia línea.
+      // Sin IVA: el IVA embebido se saca de cada línea (queda neta) y se acumula en dos líneas de
+      // Impuestos que RESTITUYEN ese IVA → el "Resultado del Grupo" da IGUAL con o sin IVA (el IVA es
+      // pass-through; el usuario compra crédito para no pagarlo). Signo: se resta el IVA débito que se
+      // había quitado de ventas y se suma el crédito que se había quitado de compras → devuelve el neto
+      // que el modo Con IVA tenía embebido. Distinto de la cuenta "IVA" del banco (percepciones).
       if (sinIva) {
         const ivaRow = Math.abs(Number(row.iva_monto) || 0);
         if (ivaRow > 0) {
           const key = forcedSide === "ingreso" ? "IVA Débito (ventas)" : "IVA Crédito (compras)";
-          (grupos.imp[key] ??= new Array(12).fill(0))[m] += forcedSide === "ingreso" ? ivaRow : -ivaRow;
+          (grupos.imp[key] ??= new Array(12).fill(0))[m] += forcedSide === "ingreso" ? -ivaRow : ivaRow;
         }
       }
       const fam = familiaCentro(cc);
