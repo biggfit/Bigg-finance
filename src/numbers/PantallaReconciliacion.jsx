@@ -5,6 +5,7 @@ import {
   aceptarCobroFranquicia, fetchBancoReglas, fetchProveedores, fetchCuentas, fetchCentrosCosto, fetchSociedades,
   ignorarMovimiento, restaurarMovimiento, fetchMovimientosIgnorados, fetchPagosSueldos,
   fetchEgresos, fetchPagosCobros, calcSaldoPendiente, imputarPagoFC,
+  pagarFacturasDesdeExtracto, cobrarFacturasDesdeExtracto,
   appendEgreso, appendProveedor, appendCuenta,
   appendIngreso, fetchClientes, appendCliente,
   appendBancoRegla, fetchIngresos, imputarCobroIngreso,
@@ -71,6 +72,105 @@ const fmt = n => (Number(n) || 0).toLocaleString("es-AR", { minimumFractionDigit
 const dedupById = arr => { const seen = new Set(); return (arr || []).filter(x => x && !seen.has(x.id) && seen.add(x.id)); };
 const MENU_ITEM = { display: "block", width: "100%", textAlign: "left", padding: "9px 12px", fontSize: 11, border: "none", borderBottom: "1px solid #f1f5f9", background: "#fff", color: "#111827", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" };
 const parseMeta = ref => Object.fromEntries(String(ref || "").split(";").map(kv => kv.split("=")).filter(a => a.length === 2));
+
+// Modal: una transferencia del extracto que salda VARIAS facturas del mismo proveedor/cliente.
+// Elegís las FCs (prefill = saldo completo, editable a parcial); la suma debe dar el total de la
+// transferencia. Al confirmar, la línea del extracto se ignora y se crea un pago/cobro real por FC.
+function ModalImputarVarias({ mov, tipo, facturas, onClose, onConfirm }) {
+  const esPago = tipo === "pago";
+  const total  = Math.abs(Number(mov.monto) || 0);
+  const r2     = n => Math.round((Number(n) || 0) * 100) / 100;
+  const [sel, setSel]       = useState({});   // { [fcId]: { checked, monto } }
+  const [saving, setSaving] = useState(false);
+
+  const toggle = (f) => setSel(s => s[f.id]?.checked
+    ? { ...s, [f.id]: { checked: false, monto: "" } }
+    : { ...s, [f.id]: { checked: true, monto: String(r2(f.saldo)) } });
+  const setMonto = (id, v) => setSel(s => ({ ...s, [id]: { checked: true, monto: v.replace(/[^\d.]/g, "") } }));
+
+  const partes = facturas.filter(f => sel[f.id]?.checked)
+    .map(f => ({ documento_id: f.id, monto: Number(sel[f.id].monto) || 0, nroComp: f.nroComp }));
+  const suma = partes.reduce((a, p) => a + Math.abs(p.monto), 0);
+  const dif  = r2(total - suma);
+  const ok   = partes.length > 0 && Math.abs(dif) <= 0.5 && partes.every(p => p.monto > 0);
+
+  const confirmar = async () => {
+    if (!ok || saving) return;
+    setSaving(true);
+    try { await onConfirm(partes); } finally { setSaving(false); }
+  };
+
+  const th = { padding: "7px 10px", fontSize: 10.5, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: ".05em", textAlign: "left", borderBottom: `1px solid ${T.border}` };
+  const td = { padding: "6px 10px", fontSize: 12.5, color: T.text, borderBottom: `1px solid ${T.border}` };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: 620, maxWidth: "94vw", maxHeight: "88vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,.3)", fontFamily: T.font }}>
+        <div style={{ padding: "13px 20px", borderBottom: `1px solid ${T.border}` }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: T.text }}>Imputar transferencia a varias facturas</div>
+          <div style={{ fontSize: 12, color: T.muted, marginTop: 3 }}>
+            {esPago ? "Pago" : "Cobro"} de <b>{mov.contraparte_nombre || "—"}</b> · {fmtDate(mov.fecha)} · <b>{fmt(total)}</b> · {mov.cuenta_bancaria}
+          </div>
+        </div>
+
+        <div style={{ overflowY: "auto", padding: "4px 8px", flex: 1 }}>
+          {facturas.length === 0 ? (
+            <div style={{ padding: 24, textAlign: "center", color: T.muted, fontSize: 13 }}>
+              No hay facturas {esPago ? "de compra" : "de venta"} pendientes en esta moneda.
+            </div>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr>
+                <th style={{ ...th, width: 34 }}></th>
+                <th style={th}>{esPago ? "Factura" : "Venta"}</th>
+                <th style={{ ...th, textAlign: "right" }}>Saldo</th>
+                <th style={{ ...th, textAlign: "right", width: 150 }}>A imputar</th>
+              </tr></thead>
+              <tbody>
+                {facturas.map(f => {
+                  const on = !!sel[f.id]?.checked;
+                  return (
+                    <tr key={f.id} style={{ background: on ? "#eff6ff" : "#fff" }}>
+                      <td style={{ ...td, textAlign: "center" }}>
+                        <input type="checkbox" checked={on} onChange={() => toggle(f)} />
+                      </td>
+                      <td style={td}>
+                        <div style={{ fontWeight: 600 }}>{f.nroComp || f.id}</div>
+                        {f.vto && <div style={{ fontSize: 10.5, color: T.muted }}>vto {fmtDate(f.vto)}</div>}
+                      </td>
+                      <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmt(f.saldo)}</td>
+                      <td style={{ ...td, textAlign: "right" }}>
+                        <input value={on ? (sel[f.id]?.monto ?? "") : ""} disabled={!on}
+                          onChange={e => setMonto(f.id, e.target.value)}
+                          style={{ width: 130, textAlign: "right", padding: "4px 7px", border: `1px solid ${T.border}`, borderRadius: 5, fontSize: 12.5, fontFamily: T.font, background: on ? "#fff" : "#f1f5f9" }} />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <div style={{ padding: "11px 20px", borderTop: `1px solid ${T.border}` }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 10 }}>
+            <span style={{ color: T.muted }}>Asignado <b style={{ color: T.text }}>{fmt(suma)}</b> de {fmt(total)}</span>
+            <span style={{ fontWeight: 700, color: Math.abs(dif) <= 0.5 ? "#16a34a" : "#dc2626" }}>
+              {Math.abs(dif) <= 0.5 ? "✓ cuadra" : (dif > 0 ? `falta ${fmt(dif)}` : `sobra ${fmt(-dif)}`)}
+            </span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+            <button onClick={onClose} style={{ padding: "7px 14px", border: `1px solid ${T.border}`, borderRadius: 6, background: "#fff", fontSize: 12.5, fontWeight: 600, color: T.text, cursor: "pointer", fontFamily: T.font }}>Cancelar</button>
+            <button onClick={confirmar} disabled={!ok || saving}
+              style={{ padding: "7px 16px", border: "none", borderRadius: 6, background: ok ? "#2563eb" : "#93b4f0", color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: ok && !saving ? "pointer" : "not-allowed", fontFamily: T.font }}>
+              {saving ? "Imputando…" : `Imputar ${partes.length || ""}`}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 // Estilos compartidos de los modales interco (Reconocer / Declarar recibida).
 const MODAL_INP = { width: "100%", background: "#eceff3", border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "9px 12px", fontSize: 13, color: T.text, fontFamily: T.font, outline: "none", boxSizing: "border-box" };
 const MODAL_LBL = { fontSize: 12, color: T.muted, fontWeight: 600, display: "block", marginBottom: 5 };
@@ -205,6 +305,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const [msg,        setMsg]        = useState("");
   const [edits,      setEdits]      = useState({}); // movId → {cuenta_contable, centro_costo}
   const [menuFor,    setMenuFor]    = useState(null); // movId con el menú ⋯ abierto
+  const [multiModal, setMultiModal] = useState(null); // { mov, tipo:"pago"|"cobro" } — una trf que salda varias FCs
   const [cargarFacturaFor, setCargarFacturaFor] = useState(null); // mov para el que abrimos "Cargar factura" de compra (débito)
   const [cargarIngresoFor, setCargarIngresoFor] = useState(null); // mov para el que abrimos "Cargar factura de venta" (crédito)
   const [clientes,   setClientes]   = useState([]); // maestro de clientes (para el modal de venta)
@@ -1836,11 +1937,17 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           {neg && !fr.es && !modoTransfer && !modoInterco && !modoFC && !modoCuota && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoFC: true, modoFranquicia: false, modoTransfer: false, noFranquicia: true }); setMenuFor(null); }}>🧾 Imputar a factura</button>
                           )}
+                          {neg && !fr.es && !modoTransfer && !modoInterco && !modoCuota && (
+                            <button style={MENU_ITEM} onClick={() => { setMultiModal({ mov: m, tipo: "pago" }); setMenuFor(null); }}>🧾 Imputar a varias facturas…</button>
+                          )}
                           {neg && !fr.es && !modoTransfer && !modoInterco && !modoCuota && !modoCobro && (
                             <button style={MENU_ITEM} onClick={() => { setCargarFacturaFor(m); setMenuFor(null); }}>➕ Cargar factura nueva…</button>
                           )}
                           {!neg && !fr.es && !modoTransfer && !modoInterco && !modoCobro && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCobro: true, modoFranquicia: false, modoTransfer: false, noFranquicia: true }); setMenuFor(null); }}>🧾 Imputar a factura</button>
+                          )}
+                          {!neg && !fr.es && !modoTransfer && !modoInterco && (
+                            <button style={MENU_ITEM} onClick={() => { setMultiModal({ mov: m, tipo: "cobro" }); setMenuFor(null); }}>🧾 Imputar a varias facturas…</button>
                           )}
                           {!neg && !fr.es && !modoTransfer && !modoInterco && !modoRecv && (
                             <button style={MENU_ITEM} onClick={() => { setCargarIngresoFor(m); setMenuFor(null); }}>➕ Cargar factura de venta nueva…</button>
@@ -2009,6 +2116,34 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       {/* Cargar factura nueva desde la bandeja (modal Nueva Compra, encima de la conciliación).
           Prefill con proveedor reconocido + monto/fecha del débito; al guardar, queda lista para
           imputar el pago (auto-entra en modo FC con la factura preseleccionada). */}
+      {/* Imputar UNA transferencia a VARIAS facturas (Santi paga N FCs de un proveedor con una sola trf). */}
+      {multiModal && (() => {
+        const { mov, tipo } = multiModal;
+        const lista = tipo === "pago"
+          ? (fcsDeProv(fcProvDe(mov)).length ? fcsDeProv(fcProvDe(mov)) : facturasPendientes)
+          : (ventasDeCliente(cobClienteDe(mov)).length ? ventasDeCliente(cobClienteDe(mov)) : ventasPendientes);
+        return (
+          <ModalImputarVarias
+            mov={mov} tipo={tipo} facturas={lista}
+            onClose={() => setMultiModal(null)}
+            onConfirm={async (partes) => {
+              try {
+                if (tipo === "pago") await pagarFacturasDesdeExtracto(mov, partes);
+                else                 await cobrarFacturasDesdeExtracto(mov, partes);
+                setPendientes(prev => prev.filter(x => x.id !== mov.id));   // sale de la bandeja
+                // refrescar saldos: la FC pasa a paga/parcial y los pagos nuevos se ven en el detalle
+                (tipo === "pago"
+                  ? fetchEgresos(sociedad).then(e => setEgresos(e || []))
+                  : fetchIngresos(sociedad).then(i => setIngresos(i || []))).catch(() => {});
+                fetchPagosCobros(sociedad).then(p => setPagosCobros(p || [])).catch(() => {});
+                setMultiModal(null);
+                setMsg(`✓ Transferencia imputada a ${partes.length} factura(s).`);
+              } catch (e) { alert("Error al imputar: " + (e?.message || e)); }
+            }}
+          />
+        );
+      })()}
+
       {cargarFacturaFor && (() => {
         const mov = cargarFacturaFor;
         const provId = fcProvDe(mov) || "";
