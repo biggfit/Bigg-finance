@@ -51,6 +51,10 @@ const fmt = (n) => "$ " + Math.round(Number(n) || 0).toLocaleString("es-AR");
 const fmtNum = (n) => (Number(n) || 0).toLocaleString("es-AR");
 const fmtFecha = (s) => {
   if (!s) return "—";
+  // Parseo de string (no new Date): "2026-07-27" con new Date() se interpreta UTC y en AR (UTC-3)
+  // muestra el día anterior. El match evita ese corrimiento.
+  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[3]}/${m[2]}/${m[1]}`;
   const d = new Date(s);
   return isNaN(d) ? s : `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
 };

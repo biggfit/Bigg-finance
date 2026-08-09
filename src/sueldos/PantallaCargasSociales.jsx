@@ -17,6 +17,12 @@ const T = {
 const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
                 "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 
+// Fecha ISO (YYYY-MM-DD) → dd/mm/aaaa para mostrar (sin corrimiento por huso).
+const fmtFecha = (s) => {
+  const m = String(s ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : (s || "");
+};
+
 const hoy     = new Date();
 const MES_DEF = hoy.getMonth() === 0 ? 12 : hoy.getMonth();
 const ANO_DEF = hoy.getMonth() === 0 ? hoy.getFullYear() - 1 : hoy.getFullYear();
@@ -150,7 +156,7 @@ function CargaCard({ carga, mes, anio, onPagar, pagandoEste }) {
           </div>
           <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>{fmtMoney(carga.monto_total)}</div>
           {carga.fecha_vto && (
-            <div style={{ fontSize: 12, color: T.muted }}>Vencimiento: {carga.fecha_vto}</div>
+            <div style={{ fontSize: 12, color: T.muted }}>Vencimiento: {fmtFecha(carga.fecha_vto)}</div>
           )}
           {dist.length > 0 && (
             <div style={{ marginTop: 8, fontSize: 12, color: T.muted }}>

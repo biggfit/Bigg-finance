@@ -187,7 +187,7 @@ export default function TabCorreo({ onPend } = {}) {
                     <td style={{ padding:"9px 12px", whiteSpace:"nowrap" }}>
                       <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:13, fontWeight:700, color:T.text }}>
                         <span>{row.proveedor || "—"}</span>
-                        {pago && <span style={{ fontSize:13, cursor:"help" }} title={`Pago ya realizado — falta matchearlo contra esta factura.\nDébito en Banco: ${pago.cuenta_bancaria} · ${pago.fecha} · ${fmtMoney(Math.abs(toNum(pago.monto)), row.moneda||"ARS")}`}>💳</span>}
+                        {pago && <span style={{ fontSize:13, cursor:"help" }} title={`Pago ya realizado — falta matchearlo contra esta factura.\nDébito en Banco: ${pago.cuenta_bancaria} · ${fmtDate(pago.fecha)} · ${fmtMoney(Math.abs(toNum(pago.monto)), row.moneda||"ARS")}`}>💳</span>}
                         {dup && <span style={{ fontSize:13, cursor:"help" }} title="Posible duplicado: ya hay un EGRESO del mismo proveedor por el mismo monto.">⚠️</span>}
                       </div>
                     </td>

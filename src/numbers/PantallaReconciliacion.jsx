@@ -480,7 +480,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const fcsDeProv = (provId) => facturasPendientes
     .filter(f => String(f.proveedorId) === String(provId))
     .sort((a, b) => String(a.vto || "").localeCompare(String(b.vto || "")));
-  const fcLabel = (f) => `${f.nroComp || f.id} · saldo ${fmt(f.saldo)}${f.vto ? ` · vto ${f.vto}` : ""}`;
+  const fcLabel = (f) => `${f.nroComp || f.id} · saldo ${fmt(f.saldo)}${f.vto ? ` · vto ${fmtDate(f.vto)}` : ""}`;
   // Proveedor efectivo de una línea en modo FC: el editado, o el reconocido si tiene pendientes.
   const fcProvDe = (mov) => {
     const ed = edits[mov.id] || {}, meta = parseMeta(mov.referencia);
@@ -1766,7 +1766,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           </select>
                           <select value={cuotaSt.cuotaSel} onChange={e => setEdit(m.id, "cuota_row", e.target.value)} disabled={!cuotaSt.planSel} style={fld(!!cuotaSt.cuotaSel, 190)}>
                             <option value="">{cuotaSt.planSel ? "— cuota —" : "elegí financiación"}</option>
-                            {cuotasDePlan(cuotaSt.planSel).map(c => <option key={c.row_id} value={String(c.row_id)}>Cuota {c.nro_cuota}/{totalCuotasPorPlan.get(c.plan_id) || "?"} · {fmt(c.total)}{c.vto ? ` · ${c.vto}` : ""}</option>)}
+                            {cuotasDePlan(cuotaSt.planSel).map(c => <option key={c.row_id} value={String(c.row_id)}>Cuota {c.nro_cuota}/{totalCuotasPorPlan.get(c.plan_id) || "?"} · {fmt(c.total)}{c.vto ? ` · ${fmtDate(c.vto)}` : ""}</option>)}
                           </select>
                         </div>
                       ) : (
