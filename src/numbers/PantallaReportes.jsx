@@ -1039,7 +1039,7 @@ const BIGG_FEE_CUENTAS = ["Fee de Gestion y Adm", "Fee de Gestion y Adm (Huergo)
 // P&L de HOLDING: arma el waterfall de management a partir de los RESULTADOS por negocio (resSedesAR/feeGer/
 // resWRE, ya netos y pre-fin/pre-imp) + los grupos de HQ/financieros/impuestos que ya barrió buildPnLBigg.
 // Convención de signo: igual que computeSubtotalsBigg (ingresos +, gastos/fin/imp positivos y se RESTAN).
-function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) {
+function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE, grossResGrupo = null }) {
   const Z = () => new Array(12).fill(0);
   const sar = resSedesAR || Z(), fg = feeGer || Z(), wre = resWRE || Z();
   const omit = (obj, keys) => Object.fromEntries(Object.entries(obj || {}).filter(([k]) => !keys.includes(k)));
@@ -1047,21 +1047,32 @@ function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) {
   const hqAccounts  = omit(pnl.grupos.hq,  BIGG_FEE_CUENTAS);    // ingresos HQ sin las fees de operación
   const ghqAccounts = omit(pnl.grupos.ghq, ["17 - Huergo"]);     // opex HQ sin Huergo (ya está en WRE)
   const gpvAccounts = pnl.grupos.gpv;                            // costo por venta HQ: Interusos, Fee Fact., compra Pauta
-  const ivaDeb = pnl.ivaDeb || Z(), ivaCred = pnl.ivaCred || Z();   // IVA embebido (sin IVA): débito ventas (−) / crédito compras (+)
+  const ivaDebRaw = pnl.ivaDeb || Z(), ivaCredRaw = pnl.ivaCred || Z();   // columna IVA del núcleo: débito ventas (−) / crédito compras (+)
+  const impReales = sumG(pnl.grupos.imp);   // tributos reales (IVA saldo, Ganancias, etc.)
   const ingHQ = sumG(hqAccounts), gpv = sumG(gpvAccounts), opexHQ = sumG(ghqAccounts),
-        financieros = sumG(pnl.grupos.fin),
-        // Impuestos = SOLO tributos reales. Las dos líneas de IVA (débito ventas / crédito compras) son
-        // INFORMATIVAS: muestran la posición de IVA (lo que se le va a pagar a Hacienda = débito − crédito),
-        // pero NO entran al Resultado. El IVA ya se sacó línea por línea en modo Sin IVA (resultado real /
-        // EBITDA real); sumar las líneas de nuevo lo restaría dos veces. Débito − Crédito = IVA a pagar
-        // (se netea a cero cuando se contabilice el pago a Hacienda; hoy ese pago no está cargado).
-        impuestos = sumG(pnl.grupos.imp);
+        financieros = sumG(pnl.grupos.fin);
   const resOperaciones = MESES.map((_, m) => sar[m] + fg[m] + wre[m]);
   const resOpMasIngHQ  = MESES.map((_, m) => resOperaciones[m] + ingHQ[m]);   // Total Ingresos (waterfall corriente)
   const margen         = MESES.map((_, m) => resOpMasIngHQ[m] - gpv[m]);      // Margen de Contribución
   const resOpGrupo     = MESES.map((_, m) => margen[m] - opexHQ[m]);
   const resAntesImp    = MESES.map((_, m) => resOpGrupo[m] - financieros[m]);
-  const resGrupo       = MESES.map((_, m) => resAntesImp[m] - impuestos[m]);
+  // IVA (solo modo Sin IVA): las líneas operativas están NETAS; las dos líneas de IVA devuelven el IVA
+  // embebido para que el Resultado del Grupo dé IGUAL que Con IVA (sacar el IVA de las líneas y sumarlo
+  // abajo = identidad). IVA Débito (ventas) suma (+); IVA Crédito (compras) resta (−). El débito es la
+  // columna real del núcleo (cruzable AFIP); el crédito se ajusta para que el puente cierre al centavo con
+  // el resultado bruto (grossResGrupo) — la diferencia mínima vs la columna cruda es el efecto de la cesión
+  // de Barrio Norte 49% (Con IVA la cede sobre el resultado con IVA, Sin IVA sobre el neto).
+  const ivaDebito  = ivaDebRaw.map(v => -v);   // +D (ventas), mostrado sumando
+  const resGrupoNeto = MESES.map((_, m) => resAntesImp[m] - impReales[m]);   // sin las líneas IVA
+  const tieneIva = grossResGrupo != null;
+  // Crédito mostrado restando (−). Con grossResGrupo: se ajusta para que Débito + Crédito = impacto total
+  // (grossResGrupo − neto) → el Resultado del Grupo da EXACTO igual que Con IVA. Sin él: columna cruda.
+  const ivaCredito = MESES.map((_, m) => tieneIva
+    ? (grossResGrupo[m] - resGrupoNeto[m]) - ivaDebito[m]   // negativo: D + C = impacto → cierra al centavo
+    : -ivaCredRaw[m]);
+  const resGrupo   = tieneIva ? grossResGrupo.slice() : resGrupoNeto;
+  const impuestos = impReales;   // la sección "Impuestos" muestra solo tributos reales
+  const ivaDeb = ivaDebito, ivaCred = ivaCredito;
   const months = new Set(); const cur = new Date().getMonth();
   for (let i = 0; i <= cur; i++) months.add(i);
   [sar, fg, wre, ingHQ, gpv, opexHQ, financieros, impuestos].forEach(a => a.forEach((v, i) => { if (v) months.add(i); }));
@@ -1077,7 +1088,6 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
           resOperaciones, resOpMasIngHQ, margen, resOpGrupo, resAntesImp, resGrupo, activeMonths: _amRaw } = sub;
   const activeMonths = mesesVisibles(_amRaw, year);
   const ncols = activeMonths.length + 2;
-  const Z12 = new Array(12).fill(0);
   const ALLKEYS = ["sec_op", "sec_ing", "sec_gpv", "sec_opex", "sec_fin", "sec_imp"];
   const [collapsed, setCollapsed] = useState({});
   const isCol  = k => !!collapsed[k];
@@ -1142,18 +1152,14 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
           {/* Debajo del operativo: financieros e impuestos del grupo, en una línea al final */}
           {sec("sec_fin", "Financieros", pnl.grupos.fin, BIGG_ORDEN_FIN, true)}
           <ResultadoRow label="Resultado antes de Impuestos" values={resAntesImp} activeMonths={activeMonths} />
-          {sec("sec_imp", "Impuestos", pnl.grupos.imp, BIGG_ORDEN_IMP, true)}
-          <ResultadoRow strong label="Resultado del Grupo" values={resGrupo} activeMonths={activeMonths} />
-          {/* Posición de IVA — cola INFORMATIVA debajo del Resultado (solo modo Sin IVA). El IVA ya se sacó
-              de cada línea (el Resultado es real, sin IVA); esta cola muestra cuánto IVA se cobró (débito
-              ventas) vs cuánto se pagó (crédito compras) y la diferencia = IVA a pagar a Hacienda (netea a
-              cero cuando se contabilice ese pago). NO afecta el Resultado del Grupo de arriba. */}
+          {/* IVA (solo modo Sin IVA): las operativas van netas; estas dos líneas devuelven el IVA embebido
+              → el Resultado del Grupo da IGUAL que Con IVA. Débito ventas suma (+), Crédito compras resta (−). */}
           {(sub.ivaDeb?.some(v => v) || sub.ivaCred?.some(v => v)) && <>
-            <tr><td colSpan={ncols} style={{ height: 18, border: "none" }} /></tr>
-            <SubtotalRow label="Posición de IVA (informativa · no afecta el resultado)" values={Z12} activeMonths={activeMonths} color={SEDE_HDR} />
             <DataRow label="IVA Débito (ventas)"   values={sub.ivaDeb}  activeMonths={activeMonths} color={SEDE_HDR} />
             <DataRow label="IVA Crédito (compras)" values={sub.ivaCred} activeMonths={activeMonths} color={SEDE_HDR} />
           </>}
+          {sec("sec_imp", "Impuestos", pnl.grupos.imp, BIGG_ORDEN_IMP, true)}
+          <ResultadoRow strong label="Resultado del Grupo" values={resGrupo} activeMonths={activeMonths} />
         </tbody>
       </table>
     </div>
@@ -2663,9 +2669,29 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     () => isBigg ? buildPnLBigg(inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva) : null,
     [isBigg, inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva]
   );
+  // Resultado del Grupo CON IVA (bruto), calculado siempre — en modo Sin IVA es el ancla para que las dos
+  // líneas de IVA devuelvan exactamente el IVA quitado y el Resultado del Grupo dé IGUAL en las dos vistas.
+  const grossResGrupo = useMemo(() => {
+    if (!isBigg || !sinIva) return null;   // en modo Con IVA subBigg ya es el bruto; no hace falta
+    const rfAR = computeSubtotalsSede(buildPnLSede(inConFranq, egConSueldos, arNucleoCCs, year, monedaPL, false)).resFinal;
+    const rfBN = bnCcId ? computeSubtotalsSede(buildPnLSede(inConFranq, egConSueldos, [bnCcId], year, monedaPL, false)).resFinal : new Array(12).fill(0);
+    const sarG = rfAR.map((v, m) => v - CESION.pct * (Number(rfBN[m]) || 0));
+    const fgG = new Array(12).fill(0);
+    for (const r of inConFranq) {
+      if (_nkSede(r.cuenta_contable) !== _nkSede("Fee de Gestion y Adm")) continue;
+      if (!nucleoEmpresas.has((r.sociedad ?? "").trim())) continue;
+      if (!r.fecha || r.fecha < PNL_INICIO || r.fecha.slice(0, 4) !== String(year)) continue;
+      if ((r.moneda ?? "ARS") !== monedaPL) continue;
+      const m = parseInt(r.fecha.slice(5, 7), 10) - 1; if (m >= 0 && m < 12) fgG[m] += montoPnL(r, false);
+    }
+    const wreG = computeSubtotalsHuergo(buildPnLHuergo(inConFranq, egConSueldos, huergoCCs, year, monedaPL, false)).margen;
+    const pnlG = buildPnLBigg(inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, false);
+    return computeSubtotalsHolding(pnlG, { resSedesAR: sarG, feeGer: fgG, resWRE: wreG }).resGrupo;
+  }, [isBigg, sinIva, inConFranq, egConSueldos, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL]);
+
   const subBigg = useMemo(
-    () => pnlBigg ? computeSubtotalsHolding(pnlBigg, { resSedesAR, feeGer, resWRE }) : null,
-    [pnlBigg, resSedesAR, feeGer, resWRE]
+    () => pnlBigg ? computeSubtotalsHolding(pnlBigg, { resSedesAR, feeGer, resWRE, grossResGrupo }) : null,
+    [pnlBigg, resSedesAR, feeGer, resWRE, grossResGrupo]
   );
 
   const toggleSedeCC = (id) => {
