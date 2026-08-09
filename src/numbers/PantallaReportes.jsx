@@ -1137,18 +1137,19 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
           {/* Debajo del operativo: financieros e impuestos del grupo, en una línea al final */}
           {sec("sec_fin", "Financieros", pnl.grupos.fin, BIGG_ORDEN_FIN, true)}
           <ResultadoRow label="Resultado antes de Impuestos" values={resAntesImp} activeMonths={activeMonths} />
-          {/* Posición de IVA — INFORMATIVA (solo modo Sin IVA). El IVA ya se sacó de cada línea (el resultado
-              es real, sin IVA); estas dos líneas muestran cuánto IVA se cobró (débito ventas) vs cuánto se
-              pagó (crédito compras). NO entran al Resultado. La diferencia (Débito − Crédito) = IVA a pagar a
-              Hacienda, que se netea a cero cuando se contabilice ese pago. */}
+          {sec("sec_imp", "Impuestos", pnl.grupos.imp, BIGG_ORDEN_IMP, true)}
+          <ResultadoRow strong label="Resultado del Grupo" values={resGrupo} activeMonths={activeMonths} />
+          {/* Posición de IVA — cola INFORMATIVA debajo del Resultado (solo modo Sin IVA). El IVA ya se sacó
+              de cada línea (el Resultado es real, sin IVA); esta cola muestra cuánto IVA se cobró (débito
+              ventas) vs cuánto se pagó (crédito compras) y la diferencia = IVA a pagar a Hacienda (netea a
+              cero cuando se contabilice ese pago). NO afecta el Resultado del Grupo de arriba. */}
           {(sub.ivaDeb?.some(v => v) || sub.ivaCred?.some(v => v)) && <>
+            <tr><td colSpan={ncols} style={{ height: 18, border: "none" }} /></tr>
             <SubtotalRow label="Posición de IVA (informativa · no afecta el resultado)" values={Z12} activeMonths={activeMonths} color={SEDE_HDR} />
             <DataRow label="IVA Débito (ventas)"   values={sub.ivaDeb}  activeMonths={activeMonths} color={SEDE_HDR} />
             <DataRow label="IVA Crédito (compras)" values={sub.ivaCred} activeMonths={activeMonths} color={SEDE_HDR} />
             <DataRow label="IVA a pagar (Hacienda) = Débito − Crédito" values={ivaAPagar} activeMonths={activeMonths} color={SEDE_HDR} />
           </>}
-          {sec("sec_imp", "Impuestos", pnl.grupos.imp, BIGG_ORDEN_IMP, true)}
-          <ResultadoRow strong label="Resultado del Grupo" values={resGrupo} activeMonths={activeMonths} />
         </tbody>
       </table>
     </div>
