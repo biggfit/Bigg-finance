@@ -1132,11 +1132,11 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
           {/* Debajo del operativo: financieros e impuestos del grupo, en una línea al final */}
           {sec("sec_fin", "Financieros", pnl.grupos.fin, BIGG_ORDEN_FIN, true)}
           <ResultadoRow label="Resultado antes de Impuestos" values={resAntesImp} activeMonths={activeMonths} />
-          {sec("sec_imp", "Impuestos", pnl.grupos.imp, BIGG_ORDEN_IMP, true)}
-          {/* IVA embebido (solo modo sin IVA): crédito compras (+, entra) / débito ventas (−, sale), con
+          {/* IVA embebido (solo modo sin IVA): débito ventas (−, sale) / crédito compras (+, entra), con
               signo natural. Suman al resultado igual que hoy (restituyen el IVA → el fondo da igual). */}
-          {sub.ivaCred?.some(v => v) && <DataRow label="IVA Crédito (compras)" values={sub.ivaCred} activeMonths={activeMonths} color={SEDE_HDR} />}
           {sub.ivaDeb?.some(v => v)  && <DataRow label="IVA Débito (ventas)"   values={sub.ivaDeb}  activeMonths={activeMonths} color={SEDE_HDR} />}
+          {sub.ivaCred?.some(v => v) && <DataRow label="IVA Crédito (compras)" values={sub.ivaCred} activeMonths={activeMonths} color={SEDE_HDR} />}
+          {sec("sec_imp", "Impuestos", pnl.grupos.imp, BIGG_ORDEN_IMP, true)}
           <ResultadoRow strong label="Resultado del Grupo" values={resGrupo} activeMonths={activeMonths} />
         </tbody>
       </table>
