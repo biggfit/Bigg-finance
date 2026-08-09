@@ -950,24 +950,29 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
       const cc = ccMap.get(ccKey(row.centro_costo));
       const emp = (cc?.empresa ?? "").trim();
       if (emp && !nucleoEmpresas.has(emp)) continue;   // fuera del núcleo (anillo 2/3) → no consolida
-      // Sin IVA: el IVA embebido se saca de cada línea (queda neta) y se acumula en dos líneas de
-      // Impuestos que RESTITUYEN ese IVA → el "Resultado del Grupo" da IGUAL con o sin IVA (el IVA es
-      // pass-through; el usuario compra crédito para no pagarlo). Signo: se resta el IVA débito que se
-      // había quitado de ventas y se suma el crédito que se había quitado de compras → devuelve el neto
-      // que el modo Con IVA tenía embebido. Distinto de la cuenta "IVA" del banco (percepciones).
-      if (sinIva) {
-        const ivaRow = Math.abs(Number(row.iva_monto) || 0);
-        if (ivaRow > 0) {
-          if (forcedSide === "ingreso") ivaDeb[m]  -= ivaRow;   // ventas: sale (−)
-          else                          ivaCred[m] += ivaRow;   // compras: entra / a favor (+)
-        }
-      }
       const fam = familiaCentro(cc);
       const cuenta = (row.cuenta_contable ?? "").trim() || "Sin cuenta";
       const meta = cuentaMap?.get(cuenta);
       const catPnl  = normCat(meta?.categoria_pnl);                            // "ventas" | "costo_venta" | …
       const catRaw  = (meta?.categoria_pnl ?? "").toLowerCase();               // crudo, para financieros/impuestos
       const catSede = (meta?.categoria_pnl_sede ?? "").trim().toLowerCase();   // "ventas" | "otros ingresos" | "costo por venta"
+      // Posición de IVA (solo modo Sin IVA), INFORMATIVA. Se clasifica por si la CUENTA es de venta o de
+      // compra — NO por el lote (ingreso/egreso): las ventas de sede por Mercado Pago entran como
+      // movimientos de banco (lote egreso) pero su IVA es DÉBITO (ventas). Débito ventas (−) / crédito
+      // compras (+). Es display; no entra al Resultado (el IVA ya se saca línea por línea).
+      if (sinIva) {
+        const ivaRow = Math.abs(Number(row.iva_monto) || 0);
+        if (ivaRow > 0) {
+          // Contra-costo de una cuenta intermediada (Interusos que netea en Coorporativos, compra de Pauta,
+          // costo por venta): aunque su categoría sea "ventas/otros ingresos", del lado egreso es COMPRA → crédito.
+          const esContraCosto = forcedSide !== "ingreso" &&
+            (ING_CONTRA_HQ.has(cuenta) || GPV_COSTO_EGRESO.has(cuenta) || catPnl === "costo_venta");
+          const esVenta = !esContraCosto && (forcedSide === "ingreso" ||
+            catSede === "ventas" || catSede === "otros ingresos" || catPnl === "ventas");
+          if (esVenta) ivaDeb[m]  -= ivaRow;   // ventas: débito (−)
+          else         ivaCred[m] += ivaRow;   // compras: crédito (+)
+        }
+      }
       let gkey = null, rowKey = cuenta, val = montoPnL(row, sinIva);
       if (fam === "propios") {
         // Sede propia: en el HOLDING entra como RESULTADO (línea "Sedes Propias Argentina", vía su propio
