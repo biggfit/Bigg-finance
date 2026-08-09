@@ -80,13 +80,16 @@ function ModalImputarVarias({ mov, tipo, facturas, onClose, onConfirm }) {
   const esPago = tipo === "pago";
   const total  = Math.abs(Number(mov.monto) || 0);
   const r2     = n => Math.round((Number(n) || 0) * 100) / 100;
-  const [sel, setSel]       = useState({});   // { [fcId]: { checked, monto } }
+  // Monto: se GUARDA limpio (parseFloat-friendly, punto decimal) y se MUESTRA es-AR (punto miles, coma decimal).
+  const fmtMil     = (s) => { const str = String(s ?? ""); if (str === "") return ""; const [e, d] = str.split("."); const ent = e.replace(/\B(?=(\d{3})+(?!\d))/g, "."); return d != null ? `${ent},${d}` : ent; };
+  const limpiarNum = (v) => String(v).replace(/\./g, "").replace(",", ".").replace(/[^\d.]/g, "");
+  const [sel, setSel]       = useState({});   // { [fcId]: { checked, monto } }  (monto = string limpio)
   const [saving, setSaving] = useState(false);
 
   const toggle = (f) => setSel(s => s[f.id]?.checked
     ? { ...s, [f.id]: { checked: false, monto: "" } }
-    : { ...s, [f.id]: { checked: true, monto: String(r2(f.saldo)) } });
-  const setMonto = (id, v) => setSel(s => ({ ...s, [id]: { checked: true, monto: v.replace(/[^\d.]/g, "") } }));
+    : { ...s, [f.id]: { checked: true, monto: Number(f.saldo).toFixed(2) } });
+  const setMonto = (id, v) => setSel(s => ({ ...s, [id]: { checked: true, monto: limpiarNum(v) } }));
 
   const partes = facturas.filter(f => sel[f.id]?.checked)
     .map(f => ({ documento_id: f.id, monto: Number(sel[f.id].monto) || 0, nroComp: f.nroComp }));
@@ -140,9 +143,9 @@ function ModalImputarVarias({ mov, tipo, facturas, onClose, onConfirm }) {
                       </td>
                       <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmt(f.saldo)}</td>
                       <td style={{ ...td, textAlign: "right" }}>
-                        <input value={on ? (sel[f.id]?.monto ?? "") : ""} disabled={!on}
+                        <input inputMode="decimal" value={on ? fmtMil(sel[f.id]?.monto ?? "") : ""} disabled={!on}
                           onChange={e => setMonto(f.id, e.target.value)}
-                          style={{ width: 130, textAlign: "right", padding: "4px 7px", border: `1px solid ${T.border}`, borderRadius: 5, fontSize: 12.5, fontFamily: T.font, background: on ? "#fff" : "#f1f5f9" }} />
+                          style={{ width: 130, textAlign: "right", padding: "4px 7px", border: `1px solid ${T.border}`, borderRadius: 5, fontSize: 12.5, fontFamily: T.font, fontVariantNumeric: "tabular-nums", color: on ? T.text : T.dim, background: on ? "#fff" : "#f1f5f9" }} />
                       </td>
                     </tr>
                   );
