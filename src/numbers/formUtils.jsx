@@ -142,8 +142,10 @@ export function calcLineasTotals(lineas) {
   return { totalSub, totalIva, totalFinal: round2(totalSub + totalIva) };
 }
 
-/** Agrupa centros de costo como en facturas ingreso/egreso; `rest` en O(n). */
+/** Agrupa centros de costo como en facturas ingreso/egreso; `rest` en O(n).
+ *  Excluye centros inactivos (activo=false, ej. el ceco "10 - HQ") → no se ofrecen en ningún select. */
 export function groupCentrosCosto(CC_LIST) {
+  CC_LIST = (CC_LIST || []).filter(c => String(c.activo).trim().toLowerCase() !== "false");
   const hq = CC_LIST.filter(c => ["hq", "marca", "hq - marca"].includes(norm(c.grupo ?? "")));
   const ops = CC_LIST.filter(c => ["operaciones", "ops", "sedes"].includes(norm(c.grupo ?? "")));
   const hqSet = new Set(hq);
