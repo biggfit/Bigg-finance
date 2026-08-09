@@ -937,6 +937,10 @@ const FAM_A_ING = { gerenciamiento: "ger", wre: "wre", hq: "hq" };   // familia 
 function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, moneda, sinIva = false) {
   const grupos = {}; for (const g of BIGG_GRUPOS) grupos[g.key] = {};
   const sinClasificar = {};
+  // IVA embebido (solo modo sin IVA): débito de ventas y crédito de compras, con signo "de caja"
+  // (crédito compras = entra, + ; débito ventas = sale, −). Suman al resultado igual que hoy (el neto
+  // restituye el IVA → Resultado del Grupo da IGUAL con/sin IVA), pero se muestran con su signo natural.
+  const ivaDeb = new Array(12).fill(0), ivaCred = new Array(12).fill(0);
   const add = (rows, forcedSide) => {
     for (const row of rows) {
       if (!row.fecha || row.fecha < PNL_INICIO || row.fecha.slice(0, 4) !== String(year)) continue;
@@ -954,8 +958,8 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
       if (sinIva) {
         const ivaRow = Math.abs(Number(row.iva_monto) || 0);
         if (ivaRow > 0) {
-          const key = forcedSide === "ingreso" ? "IVA Débito (ventas)" : "IVA Crédito (compras)";
-          (grupos.imp[key] ??= new Array(12).fill(0))[m] += forcedSide === "ingreso" ? -ivaRow : ivaRow;
+          if (forcedSide === "ingreso") ivaDeb[m]  -= ivaRow;   // ventas: sale (−)
+          else                          ivaCred[m] += ivaRow;   // compras: entra / a favor (+)
         }
       }
       const fam = familiaCentro(cc);
@@ -1003,7 +1007,7 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
     }
   };
   add(inRows, "ingreso"); add(egRows, null);
-  return { grupos, sinClasificar };
+  return { grupos, sinClasificar, ivaDeb, ivaCred };
 }
 
 // Orden de los centros dentro de "Gastos HQ" (display).
@@ -1020,7 +1024,7 @@ const GPV_COSTO_EGRESO = new Set(["Acciones de Mkt"]);
 // Mapa: cuenta contra → fila de ingreso donde netea.
 const ING_CONTRA_HQ = new Map([["Interusos", "Coorporativos"]]);
 const BIGG_ORDEN_FIN = ["Intereses Ganados", "Perdidas Financieras"];
-const BIGG_ORDEN_IMP = ["IVA Débito (ventas)", "IVA Crédito (compras)", "Plan Facilidades AFIP", "IVA", "IVA Inversiones", "IVA Compra", "Ganancias", "Otros Impuestos"];
+const BIGG_ORDEN_IMP = ["Plan Facilidades AFIP", "IVA", "IVA Inversiones", "IVA Compra", "Ganancias", "Otros Impuestos"];
 
 // Cuentas de fee (gerenciamiento/WRE) que NO van en "Ingresos HQ" (ya son líneas de operación → no duplicar).
 const BIGG_FEE_CUENTAS = ["Fee de Gestion y Adm", "Fee de Gestion y Adm (Huergo)"];
@@ -1036,8 +1040,13 @@ function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) {
   const hqAccounts  = omit(pnl.grupos.hq,  BIGG_FEE_CUENTAS);    // ingresos HQ sin las fees de operación
   const ghqAccounts = omit(pnl.grupos.ghq, ["17 - Huergo"]);     // opex HQ sin Huergo (ya está en WRE)
   const gpvAccounts = pnl.grupos.gpv;                            // costo por venta HQ: Interusos, Fee Fact., compra Pauta
+  const ivaDeb = pnl.ivaDeb || Z(), ivaCred = pnl.ivaCred || Z();   // IVA embebido (sin IVA): débito ventas (−) / crédito compras (+)
   const ingHQ = sumG(hqAccounts), gpv = sumG(gpvAccounts), opexHQ = sumG(ghqAccounts),
-        financieros = sumG(pnl.grupos.fin), impuestos = sumG(pnl.grupos.imp);
+        financieros = sumG(pnl.grupos.fin),
+        // Impuestos = tributos reales + IVA neto embebido (débito+crédito). El IVA restituye lo quitado a
+        // las operativas → Resultado del Grupo da IGUAL con/sin IVA. Las dos líneas se muestran aparte con
+        // su signo natural (crédito compras +, débito ventas −).
+        impuestos = MESES.map((_, m) => sumG(pnl.grupos.imp)[m] + ivaDeb[m] + ivaCred[m]);
   const resOperaciones = MESES.map((_, m) => sar[m] + fg[m] + wre[m]);
   const resOpMasIngHQ  = MESES.map((_, m) => resOperaciones[m] + ingHQ[m]);   // Total Ingresos (waterfall corriente)
   const margen         = MESES.map((_, m) => resOpMasIngHQ[m] - gpv[m]);      // Margen de Contribución
@@ -1048,6 +1057,7 @@ function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) {
   for (let i = 0; i <= cur; i++) months.add(i);
   [sar, fg, wre, ingHQ, gpv, opexHQ, financieros, impuestos].forEach(a => a.forEach((v, i) => { if (v) months.add(i); }));
   return { sar, fg, wre, hqAccounts, ghqAccounts, gpvAccounts, ingHQ, gpv, opexHQ, financieros, impuestos,
+           ivaDeb, ivaCred,
            resOperaciones, resOpMasIngHQ, margen, resOpGrupo, resAntesImp, resGrupo, activeMonths: [...months].sort((a, b) => a - b) };
 }
 
@@ -1123,6 +1133,10 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
           {sec("sec_fin", "Financieros", pnl.grupos.fin, BIGG_ORDEN_FIN, true)}
           <ResultadoRow label="Resultado antes de Impuestos" values={resAntesImp} activeMonths={activeMonths} />
           {sec("sec_imp", "Impuestos", pnl.grupos.imp, BIGG_ORDEN_IMP, true)}
+          {/* IVA embebido (solo modo sin IVA): crédito compras (+, entra) / débito ventas (−, sale), con
+              signo natural. Suman al resultado igual que hoy (restituyen el IVA → el fondo da igual). */}
+          {sub.ivaCred?.some(v => v) && <DataRow label="IVA Crédito (compras)" values={sub.ivaCred} activeMonths={activeMonths} color={SEDE_HDR} />}
+          {sub.ivaDeb?.some(v => v)  && <DataRow label="IVA Débito (ventas)"   values={sub.ivaDeb}  activeMonths={activeMonths} color={SEDE_HDR} />}
           <ResultadoRow strong label="Resultado del Grupo" values={resGrupo} activeMonths={activeMonths} />
         </tbody>
       </table>
