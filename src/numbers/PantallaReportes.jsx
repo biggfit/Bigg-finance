@@ -1048,7 +1048,7 @@ function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE, grossResGrup
   const ghqAccounts = omit(pnl.grupos.ghq, ["17 - Huergo"]);     // opex HQ sin Huergo (ya está en WRE)
   const gpvAccounts = pnl.grupos.gpv;                            // costo por venta HQ: Interusos, Fee Fact., compra Pauta
   const ivaDebRaw = pnl.ivaDeb || Z(), ivaCredRaw = pnl.ivaCred || Z();   // columna IVA del núcleo: débito ventas (−) / crédito compras (+)
-  const impReales = sumG(pnl.grupos.imp);   // tributos reales (IVA saldo, Ganancias, etc.)
+  const impuestos = sumG(pnl.grupos.imp);   // tributos reales (IVA saldo, Ganancias, etc.)
   const ingHQ = sumG(hqAccounts), gpv = sumG(gpvAccounts), opexHQ = sumG(ghqAccounts),
         financieros = sumG(pnl.grupos.fin);
   const resOperaciones = MESES.map((_, m) => sar[m] + fg[m] + wre[m]);
@@ -1062,17 +1062,15 @@ function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE, grossResGrup
   // columna real del núcleo (cruzable AFIP); el crédito se ajusta para que el puente cierre al centavo con
   // el resultado bruto (grossResGrupo) — la diferencia mínima vs la columna cruda es el efecto de la cesión
   // de Barrio Norte 49% (Con IVA la cede sobre el resultado con IVA, Sin IVA sobre el neto).
-  const ivaDebito  = ivaDebRaw.map(v => -v);   // +D (ventas), mostrado sumando
-  const resGrupoNeto = MESES.map((_, m) => resAntesImp[m] - impReales[m]);   // sin las líneas IVA
+  const ivaDeb  = ivaDebRaw.map(v => -v);   // +D (ventas), mostrado sumando
+  const resGrupoNeto = MESES.map((_, m) => resAntesImp[m] - impuestos[m]);   // sin las líneas IVA
   const tieneIva = grossResGrupo != null;
   // Crédito mostrado restando (−). Con grossResGrupo: se ajusta para que Débito + Crédito = impacto total
   // (grossResGrupo − neto) → el Resultado del Grupo da EXACTO igual que Con IVA. Sin él: columna cruda.
-  const ivaCredito = MESES.map((_, m) => tieneIva
-    ? (grossResGrupo[m] - resGrupoNeto[m]) - ivaDebito[m]   // negativo: D + C = impacto → cierra al centavo
+  const ivaCred = MESES.map((_, m) => tieneIva
+    ? (grossResGrupo[m] - resGrupoNeto[m]) - ivaDeb[m]   // negativo: D + C = impacto → cierra al centavo
     : -ivaCredRaw[m]);
   const resGrupo   = tieneIva ? grossResGrupo.slice() : resGrupoNeto;
-  const impuestos = impReales;   // la sección "Impuestos" muestra solo tributos reales
-  const ivaDeb = ivaDebito, ivaCred = ivaCredito;
   const months = new Set(); const cur = new Date().getMonth();
   for (let i = 0; i <= cur; i++) months.add(i);
   [sar, fg, wre, ingHQ, gpv, opexHQ, financieros, impuestos].forEach(a => a.forEach((v, i) => { if (v) months.add(i); }));
@@ -1098,6 +1096,13 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
   const sec = (key, label, accounts, order, neg = false) => <PnlSection sub label={label} accounts={accounts}
     order={order} color={SEDE_HDR} activeMonths={activeMonths} ncols={ncols} neg={neg}
     expanded={!isCol(key)} onToggle={() => toggle(key)} />;
+
+  // Sección Impuestos: sumarizador = contribución del bloque (IVA débito + crédito − tributos reales);
+  // adentro las dos líneas de IVA (solo Sin IVA) + los tributos reales. Render a mano (no `sec`) por los
+  // signos mixtos: IVA débito (+) / crédito (−) / tributos (neg).
+  const ivaOn = sub.ivaDeb?.some(v => v) || sub.ivaCred?.some(v => v);
+  const taxRows = Object.entries(pnl.grupos.imp || {}).sort(ordCmp(BIGG_ORDEN_IMP));
+  const impBlockTot = MESES.map((_, m) => (sub.ivaDeb?.[m] || 0) + (sub.ivaCred?.[m] || 0) - (sub.impuestos?.[m] || 0));
 
   if (activeMonths.length === 0) return (
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
@@ -1155,25 +1160,15 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
           {/* Sección IMPUESTOS = sumarizador arriba (contribución del bloque al resultado), y adentro:
               IVA Débito (ventas, +) / IVA Crédito (compras, −) [solo Sin IVA] + los tributos reales (−).
               Con las dos líneas de IVA, el Resultado del Grupo da IGUAL que Con IVA (el IVA embebido vuelve). */}
-          {(() => {
-            const ivaOn = sub.ivaDeb?.some(v => v) || sub.ivaCred?.some(v => v);
-            const taxRows = Object.entries(pnl.grupos.imp || {}).sort(([a], [b]) => {
-              const ia = BIGG_ORDEN_IMP.indexOf(a), ib = BIGG_ORDEN_IMP.indexOf(b);
-              return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib) || a.localeCompare(b);
-            });
-            const blockTot = MESES.map((_, m) => (sub.ivaDeb?.[m] || 0) + (sub.ivaCred?.[m] || 0) - (sub.impuestos?.[m] || 0));
-            return <>
-              <SubSectionRow label="Impuestos" values={blockTot} activeMonths={activeMonths} color={SEDE_HDR}
-                expanded={!isCol("sec_imp")} onToggle={() => toggle("sec_imp")} />
-              {!isCol("sec_imp") && <>
-                {ivaOn && <>
-                  <DataRow label="IVA Débito (ventas)"   values={sub.ivaDeb}  activeMonths={activeMonths} color={SEDE_HDR} />
-                  <DataRow label="IVA Crédito (compras)" values={sub.ivaCred} activeMonths={activeMonths} color={SEDE_HDR} />
-                </>}
-                {taxRows.map(([n, v]) => <DataRow key={n} label={n} values={v} activeMonths={activeMonths} color={SEDE_HDR} neg />)}
-              </>}
-            </>;
-          })()}
+          <SubSectionRow label="Impuestos" values={impBlockTot} activeMonths={activeMonths} color={SEDE_HDR}
+            expanded={!isCol("sec_imp")} onToggle={() => toggle("sec_imp")} />
+          {!isCol("sec_imp") && <>
+            {ivaOn && <>
+              <DataRow label="IVA Débito (ventas)"   values={sub.ivaDeb}  activeMonths={activeMonths} color={SEDE_HDR} />
+              <DataRow label="IVA Crédito (compras)" values={sub.ivaCred} activeMonths={activeMonths} color={SEDE_HDR} />
+            </>}
+            {taxRows.map(([n, v]) => <DataRow key={n} label={n} values={v} activeMonths={activeMonths} color={SEDE_HDR} neg />)}
+          </>}
           <ResultadoRow strong label="Resultado del Grupo" values={resGrupo} activeMonths={activeMonths} />
         </tbody>
       </table>
@@ -1255,6 +1250,13 @@ function PnLTable({ pnl, sub, year, moneda, label }) {
 }
 
 // ─── PnlSection ───────────────────────────────────────────────────────────────
+// Comparador de cuentas: por `order` (índice explícito) y luego alfabético; sin `order`, alfabético.
+const ordCmp = (order) => ([a], [b]) => {
+  if (order) { const ia = order.indexOf(a), ib = order.indexOf(b);
+    return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib) || a.localeCompare(b); }
+  return a.localeCompare(b);
+};
+
 function PnlSection({ label, accounts, activeMonths, color, ncols, sub, order, expanded: expandedProp, onToggle, neg = false }) {
   const [expandedState, setExpandedState] = useState(true);
   // Controlado si viene onToggle (lo maneja el toggle maestro); si no, estado interno (como antes).
@@ -1262,11 +1264,7 @@ function PnlSection({ label, accounts, activeMonths, color, ncols, sub, order, e
   const expanded = controlled ? expandedProp : expandedState;
   const toggle = controlled ? onToggle : () => setExpandedState(e => !e);
   // `order` (opcional) = orden explícito de cuentas; sin él, alfabético (comportamiento previo).
-  const rows = Object.entries(accounts).sort(([a],[b]) => {
-    if (order) { const ia = order.indexOf(a), ib = order.indexOf(b);
-      return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib) || a.localeCompare(b); }
-    return a.localeCompare(b);
-  });
+  const rows = Object.entries(accounts).sort(ordCmp(order));
   const subTotals = MESES.map((_,m) => rows.reduce((s,[,v]) => s + (v[m] || 0), 0));
   return (
     <>
