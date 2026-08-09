@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, Fragment } from "react";
-import { T } from "./theme";
+import { T, fmtDate } from "./theme";
 import {
   fetchCuentasBancarias, fetchMovimientosPendientes, ingestarExtracto, aceptarMovimiento,
   aceptarCobroFranquicia, fetchBancoReglas, fetchProveedores, fetchCuentas, fetchCentrosCosto, fetchSociedades,
@@ -134,7 +134,7 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], planCuentas = [],
         <div style={{ background: T.accentDark, padding: "16px 22px" }}>
           <div style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>Cerrar operación</div>
           <div style={{ fontSize: 12, color: "rgba(255,255,255,.6)", marginTop: 2 }}>
-            {envio ? "Le enviaste a " : "Te envió "}{pend?.origen_nombre} · parkeó {pend?.moneda} {Math.round(pend?.monto || 0).toLocaleString("es-AR")}{pend?.fecha ? ` · ${pend.fecha}` : ""}
+            {envio ? "Le enviaste a " : "Te envió "}{pend?.origen_nombre} · parkeó {pend?.moneda} {Math.round(pend?.monto || 0).toLocaleString("es-AR")}{pend?.fecha ? ` · ${fmtDate(pend.fecha)}` : ""}
           </div>
         </div>
         <div style={{ padding: 22, display: "flex", flexDirection: "column", gap: 14 }}>
@@ -965,7 +965,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const aceptar = async (mov) => {
     if (!puedeAceptarMov(mov)) { setMsg("Completá la imputación antes de aceptar."); return; }
     if (dupTransfer(mov) && !window.confirm(
-      `⚠ Posible duplicado.\n\nYa hay un movimiento contabilizado en esta cuenta con la misma fecha (${mov.fecha}) y el mismo importe. ` +
+      `⚠ Posible duplicado.\n\nYa hay un movimiento contabilizado en esta cuenta con la misma fecha (${fmtDate(mov.fecha)}) y el mismo importe. ` +
       `Si esto ya está cargado, aceptarlo lo duplica.\n\n¿Cargarlo igual?`
     )) return;
     try { await doAceptar(mov); } catch (e) { setMsg("Error al aceptar: " + e.message); }
@@ -1284,7 +1284,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                       const bloqueado = busyGest != null || !cuentaVal;
                       return (
                       <tr key={p.id_comp} style={{ borderTop: i ? `1px solid ${T.cardBorder}` : "none" }}>
-                        <td style={{ padding: "5px 14px", color: T.muted, whiteSpace: "nowrap" }}>{p.fecha}</td>
+                        <td style={{ padding: "5px 14px", color: T.muted, whiteSpace: "nowrap" }}>{fmtDate(p.fecha)}</td>
                         <td style={{ padding: "5px 14px", whiteSpace: "nowrap" }}>
                           {gest ? (
                             <span style={{ display: "inline-block", marginRight: 6, padding: "1px 7px", borderRadius: 999, fontSize: 9.5, fontWeight: 800, letterSpacing: ".05em", color: "#7c3aed", background: "rgba(167,139,250,.15)" }}
@@ -1356,7 +1356,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                       const a   = recibi ? ctaNom(p.cuenta_mia)  : ctaNom(p.cuenta_otro);
                       return (
                       <tr key={p.id} style={{ borderTop: i ? `1px solid ${T.cardBorder}` : "none" }}>
-                        <td style={{ padding: "11px 14px", color: T.muted, whiteSpace: "nowrap" }}>{p.fecha}</td>
+                        <td style={{ padding: "11px 14px", color: T.muted, whiteSpace: "nowrap" }}>{fmtDate(p.fecha)}</td>
                         <td style={{ padding: "11px 14px" }}><b>{p.origen_nombre}</b> {recibi ? "te transfirió" : "— le transferiste"}</td>
                         <td style={{ padding: "11px 14px", fontSize: 11, color: T.muted, whiteSpace: "nowrap" }}>{de} <span style={{ color: T.dim }}>→</span> {a}</td>
                         <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: T.mono, fontWeight: 700, whiteSpace: "nowrap", color: recibi ? "#16a34a" : "#dc2626" }}>{recibi ? "+" : "−"} {money(p.monto, p.moneda)}</td>
@@ -1399,7 +1399,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                         const pos = (Number(m.monto) || 0) >= 0;
                         return (
                           <tr key={m.id} style={{ borderTop: i ? `1px solid ${T.cardBorder}` : "none" }}>
-                            <td style={{ padding: "11px 14px", color: T.muted, whiteSpace: "nowrap" }}>{m.fecha}</td>
+                            <td style={{ padding: "11px 14px", color: T.muted, whiteSpace: "nowrap" }}>{fmtDate(m.fecha)}</td>
                             <td style={{ padding: "11px 14px" }}>{m.concepto || "Interuso gestión"}</td>
                             <td style={{ padding: "11px 14px", color: T.muted }}>{m.cuenta_contable || "—"}</td>
                             <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: T.mono, fontWeight: 700, whiteSpace: "nowrap", color: pos ? "#16a34a" : "#dc2626" }}>{pos ? "+" : "−"} {money(m.monto, m.moneda)}</td>
@@ -1481,7 +1481,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
           </div>
           {erroresIngesta.lineas.map((l, i) => (
             <div key={i} style={{ display: "flex", gap: 10, fontSize: 11, color: T.text, padding: "2px 0" }}>
-              <span style={{ color: T.muted, whiteSpace: "nowrap" }}>{l.fecha}</span>
+              <span style={{ color: T.muted, whiteSpace: "nowrap" }}>{fmtDate(l.fecha)}</span>
               <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.descripcion || l.ley1 || ""}</span>
               <span style={{ fontWeight: 700, whiteSpace: "nowrap", color: (Number(l.monto) || 0) < 0 ? "#dc2626" : "#16a34a" }}>{fmt(Math.abs(Number(l.monto) || 0))}</span>
             </div>
@@ -1566,7 +1566,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                   const cAbs = Math.abs(Number(intercoMatch.monto) || 0), mAbs = Math.abs(Number(m.monto) || 0);
                   const otra = intercoMatch.moneda || "", mia = m.moneda || "";
                   const tc = (mAbs > 0 && otra !== mia) ? ` · TC impl. ${otra}/${mia} ${(cAbs / mAbs).toFixed(4)}` : "";
-                  return `${otra} ${fmt(cAbs)} (parkeada ${intercoMatch.fecha})${tc}`;
+                  return `${otra} ${fmt(cAbs)} (parkeada ${fmtDate(intercoMatch.fecha)})${tc}`;
                 })() : "";
                 const modoRecv = modoRecvDe(m);                        // interco recibida (lado receptor, crédito)
                 const recvSocSel = recvSocDe(m);
@@ -1574,7 +1574,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                 return (
                   <Fragment key={`${m.id}-${i}`}>
                   <tr style={{ borderBottom: fr.split ? "none" : "1px solid #cbd5e1", background: bg }}>
-                    <td style={{ padding: "8px 12px", color: T.muted, whiteSpace: "nowrap" }}>{m.fecha}</td>
+                    <td style={{ padding: "8px 12px", color: T.muted, whiteSpace: "nowrap" }}>{fmtDate(m.fecha)}</td>
                     <td style={{ padding: "8px 12px", maxWidth: 220 }}>
                       <div style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.concepto}</div>
                       {m.contraparte_nombre && <div style={{ fontSize: 10, color: T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={m.contraparte_nombre}>{m.contraparte_nombre}</div>}
@@ -1637,7 +1637,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                       ) : hMatch ? (
                         <div>
                           <span style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed" }}>Pago de haberes</span>
-                          <div style={{ fontSize: 10, color: T.muted }}>{hMatch.fecha} · {hMatch.count} pers · ${fmt(hMatch.total)} · ya en Sueldos</div>
+                          <div style={{ fontSize: 10, color: T.muted }}>{fmtDate(hMatch.fecha)} · {hMatch.count} pers · ${fmt(hMatch.total)} · ya en Sueldos</div>
                         </div>
                       ) : modoTransfer ? (
                         <div>
@@ -1959,7 +1959,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                   const ig = parseMeta(m.referencia).ign || "";
                   return (
                     <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 12px", borderBottom: "1px solid #f1f5f9", fontSize: 12 }}>
-                      <span style={{ color: T.muted, whiteSpace: "nowrap" }}>{m.fecha}</span>
+                      <span style={{ color: T.muted, whiteSpace: "nowrap" }}>{fmtDate(m.fecha)}</span>
                       <span style={{ flex: 1, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.concepto}</span>
                       {ig.startsWith("haberes:") && <span style={{ fontSize: 9, fontWeight: 800, color: "#7c3aed", background: "#ede9fe", borderRadius: 6, padding: "2px 6px" }}>HABERES</span>}
                       <span style={{ fontWeight: 700, color: Number(m.monto) < 0 ? "#dc2626" : "#16a34a", whiteSpace: "nowrap" }}>{fmt(Math.abs(Number(m.monto) || 0))}</span>
