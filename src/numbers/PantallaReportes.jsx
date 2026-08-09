@@ -883,7 +883,7 @@ const BIGG_GRUPOS = [
 // Hardcodeado a propósito: es presentación, bajo riesgo (un nombre que no matchea solo se ordena último).
 const BIGG_ORDEN = [
   "Regalias s/Ventas", "Licencia Uso de Marca", "Equipamientos", "Coorporativos (Gympass)",
-  "APP (Gympass)", "Sponsor", "Acciones de Mkt", "Otros Ingresos",
+  "Coorporativos", "Interusos", "APP (Gympass)", "Sponsor", "Acciones de Mkt", "Otros Ingresos",
 ];
 
 // Familia del centro (dimensión que separa los subgrupos). Devuelve null si no clasifica.
@@ -936,6 +936,9 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
         // computeSubtotalsHolding) evita el doble conteo — antes un costo con categoria "costo_venta" caía en
         // gpv y se restaba dos veces (una en el margen WRE, otra en Gastos por Ventas del holding).
         gkey = FAM_A_ING[fam]; if (gkey === "wre") rowKey = cc?.nombre ?? cuenta;
+      } else if (ING_CONTRA_HQ.has(cuenta)) {
+        gkey = "hq";                                      // netea en Ingresos: contra del ingreso par (ej. Coorporativos)
+        if (forcedSide !== "ingreso") val = -val;         // el costo (egreso) RESTA al ingreso
       } else if (catPnl === "costo_venta") {
         gkey = "gpv";                                     // COSTO por venta → Gastos por Ventas: Interusos, Fee Fact.
         if (forcedSide === "ingreso") val = -val;         // lado ingreso de una cuenta intermediada = contra → neto en gpv
@@ -968,6 +971,10 @@ const BIGG_ORDEN_GPV = ["Interusos", "Acciones de Mkt", "Coorporativos (Gympass)
 // Cuentas intermediadas: su VENTA es ingreso HQ, pero su COMPRA (egreso) es costo por venta (pega en margen).
 // La pauta se le vende a franquiciados y se compra a Meta/Google → el egreso va a Gastos por Ventas, no a OPEX.
 const GPV_COSTO_EGRESO = new Set(["Acciones de Mkt"]);
+// Ingreso intermediado que netea DENTRO de Ingresos (no en Gastos por Ventas): su costo entra como
+// contra (−) del ingreso par. "Interusos" netea contra "Coorporativos" en Ingresos HQ → el neto queda
+// arriba (Total Ingresos). Margen y resultados NO cambian: el costo solo se reubica de sección.
+const ING_CONTRA_HQ = new Set(["Interusos"]);
 const BIGG_ORDEN_FIN = ["Intereses Ganados", "Perdidas Financieras"];
 const BIGG_ORDEN_IMP = ["Plan Facilidades AFIP", "IVA", "IVA Inversiones", "IVA Compra", "Ganancias", "Otros Impuestos"];
 
