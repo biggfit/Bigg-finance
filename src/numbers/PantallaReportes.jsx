@@ -796,7 +796,7 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
 // ─── P&L HUERGO (Wellness Real Estate, anillo 1) — negocio de MARGEN, no sede ──────────────────────
 // Estructura simple (no waterfall de sede): Ingresos (lo que paga el edificio) − Costos (horas de coaches)
 // = Margen. Agrupa dinámico por cuenta: inRows→Ingresos, egRows→Costos (así no hay que hardcodear cuentas).
-function buildPnLHuergo(inRows, egRows, ccFilter, year, moneda) {
+function buildPnLHuergo(inRows, egRows, ccFilter, year, moneda, sinIva = false) {
   const ingresos = {}, costos = {};
   const add = (rows, bucket) => {
     for (const row of rows) {
@@ -805,7 +805,7 @@ function buildPnLHuergo(inRows, egRows, ccFilter, year, moneda) {
       if (!ccEnFiltro(ccFilter, row.centro_costo)) continue;
       const m = parseInt(row.fecha.slice(5, 7), 10) - 1; if (m < 0 || m > 11) continue;
       const nombre = (row.cuenta_contable ?? "").trim() || "Sin cuenta";
-      (bucket[nombre] ??= new Array(12).fill(0))[m] += Number(row.total) || 0;
+      (bucket[nombre] ??= new Array(12).fill(0))[m] += montoPnL(row, sinIva);
     }
   };
   add(inRows, ingresos); add(egRows, costos);
@@ -934,7 +934,7 @@ const FAM_A_ING = { gerenciamiento: "ger", wre: "wre", hq: "hq" };   // familia 
 // otros. Las fondeadas (anillo 2: España/Colombia/Puertos) y administradas (anillo 3: Rosedal) NO se
 // consolidan línea por línea — su P&L es de esa sociedad; al núcleo solo le entra el fee (cargado en
 // una sociedad núcleo). Un centro sin `empresa` (HQ/transversal) cuenta como núcleo.
-function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, moneda) {
+function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, moneda, sinIva = false) {
   const grupos = {}; for (const g of BIGG_GRUPOS) grupos[g.key] = {};
   const sinClasificar = {};
   const add = (rows, forcedSide) => {
@@ -946,13 +946,23 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
       const cc = ccMap.get(ccKey(row.centro_costo));
       const emp = (cc?.empresa ?? "").trim();
       if (emp && !nucleoEmpresas.has(emp)) continue;   // fuera del núcleo (anillo 2/3) → no consolida
+      // Sin IVA: el IVA embebido de la factura se saca de cada línea (queda neta) y se acumula en dos
+      // líneas de Impuestos — Débito (ventas, +) neteado contra Crédito (compras, −). Distinto del IVA/
+      // percepciones que cobra el banco (cuenta "IVA", origen extracto), que sigue como su propia línea.
+      if (sinIva) {
+        const ivaRow = Math.abs(Number(row.iva_monto) || 0);
+        if (ivaRow > 0) {
+          const key = forcedSide === "ingreso" ? "IVA Débito (ventas)" : "IVA Crédito (compras)";
+          (grupos.imp[key] ??= new Array(12).fill(0))[m] += forcedSide === "ingreso" ? ivaRow : -ivaRow;
+        }
+      }
       const fam = familiaCentro(cc);
       const cuenta = (row.cuenta_contable ?? "").trim() || "Sin cuenta";
       const meta = cuentaMap?.get(cuenta);
       const catPnl  = normCat(meta?.categoria_pnl);                            // "ventas" | "costo_venta" | …
       const catRaw  = (meta?.categoria_pnl ?? "").toLowerCase();               // crudo, para financieros/impuestos
       const catSede = (meta?.categoria_pnl_sede ?? "").trim().toLowerCase();   // "ventas" | "otros ingresos" | "costo por venta"
-      let gkey = null, rowKey = cuenta, val = Number(row.total) || 0;
+      let gkey = null, rowKey = cuenta, val = montoPnL(row, sinIva);
       if (fam === "propios") {
         // Sede propia: en el HOLDING entra como RESULTADO (línea "Sedes Propias Argentina", vía su propio
         // motor) → ningún bucket de sede alimenta el holding. Su costo por venta va a "Gastos Sedes Propias"
@@ -1008,7 +1018,7 @@ const GPV_COSTO_EGRESO = new Set(["Acciones de Mkt"]);
 // Mapa: cuenta contra → fila de ingreso donde netea.
 const ING_CONTRA_HQ = new Map([["Interusos", "Coorporativos"]]);
 const BIGG_ORDEN_FIN = ["Intereses Ganados", "Perdidas Financieras"];
-const BIGG_ORDEN_IMP = ["Plan Facilidades AFIP", "IVA", "IVA Inversiones", "IVA Compra", "Ganancias", "Otros Impuestos"];
+const BIGG_ORDEN_IMP = ["IVA Débito (ventas)", "IVA Crédito (compras)", "Plan Facilidades AFIP", "IVA", "IVA Inversiones", "IVA Compra", "Ganancias", "Otros Impuestos"];
 
 // Cuentas de fee (gerenciamiento/WRE) que NO van en "Ingresos HQ" (ya son líneas de operación → no duplicar).
 const BIGG_FEE_CUENTAS = ["Fee de Gestion y Adm", "Fee de Gestion y Adm (Huergo)"];
@@ -2592,10 +2602,10 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   // Línea "Sedes Propias Argentina" = resultado de las sedes AR NETO del 49% de la cesión de Barrio Norte.
   const resSedesAR = useMemo(() => {
     if (!isBigg) return null;
-    const rfAR = computeSubtotalsSede(buildPnLSede(inConFranq, egConSueldos, arNucleoCCs, year, monedaPL)).resFinal;
-    const rfBN = bnCcId ? computeSubtotalsSede(buildPnLSede(inConFranq, egConSueldos, [bnCcId], year, monedaPL)).resFinal : new Array(12).fill(0);
+    const rfAR = computeSubtotalsSede(buildPnLSede(inConFranq, egConSueldos, arNucleoCCs, year, monedaPL, sinIva)).resFinal;
+    const rfBN = bnCcId ? computeSubtotalsSede(buildPnLSede(inConFranq, egConSueldos, [bnCcId], year, monedaPL, sinIva)).resFinal : new Array(12).fill(0);
     return rfAR.map((v, m) => v - CESION.pct * (Number(rfBN[m]) || 0));
-  }, [isBigg, inConFranq, egConSueldos, arNucleoCCs, bnCcId, year, monedaPL]);
+  }, [isBigg, inConFranq, egConSueldos, arNucleoCCs, bnCcId, year, monedaPL, sinIva]);
 
   // Línea "Gerenciamiento (Rosedal)" = fee interco Ñako→Segui (cuenta "Fee de Gestion y Adm" exacta, núcleo).
   const feeGer = useMemo(() => {
@@ -2606,20 +2616,20 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       if (!nucleoEmpresas.has((r.sociedad ?? "").trim())) continue;
       if (!r.fecha || r.fecha < PNL_INICIO || r.fecha.slice(0, 4) !== String(year)) continue;
       if ((r.moneda ?? "ARS") !== monedaPL) continue;
-      const m = parseInt(r.fecha.slice(5, 7), 10) - 1; if (m >= 0 && m < 12) t[m] += Number(r.total) || 0;
+      const m = parseInt(r.fecha.slice(5, 7), 10) - 1; if (m >= 0 && m < 12) t[m] += montoPnL(r, sinIva);
     }
     return t;
-  }, [isBigg, inConFranq, nucleoEmpresas, year, monedaPL]);
+  }, [isBigg, inConFranq, nucleoEmpresas, year, monedaPL, sinIva]);
 
   // Línea "Wellness Real Estate" = margen de Huergo (+ Puertos a futuro).
   const resWRE = useMemo(
-    () => isBigg ? computeSubtotalsHuergo(buildPnLHuergo(inConFranq, egConSueldos, huergoCCs, year, monedaPL)).margen : null,
-    [isBigg, inConFranq, egConSueldos, huergoCCs, year, monedaPL]
+    () => isBigg ? computeSubtotalsHuergo(buildPnLHuergo(inConFranq, egConSueldos, huergoCCs, year, monedaPL, sinIva)).margen : null,
+    [isBigg, inConFranq, egConSueldos, huergoCCs, year, monedaPL, sinIva]
   );
 
   const pnlBigg = useMemo(
-    () => isBigg ? buildPnLBigg(inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL) : null,
-    [isBigg, inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL]
+    () => isBigg ? buildPnLBigg(inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva) : null,
+    [isBigg, inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva]
   );
   const subBigg = useMemo(
     () => pnlBigg ? computeSubtotalsHolding(pnlBigg, { resSedesAR, feeGer, resWRE }) : null,
@@ -2733,7 +2743,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
         {/* Moneda — P&L (en sede, arranca el grupo derecho) */}
         {showMonedaPL && (
-          <div style={{ order: isSedeLike ? 4 : 0, marginLeft: isSedeLike ? "auto" : undefined }}>
+          <div style={{ order: isSedeLike ? 4 : 0, marginLeft: (isSedeLike || isBigg) ? "auto" : undefined }}>
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Moneda</label>
             <select value={monedaPL} onChange={e => setMonedaPL(e.target.value)} style={selStyle}>
@@ -2744,8 +2754,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
           </div>
         )}
 
-        {/* IVA — P&L Sedes: ver con IVA o neto (EBITDA real). A la derecha, junto a Moneda. */}
-        {isSedeLike && (
+        {/* IVA — P&L Sedes/BIGG: ver con IVA o neto (EBITDA real). A la derecha, junto a Moneda. */}
+        {(isSedeLike || isBigg) && (
           <div style={{ order: 5 }}>
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>IVA</label>
