@@ -1152,13 +1152,28 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
           {/* Debajo del operativo: financieros e impuestos del grupo, en una línea al final */}
           {sec("sec_fin", "Financieros", pnl.grupos.fin, BIGG_ORDEN_FIN, true)}
           <ResultadoRow label="Resultado antes de Impuestos" values={resAntesImp} activeMonths={activeMonths} />
-          {/* IVA (solo modo Sin IVA): las operativas van netas; estas dos líneas devuelven el IVA embebido
-              → el Resultado del Grupo da IGUAL que Con IVA. Débito ventas suma (+), Crédito compras resta (−). */}
-          {(sub.ivaDeb?.some(v => v) || sub.ivaCred?.some(v => v)) && <>
-            <DataRow label="IVA Débito (ventas)"   values={sub.ivaDeb}  activeMonths={activeMonths} color={SEDE_HDR} />
-            <DataRow label="IVA Crédito (compras)" values={sub.ivaCred} activeMonths={activeMonths} color={SEDE_HDR} />
-          </>}
-          {sec("sec_imp", "Impuestos", pnl.grupos.imp, BIGG_ORDEN_IMP, true)}
+          {/* Sección IMPUESTOS = sumarizador arriba (contribución del bloque al resultado), y adentro:
+              IVA Débito (ventas, +) / IVA Crédito (compras, −) [solo Sin IVA] + los tributos reales (−).
+              Con las dos líneas de IVA, el Resultado del Grupo da IGUAL que Con IVA (el IVA embebido vuelve). */}
+          {(() => {
+            const ivaOn = sub.ivaDeb?.some(v => v) || sub.ivaCred?.some(v => v);
+            const taxRows = Object.entries(pnl.grupos.imp || {}).sort(([a], [b]) => {
+              const ia = BIGG_ORDEN_IMP.indexOf(a), ib = BIGG_ORDEN_IMP.indexOf(b);
+              return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib) || a.localeCompare(b);
+            });
+            const blockTot = MESES.map((_, m) => (sub.ivaDeb?.[m] || 0) + (sub.ivaCred?.[m] || 0) - (sub.impuestos?.[m] || 0));
+            return <>
+              <SubSectionRow label="Impuestos" values={blockTot} activeMonths={activeMonths} color={SEDE_HDR}
+                expanded={!isCol("sec_imp")} onToggle={() => toggle("sec_imp")} />
+              {!isCol("sec_imp") && <>
+                {ivaOn && <>
+                  <DataRow label="IVA Débito (ventas)"   values={sub.ivaDeb}  activeMonths={activeMonths} color={SEDE_HDR} />
+                  <DataRow label="IVA Crédito (compras)" values={sub.ivaCred} activeMonths={activeMonths} color={SEDE_HDR} />
+                </>}
+                {taxRows.map(([n, v]) => <DataRow key={n} label={n} values={v} activeMonths={activeMonths} color={SEDE_HDR} neg />)}
+              </>}
+            </>;
+          })()}
           <ResultadoRow strong label="Resultado del Grupo" values={resGrupo} activeMonths={activeMonths} />
         </tbody>
       </table>
