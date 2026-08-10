@@ -488,6 +488,7 @@ export async function appendPago({ documento_id, sociedad, fecha, monto, moneda,
       monto:           -Math.abs(monto),
       documento_id,
       concepto:        `Pago ${documento_id}`,
+      nota:            nota ?? "",
       referencia:      referencia ?? "",
       origen:          "pago",
       created_at:      new Date().toISOString(),
@@ -511,12 +512,48 @@ export async function appendCobro({ documento_id, sociedad, fecha, monto, moneda
       monto:           Math.abs(monto),
       documento_id,
       concepto:        `Cobro ${documento_id}`,
+      nota:            nota ?? "",
       referencia:      referencia ?? "",
       origen:          "cobro",
       created_at:      new Date().toISOString(),
     },
   });
 }
+
+// ── Imputar UNA transferencia del extracto a VARIAS facturas ───────────────────
+// Santi paga N facturas de un proveedor (o cobra N ventas de un cliente) con una sola
+// transferencia. Modelo: se crean N pagos/cobros REALES —cada uno contra su factura, con su
+// monto— que suman el total, y la línea del extracto se IGNORA (queda como registro fiel del
+// banco, fuera de caja; conserva su extracto_saldo → ancla de dedup al re-subir). Cada fila nueva
+// lleva nota legible + `referencia=trf=<idExtracto>` para agruparlas y poder deshacerlas juntas.
+// Orden: primero los pagos (el valor), la ignorada al final → si algo falla, la línea del extracto
+// queda VISIBLE en la bandeja (no hay pérdida silenciosa de caja; se ignora con un click).
+async function _imputarVariasDesdeExtracto(mov, partes, appendFn) {
+  const total = Math.abs(Number(mov.monto) || 0);
+  const suma  = (partes || []).reduce((s, p) => s + Math.abs(Number(p.monto) || 0), 0);
+  if (!partes?.length) throw new Error("No hay facturas seleccionadas.");
+  if (Math.abs(round2(suma) - round2(total)) > 0.5)
+    throw new Error(`La suma de las partes (${suma.toLocaleString("es-AR")}) no coincide con la transferencia (${total.toLocaleString("es-AR")}).`);
+  const grupo    = mov.id;
+  const fechaTxt = String(mov.fecha || "").split("-").reverse().join("/");   // YYYY-MM-DD → DD/MM/YYYY
+  const nota     = `Parte de transferencia $${total.toLocaleString("es-AR")} · ${fechaTxt}`;
+  for (const p of partes) {
+    await appendFn({
+      documento_id:    p.documento_id,
+      sociedad:        mov.sociedad,
+      fecha:           mov.fecha,
+      monto:           Math.abs(Number(p.monto) || 0),
+      moneda:          mov.moneda || "ARS",
+      cuenta_bancaria: mov.cuenta_bancaria,
+      referencia:      `trf=${grupo}`,
+      nota,
+    });
+  }
+  await ignorarMovimiento(mov, `trf-multi:${grupo}`);   // último: si falla, el extracto queda pendiente y visible
+  return { ok: true, n: partes.length };
+}
+export const pagarFacturasDesdeExtracto  = (mov, partes) => _imputarVariasDesdeExtracto(mov, partes, appendPago);
+export const cobrarFacturasDesdeExtracto = (mov, partes) => _imputarVariasDesdeExtracto(mov, partes, appendCobro);
 
 /** Saldo pendiente de un documento. Usa Math.abs porque PAGOs tienen monto negativo. */
 export function calcSaldoPendiente(totalDoc, pagos = []) {
@@ -1145,11 +1182,14 @@ export async function ingestarResumenTarjeta({ sociedad, tarjeta = "", periodo =
       tipo: "EGRESO", cuenta_bancaria: l.cuenta_bancaria, cuenta_destino: "",
       cuenta_contable: String(l.cuenta_contable || "").replace(/^CUENTA_/, ""),
       centro_costo: l.centro_costo || "",
-      moneda: mon, monto: -monto, documento_id: "",
+      // Signo: consumo normal = siempre cargo (egreso, -monto). Una línea de AJUSTE (l.credito, ver
+      // MundoTarjeta → diferencia contra el TOTAL A PAGAR real del resumen) puede ir para el otro lado
+      // → conserva el signo pedido para que, al autorizarla, aceptarMovimiento la reconozca como INGRESO.
+      moneda: mon, monto: l.credito ? monto : -monto, documento_id: "",
       iva_rate: 0, iva_monto: 0,
       concepto: l.comercio || "",
       contraparte_id: "", contraparte_nombre: l.comercio || "",
-      referencia: `tc=${tarjeta};per=${periodo};com=${_normCom(l.comercio)};tit=${l.titular || ""}`,
+      referencia: `tc=${tarjeta};per=${periodo};com=${_normCom(l.comercio)};tit=${l.titular || ""}${l.ajuste ? ";ajuste=1" : ""}`,
       origen: "tarjeta", created_at: new Date().toISOString(),
     });
   }
@@ -1938,7 +1978,7 @@ export function pendientesInterco({ comps = [], clientes = [], sociedades = [], 
 // Reconocer una venta interco = registrar MI compra (factura de proveedor / CxP) en mi sociedad,
 // con MIS cuenta+centro, contraparte = la sociedad vendedora, y link `interco_ref=<id_comp venta>`
 // (así el pendiente desaparece y no se re-crea). Queda como FC por pagar (EGRESO sin pago).
-export async function reconocerVentaInterco({ sociedad, ventaIdComp, vendedorId = "", vendedorNombre = "", cuenta_contable, centro_costo = "", total, moneda = "ARS", fecha, nroComp = "", subtipo = "EGRESO" }) {
+export async function reconocerVentaInterco({ sociedad, ventaIdComp, vendedorId = "", vendedorNombre = "", cuenta_contable, cuenta_contable_id = "", centro_costo = "", total, moneda = "ARS", fecha, nroComp = "", subtipo = "EGRESO" }) {
   // subtipo="EGRESO" (default): lo que le compro/debo a la contraparte → CxP. subtipo="INGRESO": un crédito a
   // mi favor (ej. NC de interuso que Ñako me emite) → lo reconozco como venta/ingreso a mi cuenta → CxC.
   const id_comp = newId(subtipo === "INGRESO" ? "IN" : "EG");
@@ -1948,6 +1988,7 @@ export async function reconocerVentaInterco({ sociedad, ventaIdComp, vendedorId 
     subtipo,
     contraparte_id: vendedorId, contraparte_nombre: vendedorNombre,
     cuenta_contable: String(cuenta_contable || "").replace(/^CUENTA_/, ""),
+    cuenta_contable_id: String(cuenta_contable_id || ""),
     centro_costo, subtotal: t, iva_rate: 0, iva_monto: 0, total: t,
     moneda, nro_comp: nroComp, nota: `interco_ref=${ventaIdComp}`,
     created_at: new Date().toISOString(),

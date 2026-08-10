@@ -23,6 +23,9 @@ const fld = (lleno, w = 150) => ({ ...cell, width: w, color: "#111827",
   background: lleno ? "#dcfce7" : "#fff7ed", border: `1px solid ${lleno ? "#4ade80" : "#fb923c"}` });
 // Formato es-AR con decimales solo cuando existen (los centavos importan, sobre todo en USD).
 const money = (n, mon) => n ? `${mon === "USD" ? "U$D" : "$"} ${Math.abs(n).toLocaleString("es-AR", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}` : "—";
+// Igual que money() pero con el signo visible — para subtotales que pueden ser negativos
+// (un ajuste-crédito puede dejar el neto de un grupo o el total general por debajo de cero).
+const moneySigned = (n, mon) => n ? `${n < 0 ? "-" : ""}${money(n, mon)}` : "—";
 
 // Mundo Tarjeta de Conciliaciones: el resumen es "un extracto más". Se sube el PDF, cada consumo
 // entra como PENDIENTE (nb_movimientos, origen "tarjeta") con su propuesta ya puesta, y se van
@@ -44,6 +47,15 @@ export default function MundoTarjeta({ sociedad }) {
   const [prog, setProg]         = useState(null);   // { done, total } mientras autoriza en lote
   const [filtroCuenta, setFiltroCuenta] = useState("");   // filtrar la bandeja por cuenta (autorizar por lote)
   const [loading, setLoading]   = useState(true);
+  // Confirmación de "Ignorar" SIN window.confirm(): navegadores in-app (WhatsApp/Slack/Instagram) y
+  // Chrome tras varios confirm() seguidos lo desactivan silenciosamente (confirm() devuelve false sin
+  // mostrar nada) → el botón "no hacía nada". 1er click arma, 2do click (dentro de los 4s) ejecuta.
+  const [confirmIgnorarId, setConfirmIgnorarId] = useState(null);
+  useEffect(() => {
+    if (!confirmIgnorarId) return;
+    const t = setTimeout(() => setConfirmIgnorarId(null), 4000);
+    return () => clearTimeout(t);
+  }, [confirmIgnorarId]);
 
   // Tarjetas = cuentas bancarias tipo "tarjeta" de la sociedad.
   const tarjetas = useMemo(() => cuentasBanc.filter(c =>
@@ -169,13 +181,44 @@ export default function MundoTarjeta({ sociedad }) {
       }
       const rutear = lineas.filter(l => l.cuenta_bancaria);
       const sinCuenta = lineas.length - rutear.length;
+
+      // Ajuste vs. el TOTAL A PAGAR real del resumen: si lo que se va a cargar no suma exactamente
+      // eso (típico: una devolución de RG5617 que no cancela justo el saldo anterior, o redondeo de
+      // TC en un pago en USD — deja un remanente de unos pesos que el detalle no explica), se agrega
+      // una línea más a la bandeja por la diferencia — con signo (crédito si sobra, cargo si falta) —
+      // para que el total SIEMPRE cierre exacto contra el resumen. Cuenta a elección (ver Maestros ›
+      // Plan de cuentas → podés crear una "Diferencias tarjeta" para estos casos).
+      const ajustes = [];
+      if (r.totalAPagar) {
+        const sumaMoneda = (mon) => rutear.filter(l => l.moneda === mon).reduce((s, l) => s + l.monto, 0);
+        const TOL = { ARS: 1, USD: 0.5 };
+        for (const [mon, real] of [["ARS", r.totalAPagar.ars], ["USD", r.totalAPagar.usd]]) {
+          const dif = sumaMoneda(mon) - real;          // >0: se cargó de más (sobra) → crédito. <0: falta → cargo.
+          if (Math.abs(dif) <= TOL[mon]) continue;
+          const card = cardAccountFor(mon);
+          if (!card) { ajustes.push({ mon, dif, sinCuenta: true }); continue; }
+          rutear.push({
+            comercio: `Ajuste vs. Total a Pagar del resumen (${periodo || fecha})`,
+            titular: "", moneda: mon, monto: Math.abs(dif),
+            cuenta_contable: "", centro_costo: "", cuenta_bancaria: card.id, fecha,
+            ajuste: true, credito: dif > 0,
+          });
+          ajustes.push({ mon, dif, sinCuenta: false });
+        }
+      }
+
       const res = await ingestarResumenTarjeta({ sociedad, tarjeta: tarjetaSel?.nombre || "", periodo, fecha, lineas: rutear });
       await recargarPend();
+      const ajusteTxt = ajustes.map(a => a.sinCuenta
+        ? `⚠️ diferencia de ${money(Math.abs(a.dif), a.mon)} sin cuenta-tarjeta ${a.mon} para ajustarla`
+        : `+ ajuste de ${money(Math.abs(a.dif), a.mon)} (${a.dif > 0 ? "crédito" : "cargo"}) contra el Total a Pagar`
+      ).join(" · ");
       setPdfMsg(`✓ ${res.creados} consumo(s) cargados a la bandeja`
         + (res.borradas ? ` · reemplazó ${res.borradas} de una carga anterior` : "")
         + (res.yaAutorizadas ? ` · ${res.yaAutorizadas} ya autorizados (no se recargan)` : "")
         + (reconocidas ? ` · ${reconocidas} ya eran pago de FC con la tarjeta` : "")
         + (sinCuenta ? ` · ⚠️ ${sinCuenta} sin cuenta-tarjeta de esa moneda (creala en Maestros)` : "")
+        + (ajusteTxt ? ` · ${ajusteTxt}` : "")
         + ". Revisá cuenta/centro y autorizá.");
     } catch (e) { setPdfMsg("Error al leer el PDF: " + (e?.message || e)); }
     setBusy(false);
@@ -184,19 +227,25 @@ export default function MundoTarjeta({ sociedad }) {
   const setEdit = (id, k, v) => setEdits(e => ({ ...e, [id]: { ...e[id], [k]: v } }));
   const cuentaDe = m => edits[m.id]?.cuenta_contable ?? m.cuenta_contable ?? "";
   const centroDe = m => edits[m.id]?.centro_costo ?? m.centro_costo ?? "";
+  // Período P&L: a diferencia de Banco (que arranca vacío = usa la fecha del movimiento), en Tarjeta
+  // arranca con el período DEL RESUMEN (viene en referencia, per=YYYY-MM — el mismo con el que se
+  // ingirió esta línea) — un resumen es un solo ciclo de facturación y todos sus consumos deben caer
+  // en el mismo P&L salvo que alguien decida lo contrario a mano. Siempre editable.
+  const periodoDe = m => edits[m.id]?.periodo_contable ?? (metaVal(m.referencia, "per") || "");
   const completa = m => !!cuentaDe(m);   // cuenta obligatoria (centro recomendado)
 
   async function autorizar(m) {
     if (!completa(m)) return;
     setBusy(true);
     try {
-      await aceptarMovimiento(m, { cuenta_contable: cuentaDe(m), centro_costo: centroDe(m) });
+      await aceptarMovimiento(m, { cuenta_contable: cuentaDe(m), centro_costo: centroDe(m), periodo_contable: periodoDe(m) });
       await recargarPend();
     } catch (e) { alert("No se pudo autorizar: " + (e?.message || e)); }
     setBusy(false);
   }
   async function ignorar(m) {
-    if (!window.confirm(`¿Ignorar "${m.concepto}" (${money(m.monto, m.moneda)})? No se contabiliza.`)) return;
+    if (confirmIgnorarId !== m.id) { setConfirmIgnorarId(m.id); return; }   // 1er click: armar
+    setConfirmIgnorarId(null);
     setBusy(true);
     try { await ignorarMovimiento(m, "tarjeta"); await recargarPend(); }
     catch (e) { alert("No se pudo ignorar: " + (e?.message || e)); }
@@ -208,7 +257,7 @@ export default function MundoTarjeta({ sociedad }) {
     setBusy(true); setProg({ done: 0, total: listas.length });
     try {
       let done = 0;
-      for (const m of listas) { await aceptarMovimiento(m, { cuenta_contable: cuentaDe(m), centro_costo: centroDe(m) }); setProg({ done: ++done, total: listas.length }); }
+      for (const m of listas) { await aceptarMovimiento(m, { cuenta_contable: cuentaDe(m), centro_costo: centroDe(m), periodo_contable: periodoDe(m) }); setProg({ done: ++done, total: listas.length }); }
       await recargarPend();
     } catch (e) { alert("Error al autorizar en lote: " + (e?.message || e)); }
     setProg(null); setBusy(false);
@@ -226,13 +275,17 @@ export default function MundoTarjeta({ sociedad }) {
       if (!by.has(k)) { by.set(k, []); order.push(k); }
       by.get(k).push(m);
     }
-    const abs = m => Math.abs(Number(m.monto) || 0);
+    // Contribución al total ADEUDADO (no el valor absoluto): un consumo normal siempre viene con
+    // monto negativo → contrib positiva (suma). Una línea de ajuste-crédito (monto positivo, ver
+    // onPdf) → contrib negativa (resta) — así el total general cierra contra el resumen real aun
+    // con el ajuste todavía sin autorizar.
+    const contrib = m => -(Number(m.monto) || 0);
     return order.map(tit => {
       const rows = by.get(tit);
       return {
         tit, rows,
-        p: rows.reduce((s, m) => s + ((m.moneda || "ARS") !== "USD" ? abs(m) : 0), 0),
-        d: rows.reduce((s, m) => s + ((m.moneda || "ARS") === "USD" ? abs(m) : 0), 0),
+        p: rows.reduce((s, m) => s + ((m.moneda || "ARS") !== "USD" ? contrib(m) : 0), 0),
+        d: rows.reduce((s, m) => s + ((m.moneda || "ARS") === "USD" ? contrib(m) : 0), 0),
       };
     });
   }, [pendFiltrados]);
@@ -313,8 +366,8 @@ export default function MundoTarjeta({ sociedad }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, color: T.text }}>
             <thead>
               <tr style={{ background: T.tableHead, color: T.tableHeadText, position: "sticky", top: 0, zIndex: 1 }}>
-                {["Comercio", "Titular", "Cuenta *", "Centro", "ARS", "USD", ""].map((c, i) => (
-                  <th key={i} style={{ padding: "8px 10px", textAlign: (i === 4 || i === 5) ? "right" : "left", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{c}</th>
+                {["Período", "Comercio", "Titular", "Cuenta *", "Centro", "ARS", "USD", ""].map((c, i) => (
+                  <th key={i} style={{ padding: "8px 10px", textAlign: (i === 5 || i === 6) ? "right" : "left", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{c}</th>
                 ))}
               </tr>
             </thead>
@@ -323,9 +376,21 @@ export default function MundoTarjeta({ sociedad }) {
                 <Fragment key={g.tit || "(sin titular)"}>
                   {g.rows.map(m => {
                     const esUSD = (m.moneda || "ARS") === "USD";
+                    // Línea sintética agregada por diferencia vs. el Total a Pagar real del resumen
+                    // (ver onPdf) — monto>0 en la pendiente = crédito (resta), <0 = cargo (suma).
+                    const esAjuste = metaVal(m.referencia, "ajuste") === "1";
+                    const esCredito = esAjuste && Number(m.monto) > 0;
                     return (
-                      <tr key={m.id} style={{ borderTop: `1px solid ${T.cardBorder}` }}>
-                        <td style={{ padding: "5px 10px", minWidth: 200 }}>{m.concepto || metaVal(m.referencia, "com")}</td>
+                      <tr key={m.id} style={{ borderTop: `1px solid ${T.cardBorder}`, ...(esAjuste ? { background: "#fefce8" } : {}) }}>
+                        <td style={{ padding: "4px 8px" }}>
+                          <input type="month" value={periodoDe(m)} onChange={e => setEdit(m.id, "periodo_contable", e.target.value)}
+                            title="Período P&L de este consumo — arranca en el período del resumen, editable línea por línea."
+                            style={fld(!!periodoDe(m), 112)} />
+                        </td>
+                        <td style={{ padding: "5px 10px", minWidth: 200, fontStyle: esAjuste ? "italic" : "normal" }}>
+                          {esAjuste && <span title={esCredito ? "Crédito: resta del total a pagar" : "Cargo: suma al total a pagar"} style={{ marginRight: 5 }}>{esCredito ? "➖" : "➕"}</span>}
+                          {m.concepto || metaVal(m.referencia, "com")}
+                        </td>
                         <td style={{ padding: "5px 10px", color: T.muted, whiteSpace: "nowrap" }}>{g.tit || "—"}</td>
                         <td style={{ padding: "4px 8px" }}>
                           <select value={cuentaDe(m)} onChange={e => setEdit(m.id, "cuenta_contable", e.target.value)}
@@ -340,25 +405,28 @@ export default function MundoTarjeta({ sociedad }) {
                             {centroOpts.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                           </select>
                         </td>
-                        <td style={{ padding: "5px 10px", textAlign: "right", fontFamily: T.mono }}>{esUSD ? "—" : money(m.monto, "ARS")}</td>
-                        <td style={{ padding: "5px 10px", textAlign: "right", fontFamily: T.mono }}>{esUSD ? money(m.monto, "USD") : "—"}</td>
+                        <td style={{ padding: "5px 10px", textAlign: "right", fontFamily: T.mono }}>{esUSD ? "—" : (esAjuste ? moneySigned(-m.monto, "ARS") : money(m.monto, "ARS"))}</td>
+                        <td style={{ padding: "5px 10px", textAlign: "right", fontFamily: T.mono }}>{esUSD ? (esAjuste ? moneySigned(-m.monto, "USD") : money(m.monto, "USD")) : "—"}</td>
                         <td style={{ padding: "4px 8px", whiteSpace: "nowrap", textAlign: "right" }}>
                           <button onClick={() => autorizar(m)} disabled={!completa(m) || busy}
                             style={{ background: completa(m) ? T.accent : "#e5e7eb", border: "none", borderRadius: 7, padding: "6px 12px", fontSize: 12, fontWeight: 800, color: completa(m) ? "#000" : T.muted, cursor: completa(m) && !busy ? "pointer" : "default", fontFamily: T.font }}>
                             Autorizar
                           </button>
                           <button onClick={() => ignorar(m)} disabled={busy} title="No contabilizar"
-                            style={{ marginLeft: 6, background: "transparent", border: `1px solid ${T.cardBorder}`, borderRadius: 7, padding: "6px 9px", fontSize: 12, color: T.muted, cursor: busy ? "default" : "pointer", fontFamily: T.font }}>
-                            Ignorar
+                            style={{ marginLeft: 6, background: confirmIgnorarId === m.id ? "#dc2626" : "transparent",
+                              border: `1px solid ${confirmIgnorarId === m.id ? "#dc2626" : T.cardBorder}`, borderRadius: 7, padding: "6px 9px",
+                              fontSize: 12, fontWeight: confirmIgnorarId === m.id ? 800 : 400,
+                              color: confirmIgnorarId === m.id ? "#fff" : T.muted, cursor: busy ? "default" : "pointer", fontFamily: T.font }}>
+                            {confirmIgnorarId === m.id ? "¿Seguro? Confirmar" : "Ignorar"}
                           </button>
                         </td>
                       </tr>
                     );
                   })}
                   <tr style={{ borderTop: `1px solid ${T.cardBorder}`, background: "#e6eaf0", fontWeight: 700 }}>
-                    <td colSpan={4} style={{ padding: "6px 10px", fontSize: 11.5 }}>Total {g.tit || "Sin titular"}</td>
-                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: T.mono }}>{g.p ? money(g.p, "ARS") : "—"}</td>
-                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: T.mono }}>{g.d ? money(g.d, "USD") : "—"}</td>
+                    <td colSpan={5} style={{ padding: "6px 10px", fontSize: 11.5 }}>Total {g.tit || "Sin titular"}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: T.mono }}>{moneySigned(g.p, "ARS")}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: T.mono }}>{moneySigned(g.d, "USD")}</td>
                     <td />
                   </tr>
                 </Fragment>
@@ -366,9 +434,9 @@ export default function MundoTarjeta({ sociedad }) {
             </tbody>
             <tfoot>
               <tr style={{ borderTop: `2px solid ${T.cardBorder}`, background: "#fafafa", fontWeight: 800 }}>
-                <td colSpan={4} style={{ padding: "8px 10px" }}>Total general</td>
-                <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: T.mono }}>{totP ? money(totP, "ARS") : "—"}</td>
-                <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: T.mono }}>{totD ? money(totD, "USD") : "—"}</td>
+                <td colSpan={5} style={{ padding: "8px 10px" }}>Total general</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: T.mono }}>{moneySigned(totP, "ARS")}</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: T.mono }}>{moneySigned(totD, "USD")}</td>
                 <td />
               </tr>
             </tfoot>

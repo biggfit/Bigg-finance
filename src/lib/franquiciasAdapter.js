@@ -23,6 +23,10 @@ const EMPRESA_SOCIEDAD = Object.fromEntries(Object.entries(SOCIEDAD_EMPRESA).map
 // vende pauta a los franquiciados); INTERUSOS es costo que pega en margen; SPONSORS/OTROS directo.
 const FRANQ_CUENTA = { FEE: "Regalias s/Ventas", INTERUSOS: "Interusos", PAUTA: "Acciones de Mkt", SPONSORS: "Sponsor", SPONSOR: "Sponsor", OTROS: "Otros Ingresos" };
 const MONEDAS = ["ARS", "USD", "EUR"];
+// IVA por sociedad EMISORA (los importes de franquicia vienen CON IVA cuando corresponde): Ñako y
+// Gestión Deportiva y Wellness al 21%; BIGG FIT LLC sin IVA. Lineal por emisor. Habilita la vista
+// "sin IVA" (netea las franquicias) y que su IVA débito entre al desglose del P&L BIGG.
+const FRANQ_IVA_RATE = { nako: 0.21, wellness: 0.21, biggfit: 0 };
 
 // Tipos de GESTIÓN (interusos de sedes propias). A propósito NO están en COMP_TYPES:
 // así todas las funciones de saldo de franquicia (computeSaldo/Real, buildCuentaCorriente,
@@ -100,7 +104,10 @@ export function franquiciasIngresoPnLRows(compsByFr, sociedad, ventasCcId) {
       if (!monto) continue;
       const cuenta = FRANQ_CUENTA[String(def.cuenta || "OTROS").toUpperCase()] || "Otros Ingresos";
       const fecha  = (c.year != null && c.month != null) ? `${c.year}-${String(c.month + 1).padStart(2, "0")}-15` : "";
-      out.push({ fecha, sociedad: cSoc, centro_costo: ventasCcId, cuenta_contable: cuenta, moneda: compCurrency(c), total: monto * def.sign });
+      const total  = monto * def.sign;
+      const rate   = FRANQ_IVA_RATE[cSoc] ?? 0;                 // importe CON IVA (según emisor) → separar neto/IVA
+      const iva    = rate ? total - total / (1 + rate) : 0;    // parte de IVA (mantiene el signo de FACTURA/NC)
+      out.push({ fecha, sociedad: cSoc, centro_costo: ventasCcId, cuenta_contable: cuenta, moneda: compCurrency(c), total, subtotal: total - iva, iva_monto: iva });
     }
   }
   return out;

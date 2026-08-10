@@ -812,7 +812,7 @@ function CuentaRow({ cuenta, onClick, mpLive }) {
         `Por acreditarse (aún no libera; NO suma al PN): ${fmtSaldo(Number(mpLive.a_acreditarse) || 0, mpMon)}`,
         `MP real ≈ saldo contable + acreditado: ${fmtSaldo(mpEstimado, mpMon)}`,
         `(dato en vivo de hoy — no es parte del Balance/PN)`,
-        (mpLive.proximos?.length ? "Próximas liberaciones:\n" + mpLive.proximos.slice(0, 6).map(p => `  ${p.fecha}: ${fmtSaldo(p.monto, mpMon)}`).join("\n") : ""),
+        (mpLive.proximos?.length ? "Próximas liberaciones:\n" + mpLive.proximos.slice(0, 6).map(p => `  ${fmtDate(p.fecha)}: ${fmtSaldo(p.monto, mpMon)}`).join("\n") : ""),
         (mpLive.truncado ? "(⚠ hay más cobros que el tope; acreditado parcial)" : ""),
       ].filter(Boolean).join("\n")
     : "Datos en vivo de Mercado Pago";

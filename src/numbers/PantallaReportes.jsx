@@ -119,6 +119,7 @@ function movimientoToPnLRows(movs, sociedad, cuentaMap) {
       cuenta_contable: m.cuenta_contable ?? "",
       moneda:          m.moneda ?? "ARS",
       total,
+      iva_monto:       Math.abs(Number(m.iva_monto) || 0),   // para la vista "sin IVA" (neto = total − iva)
       _tipo,                                          // para el detalle de Informes (tipo de egreso)
       contraparte_nombre: m.contraparte_nombre ?? "",
     });
@@ -358,8 +359,8 @@ const SEDE_GRUPOS = [
   { key: "cvar",      label: "Costos Variables",         color: SEDE_HDR, cuentas: ["Fee Facturación", "Aranceles y Otros Financieros", "IIBB", "Imp. Cred. y Deb."] },
   { key: "gp_pers",   label: "Personal",                 color: SEDE_HDR, cuentas: ["Sueldos", "Comisiones", "Aguinaldos", "Costos Salariales"] },
   { key: "gp_ocup",   label: "Ocupación",                color: SEDE_HDR, cuentas: ["Alquiler", "Expensas", "ABL", "Servicios"] },
-  { key: "gp_mkt",    label: "Mkt y Pauta",              color: SEDE_HDR, cuentas: ["Acciones de Mkt"] },
-  { key: "gp_otros",  label: "Otros Gastos de la Sede",  color: SEDE_HDR, cuentas: ["Honorarios Profesionales", "Equipamiento y Mantenimiento", "Limpieza", "Otros Gastos del Centro"] },
+  { key: "gp_mkt",    label: "Mkt y Pauta",              color: SEDE_HDR, cuentas: ["Acciones de Mkt", "Pauta"] },
+  { key: "gp_otros",  label: "Otros Gastos de la Sede",  color: SEDE_HDR, cuentas: ["Honorarios Profesionales", "Equipamiento y Mantenimiento", "Limpieza", "Otros Gastos del Centro", "Gastos Menores de Caja"] },
   { key: "com_res",   label: "Comisión por resultados",  color: SEDE_HDR, cuentas: ["Comision S/Resultado"] },
   { key: "inv_no_op", label: "Inversiones no operativas", color: SEDE_HDR, cuentas: ["Inversiones / Gastos no Operativos"] },
 ];
@@ -431,11 +432,23 @@ const PNL_INICIO_MES  = 6;   // julio (0-based): en el año del go-live no se mu
 const mesesVisibles = (activeMonths, year) =>
   Number(year) === PNL_INICIO_ANIO ? activeMonths.filter(m => m >= PNL_INICIO_MES) : activeMonths;
 
-function buildPnLSede(inRows, egRows, ccFilter, year, moneda) {
+// Monto de una fila del P&L: bruto (con IVA) o NETO (sin IVA → resultado real / EBITDA). El neto resta
+// el iva_monto de la fila (facturas y movimientos imputados lo traen; sueldos/otros sin IVA → neto = total).
+const montoPnL = (row, sinIva) => {
+  const total = Number(row.total) || 0;
+  return sinIva ? total - (Number(row.iva_monto) || 0) : total;
+};
+
+// Grupos de INGRESO del P&L Sede (los que suman en totIngresos) → su IVA es débito (ventas); el resto, crédito.
+const SEDE_ING_KEYS = new Set(["vta_cf", "int_bigg", "int_corp"]);
+
+function buildPnLSede(inRows, egRows, ccFilter, year, moneda, sinIva = false) {
   // Pre-poblar cada grupo con sus cuentas configuradas en 0 → se muestran aunque no tengan monto.
   const grupos = {};
   for (const g of SEDE_GRUPOS) { grupos[g.key] = {}; for (const c of g.cuentas) grupos[g.key][c] = new Array(12).fill(0); }
   const sinClasificar = {};
+  // IVA stripped por línea (solo Sin IVA), para que el holding lo sume: líneas de ingreso → débito, de costo → crédito.
+  const ivaDeb = new Array(12).fill(0), ivaCred = new Array(12).fill(0);
   const add = (rows) => {
     for (const row of rows) {
       if (!row.fecha || row.fecha < PNL_INICIO || row.fecha.slice(0,4) !== String(year)) continue;
@@ -447,11 +460,20 @@ function buildPnLSede(inRows, egRows, ccFilter, year, moneda) {
       const gkey   = SEDE_CUENTA_A_GRUPO.get(_nkSede(nombre));
       const bucket = gkey ? grupos[gkey] : sinClasificar;
       if (!bucket[nombre]) bucket[nombre] = new Array(12).fill(0);
-      bucket[nombre][m] += Number(row.total) || 0;
+      // Un COMPROBANTE cuyo subtipo no coincide con la naturaleza del grupo es CONTRA: un EGRESO (factura de
+      // compra) en una cuenta de INGRESO (ej. Interusos) RESTA; un INGRESO en una cuenta de costo, resta. Así
+      // el interuso netea (+ cobrado / − pagado, clearing de la sede). Los movimientos (sin subtipo) mantienen
+      // su signo — ya vienen firmados desde movimientoToPnLRows.
+      const st = String(row.subtipo || "").toUpperCase();
+      const esEg = st === "EGRESO", esIn = st === "INGRESO", enIng = SEDE_ING_KEYS.has(gkey);
+      const contra = !!gkey && ((esEg && enIng) || (esIn && !enIng));
+      bucket[nombre][m] += montoPnL(row, sinIva) * (contra ? -1 : 1);
+      // IVA: comprobante ingreso → débito, egreso → crédito; movimiento (sin subtipo) → por grupo.
+      if (sinIva && gkey) ((esIn ? true : esEg ? false : enIng) ? ivaDeb : ivaCred)[m] += Number(row.iva_monto) || 0;
     }
   };
   add(inRows); add(egRows);
-  return { grupos, sinClasificar };
+  return { grupos, sinClasificar, ivaDeb, ivaCred };
 }
 
 const sumGrupoSede = (g) => MESES.map((_, m) => Object.values(g).reduce((s, arr) => s + (arr[m] || 0), 0));
@@ -471,6 +493,7 @@ function computeSubtotalsSede(pnl) {
   const scan = (obj) => Object.values(obj).forEach(arr => arr.forEach((v,i) => { if (v) months.add(i); }));
   Object.values(grupos).forEach(scan); scan(sinClasificar);
   return { st, totIngresos, margenContrib, totGastosOp, resOp, resFinal,
+           ivaDeb: pnl.ivaDeb || new Array(12).fill(0), ivaCred: pnl.ivaCred || new Array(12).fill(0),
            activeMonths: [...months].sort((a,b) => a-b) };
 }
 
@@ -496,6 +519,28 @@ const VISTAS_SEDE = [
   { id: "mensual",   label: "Mensual" },
   { id: "ytd",       label: "YTD" },
 ];
+// Toggle Con IVA / Sin IVA (sin IVA = resultado real / EBITDA, cada línea neta de su IVA).
+function IvaToggle({ value, onChange }) {
+  const opts = [{ id: false, label: "Con IVA" }, { id: true, label: "Sin IVA" }];
+  return (
+    <div style={{ display: "inline-flex", gap: 2, background: "#f3f4f6", borderRadius: 9, padding: 3 }}>
+      {opts.map(o => {
+        const active = value === o.id;
+        return (
+          <button key={String(o.id)} onClick={() => onChange(o.id)} style={{
+            background: active ? T.accentDark : "transparent", border: "none", borderRadius: 7,
+            color: active ? T.accent : T.muted, fontFamily: T.font, fontSize: 12.5,
+            fontWeight: active ? 800 : 600, padding: "6px 14px", cursor: "pointer", transition: "all .15s ease" }}
+            onMouseEnter={e => { if (!active) e.currentTarget.style.background = "#e5e7eb"; }}
+            onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}>
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function VistaToggle({ value, onChange }) {
   return (
     <div style={{ display: "inline-flex", gap: 2, background: "#f3f4f6", borderRadius: 9, padding: 3 }}>
@@ -569,7 +614,7 @@ function celdasSede(cols, cur, prev, pol, o) {
   });
 }
 
-function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista = "evolucion", mes = 0, cesion = null, impuestos = null, netoLabel = "Resultado Neto" }) {
+function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista = "evolucion", mes = 0, cesion = null, impuestos = null, netoLabel = "Resultado Neto", nombreCuenta = (x) => x }) {
   const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths: _amRaw } = sub;
   const activeMonths = mesesVisibles(_amRaw, year);
 
@@ -589,7 +634,7 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
 
   // Colapso jerárquico: bandas de sección (Ingresos / Gastos Op) + cada sub-grupo + toggle maestro.
   const ALLKEYS = ["sec_ing", "sec_gop", ...SEDE_GRUPOS.map(g => g.key)];
-  const [collapsed, setCollapsed] = useState({});
+  const [collapsed, setCollapsed] = useState(() => Object.fromEntries(ALLKEYS.map(k => [k, true])));   // arranca compactado
   const isCol  = k => !!collapsed[k];
   const toggle = k => setCollapsed(c => ({ ...c, [k]: !c[k] }));
   const allCol = ALLKEYS.every(k => collapsed[k]);
@@ -652,7 +697,7 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
       filas.push({ kind: "spacer" });
       filas.push({ kind: "banda", amber: true, label: "Sin clasificar (fuera del P&L de la sede)" });
       for (const [name, arr] of Object.entries(sinClasView))
-        filas.push({ kind: "cuenta", label: name, cur: arr, prev: ZERO12, pol: 1, color: "#b45309" });
+        filas.push({ kind: "cuenta", label: nombreCuenta(name), cur: arr, prev: ZERO12, pol: 1, color: "#b45309" });
     }
 
     // Celdas de una fila de cesión (violeta, con signo). Stock (saldo) → la col TOTAL muestra el saldo final.
@@ -766,20 +811,22 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
 // ─── P&L HUERGO (Wellness Real Estate, anillo 1) — negocio de MARGEN, no sede ──────────────────────
 // Estructura simple (no waterfall de sede): Ingresos (lo que paga el edificio) − Costos (horas de coaches)
 // = Margen. Agrupa dinámico por cuenta: inRows→Ingresos, egRows→Costos (así no hay que hardcodear cuentas).
-function buildPnLHuergo(inRows, egRows, ccFilter, year, moneda) {
+function buildPnLHuergo(inRows, egRows, ccFilter, year, moneda, sinIva = false) {
   const ingresos = {}, costos = {};
-  const add = (rows, bucket) => {
+  const ivaDeb = new Array(12).fill(0), ivaCred = new Array(12).fill(0);   // ingreso → débito, costo → crédito
+  const add = (rows, bucket, esIng) => {
     for (const row of rows) {
       if (!row.fecha || row.fecha < PNL_INICIO || row.fecha.slice(0, 4) !== String(year)) continue;
       if ((row.moneda ?? "ARS") !== moneda) continue;
       if (!ccEnFiltro(ccFilter, row.centro_costo)) continue;
       const m = parseInt(row.fecha.slice(5, 7), 10) - 1; if (m < 0 || m > 11) continue;
       const nombre = (row.cuenta_contable ?? "").trim() || "Sin cuenta";
-      (bucket[nombre] ??= new Array(12).fill(0))[m] += Number(row.total) || 0;
+      (bucket[nombre] ??= new Array(12).fill(0))[m] += montoPnL(row, sinIva);
+      if (sinIva) (esIng ? ivaDeb : ivaCred)[m] += Number(row.iva_monto) || 0;
     }
   };
-  add(inRows, ingresos); add(egRows, costos);
-  return { ingresos, costos };
+  add(inRows, ingresos, true); add(egRows, costos, false);
+  return { ingresos, costos, ivaDeb, ivaCred };
 }
 function computeSubtotalsHuergo(pnl) {
   const sumB = obj => MESES.map((_, m) => Object.values(obj).reduce((s, a) => s + (a[m] || 0), 0));
@@ -788,7 +835,8 @@ function computeSubtotalsHuergo(pnl) {
   const months = new Set(); const curM = new Date().getMonth();
   for (let i = 0; i <= curM; i++) months.add(i);
   [pnl.ingresos, pnl.costos].forEach(o => Object.values(o).forEach(a => a.forEach((v, i) => { if (v) months.add(i); })));
-  return { totIng, totCos, margen, activeMonths: [...months].sort((a, b) => a - b) };
+  return { totIng, totCos, margen, ivaDeb: pnl.ivaDeb || new Array(12).fill(0), ivaCred: pnl.ivaCred || new Array(12).fill(0),
+           activeMonths: [...months].sort((a, b) => a - b) };
 }
 function PnLTableHuergo({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolucion", mes = 0 }) {
   const { totIng, totCos, margen, activeMonths: _amRaw } = sub;
@@ -883,7 +931,7 @@ const BIGG_GRUPOS = [
 // Hardcodeado a propósito: es presentación, bajo riesgo (un nombre que no matchea solo se ordena último).
 const BIGG_ORDEN = [
   "Regalias s/Ventas", "Licencia Uso de Marca", "Equipamientos", "Coorporativos (Gympass)",
-  "APP (Gympass)", "Sponsor", "Acciones de Mkt", "Otros Ingresos",
+  "Coorporativos", "APP (Gympass)", "Sponsor", "Acciones de Mkt", "Otros Ingresos",
 ];
 
 // Familia del centro (dimensión que separa los subgrupos). Devuelve null si no clasifica.
@@ -904,9 +952,13 @@ const FAM_A_ING = { gerenciamiento: "ger", wre: "wre", hq: "hq" };   // familia 
 // otros. Las fondeadas (anillo 2: España/Colombia/Puertos) y administradas (anillo 3: Rosedal) NO se
 // consolidan línea por línea — su P&L es de esa sociedad; al núcleo solo le entra el fee (cargado en
 // una sociedad núcleo). Un centro sin `empresa` (HQ/transversal) cuenta como núcleo.
-function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, moneda) {
+function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, moneda, sinIva = false) {
   const grupos = {}; for (const g of BIGG_GRUPOS) grupos[g.key] = {};
   const sinClasificar = {};
+  // IVA embebido (solo modo sin IVA): débito de ventas y crédito de compras, con signo "de caja"
+  // (crédito compras = entra, + ; débito ventas = sale, −). Suman al resultado igual que hoy (el neto
+  // restituye el IVA → Resultado del Grupo da IGUAL con/sin IVA), pero se muestran con su signo natural.
+  const ivaDeb = new Array(12).fill(0), ivaCred = new Array(12).fill(0);
   const add = (rows, forcedSide) => {
     for (const row of rows) {
       if (!row.fecha || row.fecha < PNL_INICIO || row.fecha.slice(0, 4) !== String(year)) continue;
@@ -922,7 +974,7 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
       const catPnl  = normCat(meta?.categoria_pnl);                            // "ventas" | "costo_venta" | …
       const catRaw  = (meta?.categoria_pnl ?? "").toLowerCase();               // crudo, para financieros/impuestos
       const catSede = (meta?.categoria_pnl_sede ?? "").trim().toLowerCase();   // "ventas" | "otros ingresos" | "costo por venta"
-      let gkey = null, rowKey = cuenta, val = Number(row.total) || 0;
+      let gkey = null, rowKey = cuenta, val = montoPnL(row, sinIva), neg = false;
       if (fam === "propios") {
         // Sede propia: en el HOLDING entra como RESULTADO (línea "Sedes Propias Argentina", vía su propio
         // motor) → ningún bucket de sede alimenta el holding. Su costo por venta va a "Gastos Sedes Propias"
@@ -936,9 +988,13 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
         // computeSubtotalsHolding) evita el doble conteo — antes un costo con categoria "costo_venta" caía en
         // gpv y se restaba dos veces (una en el margen WRE, otra en Gastos por Ventas del holding).
         gkey = FAM_A_ING[fam]; if (gkey === "wre") rowKey = cc?.nombre ?? cuenta;
+      } else if (ING_CONTRA_HQ.has(cuenta)) {
+        gkey = "hq";                                      // netea en Ingresos
+        rowKey = ING_CONTRA_HQ.get(cuenta) || cuenta;     // MISMA fila que su ingreso par → una sola línea neta
+        if (forcedSide !== "ingreso") { val = -val; neg = true; }   // el costo (egreso) RESTA al ingreso
       } else if (catPnl === "costo_venta") {
         gkey = "gpv";                                     // COSTO por venta → Gastos por Ventas: Interusos, Fee Fact.
-        if (forcedSide === "ingreso") val = -val;         // lado ingreso de una cuenta intermediada = contra → neto en gpv
+        if (forcedSide === "ingreso") { val = -val; neg = true; }   // lado ingreso de una cuenta intermediada = contra → neto en gpv
       } else if (forcedSide === "ingreso" || catPnl === "ventas") {
         if (fam) { gkey = FAM_A_ING[fam]; if (gkey === "wre") rowKey = cc?.nombre ?? cuenta; }   // VENTA → Ingresos HQ/ger/wre
       } else if (GPV_COSTO_EGRESO.has(cuenta)) {
@@ -954,11 +1010,22 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
       const bucket = gkey ? grupos[gkey] : sinClasificar;
       if (!bucket[rowKey]) bucket[rowKey] = new Array(12).fill(0);
       bucket[rowKey][m] += val;
+      // IVA stripped (solo Sin IVA) SOLO de los buckets HQ que consolida el holding (hq/gpv/ghq/fin/imp) —
+      // sede/WRE/gerenciamiento reportan su IVA por su propio motor, no acá. Se clasifica por el signo con
+      // que la línea entra al Resultado del Grupo: revenue (+) → débito ventas, costo (−) → crédito compras.
+      // Así Σ(débito) − Σ(crédito) = impacto de HQ en el resultado, y el puente cierra por construcción.
+      if (sinIva && HQ_IVA_BUCKETS.has(gkey)) {
+        const contribSign = gkey === "hq" ? (neg ? -1 : 1) : gkey === "gpv" ? (neg ? 1 : -1) : -1;
+        (contribSign > 0 ? ivaDeb : ivaCred)[m] += Number(row.iva_monto) || 0;
+      }
     }
   };
   add(inRows, "ingreso"); add(egRows, null);
-  return { grupos, sinClasificar };
+  return { grupos, sinClasificar, ivaDeb, ivaCred };
 }
+
+// Buckets HQ que el holding consolida línea por línea (para acumular su IVA acá; sede/WRE/ger lo hacen aparte).
+const HQ_IVA_BUCKETS = new Set(["hq", "gpv", "ghq", "fin", "imp"]);
 
 // Orden de los centros dentro de "Gastos HQ" (display).
 const BIGG_ORDEN_GHQ = ["HQ - Sport", "HQ - Tecnologia", "HQ - Ventas y Operaciones", "17 - Huergo",
@@ -968,6 +1035,11 @@ const BIGG_ORDEN_GPV = ["Interusos", "Acciones de Mkt", "Coorporativos (Gympass)
 // Cuentas intermediadas: su VENTA es ingreso HQ, pero su COMPRA (egreso) es costo por venta (pega en margen).
 // La pauta se le vende a franquiciados y se compra a Meta/Google → el egreso va a Gastos por Ventas, no a OPEX.
 const GPV_COSTO_EGRESO = new Set(["Acciones de Mkt"]);
+// Ingreso intermediado que netea DENTRO de Ingresos (no en Gastos por Ventas): su costo entra como
+// contra (−) EN LA MISMA FILA que su ingreso par → una sola línea neta. Ej.: "Interusos" (costo) se
+// suma a la fila "Coorporativos" → Coorporativos − Interusos. Margen y resultados NO cambian.
+// Mapa: cuenta contra → fila de ingreso donde netea.
+const ING_CONTRA_HQ = new Map([["Interusos", "Coorporativos"]]);
 const BIGG_ORDEN_FIN = ["Intereses Ganados", "Perdidas Financieras"];
 const BIGG_ORDEN_IMP = ["Plan Facilidades AFIP", "IVA", "IVA Inversiones", "IVA Compra", "Ganancias", "Otros Impuestos"];
 
@@ -979,24 +1051,39 @@ const BIGG_FEE_CUENTAS = ["Fee de Gestion y Adm", "Fee de Gestion y Adm (Huergo)
 // Convención de signo: igual que computeSubtotalsBigg (ingresos +, gastos/fin/imp positivos y se RESTAN).
 function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) {
   const Z = () => new Array(12).fill(0);
-  const sar = resSedesAR || Z(), fg = feeGer || Z(), wre = resWRE || Z();
+  // Cada negocio operativo llega como objeto { res, ivaDeb, ivaCred } (su resultado neto + el IVA que le sacó
+  // a sus líneas). El holding suma esos IVA como cualquier otra línea → el empate Con/Sin sale por construcción.
+  const cRes = c => (c && c.res) || Z(), cDeb = c => (c && c.ivaDeb) || Z(), cCred = c => (c && c.ivaCred) || Z();
+  const sar = cRes(resSedesAR), fg = cRes(feeGer), wre = cRes(resWRE);
   const omit = (obj, keys) => Object.fromEntries(Object.entries(obj || {}).filter(([k]) => !keys.includes(k)));
   const sumG = obj => MESES.map((_, m) => Object.values(obj || {}).reduce((s, a) => s + (a[m] || 0), 0));
   const hqAccounts  = omit(pnl.grupos.hq,  BIGG_FEE_CUENTAS);    // ingresos HQ sin las fees de operación
   const ghqAccounts = omit(pnl.grupos.ghq, ["17 - Huergo"]);     // opex HQ sin Huergo (ya está en WRE)
   const gpvAccounts = pnl.grupos.gpv;                            // costo por venta HQ: Interusos, Fee Fact., compra Pauta
+  const impuestos = sumG(pnl.grupos.imp);   // tributos reales (IVA saldo, Ganancias, etc.)
   const ingHQ = sumG(hqAccounts), gpv = sumG(gpvAccounts), opexHQ = sumG(ghqAccounts),
-        financieros = sumG(pnl.grupos.fin), impuestos = sumG(pnl.grupos.imp);
+        financieros = sumG(pnl.grupos.fin);
   const resOperaciones = MESES.map((_, m) => sar[m] + fg[m] + wre[m]);
   const resOpMasIngHQ  = MESES.map((_, m) => resOperaciones[m] + ingHQ[m]);   // Total Ingresos (waterfall corriente)
   const margen         = MESES.map((_, m) => resOpMasIngHQ[m] - gpv[m]);      // Margen de Contribución
   const resOpGrupo     = MESES.map((_, m) => margen[m] - opexHQ[m]);
   const resAntesImp    = MESES.map((_, m) => resOpGrupo[m] - financieros[m]);
-  const resGrupo       = MESES.map((_, m) => resAntesImp[m] - impuestos[m]);
+  const resGrupoNeto   = MESES.map((_, m) => resAntesImp[m] - impuestos[m]);   // sin las líneas de IVA
+  // IVA (solo modo Sin IVA): las líneas operativas van NETAS; las dos líneas de IVA devuelven el IVA embebido
+  // → el Resultado del Grupo da IGUAL que Con IVA por construcción (sacar el IVA línea por línea y sumarlo
+  // abajo = identidad). Débito (ventas, +) y Crédito (compras, −) son la columna REAL de IVA del núcleo
+  // (cruzable AFIP): se suman de cada negocio (Sedes con el 49% de Barrio Norte cedido, Huergo, Gerenciamiento)
+  // + HQ. No hay plug ni ancla: Débito − Crédito = el IVA que efectivamente se le sacó al resultado.
+  const D = MESES.map((_, m) => cDeb(resSedesAR)[m] + cDeb(feeGer)[m] + cDeb(resWRE)[m] + (pnl.ivaDeb || Z())[m]);
+  const C = MESES.map((_, m) => cCred(resSedesAR)[m] + cCred(feeGer)[m] + cCred(resWRE)[m] + (pnl.ivaCred || Z())[m]);
+  const ivaDeb  = D;                    // mostrado sumando (+)
+  const ivaCred = C.map(v => -v);       // mostrado restando (−)
+  const resGrupo = MESES.map((_, m) => resGrupoNeto[m] + D[m] - C[m]);
   const months = new Set(); const cur = new Date().getMonth();
   for (let i = 0; i <= cur; i++) months.add(i);
   [sar, fg, wre, ingHQ, gpv, opexHQ, financieros, impuestos].forEach(a => a.forEach((v, i) => { if (v) months.add(i); }));
   return { sar, fg, wre, hqAccounts, ghqAccounts, gpvAccounts, ingHQ, gpv, opexHQ, financieros, impuestos,
+           ivaDeb, ivaCred,
            resOperaciones, resOpMasIngHQ, margen, resOpGrupo, resAntesImp, resGrupo, activeMonths: [...months].sort((a, b) => a - b) };
 }
 
@@ -1008,7 +1095,7 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
   const activeMonths = mesesVisibles(_amRaw, year);
   const ncols = activeMonths.length + 2;
   const ALLKEYS = ["sec_op", "sec_ing", "sec_gpv", "sec_opex", "sec_fin", "sec_imp"];
-  const [collapsed, setCollapsed] = useState({});
+  const [collapsed, setCollapsed] = useState(() => Object.fromEntries(ALLKEYS.map(k => [k, true])));   // arranca compactado
   const isCol  = k => !!collapsed[k];
   const toggle = k => setCollapsed(c => ({ ...c, [k]: !c[k] }));
   const allCol = ALLKEYS.every(k => collapsed[k]);
@@ -1017,6 +1104,13 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
   const sec = (key, label, accounts, order, neg = false) => <PnlSection sub label={label} accounts={accounts}
     order={order} color={SEDE_HDR} activeMonths={activeMonths} ncols={ncols} neg={neg}
     expanded={!isCol(key)} onToggle={() => toggle(key)} />;
+
+  // Sección Impuestos: sumarizador = contribución del bloque (IVA débito + crédito − tributos reales);
+  // adentro las dos líneas de IVA (solo Sin IVA) + los tributos reales. Render a mano (no `sec`) por los
+  // signos mixtos: IVA débito (+) / crédito (−) / tributos (neg).
+  const ivaOn = sub.ivaDeb?.some(v => v) || sub.ivaCred?.some(v => v);
+  const taxRows = Object.entries(pnl.grupos.imp || {}).sort(ordCmp(BIGG_ORDEN_IMP));
+  const impBlockTot = MESES.map((_, m) => (sub.ivaDeb?.[m] || 0) + (sub.ivaCred?.[m] || 0) - (sub.impuestos?.[m] || 0));
 
   if (activeMonths.length === 0) return (
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
@@ -1071,7 +1165,18 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
           {/* Debajo del operativo: financieros e impuestos del grupo, en una línea al final */}
           {sec("sec_fin", "Financieros", pnl.grupos.fin, BIGG_ORDEN_FIN, true)}
           <ResultadoRow label="Resultado antes de Impuestos" values={resAntesImp} activeMonths={activeMonths} />
-          {sec("sec_imp", "Impuestos", pnl.grupos.imp, BIGG_ORDEN_IMP, true)}
+          {/* Sección IMPUESTOS = sumarizador arriba (contribución del bloque al resultado), y adentro:
+              IVA Débito (ventas, +) / IVA Crédito (compras, −) [solo Sin IVA] + los tributos reales (−).
+              Con las dos líneas de IVA, el Resultado del Grupo da IGUAL que Con IVA (el IVA embebido vuelve). */}
+          <SubSectionRow label="Impuestos" values={impBlockTot} activeMonths={activeMonths} color={SEDE_HDR}
+            expanded={!isCol("sec_imp")} onToggle={() => toggle("sec_imp")} />
+          {!isCol("sec_imp") && <>
+            {ivaOn && <>
+              <DataRow label="IVA Débito (ventas)"   values={sub.ivaDeb}  activeMonths={activeMonths} color={SEDE_HDR} />
+              <DataRow label="IVA Crédito (compras)" values={sub.ivaCred} activeMonths={activeMonths} color={SEDE_HDR} />
+            </>}
+            {taxRows.map(([n, v]) => <DataRow key={n} label={n} values={v} activeMonths={activeMonths} color={SEDE_HDR} neg />)}
+          </>}
           <ResultadoRow strong label="Resultado del Grupo" values={resGrupo} activeMonths={activeMonths} />
         </tbody>
       </table>
@@ -1153,6 +1258,13 @@ function PnLTable({ pnl, sub, year, moneda, label }) {
 }
 
 // ─── PnlSection ───────────────────────────────────────────────────────────────
+// Comparador de cuentas: por `order` (índice explícito) y luego alfabético; sin `order`, alfabético.
+const ordCmp = (order) => ([a], [b]) => {
+  if (order) { const ia = order.indexOf(a), ib = order.indexOf(b);
+    return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib) || a.localeCompare(b); }
+  return a.localeCompare(b);
+};
+
 function PnlSection({ label, accounts, activeMonths, color, ncols, sub, order, expanded: expandedProp, onToggle, neg = false }) {
   const [expandedState, setExpandedState] = useState(true);
   // Controlado si viene onToggle (lo maneja el toggle maestro); si no, estado interno (como antes).
@@ -1160,11 +1272,7 @@ function PnlSection({ label, accounts, activeMonths, color, ncols, sub, order, e
   const expanded = controlled ? expandedProp : expandedState;
   const toggle = controlled ? onToggle : () => setExpandedState(e => !e);
   // `order` (opcional) = orden explícito de cuentas; sin él, alfabético (comportamiento previo).
-  const rows = Object.entries(accounts).sort(([a],[b]) => {
-    if (order) { const ia = order.indexOf(a), ib = order.indexOf(b);
-      return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib) || a.localeCompare(b); }
-    return a.localeCompare(b);
-  });
+  const rows = Object.entries(accounts).sort(ordCmp(order));
   const subTotals = MESES.map((_,m) => rows.reduce((s,[,v]) => s + (v[m] || 0), 0));
   return (
     <>
@@ -2283,10 +2391,12 @@ function WipReport({ tab }) {
 export default function PantallaReportes({ sociedad = "nako" }) {
   const [activeTab,      setActiveTab]      = useState(null);   // null = menú-landing de reportes
   const [vistaPnl,       setVistaPnl]       = useState("evolucion");   // P&L Sedes: evolucion | mensual | ytd
+  const [sinIva,         setSinIva]         = useState(() => { try { return localStorage.getItem("pnlSinIva") === "1"; } catch { return false; } });   // toggle Con/Sin IVA (recordado)
   const [mesSel,         setMesSel]         = useState(new Date().getMonth());   // mes para vistas mensual/ytd
   const [year,           setYear]           = useState(CUR_YEAR);
   const [selectedSedeCCs, setSelectedSedeCCs] = useState(null);   // null = todas · [] = ninguna · [ids] = subconjunto
   const [sedeOpen,        setSedeOpen]        = useState(false);
+  useEffect(() => { try { localStorage.setItem("pnlSinIva", sinIva ? "1" : "0"); } catch {} }, [sinIva]);
   const [monedaPL,       setMonedaPL]       = useState("ARS");
   const [monedaCF,       setMonedaCF]       = useState("ARS");
   const [rawEg,     setRawEg]     = useState([]);
@@ -2389,6 +2499,11 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     () => new Map((cuentas ?? []).map(c => [c.nombre, c])),
     [cuentas]
   );
+  // id de cuenta → nombre (para mostrar nombre en "Sin clasificar" cuando el movimiento guardó el id).
+  const nombreCuenta = useMemo(() => {
+    const byId = new Map((cuentas ?? []).map(c => [c.id, c.nombre]));
+    return (x) => byId.get(x) || x;
+  }, [cuentas]);
 
   // rawMovs se carga group-level (todas las sociedades) para el P&L Sedes/BIGG.
   // La lente "Por sociedad" (Cash Flow / Balance / Evolución PN) filtra a la sociedad activa client-side.
@@ -2515,14 +2630,14 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const ingDetalle = useMemo(() => [...inConFranq, ...gastoMovRows.filter(r => r._tipo === "Ingreso" || r._tipo === "Retención")], [inConFranq, gastoMovRows]);
 
   const pnlSede = useMemo(
-    () => buildPnLSede(inConFranq, egConSueldos, resolvedCCSede, year, monedaPL),
-    [inConFranq, egConSueldos, resolvedCCSede, year, monedaPL]
+    () => buildPnLSede(inConFranq, egConSueldos, resolvedCCSede, year, monedaPL, sinIva),
+    [inConFranq, egConSueldos, resolvedCCSede, year, monedaPL, sinIva]
   );
 
   // Año anterior (mismos arrays, filtrados a year-1) → comparativas Mensual/YTD sin fetch extra.
   const pnlSedePrev = useMemo(
-    () => buildPnLSede(inConFranq, egConSueldos, resolvedCCSede, year - 1, monedaPL),
-    [inConFranq, egConSueldos, resolvedCCSede, year, monedaPL]
+    () => buildPnLSede(inConFranq, egConSueldos, resolvedCCSede, year - 1, monedaPL, sinIva),
+    [inConFranq, egConSueldos, resolvedCCSede, year, monedaPL, sinIva]
   );
   const subSede     = useMemo(() => computeSubtotalsSede(pnlSede), [pnlSede]);
   const subSedePrev = useMemo(() => computeSubtotalsSede(pnlSedePrev), [pnlSedePrev]);
@@ -2549,36 +2664,41 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const bnCcId = useMemo(() => ccs.find(c => _nkSede(c.nombre).includes(_nkSede(CESION.matchNombre)))?.id, [ccs]);
 
   // Línea "Sedes Propias Argentina" = resultado de las sedes AR NETO del 49% de la cesión de Barrio Norte.
+  // Devuelve { res, ivaDeb, ivaCred }: el IVA de sede se cede en la misma proporción (51% de Barrio Norte).
   const resSedesAR = useMemo(() => {
     if (!isBigg) return null;
-    const rfAR = computeSubtotalsSede(buildPnLSede(inConFranq, egConSueldos, arNucleoCCs, year, monedaPL)).resFinal;
-    const rfBN = bnCcId ? computeSubtotalsSede(buildPnLSede(inConFranq, egConSueldos, [bnCcId], year, monedaPL)).resFinal : new Array(12).fill(0);
-    return rfAR.map((v, m) => v - CESION.pct * (Number(rfBN[m]) || 0));
-  }, [isBigg, inConFranq, egConSueldos, arNucleoCCs, bnCcId, year, monedaPL]);
+    const sAR = computeSubtotalsSede(buildPnLSede(inConFranq, egConSueldos, arNucleoCCs, year, monedaPL, sinIva));
+    const sBN = bnCcId ? computeSubtotalsSede(buildPnLSede(inConFranq, egConSueldos, [bnCcId], year, monedaPL, sinIva)) : null;
+    const ceder = (ar, bn) => ar.map((v, m) => v - CESION.pct * (Number(bn?.[m]) || 0));
+    return { res: ceder(sAR.resFinal, sBN?.resFinal), ivaDeb: ceder(sAR.ivaDeb, sBN?.ivaDeb), ivaCred: ceder(sAR.ivaCred, sBN?.ivaCred) };
+  }, [isBigg, inConFranq, egConSueldos, arNucleoCCs, bnCcId, year, monedaPL, sinIva]);
 
   // Línea "Gerenciamiento (Rosedal)" = fee interco Ñako→Segui (cuenta "Fee de Gestion y Adm" exacta, núcleo).
+  // Es venta → su IVA es débito (ivaCred = 0).
   const feeGer = useMemo(() => {
     if (!isBigg) return null;
-    const t = new Array(12).fill(0);
+    const res = new Array(12).fill(0), ivaDeb = new Array(12).fill(0);
     for (const r of inConFranq) {
       if (_nkSede(r.cuenta_contable) !== _nkSede("Fee de Gestion y Adm")) continue;
       if (!nucleoEmpresas.has((r.sociedad ?? "").trim())) continue;
       if (!r.fecha || r.fecha < PNL_INICIO || r.fecha.slice(0, 4) !== String(year)) continue;
       if ((r.moneda ?? "ARS") !== monedaPL) continue;
-      const m = parseInt(r.fecha.slice(5, 7), 10) - 1; if (m >= 0 && m < 12) t[m] += Number(r.total) || 0;
+      const m = parseInt(r.fecha.slice(5, 7), 10) - 1;
+      if (m >= 0 && m < 12) { res[m] += montoPnL(r, sinIva); if (sinIva) ivaDeb[m] += Number(r.iva_monto) || 0; }
     }
-    return t;
-  }, [isBigg, inConFranq, nucleoEmpresas, year, monedaPL]);
+    return { res, ivaDeb, ivaCred: new Array(12).fill(0) };
+  }, [isBigg, inConFranq, nucleoEmpresas, year, monedaPL, sinIva]);
 
-  // Línea "Wellness Real Estate" = margen de Huergo (+ Puertos a futuro).
-  const resWRE = useMemo(
-    () => isBigg ? computeSubtotalsHuergo(buildPnLHuergo(inConFranq, egConSueldos, huergoCCs, year, monedaPL)).margen : null,
-    [isBigg, inConFranq, egConSueldos, huergoCCs, year, monedaPL]
-  );
+  // Línea "Wellness Real Estate" = margen de Huergo (+ Puertos a futuro). { res, ivaDeb, ivaCred }.
+  const resWRE = useMemo(() => {
+    if (!isBigg) return null;
+    const s = computeSubtotalsHuergo(buildPnLHuergo(inConFranq, egConSueldos, huergoCCs, year, monedaPL, sinIva));
+    return { res: s.margen, ivaDeb: s.ivaDeb, ivaCred: s.ivaCred };
+  }, [isBigg, inConFranq, egConSueldos, huergoCCs, year, monedaPL, sinIva]);
 
   const pnlBigg = useMemo(
-    () => isBigg ? buildPnLBigg(inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL) : null,
-    [isBigg, inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL]
+    () => isBigg ? buildPnLBigg(inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva) : null,
+    [isBigg, inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva]
   );
   const subBigg = useMemo(
     () => pnlBigg ? computeSubtotalsHolding(pnlBigg, { resSedesAR, feeGer, resWRE }) : null,
@@ -2682,7 +2802,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         padding: "12px 16px", boxShadow: "0 1px 3px rgba(0,0,0,.04)",
       }}>
         {/* Año */}
-        <div>
+        <div style={{ order: isSedeLike ? 2 : 0 }}>
           <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
             textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Año</label>
           <select value={year} onChange={e => setYear(Number(e.target.value))} style={selStyle}>
@@ -2690,9 +2810,9 @@ export default function PantallaReportes({ sociedad = "nako" }) {
           </select>
         </div>
 
-        {/* Moneda — P&L */}
+        {/* Moneda — P&L (en sede, arranca el grupo derecho) */}
         {showMonedaPL && (
-          <div>
+          <div style={{ order: isSedeLike ? 4 : 0, marginLeft: (isSedeLike || isBigg) ? "auto" : undefined }}>
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Moneda</label>
             <select value={monedaPL} onChange={e => setMonedaPL(e.target.value)} style={selStyle}>
@@ -2700,6 +2820,15 @@ export default function PantallaReportes({ sociedad = "nako" }) {
                 <option key={k} value={k}>{v} {k}</option>
               ))}
             </select>
+          </div>
+        )}
+
+        {/* IVA — P&L Sedes/BIGG: ver con IVA o neto (EBITDA real). A la derecha, junto a Moneda. */}
+        {(isSedeLike || isBigg) && (
+          <div style={{ order: 5 }}>
+            <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
+              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>IVA</label>
+            <IvaToggle value={sinIva} onChange={setSinIva} />
           </div>
         )}
 
@@ -2724,7 +2853,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
         {/* Mes — solo para vistas comparativas (Mensual / YTD) */}
         {isPnlTiempo && vistaPnl !== "evolucion" && (
-          <div>
+          <div style={{ order: isSedeLike ? 3 : 0 }}>
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Mes</label>
             <select value={mesSel} onChange={e => setMesSel(Number(e.target.value))} style={selStyle}>
@@ -2735,7 +2864,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
         {/* Sedes dropdown — jerárquico: Operación (agrupador) › Sede */}
         {showSedes && (
-          <div ref={sedeRef} style={{ position: "relative" }}>
+          <div ref={sedeRef} style={{ position: "relative", order: isSedeLike ? 1 : 0 }}>
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Operaciones / Sedes</label>
             <button onClick={() => setSedeOpen(o => !o)} style={{
@@ -2812,7 +2941,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
              universo de sedes (scopeEmpresas) + cola de impuestos en Fondeadas ── */}
       {isSedeLike && (
         <PnLTableSede pnl={pnlSede} sub={subSede} pnlPrev={pnlSedePrev} subPrev={subSedePrev}
-          vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL}
+          vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} nombreCuenta={nombreCuenta}
           cesion={cesionSede} impuestos={isFond ? IMPUESTOS_FOND : null} netoLabel={fondCfg?.netoLabel}
           label={selectedSedeCCs === null ? "Todas las Sedes"
             : selectedSedeCCs.length === 0 ? "Ninguna sede"
