@@ -1975,7 +1975,7 @@ export function pendientesInterco({ comps = [], clientes = [], sociedades = [], 
 // Reconocer una venta interco = registrar MI compra (factura de proveedor / CxP) en mi sociedad,
 // con MIS cuenta+centro, contraparte = la sociedad vendedora, y link `interco_ref=<id_comp venta>`
 // (así el pendiente desaparece y no se re-crea). Queda como FC por pagar (EGRESO sin pago).
-export async function reconocerVentaInterco({ sociedad, ventaIdComp, vendedorId = "", vendedorNombre = "", cuenta_contable, centro_costo = "", total, moneda = "ARS", fecha, nroComp = "", subtipo = "EGRESO" }) {
+export async function reconocerVentaInterco({ sociedad, ventaIdComp, vendedorId = "", vendedorNombre = "", cuenta_contable, cuenta_contable_id = "", centro_costo = "", total, moneda = "ARS", fecha, nroComp = "", subtipo = "EGRESO" }) {
   // subtipo="EGRESO" (default): lo que le compro/debo a la contraparte → CxP. subtipo="INGRESO": un crédito a
   // mi favor (ej. NC de interuso que Ñako me emite) → lo reconozco como venta/ingreso a mi cuenta → CxC.
   const id_comp = newId(subtipo === "INGRESO" ? "IN" : "EG");
@@ -1985,6 +1985,7 @@ export async function reconocerVentaInterco({ sociedad, ventaIdComp, vendedorId 
     subtipo,
     contraparte_id: vendedorId, contraparte_nombre: vendedorNombre,
     cuenta_contable: String(cuenta_contable || "").replace(/^CUENTA_/, ""),
+    cuenta_contable_id: String(cuenta_contable_id || ""),
     centro_costo, subtotal: t, iva_rate: 0, iva_monto: 0, total: t,
     moneda, nro_comp: nroComp, nota: `interco_ref=${ventaIdComp}`,
     created_at: new Date().toISOString(),

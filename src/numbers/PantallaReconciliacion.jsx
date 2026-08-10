@@ -29,6 +29,15 @@ import { parseBBVA } from "./parsers/bbva";
 import { parseMercadoPago } from "./parsers/mercadopago";
 import { clasificarLineas, clasificarLinea, reconocerCuota } from "./reconciliacion/ruleEngine";
 
+// Fecha de comprobante → ISO (YYYY-MM-DD). Los pendientes de Franquicias vienen DD/MM/YYYY; guardarlos así
+// rompe el filtro de fecha del P&L (que compara ISO). Ya-ISO se respeta; vacío/inválido → hoy.
+const fechaComprobanteISO = (d) => {
+  const s = String(d || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const [dd, mm, yy] = s.split("/");
+  return (yy && mm && dd) ? `${yy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}` : new Date().toISOString().slice(0, 10);
+};
+
 const TIPO_LABEL = {
   impuesto: "Impuesto", comision: "Comisiones", interes: "Interés", servicio: "Servicio",
   transferencia_interna: "Transf. interna", ingreso: "Ingreso", financiacion: "Financiación",
@@ -390,8 +399,9 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     if (p.tratamiento === "gestion") await reconocerInterusoGestion(p, { cuenta, centro });
     else await reconocerVentaInterco({
       sociedad, ventaIdComp: p.id_comp, vendedorId: p.vendedor, vendedorNombre: p.vendedorNombre,
-      cuenta_contable: cuenta, centro_costo: centro, total: p.total, moneda: p.moneda,
-      fecha: new Date().toISOString().slice(0, 10), nroComp: p.nroComp, subtipo: p.subtipo || "EGRESO",
+      cuenta_contable: cuenta, cuenta_contable_id: cuentaIdPorNombre(cuenta),   // persistir el id, no solo el nombre
+      centro_costo: centro, total: p.total, moneda: p.moneda,
+      fecha: fechaComprobanteISO(p.fecha), nroComp: p.nroComp, subtipo: p.subtipo || "EGRESO",   // fecha del doc (Franquicias, DD/MM/YYYY→ISO), no hoy
     });
   };
   const aceptarUno = async (p) => {
