@@ -26,6 +26,7 @@ import { parseGalicia } from "./parsers/galicia";
 import { parseInterAudi } from "./parsers/interaudi";
 import { parseCaixa } from "./parsers/caixa";
 import { parseBBVA } from "./parsers/bbva";
+import { parseSantander } from "./parsers/santander";
 import { parseMercadoPago } from "./parsers/mercadopago";
 import { clasificarLineas, clasificarLinea, reconocerCuota } from "./reconciliacion/ruleEngine";
 
@@ -802,6 +803,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         const data = /interaudi/i.test(banco) ? await parseInterAudi(file)
           : /caixa/i.test(banco) ? await parseCaixa(file)
           : /bbva/i.test(banco) ? await parseBBVA(file)
+          : /santander/i.test(banco) ? await parseSantander(file)
           : await parseGalicia(file);
         const ctx = { banco: cta?.banco, sociedad, pais: "", franquicias, sociedades, cuentas: cuentasAll, moneda, cuotasPendientes };
         lineas = clasificarLineas(data.lineas, reglas, proveedores, ctx);
