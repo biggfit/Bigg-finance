@@ -460,8 +460,16 @@ function buildPnLSede(inRows, egRows, ccFilter, year, moneda, sinIva = false) {
       const gkey   = SEDE_CUENTA_A_GRUPO.get(_nkSede(nombre));
       const bucket = gkey ? grupos[gkey] : sinClasificar;
       if (!bucket[nombre]) bucket[nombre] = new Array(12).fill(0);
-      bucket[nombre][m] += montoPnL(row, sinIva);
-      if (sinIva && gkey) (SEDE_ING_KEYS.has(gkey) ? ivaDeb : ivaCred)[m] += Number(row.iva_monto) || 0;
+      // Un COMPROBANTE cuyo subtipo no coincide con la naturaleza del grupo es CONTRA: un EGRESO (factura de
+      // compra) en una cuenta de INGRESO (ej. Interusos) RESTA; un INGRESO en una cuenta de costo, resta. Así
+      // el interuso netea (+ cobrado / − pagado, clearing de la sede). Los movimientos (sin subtipo) mantienen
+      // su signo — ya vienen firmados desde movimientoToPnLRows.
+      const st = String(row.subtipo || "").toUpperCase();
+      const esEg = st === "EGRESO", esIn = st === "INGRESO", enIng = SEDE_ING_KEYS.has(gkey);
+      const contra = !!gkey && ((esEg && enIng) || (esIn && !enIng));
+      bucket[nombre][m] += montoPnL(row, sinIva) * (contra ? -1 : 1);
+      // IVA: comprobante ingreso → débito, egreso → crédito; movimiento (sin subtipo) → por grupo.
+      if (sinIva && gkey) ((esIn ? true : esEg ? false : enIng) ? ivaDeb : ivaCred)[m] += Number(row.iva_monto) || 0;
     }
   };
   add(inRows); add(egRows);
