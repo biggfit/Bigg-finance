@@ -606,7 +606,7 @@ function celdasSede(cols, cur, prev, pol, o) {
   });
 }
 
-function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista = "evolucion", mes = 0, cesion = null, impuestos = null, netoLabel = "Resultado Neto" }) {
+function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista = "evolucion", mes = 0, cesion = null, impuestos = null, netoLabel = "Resultado Neto", nombreCuenta = (x) => x }) {
   const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths: _amRaw } = sub;
   const activeMonths = mesesVisibles(_amRaw, year);
 
@@ -689,7 +689,7 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
       filas.push({ kind: "spacer" });
       filas.push({ kind: "banda", amber: true, label: "Sin clasificar (fuera del P&L de la sede)" });
       for (const [name, arr] of Object.entries(sinClasView))
-        filas.push({ kind: "cuenta", label: name, cur: arr, prev: ZERO12, pol: 1, color: "#b45309" });
+        filas.push({ kind: "cuenta", label: nombreCuenta(name), cur: arr, prev: ZERO12, pol: 1, color: "#b45309" });
     }
 
     // Celdas de una fila de cesión (violeta, con signo). Stock (saldo) → la col TOTAL muestra el saldo final.
@@ -2491,6 +2491,11 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     () => new Map((cuentas ?? []).map(c => [c.nombre, c])),
     [cuentas]
   );
+  // id de cuenta → nombre (para mostrar nombre en "Sin clasificar" cuando el movimiento guardó el id).
+  const nombreCuenta = useMemo(() => {
+    const byId = new Map((cuentas ?? []).map(c => [c.id, c.nombre]));
+    return (x) => byId.get(x) || x;
+  }, [cuentas]);
 
   // rawMovs se carga group-level (todas las sociedades) para el P&L Sedes/BIGG.
   // La lente "Por sociedad" (Cash Flow / Balance / Evolución PN) filtra a la sociedad activa client-side.
@@ -2928,7 +2933,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
              universo de sedes (scopeEmpresas) + cola de impuestos en Fondeadas ── */}
       {isSedeLike && (
         <PnLTableSede pnl={pnlSede} sub={subSede} pnlPrev={pnlSedePrev} subPrev={subSedePrev}
-          vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL}
+          vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} nombreCuenta={nombreCuenta}
           cesion={cesionSede} impuestos={isFond ? IMPUESTOS_FOND : null} netoLabel={fondCfg?.netoLabel}
           label={selectedSedeCCs === null ? "Todas las Sedes"
             : selectedSedeCCs.length === 0 ? "Ninguna sede"
