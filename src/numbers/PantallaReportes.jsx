@@ -626,7 +626,7 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
 
   // Colapso jerárquico: bandas de sección (Ingresos / Gastos Op) + cada sub-grupo + toggle maestro.
   const ALLKEYS = ["sec_ing", "sec_gop", ...SEDE_GRUPOS.map(g => g.key)];
-  const [collapsed, setCollapsed] = useState({});
+  const [collapsed, setCollapsed] = useState(() => Object.fromEntries(ALLKEYS.map(k => [k, true])));   // arranca compactado
   const isCol  = k => !!collapsed[k];
   const toggle = k => setCollapsed(c => ({ ...c, [k]: !c[k] }));
   const allCol = ALLKEYS.every(k => collapsed[k]);
@@ -1087,7 +1087,7 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
   const activeMonths = mesesVisibles(_amRaw, year);
   const ncols = activeMonths.length + 2;
   const ALLKEYS = ["sec_op", "sec_ing", "sec_gpv", "sec_opex", "sec_fin", "sec_imp"];
-  const [collapsed, setCollapsed] = useState({});
+  const [collapsed, setCollapsed] = useState(() => Object.fromEntries(ALLKEYS.map(k => [k, true])));   // arranca compactado
   const isCol  = k => !!collapsed[k];
   const toggle = k => setCollapsed(c => ({ ...c, [k]: !c[k] }));
   const allCol = ALLKEYS.every(k => collapsed[k]);
