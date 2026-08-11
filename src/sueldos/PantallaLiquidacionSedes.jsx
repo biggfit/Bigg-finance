@@ -863,7 +863,13 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         const efectivo = e.cerrada
           ? (Number(e._efCong) || 0)
           : Math.max(0, e.total - e.monto_haberes - e.monto_deposito - e.monto_transferencia);
-        return { ...e, monto_efectivo: efectivo, pendiente: e.total - e.total_pagado };
+        // Cerrada → el pendiente (columna + botón Pagar) se mide contra el total CONGELADO
+        // (baldes de banco + efectivo congelado), no el total del roster en vivo, que deriva y
+        // muestra pendientes fantasma en coaches ya pagados. Borrador → total en vivo.
+        const totalPend = e.cerrada
+          ? (e.monto_haberes + e.monto_deposito + e.monto_transferencia + efectivo)
+          : e.total;
+        return { ...e, monto_efectivo: efectivo, pendiente: totalPend - e.total_pagado };
       });
     return sortByRol(arr);
   }, [rows, legajos, pagos, calcTotal, novsByRowKey]);
