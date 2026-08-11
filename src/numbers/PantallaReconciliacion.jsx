@@ -235,8 +235,13 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], planCuentas = [],
           monto: Number(monto), moneda: monedaCta, costo: Number(costo) || 0, costo_cuenta: costoCuenta, parked_leg_id: pend.id,
         });
       }
-      await onDone();
-    } catch (e) { setBusy(false); alert("No se pudo declarar: " + (e?.message || e)); }
+      await onDone();   // refresca la CC + cierra el modal
+    } catch (e) {
+      // La escritura pudo quedar a medias (GAS/proxy con hipo). Refrescamos y cerramos IGUAL para no dejar
+      // la ventana colgada; avisamos para que verifiques el saldo antes de reintentar (evita doble carga).
+      alert("Puede que se haya guardado parcialmente (error de red/servidor):\n" + (e?.message || e) + "\n\nRefrescá y verificá el saldo antes de reintentar.");
+      try { await onDone(); } catch {}
+    } finally { setBusy(false); }
   };
 
   const inp = MODAL_INP, lbl = MODAL_LBL;
