@@ -84,6 +84,9 @@ export function derivarSaldos({
   }
 
   // ── Cuentas con saldo calculado desde movimientos ──
+  // Una cuenta puesta como inactiva (activo=false) se OCULTA, pero SOLO si quedó en $0: si todavía
+  // tiene saldo la seguimos mostrando para no esconder plata del total (desactivar ≠ borrar el saldo).
+  const cuentaInactiva = (c) => c.activo === false || /^(false|no|0)$/i.test(String(c.activo ?? "").trim());
   const cuentas = cuentasBancarias
     .filter(c => (c.sociedad ?? "").toLowerCase() === _soc)
     .map(cuenta => {
@@ -91,7 +94,8 @@ export function derivarSaldos({
         m.cuenta_bancaria === cuenta.id && !esIgnorado(m) && (!corte || (m.fecha ?? "") <= corte));
       const saldo = movsCuenta.reduce((s, m) => s + (Number(m.monto) || 0), 0);
       return { ...cuenta, tipo: (cuenta.tipo ?? "").toLowerCase(), saldo };
-    });
+    })
+    .filter(c => !cuentaInactiva(c) || Math.abs(Number(c.saldo) || 0) > 0.005);
 
   const cuentaById     = new Map(cuentasContables.map(c => [c.id, c]));
   const cuentaByNombre = new Map(cuentasContables.map(c => [(c.nombre ?? "").toLowerCase(), c]));
