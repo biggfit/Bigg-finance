@@ -392,7 +392,24 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
       const totalPagado = pagosMios.reduce((s, p) => s + p.monto, 0);
       const total_bruto = lineas.reduce((s, l) => s + (Number(l.importe) || 0), 0);
       // Cerrada → novedades CONGELADAS en la liquidación (líneas); borrador → su_novedades en vivo.
-      const novsMios = isCerrada(liq?.estado) ? (liq.novedades || []) : (novByLegajo.get(leg.id) || []);
+      const masterNovs = novByLegajo.get(leg.id) || [];
+      const novsBase = isCerrada(liq?.estado) ? (liq.novedades || []) : masterNovs;
+      // Alias de pago por novedad = su propio id + los ids del maestro su_novedades con la MISMA
+      // cuenta contable. Los pagos hechos ANTES de cerrar apuntan al id maestro (NOV-…), que al
+      // congelar la novedad se reemplaza por el id de línea (…-L0x) → sin esto, ese pago queda
+      // huérfano y la novedad se ve impaga aunque esté saldada. Se adjunta solo a la PRIMERA
+      // novedad de cada cuenta (si hubiera varias del mismo tipo) para no duplicar; el total igual
+      // se deduplica en sumPagosSinDuplicar.
+      const ccVisto = new Set();
+      const novsMios = novsBase.map(n => {
+        const cc = String(n.cuenta_contable_id || "");
+        let alias = [];
+        if (cc && !ccVisto.has(cc)) {
+          ccVisto.add(cc);
+          alias = masterNovs.filter(m => String(m.cuenta_contable_id || "") === cc).map(m => String(m.id));
+        }
+        return { ...n, _idsPago: [...new Set([String(n.id), ...alias])] };
+      });
       const total_novedades = novsMios.reduce((s, n) => s + (Number(n.monto) || 0), 0);
       return {
         id:                  liq?.id,                   // undefined ⇒ liquidación virtual (aún no cerrada)
@@ -1441,32 +1458,61 @@ function exportarMonotributoEfectivo(liqs, mes, anio) {
 
 // ── Paso 3: Registrar pagos ───────────────────────────────────────────────────
 
-// Líneas con id sintético (derivadas del legajo, no persistidas): leg-/auto-/fp-.
-// Su id se regenera entre cargas, así que un pago no puede anclarse a él de forma
-// estable; se matchea por tipo de forma de pago.
-const esLineaSintetica = (id) => /^(leg-|auto-|fp-)/.test(String(id));
+// Id de forma de pago PROVISORIO (pre-cierre): leg-/auto-/fp-/FP-LEG-. Es el id inestable
+// al que apunta un pago hecho antes de cerrar; al cerrar, la línea se regenera con id
+// persistido (LIQ-…-L0x) y el pago queda "huérfano". SOLO estos re-anclan por tipo — un id
+// persistido de OTRA liquidación (LIQ-…) NO, para no robar pagos entre liquidaciones/sedes.
+const esIdProvisional = (id) => /^(leg-|auto-|fp-|FP-LEG-)/i.test(String(id));
 // Pago de novedad: id con prefijo "NOV-" (ver newId("NOV") en sueldosApi). Estos
 // pertenecen a otra cuenta contable y nunca deben aparecer bajo una línea de sueldo.
 const esPagoDeNovedad = (id) => /^NOV-/.test(String(id));
 
-// Pagos asociados a una línea. Para líneas persistidas: match exacto por
-// forma_pago_id. Si no matchea Y la línea es sintética (id inestable entre cargas,
-// p. ej. la liquidación se reabrió y el id real al que apuntaba el pago ya no existe):
-// match por tipo_componente, excluyendo pagos de novedades y pagos que ya tengan
-// dueño exacto en OTRA línea (evita contar el mismo pago dos veces cuando hay
-// varias líneas del mismo tipo, p. ej. dos transferencias a cuentas distintas).
-// Una línea con id persistido que simplemente no tiene pago propio NO hereda el
-// pago de una línea hermana del mismo tipo.
+// Pagos asociados a una línea = los que apuntan a su id (byId) + los HUÉRFANOS de su tipo.
+// Un huérfano es un pago cuyo forma_pago_id NO matchea ninguna línea actual: pasa cuando la
+// liquidación se cerró (o reabrió y volvió a cerrar) y las líneas se regeneraron con ids nuevos
+// (LIQ-…-L0x), dejando al pago —hecho antes, con el id provisorio leg-/fp-— apuntando a un id
+// muerto. La clave estable NO es el id volátil de la línea sino (liquidación + tipo_componente),
+// así que el huérfano se re-ancla por tipo. Con varias líneas del mismo tipo, los huérfanos se
+// reparten por IMPORTE (cada línea toma el pago de su monto; los sobrantes a la primera) para que
+// el desglose por línea sea prolijo; el total del tipo no cambia (colState deduplica aguas arriba
+// en sumPagosSinDuplicar). Excluye pagos de novedades (van por getPagosNovedad, cuenta aparte).
 function getPagosLinea(liq, linea) {
   const pagos = liq.pagos || [];
   const byId = linea.id ? pagos.filter(p => String(p.forma_pago_id) === String(linea.id)) : [];
-  if (byId.length) return byId;
-  if (!esLineaSintetica(linea.id)) return [];
-  const idsPropios = new Set((liq.lineas || []).map(l => String(l.id)));
-  return pagos.filter(p =>
+  // "Propios" = ids de TODAS las filas persistidas de la liquidación (formas + novedades):
+  // un pago que apunta explícito a una de ellas pertenece a esa fila y NO debe re-anclarse
+  // por tipo a una hermana. Incluir las novedades es clave: el pago de una novedad (p. ej.
+  // Monotributo, que sale por efectivo) NO debe ser absorbido además por la línea Efectivo.
+  const idsPropios = new Set([
+    ...(liq.lineas || []).map(l => String(l.id)),
+    ...(liq.novedades || []).map(n => String(n.id)),
+  ]);
+  // Huérfanos del tipo: pagos pre-cierre con id provisorio (leg-/fp-/FP-LEG-) sin dueño actual —
+  // NO un LIQ-… de otra liquidación/sede, ni un pago de novedad.
+  const orfanT = pagos.filter(p =>
     p.tipo_componente === linea.tipo &&
+    esIdProvisional(p.forma_pago_id) &&
     !esPagoDeNovedad(p.forma_pago_id) &&
     !idsPropios.has(String(p.forma_pago_id)));
+  if (!orfanT.length) return byId;
+  // Reparto determinístico entre las líneas del mismo tipo: el pago pre-cierre no guarda a qué
+  // línea fue, pero su importe coincide con el de su línea → cada línea (que no tenga pago propio)
+  // toma el huérfano de igual importe; los sobrantes caen en la primera. NO cambia el total del
+  // tipo (colState suma con dedup), solo ordena el desglose por línea y evita el +/− fantasma
+  // entre hermanas de la misma forma.
+  const mismasTipo = (liq.lineas || []).filter(l => l.tipo === linea.tipo);
+  const pool = orfanT.map(p => ({ p, used: false }));
+  const asign = new Map();
+  for (const l of mismasTipo) {
+    if (pagos.some(p => String(p.forma_pago_id) === String(l.id))) { asign.set(String(l.id), []); continue; }
+    const imp = Math.abs(Number(l.importe) || 0);
+    const hit = pool.find(d => !d.used && Math.abs(Math.abs(Number(d.p.monto) || 0) - imp) < 1);
+    if (hit) hit.used = true;
+    asign.set(String(l.id), hit ? [hit.p] : []);
+  }
+  const sobra = pool.filter(d => !d.used).map(d => d.p);
+  if (sobra.length && mismasTipo[0]) asign.get(String(mismasTipo[0].id)).push(...sobra);
+  return [...byId, ...(asign.get(String(linea.id)) || [])];
 }
 
 // Suma pagos de varios ítems sin contar el mismo movimiento dos veces (defensa extra
@@ -1489,8 +1535,13 @@ function sumPagosSinDuplicar(gruposDePagos) {
 // Requiere la columna forma_pago_id en nb_movimientos; sin ella el pago no se puede
 // anclar a una novedad concreta (dos novedades iguales serían indistinguibles).
 function getPagosNovedad(liq, nov) {
-  if (!nov.id) return [];
-  return (liq.pagos || []).filter(p => String(p.forma_pago_id) === String(nov.id));
+  // Matchea por el set de ids de la novedad (su id de línea congelada + los ids maestro NOV-…
+  // de su misma cuenta, ver _idsPago en el memo liqs). Cubre pagos hechos antes y después de
+  // cerrar, que apuntan a ids distintos de la misma novedad.
+  const ids = (nov._idsPago && nov._idsPago.length ? nov._idsPago : (nov.id ? [nov.id] : [])).map(String);
+  if (!ids.length) return [];
+  const set = new Set(ids);
+  return (liq.pagos || []).filter(p => set.has(String(p.forma_pago_id)));
 }
 
 function describirDestino(l, nombreEmpleado = "") {
