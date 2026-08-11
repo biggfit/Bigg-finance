@@ -11,7 +11,6 @@ const FORM_VACÍO = {
   fecha:        HOY,
   ctaOrigenId:  "",
   ctaDestinoId: "",
-  destinoSocId: "",          // modo park: sociedad destino (la otra declara su pata)
   monto:        "",
   nota:         "",
 };
@@ -75,10 +74,8 @@ export default function PantallaIntercompania({ sociedad, openNew, onOpenNewCons
 
   const esPark = form.modo === "park" && !editPatas;
   const canSave =
-    form.fecha && form.ctaOrigenId && montoN > 0 &&
-    (esPark
-      ? (form.destinoSocId && form.destinoSocId !== ctaOrigen?.sociedad)
-      : (form.ctaDestinoId && form.ctaOrigenId !== form.ctaDestinoId));
+    form.fecha && form.ctaOrigenId && form.ctaDestinoId &&
+    form.ctaOrigenId !== form.ctaDestinoId && montoN > 0;
 
   const _savingRef = useRef(false);
   async function handleGuardar() {
@@ -107,8 +104,9 @@ export default function PantallaIntercompania({ sociedad, openNew, onOpenNewCons
           cuenta_bancaria:  form.ctaOrigenId,
           moneda,
           monto:            -montoN,   // sale de mi caja (le puse plata → me la deben)
-          destino_sociedad: form.destinoSocId,
-          destino_nombre:   socNombre(form.destinoSocId),
+          destino_sociedad: ctaDestino.sociedad,
+          destino_nombre:   socNombre(ctaDestino.sociedad),
+          cuenta_destino:   form.ctaDestinoId,   // pista de la cuenta del otro lado (no crea su pata)
           nota:             form.nota,
         });
       } else {
@@ -197,7 +195,7 @@ export default function PantallaIntercompania({ sociedad, openNew, onOpenNewCons
             {!editPatas && (
               <div style={{ display:"flex", gap:8 }}>
                 {[["transfer", "Transferencia · misma moneda"], ["park", "Parkear 1 pata · distinta moneda"]].map(([m, l]) => (
-                  <button key={m} onClick={() => set("modo", m)} style={{
+                  <button key={m} onClick={() => setForm(f => ({ ...f, modo: m, ctaDestinoId: "" }))} style={{
                     flex:1, padding:"7px 10px", fontSize:12, fontWeight:700, borderRadius:8, cursor:"pointer", fontFamily:T.font,
                     border:`1px solid ${form.modo === m ? T.accentDark : T.cardBorder}`,
                     background: form.modo === m ? T.accentDark : "#fff", color: form.modo === m ? "#fff" : T.muted }}>{l}</button>
@@ -214,11 +212,11 @@ export default function PantallaIntercompania({ sociedad, openNew, onOpenNewCons
               options={ctasAgrupadas(allCuentas)} />
             {esPark ? (
               <>
-                <Select label="Entró a — sociedad (la otra pata)" required value={form.destinoSocId}
-                  onChange={v => set("destinoSocId", v)}
-                  options={SOCIEDADES.filter(s => s.id !== ctaOrigen?.sociedad).map(s => ({ value: s.id, label: s.nombre }))} />
+                <Select label="Entró a — cuenta (otra sociedad)" required value={form.ctaDestinoId}
+                  onChange={v => set("ctaDestinoId", v)}
+                  options={ctasAgrupadas(allCuentas.filter(c => c.sociedad !== ctaOrigen?.sociedad))} />
                 <div style={{ fontSize:11, color:T.muted, marginTop:-8 }}>
-                  Le ponés plata a <strong>{form.destinoSocId ? socNombre(form.destinoSocId) : "la otra sociedad"}</strong> (te la deben). Se registra <strong>solo tu pata</strong> en {moneda || "tu moneda"}; ella declara la suya en su moneda al conciliar — sin tipo de cambio.
+                  Le ponés plata a <strong>{ctaDestino ? socNombre(ctaDestino.sociedad) : "la otra sociedad"}</strong> (te la deben). Se registra <strong>solo tu pata</strong> en {moneda || "tu moneda"}; esa sociedad declara la suya (en {ctaDestino?.moneda || "su moneda"}) al conciliar — sin tipo de cambio.
                 </div>
               </>
             ) : (
