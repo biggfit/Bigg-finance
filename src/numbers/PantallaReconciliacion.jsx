@@ -563,24 +563,35 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     return lotesHaberes.find(L => Math.abs(L.total - t) <= Math.max(500, L.total * 0.01)) || null;
   };
 
-  // ── "Posible duplicado": una línea del extracto que coincide (fecha|monto) con un movimiento YA
-  // contabilizado en la MISMA cuenta. Cubre transferencias/interco (la pata ya existe al conciliar el
-  // otro banco), pagos de tarjeta ya cargados a mano, y cualquier otro movimiento previo. Se excluyen:
+  // ── "Posible duplicado": una línea del extracto que coincide con un movimiento YA contabilizado en
+  // la MISMA cuenta. Cubre transferencias/interco (la pata ya existe al conciliar el otro banco), pagos
+  // de tarjeta ya cargados a mano, y cualquier otro movimiento previo. Se excluyen:
   //   • las líneas de extracto todavía pendientes (origen="extracto" sin documento_id) → no se marcan
   //     entre sí ni a sí mismas; solo avisamos contra algo YA cargado en la caja.
   //   • las ignoradas (documento_id "IGN-…").
+  // Match: si el movimiento trae Nº de operación (MP lo guarda en extracto_saldo, formato
+  // "tipo|cuenta|centro|OP|monto"), se compara por OP → dos operaciones distintas del mismo día y
+  // monto NO son duplicado. Si no hay OP (Galicia/Santander, filas agregadas), cae a fecha + monto
+  // CON SIGNO → un ingreso y su reintegro del mismo importe (ej. +119.880 vs −119.880) no colisionan.
+  const opDe = (m) => (String(m.extracto_saldo || "").split("|")[3] || "").trim();
   const cajaKeys = useMemo(() => {
-    const s = new Set();
+    const ops = new Set(), amts = new Set();
     for (const m of movsCuenta) {
       if (String(m.cuenta_bancaria) !== String(cuentaTab)) continue;
       const doc = String(m.documento_id || "");
       const pendiente = m.origen === "extracto" && !doc;
       if (pendiente || doc.startsWith("IGN-")) continue;
-      s.add(`${m.fecha}|${Math.round(Math.abs(Number(m.monto) || 0))}`);
+      const op = opDe(m);
+      if (op) ops.add(op);
+      else amts.add(`${m.fecha}|${Math.round(Number(m.monto) || 0)}`);
     }
-    return s;
+    return { ops, amts };
   }, [movsCuenta, cuentaTab]);
-  const dupTransfer = (mov) => cajaKeys.has(`${mov.fecha}|${Math.round(Math.abs(Number(mov.monto) || 0))}`);
+  const dupTransfer = (mov) => {
+    const op = opDe(mov);
+    if (op) return cajaKeys.ops.has(op);
+    return cajaKeys.amts.has(`${mov.fecha}|${Math.round(Number(mov.monto) || 0)}`);
+  };
 
   // ── Imputar a factura: facturas de proveedor con saldo pendiente, de la moneda de la cuenta.
   const facturasPendientes = useMemo(() => {
