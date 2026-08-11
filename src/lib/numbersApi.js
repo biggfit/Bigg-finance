@@ -1182,11 +1182,14 @@ export async function ingestarResumenTarjeta({ sociedad, tarjeta = "", periodo =
       tipo: "EGRESO", cuenta_bancaria: l.cuenta_bancaria, cuenta_destino: "",
       cuenta_contable: String(l.cuenta_contable || "").replace(/^CUENTA_/, ""),
       centro_costo: l.centro_costo || "",
-      moneda: mon, monto: -monto, documento_id: "",
+      // Signo: consumo normal = siempre cargo (egreso, -monto). Una línea de AJUSTE (l.credito, ver
+      // MundoTarjeta → diferencia contra el TOTAL A PAGAR real del resumen) puede ir para el otro lado
+      // → conserva el signo pedido para que, al autorizarla, aceptarMovimiento la reconozca como INGRESO.
+      moneda: mon, monto: l.credito ? monto : -monto, documento_id: "",
       iva_rate: 0, iva_monto: 0,
       concepto: l.comercio || "",
       contraparte_id: "", contraparte_nombre: l.comercio || "",
-      referencia: `tc=${tarjeta};per=${periodo};com=${_normCom(l.comercio)};tit=${l.titular || ""}`,
+      referencia: `tc=${tarjeta};per=${periodo};com=${_normCom(l.comercio)};tit=${l.titular || ""}${l.ajuste ? ";ajuste=1" : ""}`,
       origen: "tarjeta", created_at: new Date().toISOString(),
     });
   }

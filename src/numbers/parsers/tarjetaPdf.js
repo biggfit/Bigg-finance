@@ -6,7 +6,11 @@
 //   "TARJETA NNNN Total Consumos de <NOMBRE> <tot pesos> <tot dólares>"
 // → el titular se autocompleta a las líneas del grupo. Moneda: USD si la línea trae
 // USD/EUR/COP (consumo en el exterior, importe billed en la columna DÓLARES), si no ARS.
-// Pagos e impuestos (SU PAGO, DEV.IMP RG) están ANTES del detalle → se ignoran.
+// Pagos e impuestos (SU PAGO, DEV.IMP RG) están ANTES del detalle → se ignoran. Cuando no cancelan
+// EXACTO el saldo anterior (ej. una devolución de RG5617 que sobra/falta unos pesos vs lo pagado),
+// dejan un remanente que el resumen sí mete en el TOTAL A PAGAR pero que estas líneas no explican
+// → se devuelve `totalAPagar` (el importe real) para que el caller pueda armar un ajuste por la
+// diferencia, en vez de tener que parsear esa sección (formato variable, no vale la pena).
 import { extractLines } from "./planPdf";
 
 const arNum = s => { const n = parseFloat(String(s).replace(/\./g, "").replace(",", ".")); return isNaN(n) ? 0 : n; };
@@ -33,9 +37,24 @@ function parseHeader(lines) {
   return { nroResumen: nro, fechaCierre, vto, periodo };
 }
 
+// "TOTAL A PAGAR" real del resumen (pesos + dólares) — el bank layout lo dibuja con un ícono al lado
+// de la etiqueta, lo que hace que pdfjs a veces ordene los 2 importes en la línea ANTERIOR a la del
+// label (mismo Y del ícono, no del texto). Se busca en una ventanita alrededor por si el orden cambia.
+function parseTotalAPagar(lines) {
+  const idx = lines.findIndex(l => /^TOTAL A PAGAR\b/i.test(l.trim()));
+  if (idx < 0) return null;
+  for (const i of [idx - 1, idx + 1, idx]) {
+    const ln = lines[i]; if (!ln) continue;
+    const amts = (ln.match(AMT) || []).map(arNum);
+    if (amts.length >= 2) return { ars: amts[0], usd: amts[1] };
+  }
+  return null;
+}
+
 export async function parseTarjetaPdf(file) {
   const lines = await extractLines(file);
   const header = parseHeader(lines);
+  const totalAPagar = parseTotalAPagar(lines);
   const out = [];
   let pending = [];
   let inDetalle = false;
@@ -80,5 +99,5 @@ export async function parseTarjetaPdf(file) {
     pending.push({ fecha: dm[1], comercio: desc.slice(0, 60), monto, moneda });
   }
   flush("");                                             // grupo final sin "Total Consumos" (impuestos)
-  return { lineas: out, header, controles };
+  return { lineas: out, header, controles, totalAPagar };
 }

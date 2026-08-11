@@ -331,7 +331,7 @@ function buildResumenSedes(emp, categorias, novList = []) {
   const acc = {
     fijo: 0, horasCant: 0, horasMonto: 0,
     cdpCoachCant: 0, cdpFrontCant: 0, cdpMonto: 0,
-    oneShotCant: 0, oneShotMonto: 0, asignaciones: 0, objGrupalMonto: 0, objGrupalPct: 0,
+    oneShotCant: 0, oneShotMonto: 0, asignaciones: 0, objGrupalMonto: 0, objGrupalPct: 0, objGrupalPcts: [],
     feriadosCant: 0, feriadosMonto: 0, domingosCant: 0, domingosMonto: 0,
     yogaCant: 0, yogaMonto: 0, runningCant: 0, runningMonto: 0, programaciones: 0, redondeo: 0, sueldoVariable: 0,
   };
@@ -363,7 +363,12 @@ function buildResumenSedes(emp, categorias, novList = []) {
                      "yogaCant","yogaMonto","runningCant","runningMonto","programaciones","redondeo","sueldoVariable"]) {
       acc[k] += d[k] || 0;
     }
-    if (d.objGrupalPct) acc.objGrupalPct = d.objGrupalPct;   // % (no se suma entre sedes; es la tasa aplicada)
+    if (d.objGrupalPct) {
+      acc.objGrupalPct = d.objGrupalPct;   // % (no se suma entre sedes; es la tasa aplicada)
+      const existente = acc.objGrupalPcts.find(o => o.pct === d.objGrupalPct);
+      if (existente) existente.monto += d.objGrupalMonto || 0;
+      else acc.objGrupalPcts.push({ pct: d.objGrupalPct, monto: d.objGrupalMonto || 0 });
+    }
     const sn = row.sede_nombre || "—";
     if (d.horasCant > 0) desgloseHoras.push({ sede: sn, cant: d.horasCant, tarifa: d.tarifaHora });
     if (d.yogaCant  > 0) desgloseHoras.push({ sede: sn, cant: d.yogaCant,  tarifa: d.tarifaYoga });
@@ -533,6 +538,11 @@ function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo }) {
   // Si hay más de una tarifa, el paréntesis explica cómo se compone (cant × $tarifa + …); si es una sola,
   // se cae al annotate de sedes (extra) porque Cant × Valor ya cuadra.
   const compHoras = composicionValor(resumen.desgloseHoras) || extra("horas");
+  // Objetivo grupal: si hubo más de una tasa (multi-sede con % distinto), mostrar todas en vez
+  // de solo la última aplicada (bug: antes se pisaba y se perdía la tasa de la otra sede).
+  const objGrupalTxt = resumen.objGrupalPcts?.length > 1
+    ? ` (${resumen.objGrupalPcts.map(o => `${fmtNum(o.pct)}%: ${fmt(o.monto)}`).join(" + ")})`
+    : resumen.objGrupalPct ? ` (${fmtNum(resumen.objGrupalPct)}%)` : "";
   return (
     <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={periodo} onImprimirTodo={onImprimirTodo}>
       <Section>
@@ -556,7 +566,7 @@ function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo }) {
             <Linea label={`CDP Coach${extra("cdpCoach")}`}      cant={resumen.cdpCoachCant} valor={resumen.tCdpCoach}     importe={resumen.cdpCoachCant * resumen.tCdpCoach} />
             <Linea label="Running" cant={resumen.runningCant} valor={resumen.tarifaRunning} importe={resumen.runningMonto} />
             <Linea label="Programaciones" importe={resumen.programaciones} />
-            <Linea label={`Comisión Grupal${resumen.objGrupalPct ? ` (${fmtNum(resumen.objGrupalPct)}%)` : ""}`}  importe={resumen.objGrupalMonto} />
+            <Linea label={`Comisión Grupal${objGrupalTxt}`}  importe={resumen.objGrupalMonto} />
             <Subtotal label="Sueldo Variable" importe={sueldoVariable} />
 
             <Subtotal label="Total Sueldo" importe={totalSueldo} fuerte />
