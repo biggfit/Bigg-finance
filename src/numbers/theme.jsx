@@ -127,6 +127,15 @@ export function Input({ label, value, onChange, placeholder, type="text", requir
 }
 
 export function Select({ label, value, onChange, options, required }) {
+  // Si alguna opción trae `group`, se renderiza con <optgroup> (mismo orden de aparición del grupo).
+  // Útil cuando el selector mezcla varias sociedades y sería imposible de buscar en una lista plana.
+  const agrupado = options.some(o => o && o.group);
+  const grupos = agrupado ? (() => {
+    const m = new Map();
+    for (const o of options) { const g = o.group || "—"; if (!m.has(g)) m.set(g, []); m.get(g).push(o); }
+    return [...m.entries()];
+  })() : null;
+  const opt = o => <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>;
   return (
     <div>
       <label style={{ fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:5 }}>
@@ -137,9 +146,9 @@ export function Select({ label, value, onChange, options, required }) {
           borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text,
           fontFamily:T.font, outline:"none", boxSizing:"border-box" }}>
         <option value="">— Seleccionar —</option>
-        {options.map(o => (
-          <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>
-        ))}
+        {agrupado
+          ? grupos.map(([g, opts]) => <optgroup key={g} label={g}>{opts.map(opt)}</optgroup>)
+          : options.map(opt)}
       </select>
     </div>
   );

@@ -12,7 +12,6 @@ const FORM_VACÍO = {
   ctaOrigenId:  "",
   ctaDestinoId: "",
   destinoSocId: "",          // modo park: sociedad destino (la otra declara su pata)
-  direccion:    "envio",     // modo park: "envio" = les puse plata (acreedor) · "recibo" = me pusieron (deudor)
   monto:        "",
   nota:         "",
 };
@@ -107,7 +106,7 @@ export default function PantallaIntercompania({ sociedad, openNew, onOpenNewCons
           fecha:            form.fecha,
           cuenta_bancaria:  form.ctaOrigenId,
           moneda,
-          monto:            form.direccion === "envio" ? -montoN : montoN,
+          monto:            -montoN,   // sale de mi caja (le puse plata → me la deben)
           destino_sociedad: form.destinoSocId,
           destino_nombre:   socNombre(form.destinoSocId),
           nota:             form.nota,
@@ -141,6 +140,16 @@ export default function PantallaIntercompania({ sociedad, openNew, onOpenNewCons
     const soc  = SOCIEDADES.find(s => s.id === c.sociedad);
     return `${icon} ${c.nombre} (${soc?.nombre ?? c.sociedad})`;
   };
+
+  // Opciones de cuenta AGRUPADAS por sociedad (optgroup), ordenadas por el orden de SOCIEDADES y
+  // luego por nombre → así el selector que mezcla todas las sociedades es buscable.
+  const ctasAgrupadas = (list) => [...list]
+    .sort((a, b) => {
+      const ia = SOCIEDADES.findIndex(s => s.id === a.sociedad), ib = SOCIEDADES.findIndex(s => s.id === b.sociedad);
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || String(a.nombre).localeCompare(String(b.nombre));
+    })
+    .map(c => ({ value: c.id, group: socNombre(c.sociedad),
+      label: `${TIPO_CUENTA[(c.tipo ?? "").toLowerCase()]?.icon ?? "💳"} ${c.nombre}` }));
 
   // Cuentas destino: OTRA sociedad y MISMA moneda que el origen (la transferencia no convierte).
   const cuentasDestino = useMemo(() =>
@@ -200,18 +209,16 @@ export default function PantallaIntercompania({ sociedad, openNew, onOpenNewCons
               <Input label={`Monto${moneda ? ` (${moneda})` : ""}`} required type="number"
                 value={form.monto} onChange={v => set("monto", v)} placeholder="0,00" />
             </div>
-            <Select label={esPark ? "Mi caja (de acá sale / acá entra la plata)" : "Salió de — cuenta"} required value={form.ctaOrigenId}
+            <Select label={esPark ? "Salió de — mi caja" : "Salió de — cuenta"} required value={form.ctaOrigenId}
               onChange={v => { set("ctaOrigenId", v); set("ctaDestinoId", ""); }}
-              options={allCuentas.map(c => ({ value: c.id, label: ctaLabel(c) }))} />
+              options={ctasAgrupadas(allCuentas)} />
             {esPark ? (
               <>
-                <Select label="Sociedad destino (la otra pata)" required value={form.destinoSocId}
+                <Select label="Entró a — sociedad (la otra pata)" required value={form.destinoSocId}
                   onChange={v => set("destinoSocId", v)}
                   options={SOCIEDADES.filter(s => s.id !== ctaOrigen?.sociedad).map(s => ({ value: s.id, label: s.nombre }))} />
-                <Select label="Dirección" required value={form.direccion} onChange={v => set("direccion", v)}
-                  options={[{ value:"envio", label:"Le puse plata (me la deben)" }, { value:"recibo", label:"Me pusieron plata (se la debo)" }]} />
                 <div style={{ fontSize:11, color:T.muted, marginTop:-8 }}>
-                  Se registra <strong>solo tu pata</strong> en {moneda || "tu moneda"}. La otra sociedad declara la suya en su moneda al conciliar — sin tipo de cambio.
+                  Le ponés plata a <strong>{form.destinoSocId ? socNombre(form.destinoSocId) : "la otra sociedad"}</strong> (te la deben). Se registra <strong>solo tu pata</strong> en {moneda || "tu moneda"}; ella declara la suya en su moneda al conciliar — sin tipo de cambio.
                 </div>
               </>
             ) : (
@@ -223,7 +230,7 @@ export default function PantallaIntercompania({ sociedad, openNew, onOpenNewCons
                 )}
                 <Select label="Entró a — cuenta" required value={form.ctaDestinoId}
                   onChange={v => set("ctaDestinoId", v)}
-                  options={cuentasDestino.map(c => ({ value: c.id, label: ctaLabel(c) }))} />
+                  options={ctasAgrupadas(cuentasDestino)} />
               </>
             )}
             <div>
