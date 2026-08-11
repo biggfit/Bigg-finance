@@ -40,6 +40,21 @@ const TIPO_CFG = {
 const TIPO_SIN_CONCILIAR = { bg:"#fee2e2", color:"#dc2626" };
 const esSinConciliar = (m) => m.origen === "extracto" && !String(m.documento_id || "");
 
+// Las patas de una TRF/CAMBIO/INTERCO/TARJETA comparten `documento_id` y, en las transferencias
+// manuales, además el mismo stem de id (`<sharedId>-E` / `-I`). El stem = documento_id si está,
+// si no el propio id sin el sufijo -E/-I. `patasDelPar` junta ambas patas por documento_id O por
+// stem del id → así, aunque una pata haya quedado sin documento_id (par roto), igual se emparejan
+// y no queda una contrapartida huérfana al borrar/editar.
+const stemPar = (m) => String(m?.documento_id || "") || String(m?.id || "").replace(/-[EI]$/, "");
+const patasDelPar = (mov, movs) => {
+  const stem = stemPar(mov);
+  if (!stem) return [mov];
+  return (movs || []).filter(m =>
+    String(m.documento_id || "") === stem ||
+    String(m.id || "") === stem ||
+    String(m.id || "").replace(/-[EI]$/, "") === stem);
+};
+
 
 /** Botones de barra — misma geometría; variante por intención */
 const tesoreriaActionBtn = {
@@ -1470,8 +1485,7 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
   // ── Editar un PAR local (transferencia propia / pago de tarjeta): abre el mismo modal con el que
   //    se creó, pre-cargado; al guardar, actualiza las 2 patas en su lugar. ──────────────────────
   const abrirEditarPar = (m) => {
-    const doc = String(m.documento_id || "");
-    const patas = movimientos.filter(x => String(x.documento_id || "") === doc);
+    const patas = patasDelPar(m, movimientos);   // por documento_id O stem del id (tolera par roto)
     if (m.tipo === "TRANSFERENCIA") {
       const salida = patas.find(p => Number(p.monto) < 0), entrada = patas.find(p => Number(p.monto) > 0);
       if (!salida || !entrada) return;
@@ -1543,9 +1557,8 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
     // o la contrapartida queda huérfana y sigue sumando al saldo (la transferencia se "duplica").
     // Solo se juntan las patas cargadas en la sociedad activa (interco cross-sociedad borra su lado).
     const PAREADO = ["TRANSFERENCIA", "INTERCOMPANIA", "CAMBIO", "PAGO_TARJETA"];
-    const doc = String(mov.documento_id || "");
-    const patas = (PAREADO.includes(mov.tipo) && doc)
-      ? movimientos.filter(m => String(m.documento_id || "") === doc)
+    const patas = PAREADO.includes(mov.tipo)
+      ? patasDelPar(mov, movimientos)   // por documento_id O stem del id (tolera par roto)
       : [mov];
     const extra = patas.length > 1 ? ` y su contrapartida (${patas.length} movimientos)` : "";
     if (!confirm(`¿Eliminar movimiento "${mov.concepto ?? mov.id}"${extra}?`)) return;
