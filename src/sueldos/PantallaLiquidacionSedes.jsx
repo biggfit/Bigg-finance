@@ -829,6 +829,12 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         if (isCerrada(r.estado)) map[ek].cerrada = true;
       }
 
+      // Efectivo CONGELADO de una fila CERRADA = escalar `monto_efectivo` (líneas de pago en
+      // efectivo, ya con redondeo) + sus novedades en efectivo (abajo). Es la fuente estable del
+      // pendiente de una liq cerrada; usarlo evita recalcular el efectivo del roster EN VIVO
+      // (horas × tarifas actuales), que deriva y muestra parciales fantasma en coaches ya pagados.
+      if (isCerrada(r.estado)) map[ek]._efCong = (map[ek]._efCong || 0) + (Number(r.monto_efectivo) || 0);
+
       // Novedades de esta fila (extra que suma). Van al total/pendiente del empleado y al
       // bucket de su forma de pago (para que aparezcan como pagables en Paso 5). El split del
       // sueldo (total_sueldo) NO las incluye: se congelan como líneas tipo "novedad" aparte.
@@ -844,13 +850,19 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
           map[ek].total_nov += monto;
           const b = NOV_FP_BUCKET[n.forma_pago] || "efectivo";
           if (b !== "efectivo" && !isCerrada(r.estado)) map[ek][`monto_${b}`] += monto;
+          // Novedad en efectivo de una fila cerrada → suma al efectivo congelado (no está en el escalar).
+          if (b === "efectivo" && isCerrada(r.estado)) map[ek]._efCong = (map[ek]._efCong || 0) + monto;
         }
         map[ek].novedades.push(...novsR);
       }
     });
     const arr = Object.values(map)
       .map(e => {
-        const efectivo  = Math.max(0, e.total - e.monto_haberes - e.monto_deposito - e.monto_transferencia);
+        // Cerrada → efectivo CONGELADO (lo que se liquidó y hay que pagar en cash). Borrador →
+        // efectivo en vivo = remanente del total. Evita el parcial fantasma por recálculo del roster.
+        const efectivo = e.cerrada
+          ? (Number(e._efCong) || 0)
+          : Math.max(0, e.total - e.monto_haberes - e.monto_deposito - e.monto_transferencia);
         return { ...e, monto_efectivo: efectivo, pendiente: e.total - e.total_pagado };
       });
     return sortByRol(arr);
@@ -2184,7 +2196,11 @@ function statsDesdePagoDraft(empls, pagoDraft) {
     const d    = pagoDraft[empl.legajo_id] || {};
     const hab  = Number(d.monto_haberes)       || 0;
     const mono = Number(d.monto_transferencia) || 0;
-    const eft  = Math.max(0, Math.ceil((empl.total - hab - mono) / 100) * 100);
+    // Cerrada → efectivo CONGELADO (empl.monto_efectivo, ya = lo liquidado). Borrador → remanente
+    // en vivo redondeado. Así una liq cerrada no muestra pendiente fantasma por recálculo del roster.
+    const eft  = empl.cerrada
+      ? (Number(empl.monto_efectivo) || 0)
+      : Math.max(0, Math.ceil((empl.total - hab - mono) / 100) * 100);
     s.haberes.total     += hab;
     s.monotributo.total += mono;
     s.efectivo.total    += eft;
