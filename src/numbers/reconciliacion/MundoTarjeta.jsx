@@ -232,7 +232,17 @@ export default function MundoTarjeta({ sociedad }) {
   // ingirió esta línea) — un resumen es un solo ciclo de facturación y todos sus consumos deben caer
   // en el mismo P&L salvo que alguien decida lo contrario a mano. Siempre editable.
   const periodoDe = m => edits[m.id]?.periodo_contable ?? (metaVal(m.referencia, "per") || "");
-  const completa = m => !!cuentaDe(m);   // cuenta obligatoria (centro recomendado)
+  // Solo cuentas de EGRESO: un consumo de tarjeta nunca se imputa contra una cuenta de Venta/Ingreso
+  // (ej. "Pauta" existe dos veces en el plan — una de Venta para lo que se le cobra a franquicias,
+  // otra de Gasto para lo que se gasta en publicidad — acá solo tiene sentido la segunda).
+  const cuentaOpts = useMemo(() => cuentas
+    .filter(c => { const t = (c.tipo ?? "").toLowerCase(); return t === "gasto" || t === "gastos" || t === "financiero" || t === "financieros"; })
+    .slice().sort((a, b) => String(a.nombre).localeCompare(String(b.nombre))), [cuentas]);
+  // Nombres válidos para el input con autocompletar (datalist): permite tipear y buscar, pero solo
+  // cuenta como "completa" si matchea EXACTO una cuenta real — evita que un typo quede como imputado.
+  const cuentaNombresSet = useMemo(() => new Set(cuentaOpts.map(c => c.nombre)), [cuentaOpts]);
+  // Cuenta obligatoria Y debe ser una cuenta real del plan (no cualquier texto tipeado) — centro recomendado.
+  const completa = m => cuentaNombresSet.has(cuentaDe(m));
 
   async function autorizar(m) {
     if (!completa(m)) return;
@@ -293,7 +303,6 @@ export default function MundoTarjeta({ sociedad }) {
   const totD = gruposTit.reduce((s, g) => s + g.d, 0);
 
   const listasCount = pendFiltrados.filter(completa).length;
-  const cuentaOpts = useMemo(() => cuentas.slice().sort((a, b) => String(a.nombre).localeCompare(String(b.nombre))), [cuentas]);
   const centroOpts = useMemo(() => centros.slice().sort((a, b) => String(a.nombre).localeCompare(String(b.nombre))), [centros]);
 
   return (
@@ -394,7 +403,7 @@ export default function MundoTarjeta({ sociedad }) {
                         <td style={{ padding: "5px 10px", color: T.muted, whiteSpace: "nowrap" }}>{g.tit || "—"}</td>
                         <td style={{ padding: "4px 8px" }}>
                           <select value={cuentaDe(m)} onChange={e => setEdit(m.id, "cuenta_contable", e.target.value)}
-                            style={fld(!!cuentaDe(m), 160)}>
+                            style={fld(completa(m), 160)}>
                             <option value="">— cuenta —</option>
                             {cuentaOpts.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
                           </select>
