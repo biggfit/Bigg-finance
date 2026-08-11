@@ -287,6 +287,11 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], planCuentas = [],
   );
 }
 
+// Centro de costo por defecto por sociedad en Conciliación. Sociedades de una sola sede
+// precargan ese centro en TODOS los movimientos (egresos e ingresos), en todas sus cuentas.
+// Ej.: Segui Fit → "06 - Palermo Rosedal". Para sumar otra, agregar { id_sociedad: id_centro }.
+const CENTRO_DEFAULT_SOCIEDAD = { "segui-fit": "cc-2026-rosedal" };
+
 export default function PantallaReconciliacion({ sociedad, onPendientes, mundo = "banco" }) {
   const [cuentas,    setCuentas]    = useState([]);
   const [cuentasAll, setCuentasAll] = useState([]); // todas las cuentas bancarias (todas las sociedades) para destino de transferencia
@@ -1228,6 +1233,23 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const pendCuenta = useMemo(
     () => pendientes.filter(m => !cuentaTab || String(m.cuenta_bancaria) === String(cuentaTab)),
     [pendientes, cuentaTab]);
+  // Centro por defecto de la sociedad (ej. Segui Fit → Rosedal): precarga ese centro en los
+  // pendientes que no traen uno. Toca `edits`, así lo toman tanto el select como el "Aceptar".
+  const centroDefaultSoc = CENTRO_DEFAULT_SOCIEDAD[sociedad] || "";
+  useEffect(() => {
+    if (!centroDefaultSoc) return;
+    setEdits(prev => {
+      let changed = false;
+      const next = { ...prev };
+      for (const m of pendCuenta) {
+        if (!next[m.id]?.centro_costo && !m.centro_costo) {
+          next[m.id] = { ...next[m.id], centro_costo: centroDefaultSoc };
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [pendCuenta, centroDefaultSoc]);
   // Grupos presentes en la cuenta (con conteo) para el desplegable del header.
   const gruposDisp = useMemo(() => {
     const o = {}; pendCuenta.forEach(m => { const g = grupoDe(m); o[g] = (o[g] || 0) + 1; });
