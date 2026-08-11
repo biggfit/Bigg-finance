@@ -1208,6 +1208,17 @@ export async function fetchPendientesTarjeta(sociedad) {
   return rows.filter(m => m.origen === "tarjeta" && !m.documento_id);
 }
 
+// Campos comunes de la pata PARKEADA (interco_park) — una sola fuente para el contrato que leen
+// lecturaInterco / intercoLedger / pendientesInterco (por origen + signo de la caja, sin P&L).
+// Lo usan el conciliador (edit de la línea del extracto) y el alta manual parkearIntercoManual (add).
+const intercoParkFields = ({ id, destino_sociedad = "", destino_nombre = "", cuenta_destino = "" }) => ({
+  tipo: "INTERCOMPANIA",
+  contraparte_id: destino_sociedad || "", contraparte_nombre: destino_nombre || "",
+  cuenta_contable: "", centro_costo: "",
+  cuenta_destino: cuenta_destino || "",   // hint: la cuenta del otro lado (no crea su pata)
+  documento_id: "INTERPARK-" + id, origen: "interco_park", referencia: "1",
+});
+
 // Acepta un movimiento pendiente: lo IMPUTA in-place y lo deja conciliado.
 // Una sola escritura (no crea comprobante): el movimiento es el hecho devengado+caja;
 // el P&L lo lee vía adapter por documento_id que empieza con "CONTAB-".
@@ -1261,11 +1272,7 @@ export async function aceptarMovimiento(mov, prop = {}) {
     // No hay contraparte parkeada → PARKEO: se registra SOLO mi pata (posición interco, lecturaInterco la
     // lee por origen). La otra sociedad la va a matchear/declarar cuando concilie su lado (espejo asistido).
     return post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
-      tipo: "INTERCOMPANIA",
-      contraparte_id: prop.destino_sociedad || "", contraparte_nombre: prop.destino_nombre || "",
-      cuenta_contable: "", centro_costo: "",
-      cuenta_destino: prop.cuenta_destino || "",   // hint: la cuenta única del otro lado (no crea pata)
-      documento_id: "INTERPARK-" + mov.id, origen: "interco_park", referencia: "1",
+      ...intercoParkFields({ id: mov.id, destino_sociedad: prop.destino_sociedad, destino_nombre: prop.destino_nombre, cuenta_destino: prop.cuenta_destino }),
       ...firma(),
     }});
   }
@@ -1920,12 +1927,8 @@ export async function parkearIntercoManual({ sociedad, fecha, cuenta_bancaria, m
   const dst = destino_nombre || destino_sociedad;
   const concepto = `Interco ${m < 0 ? "→" : "←"} ${dst}${nota ? " · " + nota : ""}`;
   await post({ action:"add", sheet:"nb_movimientos", row: {
-    id, sociedad, fecha, tipo:"INTERCOMPANIA",
-    cuenta_bancaria, cuenta_destino,
-    cuenta_contable:"", centro_costo:"",
-    moneda, monto: m,
-    contraparte_id: destino_sociedad, contraparte_nombre: destino_nombre || "",
-    documento_id:"INTERPARK-" + id, origen:"interco_park", referencia:"1",
+    id, sociedad, fecha, cuenta_bancaria, moneda, monto: m,
+    ...intercoParkFields({ id, destino_sociedad, destino_nombre, cuenta_destino }),
     concepto, nota, created_at: new Date().toISOString(),
     ...firma(),
   }});

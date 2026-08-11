@@ -1458,11 +1458,11 @@ function exportarMonotributoEfectivo(liqs, mes, anio) {
 
 // ── Paso 3: Registrar pagos ───────────────────────────────────────────────────
 
-// Id de forma de pago PROVISORIO (pre-cierre): leg-/auto-/fp-/FP-LEG-. Es el id inestable
-// al que apunta un pago hecho antes de cerrar; al cerrar, la línea se regenera con id
-// persistido (LIQ-…-L0x) y el pago queda "huérfano". SOLO estos re-anclan por tipo — un id
+// Id de forma de pago PROVISORIO (pre-cierre): leg-/auto-/fp- (el flag `i` cubre también FP-LEG-).
+// Es el id inestable al que apunta un pago hecho antes de cerrar; al cerrar, la línea se regenera
+// con id persistido (LIQ-…-L0x) y el pago queda "huérfano". SOLO estos re-anclan por tipo — un id
 // persistido de OTRA liquidación (LIQ-…) NO, para no robar pagos entre liquidaciones/sedes.
-const esIdProvisional = (id) => /^(leg-|auto-|fp-|FP-LEG-)/i.test(String(id));
+const esIdProvisional = (id) => /^(leg-|auto-|fp-)/i.test(String(id));
 // Pago de novedad: id con prefijo "NOV-" (ver newId("NOV") en sueldosApi). Estos
 // pertenecen a otra cuenta contable y nunca deben aparecer bajo una línea de sueldo.
 const esPagoDeNovedad = (id) => /^NOV-/.test(String(id));

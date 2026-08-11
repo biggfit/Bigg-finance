@@ -133,12 +133,6 @@ export default function PantallaIntercompania({ sociedad, openNew, onOpenNewCons
     }
   }
 
-  const ctaLabel = (c) => {
-    const icon = TIPO_CUENTA[(c.tipo ?? "").toLowerCase()]?.icon ?? "💳";
-    const soc  = SOCIEDADES.find(s => s.id === c.sociedad);
-    return `${icon} ${c.nombre} (${soc?.nombre ?? c.sociedad})`;
-  };
-
   // Opciones de cuenta AGRUPADAS por sociedad (optgroup), ordenadas por el orden de SOCIEDADES y
   // luego por nombre → así el selector que mezcla todas las sociedades es buscable.
   const ctasAgrupadas = (list) => [...list]
