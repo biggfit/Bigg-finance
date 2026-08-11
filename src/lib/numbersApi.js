@@ -1908,6 +1908,30 @@ export async function updateIntercompania({ salidaId, entradaId, fecha, socOrige
   return { ok:true };
 }
 
+// Alta MANUAL de una interco de UNA sola pata (PARKEAR), sin necesidad de una línea de extracto.
+// Para cross-moneda / fondeo (USD→EUR/COP): registro SOLO mi lado (mi caja, mi moneda) con el MISMO
+// shape que produce el conciliador (aceptarMovimiento branch interco_park). La otra sociedad declara
+// su pata en su moneda cuando concilia. Sin cuenta_contable → NO toca P&L; la posición la lee
+// lecturaInterco por origen="interco_park" + el signo de la caja.
+// monto FIRMADO: <0 salió de mi caja (les puse plata → soy acreedor) · >0 entró (me pusieron → soy deudor).
+export async function parkearIntercoManual({ sociedad, fecha, cuenta_bancaria, moneda, monto, destino_sociedad, destino_nombre = "", cuenta_destino = "", nota = "" }) {
+  const id  = newId("INTERPARK");
+  const m   = Number(monto) || 0;
+  const dst = destino_nombre || destino_sociedad;
+  const concepto = `Interco ${m < 0 ? "→" : "←"} ${dst}${nota ? " · " + nota : ""}`;
+  await post({ action:"add", sheet:"nb_movimientos", row: {
+    id, sociedad, fecha, tipo:"INTERCOMPANIA",
+    cuenta_bancaria, cuenta_destino,
+    cuenta_contable:"", centro_costo:"",
+    moneda, monto: m,
+    contraparte_id: destino_sociedad, contraparte_nombre: destino_nombre || "",
+    documento_id:"INTERPARK-" + id, origen:"interco_park", referencia:"1",
+    concepto, nota, created_at: new Date().toISOString(),
+    ...firma(),
+  }});
+  return { ok:true, id };
+}
+
 export const deleteIntercompania = _deleteMovRows;
 
 // Saldos de APERTURA interco (go-live): filas `origen="interco_apertura"` en nb_movimientos,

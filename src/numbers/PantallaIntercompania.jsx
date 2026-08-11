@@ -1,15 +1,18 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { T, Btn, Input, Select, PageHeader, fmtMoney } from "./theme";
 import { TIPO_CUENTA, SOCIEDADES } from "../data/tesoreriaData";
-import { appendIntercompania, updateIntercompania, fetchCuentasBancarias, fetchIntercoData, lecturaInterco } from "../lib/numbersApi";
+import { appendIntercompania, updateIntercompania, parkearIntercoManual, fetchCuentasBancarias, fetchIntercoData, lecturaInterco } from "../lib/numbersApi";
 import { sociedadNombreMap } from "./tesoreriaDerive";
 
 const HOY = new Date().toISOString().slice(0, 10);
 
 const FORM_VACÍO = {
+  modo:         "transfer",  // "transfer" = 2 patas misma moneda · "park" = 1 pata (cross-moneda / fondeo)
   fecha:        HOY,
   ctaOrigenId:  "",
   ctaDestinoId: "",
+  destinoSocId: "",          // modo park: sociedad destino (la otra declara su pata)
+  direccion:    "envio",     // modo park: "envio" = les puse plata (acreedor) · "recibo" = me pusieron (deudor)
   monto:        "",
   nota:         "",
 };
@@ -71,12 +74,12 @@ export default function PantallaIntercompania({ sociedad, openNew, onOpenNewCons
   const moneda     = ctaOrigen?.moneda ?? "";
   const montoN     = Number(form.monto) || 0;
 
+  const esPark = form.modo === "park" && !editPatas;
   const canSave =
-    form.fecha &&
-    form.ctaOrigenId &&
-    form.ctaDestinoId &&
-    form.ctaOrigenId !== form.ctaDestinoId &&
-    montoN > 0;
+    form.fecha && form.ctaOrigenId && montoN > 0 &&
+    (esPark
+      ? (form.destinoSocId && form.destinoSocId !== ctaOrigen?.sociedad)
+      : (form.ctaDestinoId && form.ctaOrigenId !== form.ctaDestinoId));
 
   const _savingRef = useRef(false);
   async function handleGuardar() {
@@ -96,6 +99,18 @@ export default function PantallaIntercompania({ sociedad, openNew, onOpenNewCons
           moneda,
           monto:      montoN,
           nota:       form.nota,
+        });
+      } else if (esPark) {
+        // 1 sola pata (cross-moneda / fondeo): registro MI lado; la otra sociedad declara el suyo.
+        await parkearIntercoManual({
+          sociedad:         ctaOrigen.sociedad,
+          fecha:            form.fecha,
+          cuenta_bancaria:  form.ctaOrigenId,
+          moneda,
+          monto:            form.direccion === "envio" ? -montoN : montoN,
+          destino_sociedad: form.destinoSocId,
+          destino_nombre:   socNombre(form.destinoSocId),
+          nota:             form.nota,
         });
       } else {
         await appendIntercompania({
@@ -164,28 +179,53 @@ export default function PantallaIntercompania({ sociedad, openNew, onOpenNewCons
           boxShadow:"0 20px 60px rgba(0,0,0,.25)", overflow:"hidden" }} onClick={e => e.stopPropagation()}>
           <div style={{ background:"#0e7490", padding:"14px 22px", display:"flex",
             justifyContent:"space-between", alignItems:"center" }}>
-            <span style={{ fontSize:15, fontWeight:800, color:"#fff" }}>{editPatas ? "Editar transferencia intercompañía" : "Nueva transferencia intercompañía"}</span>
+            <span style={{ fontSize:15, fontWeight:800, color:"#fff" }}>{editPatas ? "Editar transferencia intercompañía" : esPark ? "Parkear interco (una pata)" : "Nueva transferencia intercompañía"}</span>
             <button onClick={() => { setShowForm(false); setForm(FORM_VACÍO); setEditPatas(null); }}
               style={{ background:"transparent", border:"none", color:"rgba(255,255,255,.6)",
                 fontSize:20, cursor:"pointer", lineHeight:1 }}>✕</button>
           </div>
           <div style={{ padding:24, display:"flex", flexDirection:"column", gap:14 }}>
+            {!editPatas && (
+              <div style={{ display:"flex", gap:8 }}>
+                {[["transfer", "Transferencia · misma moneda"], ["park", "Parkear 1 pata · distinta moneda"]].map(([m, l]) => (
+                  <button key={m} onClick={() => set("modo", m)} style={{
+                    flex:1, padding:"7px 10px", fontSize:12, fontWeight:700, borderRadius:8, cursor:"pointer", fontFamily:T.font,
+                    border:`1px solid ${form.modo === m ? T.accentDark : T.cardBorder}`,
+                    background: form.modo === m ? T.accentDark : "#fff", color: form.modo === m ? "#fff" : T.muted }}>{l}</button>
+                ))}
+              </div>
+            )}
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
               <Input label="Fecha" required type="date" value={form.fecha} onChange={v => set("fecha", v)} />
               <Input label={`Monto${moneda ? ` (${moneda})` : ""}`} required type="number"
                 value={form.monto} onChange={v => set("monto", v)} placeholder="0,00" />
             </div>
-            <Select label="Salió de — cuenta" required value={form.ctaOrigenId}
+            <Select label={esPark ? "Mi caja (de acá sale / acá entra la plata)" : "Salió de — cuenta"} required value={form.ctaOrigenId}
               onChange={v => { set("ctaOrigenId", v); set("ctaDestinoId", ""); }}
               options={allCuentas.map(c => ({ value: c.id, label: ctaLabel(c) }))} />
-            {form.ctaOrigenId && (
-              <div style={{ fontSize:11, color:T.muted, marginTop:-8 }}>
-                Solo se muestran cuentas en <strong>{moneda}</strong> para la entrada
-              </div>
+            {esPark ? (
+              <>
+                <Select label="Sociedad destino (la otra pata)" required value={form.destinoSocId}
+                  onChange={v => set("destinoSocId", v)}
+                  options={SOCIEDADES.filter(s => s.id !== ctaOrigen?.sociedad).map(s => ({ value: s.id, label: s.nombre }))} />
+                <Select label="Dirección" required value={form.direccion} onChange={v => set("direccion", v)}
+                  options={[{ value:"envio", label:"Le puse plata (me la deben)" }, { value:"recibo", label:"Me pusieron plata (se la debo)" }]} />
+                <div style={{ fontSize:11, color:T.muted, marginTop:-8 }}>
+                  Se registra <strong>solo tu pata</strong> en {moneda || "tu moneda"}. La otra sociedad declara la suya en su moneda al conciliar — sin tipo de cambio.
+                </div>
+              </>
+            ) : (
+              <>
+                {form.ctaOrigenId && (
+                  <div style={{ fontSize:11, color:T.muted, marginTop:-8 }}>
+                    Solo se muestran cuentas en <strong>{moneda}</strong> para la entrada
+                  </div>
+                )}
+                <Select label="Entró a — cuenta" required value={form.ctaDestinoId}
+                  onChange={v => set("ctaDestinoId", v)}
+                  options={cuentasDestino.map(c => ({ value: c.id, label: ctaLabel(c) }))} />
+              </>
             )}
-            <Select label="Entró a — cuenta" required value={form.ctaDestinoId}
-              onChange={v => set("ctaDestinoId", v)}
-              options={cuentasDestino.map(c => ({ value: c.id, label: ctaLabel(c) }))} />
             <div>
               <label style={{ fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:5 }}>Observación</label>
               <textarea value={form.nota} onChange={e => set("nota", e.target.value)}
