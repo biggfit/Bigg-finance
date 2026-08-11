@@ -148,7 +148,7 @@ function MovimientoModal({ sociedad, cuentasBancarias, initial = null, editMode 
             <button onClick={onClose} style={{
               background:"#dc2626", border:"none", borderRadius:8, padding:"9px 20px",
               fontSize:13, fontWeight:700, color:"#fff", cursor:"pointer", fontFamily:T.font }}>Cancelar ✕</button>
-            <button onClick={() => { onSave(form); onClose(); }} disabled={!canSave} style={{
+            <button onClick={() => { onSave({ ...form, moneda: monedaSalida || form.moneda || "ARS" }); onClose(); }} disabled={!canSave} style={{
               background: canSave ? "#16a34a" : "#9ca3af", border:"none", borderRadius:8,
               padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff",
               cursor: canSave ? "pointer" : "default", fontFamily:T.font }}>{editMode ? "Guardar ✓" : "Crear ✓"}</button>
