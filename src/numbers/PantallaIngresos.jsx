@@ -954,7 +954,10 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
   };
 
   const handleCobro = async (data) => {
-    const ingreso = ingresos.find(i => i.id === data.ingresoId);
+    // En "Guardar y cobrar" el ingreso recién se creó y todavía NO está en `ingresos` (cargarIngresos
+    // es posterior) → find() daría undefined y la moneda/cuenta/centro caían al default ("ARS").
+    // `showCobro` ES la venta que se está cobrando (con su moneda real) → fallback confiable.
+    const ingreso = ingresos.find(i => i.id === data.ingresoId) || showCobro;
     const ccHeredado = ingreso?.lineas?.find(l => l.cc)?.cc ?? "";
     try {
       if (String(data.medioCobro).startsWith("ant:")) {
