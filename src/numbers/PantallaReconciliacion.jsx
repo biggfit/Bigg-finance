@@ -570,10 +570,14 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   //     entre sí ni a sí mismas; solo avisamos contra algo YA cargado en la caja.
   //   • las ignoradas (documento_id "IGN-…").
   // Match: si el movimiento trae Nº de operación (MP lo guarda en extracto_saldo, formato
-  // "tipo|cuenta|centro|OP|monto"), se compara por OP → dos operaciones distintas del mismo día y
-  // monto NO son duplicado. Si no hay OP (Galicia/Santander, filas agregadas), cae a fecha + monto
-  // CON SIGNO → un ingreso y su reintegro del mismo importe (ej. +119.880 vs −119.880) no colisionan.
+  // "tipo|cuenta|centro|OP|monto"), se compara por OP + monto CON SIGNO. En MP una misma operación
+  // puede aparecer dos veces con signo opuesto (una venta y su devolución/neteo de días o meses
+  // después): mismo OP pero +2.750 vs −2.750 → NO son duplicado. Solo la reimportación exacta de la
+  // línea (mismo OP y mismo monto con signo) se marca. Si no hay OP (Galicia/Santander, filas
+  // agregadas), cae a fecha + monto con signo → un ingreso y su reintegro del mismo importe tampoco
+  // colisionan. Dos operaciones MP distintas del mismo día y monto nunca se marcan (distinto OP).
   const opDe = (m) => (String(m.extracto_saldo || "").split("|")[3] || "").trim();
+  const signo = (m) => Math.round(Number(m.monto) || 0);
   const cajaKeys = useMemo(() => {
     const ops = new Set(), amts = new Set();
     for (const m of movsCuenta) {
@@ -582,15 +586,15 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       const pendiente = m.origen === "extracto" && !doc;
       if (pendiente || doc.startsWith("IGN-")) continue;
       const op = opDe(m);
-      if (op) ops.add(op);
-      else amts.add(`${m.fecha}|${Math.round(Number(m.monto) || 0)}`);
+      if (op) ops.add(`${op}|${signo(m)}`);
+      else amts.add(`${m.fecha}|${signo(m)}`);
     }
     return { ops, amts };
   }, [movsCuenta, cuentaTab]);
   const dupTransfer = (mov) => {
     const op = opDe(mov);
-    if (op) return cajaKeys.ops.has(op);
-    return cajaKeys.amts.has(`${mov.fecha}|${Math.round(Number(mov.monto) || 0)}`);
+    if (op) return cajaKeys.ops.has(`${op}|${signo(mov)}`);
+    return cajaKeys.amts.has(`${mov.fecha}|${signo(mov)}`);
   };
 
   // ── Imputar a factura: facturas de proveedor con saldo pendiente, de la moneda de la cuenta.
