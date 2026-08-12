@@ -2222,7 +2222,9 @@ const TIPO_COMP_LABEL = { EGRESO: "Compra", GASTO: "Gasto", INGRESO: "Venta", NC
 // ─── Detalle de comprobantes (Ingresos / Egresos) — listar + filtrar + KPIs ────
 function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedades = [] }) {
   const esEg = tipo === "EGRESO";
-  const contraLabel = esEg ? "Proveedor" : "Cliente";
+  // Egresos incluyen sueldos → la contraparte es proveedor O legajo (ambos en contraparte_nombre,
+  // que el buscador de la línea 2288 ya matchea). El label lo refleja.
+  const contraLabel = esEg ? "Proveedor / Legajo" : "Cliente";
   const ccMap  = useMemo(() => new Map(ccs.map(c => [ccKey(c.id), c.nombre])), [ccs]);
   const socMap = useMemo(() => new Map(sociedades.map(s => [String(s.id), s.nombre])), [sociedades]);
 
