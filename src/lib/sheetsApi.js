@@ -13,17 +13,36 @@ const TOKEN      = import.meta.env.VITE_SHEETS_TOKEN;
 // En prod: idem — Vercel reescribirá /api/sheets hacia el Apps Script
 const PROXY_BASE = "/api/sheets";
 
+// Caché en memoria (igual que numbersApi): `get("all")` es un agregado pesado que Tesorería
+// re-pide en CADA entrada (fuera del boot de App.jsx). Sin caché, cada navegación gatillaba un
+// round-trip al GAS. TTL 90s + dedup de requests en vuelo; toda escritura la invalida (ver post()).
+const _cache    = new Map();  // key → { data, ts }
+const _inflight = new Map();  // key → Promise
+const SHEETS_TTL = 90_000;
+
 /** GET a la Apps Script Web App (via proxy) */
 async function get(resource) {
   if (!CONFIGURED) throw new Error("VITE_SHEETS_API_URL no configurada");
   // `_cb` (solo en la ventana de refresco) saltea la caché de borde del CDN — ver cacheBust.js.
   const cb  = bustToken();
   const url = `${PROXY_BASE}?resource=${resource}&token=${encodeURIComponent(TOKEN)}${cb ? `&_cb=${cb}` : ""}`;
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  if (data.error) throw new Error(data.error);
-  return data;
+  const key = url;
+
+  const cached = _cache.get(key);
+  if (cached && Date.now() - cached.ts < SHEETS_TTL) return cached.data;
+  if (_inflight.has(key)) return _inflight.get(key);
+
+  const req = (async () => {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    _cache.set(key, { data, ts: Date.now() });
+    return data;
+  })();
+  _inflight.set(key, req);
+  req.finally(() => _inflight.delete(key));
+  return req;
 }
 
 /** POST a la Apps Script Web App (via proxy) */
@@ -37,6 +56,8 @@ async function post(body) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   if (data.error) throw new Error(data.error);
+  // Toda escritura afecta el agregado "all" (comps/saldos) → invalidar toda la caché de sheets.
+  _cache.clear();
   // Ventana de refresco: tras escribir, este navegador salta el borde unos segundos → ve su cambio.
   forzarRefresco();
   return data;
