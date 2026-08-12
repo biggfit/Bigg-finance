@@ -315,14 +315,29 @@ export async function appendCargaSocial({ sociedad, proveedorId = "", proveedor 
   const ud = new Date(Number(anio), Number(mes), 0).getDate();   // último día del mes → cae en el P&L de ese mes
   const fecha = `${anio}-${String(mes).padStart(2, "0")}-${String(ud).padStart(2, "0")}`;
   const nota = `${CS_TAG} ${concepto || `Cargas sociales ${mes}/${anio}`}`;
-  return appendEgreso({
-    sociedad, fecha, vto,
-    proveedorId, proveedor,
-    cuenta, cuentaId, moneda: "ARS",
-    nroComp: vep,   // el VEP → N° de comprobante (para conciliar el débito del banco)
-    nota,
-    lineas: lineas.filter(l => (Number(l.subtotal) || 0) !== 0).map(l => ({ cc: l.cc, subtotal: Number(l.subtotal) || 0, ivaRate: 0 })),
-  });
+  const id_comp = newId("EG");
+  const created_at = new Date().toISOString();
+  const cta = String(cuenta || "").replace(/^CUENTA_/, "");
+  // UNA sola escritura atómica (add_batch): todas las líneas de centro en un POST. Evita el
+  // comprobante a medias que dejaba el loop secuencial de appendEgreso cuando el GAS se cuelga.
+  const rows = lineas
+    .filter(l => (Number(l.subtotal) || 0) !== 0)
+    .map((l, i) => {
+      const sub = round2(Number(l.subtotal) || 0);
+      return {
+        id: `${id_comp}-L${pad(i + 1)}`, id_comp, sociedad, fecha, vto,
+        subtipo: "EGRESO",
+        contraparte_id: proveedorId, contraparte_nombre: proveedor,
+        cuenta_contable: cta, cuenta_contable_id: cuentaId,
+        moneda: "ARS", centro_costo: l.cc,
+        subtotal: sub, iva_rate: 0, iva_monto: 0, total: sub,
+        nro_comp: vep,   // el VEP → N° de comprobante (para conciliar el débito del banco)
+        nota, created_at,
+      };
+    });
+  if (!rows.length) return { ok: true, id_comp, n: 0 };
+  await post({ action: "add_batch", sheet: "nb_comprobantes", rows });
+  return { ok: true, id_comp, n: rows.length };
 }
 
 // Lista las cargas sociales de un mes/anio leyendo nb_comprobantes (marca CS_TAG), agrupadas por

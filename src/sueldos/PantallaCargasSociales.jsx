@@ -175,6 +175,12 @@ function FormCargaSocial({ mes, anio, masters, ccNombre, onClose, onSaved }) {
   const setLinMonto = (cc, v) => setLineas(ls => ls.map(l => l.cc === cc ? { ...l, monto: v } : l));
   const rmCentro    = (cc)   => setLineas(ls => ls.filter(l => l.cc !== cc));
   const agregar     = ()     => { if (!addCC || ccsUsados.has(addCC)) return; setLineas(ls => [...ls, { cc: addCC, monto: 0 }]); setAddCC(""); };
+  // Fuerza el calce exacto: el último centro absorbe la diferencia contra el total (para ediciones a mano).
+  const ajustarUltimo = () => setLineas(ls => {
+    if (!ls.length) return ls;
+    const otros = r2(ls.slice(0, -1).reduce((s, l) => s + (Number(l.monto) || 0), 0));
+    return ls.map((l, i) => i === ls.length - 1 ? { ...l, monto: r2(tot - otros) } : l);
+  });
 
   const handleSave = async () => {
     if (savingRef.current) return;
@@ -303,6 +309,14 @@ function FormCargaSocial({ mes, anio, masters, ccNombre, onClose, onSaved }) {
                 )}
               </tfoot>
             </table>
+          )}
+
+          {tot > 0 && lineas.length > 0 && !cuadra && (
+            <div style={{ marginTop: 8, textAlign: "right" }}>
+              <button onClick={ajustarUltimo} style={{ border: `1px solid ${T.border}`, background: "#fffbeb", color: T.amber, borderRadius: 6, padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                Ajustar diferencia al último centro
+              </button>
+            </div>
           )}
 
           {sociedad && !loadingBase && (
