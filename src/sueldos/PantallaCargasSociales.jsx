@@ -80,7 +80,7 @@ export default function PantallaCargasSociales({ mes: mesProp, anio: anioProp, p
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {cargas.map(c => <CargaCard key={c.id_comp} carga={c} socNombre={socNombre} ccNombre={ccNombre} />)}
+          {cargas.map(c => <CargaCard key={c.id_comp} carga={c} socNombre={socNombre} />)}
         </div>
       )}
 
@@ -92,8 +92,7 @@ export default function PantallaCargasSociales({ mes: mesProp, anio: anioProp, p
   );
 }
 
-function CargaCard({ carga, socNombre, ccNombre }) {
-  const dist = Object.entries(carga.distribucion ?? {});
+function CargaCard({ carga, socNombre }) {
   return (
     <div style={{ border: `1px solid ${carga.pagado ? "#bbf7d0" : T.border}`, borderRadius: 8, padding: 16, background: carga.pagado ? "#f0fdf4" : T.card }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
@@ -109,17 +108,6 @@ function CargaCard({ carga, socNombre, ccNombre }) {
         {carga.vep && <span>VEP: <b style={{ color: T.text }}>{carga.vep}</b></span>}
         {carga.vto && <span>Vencimiento: {fmtFecha(carga.vto)}</span>}
       </div>
-      {dist.length > 0 && (
-        <div style={{ marginTop: 8, fontSize: 12, color: T.muted }}>
-          Distribución:{" "}
-          {dist.map(([ccId, monto]) => (
-            <span key={ccId} style={{ marginRight: 10, whiteSpace: "nowrap" }}>{ccNombre(ccId)}: {fmtMoney(monto)}</span>
-          ))}
-        </div>
-      )}
-      {!carga.pagado && (
-        <div style={{ marginTop: 8, fontSize: 11, color: T.dim }}>El pago se concilia desde Conciliaciones (por el N° de VEP).</div>
-      )}
     </div>
   );
 }
