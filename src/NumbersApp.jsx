@@ -20,6 +20,7 @@ import PantallaUsuarios          from "./numbers/PantallaUsuarios";
 import { SOCIEDADES as SOC_FALLBACK } from "./data/tesoreriaData";
 import { fetchSociedades, fetchMovimientosPendientes, fetchCorreoBorradores } from "./lib/numbersApi";
 import { inicial } from "./lib/auth";
+import { forzarRefresco } from "./lib/cacheBust";
 
 // ─── Nav button style helpers ─────────────────────────────────────────────────
 const navBtnStyle = (active) => ({
@@ -689,6 +690,16 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
             </button>
           </div>
           </nav>
+
+          {/* ── Actualizar datos: trae lo último del servidor (saltea la caché compartida) ── */}
+          <div style={{ borderTop:"1px solid rgba(255,255,255,.07)", padding:"6px 0", flexShrink:0 }}>
+            <button onClick={() => { forzarRefresco(); window.location.reload(); }}
+              title="Trae los últimos datos del servidor, salteando la caché compartida. Usalo si un compañero acaba de cargar algo y todavía no lo ves."
+              style={navBtnStyle(false)} {...navBtnHover(false)}>
+              <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>🔄</span>
+              Actualizar datos
+            </button>
+          </div>
 
           {/* ── Pie: usuario logueado (fijo al fondo del sidebar) ── */}
           {sesion && (

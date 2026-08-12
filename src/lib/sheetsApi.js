@@ -1,5 +1,6 @@
 // ─── Google Sheets API layer (via Apps Script Web App) ────────────────────────
 import { getFranchiseCurrencies } from "../data/franchisor";
+import { bustToken, forzarRefresco } from "./cacheBust";
 // Todas las operaciones de lectura/escritura pasan por acá.
 // Configurar en .env.local:
 //   VITE_SHEETS_API_URL=https://script.google.com/macros/s/.../exec
@@ -15,7 +16,9 @@ const PROXY_BASE = "/api/sheets";
 /** GET a la Apps Script Web App (via proxy) */
 async function get(resource) {
   if (!CONFIGURED) throw new Error("VITE_SHEETS_API_URL no configurada");
-  const url = `${PROXY_BASE}?resource=${resource}&token=${encodeURIComponent(TOKEN)}`;
+  // `_cb` (solo en la ventana de refresco) saltea la caché de borde del CDN — ver cacheBust.js.
+  const cb  = bustToken();
+  const url = `${PROXY_BASE}?resource=${resource}&token=${encodeURIComponent(TOKEN)}${cb ? `&_cb=${cb}` : ""}`;
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
@@ -34,6 +37,8 @@ async function post(body) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   if (data.error) throw new Error(data.error);
+  // Ventana de refresco: tras escribir, este navegador salta el borde unos segundos → ve su cambio.
+  forzarRefresco();
   return data;
 }
 

@@ -4,6 +4,7 @@
 // Proxy local/Vercel: /api/sueldos
 
 import { stamp } from "./auth";
+import { bustToken, forzarRefresco } from "./cacheBust";
 
 const BASE    = "/api/sueldos";
 const TOKEN   = import.meta.env.VITE_SHEETS_TOKEN ?? "";
@@ -27,7 +28,9 @@ function cacheGet(key) {
 // ── Helpers HTTP ──────────────────────────────────────────────────────────────
 
 async function get(sheet, params = {}, base = BASE, { retries = 2, retryDelayMs = 1200 } = {}) {
-  const qs = new URLSearchParams({ resource: sheet, token: TOKEN, ...params }).toString();
+  // `_cb` (solo en la ventana de refresco) saltea la caché de borde del CDN — ver cacheBust.js.
+  const cb = bustToken();
+  const qs = new URLSearchParams({ resource: sheet, token: TOKEN, ...params, ...(cb ? { _cb: cb } : {}) }).toString();
   const key = `${base}?${qs}`;
   const hit = cacheGet(key);
   if (hit) return hit;
@@ -85,6 +88,8 @@ async function post(payload, base = BASE, { retries = 2, retryDelayMs = 1200 } =
       throw new Error(`Error del servidor (${res.status}): ${text.slice(0, 120)}`);
     }
     if (data?.error) throw new Error(data.error);
+    // Ventana de refresco: tras escribir, este navegador salta el borde unos segundos → ve su cambio.
+    forzarRefresco();
     return data;
   }
 }

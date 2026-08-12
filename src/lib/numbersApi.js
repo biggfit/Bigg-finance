@@ -4,6 +4,7 @@
 //   VITE_NUMBERS_API_URL=https://script.google.com/macros/s/.../exec
 
 import { stamp, firma } from "./auth";
+import { bustToken, forzarRefresco } from "./cacheBust";
 
 const CONFIGURED = !!import.meta.env.VITE_NUMBERS_API_URL;
 const TOKEN      = import.meta.env.VITE_SHEETS_TOKEN;   // mismo token
@@ -35,7 +36,10 @@ function _invalidate(sheet) {
 
 async function get(resource, params = {}) {
   if (!CONFIGURED) throw new Error("VITE_NUMBERS_API_URL no configurada");
-  const qs  = new URLSearchParams({ resource, token: TOKEN, ...params }).toString();
+  // `_cb` (solo dentro de la ventana de refresco) hace que la URL cambie → el CDN de Vercel falla el
+  // match y pide fresco al origen. Fuera de la ventana no va, así el equipo comparte la caché de borde.
+  const cb  = bustToken();
+  const qs  = new URLSearchParams({ resource, token: TOKEN, ...params, ...(cb ? { _cb: cb } : {}) }).toString();
   const key = qs;
 
   // Devolver cache si es fresco (TTL según sea maestro o transaccional)
@@ -69,8 +73,10 @@ async function get(resource, params = {}) {
 }
 
 // Lee una hoja SIN cache (para la verificación de idempotencia en un reintento de escritura).
+// `_nocache` único ⇒ salta también la caché de BORDE (el `no-store` del fetch solo evita la del
+// navegador); leer stale acá podría concluir "la fila no entró" y re-agregarla → duplicado.
 async function _fetchRowsRaw(sheet) {
-  const qs  = new URLSearchParams({ resource: sheet, token: TOKEN }).toString();
+  const qs  = new URLSearchParams({ resource: sheet, token: TOKEN, _nocache: `${Date.now()}.${Math.random()}` }).toString();
   const res = await fetch(`${BASE}?${qs}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
@@ -105,7 +111,7 @@ async function post(body) {
       try {
         const existentes = new Set((await _fetchRowsRaw(body.sheet)).map(r => String(r.id)));
         const faltan = addIds.filter(id => !existentes.has(String(id)));
-        if (!faltan.length) { _invalidate(body.sheet); return { ok: true, deduped: true }; }
+        if (!faltan.length) { _invalidate(body.sheet); forzarRefresco(); return { ok: true, deduped: true }; }
         // Batch parcialmente escrito: no se puede re-mandar solo lo que falta sin duplicar lo que entró.
         if (faltan.length !== addIds.length) throw lastErr;
       } catch { throw lastErr; }   // ante la duda, no arriesgar un duplicado
@@ -120,6 +126,9 @@ async function post(body) {
       const data = await res.json();
       if (data.error) { const e = new Error(data.error); e._serverReject = true; throw e; }
       if (body.sheet) _invalidate(body.sheet);
+      // Abre la ventana de refresco: los próximos GET de este navegador saltan el borde por unos
+      // segundos → ves tu propio cambio al instante (y de paso lo último del resto del equipo).
+      forzarRefresco();
       return data;
     } catch (e) {
       lastErr = e;
