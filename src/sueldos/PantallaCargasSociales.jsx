@@ -3,7 +3,7 @@ import {
   fetchSociedades, fetchProveedores, fetchCuentas, fetchCentrosCosto,
   appendCargaSocial, fetchCargasSociales,
 } from "../lib/numbersApi";
-import { baseHaberesPorCentro } from "../lib/sueldosApi";
+import { baseHaberesPorCentro, fmtMiles, limpiarMonto } from "../lib/sueldosApi";
 
 const T = {
   bg: "#f8fafc", card: "#ffffff", border: "#e2e8f0", text: "#1e293b",
@@ -170,7 +170,9 @@ function FormCargaSocial({ mes, anio, masters, ccNombre, onClose, onSaved }) {
   const ccsUsados = new Set(lineas.map(l => String(l.cc)));
   const ccsDisponibles = masters.ccs.filter(c => !ccsUsados.has(String(c.id)));
 
-  const setLinMonto = (cc, v) => setLineas(ls => ls.map(l => l.cc === cc ? { ...l, monto: v === "" ? "" : Number(v) } : l));
+  // v llega ya limpio (limpiarMonto: dígitos + "." decimal). Se guarda el STRING para poder tipear
+  // decimales sin que la coma se corte; se convierte a Number recién al sumar/guardar.
+  const setLinMonto = (cc, v) => setLineas(ls => ls.map(l => l.cc === cc ? { ...l, monto: v } : l));
   const rmCentro    = (cc)   => setLineas(ls => ls.filter(l => l.cc !== cc));
   const agregar     = ()     => { if (!addCC || ccsUsados.has(addCC)) return; setLineas(ls => [...ls, { cc: addCC, monto: 0 }]); setAddCC(""); };
 
@@ -231,7 +233,7 @@ function FormCargaSocial({ mes, anio, masters, ccNombre, onClose, onSaved }) {
           </div>
           <div>
             <label style={lab}>Monto total (ARS)</label>
-            <input style={inp} type="number" value={monto} onChange={e => setMonto(e.target.value)} placeholder="0" />
+            <input style={inp} inputMode="decimal" value={fmtMiles(monto)} onChange={e => setMonto(limpiarMonto(e.target.value))} placeholder="0" />
           </div>
           <div>
             <label style={lab}>N° de VEP</label>
@@ -278,7 +280,7 @@ function FormCargaSocial({ mes, anio, masters, ccNombre, onClose, onSaved }) {
                       <td style={{ padding: "5px 6px", textAlign: "right", color: T.muted }}>{hb ? fmtMoney(hb) : "—"}</td>
                       <td style={{ padding: "5px 6px", textAlign: "right", color: T.muted }}>{hb ? pct.toFixed(1) + "%" : "—"}</td>
                       <td style={{ padding: "5px 6px", textAlign: "right" }}>
-                        <input type="number" value={l.monto} onChange={e => setLinMonto(l.cc, e.target.value)}
+                        <input inputMode="decimal" value={fmtMiles(String(l.monto))} onChange={e => setLinMonto(l.cc, limpiarMonto(e.target.value))}
                           style={{ ...inp, width: 120, textAlign: "right", padding: "4px 8px" }} />
                       </td>
                       <td style={{ padding: "5px 6px", textAlign: "center" }}>
