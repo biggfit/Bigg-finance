@@ -16,6 +16,7 @@ const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
 
 const fmtFecha = (s) => { const m = String(s ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1]}` : (s || ""); };
 const fmtMoney = (n) => "$" + Math.round(Number(n) || 0).toLocaleString("es-AR");
+const fmtMoney2 = (n) => "$" + (Number(n) || 0).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const hoy     = new Date();
 const MES_DEF = hoy.getMonth() === 0 ? 12 : hoy.getMonth();
@@ -148,22 +149,24 @@ function FormCargaSocial({ mes, anio, masters, ccNombre, onClose, onSaved }) {
     return () => { live = false; };
   }, [sociedad, mes, anio]);
 
-  const tot = parseFloat(monto) || 0;
+  const r2  = (n) => Math.round((Number(n) || 0) * 100) / 100;   // redondeo al centavo
+  const tot = r2(parseFloat(monto) || 0);
 
-  // Auto-prorrateo por regla de tres cuando cambian base o monto (el último centro absorbe el redondeo).
+  // Auto-prorrateo por regla de tres al CENTAVO; el último centro absorbe el resto para que la
+  // suma dé EXACTA (dos decimales) al monto ingresado.
   useEffect(() => {
     if (!base || base.total <= 0 || tot <= 0) { setLineas([]); return; }
     const ccs = Object.keys(base.porCentro);
     let acc = 0;
     const arr = ccs.map((cc, i) => {
-      const m = i === ccs.length - 1 ? Math.round(tot - acc) : Math.round(tot * base.porCentro[cc] / base.total);
-      acc += m; return { cc, monto: m };
+      const m = i === ccs.length - 1 ? r2(tot - acc) : r2(tot * base.porCentro[cc] / base.total);
+      acc = r2(acc + m); return { cc, monto: m };
     });
     setLineas(arr);
-  }, [base, tot]);
+  }, [base, tot]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const sumLineas = lineas.reduce((s, l) => s + (Number(l.monto) || 0), 0);
-  const cuadra = tot > 0 && Math.abs(sumLineas - tot) <= 1;
+  const sumLineas = r2(lineas.reduce((s, l) => s + (Number(l.monto) || 0), 0));
+  const cuadra = tot > 0 && Math.abs(sumLineas - tot) < 0.005;   // al centavo
   const ccsUsados = new Set(lineas.map(l => String(l.cc)));
   const ccsDisponibles = masters.ccs.filter(c => !ccsUsados.has(String(c.id)));
 
@@ -288,12 +291,12 @@ function FormCargaSocial({ mes, anio, masters, ccNombre, onClose, onSaved }) {
               <tfoot>
                 <tr style={{ borderTop: `2px solid ${T.border}`, fontWeight: 700 }}>
                   <td style={{ padding: "6px" }} colSpan={3}>Total distribuido</td>
-                  <td style={{ padding: "6px", textAlign: "right", color: cuadra ? T.green : T.red }}>{fmtMoney(sumLineas)}</td>
+                  <td style={{ padding: "6px", textAlign: "right", color: cuadra ? T.green : T.red }}>{fmtMoney2(sumLineas)}</td>
                   <td />
                 </tr>
                 {tot > 0 && !cuadra && (
                   <tr><td colSpan={5} style={{ padding: "2px 6px", textAlign: "right", fontSize: 11, color: T.red }}>
-                    Debe sumar {fmtMoney(tot)} (difieren {fmtMoney(Math.abs(sumLineas - tot))})
+                    Debe sumar {fmtMoney2(tot)} (difieren {fmtMoney2(Math.abs(sumLineas - tot))})
                   </td></tr>
                 )}
               </tfoot>
