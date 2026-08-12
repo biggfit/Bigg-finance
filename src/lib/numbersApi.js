@@ -2058,10 +2058,16 @@ export function pendientesInterco({ comps = [], clientes = [], sociedades = [], 
     const key = c.id_comp || c.id;
     if (!ventas.has(key)) ventas.set(key, {
       id_comp: key, vendedor: c.sociedad, vendedorNombre: socNombre(c.sociedad),
-      fecha: c.fecha, nroComp: c.nro_comp, moneda: c.moneda || "ARS", total: 0,
+      fecha: c.fecha, nroComp: c.nro_comp, moneda: c.moneda || "ARS", total: 0, subtotal: 0, iva_monto: 0, iva_rate: 0,
     });
-    ventas.get(key).total += toNum(c.total);
+    const v = ventas.get(key);
+    v.total += toNum(c.total);
+    v.subtotal += toNum(c.subtotal);
+    v.iva_monto += toNum(c.iva_monto);
+    if (!v.iva_rate) v.iva_rate = toNum(c.iva_rate);   // rate de la factura (uniforme por comprobante)
   }
+  // Sin desglose cargado (ventas viejas): subtotal = total, IVA 0 → el reconocer no inventa IVA.
+  for (const v of ventas.values()) if (!(v.subtotal > 0)) { v.subtotal = v.total; v.iva_monto = 0; v.iva_rate = 0; }
   // franqPend = pendientes de documentos de franquicia emitidos a mí (ej. Segui), ya con forma de pendiente
   // y armados por la pantalla (que tiene el mundo Franquicias). Mismo dedup por interco_ref (id_comp "FR-…").
   return [...ventas.values(), ...franqPend].filter(v => !reconocidos.has(v.id_comp))
@@ -2071,18 +2077,23 @@ export function pendientesInterco({ comps = [], clientes = [], sociedades = [], 
 // Reconocer una venta interco = registrar MI compra (factura de proveedor / CxP) en mi sociedad,
 // con MIS cuenta+centro, contraparte = la sociedad vendedora, y link `interco_ref=<id_comp venta>`
 // (así el pendiente desaparece y no se re-crea). Queda como FC por pagar (EGRESO sin pago).
-export async function reconocerVentaInterco({ sociedad, ventaIdComp, vendedorId = "", vendedorNombre = "", cuenta_contable, cuenta_contable_id = "", centro_costo = "", total, moneda = "ARS", fecha, nroComp = "", subtipo = "EGRESO" }) {
+export async function reconocerVentaInterco({ sociedad, ventaIdComp, vendedorId = "", vendedorNombre = "", cuenta_contable, cuenta_contable_id = "", centro_costo = "", total, subtotal, iva_rate, iva_monto, moneda = "ARS", fecha, nroComp = "", subtipo = "EGRESO" }) {
   // subtipo="EGRESO" (default): lo que le compro/debo a la contraparte → CxP. subtipo="INGRESO": un crédito a
   // mi favor (ej. NC de interuso que Ñako me emite) → lo reconozco como venta/ingreso a mi cuenta → CxC.
   const id_comp = newId(subtipo === "INGRESO" ? "IN" : "EG");
   const t = toNum(total);
+  // Hereda la discriminación de IVA de la factura original (la que emitió la otra sociedad) → así la
+  // compra reconocida toma bien el crédito fiscal. Sin desglose → subtotal = total, IVA 0 (como antes).
+  const sub  = toNum(subtotal) > 0 ? toNum(subtotal) : t;
+  const ivaM = toNum(iva_monto) || 0;
+  const ivaR = toNum(iva_rate)  || 0;
   await post({ action: "add", sheet: "nb_comprobantes", row: {
     id: `${id_comp}-L1`, id_comp, sociedad, fecha,
     subtipo,
     contraparte_id: vendedorId, contraparte_nombre: vendedorNombre,
     cuenta_contable: String(cuenta_contable || "").replace(/^CUENTA_/, ""),
     cuenta_contable_id: String(cuenta_contable_id || ""),
-    centro_costo, subtotal: t, iva_rate: 0, iva_monto: 0, total: t,
+    centro_costo, subtotal: sub, iva_rate: ivaR, iva_monto: ivaM, total: t,
     moneda, nro_comp: nroComp, nota: `interco_ref=${ventaIdComp}`,
     created_at: new Date().toISOString(),
   }});

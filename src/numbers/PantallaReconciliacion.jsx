@@ -411,7 +411,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     else await reconocerVentaInterco({
       sociedad, ventaIdComp: p.id_comp, vendedorId: p.vendedor, vendedorNombre: p.vendedorNombre,
       cuenta_contable: cuenta, cuenta_contable_id: cuentaIdPorNombre(cuenta),   // persistir el id, no solo el nombre
-      centro_costo: centro, total: p.total, moneda: p.moneda,
+      centro_costo: centro, total: p.total, subtotal: p.subtotal, iva_rate: p.iva_rate, iva_monto: p.iva_monto, moneda: p.moneda,
       fecha: fechaComprobanteISO(p.fecha), nroComp: p.nroComp, subtipo: p.subtipo || "EGRESO",   // fecha del doc (Franquicias, DD/MM/YYYY→ISO), no hoy
     });
   };
