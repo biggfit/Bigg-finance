@@ -304,6 +304,56 @@ export async function appendEgreso(egreso) {
   return { ok: true, id_comp };
 }
 
+// ── CARGAS SOCIALES (F931 / aportes sindicales / obligaciones por sociedad) ────
+// Cada obligación mensual = un EGRESO en nb_comprobantes (CxP), con una línea por centro
+// (prorrateo por haberes en blanco, calculado en la UI con baseHaberesPorCentro de sueldosApi).
+// Proveedor y cuenta se eligen por asiento (AFIP/ARCA, UTEDYC, …). Sin hoja propia: el histórico
+// se lee de nb_comprobantes. Se marcan con CS_TAG en la nota para poder listarlas en el módulo.
+export const CS_TAG = "[CARGASOC]";
+
+export async function appendCargaSocial({ sociedad, proveedorId = "", proveedor = "", cuenta, cuentaId = "", mes, anio, vep = "", vto = "", lineas = [], concepto = "" }) {
+  const ud = new Date(Number(anio), Number(mes), 0).getDate();   // último día del mes → cae en el P&L de ese mes
+  const fecha = `${anio}-${String(mes).padStart(2, "0")}-${String(ud).padStart(2, "0")}`;
+  const nota = `${CS_TAG} ${concepto || `Cargas sociales ${mes}/${anio}`}`;
+  return appendEgreso({
+    sociedad, fecha, vto,
+    proveedorId, proveedor,
+    cuenta, cuentaId, moneda: "ARS",
+    nroComp: vep,   // el VEP → N° de comprobante (para conciliar el débito del banco)
+    nota,
+    lineas: lineas.filter(l => (Number(l.subtotal) || 0) !== 0).map(l => ({ cc: l.cc, subtotal: Number(l.subtotal) || 0, ivaRate: 0 })),
+  });
+}
+
+// Lista las cargas sociales de un mes/anio leyendo nb_comprobantes (marca CS_TAG), agrupadas por
+// comprobante, con distribución por centro y estado de pago (vía pagos que las referencian).
+export async function fetchCargasSociales(mes, anio) {
+  const [comps, pagos] = await Promise.all([get("nb_comprobantes", {}), fetchPagosCobros()]);
+  const pagadoByComp = {};
+  for (const p of (pagos || [])) if (p.tipo === "PAGO" && p.documento_id) pagadoByComp[p.documento_id] = (pagadoByComp[p.documento_id] || 0) + Math.abs(Number(p.monto) || 0);
+  const byComp = {};
+  for (const r of (comps || [])) {
+    if (!String(r.nota || "").includes(CS_TAG)) continue;
+    if (String(r.subtipo || "").toUpperCase() !== "EGRESO") continue;
+    const f = String(r.fecha || "");
+    if (f.slice(0, 4) !== String(anio) || Number(f.slice(5, 7)) !== Number(mes)) continue;
+    const k = r.id_comp;
+    if (!byComp[k]) byComp[k] = {
+      id_comp: k, sociedad: r.sociedad, proveedor: r.contraparte_nombre || r.contraparte_id || "",
+      proveedorId: r.contraparte_id || "", cuenta: r.cuenta_contable || "", vep: r.nro_comp || "",
+      vto: r.vto || "", fecha: r.fecha || "", monto_total: 0, distribucion: {},
+    };
+    const t = toNum(r.total);
+    byComp[k].monto_total += t;
+    const cc = r.centro_costo || "";
+    byComp[k].distribucion[cc] = (byComp[k].distribucion[cc] || 0) + t;
+  }
+  return Object.values(byComp).map(c => ({
+    ...c,
+    pagado: c.monto_total > 0 && calcSaldoPendiente(c.monto_total, [{ monto: pagadoByComp[c.id_comp] || 0 }]) <= 0.5,
+  })).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+}
+
 /** Elimina todas las líneas de un egreso (por id_comp).
  *  ROBUSTO: tras el del_comp, RE-LEE sin cache y borra por id cualquier fila que haya
  *  quedado con ese id_comp. Visto en prod: al re-guardar una edición, una línea vieja

@@ -905,89 +905,29 @@ export async function deletePago(id, nb_movimiento_id) {
   if (movId) await post({ action: "del", sheet: "nb_movimientos", id: movId }, BASE_NB);
 }
 
-// ── CARGAS SOCIALES ───────────────────────────────────────────────────────────
-
-export async function fetchCargasSociales(mes, anio) {
-  const rows = await get("su_cargas_sociales", { mes, anio });
-  return (Array.isArray(rows) ? rows : []).map(r => ({
-    id:                  r.id,
-    mes:                 r.mes,
-    anio:                r.anio,
-    sociedad_id:         r.sociedad_id ?? "",
-    sociedad_nombre:     r.sociedad_nombre ?? "",
-    monto_total:         Number(r.monto_total) || 0,
-    distribucion:        (() => { try { return JSON.parse(r.distribucion_json || "{}"); } catch { return {}; } })(),
-    fecha_vto:           r.fecha_vto ?? "",
-    nb_comprobante_id:   r.nb_comprobante_id ?? "",
-    nb_movimiento_id:    r.nb_movimiento_id ?? "",
-    pagado:              String(r.pagado ?? "false").toLowerCase() === "true",
-  }));
-}
-
-export async function saveCargasSociales(data) {
-  const id = data.id ?? newId("CS");
-  const row = {
-    ...data,
-    id,
-    distribucion_json: JSON.stringify(data.distribucion ?? {}),
-  };
-  delete row.distribucion;
-  await post({ action: data.id ? "upd" : "add", sheet: "su_cargas_sociales", id, row });
-  return id;
-}
-
-/**
- * Registra el pago del F931. Crea nb_comprobantes + nb_movimientos en Numbers.
- */
-export async function pagarCargasSociales({
-  id, mes, anio, sociedad_id, sociedad_nombre, monto_total,
-  fecha, cuenta_bancaria_id, cuenta_bancaria_nombre,
-}) {
-  const concepto = `F931 ${sociedad_nombre} ${mes}/${anio}`;
-
-  // Egreso en Numbers (proveedor AFIP)
-  const compRow = {
-    sociedad:            sociedad_id,
-    fecha,
-    subtipo:             "EGRESO_FC",
-    contraparte_id:      "AFIP",
-    contraparte_nombre:  "AFIP",
-    moneda:              "ARS",
-    subtotal:            monto_total,
-    iva_rate:            0,
-    iva:                 0,
-    total:               monto_total,
-    nota:                concepto,
-    estado:              "pagado",
-    origen:              "sueldos",
-    created_at:          new Date().toISOString(),
-  };
-  const compRes = await post({ action: "add", sheet: "nb_comprobantes", row: compRow }, BASE_NB);
-  const nb_comprobante_id = compRes?.id ?? "";
-
-  // Movimiento de tesorería
-  const movRow = {
-    sociedad:        sociedad_id,
-    fecha,
-    tipo:            "PAGO",
-    cuenta_bancaria: cuenta_bancaria_id,
-    moneda:          "ARS",
-    monto:           -monto_total,
-    concepto,
-    documento_id:    nb_comprobante_id,
-    origen:          "sueldos",
-    created_at:      new Date().toISOString(),
-  };
-  const movRes = await post({ action: "add", sheet: "nb_movimientos", row: movRow }, BASE_NB);
-  const nb_movimiento_id = movRes?.id ?? "";
-
-  // Actualizar carga social como pagada
-  await post({
-    action: "upd", sheet: "su_cargas_sociales", id,
-    row: { pagado: "true", nb_comprobante_id, nb_movimiento_id },
-  });
-
-  return { nb_comprobante_id, nb_movimiento_id };
+// ── CARGAS SOCIALES — base de prorrateo ───────────────────────────────────────
+// El F931 (y el aporte sindical) se prorratea por los HABERES EN BLANCO de cada centro.
+// Fuente autoritativa = liquidaciones CERRADAS del mes (bucket "haberes"), agrupadas por centro
+// (= la sede del legajo). La ESCRITURA del comprobante (CxP) y la LECTURA del histórico viven en
+// numbersApi (nb_comprobantes) → sin hoja propia (su_cargas_sociales queda sin efecto, cero doble
+// escritura). Acá sólo derivamos la base desde el mundo Sueldos.
+export async function baseHaberesPorCentro(sociedadId, mes, anio) {
+  const liqs = await fetchLiquidacionesCerradas(anio);
+  const porCentro = {};
+  let total = 0;
+  for (const liq of liqs) {
+    if (Number(liq.mes) !== Number(mes) || Number(liq.anio) !== Number(anio)) continue;
+    for (const row of liquidacionToPnLRows(liq)) {
+      if (row.bucket !== "haberes") continue;                 // solo lo declarado en blanco
+      if (String(row.sociedad) !== String(sociedadId)) continue;
+      const m = Number(row.total) || 0;
+      if (m <= 0) continue;
+      const cc = row.centro_costo || "";
+      porCentro[cc] = (porCentro[cc] || 0) + m;
+      total += m;
+    }
+  }
+  return { porCentro, total };
 }
 
 // ── BIGG Eye ──────────────────────────────────────────────────────────────────
