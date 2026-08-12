@@ -50,6 +50,8 @@ export default function App({ onVolverNumbers } = {}) {
   const [comps,          setComps]          = useState({});
   const compsRef = useRef({});
   compsRef.current = comps;
+  const franchisesRef = useRef([]);
+  franchisesRef.current = franchises;
   const [saldoInicial,   setSaldoInicial]   = useState({});
   const [recordatorios,  setRecordatorios]  = useState(() => {
     try { return JSON.parse(localStorage.getItem("recordatorios") ?? "{}"); } catch { return {}; }
@@ -264,15 +266,33 @@ export default function App({ onVolverNumbers } = {}) {
       [oldKey]: (prev[oldKey] ?? []).filter(c => c.id !== String(compId)),
       [newKey]: [...(prev[newKey] ?? []), updatedComp],
     }));
+    const revertir = () => setComps(prev => ({
+      ...prev,
+      [oldKey]: [...(prev[oldKey] ?? []), comp],
+      [newKey]: (prev[newKey] ?? []).filter(c => c.id !== String(compId)),
+    }));
+
+    // Los movimientos financieros viven en nb_movimientos, no en `comprobantes`, y ahí la sede
+    // es `contraparte_id` (no hay columna frId). Mandarlos a updateComp escribía en la hoja
+    // equivocada → el cambio de sede se revertía solo. Mismo desvío que hace editComp.
+    if (comp._numbers) {
+      const m      = { ...comp, ...patch };
+      const signo  = m.type === "PAGO_ENVIADO" ? -1 : 1;
+      const frNew  = franchisesRef.current.find(f => String(f.id) === newKey);
+      updateMovTesoreria(compId, {
+        tipo: m.type === "PAGO_ENVIADO" ? "EGRESO" : "COBRO", fr_tipo: m.type,
+        monto: signo * Math.abs(Number(m.amount) || 0),
+        moneda: m.currency, fecha: dmyToIso(m.date),
+        concepto: m.nota || m.ref || "",
+        documento_id: m.invoice || "",
+        contraparte_id: newKey,
+        contraparte_nombre: frNew?.name ?? "",
+      }).catch(err => { console.error('Numbers moveComp:', err); revertir(); });
+      return;
+    }
+
     updateComp(oldFrId, compId, { ...patch, frId: String(newFrId) })
-      .catch(err => {
-        console.error('Sheets moveComp:', err);
-        setComps(prev => ({
-          ...prev,
-          [oldKey]: [...(prev[oldKey] ?? []), comp],
-          [newKey]: (prev[newKey] ?? []).filter(c => c.id !== String(compId)),
-        }));
-      });
+      .catch(err => { console.error('Sheets moveComp:', err); revertir(); });
   }, []);
 
   const handleExportCSV = useCallback(() => {
