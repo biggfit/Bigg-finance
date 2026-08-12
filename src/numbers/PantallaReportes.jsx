@@ -92,8 +92,13 @@ function movimientoToPnLRows(movs, sociedad, cuentaMap) {
   const out = [];
   for (const m of (movs ?? [])) {
     if (soc && (m.sociedad ?? "").toLowerCase() !== soc) continue;
-    const nombre = (m.cuenta_contable ?? "").trim();
-    if (!nombre) continue;
+    const raw = (m.cuenta_contable ?? "").trim();
+    if (!raw) continue;
+    // La fila puede traer el NOMBRE de la cuenta o (si el writer no supo convertirlo) su ID.
+    // `cuentaMap` resuelve ambos → canonizamos a nombre acá, una sola vez, para que las tres
+    // tablas (Sede, estructurado, BIGG) agrupen por la misma clave y no partan una cuenta en dos.
+    const cuenta = cuentaMap?.get(raw);
+    const nombre = cuenta?.nombre || raw;
     // Entra al P&L: gasto/ingreso contado-conciliado (CONTAB-), retención sufrida, o interuso de
     // gestión (asiento de gestión de sede propia, pata 2). La retención lleva documento_id de la
     // factura (netea la CxC), por eso se la reconoce por origen; el interuso de gestión NO tiene caja.
@@ -109,7 +114,7 @@ function movimientoToPnLRows(movs, sociedad, cuentaMap) {
       total = monto;
       _tipo = "Interuso gestión";
     } else {
-      const esIngreso = normCat(cuentaMap?.get(nombre)?.categoria_pnl) === "ventas";
+      const esIngreso = normCat(cuenta?.categoria_pnl) === "ventas";
       total = esIngreso ? monto : -monto;
       _tipo = esIngreso ? "Ingreso" : "Gasto";
     }
@@ -117,7 +122,7 @@ function movimientoToPnLRows(movs, sociedad, cuentaMap) {
       fecha:           periodoPnLDe(m),
       sociedad:        m.sociedad,
       centro_costo:    m.centro_costo ?? "",
-      cuenta_contable: m.cuenta_contable ?? "",
+      cuenta_contable: nombre,                        // canónico (nunca el id crudo)
       moneda:          m.moneda ?? "ARS",
       total,
       iva_monto:       Math.abs(Number(m.iva_monto) || 0),   // para la vista "sin IVA" (neto = total − iva)
@@ -421,7 +426,12 @@ const FONDEADAS = {
   op_puertos:  { empresa: "puertos",    moneda: "USD", label: "Puertos",  familia: "propios" },
   op_rosedal:  { empresa: "segui-fit",  moneda: "ARS", label: "Rosedal",  familia: "gerenciamiento", netoLabel: "Free Cash Flow" },
 };
-const IMPUESTOS_FOND = ["IVA", "Ganancias"];   // match por nombre de cuenta (incluye)
+// Match por nombre de cuenta (incluye). "Retenciones" son las retenciones sufridas en la fondeada
+// (en Colombia: RteFte / RteICA) — la cuenta declara categoria_pnl="impuestos", igual que IVA, así
+// que pertenece a esta cola. Sin esto quedaban en "Sin clasificar", fuera de todo total.
+// TODO: esta lista curada por nombre debería salir de categoria_pnl="impuestos" en maestros —
+// hoy cada cuenta de impuesto nueva hay que acordarse de agregarla acá o desaparece del resultado.
+const IMPUESTOS_FOND = ["IVA", "Ganancias", "Retenciones"];
 
 // Go-live: el P&L arranca el 1/7/2026. Todo lo anterior es migración de saldos iniciales de Contagram
 // (metida en cualquier cuenta/centro) y NO es resultado del período → se excluye de TODOS los P&L. Los
@@ -2528,10 +2538,17 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   // Al entrar a un negocio, arrancar en su moneda (fondeada = la suya; Huergo = ARS). Igual se puede cambiar.
   useEffect(() => { if (isFond) setMonedaPL(fondCfg.moneda); else if (isHuergo) setMonedaPL("ARS"); }, [activeTab]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const cuentaMap = useMemo(
-    () => new Map((cuentas ?? []).map(c => [c.nombre, c])),
-    [cuentas]
-  );
+  // Clave por NOMBRE (lo que guardan las filas) y TAMBIÉN por id: varios writers de numbersApi
+  // convierten id→nombre con `.replace(/^CUENTA_/, "")`, que no toca los ids nuevos (`CTA-…`) y
+  // deja el id crudo en `cuenta_contable`. Esas filas no resolvían categoría y caían fuera de
+  // todo total. Los nombres se cargan al final: si un id coincidiera con el nombre de otra
+  // cuenta, gana el nombre.
+  const cuentaMap = useMemo(() => {
+    const m = new Map();
+    for (const c of cuentas ?? []) if (c.id)     m.set(c.id, c);
+    for (const c of cuentas ?? []) if (c.nombre) m.set(c.nombre, c);
+    return m;
+  }, [cuentas]);
   // id de cuenta → nombre (para mostrar nombre en "Sin clasificar" cuando el movimiento guardó el id).
   const nombreCuenta = useMemo(() => {
     const byId = new Map((cuentas ?? []).map(c => [c.id, c.nombre]));
