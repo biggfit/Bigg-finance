@@ -1034,7 +1034,7 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
 const HQ_IVA_BUCKETS = new Set(["hq", "gpv", "ghq", "fin", "imp"]);
 
 // Orden de los centros dentro de "Gastos HQ" (display).
-const BIGG_ORDEN_GHQ = ["HQ - Sport", "HQ - Tecnologia", "HQ - Ventas y Operaciones", "17 - Huergo",
+const BIGG_ORDEN_GHQ = ["HQ - Sport", "HQ - Tecnologia", "HQ - Ventas y Operaciones", "11 - Huergo",
   "HQ - Marketing", "HQ - BI", "HQ - Design", "HQ - Gerencia General", "HQ - Administracion",
   "HQ - Recursos Humanos", "HQ - Infraestructura IT"];
 const BIGG_ORDEN_GPV = ["Interusos", "Acciones de Mkt", "Coorporativos (Gympass)", "Fee Facturación"];
@@ -1064,7 +1064,7 @@ function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) {
   const omit = (obj, keys) => Object.fromEntries(Object.entries(obj || {}).filter(([k]) => !keys.includes(k)));
   const sumG = obj => MESES.map((_, m) => Object.values(obj || {}).reduce((s, a) => s + (a[m] || 0), 0));
   const hqAccounts  = omit(pnl.grupos.hq,  BIGG_FEE_CUENTAS);    // ingresos HQ sin las fees de operación
-  const ghqAccounts = omit(pnl.grupos.ghq, ["17 - Huergo"]);     // opex HQ sin Huergo (ya está en WRE)
+  const ghqAccounts = omit(pnl.grupos.ghq, ["11 - Huergo"]);     // opex HQ sin Huergo (ya está en WRE)
   const gpvAccounts = pnl.grupos.gpv;                            // costo por venta HQ: Interusos, Fee Fact., compra Pauta
   const impuestos = sumG(pnl.grupos.imp);   // tributos reales (IVA saldo, Ganancias, etc.)
   const capexAccounts = pnl.grupos.capex;   // compra de operaciones: abajo del resultado, NO es gasto operativo
