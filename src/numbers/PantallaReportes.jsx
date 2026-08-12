@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, Fragment } from "react";
 import { T, PageHeader } from "./theme";
-import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco, calcSaldoPendiente } from "../lib/numbersApi";
+import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco, fondeoFondeadasMensual, calcSaldoPendiente } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, pendienteSueldosPorLegajo, adelantoSueldosPorLegajo } from "../lib/sueldosApi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
 import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
@@ -23,6 +23,7 @@ function normCat(raw) {
   if (s === "gastos_financieros" || s === "gasto_financiero"
    || s === "financiero"   || s === "financieros")            return "gastos_financieros";
   if (s === "impuestos"    || s === "impuesto")               return "impuestos";
+  if (s === "capex"        || s === "inversiones")            return "capex";
   if (s === "r_y_d"  || s === "r&d"  || s === "ryd")         return "r_y_d";
   if (s === "sales_marketing" || s.includes("sales"))         return "sales_marketing";
   if (s === "g_and_a" || s === "g&a" || s === "gna")         return "g_and_a";
@@ -926,12 +927,13 @@ const BIGG_GRUPOS = [
   { key: "ghq",    label: "Gastos HQ" },               // filas = centros HQ (Sport, Tecnología, …)
   { key: "fin",    label: "Financieros" },             // Intereses Ganados − Pérdidas Financieras
   { key: "imp",    label: "Impuestos" },               // IVA, Ganancias, Plan AFIP…
+  { key: "capex",  label: "Inversiones / Capex" },      // compra de operaciones: centro con categoria_pnl="capex" → DEBAJO del Resultado del Grupo
 ];
 // Orden de las cuentas dentro de cada subgrupo (display; las que no figuran van al final, alfabéticas).
 // Hardcodeado a propósito: es presentación, bajo riesgo (un nombre que no matchea solo se ordena último).
 const BIGG_ORDEN = [
   "Regalias s/Ventas", "Licencia Uso de Marca", "Equipamientos", "Coorporativos (Gympass)",
-  "Coorporativos", "APP (Gympass)", "Sponsor", "Acciones de Mkt", "Otros Ingresos",
+  "Coorporativos", "APP (Gympass)", "Sponsor", "Pauta", "Otros Ingresos",
 ];
 
 // Familia del centro (dimensión que separa los subgrupos). Devuelve null si no clasifica.
@@ -975,7 +977,11 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
       const catRaw  = (meta?.categoria_pnl ?? "").toLowerCase();               // crudo, para financieros/impuestos
       const catSede = (meta?.categoria_pnl_sede ?? "").trim().toLowerCase();   // "ventas" | "otros ingresos" | "costo por venta"
       let gkey = null, rowKey = cuenta, val = montoPnL(row, sinIva), neg = false;
-      if (fam === "propios") {
+      if (normCat(cc?.categoria_pnl) === "capex") {
+        // Centro tagueado capex (ej. "HQ - Capex"): compra de operaciones → sección propia DEBAJO del
+        // Resultado del Grupo, fuera de OPEX/sede. Lo decide el CENTRO (no la cuenta), y gana sobre todo.
+        gkey = "capex";
+      } else if (fam === "propios") {
         // Sede propia: en el HOLDING entra como RESULTADO (línea "Sedes Propias Argentina", vía su propio
         // motor) → ningún bucket de sede alimenta el holding. Su costo por venta va a "Gastos Sedes Propias"
         // (no a gpv) para no duplicarlo con el resultado de sede.
@@ -1033,13 +1039,13 @@ const BIGG_ORDEN_GHQ = ["HQ - Sport", "HQ - Tecnologia", "HQ - Ventas y Operacio
   "HQ - Recursos Humanos", "HQ - Infraestructura IT"];
 const BIGG_ORDEN_GPV = ["Interusos", "Acciones de Mkt", "Coorporativos (Gympass)", "Fee Facturación"];
 // Cuentas intermediadas: su VENTA es ingreso HQ, pero su COMPRA (egreso) es costo por venta (pega en margen).
-// La pauta se le vende a franquiciados y se compra a Meta/Google → el egreso va a Gastos por Ventas, no a OPEX.
-const GPV_COSTO_EGRESO = new Set(["Acciones de Mkt"]);
+const GPV_COSTO_EGRESO = new Set([]);
 // Ingreso intermediado que netea DENTRO de Ingresos (no en Gastos por Ventas): su costo entra como
 // contra (−) EN LA MISMA FILA que su ingreso par → una sola línea neta. Ej.: "Interusos" (costo) se
-// suma a la fila "Coorporativos" → Coorporativos − Interusos. Margen y resultados NO cambian.
+// suma a la fila "Coorporativos" → Coorporativos − Interusos. "Pauta" es igual: la venta a franquiciados
+// (ingreso) netea la compra a JMC/Meta/Google (egreso) en la fila "Pauta". Margen y resultados NO cambian.
 // Mapa: cuenta contra → fila de ingreso donde netea.
-const ING_CONTRA_HQ = new Map([["Interusos", "Coorporativos"]]);
+const ING_CONTRA_HQ = new Map([["Interusos", "Coorporativos"], ["Pauta", "Pauta"]]);
 const BIGG_ORDEN_FIN = ["Intereses Ganados", "Perdidas Financieras"];
 const BIGG_ORDEN_IMP = ["Plan Facilidades AFIP", "IVA", "IVA Inversiones", "IVA Compra", "Ganancias", "Otros Impuestos"];
 
@@ -1061,6 +1067,8 @@ function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) {
   const ghqAccounts = omit(pnl.grupos.ghq, ["17 - Huergo"]);     // opex HQ sin Huergo (ya está en WRE)
   const gpvAccounts = pnl.grupos.gpv;                            // costo por venta HQ: Interusos, Fee Fact., compra Pauta
   const impuestos = sumG(pnl.grupos.imp);   // tributos reales (IVA saldo, Ganancias, etc.)
+  const capexAccounts = pnl.grupos.capex;   // compra de operaciones: abajo del resultado, NO es gasto operativo
+  const capex = sumG(capexAccounts);
   const ingHQ = sumG(hqAccounts), gpv = sumG(gpvAccounts), opexHQ = sumG(ghqAccounts),
         financieros = sumG(pnl.grupos.fin);
   const resOperaciones = MESES.map((_, m) => sar[m] + fg[m] + wre[m]);
@@ -1079,22 +1087,24 @@ function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) {
   const ivaDeb  = D;                    // mostrado sumando (+)
   const ivaCred = C.map(v => -v);       // mostrado restando (−)
   const resGrupo = MESES.map((_, m) => resGrupoNeto[m] + D[m] - C[m]);
+  const resFinal = MESES.map((_, m) => resGrupo[m] - capex[m]);   // Resultado Final = después de inversiones/capex
   const months = new Set(); const cur = new Date().getMonth();
   for (let i = 0; i <= cur; i++) months.add(i);
-  [sar, fg, wre, ingHQ, gpv, opexHQ, financieros, impuestos].forEach(a => a.forEach((v, i) => { if (v) months.add(i); }));
-  return { sar, fg, wre, hqAccounts, ghqAccounts, gpvAccounts, ingHQ, gpv, opexHQ, financieros, impuestos,
+  [sar, fg, wre, ingHQ, gpv, opexHQ, financieros, impuestos, capex].forEach(a => a.forEach((v, i) => { if (v) months.add(i); }));
+  return { sar, fg, wre, hqAccounts, ghqAccounts, gpvAccounts, capexAccounts, ingHQ, gpv, opexHQ, financieros, impuestos, capex,
            ivaDeb, ivaCred,
-           resOperaciones, resOpMasIngHQ, margen, resOpGrupo, resAntesImp, resGrupo, activeMonths: [...months].sort((a, b) => a - b) };
+           resOperaciones, resOpMasIngHQ, margen, resOpGrupo, resAntesImp, resGrupo, resFinal, activeMonths: [...months].sort((a, b) => a - b) };
 }
 
 // P&L BIGG = P&L de HOLDING. Arriba el RESULTADO de cada negocio operativo (no la venta); después HQ
 // (ingresos − opex), y al final financieros + impuestos del grupo. `sub` = computeSubtotalsHolding.
 function PnLTableBigg({ pnl, sub, year, moneda }) {
-  const { sar, fg, wre, hqAccounts, ghqAccounts, gpvAccounts, ingHQ, opexHQ,
-          resOperaciones, resOpMasIngHQ, margen, resOpGrupo, resAntesImp, resGrupo, activeMonths: _amRaw } = sub;
+  const { sar, fg, wre, hqAccounts, ghqAccounts, gpvAccounts, capexAccounts, ingHQ, opexHQ,
+          resOperaciones, resOpMasIngHQ, margen, resOpGrupo, resAntesImp, resGrupo, resFinal, activeMonths: _amRaw } = sub;
   const activeMonths = mesesVisibles(_amRaw, year);
   const ncols = activeMonths.length + 2;
-  const ALLKEYS = ["sec_op", "sec_ing", "sec_gpv", "sec_opex", "sec_fin", "sec_imp"];
+  const hayCapex = Object.keys(capexAccounts || {}).length > 0;
+  const ALLKEYS = ["sec_op", "sec_ing", "sec_gpv", "sec_opex", "sec_fin", "sec_imp", "sec_capex"];
   const [collapsed, setCollapsed] = useState(() => Object.fromEntries(ALLKEYS.map(k => [k, true])));   // arranca compactado
   const isCol  = k => !!collapsed[k];
   const toggle = k => setCollapsed(c => ({ ...c, [k]: !c[k] }));
@@ -1178,6 +1188,14 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
             {taxRows.map(([n, v]) => <DataRow key={n} label={n} values={v} activeMonths={activeMonths} color={SEDE_HDR} neg />)}
           </>}
           <ResultadoRow strong label="Resultado del Grupo" values={resGrupo} activeMonths={activeMonths} />
+
+          {/* Debajo de TODO: compra de operaciones (centros con categoria_pnl=capex). No es gasto operativo
+              → no toca el Resultado del Grupo; se resta aparte para llegar al Resultado Final. */}
+          {hayCapex && <>
+            <tr><td colSpan={ncols} style={{ height: 10, border: "none" }} /></tr>
+            {sec("sec_capex", "Inversiones / Capex", capexAccounts, null, true)}
+            <ResultadoRow strong label="Resultado Final del Grupo" values={resFinal} activeMonths={activeMonths} />
+          </>}
         </tbody>
       </table>
     </div>
@@ -2696,10 +2714,20 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     return { res: s.margen, ivaDeb: s.ivaDeb, ivaCred: s.ivaCred };
   }, [isBigg, inConFranq, egConSueldos, huergoCCs, year, monedaPL, sinIva]);
 
-  const pnlBigg = useMemo(
-    () => isBigg ? buildPnLBigg(inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva) : null,
-    [isBigg, inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva]
-  );
+  const pnlBigg = useMemo(() => {
+    if (!isBigg) return null;
+    const p = buildPnLBigg(inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva);
+    // Fondeo del núcleo a las fondeadas (anillo 2: España/Colombia/Puertos) POR MES → se suma DENTRO de la
+    // sección Inversiones/Capex (es plata invertida, no gasto operativo). Segui (externa) queda afuera. Por
+    // moneda (el fondeo EUR aparece en vista EUR, el USD en USD) hasta que se consolide a una moneda.
+    const fondeo = fondeoFondeadasMensual(intercoData, { year, moneda: monedaPL, desde: PNL_INICIO });
+    const nomSoc = new Map((intercoData?.sociedades || []).map(s => [String(s.id), s.nombre || s.id]));
+    for (const [fid, arr] of Object.entries(fondeo)) {
+      if (!arr.some(v => Math.abs(v) > 0.01)) continue;
+      p.grupos.capex[`Fondeo · ${nomSoc.get(String(fid)) || fid}`] = arr;
+    }
+    return p;
+  }, [isBigg, inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva, intercoData]);
   const subBigg = useMemo(
     () => pnlBigg ? computeSubtotalsHolding(pnlBigg, { resSedesAR, feeGer, resWRE }) : null,
     [pnlBigg, resSedesAR, feeGer, resWRE]

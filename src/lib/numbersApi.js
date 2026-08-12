@@ -2182,6 +2182,61 @@ export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades
   return out;
 }
 
+// Fondeo del NÚCLEO a las FONDEADAS (anillo 2: España/Colombia/Puertos), POR MES, en una moneda/año —
+// "la plata que puse este mes en cada negocio". Mismos criterios y convención de signo que lecturaInterco
+// (quien pone la plata = acreedor → invertido = +), pero resuelto por fecha (mes) y filtrado a
+// núcleo→fondeada (excluye Segui = externa/anillo 3, y núcleo↔núcleo). Devuelve { [fondeadaId]: number[12] }
+// (positivo = invertido ese mes; negativo = te devolvieron). Σ meses = el `neto` de lecturaInterco para esa
+// posición. Read-only. Nota: por-moneda (sin FX); consolidación a una moneda = a futuro.
+export function fondeoFondeadasMensual({ movs = [], comps = [], centros = [], sociedades = [] } = {}, { year = null, moneda = "ARS", desde = null } = {}) {
+  const empresaDe = new Map((centros || []).map(c => [String(c.id), String(c.empresa || "")]));
+  const nucleo   = new Set((sociedades || []).filter(s => /n[úu]cleo/i.test(String(s.anillo || ""))).map(s => String(s.id)));
+  const fondeada = new Set((sociedades || []).filter(s => /fondead/i.test(String(s.anillo || ""))).map(s => String(s.id)));
+  const out = {};
+  // Registra un aporte del núcleo A hacia la fondeada B (add(A,B,delta) de lecturaInterco), bucketeado por mes.
+  const rec = (A, B, fecha, mon, delta) => {
+    A = String(A || ""); B = String(B || "");
+    if (!nucleo.has(A) || !fondeada.has(B) || A === B) return;
+    if ((mon || "ARS") !== moneda) return;
+    const f = String(fecha || "");
+    if (year && f.slice(0, 4) !== String(year)) return;
+    // Es el FLUJO del mes (lo que puse ese mes), no el acumulado: la apertura (30/6, pre-go-live) es la
+    // posición inicial, no un movimiento → se excluye lo anterior a `desde`.
+    if (desde && f < desde) return;
+    const m = parseInt(f.slice(5, 7), 10) - 1;
+    if (m < 0 || m > 11 || Math.abs(delta) < 0.01) return;
+    (out[B] ??= new Array(12).fill(0))[m] += delta;
+  };
+  // 1a/1b. Fondeo vía gasto (A paga un gasto imputado a un CECO de B): comprobantes + gastos directos/CONTAB.
+  for (const r of comps) {
+    const sub = String(r.subtipo || "").toUpperCase();
+    if (sub !== "EGRESO" && sub !== "GASTO" && sub !== "EGRESO_FC") continue;
+    rec(r.sociedad, empresaDe.get(String(r.centro_costo || "")), r.fecha, r.moneda, Math.abs(toNum(r.total)));
+  }
+  for (const m of movs) {
+    if (esIgnorado(m)) continue;
+    const tipo = String(m.tipo || "").toUpperCase();
+    if (tipo === "INGRESO" || tipo === "COBRO") continue;
+    const esGasto = m.origen === "gasto_directo" || String(m.documento_id || "").startsWith("CONTAB-");
+    if (!esGasto) continue;
+    rec(m.sociedad, empresaDe.get(String(m.centro_costo || "")), m.fecha, m.moneda, Math.abs(toNum(m.monto)));
+  }
+  // 2. Pares INTERCOMPANIA (transferencias del núcleo): ambas patas, cada una con su fecha.
+  for (const { salida, entrada } of _pairMovs(movs, "INTERCOMPANIA")) {
+    if (!salida || !entrada) continue;
+    rec(salida.sociedad,  entrada.sociedad, salida.fecha,  salida.moneda,  +Math.abs(toNum(salida.monto)));
+    rec(entrada.sociedad, salida.sociedad,  entrada.fecha, entrada.moneda, -Math.abs(toNum(entrada.monto)));
+  }
+  // 3. Apertura interco (30/6, monto firmado). 4. Interco parkeadas (contrib = −monto). 5. Interusos de gestión.
+  for (const m of movs) {
+    if (esIgnorado(m)) continue;
+    if (m.origen === "interco_apertura")      rec(m.sociedad, m.contraparte_id, m.fecha, m.moneda, toNum(m.monto));
+    else if (m.origen === "interco_park")     rec(m.sociedad, m.contraparte_id, m.fecha, m.moneda, -toNum(m.monto));
+    else if (m.origen === "interuso_gestion") rec(m.sociedad, m.contraparte_id, m.fecha, m.moneda, toNum(m.monto));
+  }
+  return out;
+}
+
 // Extracto (ledger) de la posición interco de UNA sociedad contra UNA contraparte+moneda: cada
 // movimiento por fecha con su +/− y saldo corriente, más el saldo de apertura. Mismas reglas y
 // convención de signo que lecturaInterco (quien pone la plata = acreedor) → el saldo final coincide
