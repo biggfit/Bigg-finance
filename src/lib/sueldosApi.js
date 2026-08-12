@@ -917,6 +917,8 @@ export async function baseHaberesPorCentro(sociedadId, mes, anio) {
   let total = 0;
   for (const liq of liqs) {
     if (Number(liq.mes) !== Number(mes) || Number(liq.anio) !== Number(anio)) continue;
+    // Los HQ_OWNER (socios) se pagan como autónomos → NO generan cargas sociales → fuera de la base.
+    if (String(liq.rol || "").toUpperCase() === "HQ_OWNER") continue;
     for (const row of liquidacionToPnLRows(liq)) {
       if (row.bucket !== "haberes") continue;                 // solo lo declarado en blanco
       if (String(row.sociedad) !== String(sociedadId)) continue;

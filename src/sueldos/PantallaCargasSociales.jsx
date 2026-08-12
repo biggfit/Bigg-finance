@@ -199,7 +199,8 @@ function FormCargaSocial({ mes, anio, masters, ccNombre, onClose, onSaved }) {
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }}>
-      <div style={{ background: T.card, borderRadius: 12, padding: 28, width: 560, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 8px 32px rgba(0,0,0,.18)", fontFamily: T.font }}>
+      <div style={{ background: T.card, borderRadius: 12, width: 560, maxHeight: "90vh", display: "flex", flexDirection: "column", boxShadow: "0 8px 32px rgba(0,0,0,.18)", fontFamily: T.font }}>
+        <div style={{ padding: "24px 28px", overflowY: "auto" }}>
         <h3 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 700 }}>Nueva carga social — {MESES[mes-1]} {anio}</h3>
         <p style={{ margin: "0 0 18px", fontSize: 12, color: T.muted }}>F931, aporte sindical u otra obligación. Se crea como CxP y se prorratea por los haberes en blanco de cada centro.</p>
 
@@ -310,7 +311,10 @@ function FormCargaSocial({ mes, anio, masters, ccNombre, onClose, onSaved }) {
           )}
         </div>
 
-        <div style={{ display: "flex", gap: 10, marginTop: 24, justifyContent: "flex-end" }}>
+        </div>{/* /cuerpo scrolleable */}
+
+        {/* Pie fijo: siempre visible aunque el cuerpo scrollee */}
+        <div style={{ display: "flex", gap: 10, padding: "14px 28px", borderTop: `1px solid ${T.border}`, justifyContent: "flex-end", flexShrink: 0 }}>
           <button onClick={onClose} style={{ border: `1px solid ${T.border}`, background: T.card, borderRadius: 7, padding: "8px 16px", fontSize: 13, cursor: "pointer", fontFamily: T.font }}>Cancelar</button>
           <button onClick={handleSave} disabled={saving || !cuadra} style={{ background: (saving || !cuadra) ? T.dim : T.blue, color: "#fff", border: "none", borderRadius: 7, padding: "8px 20px", fontSize: 13, fontWeight: 600, cursor: (saving || !cuadra) ? "not-allowed" : "pointer", fontFamily: T.font }}>
             {saving ? "Creando…" : "Crear CxP"}
