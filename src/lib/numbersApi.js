@@ -2510,6 +2510,43 @@ export async function fetchFinanciaciones(sociedad) {
   return agruparPlanes(rows);
 }
 
+// Ledger (extracto) del PASIVO de financiaciones de un bucket (plan_afip / prestamo) en una moneda:
+// el saldo es el capital adeudado. Apertura = capital original (o remanente al go-live en aperturas);
+// cada cuota PAGADA lo baja (−capital) por su fecha de pago; las PENDIENTES se muestran como evento
+// (delta 0, el capital ya estaba en la apertura) para ver si la cuota del mes se devengó/está por pagar.
+// `final` = capital pendiente (coincide con el saldo del bucket). Espeja el shape de intercoLedger.
+export function financiacionLedger(planes = [], { tipo = null, moneda = "ARS" } = {}) {
+  const hoy = new Date().toISOString().slice(0, 10);
+  const fmtN = v => (Number(v) || 0).toLocaleString("es-AR", { maximumFractionDigits: 2 });
+  const sel = (planes || []).filter(p =>
+    (p.moneda || "ARS") === moneda &&
+    (tipo == null || (tipo === "plan_afip" ? p.tipo === "plan_afip" : p.tipo !== "plan_afip")));
+  let opening = 0;
+  const entries = [];
+  for (const p of sel) {
+    const acr = p.acreedor_nombre || p.nro_plan || "—";
+    const N = p.n_cuotas || (p.cuotas || []).length;
+    for (const c of (p.cuotas || [])) {
+      if (c.estado === "cancelada") continue;
+      opening += c.capital;                              // capital no cancelado = deuda de apertura
+      if (c.estado === "pagada") {
+        entries.push({ fecha: c.fecha_pago || c.vto, delta: -c.capital,
+          concepto: `${acr} · Cuota ${c.nro_cuota}/${N} pagada`,
+          sub: `capital ${fmtN(c.capital)} · interés ${fmtN(c.interes)}` });
+      } else {
+        const dev = c.vto && String(c.vto) <= hoy;       // vencida = ya devengada (P&L por vto)
+        entries.push({ fecha: c.vto, delta: 0, pend: true,
+          concepto: `${acr} · Cuota ${c.nro_cuota}/${N} ${dev ? "devengada · pendiente de pago" : "programada"}`,
+          sub: `capital ${fmtN(c.capital)} · interés ${fmtN(c.interes)}` });
+      }
+    }
+  }
+  entries.sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)));
+  let saldo = opening;
+  for (const e of entries) { saldo += e.delta; e.saldo = saldo; }
+  return { opening, entries, final: saldo };
+}
+
 /**
  * Pasivo de financiaciones por bucket (planes AFIP → impuestos, créditos → financiero).
  * Fuente ÚNICA para el pasivo que muestran Reportes→Balance y Tesorería (mismo número en los dos).

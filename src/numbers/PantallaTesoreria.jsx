@@ -515,6 +515,10 @@ function EditarMovModal({ mov, cuentasBancarias, cuentasContables = [], centrosC
 // ─── Modal de aging por contraparte ──────────────────────────────────────────
 export function PaginaAging({ item, fechaCorte, headerColor, onBack }) {
   const hoy = fechaCorte ? new Date(fechaCorte + "T00:00:00") : new Date();
+  // Toggle Aging ↔ Movimientos: si el item trae un ledger (ej. financiaciones), se puede ver el extracto
+  // de la cuenta de pasivo (apertura + cuotas por fecha con saldo corriente), como en un banco.
+  const hayLedger = !!(item.ledger && ((item.ledger.entries?.length) || item.ledger.opening));
+  const [verLedger, setVerLedger] = useState(false);
 
   const grouped = {};
   for (const doc of (item.docs ?? [])) {
@@ -570,15 +574,66 @@ export function PaginaAging({ item, fechaCorte, headerColor, onBack }) {
             {fechaCorte && <span style={{ marginLeft:8 }}>· Al {fmtDate(fechaCorte)}</span>}
           </div>
         </div>
-        <div style={{ marginLeft:"auto", display:"flex", flexDirection:"column", alignItems:"flex-end" }}>
-          <span style={{ fontSize:11, color:T.muted, textTransform:"uppercase",
-            letterSpacing:".06em", fontWeight:700 }}>Total pendiente</span>
-          <span style={{ fontSize:22, fontFamily:"var(--mono)", fontWeight:900,
-            color: headerColor, whiteSpace:"nowrap" }}>{fmtSaldo(totRow.total, mon)}</span>
+        <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:16 }}>
+          {hayLedger && (
+            <button onClick={() => setVerLedger(v => !v)}
+              style={{ background: verLedger ? headerColor : "#f3f4f6", border:`1px solid ${verLedger ? headerColor : T.cardBorder}`,
+                borderRadius:8, padding:"7px 14px", fontSize:12.5, fontWeight:800,
+                color: verLedger ? "#fff" : T.muted, cursor:"pointer", fontFamily:T.font, whiteSpace:"nowrap" }}>
+              {verLedger ? "Ver por vencimiento" : "Ver movimientos"}
+            </button>
+          )}
+          <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end" }}>
+            <span style={{ fontSize:11, color:T.muted, textTransform:"uppercase",
+              letterSpacing:".06em", fontWeight:700 }}>{verLedger && hayLedger ? "Saldo" : "Total pendiente"}</span>
+            <span style={{ fontSize:22, fontFamily:"var(--mono)", fontWeight:900,
+              color: headerColor, whiteSpace:"nowrap" }}>{fmtSaldo(verLedger && hayLedger ? (item.ledger.final ?? totRow.total) : totRow.total, mon)}</span>
+          </div>
         </div>
       </div>
 
-      {/* Tabla */}
+      {/* Movimientos (extracto del pasivo, saldo corriente) o Aging por vencimiento */}
+      {verLedger && hayLedger ? (() => {
+        const led = item.ledger;
+        const rowsL = [...(led.entries || [])].reverse();   // más reciente arriba
+        const fmtF = f => { const s = String(f || ""); return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10).split("-").reverse().join("/") : s; };
+        const sgn = v => (v >= 0 ? "+ " : "− ") + fmtSaldo(Math.abs(v), mon);
+        return (
+          <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:T.radius, boxShadow:T.shadow, overflow:"hidden" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse" }}>
+              <thead>
+                <tr style={{ background:headerColor }}>
+                  <th style={{ ...thS, textAlign:"left" }}>Fecha</th>
+                  <th style={{ ...thS, textAlign:"left" }}>Concepto</th>
+                  <th style={thS}>Monto</th>
+                  <th style={{ ...thS, color:"#fff" }}>Saldo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rowsL.length === 0 && <tr><td colSpan={4} style={{ padding:16, fontSize:13, color:T.muted, textAlign:"center" }}>Sin movimientos (solo saldo de apertura).</td></tr>}
+                {rowsL.map((e, i) => (
+                  <tr key={i} style={{ borderBottom:`1px solid ${T.cardBorder}`, background:i % 2 === 0 ? T.card : "#fafbfc" }}>
+                    <td style={{ padding:"9px 16px", fontSize:12.5, color:T.muted, whiteSpace:"nowrap", verticalAlign:"top" }}>{fmtF(e.fecha)}</td>
+                    <td style={{ padding:"9px 16px", fontSize:13, color: e.pend ? T.muted : T.text }}>
+                      <div>{e.concepto}</div>
+                      {e.sub && <div style={{ fontSize:11, color:T.dim, marginTop:2 }}>{e.sub}</div>}
+                    </td>
+                    <td style={{ ...tdS, color: e.delta >= 0 ? "#16a34a" : "#dc2626", fontWeight:700 }}>{e.delta === 0 ? <span style={{ color:T.dim }}>—</span> : sgn(e.delta)}</td>
+                    <td style={{ ...tdS, fontWeight:800 }}>{fmtSaldo(e.saldo, mon)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{ background:"#f3f4f6", borderTop:`2px solid ${T.cardBorder}` }}>
+                  <td style={{ padding:"9px 16px", fontSize:12.5, fontWeight:800, color:T.muted }} colSpan={2}>Saldo de apertura</td>
+                  <td style={tdS} />
+                  <td style={{ ...tdS, fontWeight:900 }}>{fmtSaldo(led.opening || 0, mon)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        );
+      })() : (
       <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`,
         borderRadius:T.radius, boxShadow:T.shadow, overflow:"hidden" }}>
         <table style={{ width:"100%", borderCollapse:"collapse", tableLayout:"fixed" }}>
@@ -627,6 +682,7 @@ export function PaginaAging({ item, fechaCorte, headerColor, onBack }) {
           </tfoot>
         </table>
       </div>
+      )}
     </div>
   );
 }
