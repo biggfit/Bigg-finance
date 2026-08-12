@@ -30,7 +30,9 @@ const ttlDe = resource => (MASTER_RES.has(resource) ? CACHE_TTL_MASTER : CACHE_T
 
 function _invalidate(sheet) {
   for (const key of _cache.keys()) {
-    if (key.startsWith(`resource=${sheet}`)) _cache.delete(key);
+    // Limpia la hoja Y cualquier batch (__multi) que pueda contenerla → tras escribir, el próximo
+    // primeCache re-trae fresco (si no, un batch cacheado re-sembraría datos viejos por hasta el TTL).
+    if (key.startsWith(`resource=${sheet}`) || key.startsWith("resource=__multi")) _cache.delete(key);
   }
 }
 
@@ -137,6 +139,61 @@ async function post(body) {
     }
   }
   throw lastErr;
+}
+
+// ─── Batch de lectura (getMulti) ──────────────────────────────────────────────
+// Trae VARIAS hojas del GAS en UNA sola llamada (el backend serializa los requests a ~3-4s c/u,
+// así una pantalla de ~10 fetch pasaba de ~8 round-trips a 1). specs = [{ resource, sociedad? }].
+// Devuelve { <resource>: filas[] }. Cachea/deduplica y respeta la ventana de refresco (_cb) igual que get().
+export async function getMulti(specs = []) {
+  if (!CONFIGURED) throw new Error("VITE_NUMBERS_API_URL no configurada");
+  const spec = specs.map(x => (x.sociedad ? { r: x.resource, s: x.sociedad } : { r: x.resource }));
+  const cb   = bustToken();
+  const qs   = new URLSearchParams({ resource: "__multi", spec: JSON.stringify(spec), token: TOKEN, ...(cb ? { _cb: cb } : {}) }).toString();
+  const key  = qs;
+
+  const cached = _cache.get(key);
+  if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.data;
+  if (_inflight.has(key)) return _inflight.get(key);
+
+  const req = (async () => {
+    let lastErr;
+    for (let i = 0; i < 3; i++) {
+      try {
+        const res = await fetch(`${BASE}?${qs}`, { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        _cache.set(key, { data, ts: Date.now() });
+        return data;
+      } catch (e) {
+        lastErr = e;
+        if (i < 2) await new Promise(r => setTimeout(r, (i + 1) * 600));
+      }
+    }
+    throw lastErr;
+  })();
+  _inflight.set(key, req);
+  req.finally(() => _inflight.delete(key));
+  return req;
+}
+
+// Precalienta la caché individual con UN solo batch: los get(resource, {sociedad?}) que dispare la
+// pantalla justo después salen de caché (0 red). Best-effort: si el batch falla (GAS viejo, error),
+// no siembra nada y la pantalla cae a las llamadas de a una — mismo comportamiento que antes.
+// Las claves sembradas replican EXACTO las que arma get() (mismo orden de params + _cb) → hit garantizado.
+export async function primeCache(specs = []) {
+  if (!CONFIGURED || !specs.length) return;
+  const cb = bustToken();
+  let data;
+  try { data = await getMulti(specs); }
+  catch { return; }
+  for (const s of specs) {
+    const rows = data[s.resource];
+    if (rows == null) continue;
+    const key = new URLSearchParams({ resource: s.resource, token: TOKEN, ...(s.sociedad ? { sociedad: s.sociedad } : {}), ...(cb ? { _cb: cb } : {}) }).toString();
+    _cache.set(key, { data: rows, ts: Date.now() });
+  }
 }
 
 // ─── Generador de IDs ────────────────────────────────────────────────────────

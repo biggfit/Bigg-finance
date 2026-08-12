@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, Fragment } from "react";
 import { T, PageHeader } from "./theme";
-import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco, fondeoFondeadasMensual, calcSaldoPendiente } from "../lib/numbersApi";
+import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco, fondeoFondeadasMensual, calcSaldoPendiente, primeCache } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, pendienteSueldosPorLegajo, adelantoSueldosPorLegajo } from "../lib/sueldosApi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
 import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
@@ -2453,7 +2453,21 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     const run = async () => {
       setLoading(true); setError(null);
       try {
-        const [eg, ing, movs, cbs, ccList, ctaList, liqsC, pagosS, fin, socs, socsCC] = await Promise.all([
+        // Sueldos (liquidaciones + pagos) vive en otro backend → se dispara en paralelo al batch de Numbers.
+        const liqsP  = fetchLiquidacionesCerradas().catch(() => []);
+        const pagosP = fetchPagosAnio().catch(() => []);
+        // Batch: 8 hojas group-wide de Numbers en UNA llamada → los fetch de abajo salen de caché.
+        await primeCache([
+          { resource: "nb_comprobantes" },
+          { resource: "nb_movimientos" },
+          { resource: "nb_cuentas_bancarias" },
+          { resource: "nb_centros_costo" },
+          { resource: "nb_cuentas" },
+          { resource: "nb_financiaciones" },
+          { resource: "nb_socios" },
+          { resource: "nb_socios_cc" },
+        ]);
+        const [eg, ing, movs, cbs, ccList, ctaList, fin, socs, socsCC] = await Promise.all([
           // P&L Sedes/BIGG son group-level (todas las sociedades). Cash Flow (por sociedad) filtra client-side.
           fetchLineasEnriquecidas(null, ["EGRESO", "GASTO"]).catch(() => []),
           fetchLineasEnriquecidas(null, "INGRESO").catch(() => []),
@@ -2461,12 +2475,11 @@ export default function PantallaReportes({ sociedad = "nako" }) {
           fetchCuentasBancarias().catch(() => []),
           fetchCentrosCosto().catch(() => []),
           fetchCuentas().catch(() => []),
-          fetchLiquidacionesCerradas().catch(() => []),
-          fetchPagosAnio().catch(() => []),
           fetchFinanciaciones().catch(() => []),
           fetchSocios().catch(() => []),
           fetchSociosCC().catch(() => []),
         ]);
+        const [liqsC, pagosS] = [await liqsP, await pagosP];
         if (cancelled) return;
         setRawEg(eg);
         setRawIn(ing);

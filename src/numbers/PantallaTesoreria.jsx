@@ -9,7 +9,7 @@ import {
   fetchEgresos, fetchIngresos, fetchPagosCobros,
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto, fetchSaldoMercadoPago, esCuentaMercadoPago,
   appendGastoDirecto, esIgnorado, ignorarMovimiento, esCuentaCredito, fetchFinanciaciones,
-  pagarTarjeta, fetchSocios, fetchSociosCC, fetchIntercoData, intercoLedger,
+  pagarTarjeta, fetchSocios, fetchSociosCC, fetchIntercoData, intercoLedger, primeCache,
 } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas } from "../lib/sueldosApi";
 import { fetchAll } from "../lib/sheetsApi";        // Franquicias (read-only)
@@ -1416,18 +1416,32 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
     setLoading(true);
     setError(null);
     try {
-      const [movs, egs, ings, pcs, cbList, ctaList, liqsS, fin, socs, socsCC] = await Promise.all([
+      // Liquidaciones vive en el backend de Sueldos → se dispara en paralelo al batch de Numbers.
+      const liqsP = fetchLiquidacionesCerradas().catch(() => []);
+      // Batch: trae las 7 hojas de Numbers en UNA llamada y precalienta la caché → los fetch de abajo
+      // salen de caché (0 red). Best-effort: si falla, cada fetch pega solo (igual que antes).
+      await primeCache([
+        { resource: "nb_movimientos",       sociedad },
+        { resource: "nb_comprobantes",      sociedad },
+        { resource: "nb_financiaciones",    sociedad },
+        { resource: "nb_cuentas_bancarias" },
+        { resource: "nb_cuentas" },
+        { resource: "nb_centros_costo" },
+        { resource: "nb_socios" },
+        { resource: "nb_socios_cc" },
+      ]);
+      const [movs, egs, ings, pcs, cbList, ctaList, fin, socs, socsCC] = await Promise.all([
         fetchMovTesoreria(sociedad),
         fetchEgresos(sociedad).catch(() => []),
         fetchIngresos(sociedad).catch(() => []),
         fetchPagosCobros(sociedad).catch(() => []),
         fetchCuentasBancarias().catch(() => []),
         fetchCuentas().catch(() => []),
-        fetchLiquidacionesCerradas().catch(() => []),
         fetchFinanciaciones(sociedad).catch(() => []),
         fetchSocios().catch(() => []),
         fetchSociosCC().catch(() => []),
       ]);
+      const liqsS = await liqsP;
       setMovimientos(Array.isArray(movs) ? movs : []);
       setEgresos(Array.isArray(egs) ? egs : []);
       setIngresos(Array.isArray(ings) ? ings : []);
