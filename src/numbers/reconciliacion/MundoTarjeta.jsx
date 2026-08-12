@@ -241,8 +241,10 @@ export default function MundoTarjeta({ sociedad }) {
   // Nombres válidos para el input con autocompletar (datalist): permite tipear y buscar, pero solo
   // cuenta como "completa" si matchea EXACTO una cuenta real — evita que un typo quede como imputado.
   const cuentaNombresSet = useMemo(() => new Set(cuentaOpts.map(c => c.nombre)), [cuentaOpts]);
-  // Cuenta obligatoria Y debe ser una cuenta real del plan (no cualquier texto tipeado) — centro recomendado.
-  const completa = m => cuentaNombresSet.has(cuentaDe(m));
+  // Para autorizar: cuenta obligatoria (una cuenta real del plan, no texto tipeado) Y centro obligatorio.
+  // Sin ambos, el gasto entra a la base sin imputar y se cuela como fila suelta en el P&L (ej. nafta de
+  // un comercio que el prefill no reconoció) → no se puede autorizar hasta completar los dos.
+  const completa = m => cuentaNombresSet.has(cuentaDe(m)) && !!String(centroDe(m)).trim();
 
   async function autorizar(m) {
     if (!completa(m)) return;
@@ -418,6 +420,7 @@ export default function MundoTarjeta({ sociedad }) {
                         <td style={{ padding: "5px 10px", textAlign: "right", fontFamily: T.mono }}>{esUSD ? (esAjuste ? moneySigned(-m.monto, "USD") : money(m.monto, "USD")) : "—"}</td>
                         <td style={{ padding: "4px 8px", whiteSpace: "nowrap", textAlign: "right" }}>
                           <button onClick={() => autorizar(m)} disabled={!completa(m) || busy}
+                            title={completa(m) ? "" : (!cuentaNombresSet.has(cuentaDe(m)) ? "Falta la cuenta contable" : "Falta el centro de costo")}
                             style={{ background: completa(m) ? T.accent : "#e5e7eb", border: "none", borderRadius: 7, padding: "6px 12px", fontSize: 12, fontWeight: 800, color: completa(m) ? "#000" : T.muted, cursor: completa(m) && !busy ? "pointer" : "default", fontFamily: T.font }}>
                             Autorizar
                           </button>
