@@ -211,7 +211,7 @@ function FormCargaSocial({ mes, anio, masters, ccNombre, onClose, onSaved }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }}>
       <div style={{ background: T.card, borderRadius: 12, width: 560, maxHeight: "90vh", display: "flex", flexDirection: "column", boxShadow: "0 8px 32px rgba(0,0,0,.18)", fontFamily: T.font }}>
-        <div style={{ padding: "24px 28px", overflowY: "auto" }}>
+        <div style={{ padding: "24px 28px", overflowY: "auto", flex: 1, minHeight: 0 }}>
         <h3 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 700 }}>Nueva carga social — {MESES[mes-1]} {anio}</h3>
         <p style={{ margin: "0 0 18px", fontSize: 12, color: T.muted }}>F931, aporte sindical u otra obligación. Se crea como CxP y se prorratea por los haberes en blanco de cada centro.</p>
 
