@@ -79,6 +79,17 @@ export const MONEDA_SYM = {
   COP: "COP",
 };
 
+// Monedas elegibles en los formularios (factura de proveedor/cliente, moneda habitual del
+// maestro). Fuente única para que no vuelvan a quedar listas hardcodeadas desincronizadas:
+// COP existía en MONEDA_SYM y en las cuentas bancarias de Tigre Loco, pero no en los selects,
+// así que en Colombia no se podía cargar una factura en su propia moneda.
+export const MONEDA_OPTS = [
+  { value: "ARS", label: "$ ARS", labelLargo: "ARS — Pesos" },
+  { value: "USD", label: "U$D",   labelLargo: "USD — Dólares" },
+  { value: "EUR", label: "€ EUR", labelLargo: "EUR — Euros" },
+  { value: "COP", label: "COP",   labelLargo: "COP — Pesos colombianos" },
+];
+
 export const fmtSaldo = (n, moneda) => {
   const sym  = MONEDA_SYM[moneda] ?? moneda;
   const abs  = Math.abs(Number(n) || 0);

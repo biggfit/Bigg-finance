@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { T } from "./theme";
 import { checkDuplicateComp } from "../lib/numbersApi";
 import { IVA_OPTS, todayISO, addDays, fmtNum } from "../data/numbersData";
+import { MONEDA_OPTS } from "../data/tesoreriaData";
 import {
   inputStyle, dateStyle, lookupId, makeCCResolver,
   calcLineasTotals, SoftField, FacturaFormFocusRing, FACTURA_FORM_CLASS,
@@ -140,9 +141,7 @@ export default function NuevoIngresoModal({ onClose, onSave, sociedad, clientes 
         </SoftField>
         <SoftField label="Moneda">
           <select value={moneda} onChange={e => setMoneda(e.target.value)} style={inputStyle}>
-            <option value="ARS">$ ARS</option>
-            <option value="USD">U$D</option>
-            <option value="EUR">€ EUR</option>
+            {MONEDA_OPTS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>
         </SoftField>
         <SoftField label="N° comprobante">

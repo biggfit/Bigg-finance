@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { T, Btn, Input, Select } from "./theme";
-import { CUENTAS_BANCARIAS, TIPO_CUENTA } from "../data/tesoreriaData";
+import { CUENTAS_BANCARIAS, TIPO_CUENTA, MONEDA_OPTS } from "../data/tesoreriaData";
 import {
   fetchProveedores, appendProveedor, updateProveedor, deleteProveedor,
   fetchClientes,    appendCliente,   updateCliente,   deleteCliente,
@@ -166,9 +166,7 @@ export function ProveedorModal({ initial, onClose, onSave, cuentas = [], centros
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
               <ModalField label="Moneda habitual">
                 <select value={form.monedaDefault ?? "ARS"} onChange={e=>set("monedaDefault",e.target.value)} style={MODAL_INP}>
-                  <option value="ARS">ARS — Pesos</option>
-                  <option value="USD">USD — Dólares</option>
-                  <option value="EUR">EUR — Euros</option>
+                  {MONEDA_OPTS.map(m => <option key={m.value} value={m.value}>{m.labelLargo}</option>)}
                 </select>
               </ModalField>
               <ModalField label="Centro de costo default">
@@ -294,9 +292,7 @@ export function ClienteModal({ initial, onClose, onSave, cuentas = [], centrosCo
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
               <ModalField label="Moneda habitual">
                 <select value={form.monedaDefault ?? "ARS"} onChange={e=>set("monedaDefault",e.target.value)} style={MODAL_INP}>
-                  <option value="ARS">ARS — Pesos</option>
-                  <option value="USD">USD — Dólares</option>
-                  <option value="EUR">EUR — Euros</option>
+                  {MONEDA_OPTS.map(m => <option key={m.value} value={m.value}>{m.labelLargo}</option>)}
                 </select>
               </ModalField>
               <ModalField label="Centro de costo default">
