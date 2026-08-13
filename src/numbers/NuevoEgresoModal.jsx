@@ -33,6 +33,7 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
   const initProvId = lookupId(proveedores, "proveedorId", "proveedor", initialData);
   const initCuentaId = lookupId(CUENTAS_GASTO, "cuentaId", "cuenta", initialData);
   // Alicuotas del pais de la sociedad: la general es el default de cada linea nueva.
+  const monedaSoc  = useMemo(() => monedaDeSociedad(sociedad), [sociedad]);
   const ivaOpts    = useMemo(() => ivaOptsDeSociedad(sociedad), [sociedad]);
   const ivaDefault = useMemo(() => ivaDefaultDeSociedad(sociedad), [sociedad]);
   const initLineas = useMemo(
@@ -157,6 +158,11 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
           <select value={moneda} onChange={e => setMoneda(e.target.value)} style={inputStyle}>
             {MONEDA_OPTS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>
+          {moneda !== monedaSoc && (
+            <div style={{ fontSize: 11, color: "#b45309", marginTop: 4, lineHeight: 1.35 }}>
+              ⚠ La sociedad opera en {monedaSoc}. En {moneda} esta factura no entra en su P&amp;L.
+            </div>
+          )}
         </SoftField>
         <SoftField label="N° comprobante">
           <input ref={nroMask.ref} value={nroComp}

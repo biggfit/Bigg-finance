@@ -223,7 +223,14 @@ export function makeFacturaPartyChangeHandler({ setPartyId, list, setCuentaId, s
     if (!row) return;
     if (row.cuentaDefault) setCuentaId(row.cuentaDefault);
     if (row.monedaDefault) setMoneda(row.monedaDefault);
-    setLineas([newLinea(row.ccDefault ?? "", ivaDefault)]);
+    // NO pisar importes ya cargados: abierto desde Conciliación el subtotal viene del extracto, y
+    // elegir el proveedor despues borraba la plata. Solo se resetea si no hay ningun monto tipeado;
+    // si lo hay, se conserva todo y el ccDefault del proveedor unicamente rellena los cc vacios.
+    setLineas(prev => {
+      const hayMonto = (prev ?? []).some(l => String(l.subtotal ?? "").trim() !== "");
+      if (!hayMonto) return [newLinea(row.ccDefault ?? "", ivaDefault)];
+      return prev.map(l => ({ ...l, cc: l.cc || (row.ccDefault ?? "") }));
+    });
     if (setVto) {
       const vto = calcVtoFromProveedor(row, getFecha?.());
       if (vto) setVto(vto);
