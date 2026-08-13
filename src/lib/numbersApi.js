@@ -5,6 +5,7 @@
 
 import { stamp, firma } from "./auth";
 import { bustToken, forzarRefresco } from "./cacheBust";
+import { fetchLegajos } from "./sueldosApi";   // solo lectura (mapa legajo→sociedad para interco de sueldos)
 
 const CONFIGURED = !!import.meta.env.VITE_NUMBERS_API_URL;
 const TOKEN      = import.meta.env.VITE_SHEETS_TOKEN;   // mismo token
@@ -2076,19 +2077,27 @@ export const deleteIntercompania = _deleteMovRows;
 // ── LECTURA intercompañía (el corazón del módulo — LECTURA, no escribe) ──────────
 // Trae TODO lo necesario para leer lo intercompany (todas las sociedades).
 export async function fetchIntercoData() {
-  const [movs, comps, centros, clientes, sociedades] = await Promise.all([
+  const [movs, comps, centros, clientes, sociedades, legajos] = await Promise.all([
     get("nb_movimientos", {}).catch(() => []),
     get("nb_comprobantes", {}).catch(() => []),
     get("nb_centros_costo", {}).catch(() => []),
     get("nb_clientes", {}).catch(() => []),
     get("nb_sociedades", {}).catch(() => []),
+    fetchLegajos().catch(() => []),   // para derivar la interco de sueldos (legajo → sociedad empleadora)
   ]);
+  // Mapa legajo → sociedad empleadora: cuando la caja que paga un sueldo (mov.sociedad) ≠ la sociedad
+  // del legajo, hubo fondeo cross-society (ej. Beta paga el efectivo de un coach de Segui). lecturaInterco lo lee.
+  const legajoSoc = {};
+  for (const l of (Array.isArray(legajos) ? legajos : [])) {
+    if (l?.id) legajoSoc[String(l.id)] = String(l.sociedad_id || "");
+  }
   return {
     movs:       Array.isArray(movs) ? movs : [],
     comps:      Array.isArray(comps) ? comps : [],
     centros:    Array.isArray(centros) ? centros : [],
     clientes:   Array.isArray(clientes) ? clientes : [],
     sociedades: Array.isArray(sociedades) ? sociedades : [],
+    legajoSoc,
   };
 }
 
@@ -2220,7 +2229,7 @@ export async function revertirInterusoGestion(movId) {
 //      directos / conciliación contabilizada en nb_movimientos)
 //   2. Préstamos/transferencias del núcleo (pares INTERCOMPANIA).
 // Si `sociedad` viene → solo las posiciones de esa sociedad (mirada propia).
-export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades = [] } = {}, { sociedad = null } = {}) {
+export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades = [], legajoSoc = {} } = {}, { sociedad = null } = {}) {
   const empresaDe = new Map((centros || []).map(c => [String(c.id), c.empresa]));
   // Sociedades del núcleo (por anillo) → para decidir si un interuso de gestión cross-society deja
   // posición: núcleo↔núcleo NO (Hektor); hacia una fondeada/externa SÍ (Wellness).
@@ -2310,6 +2319,22 @@ export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades
     add(A, B, m.moneda || "ARS", +mm);
     add(B, A, m.moneda || "ARS", -mm);
   }
+  // 6. SUELDOS pagados por cuenta de otra sociedad (fondeo POR PAGADO, no devengado). La caja que
+  //    pagó (m.sociedad) frenteó el sueldo de un legajo cuya sociedad empleadora es otra → fondeo.
+  //    Ej.: Beta paga el efectivo de un coach de Segui → Beta acreedor / Segui deudor. Los haberes
+  //    tienen m.sociedad = la del legajo → A===B → sin posición (Segui pagó su propio blanco).
+  //    núcleo↔núcleo se saltea (efectivo de un coach del núcleo pagado con Beta = caja negra, no interco).
+  //    Sin datos de anillo no arriesgo posiciones espurias (mismo criterio que la fuente 5).
+  if (nucleo.size) for (const m of movs) {
+    if (m.origen !== "sueldos" || esIgnorado(m)) continue;
+    const A = String(m.sociedad || ""), B = String(legajoSoc[String(m.legajo_id || "")] || "");
+    if (!A || !B || A === B) continue;
+    if (nucleo.has(A) && nucleo.has(B)) continue;   // ambas del núcleo → sin posición
+    const monto = Math.abs(toNum(m.monto));
+    if (monto < 0.01) continue;
+    add(A, B, m.moneda || "ARS", +monto);   // A (la caja que pagó) acreedor
+    add(B, A, m.moneda || "ARS", -monto);   // B (la sociedad empleadora) deudor
+  }
   const soc = sociedad ? String(sociedad).toLowerCase() : null;
   const out = [];
   for (const [s, porC] of Object.entries(acc)) {
@@ -2383,7 +2408,7 @@ export function fondeoFondeadasMensual({ movs = [], comps = [], centros = [], so
 // movimiento por fecha con su +/− y saldo corriente, más el saldo de apertura. Mismas reglas y
 // convención de signo que lecturaInterco (quien pone la plata = acreedor) → el saldo final coincide
 // con el `neto` de esa posición. Read-only, no toca datos.
-export function intercoLedger({ movs = [], comps = [], centros = [], sociedades = [] } = {}, { sociedad, contraparte, moneda = "ARS" } = {}) {
+export function intercoLedger({ movs = [], comps = [], centros = [], sociedades = [], legajoSoc = {} } = {}, { sociedad, contraparte, moneda = "ARS" } = {}) {
   const S = String(sociedad || "").toLowerCase();
   const C = String(contraparte || "").toLowerCase();
   const empresaDe = new Map((centros || []).map(c => [String(c.id), c.empresa]));
@@ -2454,6 +2479,15 @@ export function intercoLedger({ movs = [], comps = [], centros = [], sociedades 
     if (!nucleo.size || (nucleo.has(A) && nucleo.has(B))) continue;
     const meta = { tipo: "Interuso gestión", cuenta: m.cuenta_contable || "", centro: cc(m.centro_costo), ref: m.documento_id || m.id || "" };
     pair(A, B, m.moneda, m.fecha, m.concepto || "Interuso gestión", mm, meta);
+  }
+  // 6. SUELDOS pagados por cuenta de otra sociedad (por pagado). Espeja la fuente 6 de lecturaInterco.
+  if (nucleo.size) for (const m of movs) {
+    if (m.origen !== "sueldos" || esIgnorado(m)) continue;
+    const A = String(m.sociedad || ""), B = String(legajoSoc[String(m.legajo_id || "")] || "");
+    if (!A || !B || A === B || (nucleo.has(A) && nucleo.has(B))) continue;
+    const monto = Math.abs(toNum(m.monto)); if (monto < 0.01) continue;
+    const meta = { tipo: "Sueldo", prov: m.legajo_nombre || "", cuenta: m.cuenta_contable || "Sueldos", centro: cc(m.centro_costo), ref: m.documento_id || m.id || "" };
+    pair(A, B, m.moneda, m.fecha, m.concepto || `Sueldo ${m.legajo_nombre || ""}`.trim(), monto, meta);
   }
   const key = f => { const s = String(f || ""); if (/^\d{4}-/.test(s)) return s.slice(0, 10); const [d, mm, y] = s.split("/"); return y ? `${y}-${String(mm).padStart(2, "0")}-${String(d).padStart(2, "0")}` : s; };
   entries.sort((a, b) => key(a.fecha).localeCompare(key(b.fecha)));
