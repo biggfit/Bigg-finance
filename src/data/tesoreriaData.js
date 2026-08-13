@@ -83,6 +83,12 @@ export const MONEDA_SYM = {
 // maestro). Fuente única para que no vuelvan a quedar listas hardcodeadas desincronizadas:
 // COP existía en MONEDA_SYM y en las cuentas bancarias de Tigre Loco, pero no en los selects,
 // así que en Colombia no se podía cargar una factura en su propia moneda.
+// Moneda con la que abre un formulario nuevo (factura de proveedor/cliente) segun la sociedad
+// activa. Antes arrancaba siempre en ARS, asi que en Tigre Loco (COP), Bigg Fit (USD) y Wellness
+// (EUR) habia que corregir el dropdown en cada carga. Lee de SOCIEDADES, que espeja nb_sociedades;
+// si el id no esta en la lista cae en ARS, que es el comportamiento que habia antes.
+export const monedaDeSociedad = (id) => SOCIEDADES.find(s => s.id === id)?.moneda ?? "ARS";
+
 export const MONEDA_OPTS = [
   { value: "ARS", label: "$ ARS", labelLargo: "ARS — Pesos" },
   { value: "USD", label: "U$D",   labelLargo: "USD — Dólares" },

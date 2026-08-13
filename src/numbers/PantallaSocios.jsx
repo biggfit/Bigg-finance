@@ -9,6 +9,7 @@ import {
   fetchSocios, fetchSociosCC, fetchMovSocios, fetchSociedades, fetchCuentasBancarias,
   appendMovSocio, declararDividendo, aperturaSocio, repartirDividendo, SOCIO_SIGNO_CAJA,
 } from "../lib/numbersApi";
+import { MONEDA_OPTS } from "../data/tesoreriaData";
 
 // Parser de montos: el punto SIEMPRE es separador de miles y la coma es decimal (formato AR).
 // Los valores numéricos del Sheet llegan como number (se devuelven tal cual); solo los strings
@@ -357,7 +358,7 @@ function MovimientoModal({ modal, socios, sociedades, bancos, busy, setBusy, onC
               <>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
                   <Field label="Sociedad (default)"><select value={sociedad} onChange={e => { const v = e.target.value; setSociedad(v); setLineas(ls => ls.map(x => ({ ...x, sociedad: v }))); }} style={inputStyle}><option value="">—</option>{sociedadOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</select></Field>
-                  <Field label="Moneda"><select value={moneda} onChange={e => setMoneda(e.target.value)} style={inputStyle}><option value="ARS">ARS</option><option value="USD">USD</option><option value="EUR">EUR</option></select></Field>
+                  <Field label="Moneda"><select value={moneda} onChange={e => setMoneda(e.target.value)} style={inputStyle}>{MONEDA_OPTS.map(m => <option key={m.value} value={m.value}>{m.value}</option>)}</select></Field>
                   <Field label="Fecha"><input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={inputStyle} /></Field>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 12, alignItems: "end" }}>
@@ -382,7 +383,7 @@ function MovimientoModal({ modal, socios, sociedades, bancos, busy, setBusy, onC
                 <Field label="Socio"><select value={socioId} onChange={e => setSocioId(e.target.value)} style={inputStyle}><option value="">—</option>{socioOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</select></Field>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                   <Field label="Sociedad"><select value={sociedad} onChange={e => setSociedad(e.target.value)} style={inputStyle}><option value="">—</option>{sociedadOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</select></Field>
-                  <Field label="Moneda"><select value={moneda} onChange={e => setMoneda(e.target.value)} style={inputStyle}><option value="ARS">ARS</option><option value="USD">USD</option><option value="EUR">EUR</option></select></Field>
+                  <Field label="Moneda"><select value={moneda} onChange={e => setMoneda(e.target.value)} style={inputStyle}>{MONEDA_OPTS.map(m => <option key={m.value} value={m.value}>{m.value}</option>)}</select></Field>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
                   <Field label="Dirección"><select value={direccion} onChange={e => setDireccion(e.target.value)} style={inputStyle}><option value="deudor">Nos debe (activo)</option><option value="acreedor">Le debemos (pasivo)</option></select></Field>

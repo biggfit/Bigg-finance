@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { T } from "./theme";
 import { checkDuplicateComp } from "../lib/numbersApi";
 import { IVA_OPTS, todayISO, addDays, fmtNum } from "../data/numbersData";
-import { MONEDA_OPTS } from "../data/tesoreriaData";
+import { MONEDA_OPTS, monedaDeSociedad } from "../data/tesoreriaData";
 import {
   inputStyle, dateStyle, lookupId, makeCCResolver,
   calcLineasTotals, SoftField, FacturaFormFocusRing, FACTURA_FORM_CLASS,
@@ -37,7 +37,7 @@ export default function NuevoIngresoModal({ onClose, onSave, sociedad, clientes 
 
   const [cliId, setCliId] = useState(initCliId);
   const [cuentaId, setCuentaId] = useState(initCuentaId);
-  const [moneda, setMoneda] = useState(initialData?.moneda ?? "ARS");
+  const [moneda, setMoneda] = useState(initialData?.moneda ?? monedaDeSociedad(sociedad));
   const [fecha, setFecha] = useState(initialData?.fecha ?? todayISO());
   const [vto, setVto] = useState(initialData?.vto ?? addDays(todayISO(), 30));
   const [nroComp, setNroComp] = useState(initialData?.nroComp ?? "");
