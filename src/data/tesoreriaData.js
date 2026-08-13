@@ -89,6 +89,24 @@ export const MONEDA_SYM = {
 // si el id no esta en la lista cae en ARS, que es el comportamiento que habia antes.
 export const monedaDeSociedad = (id) => SOCIEDADES.find(s => s.id === id)?.moneda ?? "ARS";
 
+// Alicuotas de IVA por pais de la sociedad. El circuito de factura estaba cableado a Argentina
+// (opciones 0/10.5/21/27 y default 21), asi que en Tigre Loco no se podia cargar el IVA colombiano
+// —no existia el 19%— y a Bigg Fit LLC, que no lleva IVA, le aparecia 21% preseleccionado.
+// La 1a opcion de cada lista es la que trae una linea nueva.
+const IVA_POR_PAIS = {
+  AR: [21, 10.5, 27, 0],   // general, reducida, incrementada, exento
+  CO: [19, 5, 0],          // general, reducida, exento
+  ES: [21, 10, 4, 0],      // general, reducida, superreducida, exento
+  US: [0],                 // sin IVA
+};
+const ivaListaDeSociedad = (id) => IVA_POR_PAIS[SOCIEDADES.find(s => s.id === id)?.pais] ?? IVA_POR_PAIS.AR;
+
+// Opciones ordenadas de menor a mayor para el <select>, pero el default sale de la lista de arriba
+// (la general del pais), no del primero del select.
+export const ivaOptsDeSociedad = (id) =>
+  [...ivaListaDeSociedad(id)].sort((a, b) => a - b).map(v => ({ value: v, label: `${v}%` }));
+export const ivaDefaultDeSociedad = (id) => ivaListaDeSociedad(id)[0];
+
 export const MONEDA_OPTS = [
   { value: "ARS", label: "$ ARS", labelLargo: "ARS — Pesos" },
   { value: "USD", label: "U$D",   labelLargo: "USD — Dólares" },

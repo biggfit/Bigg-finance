@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { T } from "./theme";
-import { IVA_OPTS, todayISO, addDays, fmtNum } from "../data/numbersData";
-import { MONEDA_OPTS, monedaDeSociedad } from "../data/tesoreriaData";
+import { todayISO, addDays, fmtNum } from "../data/numbersData";
+import { MONEDA_OPTS, monedaDeSociedad, ivaOptsDeSociedad, ivaDefaultDeSociedad } from "../data/tesoreriaData";
 import {
   inputStyle, dateStyle, lookupId, makeCCResolver,
   calcLineasTotals, SoftField, FacturaFormFocusRing, FACTURA_FORM_CLASS,
@@ -32,9 +32,12 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
   const resolveCC = useMemo(() => makeCCResolver(CC_LIST), [CC_LIST]);
   const initProvId = lookupId(proveedores, "proveedorId", "proveedor", initialData);
   const initCuentaId = lookupId(CUENTAS_GASTO, "cuentaId", "cuenta", initialData);
+  // Alicuotas del pais de la sociedad: la general es el default de cada linea nueva.
+  const ivaOpts    = useMemo(() => ivaOptsDeSociedad(sociedad), [sociedad]);
+  const ivaDefault = useMemo(() => ivaDefaultDeSociedad(sociedad), [sociedad]);
   const initLineas = useMemo(
-    () => initialFacturaLineas(initialData, resolveCC),
-    [initialData, resolveCC],
+    () => initialFacturaLineas(initialData, resolveCC, ivaDefault),
+    [initialData, resolveCC, ivaDefault],
   );
 
   const [provId, setProvId] = useState(initProvId);
@@ -45,7 +48,7 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
   const [nroComp, setNroComp] = useState(initialData?.nroComp ?? "");
   const nroMask = useNroCompMask(nroComp, setNroComp);
   const [nota, setNota] = useState(initialData?.nota ?? "");
-  const { lineas, setLineas, updLinea, addLinea, delLinea } = useLineas(initLineas);
+  const { lineas, setLineas, updLinea, addLinea, delLinea } = useLineas(initLineas, ivaDefault);
 
   const ccGroups = useCcGroups(CC_LIST);
 
@@ -66,7 +69,8 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
     setLineas,
     setVto,
     getFecha: () => fecha,
-  }), [proveedores, setLineas, fecha]);
+    ivaDefault,
+  }), [proveedores, setLineas, fecha, ivaDefault]);
 
   const { totalSub, totalIva, totalFinal } = useMemo(() => calcLineasTotals(lineas), [lineas]);
   const canSave = facturaCanSave({ partyId: provId, cuentaId, fecha, lineas });
@@ -175,7 +179,7 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
         ccGroups={ccGroups}
         moneda={moneda}
         fmtNum={fmtNum}
-        IVA_OPTS={IVA_OPTS}
+        IVA_OPTS={ivaOpts}
         updLinea={updLinea}
         delLinea={delLinea}
         addLinea={addLinea}
