@@ -2074,6 +2074,7 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
     sociedad_id:        "",   // solo para transferencia
     cuenta_id:          "",
     cuenta_contable_id: "",
+    nota:               "",   // nota manual del pago → columna `nota` de nb_movimientos
   });
   const [cuentas,          setCuentas]          = useState([]);
   const [sociedades,       setSociedades]       = useState([]);
@@ -2146,7 +2147,7 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
         if (pendienteItem <= PAGO_EPS) continue;
         const monto = Math.min(pendienteItem, restante);
         restante -= monto;
-        await appendPago({ ...comunes, forma_pago_id: it.ref.id, monto, concepto: conceptoPago(it, liq, mes, anio), nota: notaPago(it), ambito: "hq" });
+        await appendPago({ ...comunes, forma_pago_id: it.ref.id, monto, concepto: conceptoPago(it, liq, mes, anio), nota: [form.nota.trim(), notaPago(it)].filter(Boolean).join(" · "), ambito: "hq" });
       }
       await onSaved();
     } catch (e) { alert("Error: " + e.message); setSaving(false); } finally { savingRef.current = false; }
@@ -2216,6 +2217,11 @@ function ModalPagoHQ({ mes, anio, liq, cell, onClose, onSaved }) {
           </div>
           <div style={{ fontSize: 12, color: T.muted, background: T.bg, borderRadius: 5, padding: "6px 10px" }}>
             Cuenta contable: <strong style={{ color: T.text }}>{cell.cuenta_contable_nombre}</strong>
+          </div>
+          <div>
+            <ModalLabel>Nota (opcional)</ModalLabel>
+            <input style={MODAL_INPUT} value={form.nota} placeholder="Ej: pagado en mano, adelanto…"
+              onChange={e => set("nota", e.target.value)} />
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
