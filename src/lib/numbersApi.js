@@ -482,7 +482,7 @@ export async function parkearFacturaCorreo({ mailId, threadId = "", remitente = 
   if (rows.some(r => String(r.id_comp) === id_comp)) return { ok: true, dedup: "mail", id_comp };
   const nro = String(nroComp || "").trim();
   if (nro && rows.some(r => (r.subtipo ?? "").toUpperCase() === "EGRESO"
-      && (r.nro_comp ?? "").trim() === nro && String(r.contraparte_id ?? "") === String(proveedorId)))
+      && String(r.nro_comp ?? "").trim() === nro && String(r.contraparte_id ?? "") === String(proveedorId)))
     return { ok: true, dedup: "fc", id_comp };
   // El total viene del mail (bruto). Si el proveedor discrimina IVA, se abre subtotal + iva_monto.
   const t   = round2(Number(total) || 0);
@@ -2678,7 +2678,7 @@ export async function checkDuplicateComp(sociedad, subtipo, nroComp, contraparte
     seen.add(key);
     if (key === excludeId) continue;
     if ((r.subtipo ?? "").toUpperCase() !== subtipo.toUpperCase()) continue;
-    if ((r.nro_comp ?? "").trim().toLowerCase() !== nroNorm) continue;
+    if (String(r.nro_comp ?? "").trim().toLowerCase() !== nroNorm) continue;
     if ((r.contraparte_id ?? "") !== (contraparteId ?? "")) continue;
     return key;                    // duplicado encontrado → retorna id_comp
   }
