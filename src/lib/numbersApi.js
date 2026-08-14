@@ -1416,6 +1416,12 @@ export async function aceptarMovimiento(mov, prop = {}) {
     // destino, esa línea es duplicado de esta contrapartida → deduplicar / Ignorar.
     const interco  = !!prop.interco;
     const destino  = prop.cuenta_destino || mov.cuenta_destino || "";
+    // Guarda: una transferencia SIEMPRE tiene dos cuentas. Sin destino, la contrapartida (-E) se
+    // crearía con cuenta_bancaria vacía → "pata fantasma": no sube/baja ningún banco y descuadra el
+    // Cash Flow (línea "Transferencias entre cuentas"). Bloquear acá, en el único choke point de
+    // escritura, cubre todos los llamadores (botón, aceptar masivo, futuros), no solo el gate de la UI.
+    if (!String(destino).trim())
+      throw new Error("Transferencia sin cuenta del otro lado: elegí la cuenta destino antes de aceptar.");
     const tipoMov  = interco ? "INTERCOMPANIA" : "TRANSFERENCIA";
     const sharedId = newId(interco ? "INTERCOMPANY" : "TRF");
     await post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
