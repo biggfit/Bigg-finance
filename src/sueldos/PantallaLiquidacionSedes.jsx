@@ -50,15 +50,14 @@ const NOV_FP_BUCKET = {
 const rowKeyDe = (legajo_id, sede_id) => `${legajo_id || ""}__${sede_id || ""}`;
 
 // Base sobre la que se aplica el % de objetivo grupal (regla de negocio, depende del rol):
-//  - coaches: horas (normales + feriado) + objetivos individuales (asignado).
-//  - front/fijo (encargado, ventas, limpieza): sueldo básico + feriado.
-// El feriado del front se carga como novedad (no es campo de la fila), así que su monto NO
-// entra acá; para front la base efectiva es el sueldo básico.
-function baseGrupalDe(rol, { horasMonto, feriadosMonto, asignado, sueldoBase }) {
-  if (ROLES_LIMP.includes(rol)) return 0;   // LIMPIEZA está EXENTA de objetivos (individual y grupal)
-  return ROLES_COACHES.includes(rol)
-    ? horasMonto + feriadosMonto + asignado
-    : sueldoBase + feriadosMonto;
+//  - Coach Senior y Coach: horas regulares + feriado + domingo + objetivos individuales (asignado).
+//  - Encargado y Ventas (front): SOLO sueldo básico. El feriado del front viene como novedad (texto
+//    libre), no como campo de la fila → se EXCLUYE a propósito (cruzarlo sería frágil, decisión del usuario).
+//  - Yoga, Huergo A/B y Limpieza: EXENTOS de la comisión grupal (base 0).
+function baseGrupalDe(rol, { horasMonto, feriadosMonto, domingosMonto, asignado, sueldoBase }) {
+  if (rol === "COACH_SENIOR" || rol === "COACH") return horasMonto + feriadosMonto + domingosMonto + asignado;
+  if (rol === "ENCARGADO" || rol === "VENTAS")   return sueldoBase;
+  return 0;   // Yoga, Huergo A/B, Limpieza
 }
 
 // Orden de visualización: primero por rol (Encargados → Vendedores → Limpieza → Coaches),
@@ -553,7 +552,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     const os       = Number(row.q_one_shot) || 0,     osMonto       = os * tarifaOS;
     const asignado  = Number(row.asignado) || 0;
     const cGrupoPct = Number(row.c_grupo_pct) || 0;
-    const cGrupoMonto = baseGrupalDe(row.rol, { horasMonto, feriadosMonto, asignado, sueldoBase: fijo }) * (cGrupoPct / 100);
+    const cGrupoMonto = baseGrupalDe(row.rol, { horasMonto, feriadosMonto, domingosMonto, asignado, sueldoBase: fijo }) * (cGrupoPct / 100);
     const total = fijo + horasMonto + feriadosMonto + domingosMonto + yogaMonto + runningMonto
                 + cdpCoachMonto + cdpFrontMonto + osMonto + asignado + cGrupoMonto;
     return { tarifaHora, tCdpCoach, tCdpFront, tarifaOS, tarifaDom, tarifaYoga, tarifaRun, fijo,
