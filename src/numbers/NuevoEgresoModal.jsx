@@ -104,9 +104,14 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
   // puede facturar dos veces el mismo N° por error suyo, o querer cargarla a propósito.
   const guardConDuplicado = async () => {
     if (dupError) return true;   // ya avisado → dejar guardar
-    const dup = await checkDuplicateComp(sociedad, "EGRESO", nroComp, provId, isEdit ? initialData.id : null);
-    if (dup) { setDupError(dup); return false; }
-    return true;
+    try {
+      const dup = await checkDuplicateComp(sociedad, "EGRESO", nroComp, provId, isEdit ? initialData.id : null);
+      if (dup) { setDupError(dup); return false; }
+      return true;
+    } catch (e) {
+      alert("No se pudo verificar duplicados: " + e.message);
+      return false;
+    }
   };
   const handleSave = async () => {
     if (!(await guardConDuplicado())) return;
