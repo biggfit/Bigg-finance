@@ -597,12 +597,63 @@ export const pagoTipoABucket = (tipo) => {
   return "monotributo";  // monotributo | transferencia_financiera
 };
 
-// Devengado de una liquidación desglosado por (balde de forma, sociedad).
-// HQ guarda líneas (formas_pago) con `sociedad_id` por línea de monotributo; Sedes usa
-// los escalares monto_*. Única fuente de la derivación de sociedad por forma.
+// Cuenta contable del P&L por concepto del desglose CONGELADO de la liquidación.
+// El sueldo se reparte a estas cuentas leyendo el desglose por concepto (no la forma de
+// pago ni re-cerrar). Lo no listado → "Sueldos". `campo` = el field del liq parseado.
+const CONCEPTO_CUENTA = {
+  sueldo_base:  "Sueldos",
+  horas:        "Sueldos",
+  feriados:     "Sueldos",
+  domingos:     "Sueldos",
+  yoga:         "Sueldos",
+  running:      "Sueldos",
+  redondeo:     "Sueldos",
+  programacion: "Sueldos",   // legacy (comisión del encargado, hoy es novedad)
+  cdp:          "Incentivos", // legacy CDP único
+  cdp_coach:    "Incentivos",
+  cdp_front:    "Incentivos",
+  one_shot:     "Incentivos",
+  objetivos:    "Comisiones",
+  bonos:        "Comisiones",  // "Objetivo grupal"
+};
+
+// Mezcla de cuentas (Sueldos/Incentivos/Comisiones…) del desglose por concepto congelado.
+// Devuelve { mix: {cuenta: monto}, total }. total 0 → la liq no trae desglose (HQ legacy)
+// y el caller cae al comportamiento viejo ("Sueldos" entero).
+function mezclaCuentasConcepto(liq) {
+  const mix = {};
+  let total = 0;
+  for (const [campo, cuenta] of Object.entries(CONCEPTO_CUENTA)) {
+    const v = campo === "sueldo_base" ? (Number(liq.sueldo_base) || 0) : (Number(liq[`${campo}_total`]) || 0);
+    if (v <= 0) continue;
+    mix[cuenta] = (mix[cuenta] || 0) + v;
+    total += v;
+  }
+  return { mix, total };
+}
+
+// Devengado de una liquidación desglosado por (balde de forma, sociedad, CUENTA).
+// La CUENTA sale del desglose por concepto (Sueldos/Incentivos/Comisiones); la SOCIEDAD y el
+// balde salen de la forma de pago (sin cambios). El monto de cada forma se reparte entre las
+// cuentas con el mismo ratio que el desglose por concepto (proporcional; la última cuenta se
+// lleva el remanente para no perder centavos). Punto 4: dividir Sueldos vs Comisiones/Incentivos
+// en el P&L sin re-cerrar (read-side). No mueve sociedad → deuda/931/cargas/cashflow idénticos.
+// HQ guarda líneas (formas_pago) con `sociedad_id` por línea de monotributo; Sedes usa los escalares monto_*.
 export function devengadoPorFormaYSociedad(liq) {
   const out = [];
-  // Sueldo (cuenta "Sueldos"): por línea (HQ) o por escalares (Sedes).
+  const { mix, total: mixTot } = mezclaCuentasConcepto(liq);
+  const cuentasMix = Object.keys(mix);
+  const pushSueldo = (bucket, sociedad, total) => {
+    if (total <= 0) return;
+    if (mixTot <= 0) { out.push({ bucket, sociedad, total, cuenta_contable: "Sueldos" }); return; }
+    let acc = 0;
+    cuentasMix.forEach((cuenta, i) => {
+      const monto = i === cuentasMix.length - 1 ? total - acc : Math.round(total * (mix[cuenta] / mixTot));
+      acc += monto;
+      if (monto !== 0) out.push({ bucket, sociedad, total: monto, cuenta_contable: cuenta });
+    });
+  };
+  // Sueldo: por línea (HQ) o por escalares (Sedes).
   if (Array.isArray(liq.formas_pago) && liq.formas_pago.length) {
     for (const l of liq.formas_pago) {
       const total = Number(l.importe) || 0;
@@ -614,12 +665,12 @@ export function devengadoPorFormaYSociedad(liq) {
       else if (l.tipo === "transferencia_financiera")  sociedad = "beta";
       else if (l.tipo === "haberes")                   sociedad = liq.sociedad_id || "";
       else                                             sociedad = "beta";  // depósito, efectivo
-      out.push({ bucket: pagoTipoABucket(l.tipo), sociedad, total, cuenta_contable: "Sueldos" });
+      pushSueldo(pagoTipoABucket(l.tipo), sociedad, total);
     }
   } else {
     for (const { bucket, campo } of SALARY_BUCKETS) {
       const total = Number(liq[campo]) || 0;
-      if (total > 0) out.push({ bucket, sociedad: sociedadDeForma(liq, bucket), total, cuenta_contable: "Sueldos" });
+      if (total > 0) pushSueldo(bucket, sociedadDeForma(liq, bucket), total);
     }
   }
   // Novedades congeladas: cada una a SU cuenta contable (Autónomos, Monotributo…).
