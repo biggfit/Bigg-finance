@@ -985,6 +985,58 @@ export async function deleteCliente(id) {
   return post({ action: "del", sheet: "nb_clientes", id });
 }
 
+// ─── TIPOS DE CAMBIO (consolidado FX) ────────────────────────────────────────
+// Lee nb_tipos_cambio (1 fila/mes, tasas contra USD) y lo normaliza a un mapa
+// { "YYYY-MM": { yearMonth, arsUSD, eurUSD, copUSD, uyuUSD, pygUSD, clpUSD, penUSD } }.
+// Fuente única del grupo (Franquicias lo lee de acá una vez que Lucía migre).
+const _TC_MONEDAS = ["arsUSD", "eurUSD", "copUSD", "uyuUSD", "pygUSD", "clpUSD", "penUSD"];
+
+// Google Sheets puede devolver "2026-01" como Date → normalizar a "YYYY-MM".
+function _normYearMonth(v) {
+  if (v == null) return "";
+  if (v instanceof Date) return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, "0")}`;
+  const s = String(v).trim();
+  const m = s.match(/^(\d{4})-(\d{2})/);         // "2026-01" o "2026-01-15T..." → "2026-01"
+  if (m) return `${m[1]}-${m[2]}`;
+  const d = new Date(s);                          // "Thu Jan 01 2026 ..." (Date serializado)
+  if (!isNaN(d)) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  return s;
+}
+
+export async function fetchTiposCambio() {
+  const rows = await get("nb_tipos_cambio").catch(() => []);
+  const map = {};
+  for (const r of (Array.isArray(rows) ? rows : [])) {
+    const ym = _normYearMonth(r.yearMonth ?? r.mes ?? r.periodo ?? r.year_month);
+    if (!ym) continue;
+    const tc = { yearMonth: ym };
+    for (const k of _TC_MONEDAS) tc[k] = Number(r[k]) || 0;
+    map[ym] = tc;
+  }
+  return map;
+}
+
+// TC del mes (1-12). Devuelve el objeto de tasas o null si no está cargado.
+export function tcDelMes(tiposCambio, anio, mes) {
+  const ym = `${anio}-${String(mes).padStart(2, "0")}`;
+  return tiposCambio?.[ym] || null;
+}
+
+// Convierte un monto de su moneda a USD con el TC del mes (objeto de tcDelMes).
+// Convención nb_tipos_cambio (= Franquicias): arsUSD/copUSD/uyuUSD/pygUSD/clpUSD/penUSD =
+// unidades de esa moneda por 1 USD (se DIVIDE); eurUSD = USD por 1 EUR (se MULTIPLICA).
+// Sin TC del mes o tasa 0 → devuelve null (dato faltante, para que el reporte lo marque; NO 0
+// silencioso que mezcle monedas sin traducir).
+export function montoAUSD(monto, moneda, tcMes) {
+  const n = Number(monto) || 0;
+  const cur = String(moneda || "").toUpperCase();
+  if (cur === "USD") return n;
+  if (!tcMes) return null;
+  if (cur === "EUR") return tcMes.eurUSD > 0 ? n * tcMes.eurUSD : null;
+  const rate = tcMes[cur.toLowerCase() + "USD"];  // ARS→arsUSD, COP→copUSD, ...
+  return rate > 0 ? n / rate : null;
+}
+
 // ─── SOCIEDADES ──────────────────────────────────────────────────────────────
 
 export async function fetchSociedades() {
