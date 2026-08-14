@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { fetchLiquidaciones, fetchCategorias, fetchPagos, fetchLegajos, fetchNovedades, desglosarLiquidacion, isCerrada, idLiqDe, reabrirLiquidaciones, ROLES_SEDES, ROLES_HQ } from "../lib/sueldosApi";
+import { fetchLiquidaciones, fetchCategorias, fetchPagos, fetchLegajos, fetchNovedades, desglosarLiquidacion, isCerrada, ROLES_SEDES, ROLES_HQ } from "../lib/sueldosApi";
 
 const T = {
   bg:     "#f8fafc",
@@ -157,26 +157,6 @@ export default function PantallaResumen({ pais = "AR" }) {
 
   const periodo = `${MESES[mes - 1]} ${anio}`;
 
-  // Liquidación cerrada del empleado seleccionado → se puede reabrir para que
-  // novedades cargadas/editadas después del cierre vuelvan a reflejarse en el recibo.
-  const cerrada = useMemo(() => !!sel && sel.rows.some(r => isCerrada(r.estado)), [sel]);
-  const [reabriendo, setReabriendo] = useState(false);
-  const handleReabrir = async () => {
-    if (!sel) return;
-    if (!window.confirm(`¿Reabrir la liquidación de ${sel.nombre}? Vuelve a borrador: vas a poder editarla en Liquidación ${vista === "hq" ? "HQ" : "Sedes"} y tenés que volver a cerrarla para que los cambios (por ej. novedades nuevas) se congelen en el recibo.`)) return;
-    setReabriendo(true);
-    try {
-      const sedeIds = [...new Set(sel.rows.map(r => r.sede_id ?? ""))];
-      await reabrirLiquidaciones(sedeIds.map(sid => idLiqDe(sel.id, mes, anio, sid)));
-      // Refresh liviano: solo liquidaciones (lo único que cambió), sin re-descargar
-      // categorías/pagos/legajos/novedades ni bloquear la pantalla con "Cargando…".
-      const ls = await fetchLiquidaciones(mes, anio).catch(() => []);
-      setLiqs(Array.isArray(ls) ? ls : []);
-    } catch (e) {
-      alert("Error al reabrir: " + e.message);
-    } finally { setReabriendo(false); }
-  };
-
   return (
     <div className={idsPrint ? "print-todos" : "print-solo"}
       style={{ padding: 24, fontFamily: T.font, color: T.text, maxWidth: 860, margin: "0 auto" }}>
@@ -212,27 +192,6 @@ export default function PantallaResumen({ pais = "AR" }) {
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
         <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>Resumen de liquidación</h2>
-        <span style={{ fontSize: 12, color: T.dim, whiteSpace: "nowrap", flexShrink: 0 }}>· solo consulta</span>
-        {cerrada && (
-          resumen?.desyncItems?.length ? (
-            <span title={`Novedades cargadas/editadas después del cierre que NO están en este recibo — reabrí la liquidación para que se reflejen:\n${resumen.desyncItems.map(d => `• ${d.descripcion} (${fmt(d.monto)})`).join("\n")}`}
-              style={{ fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 5, background: "#fee2e2", color: "#b91c1c", flexShrink: 0, cursor: "help", whiteSpace: "nowrap" }}>
-              🔴 Faltan {resumen.desyncItems.length} novedad{resumen.desyncItems.length > 1 ? "es" : ""}
-            </span>
-          ) : (
-            <span title="Las novedades cargadas coinciden con las de este recibo"
-              style={{ fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 5, background: "#dcfce7", color: "#15803d", flexShrink: 0, whiteSpace: "nowrap" }}>
-              🟢 Al día
-            </span>
-          )
-        )}
-        {cerrada && (
-          <button onClick={handleReabrir} disabled={reabriendo}
-            title="Reabrir la liquidación de este empleado (vuelve a borrador para poder editarla)"
-            style={{ ...fichaBtn, flexShrink: 0, opacity: reabriendo ? 0.5 : 1, cursor: reabriendo ? "default" : "pointer" }}>
-            {reabriendo ? "Reabriendo…" : "🔓 Reabrir liquidación"}
-          </button>
-        )}
 
         {/* Toggle Sedes / HQ */}
         <div style={{ display: "flex", gap: 2, background: T.head, borderRadius: 7, padding: 3 }}>

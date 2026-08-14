@@ -79,8 +79,20 @@ export default function PantallaCargasSociales({ mes: mesProp, anio: anioProp, p
           Cargá el F931 y el aporte sindical de cada sociedad con "+ Nueva carga".
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {cargas.map(c => <CargaCard key={c.id_comp} carga={c} socNombre={socNombre} />)}
+        <div style={{ border: `1px solid ${T.border}`, borderRadius: 8, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: T.bg }}>
+                {["Sociedad", "Proveedor", "Cuenta", "VEP", "Vto"].map(h =>
+                  <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontSize: 11, fontWeight: 700, color: T.muted, whiteSpace: "nowrap" }}>{h}</th>)}
+                <th style={{ padding: "8px 12px", textAlign: "right", fontSize: 11, fontWeight: 700, color: T.muted }}>Monto</th>
+                <th style={{ padding: "8px 12px", textAlign: "center", fontSize: 11, fontWeight: 700, color: T.muted }}>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cargas.map(c => <CargaRow key={c.id_comp} carga={c} socNombre={socNombre} />)}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -92,23 +104,22 @@ export default function PantallaCargasSociales({ mes: mesProp, anio: anioProp, p
   );
 }
 
-function CargaCard({ carga, socNombre }) {
+function CargaRow({ carga, socNombre }) {
+  const td = { padding: "9px 12px", borderTop: `1px solid ${T.border}`, whiteSpace: "nowrap" };
   return (
-    <div style={{ border: `1px solid ${carga.pagado ? "#bbf7d0" : T.border}`, borderRadius: 8, padding: 16, background: carga.pagado ? "#f0fdf4" : T.card }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
-        <span style={{ fontWeight: 700, fontSize: 15 }}>{socNombre(carga.sociedad)}</span>
-        <span style={{ fontSize: 12, color: T.muted }}>· {carga.proveedor}</span>
-        <span style={{ fontSize: 11, color: T.dim }}>· {carga.cuenta}</span>
+    <tr style={{ background: carga.pagado ? "#f0fdf4" : "#fff" }}>
+      <td style={{ ...td, fontWeight: 700 }}>{socNombre(carga.sociedad)}</td>
+      <td style={{ ...td, color: T.muted }}>{carga.proveedor}</td>
+      <td style={{ ...td, color: T.dim, fontSize: 12 }}>{carga.cuenta}</td>
+      <td style={{ ...td, color: T.text }}>{carga.vep || "—"}</td>
+      <td style={{ ...td, color: T.muted }}>{carga.vto ? fmtFecha(carga.vto) : "—"}</td>
+      <td style={{ ...td, textAlign: "right", fontWeight: 700 }}>{fmtMoney(carga.monto_total)}</td>
+      <td style={{ ...td, textAlign: "center" }}>
         {carga.pagado
           ? <span style={{ fontSize: 11, fontWeight: 600, color: T.green, background: "#dcfce7", padding: "2px 8px", borderRadius: 999 }}>✓ Pagado</span>
           : <span style={{ fontSize: 11, fontWeight: 600, color: "#92400e", background: "#fef3c7", padding: "2px 8px", borderRadius: 999 }}>CxP pendiente</span>}
-      </div>
-      <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>{fmtMoney(carga.monto_total)}</div>
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, color: T.muted }}>
-        {carga.vep && <span>VEP: <b style={{ color: T.text }}>{carga.vep}</b></span>}
-        {carga.vto && <span>Vencimiento: {fmtFecha(carga.vto)}</span>}
-      </div>
-    </div>
+      </td>
+    </tr>
   );
 }
 
@@ -322,7 +333,7 @@ function FormCargaSocial({ mes, anio, masters, ccNombre, onClose, onSaved }) {
 
         {/* Pie fijo: siempre visible aunque el cuerpo scrollee */}
         <div style={{ display: "flex", gap: 10, padding: "14px 28px", borderTop: `1px solid ${T.border}`, justifyContent: "flex-end", flexShrink: 0 }}>
-          <button onClick={onClose} style={{ border: `1px solid ${T.border}`, background: T.card, borderRadius: 7, padding: "8px 16px", fontSize: 13, cursor: "pointer", fontFamily: T.font }}>Cancelar</button>
+          <button onClick={onClose} style={{ border: `1px solid ${T.border}`, background: T.card, borderRadius: 7, padding: "8px 16px", fontSize: 13, cursor: "pointer", fontFamily: T.font, color: T.text, fontWeight: 600 }}>Cancelar</button>
           <button onClick={handleSave} disabled={saving || !cuadra} style={{ background: (saving || !cuadra) ? T.dim : T.blue, color: "#fff", border: "none", borderRadius: 7, padding: "8px 20px", fontSize: 13, fontWeight: 600, cursor: (saving || !cuadra) ? "not-allowed" : "pointer", fontFamily: T.font }}>
             {saving ? "Creando…" : "Crear CxP"}
           </button>

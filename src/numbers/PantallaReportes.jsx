@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, Fragment } from "react";
 import { T, PageHeader } from "./theme";
-import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco, fondeoFondeadasMensual, calcSaldoPendiente, primeCache } from "../lib/numbersApi";
+import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco, fondeoFondeadasMensual, calcSaldoPendiente, primeCache, fetchTiposCambio, tcDelMes, montoAUSD } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, pendienteSueldosPorLegajo, adelantoSueldosPorLegajo } from "../lib/sueldosApi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
 import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
@@ -291,8 +291,10 @@ function DataRow({ label, values, activeMonths, color, neg = false }) {
   );
 }
 
-function SubtotalRow({ label, values, activeMonths, color, strong, neg = false, noBottom = false }) {
-  const total = rowSum(values);
+// totalOverride: para filas de SALDO (running balance), la columna TOTAL no debe sumar los meses (no tiene
+// sentido). Se pasa el saldo final; `null` deja el TOTAL en blanco. undefined → suma normal (subtotales de flujo).
+function SubtotalRow({ label, values, activeMonths, color, strong, neg = false, noBottom = false, totalOverride }) {
+  const total = totalOverride !== undefined ? totalOverride : rowSum(values);
   const bg = strong ? "#cbd5e1" : "#f3f4f6";
   // Bordes SOLO en las celdas (no en el <tr>): con border-collapse + celda sticky, duplicar el borde
   // en el <tr> y en la celda genera costura/doblado al colapsar. Fuente única = la celda.
@@ -315,7 +317,7 @@ function SubtotalRow({ label, values, activeMonths, color, strong, neg = false, 
       <td style={{ padding: "12px 14px", fontSize: 15, textAlign: "right", fontFamily: "var(--mono)",
         fontWeight: 900, color: color ?? T.text, whiteSpace: "nowrap",
         borderLeft: `1px solid ${T.cardBorder}`, ...bord }}>
-        {fmtPar(total, neg)}
+        {total === null ? "" : fmtPar(total, neg)}
       </td>
     </tr>
   );
@@ -363,7 +365,7 @@ const SEDE_GRUPOS = [
   { key: "int_bigg",  label: "Interusos red BIGG",       color: SEDE_HDR, cuentas: ["Interusos"] },
   { key: "int_corp",  label: "Interusos corporativos",   color: SEDE_HDR, cuentas: ["Coorporativos"] },
   { key: "cvar",      label: "Costos Variables",         color: SEDE_HDR, cuentas: ["Fee Facturación", "Aranceles y Otros Financieros", "IIBB", "Imp. Cred. y Deb."] },
-  { key: "gp_pers",   label: "Personal",                 color: SEDE_HDR, cuentas: ["Sueldos", "Comisiones", "Aguinaldos", "Costos Salariales"] },
+  { key: "gp_pers",   label: "Personal",                 color: SEDE_HDR, cuentas: ["Sueldos", "Incentivos", "Comisiones", "Aguinaldos", "Costos Salariales"] },
   { key: "gp_ocup",   label: "Ocupación",                color: SEDE_HDR, cuentas: ["Alquiler", "Expensas", "ABL", "Servicios"] },
   { key: "gp_mkt",    label: "Mkt y Pauta",              color: SEDE_HDR, cuentas: ["Acciones de Mkt", "Pauta"] },
   { key: "gp_otros",  label: "Otros Gastos de la Sede",  color: SEDE_HDR, cuentas: ["Honorarios Profesionales", "Equipamiento y Mantenimiento", "Limpieza", "Otros Gastos del Centro", "Gastos Menores de Caja"] },
@@ -437,6 +439,26 @@ const IMPUESTOS_FOND = ["IVA", "Ganancias", "Retenciones"];
 // (metida en cualquier cuenta/centro) y NO es resultado del período → se excluye de TODOS los P&L. Los
 // saldos iniciales de verdad viven como filas SALDO_INICIAL en nb_movimientos (Balance/Tesorería, nunca P&L).
 const PNL_INICIO = "2026-07-01";
+// Mes en curso "YYYY-MM": corte para el aviso de TC faltante (mes pasado sin TC = hueco; en curso = esperado).
+const _mesActualYM = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; })();
+
+// Pre-traduce filas de P&L a USD (consolidado): convierte `total` + `iva_monto` al TC del mes de CADA fila
+// (mes por mes) y marca `moneda:"USD"`, para que los builders corran nativos en USD sin tocar su lógica.
+// `fx(monto, moneda, anio, mes)` traduce (o null si falta TC). Filas sin TC se dropean; los meses PASADOS
+// sin TC se listan en `mesesSinTC` (el mes en curso sin TC de cierre es esperado → no se lista).
+function traducirFilasUSD(rows, fx) {
+  if (!fx) return { rows, mesesSinTC: [] };
+  const out = [], sin = new Set();
+  for (const r of (rows || [])) {
+    if (!r?.fecha) { out.push(r); continue; }
+    const anio = parseInt(r.fecha.slice(0, 4), 10), mes = parseInt(r.fecha.slice(5, 7), 10);
+    const t = fx(Number(r.total) || 0, r.moneda || "ARS", anio, mes);
+    if (t == null) { const ym = r.fecha.slice(0, 7); if (ym < _mesActualYM) sin.add(ym); continue; }
+    const iva = fx(Number(r.iva_monto) || 0, r.moneda || "ARS", anio, mes) ?? 0;
+    out.push({ ...r, total: t, iva_monto: iva, moneda: "USD" });
+  }
+  return { rows: out, mesesSinTC: [...sin].sort() };
+}
 const PNL_INICIO_ANIO = 2026;
 const PNL_INICIO_MES  = 6;   // julio (0-based): en el año del go-live no se muestran los meses previos
 // En el año del go-live, oculta las columnas de meses anteriores al go-live (Ene–Jun 2026 = vacías).
@@ -453,6 +475,8 @@ const montoPnL = (row, sinIva) => {
 // Grupos de INGRESO del P&L Sede (los que suman en totIngresos) → su IVA es débito (ventas); el resto, crédito.
 const SEDE_ING_KEYS = new Set(["vta_cf", "int_bigg", "int_corp"]);
 
+// La consolidación FX (USD) se resuelve pre-traduciendo las filas a USD ANTES de llamar acá
+// (ver traducirFilasUSD): este builder corre siempre en modo nativo (filtra por `moneda`).
 function buildPnLSede(inRows, egRows, ccFilter, year, moneda, sinIva = false) {
   // Pre-poblar cada grupo con sus cuentas configuradas en 0 → se muestran aunque no tengan monto.
   const grupos = {};
@@ -1108,11 +1132,10 @@ function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) {
 
 // P&L BIGG = P&L de HOLDING. Arriba el RESULTADO de cada negocio operativo (no la venta); después HQ
 // (ingresos − opex), y al final financieros + impuestos del grupo. `sub` = computeSubtotalsHolding.
-function PnLTableBigg({ pnl, sub, year, moneda }) {
-  const { sar, fg, wre, hqAccounts, ghqAccounts, gpvAccounts, capexAccounts, ingHQ, opexHQ,
+function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolucion", mes = 0 }) {
+  const { sar, fg, wre, hqAccounts, ghqAccounts, gpvAccounts, capexAccounts,
           resOperaciones, resOpMasIngHQ, margen, resOpGrupo, resAntesImp, resGrupo, resFinal, activeMonths: _amRaw } = sub;
   const activeMonths = mesesVisibles(_amRaw, year);
-  const ncols = activeMonths.length + 2;
   const hayCapex = Object.keys(capexAccounts || {}).length > 0;
   const ALLKEYS = ["sec_op", "sec_ing", "sec_gpv", "sec_opex", "sec_fin", "sec_imp", "sec_capex"];
   const [collapsed, setCollapsed] = useState(() => Object.fromEntries(ALLKEYS.map(k => [k, true])));   // arranca compactado
@@ -1121,17 +1144,6 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
   const allCol = ALLKEYS.every(k => collapsed[k]);
   const toggleAll = () => setCollapsed(allCol ? {} : Object.fromEntries(ALLKEYS.map(k => [k, true])));
 
-  const sec = (key, label, accounts, order, neg = false) => <PnlSection sub label={label} accounts={accounts}
-    order={order} color={SEDE_HDR} activeMonths={activeMonths} ncols={ncols} neg={neg}
-    expanded={!isCol(key)} onToggle={() => toggle(key)} />;
-
-  // Sección Impuestos: sumarizador = contribución del bloque (IVA débito + crédito − tributos reales);
-  // adentro las dos líneas de IVA (solo Sin IVA) + los tributos reales. Render a mano (no `sec`) por los
-  // signos mixtos: IVA débito (+) / crédito (−) / tributos (neg).
-  const ivaOn = sub.ivaDeb?.some(v => v) || sub.ivaCred?.some(v => v);
-  const taxRows = Object.entries(pnl.grupos.imp || {}).sort(ordCmp(BIGG_ORDEN_IMP));
-  const impBlockTot = MESES.map((_, m) => (sub.ivaDeb?.[m] || 0) + (sub.ivaCred?.[m] || 0) - (sub.impuestos?.[m] || 0));
-
   if (activeMonths.length === 0) return (
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
       padding: "60px 24px", textAlign: "center", boxShadow: T.shadow }}>
@@ -1139,73 +1151,111 @@ function PnLTableBigg({ pnl, sub, year, moneda }) {
     </div>
   );
 
+  // ── Un solo render para las 3 vistas: MISMAS filas, distinto bloque de columnas (cols) ──
+  const cols = vista === "evolucion" ? colsEvolucion(activeMonths) : colsSedeVista(vista, mes, year);
+  const P = subPrev || {};
+  const Pg = pnlPrev?.grupos || {};
+  const sumMap = obj => MESES.map((_, m) => Object.values(obj || {}).reduce((s, a) => s + (a[m] || 0), 0));
+  const ivaOn = sub.ivaDeb?.some(v => v) || sub.ivaCred?.some(v => v);
+  const impBlockTot     = MESES.map((_, m) => (sub.ivaDeb?.[m] || 0) + (sub.ivaCred?.[m] || 0) - (sub.impuestos?.[m] || 0));
+  const impBlockTotPrev = MESES.map((_, m) => ((P.ivaDeb?.[m]) || 0) + ((P.ivaCred?.[m]) || 0) - ((P.impuestos?.[m]) || 0));
+
+  const filas = [];
+  // Sección colapsable con cuentas por adentro (cur del sub, prev del subPrev; sumaria = Σ cuentas).
+  const secc = (key, label, accounts, accountsPrev, order, pol) => {
+    filas.push({ kind: "grupo", key, label, cur: sumMap(accounts), prev: sumMap(accountsPrev), pol });
+    if (!isCol(key)) for (const [n] of Object.entries(accounts || {}).sort(ordCmp(order)))
+      filas.push({ kind: "cuenta", label: n, cur: accounts[n], prev: (accountsPrev?.[n]) || ZERO12, pol });
+  };
+
+  // Resultado de Operaciones (una línea por negocio = SU resultado).
+  filas.push({ kind: "grupo", key: "sec_op", label: "Resultado de Operaciones", cur: resOperaciones, prev: P.resOperaciones, pol: 1 });
+  if (!isCol("sec_op")) {
+    filas.push({ kind: "cuenta", label: "Sedes Propias Argentina",         cur: sar, prev: P.sar, pol: 1 });
+    filas.push({ kind: "cuenta", label: "Gerenciamiento de Sedes (Rosedal)", cur: fg,  prev: P.fg,  pol: 1 });
+    filas.push({ kind: "cuenta", label: "Wellness Real Estate (Huergo)",    cur: wre, prev: P.wre, pol: 1 });
+  }
+  secc("sec_ing", "Ingresos HQ", hqAccounts, P.hqAccounts, BIGG_ORDEN, 1);
+  filas.push({ kind: "subtotal", strong: true, label: "Total Ingresos", cur: resOpMasIngHQ, prev: P.resOpMasIngHQ, pol: 1 });
+  secc("sec_gpv", "Gastos por Ventas", gpvAccounts, P.gpvAccounts, BIGG_ORDEN_GPV, -1);
+  filas.push({ kind: "subtotal", strong: true, label: "Margen de Contribución", cur: margen, prev: P.margen, pol: 1 });
+  secc("sec_opex", "OPEX HQ", ghqAccounts, P.ghqAccounts, BIGG_ORDEN_GHQ, -1);
+  filas.push({ kind: "subtotal", label: "Total OPEX HQ", cur: sub.opexHQ, prev: P.opexHQ, pol: -1 });
+  filas.push({ kind: "result", label: "Resultado Operativo del Grupo", cur: resOpGrupo, prev: P.resOpGrupo, pol: 1 });
+  secc("sec_fin", "Financieros", pnl.grupos.fin, Pg.fin, BIGG_ORDEN_FIN, -1);
+  filas.push({ kind: "result", label: "Resultado antes de Impuestos", cur: resAntesImp, prev: P.resAntesImp, pol: 1 });
+  // Impuestos: sumarizador (contribución del bloque) + IVA débito/crédito (solo Sin IVA) + tributos reales.
+  filas.push({ kind: "grupo", key: "sec_imp", label: "Impuestos", cur: impBlockTot, prev: impBlockTotPrev, pol: 1 });
+  if (!isCol("sec_imp")) {
+    if (ivaOn) {
+      filas.push({ kind: "cuenta", label: "IVA Débito (ventas)",   cur: sub.ivaDeb,  prev: P.ivaDeb,  pol: 1 });
+      filas.push({ kind: "cuenta", label: "IVA Crédito (compras)", cur: sub.ivaCred, prev: P.ivaCred, pol: 1 });
+    }
+    for (const [n, v] of Object.entries(pnl.grupos.imp || {}).sort(ordCmp(BIGG_ORDEN_IMP)))
+      filas.push({ kind: "cuenta", label: n, cur: v, prev: (Pg.imp?.[n]) || ZERO12, pol: -1 });
+  }
+  filas.push({ kind: "result", strong: true, label: "Resultado del Grupo", cur: resGrupo, prev: P.resGrupo, pol: 1 });
+  if (hayCapex) {
+    filas.push({ kind: "spacer" });
+    secc("sec_capex", "Inversiones / Capex", capexAccounts, P.capexAccounts, null, -1);
+    filas.push({ kind: "result", strong: true, label: "Resultado Final del Grupo", cur: resFinal, prev: P.resFinal, pol: 1 });
+  }
+
   return (
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
       boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
-      <table style={{ width: "100%", minWidth: 280 + activeMonths.length * 122 + 150, borderCollapse: "collapse", tableLayout: "fixed" }}>
-        <colgroup>
-          <col style={{ width: 280 }} />
-          {activeMonths.map(m => <col key={m} style={{ width: 122 }} />)}
-          <col style={{ width: 150 }} />
-        </colgroup>
-        <thead>
-          <tr>
-            <th onClick={toggleAll} title="Contraer / expandir todo"
-              style={{ ...thStyle, textAlign: "left", whiteSpace: "nowrap", cursor: "pointer",
-                userSelect: "none", ...stickyCol, background: T.tableHead, zIndex: 4 }}>
-              <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{allCol ? "▶" : "▼"}</span>Cuenta
-            </th>
-            {activeMonths.map(m => <th key={m} style={thStyle}>{MESES[m]}</th>)}
-            <th style={{ ...thStyle, borderLeft: "1px solid rgba(255,255,255,.12)" }}>TOTAL</th>
-          </tr>
-        </thead>
+      <table style={{ width: "100%", borderCollapse: "collapse",
+        ...(vista === "evolucion" ? { minWidth: 280 + activeMonths.length * 122 + 150, tableLayout: "fixed" } : { minWidth: 260 + cols.length * 120 }) }}>
+        {vista === "evolucion" && (
+          <colgroup><col style={{ width: 280 }} />{activeMonths.map(m => <col key={m} style={{ width: 122 }} />)}<col style={{ width: 150 }} /></colgroup>
+        )}
+        <thead><tr>
+          <th onClick={toggleAll} title="Contraer / expandir todo" style={{ ...thStyle, textAlign: "left",
+            whiteSpace: "nowrap", cursor: "pointer", userSelect: "none", ...stickyCol, background: T.tableHead, zIndex: 4 }}>
+            <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{allCol ? "▶" : "▼"}</span>Cuenta
+          </th>
+          {cols.map((c, i) => <th key={i} style={{ ...thStyle, ...(c.total ? { borderLeft: "1px solid rgba(255,255,255,.12)" } : {}) }}>{c.header}</th>)}
+        </tr></thead>
         <tbody>
-          {/* Resultado de operaciones: una línea por negocio = SU resultado (no la venta). Mismo diseño
-              que "Ingresos HQ" (SubSectionRow slate), no la banda oscura de secciones crudas. */}
-          <SubSectionRow label="Resultado de Operaciones" values={resOperaciones} activeMonths={activeMonths}
-            color={SEDE_HDR} expanded={!isCol("sec_op")} onToggle={() => toggle("sec_op")} />
-          {!isCol("sec_op") && <>
-            <DataRow label="Sedes Propias Argentina" values={sar} activeMonths={activeMonths} color={SEDE_HDR} />
-            <DataRow label="Gerenciamiento de Sedes (Rosedal)" values={fg} activeMonths={activeMonths} color={SEDE_HDR} />
-            <DataRow label="Wellness Real Estate (Huergo)" values={wre} activeMonths={activeMonths} color={SEDE_HDR} />
-          </>}
-
-          {/* HQ: ingresos propios − opex por departamento */}
-          {sec("sec_ing", "Ingresos HQ", hqAccounts, BIGG_ORDEN)}
-          <SubtotalRow strong noBottom label="Total Ingresos" values={resOpMasIngHQ} activeMonths={activeMonths} color={SEDE_HDR} />
-
-          {/* Costo por venta (variable, existe solo si hay venta): interusos a franquiciados, compra de
-              pauta, fee de facturación → Margen de Contribución. OPEX (fijo) va debajo del margen. */}
-          {sec("sec_gpv", "Gastos por Ventas", gpvAccounts, BIGG_ORDEN_GPV, true)}
-          <SubtotalRow strong noBottom label="Margen de Contribución" values={margen} activeMonths={activeMonths} color={SEDE_HDR} />
-          {sec("sec_opex", "OPEX HQ", ghqAccounts, BIGG_ORDEN_GHQ, true)}
-          <SubtotalRow strong neg noBottom label="Total OPEX HQ" values={opexHQ} activeMonths={activeMonths} color={SEDE_HDR} />
-          <ResultadoRow strong noBottom label="Resultado Operativo del Grupo" values={resOpGrupo} activeMonths={activeMonths} />
-
-          {/* Debajo del operativo: financieros e impuestos del grupo, en una línea al final */}
-          {sec("sec_fin", "Financieros", pnl.grupos.fin, BIGG_ORDEN_FIN, true)}
-          <ResultadoRow label="Resultado antes de Impuestos" values={resAntesImp} activeMonths={activeMonths} />
-          {/* Sección IMPUESTOS = sumarizador arriba (contribución del bloque al resultado), y adentro:
-              IVA Débito (ventas, +) / IVA Crédito (compras, −) [solo Sin IVA] + los tributos reales (−).
-              Con las dos líneas de IVA, el Resultado del Grupo da IGUAL que Con IVA (el IVA embebido vuelve). */}
-          <SubSectionRow label="Impuestos" values={impBlockTot} activeMonths={activeMonths} color={SEDE_HDR}
-            expanded={!isCol("sec_imp")} onToggle={() => toggle("sec_imp")} />
-          {!isCol("sec_imp") && <>
-            {ivaOn && <>
-              <DataRow label="IVA Débito (ventas)"   values={sub.ivaDeb}  activeMonths={activeMonths} color={SEDE_HDR} />
-              <DataRow label="IVA Crédito (compras)" values={sub.ivaCred} activeMonths={activeMonths} color={SEDE_HDR} />
-            </>}
-            {taxRows.map(([n, v]) => <DataRow key={n} label={n} values={v} activeMonths={activeMonths} color={SEDE_HDR} neg />)}
-          </>}
-          <ResultadoRow strong label="Resultado del Grupo" values={resGrupo} activeMonths={activeMonths} />
-
-          {/* Debajo de TODO: compra de operaciones (centros con categoria_pnl=capex). No es gasto operativo
-              → no toca el Resultado del Grupo; se resta aparte para llegar al Resultado Final. */}
-          {hayCapex && <>
-            <tr><td colSpan={ncols} style={{ height: 10, border: "none" }} /></tr>
-            {sec("sec_capex", "Inversiones / Capex", capexAccounts, null, true)}
-            <ResultadoRow strong label="Resultado Final del Grupo" values={resFinal} activeMonths={activeMonths} />
-          </>}
+          {filas.map((f, idx) => {
+            if (f.kind === "spacer")
+              return <tr key={idx}><td colSpan={cols.length + 1} style={{ height: 10, border: "none" }} /></tr>;
+            if (f.kind === "grupo") return (
+              <tr key={idx} onClick={() => toggle(f.key)} style={{ background: "#f1f5f9", borderTop: `1px solid ${T.cardBorder}`, cursor: "pointer" }}>
+                <td style={{ padding: "7px 14px", fontSize: 11, fontWeight: 800, color: SEDE_HDR, textTransform: "uppercase",
+                  letterSpacing: ".04em", userSelect: "none", ...stickyCol, background: "#f1f5f9" }}>
+                  <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{isCol(f.key) ? "▶" : "▼"}</span>{f.label}
+                </td>
+                {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "7px 12px", fs: 12, fw: 800, color: SEDE_HDR })}
+              </tr>
+            );
+            if (f.kind === "cuenta") return (
+              <tr key={idx} style={{ borderBottom: `1px solid ${T.cardBorder}`, background: T.card }}>
+                <td style={{ padding: "6px 14px 6px 32px", fontSize: 13, color: T.text, whiteSpace: "nowrap",
+                  borderBottom: `1px solid ${T.cardBorder}`, ...stickyCol, background: T.card }}>{f.label}</td>
+                {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "6px 12px", fs: 13, fw: 400, color: SEDE_HDR })}
+              </tr>
+            );
+            if (f.kind === "subtotal") {
+              const bg = f.strong ? "#cbd5e1" : "#f3f4f6";
+              return (
+                <tr key={idx} style={{ background: bg, borderTop: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, borderBottom: `2px solid ${T.cardBorder}` }}>
+                  <td style={{ padding: "12px 14px", fontSize: f.strong ? 15 : 14, fontWeight: 900, color: SEDE_HDR,
+                    borderTop: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, borderBottom: `2px solid ${T.cardBorder}`, ...stickyCol, background: bg }}>{f.label}</td>
+                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: f.strong ? 15 : 14, fw: 900, color: SEDE_HDR,
+                    bt: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, bb: `2px solid ${T.cardBorder}` })}
+                </tr>
+              );
+            }
+            const pv = primaryVal(vista, f.cur, mes), rc = pv >= 0 ? T.green : T.red, rbg = pv >= 0 ? "#bbf7d0" : "#fecaca";
+            return (
+              <tr key={idx} style={{ background: rbg, borderTop: `3px solid ${rc}`, borderBottom: `2px solid ${rc}` }}>
+                <td style={{ padding: "12px 14px", fontSize: 15, fontWeight: 900, color: rc,
+                  borderTop: `3px solid ${rc}`, borderBottom: `2px solid ${rc}`, ...stickyCol, background: rbg }}>{f.label}</td>
+                {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: 15, fw: 900, bySign: true, bt: `3px solid ${rc}`, bb: `2px solid ${rc}` })}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -1676,7 +1726,7 @@ const CF_ACT = [
 ];
 // Orden fijo de conceptos por actividad (para que las líneas salgan en orden de negocio, no por magnitud).
 const CF_CONCEPTO_ORDEN = {
-  operativo:    ["Ingresos Sedes", "Costos Sedes", "Ingresos HQ", "Sueldos HQ", "Otros HQ", "Franquicias (neto)", "Sin conciliar (pendiente) — cobros", "Sin conciliar (pendiente) — pagos", "Otros operativo (cobros)", "Otros operativo (pagos)"],
+  operativo:    ["Ingresos Sedes", "Ingresos HQ", "Franquicias (neto)", "Costos Sedes", "Costos HQ", "Sin conciliar (pendiente)"],
   inversion:    ["Movimientos intercompañía", "Fondeo a otros negocios"],
   financiacion: ["Préstamos recibidos", "Pago de préstamos / cuotas", "Anticipos de clientes", "Aportes / dividendos / préstamos de socios"],
   internos:     ["Transferencias entre cuentas", "Cambio de moneda"],
@@ -1697,8 +1747,8 @@ function clasificarFlujo(m, { ccMap, nucleoEmpresas, docCentro } = {}) {
   if (origen.startsWith("financiacion") || origen === "cuota" || doc.startsWith("FIN-"))
     return { act: "financiacion", concepto: entra ? "Préstamos recibidos" : "Pago de préstamos / cuotas" };
   if (origen === "anticipo_alta") return { act: "financiacion", concepto: "Anticipos de clientes" };   // el cliente te financia
-  // Pago del resumen de tarjeta: settlement central → Otros HQ.
-  if (tipo === "PAGO_TARJETA" || origen === "pago_tarjeta") return { act: "operativo", concepto: "Otros HQ" };
+  // Pago del resumen de tarjeta: settlement central → Costos HQ.
+  if (tipo === "PAGO_TARJETA" || origen === "pago_tarjeta") return { act: "operativo", concepto: "Costos HQ" };
   // Franquicias (neto ingreso − egreso)
   if (origen === "franquicias") return { act: "operativo", concepto: "Franquicias (neto)" };
   // Inversión — interco
@@ -1712,18 +1762,17 @@ function clasificarFlujo(m, { ccMap, nucleoEmpresas, docCentro } = {}) {
   // Inversión — fondeo: gasto/ingreso a un centro cuya sociedad dueña está FUERA del núcleo.
   if (empresa && nucleoEmpresas && !nucleoEmpresas.has(empresa))
     return { act: "inversion", concepto: "Fondeo a otros negocios" };
-  // Operativo por negocio
-  if (grupo === "hq") {
-    if (origen === "sueldos") return { act: "operativo", concepto: "Sueldos HQ" };
-    return { act: "operativo", concepto: entra ? "Ingresos HQ" : "Otros HQ" };
-  }
+  // Operativo por negocio. HQ = todo lo que NO es sede ni franquicia (sueldos HQ, otros gastos, catch-all).
+  if (grupo === "hq")
+    return { act: "operativo", concepto: entra ? "Ingresos HQ" : "Costos HQ" };
   if (cc && grupo !== "inversiones")   // centro de sede (operaciones): sueldos de sede caen en Costos Sedes
     return { act: "operativo", concepto: entra ? "Ingresos Sedes" : "Costos Sedes" };
   // Línea del extracto TODAVÍA no aceptada en la bandeja (caja real, aún sin imputar) = backlog de conciliación.
+  // Una sola línea (neta): que dé CERO = los motores de conciliación están limpios para ese mes.
   if (origen === "extracto" && !doc)
-    return { act: "operativo", concepto: entra ? "Sin conciliar (pendiente) — cobros" : "Sin conciliar (pendiente) — pagos" };
-  // Catch-all genuino: sin centro resoluble (raro)
-  return { act: "operativo", concepto: entra ? "Otros operativo (cobros)" : "Otros operativo (pagos)" };
+    return { act: "operativo", concepto: "Sin conciliar (pendiente)" };
+  // Catch-all: sin centro resoluble (raro) → HQ (no es sede ni franquicia).
+  return { act: "operativo", concepto: entra ? "Ingresos HQ" : "Costos HQ" };
 }
 
 // ─── Tab Cash Flow ────────────────────────────────────────────────────────────
@@ -1731,12 +1780,14 @@ function clasificarFlujo(m, { ccMap, nucleoEmpresas, docCentro } = {}) {
 // intra-núcleo se netea SOLO (ambas patas —origen "intercompania", mismo documento_id— están en el
 // set y son opuestas → suman 0). El fondeo hacia anillo 2/3 queda (solo está la pata del núcleo) →
 // aparece como Inversión: es plata que salió del perímetro del grupo.
-const CF_START_MES = 6;   // Julio (0-indexed) — go-live 1/7/2026: el Cash Flow arranca acá (hardcodeado)
+const CF_GO_LIVE_YEAR = 2026;   // año del go-live
+const CF_START_MES = 6;   // Julio (0-indexed): el Cash Flow arranca acá SOLO el año de go-live (1/7/2026).
+                          // Los años posteriores arrancan en enero (todo lo previo va al saldo inicial).
 // Orden de anillos en el filtro (los que no matcheen van al final, alfabético).
 const CF_ANILLO_ORDEN = ["cleo", "fond", "extern"];
 const anilloRank = (a) => { const x = String(a || "").toLowerCase(); const i = CF_ANILLO_ORDEN.findIndex(k => x.includes(k)); return i === -1 ? 99 : i; };
 
-function TabCashFlow({ rawMovs, rawIn = [], rawEg = [], ccMap, nucleoEmpresas, selSoc = new Set(), year, moneda, tarjetaIds }) {
+function TabCashFlow({ rawMovs, rawIn = [], rawEg = [], ccMap, nucleoEmpresas, selSoc = new Set(), year, moneda, tarjetaIds, cuentasBancarias = [] }) {
   const [open, setOpen] = useState({ operativo: true, inversion: true, financiacion: true, internos: false });
   const toggle = (k) => setOpen(o => ({ ...o, [k]: !o[k] }));
 
@@ -1757,20 +1808,33 @@ function TabCashFlow({ rawMovs, rawIn = [], rawEg = [], ccMap, nucleoEmpresas, s
   }, [rawIn, rawEg]);
   const ctx = useMemo(() => ({ ccMap, nucleoEmpresas, docCentro }), [ccMap, nucleoEmpresas, docCentro]);
 
+  // Moneda AUTORITATIVA = la de la cuenta bancaria (una cuenta USD solo tiene USD). El campo `moneda` del
+  // movimiento es fallback (por si una cuenta no está en el maestro). Evita que un movimiento mal cargado
+  // (moneda en blanco → antes caía a ARS) se cuele en la moneda equivocada.
+  const cuentaMoneda = useMemo(() => {
+    const mm = new Map();
+    for (const c of (cuentasBancarias || [])) mm.set(String(c.id), String(c.moneda || "ARS"));
+    return mm;
+  }, [cuentasBancarias]);
+  const monedaDe = (m) => cuentaMoneda.get(String(m.cuenta_bancaria)) || (m.moneda ?? "ARS");
+
   // Predicado de caja: sociedad ELEGIDA (filtro en el box), con banco real, no ignorada, no tarjeta, en la moneda.
   const esCash = (m) => !!m.fecha && !esIgnorado(m) && !!m.cuenta_bancaria
-    && !(tarjetaIds?.has(m.cuenta_bancaria)) && (m.moneda ?? "ARS") === moneda
+    && !(tarjetaIds?.has(m.cuenta_bancaria)) && monedaDe(m) === moneda
     && (selSoc.size === 0 || selSoc.has(String(m.sociedad ?? "").trim()));
 
-  const cutoff = `${year}-${String(CF_START_MES + 1).padStart(2, "0")}-01`;   // arranque del período (1/7)
+  // Arranque del período: SOLO el año de go-live empieza en julio (1/7/2026); los años posteriores en enero.
+  // Todo lo previo al cutoff (incl. las aperturas al 30/6/2026) va al saldo inicial.
+  const cfStartMes = year === CF_GO_LIVE_YEAR ? CF_START_MES : 0;
+  const cutoff = `${year}-${String(cfStartMes + 1).padStart(2, "0")}-01`;
 
   const movsFilt = useMemo(() => rawMovs.filter(m => esCash(m) && m.fecha.slice(0, 4) === String(year) && m.fecha >= cutoff),
-    [rawMovs, year, moneda, tarjetaIds, selSoc]); // eslint-disable-line react-hooks/exhaustive-deps
+    [rawMovs, year, moneda, tarjetaIds, selSoc, cuentaMoneda]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Saldo de caja al inicio del período (todo lo movido ANTES del 1/7, incl. ene–jun del año, en esta moneda).
+  // Saldo de caja al inicio del período (todo lo movido ANTES del cutoff, en esta moneda).
   const openingCash = useMemo(() => rawMovs.reduce((s, m) =>
     (esCash(m) && m.fecha < cutoff) ? s + (Number(m.monto) || 0) : s, 0),
-    [rawMovs, year, moneda, tarjetaIds, selSoc]); // eslint-disable-line react-hooks/exhaustive-deps
+    [rawMovs, year, moneda, tarjetaIds, selSoc, cuentaMoneda]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // porAct[actividad][concepto] = 12 meses (neto firmado); actTot[actividad] = subtotal mensual.
   const { porAct, actTot } = useMemo(() => {
@@ -1799,9 +1863,9 @@ function TabCashFlow({ rawMovs, rawIn = [], rawEg = [], ccMap, nucleoEmpresas, s
 
   const activeMonths = useMemo(() => {
     const s = new Set();
-    movsFilt.forEach(m => { const i = parseInt(m.fecha.slice(5, 7), 10) - 1; if (i >= CF_START_MES && i <= 11) s.add(i); });
+    movsFilt.forEach(m => { const i = parseInt(m.fecha.slice(5, 7), 10) - 1; if (i >= cfStartMes && i <= 11) s.add(i); });
     const finYear = new Date().getFullYear() === year ? new Date().getMonth() : 11;
-    for (let i = CF_START_MES; i <= Math.max(finYear, CF_START_MES); i++) s.add(i);
+    for (let i = cfStartMes; i <= Math.max(finYear, cfStartMes); i++) s.add(i);
     return [...s].sort((a, b) => a - b);
   }, [movsFilt, year]);
 
@@ -1833,8 +1897,9 @@ function TabCashFlow({ rawMovs, rawIn = [], rawEg = [], ccMap, nucleoEmpresas, s
           </tr>
         </thead>
         <tbody>
-          {/* Saldo de caja al inicio de cada mes */}
-          <SubtotalRow label="Saldo inicial de caja" values={saldoInicioMes} activeMonths={activeMonths} color={T.muted} noBottom />
+          {/* Saldo de caja al inicio de cada mes. TOTAL = saldo al arranque del período (NO la suma de meses). */}
+          <SubtotalRow label="Saldo inicial de caja" values={saldoInicioMes} activeMonths={activeMonths} color={T.muted} noBottom
+            totalOverride={saldoInicioMes[activeMonths[0]] ?? 0} />
 
           {CF_ACT.map(({ key, label }) => {
             const ord = CF_CONCEPTO_ORDEN[key] || [];
@@ -1855,7 +1920,9 @@ function TabCashFlow({ rawMovs, rawIn = [], rawEg = [], ccMap, nucleoEmpresas, s
           })}
 
           <ResultadoRow label="Flujo neto del período" values={flujoNeto} activeMonths={activeMonths} />
-          <SubtotalRow label="Saldo final de caja" values={saldoFinal} activeMonths={activeMonths} color={T.text} strong />
+          {/* TOTAL = saldo final del último mes activo (el saldo de caja "a hoy"), NO la suma de los meses. */}
+          <SubtotalRow label="Saldo final de caja" values={saldoFinal} activeMonths={activeMonths} color={T.text} strong
+            totalOverride={saldoFinal[activeMonths[activeMonths.length - 1]] ?? 0} />
         </tbody>
       </table>
     </div>
@@ -2427,7 +2494,14 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const [selectedSedeCCs, setSelectedSedeCCs] = useState(null);   // null = todas · [] = ninguna · [ids] = subconjunto
   const [sedeOpen,        setSedeOpen]        = useState(false);
   useEffect(() => { try { localStorage.setItem("pnlSinIva", sinIva ? "1" : "0"); } catch {} }, [sinIva]);
-  const [monedaPL,       setMonedaPL]       = useState("ARS");
+  const [monedaSel,      setMonedaSel]      = useState("ARS");   // valor crudo del selector (incl. modos FX consolidados)
+  const [tiposCambio,    setTiposCambio]    = useState({});      // nb_tipos_cambio: mapa YYYY-MM → tasas USD
+  useEffect(() => { fetchTiposCambio().then(setTiposCambio).catch(() => {}); }, []);
+  // Modo de consolidación FX derivado del selector. "native" = filtra por moneda (como siempre);
+  // "real" = traduce TODO a USD al TC de cierre de cada mes. ("USD · Constante" / constant currency = WIP.)
+  const fxMode   = monedaSel === "USD_REAL" ? "real" : "native";
+  const monedaPL = fxMode === "native" ? monedaSel : "USD";
+  const setMonedaPL = setMonedaSel;   // los efectos que forzaban moneda (fondeadas/Huergo) siguen andando
   const [monedaCF,       setMonedaCF]       = useState("ARS");
   const [rawEg,     setRawEg]     = useState([]);
   const [rawIn,     setRawIn]     = useState([]);
@@ -2679,15 +2753,32 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const egDetalle  = useMemo(() => egConSueldos.filter(r => !r._tipo || ["Gasto", "Sueldo", "Financiación"].includes(r._tipo)), [egConSueldos]);
   const ingDetalle = useMemo(() => [...inConFranq, ...gastoMovRows.filter(r => r._tipo === "Ingreso" || r._tipo === "Retención")], [inConFranq, gastoMovRows]);
 
+  // Traductor FX del P&L Sedes (piloto de consolidación). null en modo nativo. "real" = a USD al TC de cierre
+  // del mes de cada fila (traducí mes por mes y sumá). tcConst (constant currency) = WIP.
+  const fxConv = useMemo(
+    () => fxMode === "real" ? ((monto, moneda, anio, mes) => montoAUSD(monto, moneda, tcDelMes(tiposCambio, anio, mes))) : null,
+    [fxMode, tiposCambio]
+  );
+  // Filas pre-traducidas a USD para el consolidado (UNA vez, mes por mes). En modo nativo (fxConv null) son
+  // las mismas filas → todos los P&L (Sedes/Huergo/BIGG) corren nativos en USD sin tocar su lógica. Mecanismo
+  // único de traducción del consolidado.
+  const inFxRows = useMemo(() => traducirFilasUSD(inConFranq, fxConv), [inConFranq, fxConv]);
+  const egFxRows = useMemo(() => traducirFilasUSD(egConSueldos, fxConv), [egConSueldos, fxConv]);
+  const inFx = inFxRows.rows, egFx = egFxRows.rows;
+  // Meses PASADOS sin TC (alimenta el aviso). El mes en curso sin TC de cierre es esperado → no entra.
+  const mesesSinTC = useMemo(
+    () => [...new Set([...(inFxRows.mesesSinTC || []), ...(egFxRows.mesesSinTC || [])])].sort(),
+    [inFxRows, egFxRows]
+  );
   const pnlSede = useMemo(
-    () => buildPnLSede(inConFranq, egConSueldos, resolvedCCSede, year, monedaPL, sinIva),
-    [inConFranq, egConSueldos, resolvedCCSede, year, monedaPL, sinIva]
+    () => buildPnLSede(inFx, egFx, resolvedCCSede, year, monedaPL, sinIva),
+    [inFx, egFx, resolvedCCSede, year, monedaPL, sinIva]
   );
 
   // Año anterior (mismos arrays, filtrados a year-1) → comparativas Mensual/YTD sin fetch extra.
   const pnlSedePrev = useMemo(
-    () => buildPnLSede(inConFranq, egConSueldos, resolvedCCSede, year - 1, monedaPL, sinIva),
-    [inConFranq, egConSueldos, resolvedCCSede, year, monedaPL, sinIva]
+    () => buildPnLSede(inFx, egFx, resolvedCCSede, year - 1, monedaPL, sinIva),
+    [inFx, egFx, resolvedCCSede, year, monedaPL, sinIva]
   );
   const subSede     = useMemo(() => computeSubtotalsSede(pnlSede), [pnlSede]);
   const subSedePrev = useMemo(() => computeSubtotalsSede(pnlSedePrev), [pnlSedePrev]);
@@ -2698,9 +2789,9 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     [ccs]
   );
   // Se computa solo cuando la pestaña Huergo está activa (evita escanear los datasets en cada render de otras).
-  const pnlHuergo     = useMemo(() => isHuergo ? buildPnLHuergo(inConFranq, egConSueldos, huergoCCs, year, monedaPL) : null, [isHuergo, inConFranq, egConSueldos, huergoCCs, year, monedaPL]);
+  const pnlHuergo     = useMemo(() => isHuergo ? buildPnLHuergo(inFx, egFx, huergoCCs, year, monedaPL) : null, [isHuergo, inFx, egFx, huergoCCs, year, monedaPL]);
   const subHuergo     = useMemo(() => pnlHuergo ? computeSubtotalsHuergo(pnlHuergo) : null, [pnlHuergo]);
-  const pnlHuergoPrev = useMemo(() => isHuergo ? buildPnLHuergo(inConFranq, egConSueldos, huergoCCs, year - 1, monedaPL) : null, [isHuergo, inConFranq, egConSueldos, huergoCCs, year, monedaPL]);
+  const pnlHuergoPrev = useMemo(() => isHuergo ? buildPnLHuergo(inFx, egFx, huergoCCs, year - 1, monedaPL) : null, [isHuergo, inFx, egFx, huergoCCs, year, monedaPL]);
   const subHuergoPrev = useMemo(() => pnlHuergoPrev ? computeSubtotalsHuergo(pnlHuergoPrev) : null, [pnlHuergoPrev]);
 
   // ── P&L BIGG = P&L de HOLDING (Núcleo/anillo 1). Se computa solo en la pestaña pl_bigg. ──
@@ -2713,57 +2804,49 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   );
   const bnCcId = useMemo(() => ccs.find(c => _nkSede(c.nombre).includes(_nkSede(CESION.matchNombre)))?.id, [ccs]);
 
-  // Línea "Sedes Propias Argentina" = resultado de las sedes AR NETO del 49% de la cesión de Barrio Norte.
-  // Devuelve { res, ivaDeb, ivaCred }: el IVA de sede se cede en la misma proporción (51% de Barrio Norte).
-  const resSedesAR = useMemo(() => {
-    if (!isBigg) return null;
-    const sAR = computeSubtotalsSede(buildPnLSede(inConFranq, egConSueldos, arNucleoCCs, year, monedaPL, sinIva));
-    const sBN = bnCcId ? computeSubtotalsSede(buildPnLSede(inConFranq, egConSueldos, [bnCcId], year, monedaPL, sinIva)) : null;
-    const ceder = (ar, bn) => ar.map((v, m) => v - CESION.pct * (Number(bn?.[m]) || 0));
-    return { res: ceder(sAR.resFinal, sBN?.resFinal), ivaDeb: ceder(sAR.ivaDeb, sBN?.ivaDeb), ivaCred: ceder(sAR.ivaCred, sBN?.ivaCred) };
-  }, [isBigg, inConFranq, egConSueldos, arNucleoCCs, bnCcId, year, monedaPL, sinIva]);
+  // El holding usa las MISMAS filas pre-traducidas (inFx/egFx, definidas arriba). Alias por legibilidad.
+  const inBigg = inFx, egBigg = egFx;
 
-  // Línea "Gerenciamiento (Rosedal)" = fee interco Ñako→Segui (cuenta "Fee de Gestion y Adm" exacta, núcleo).
-  // Es venta → su IVA es débito (ivaCred = 0).
-  const feeGer = useMemo(() => {
-    if (!isBigg) return null;
-    const res = new Array(12).fill(0), ivaDeb = new Array(12).fill(0);
-    for (const r of inConFranq) {
+  // Holding (P&L BIGG) para un año dado → { pnl (grupos+capex con fondeo), sub (subtotales) }. Se calcula para
+  // `year` y `year-1` (comparativas Mensual/YTD). Usa las filas pre-traducidas inBigg/egBigg (USD en consolidado).
+  const holdingDe = (yr) => {
+    // Sedes Propias AR neto del 49% de Barrio Norte (IVA cedido en la misma proporción).
+    const sAR = computeSubtotalsSede(buildPnLSede(inBigg, egBigg, arNucleoCCs, yr, monedaPL, sinIva));
+    const sBN = bnCcId ? computeSubtotalsSede(buildPnLSede(inBigg, egBigg, [bnCcId], yr, monedaPL, sinIva)) : null;
+    const ceder = (ar, bn) => ar.map((v, m) => v - CESION.pct * (Number(bn?.[m]) || 0));
+    const resSedesAR = { res: ceder(sAR.resFinal, sBN?.resFinal), ivaDeb: ceder(sAR.ivaDeb, sBN?.ivaDeb), ivaCred: ceder(sAR.ivaCred, sBN?.ivaCred) };
+    // Gerenciamiento (Rosedal) = fee Ñako→Segui (cuenta "Fee de Gestion y Adm" exacta, núcleo; venta → IVA débito).
+    const fRes = new Array(12).fill(0), fDeb = new Array(12).fill(0);
+    for (const r of inBigg) {
       if (_nkSede(r.cuenta_contable) !== _nkSede("Fee de Gestion y Adm")) continue;
       if (!nucleoEmpresas.has((r.sociedad ?? "").trim())) continue;
-      if (!r.fecha || r.fecha < PNL_INICIO || r.fecha.slice(0, 4) !== String(year)) continue;
+      if (!r.fecha || r.fecha < PNL_INICIO || r.fecha.slice(0, 4) !== String(yr)) continue;
       if ((r.moneda ?? "ARS") !== monedaPL) continue;
       const m = parseInt(r.fecha.slice(5, 7), 10) - 1;
-      if (m >= 0 && m < 12) { res[m] += montoPnL(r, sinIva); if (sinIva) ivaDeb[m] += Number(r.iva_monto) || 0; }
+      if (m >= 0 && m < 12) { fRes[m] += montoPnL(r, sinIva); if (sinIva) fDeb[m] += Number(r.iva_monto) || 0; }
     }
-    return { res, ivaDeb, ivaCred: new Array(12).fill(0) };
-  }, [isBigg, inConFranq, nucleoEmpresas, year, monedaPL, sinIva]);
-
-  // Línea "Wellness Real Estate" = margen de Huergo (+ Puertos a futuro). { res, ivaDeb, ivaCred }.
-  const resWRE = useMemo(() => {
-    if (!isBigg) return null;
-    const s = computeSubtotalsHuergo(buildPnLHuergo(inConFranq, egConSueldos, huergoCCs, year, monedaPL, sinIva));
-    return { res: s.margen, ivaDeb: s.ivaDeb, ivaCred: s.ivaCred };
-  }, [isBigg, inConFranq, egConSueldos, huergoCCs, year, monedaPL, sinIva]);
-
-  const pnlBigg = useMemo(() => {
-    if (!isBigg) return null;
-    const p = buildPnLBigg(inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva);
-    // Fondeo del núcleo a las fondeadas (anillo 2: España/Colombia/Puertos) POR MES → se suma DENTRO de la
-    // sección Inversiones/Capex (es plata invertida, no gasto operativo). Segui (externa) queda afuera. Por
-    // moneda (el fondeo EUR aparece en vista EUR, el USD en USD) hasta que se consolide a una moneda.
-    const fondeo = fondeoFondeadasMensual(intercoData, { year, moneda: monedaPL, desde: PNL_INICIO });
+    const feeGer = { res: fRes, ivaDeb: fDeb, ivaCred: new Array(12).fill(0) };
+    // Wellness Real Estate = margen de Huergo (+ Puertos a futuro).
+    const sH = computeSubtotalsHuergo(buildPnLHuergo(inBigg, egBigg, huergoCCs, yr, monedaPL, sinIva));
+    const resWRE = { res: sH.margen, ivaDeb: sH.ivaDeb, ivaCred: sH.ivaCred };
+    // HQ + fondeo de las fondeadas (anillo 2) dentro de Inversiones/Capex. El fondeo interco ya está en USD.
+    const pnl = buildPnLBigg(inBigg, egBigg, ccMap, cuentaMap, nucleoEmpresas, yr, monedaPL, sinIva);
+    const fondeo = fondeoFondeadasMensual(intercoData, { year: yr, moneda: monedaPL, desde: PNL_INICIO });
     const nomSoc = new Map((intercoData?.sociedades || []).map(s => [String(s.id), s.nombre || s.id]));
     for (const [fid, arr] of Object.entries(fondeo)) {
       if (!arr.some(v => Math.abs(v) > 0.01)) continue;
-      p.grupos.capex[`Fondeo · ${nomSoc.get(String(fid)) || fid}`] = arr;
+      pnl.grupos.capex[`Fondeo · ${nomSoc.get(String(fid)) || fid}`] = arr;
     }
-    return p;
-  }, [isBigg, inConFranq, egConSueldos, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva, intercoData]);
-  const subBigg = useMemo(
-    () => pnlBigg ? computeSubtotalsHolding(pnlBigg, { resSedesAR, feeGer, resWRE }) : null,
-    [pnlBigg, resSedesAR, feeGer, resWRE]
-  );
+    return { pnl, sub: computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) };
+  };
+  const biggCur  = useMemo(() => isBigg ? holdingDe(year)     : null,   // eslint-disable-line react-hooks/exhaustive-deps
+    [isBigg, inBigg, egBigg, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva, intercoData]);
+  const biggPrev = useMemo(() => isBigg ? holdingDe(year - 1) : null,   // eslint-disable-line react-hooks/exhaustive-deps
+    [isBigg, inBigg, egBigg, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva, intercoData]);
+  const pnlBigg     = biggCur?.pnl  || null;
+  const subBigg     = biggCur?.sub  || null;
+  const pnlBiggPrev = biggPrev?.pnl || null;
+  const subBiggPrev = biggPrev?.sub || null;
 
   const toggleSedeCC = (id) => {
     setSelectedSedeCCs(prev => {
@@ -2840,7 +2923,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         subtitle={isPnlTiempo ? undefined : curLente?.label}
         action={
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            {isPnlTiempo && <VistaToggle value={vistaPnl} onChange={setVistaPnl} />}
+            {(isPnlTiempo || isBigg) && <VistaToggle value={vistaPnl} onChange={setVistaPnl} />}
             <button onClick={() => setActiveTab(null)} style={{
               display: "inline-flex", alignItems: "center", gap: 6,
               background: "#f3f4f6", border: `1px solid ${T.cardBorder}`, borderRadius: 8,
@@ -2875,10 +2958,16 @@ export default function PantallaReportes({ sociedad = "nako" }) {
           <div style={{ order: isSedeLike ? 4 : 0, marginLeft: (isSedeLike || isBigg) ? "auto" : undefined }}>
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Moneda</label>
-            <select value={monedaPL} onChange={e => setMonedaPL(e.target.value)} style={selStyle}>
-              {Object.entries(MONEDA_SYM).map(([k, v]) => (
-                <option key={k} value={k}>{v} {k}</option>
-              ))}
+            <select value={monedaSel} onChange={e => setMonedaSel(e.target.value)} style={selStyle}>
+              <optgroup label="Monedas">
+                {Object.entries(MONEDA_SYM).map(([k, v]) => (
+                  <option key={k} value={k}>{v} {k}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Consolidado">
+                <option value="USD_REAL">U$D · TC Real</option>
+                <option value="USD_CONST" disabled>U$D · Constante (WIP)</option>
+              </optgroup>
             </select>
           </div>
         )}
@@ -2912,7 +3001,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         )}
 
         {/* Mes — solo para vistas comparativas (Mensual / YTD) */}
-        {isPnlTiempo && vistaPnl !== "evolucion" && (
+        {(isPnlTiempo || isBigg) && vistaPnl !== "evolucion" && (
           <div style={{ order: isSedeLike ? 3 : 0 }}>
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Mes</label>
@@ -2997,6 +3086,14 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       </div>
       )}
 
+      {/* Aviso de meses PASADOS sin TC en modo consolidado (el mes en curso queda en blanco, es esperado). */}
+      {fxMode !== "native" && mesesSinTC.length > 0 && (
+        <div style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 8, padding: "8px 14px",
+          marginBottom: 16, fontSize: 12, color: "#92400e", fontWeight: 600 }}>
+          ⚠ Faltan tipos de cambio de: {mesesSinTC.join(", ")} → esos meses no se tradujeron a USD. Cargalos en Maestros (nb_tipos_cambio).
+        </div>
+      )}
+
       {/* ── P&L Sedes (Argentina núcleo) y Fondeadas (España/Colombia/Puertos): mismo reporte, distinto
              universo de sedes (scopeEmpresas) + cola de impuestos en Fondeadas ── */}
       {isSedeLike && (
@@ -3016,13 +3113,14 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
       {/* ── P&L BIGG consolidado (subgrupos, hasta Margen Bruto) ── */}
       {activeTab === "pl_bigg" && (
-        <PnLTableBigg pnl={pnlBigg} sub={subBigg} year={year} moneda={monedaPL} />
+        <PnLTableBigg pnl={pnlBigg} sub={subBigg} pnlPrev={pnlBiggPrev} subPrev={subBiggPrev}
+          vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} />
       )}
 
       {/* ── Cash Flow ── */}
       {activeTab === "cf" && (
         <TabCashFlow rawMovs={rawMovs} rawIn={rawIn} rawEg={rawEg} ccMap={ccMap} nucleoEmpresas={nucleoEmpresas}
-          selSoc={cfSel} year={year} moneda={monedaCF} tarjetaIds={tarjetaIds} />
+          selSoc={cfSel} year={year} moneda={monedaCF} tarjetaIds={tarjetaIds} cuentasBancarias={cuentasBancarias} />
       )}
 
       {activeTab === "balance" && (
