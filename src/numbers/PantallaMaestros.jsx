@@ -13,6 +13,7 @@ import {
   contarUsosMaestro,
 } from "../lib/numbersApi";
 import { CUENTAS as CUENTAS_STATIC, CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
+import TabTiposCambio from "./TabTiposCambio";
 
 // ─── Chip de tipo ─────────────────────────────────────────────────────────────
 function TipoChip({ tipo }) {
@@ -1843,6 +1844,7 @@ export default function PantallaMaestros({ activeTab = "sociedades" }) {
        : activeTab === "cuentas"   ? <TabCuentas />
        : activeTab === "cc"        ? <TabCC />
        : activeTab === "banco_reglas" ? <TabBancoReglas />
+       : activeTab === "tipos_cambio" ? <TabTiposCambio />
        : <TabSociedades />}
     </div>
   );

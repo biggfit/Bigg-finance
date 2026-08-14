@@ -45,6 +45,7 @@ const MAESTROS_TABS = [
   { id:"cuentas",     label:"Plan de Cuentas",  icon:"📋" },
   { id:"clientes",    label:"Clientes",          icon:"🏢" },
   { id:"proveedores", label:"Proveedores",       icon:"🧾" },
+  { id:"tipos_cambio",label:"Tipos de Cambio",   icon:"💱" },
   { id:"banco_reglas",label:"Reglas de banco",   icon:"⚙" },
 ];
 

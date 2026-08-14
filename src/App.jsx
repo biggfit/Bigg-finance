@@ -6,9 +6,9 @@ import { fetchAll,
          fetchFranchises, fetchFranchisor,
          sheetsSaveFr, sheetsAddFr, sheetsDeleteFr, sheetsSaveFranchisor,
          fetchRecordatorios, saveRecordatorio,
-         tryDecrementInvoiceSeq,
-         saveTipoCambio } from "./lib/sheetsApi";
-import { fetchMovTesoreria, appendMovFranquicia, deleteMovTesoreria, updateMovTesoreria } from "./lib/numbersApi";   // fuente financiera única (nb_movimientos)
+         tryDecrementInvoiceSeq } from "./lib/sheetsApi";
+import { fetchMovTesoreria, appendMovFranquicia, deleteMovTesoreria, updateMovTesoreria,
+         fetchTiposCambio } from "./lib/numbersApi";   // fuente financiera única (nb_movimientos) + maestro de TC (nb_tipos_cambio)
 import { enriquecerCompsConMovs } from "./lib/franquiciasAdapter";
 import { CURRENCIES, MONTHS, AVAILABLE_YEARS, computeSaldo, computeSaldoPrevMes, downloadCSV } from "./lib/helpers";
 import "./lib/styles";
@@ -127,11 +127,6 @@ export default function App({ onVolverNumbers } = {}) {
   const saveFranchisor = useCallback((side, data) => {
     setFranchisor(prev => ({ ...prev, [side]: { ...(prev?.[side] ?? {}), ...data } }));
     sheetsSaveFranchisor(side, data).catch(err => console.error('Sheets saveFranchisor:', err));
-  }, []);
-
-  const saveTC = useCallback((yearMonth, tc) => {
-    setTiposCambio(prev => ({ ...prev, [yearMonth]: { yearMonth, ...tc } }));
-    return saveTipoCambio(yearMonth, tc);
   }, []);
 
 
@@ -345,9 +340,12 @@ export default function App({ onVolverNumbers } = {}) {
   // Además traemos nb_movimientos (Numbers) en paralelo: los movimientos financieros de
   // franquicia (origen "franquicias", desde el 1/7) se inyectan en `comps` en ESTE único punto
   // → todos los reportes de CC leen las dos hojas sin tocarse. (Lo histórico ≤30/6 sigue en comprobantes.)
+  // El TC ya NO viene en el agregado `all`: el maestro vive en Numbers (nb_tipos_cambio) y se
+  // edita en Maestros › Tipos de Cambio. Acá solo se LEE. Si esa lectura falla, la app arranca
+  // igual con {} → el fee y la facturación avisan "falta TC" en vez de caerse enteras.
   useEffect(() => {
-    Promise.all([fetchAll(), fetchMovTesoreria().catch(() => [])])
-      .then(([{ comps: compsRaw, saldos, franchises, franchisor: rawFranchisor, recordatorios, tiposCambio: tc }, movsNumbers]) => {
+    Promise.all([fetchAll(), fetchMovTesoreria().catch(() => []), fetchTiposCambio().catch(() => ({}))])
+      .then(([{ comps: compsRaw, saldos, franchises, franchisor: rawFranchisor, recordatorios }, movsNumbers, tc]) => {
         const comps = enriquecerCompsConMovs(compsRaw, movsNumbers);
         setComps(comps);
         setSaldoInicial(saldos);
@@ -365,7 +363,7 @@ export default function App({ onVolverNumbers } = {}) {
 
         setRecordatorios(recordatorios ?? {});
         setTiposCambio(tc ?? {});
-        console.log('[fetchAll] tiposCambio desde Sheets:', tc);
+        console.log('[fetchAll] tiposCambio desde Numbers (nb_tipos_cambio):', tc);
         console.log('[fetchAll] saldos desde Sheets:', saldos);
         console.log('[fetchAll] comps keys:', Object.keys(comps).length, '— muestra primer fr:', Object.entries(comps)[0]);
         setSheetsReady(true);
@@ -425,12 +423,10 @@ export default function App({ onVolverNumbers } = {}) {
           franchises={franchises}
           franchisor={franchisor}
           comps={comps}
-          tiposCambio={tiposCambio}
           onSaveFr={saveFr}
           onAddFr={addFr}
           onDeleteFr={deleteFr}
           onSaveFranchisor={saveFranchisor}
-          onSaveTC={saveTC}
           onClose={() => setShowMaestros(false)}
         />
       )}

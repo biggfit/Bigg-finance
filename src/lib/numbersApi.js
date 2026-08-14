@@ -25,6 +25,7 @@ const CACHE_TTL_MASTER = 600_000;   // maestros (casi nunca cambian en una sesi�
 const MASTER_RES = new Set([
   "nb_cuentas", "nb_centros_costo", "nb_proveedores", "nb_clientes",
   "nb_sociedades", "nb_cuentas_bancarias", "nb_banco_reglas", "nb_usuarios",
+  "nb_tipos_cambio",
 ]);
 const ttlDe = resource => (MASTER_RES.has(resource) ? CACHE_TTL_MASTER : CACHE_TTL);
 
@@ -1019,6 +1020,112 @@ export async function updateCentroCosto(id, patch) {
 
 export async function deleteCentroCosto(id) {
   return post({ action: "del", sheet: "nb_centros_costo", id });
+}
+
+// ─── TIPOS DE CAMBIO ─────────────────────────────────────────────────────────
+// Maestro ÚNICO del TC de todo el grupo (nb_tipos_cambio): una fila por mes, tasas
+// contra USD. Se edita en Numbers (Maestros › Tipos de Cambio) y lo consumen los dos
+// lados: el consolidado en USD de Numbers y Franquicias (fee en USD + facturación en
+// moneda local). Antes el maestro vivía en Franquicias (hoja `tipos_cambio`) y Numbers
+// no tenía TC — se dio vuelta para no tener dos fuentes de la misma verdad.
+//
+// Convención de campo: <moneda en minúscula>USD = unidades de esa moneda por 1 USD
+// (ej. arsUSD 1560 = 1560 ARS por dólar). USD no tiene campo: es 1 por definición.
+
+// Moneda → campo del maestro. Fuente única del mapeo: que nadie lo re-derive.
+export const TC_FIELD = {
+  USD: null,        // 1 por definición
+  ARS: "arsUSD",
+  EUR: "eurUSD",
+  COP: "copUSD",
+  UYU: "uyuUSD",
+  PYG: "pygUSD",
+  CLP: "clpUSD",
+  PEN: "penUSD",
+};
+
+// Campos del maestro, en el orden en que se muestran/guardan.
+export const TC_FIELDS = Object.values(TC_FIELD).filter(Boolean);
+
+// El yearMonth vive como TEXTO en la hoja ("2026-07"). Si alguien pisa el formato de la
+// columna, Sheets lo interpreta como fecha y el handler genérico lo devuelve "2026-07-01"
+// (o peor, un Date). Normalizar acá es lo que evita que el lookup del mes falle en silencio
+// — ya pasó en la hoja vieja de Franquicias, que quedó con una fila fantasma de julio.
+function normYearMonth(v) {
+  if (v && typeof v.getTime === "function") {
+    return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, "0")}`;
+  }
+  const m = String(v ?? "").trim().match(/^(\d{4})-(\d{2})/);
+  return m ? `${m[1]}-${m[2]}` : "";
+}
+
+/**
+ * Maestro de TC como mapa por mes: { "2026-07": { yearMonth, arsUSD, eurUSD, … } }.
+ * Shape idéntico al que ya esperan ReporteFeeModal / TabFacturador (0 = sin dato).
+ */
+export async function fetchTiposCambio() {
+  const rows = await get("nb_tipos_cambio");
+  const out  = {};
+  for (const r of (Array.isArray(rows) ? rows : [])) {
+    const ym = normYearMonth(r.yearMonth);
+    if (!ym) continue;                                   // fila basura o vacía → se ignora
+    const tc = { yearMonth: ym };
+    for (const f of TC_FIELDS) tc[f] = Number(r[f]) || 0;
+    out[ym] = tc;                                        // si hubiera dos filas del mes, gana la última
+  }
+  return out;
+}
+
+/**
+ * Upsert del TC de un mes. `tc` puede ser parcial: solo se escriben los campos presentes
+ * (así editar ARS no borra el COP que ya estaba cargado).
+ * @param {string} yearMonth  "2026-07"
+ * @param {{ arsUSD?: number, eurUSD?: number, copUSD?: number, … }} tc
+ */
+export async function saveTipoCambio(yearMonth, tc = {}) {
+  const ym = normYearMonth(yearMonth);
+  if (!ym) throw new Error(`yearMonth inválido: ${yearMonth}`);
+
+  const patch = {};
+  for (const f of TC_FIELDS) {
+    if (!(f in tc)) continue;
+    const n = Number(tc[f]);
+    patch[f] = n > 0 ? n : "";                           // vacío en vez de 0 → la hoja queda legible
+  }
+
+  // Lectura FRESCA (sin caché de app ni de borde) para decidir edit vs add: con datos
+  // stale, un mes que ya existe se agregaría de nuevo y quedarían dos filas del mismo mes.
+  const rows = await _fetchRowsRaw("nb_tipos_cambio");
+  const existente = rows.find(r => normYearMonth(r.yearMonth) === ym);
+
+  if (existente) {
+    // El GAS matchea la fila con String(celda) === String(id). Si la celda dejó de ser texto,
+    // el match falla y el edit se pierde → cortamos con un mensaje accionable en vez de
+    // appendear un duplicado silencioso.
+    if (String(existente.yearMonth).trim() !== ym) {
+      throw new Error(
+        `La fila ${ym} de nb_tipos_cambio no está guardada como texto (vale "${existente.yearMonth}"). ` +
+        `Formateá la columna yearMonth como "Texto sin formato" y reescribí ese mes.`
+      );
+    }
+    return post({ action: "edit", sheet: "nb_tipos_cambio", id_field: "yearMonth", id: ym, patch });
+  }
+  return post({ action: "add", sheet: "nb_tipos_cambio", row: { yearMonth: ym, ...patch } });
+}
+
+/**
+ * Tasa moneda→USD del mes: cuántas unidades de `moneda` equivalen a 1 USD.
+ * USD → 1. Sin dato → null (el llamador decide si eso es un error o un cero).
+ * Para pasar un importe a USD: monto / tcRate(...).
+ */
+export function tcRate(tiposCambio, yearMonth, moneda) {
+  const cur = String(moneda ?? "").toUpperCase();
+  if (cur === "USD") return 1;
+  const field = TC_FIELD[cur];
+  if (!field) return null;                               // moneda que el maestro no cubre
+  const tc = tiposCambio?.[normYearMonth(yearMonth)];
+  const v  = Number(tc?.[field]);
+  return v > 0 ? v : null;
 }
 
 // ─── REGLAS DE BANCO (motor de conciliación) ─────────────────────────────────

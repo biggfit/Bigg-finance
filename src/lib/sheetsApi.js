@@ -291,25 +291,13 @@ export async function saveRecordatorio({ frId, fecha, ccMes, ccAnio, to, frName,
 }
 
 // ─── Tipos de Cambio ─────────────────────────────────────────────────────────
-
-/**
- * Carga todos los tipos de cambio desde Sheets.
- * @returns {{ [yearMonth: string]: { yearMonth: string, arsUSD: number, eurUSD: number } }}
- */
-export async function fetchTiposCambio() {
-  try {
-    return await get("tiposCambio");
-  } catch (e) { console.error("[fetchTiposCambio]", e); return {}; }
-}
-
-/**
- * Guarda (crea o actualiza) el tipo de cambio de un mes.
- * @param {string} yearMonth  e.g. "2026-04"
- * @param {{ arsUSD: number, eurUSD: number }} tc
- */
-export async function saveTipoCambio(yearMonth, tc) {
-  return post({ action: "saveTC", yearMonth, tc });
-}
+// El maestro del TC ya NO vive acá: se mudó a Numbers (hoja nb_tipos_cambio) porque es un
+// dato de todo el grupo y no solo de franquicias. Se edita en Numbers › Maestros › Tipos de
+// Cambio y se lee con `fetchTiposCambio` de numbersApi — Franquicias es consumidor, no dueño.
+//
+// La hoja vieja `tipos_cambio` y los handlers saveTC/tiposCambio del GAS quedan en pie como
+// respaldo de la migración; ya nadie los lee ni los escribe. Se limpian cuando el consolidado
+// de Numbers esté enganchado y confirmado.
 
 // ─── Mail ─────────────────────────────────────────────────────────────────────
 
