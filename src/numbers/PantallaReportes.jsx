@@ -291,8 +291,10 @@ function DataRow({ label, values, activeMonths, color, neg = false }) {
   );
 }
 
-function SubtotalRow({ label, values, activeMonths, color, strong, neg = false, noBottom = false }) {
-  const total = rowSum(values);
+// totalOverride: para filas de SALDO (running balance), la columna TOTAL no debe sumar los meses (no tiene
+// sentido). Se pasa el saldo final; `null` deja el TOTAL en blanco. undefined → suma normal (subtotales de flujo).
+function SubtotalRow({ label, values, activeMonths, color, strong, neg = false, noBottom = false, totalOverride }) {
+  const total = totalOverride !== undefined ? totalOverride : rowSum(values);
   const bg = strong ? "#cbd5e1" : "#f3f4f6";
   // Bordes SOLO en las celdas (no en el <tr>): con border-collapse + celda sticky, duplicar el borde
   // en el <tr> y en la celda genera costura/doblado al colapsar. Fuente única = la celda.
@@ -315,7 +317,7 @@ function SubtotalRow({ label, values, activeMonths, color, strong, neg = false, 
       <td style={{ padding: "12px 14px", fontSize: 15, textAlign: "right", fontFamily: "var(--mono)",
         fontWeight: 900, color: color ?? T.text, whiteSpace: "nowrap",
         borderLeft: `1px solid ${T.cardBorder}`, ...bord }}>
-        {fmtPar(total, neg)}
+        {total === null ? "" : fmtPar(total, neg)}
       </td>
     </tr>
   );
@@ -1724,7 +1726,7 @@ const CF_ACT = [
 ];
 // Orden fijo de conceptos por actividad (para que las líneas salgan en orden de negocio, no por magnitud).
 const CF_CONCEPTO_ORDEN = {
-  operativo:    ["Ingresos Sedes", "Costos Sedes", "Ingresos HQ", "Sueldos HQ", "Otros HQ", "Franquicias (neto)", "Sin conciliar (pendiente) — cobros", "Sin conciliar (pendiente) — pagos", "Otros operativo (cobros)", "Otros operativo (pagos)"],
+  operativo:    ["Ingresos Sedes", "Ingresos HQ", "Franquicias (neto)", "Costos Sedes", "Costos HQ", "Sin conciliar (pendiente)"],
   inversion:    ["Movimientos intercompañía", "Fondeo a otros negocios"],
   financiacion: ["Préstamos recibidos", "Pago de préstamos / cuotas", "Anticipos de clientes", "Aportes / dividendos / préstamos de socios"],
   internos:     ["Transferencias entre cuentas", "Cambio de moneda"],
@@ -1745,8 +1747,8 @@ function clasificarFlujo(m, { ccMap, nucleoEmpresas, docCentro } = {}) {
   if (origen.startsWith("financiacion") || origen === "cuota" || doc.startsWith("FIN-"))
     return { act: "financiacion", concepto: entra ? "Préstamos recibidos" : "Pago de préstamos / cuotas" };
   if (origen === "anticipo_alta") return { act: "financiacion", concepto: "Anticipos de clientes" };   // el cliente te financia
-  // Pago del resumen de tarjeta: settlement central → Otros HQ.
-  if (tipo === "PAGO_TARJETA" || origen === "pago_tarjeta") return { act: "operativo", concepto: "Otros HQ" };
+  // Pago del resumen de tarjeta: settlement central → Costos HQ.
+  if (tipo === "PAGO_TARJETA" || origen === "pago_tarjeta") return { act: "operativo", concepto: "Costos HQ" };
   // Franquicias (neto ingreso − egreso)
   if (origen === "franquicias") return { act: "operativo", concepto: "Franquicias (neto)" };
   // Inversión — interco
@@ -1760,18 +1762,17 @@ function clasificarFlujo(m, { ccMap, nucleoEmpresas, docCentro } = {}) {
   // Inversión — fondeo: gasto/ingreso a un centro cuya sociedad dueña está FUERA del núcleo.
   if (empresa && nucleoEmpresas && !nucleoEmpresas.has(empresa))
     return { act: "inversion", concepto: "Fondeo a otros negocios" };
-  // Operativo por negocio
-  if (grupo === "hq") {
-    if (origen === "sueldos") return { act: "operativo", concepto: "Sueldos HQ" };
-    return { act: "operativo", concepto: entra ? "Ingresos HQ" : "Otros HQ" };
-  }
+  // Operativo por negocio. HQ = todo lo que NO es sede ni franquicia (sueldos HQ, otros gastos, catch-all).
+  if (grupo === "hq")
+    return { act: "operativo", concepto: entra ? "Ingresos HQ" : "Costos HQ" };
   if (cc && grupo !== "inversiones")   // centro de sede (operaciones): sueldos de sede caen en Costos Sedes
     return { act: "operativo", concepto: entra ? "Ingresos Sedes" : "Costos Sedes" };
   // Línea del extracto TODAVÍA no aceptada en la bandeja (caja real, aún sin imputar) = backlog de conciliación.
+  // Una sola línea (neta): que dé CERO = los motores de conciliación están limpios para ese mes.
   if (origen === "extracto" && !doc)
-    return { act: "operativo", concepto: entra ? "Sin conciliar (pendiente) — cobros" : "Sin conciliar (pendiente) — pagos" };
-  // Catch-all genuino: sin centro resoluble (raro)
-  return { act: "operativo", concepto: entra ? "Otros operativo (cobros)" : "Otros operativo (pagos)" };
+    return { act: "operativo", concepto: "Sin conciliar (pendiente)" };
+  // Catch-all: sin centro resoluble (raro) → HQ (no es sede ni franquicia).
+  return { act: "operativo", concepto: entra ? "Ingresos HQ" : "Costos HQ" };
 }
 
 // ─── Tab Cash Flow ────────────────────────────────────────────────────────────
@@ -1779,12 +1780,14 @@ function clasificarFlujo(m, { ccMap, nucleoEmpresas, docCentro } = {}) {
 // intra-núcleo se netea SOLO (ambas patas —origen "intercompania", mismo documento_id— están en el
 // set y son opuestas → suman 0). El fondeo hacia anillo 2/3 queda (solo está la pata del núcleo) →
 // aparece como Inversión: es plata que salió del perímetro del grupo.
-const CF_START_MES = 6;   // Julio (0-indexed) — go-live 1/7/2026: el Cash Flow arranca acá (hardcodeado)
+const CF_GO_LIVE_YEAR = 2026;   // año del go-live
+const CF_START_MES = 6;   // Julio (0-indexed): el Cash Flow arranca acá SOLO el año de go-live (1/7/2026).
+                          // Los años posteriores arrancan en enero (todo lo previo va al saldo inicial).
 // Orden de anillos en el filtro (los que no matcheen van al final, alfabético).
 const CF_ANILLO_ORDEN = ["cleo", "fond", "extern"];
 const anilloRank = (a) => { const x = String(a || "").toLowerCase(); const i = CF_ANILLO_ORDEN.findIndex(k => x.includes(k)); return i === -1 ? 99 : i; };
 
-function TabCashFlow({ rawMovs, rawIn = [], rawEg = [], ccMap, nucleoEmpresas, selSoc = new Set(), year, moneda, tarjetaIds }) {
+function TabCashFlow({ rawMovs, rawIn = [], rawEg = [], ccMap, nucleoEmpresas, selSoc = new Set(), year, moneda, tarjetaIds, cuentasBancarias = [] }) {
   const [open, setOpen] = useState({ operativo: true, inversion: true, financiacion: true, internos: false });
   const toggle = (k) => setOpen(o => ({ ...o, [k]: !o[k] }));
 
@@ -1805,20 +1808,33 @@ function TabCashFlow({ rawMovs, rawIn = [], rawEg = [], ccMap, nucleoEmpresas, s
   }, [rawIn, rawEg]);
   const ctx = useMemo(() => ({ ccMap, nucleoEmpresas, docCentro }), [ccMap, nucleoEmpresas, docCentro]);
 
+  // Moneda AUTORITATIVA = la de la cuenta bancaria (una cuenta USD solo tiene USD). El campo `moneda` del
+  // movimiento es fallback (por si una cuenta no está en el maestro). Evita que un movimiento mal cargado
+  // (moneda en blanco → antes caía a ARS) se cuele en la moneda equivocada.
+  const cuentaMoneda = useMemo(() => {
+    const mm = new Map();
+    for (const c of (cuentasBancarias || [])) mm.set(String(c.id), String(c.moneda || "ARS"));
+    return mm;
+  }, [cuentasBancarias]);
+  const monedaDe = (m) => cuentaMoneda.get(String(m.cuenta_bancaria)) || (m.moneda ?? "ARS");
+
   // Predicado de caja: sociedad ELEGIDA (filtro en el box), con banco real, no ignorada, no tarjeta, en la moneda.
   const esCash = (m) => !!m.fecha && !esIgnorado(m) && !!m.cuenta_bancaria
-    && !(tarjetaIds?.has(m.cuenta_bancaria)) && (m.moneda ?? "ARS") === moneda
+    && !(tarjetaIds?.has(m.cuenta_bancaria)) && monedaDe(m) === moneda
     && (selSoc.size === 0 || selSoc.has(String(m.sociedad ?? "").trim()));
 
-  const cutoff = `${year}-${String(CF_START_MES + 1).padStart(2, "0")}-01`;   // arranque del período (1/7)
+  // Arranque del período: SOLO el año de go-live empieza en julio (1/7/2026); los años posteriores en enero.
+  // Todo lo previo al cutoff (incl. las aperturas al 30/6/2026) va al saldo inicial.
+  const cfStartMes = year === CF_GO_LIVE_YEAR ? CF_START_MES : 0;
+  const cutoff = `${year}-${String(cfStartMes + 1).padStart(2, "0")}-01`;
 
   const movsFilt = useMemo(() => rawMovs.filter(m => esCash(m) && m.fecha.slice(0, 4) === String(year) && m.fecha >= cutoff),
-    [rawMovs, year, moneda, tarjetaIds, selSoc]); // eslint-disable-line react-hooks/exhaustive-deps
+    [rawMovs, year, moneda, tarjetaIds, selSoc, cuentaMoneda]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Saldo de caja al inicio del período (todo lo movido ANTES del 1/7, incl. ene–jun del año, en esta moneda).
+  // Saldo de caja al inicio del período (todo lo movido ANTES del cutoff, en esta moneda).
   const openingCash = useMemo(() => rawMovs.reduce((s, m) =>
     (esCash(m) && m.fecha < cutoff) ? s + (Number(m.monto) || 0) : s, 0),
-    [rawMovs, year, moneda, tarjetaIds, selSoc]); // eslint-disable-line react-hooks/exhaustive-deps
+    [rawMovs, year, moneda, tarjetaIds, selSoc, cuentaMoneda]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // porAct[actividad][concepto] = 12 meses (neto firmado); actTot[actividad] = subtotal mensual.
   const { porAct, actTot } = useMemo(() => {
@@ -1847,9 +1863,9 @@ function TabCashFlow({ rawMovs, rawIn = [], rawEg = [], ccMap, nucleoEmpresas, s
 
   const activeMonths = useMemo(() => {
     const s = new Set();
-    movsFilt.forEach(m => { const i = parseInt(m.fecha.slice(5, 7), 10) - 1; if (i >= CF_START_MES && i <= 11) s.add(i); });
+    movsFilt.forEach(m => { const i = parseInt(m.fecha.slice(5, 7), 10) - 1; if (i >= cfStartMes && i <= 11) s.add(i); });
     const finYear = new Date().getFullYear() === year ? new Date().getMonth() : 11;
-    for (let i = CF_START_MES; i <= Math.max(finYear, CF_START_MES); i++) s.add(i);
+    for (let i = cfStartMes; i <= Math.max(finYear, cfStartMes); i++) s.add(i);
     return [...s].sort((a, b) => a - b);
   }, [movsFilt, year]);
 
@@ -1881,8 +1897,9 @@ function TabCashFlow({ rawMovs, rawIn = [], rawEg = [], ccMap, nucleoEmpresas, s
           </tr>
         </thead>
         <tbody>
-          {/* Saldo de caja al inicio de cada mes */}
-          <SubtotalRow label="Saldo inicial de caja" values={saldoInicioMes} activeMonths={activeMonths} color={T.muted} noBottom />
+          {/* Saldo de caja al inicio de cada mes. TOTAL = saldo al arranque del período (NO la suma de meses). */}
+          <SubtotalRow label="Saldo inicial de caja" values={saldoInicioMes} activeMonths={activeMonths} color={T.muted} noBottom
+            totalOverride={saldoInicioMes[activeMonths[0]] ?? 0} />
 
           {CF_ACT.map(({ key, label }) => {
             const ord = CF_CONCEPTO_ORDEN[key] || [];
@@ -1903,7 +1920,9 @@ function TabCashFlow({ rawMovs, rawIn = [], rawEg = [], ccMap, nucleoEmpresas, s
           })}
 
           <ResultadoRow label="Flujo neto del período" values={flujoNeto} activeMonths={activeMonths} />
-          <SubtotalRow label="Saldo final de caja" values={saldoFinal} activeMonths={activeMonths} color={T.text} strong />
+          {/* TOTAL = saldo final del último mes activo (el saldo de caja "a hoy"), NO la suma de los meses. */}
+          <SubtotalRow label="Saldo final de caja" values={saldoFinal} activeMonths={activeMonths} color={T.text} strong
+            totalOverride={saldoFinal[activeMonths[activeMonths.length - 1]] ?? 0} />
         </tbody>
       </table>
     </div>
@@ -3101,7 +3120,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       {/* ── Cash Flow ── */}
       {activeTab === "cf" && (
         <TabCashFlow rawMovs={rawMovs} rawIn={rawIn} rawEg={rawEg} ccMap={ccMap} nucleoEmpresas={nucleoEmpresas}
-          selSoc={cfSel} year={year} moneda={monedaCF} tarjetaIds={tarjetaIds} />
+          selSoc={cfSel} year={year} moneda={monedaCF} tarjetaIds={tarjetaIds} cuentasBancarias={cuentasBancarias} />
       )}
 
       {activeTab === "balance" && (
