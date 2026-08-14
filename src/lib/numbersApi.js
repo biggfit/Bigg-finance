@@ -987,35 +987,10 @@ export async function deleteCliente(id) {
 }
 
 // ─── TIPOS DE CAMBIO (consolidado FX) ────────────────────────────────────────
-// Lee nb_tipos_cambio (1 fila/mes, tasas contra USD) y lo normaliza a un mapa
-// { "YYYY-MM": { yearMonth, arsUSD, eurUSD, copUSD, uyuUSD, pygUSD, clpUSD, penUSD } }.
-// Fuente única del grupo (Franquicias lo lee de acá una vez que Lucía migre).
-const _TC_MONEDAS = ["arsUSD", "eurUSD", "copUSD", "uyuUSD", "pygUSD", "clpUSD", "penUSD"];
-
-// Google Sheets puede devolver "2026-01" como Date → normalizar a "YYYY-MM".
-function _normYearMonth(v) {
-  if (v == null) return "";
-  if (v instanceof Date) return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, "0")}`;
-  const s = String(v).trim();
-  const m = s.match(/^(\d{4})-(\d{2})/);         // "2026-01" o "2026-01-15T..." → "2026-01"
-  if (m) return `${m[1]}-${m[2]}`;
-  const d = new Date(s);                          // "Thu Jan 01 2026 ..." (Date serializado)
-  if (!isNaN(d)) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-  return s;
-}
-
-export async function fetchTiposCambio() {
-  const rows = await get("nb_tipos_cambio").catch(() => []);
-  const map = {};
-  for (const r of (Array.isArray(rows) ? rows : [])) {
-    const ym = _normYearMonth(r.yearMonth ?? r.mes ?? r.periodo ?? r.year_month);
-    if (!ym) continue;
-    const tc = { yearMonth: ym };
-    for (const k of _TC_MONEDAS) tc[k] = Number(r[k]) || 0;
-    map[ym] = tc;
-  }
-  return map;
-}
+// El fetch/save/mapeo de moneda vive más abajo junto a TC_FIELD (§ "Maestro ÚNICO
+// del TC de todo el grupo") — Franquicias ya migró a leer de acá, así que dejamos
+// una sola implementación en vez de las dos que había cuando cada lado la escribió
+// por su cuenta. tcDelMes/montoAUSD quedan acá porque son propios del consolidado FX.
 
 // TC del mes (1-12). Devuelve el objeto de tasas o null si no está cargado.
 export function tcDelMes(tiposCambio, anio, mes) {
