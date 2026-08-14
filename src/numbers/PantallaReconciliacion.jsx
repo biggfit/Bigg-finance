@@ -235,8 +235,13 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], planCuentas = [],
           monto: Number(monto), moneda: monedaCta, costo: Number(costo) || 0, costo_cuenta: costoCuenta, parked_leg_id: pend.id,
         });
       }
-      await onDone();
-    } catch (e) { setBusy(false); alert("No se pudo declarar: " + (e?.message || e)); }
+      await onDone();   // refresca la CC + cierra el modal
+    } catch (e) {
+      // La escritura pudo quedar a medias (GAS/proxy con hipo). Refrescamos y cerramos IGUAL para no dejar
+      // la ventana colgada; avisamos para que verifiques el saldo antes de reintentar (evita doble carga).
+      alert("Puede que se haya guardado parcialmente (error de red/servidor):\n" + (e?.message || e) + "\n\nRefrescá y verificá el saldo antes de reintentar.");
+      try { await onDone(); } catch {}
+    } finally { setBusy(false); }
   };
 
   const inp = MODAL_INP, lbl = MODAL_LBL;
@@ -286,6 +291,11 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], planCuentas = [],
     </div>
   );
 }
+
+// Centro de costo por defecto por sociedad en Conciliación. Sociedades de una sola sede
+// precargan ese centro en TODOS los movimientos (egresos e ingresos), en todas sus cuentas.
+// Ej.: Segui Fit → "06 - Palermo Rosedal". Para sumar otra, agregar { id_sociedad: id_centro }.
+const CENTRO_DEFAULT_SOCIEDAD = { "segui-fit": "cc-2026-rosedal" };
 
 export default function PantallaReconciliacion({ sociedad, onPendientes, mundo = "banco" }) {
   const [cuentas,    setCuentas]    = useState([]);
@@ -401,7 +411,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     else await reconocerVentaInterco({
       sociedad, ventaIdComp: p.id_comp, vendedorId: p.vendedor, vendedorNombre: p.vendedorNombre,
       cuenta_contable: cuenta, cuenta_contable_id: cuentaIdPorNombre(cuenta),   // persistir el id, no solo el nombre
-      centro_costo: centro, total: p.total, moneda: p.moneda,
+      centro_costo: centro, total: p.total, subtotal: p.subtotal, iva_rate: p.iva_rate, iva_monto: p.iva_monto, moneda: p.moneda,
       fecha: fechaComprobanteISO(p.fecha), nroComp: p.nroComp, subtipo: p.subtipo || "EGRESO",   // fecha del doc (Franquicias, DD/MM/YYYY→ISO), no hoy
     });
   };
@@ -553,24 +563,39 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     return lotesHaberes.find(L => Math.abs(L.total - t) <= Math.max(500, L.total * 0.01)) || null;
   };
 
-  // ── "Posible duplicado": una línea del extracto que coincide (fecha|monto) con un movimiento YA
-  // contabilizado en la MISMA cuenta. Cubre transferencias/interco (la pata ya existe al conciliar el
-  // otro banco), pagos de tarjeta ya cargados a mano, y cualquier otro movimiento previo. Se excluyen:
+  // ── "Posible duplicado": una línea del extracto que coincide con un movimiento YA contabilizado en
+  // la MISMA cuenta. Cubre transferencias/interco (la pata ya existe al conciliar el otro banco), pagos
+  // de tarjeta ya cargados a mano, y cualquier otro movimiento previo. Se excluyen:
   //   • las líneas de extracto todavía pendientes (origen="extracto" sin documento_id) → no se marcan
   //     entre sí ni a sí mismas; solo avisamos contra algo YA cargado en la caja.
   //   • las ignoradas (documento_id "IGN-…").
+  // Match: si el movimiento trae Nº de operación (MP lo guarda en extracto_saldo, formato
+  // "tipo|cuenta|centro|OP|monto"), se compara por OP + monto CON SIGNO. En MP una misma operación
+  // puede aparecer dos veces con signo opuesto (una venta y su devolución/neteo de días o meses
+  // después): mismo OP pero +2.750 vs −2.750 → NO son duplicado. Solo la reimportación exacta de la
+  // línea (mismo OP y mismo monto con signo) se marca. Si no hay OP (Galicia/Santander, filas
+  // agregadas), cae a fecha + monto con signo → un ingreso y su reintegro del mismo importe tampoco
+  // colisionan. Dos operaciones MP distintas del mismo día y monto nunca se marcan (distinto OP).
+  const opDe = (m) => (String(m.extracto_saldo || "").split("|")[3] || "").trim();
+  const signo = (m) => Math.round(Number(m.monto) || 0);
   const cajaKeys = useMemo(() => {
-    const s = new Set();
+    const ops = new Set(), amts = new Set();
     for (const m of movsCuenta) {
       if (String(m.cuenta_bancaria) !== String(cuentaTab)) continue;
       const doc = String(m.documento_id || "");
       const pendiente = m.origen === "extracto" && !doc;
       if (pendiente || doc.startsWith("IGN-")) continue;
-      s.add(`${m.fecha}|${Math.round(Math.abs(Number(m.monto) || 0))}`);
+      const op = opDe(m);
+      if (op) ops.add(`${op}|${signo(m)}`);
+      else amts.add(`${m.fecha}|${signo(m)}`);
     }
-    return s;
+    return { ops, amts };
   }, [movsCuenta, cuentaTab]);
-  const dupTransfer = (mov) => cajaKeys.has(`${mov.fecha}|${Math.round(Math.abs(Number(mov.monto) || 0))}`);
+  const dupTransfer = (mov) => {
+    const op = opDe(mov);
+    if (op) return cajaKeys.ops.has(`${op}|${signo(mov)}`);
+    return cajaKeys.amts.has(`${mov.fecha}|${signo(mov)}`);
+  };
 
   // ── Imputar a factura: facturas de proveedor con saldo pendiente, de la moneda de la cuenta.
   const facturasPendientes = useMemo(() => {
@@ -1228,6 +1253,23 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const pendCuenta = useMemo(
     () => pendientes.filter(m => !cuentaTab || String(m.cuenta_bancaria) === String(cuentaTab)),
     [pendientes, cuentaTab]);
+  // Centro por defecto de la sociedad (ej. Segui Fit → Rosedal): precarga ese centro en los
+  // pendientes que no traen uno. Toca `edits`, así lo toman tanto el select como el "Aceptar".
+  const centroDefaultSoc = CENTRO_DEFAULT_SOCIEDAD[sociedad] || "";
+  useEffect(() => {
+    if (!centroDefaultSoc) return;
+    setEdits(prev => {
+      let changed = false;
+      const next = { ...prev };
+      for (const m of pendCuenta) {
+        if (!next[m.id]?.centro_costo && !m.centro_costo) {
+          next[m.id] = { ...next[m.id], centro_costo: centroDefaultSoc };
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [pendCuenta, centroDefaultSoc]);
   // Grupos presentes en la cuenta (con conteo) para el desplegable del header.
   const gruposDisp = useMemo(() => {
     const o = {}; pendCuenta.forEach(m => { const g = grupoDe(m); o[g] = (o[g] || 0) + 1; });

@@ -5,7 +5,7 @@
 // de Reportes (loop por sociedad sobre datasets de todas). Sin React, sin I/O.
 import {
   calcSaldoPendiente, esCuentaCredito, esIgnorado,
-  financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, sociosSaldos, lecturaInterco,
+  financiacionPasivoBuckets, financiacionLedger, agruparAnticipos, anticipoPasivo, sociosSaldos, lecturaInterco,
 } from "../lib/numbersApi";
 import { parsePagoFromMov, normSoc, pendienteSueldosPorLegajo, adelantoSueldosPorLegajo } from "../lib/sueldosApi";
 import { franquiciasSaldosCxC } from "../lib/franquiciasAdapter";
@@ -26,6 +26,15 @@ const intercoItem = (neto, moneda, nombre, ref = null) => ({
   headerColor: neto > 0 ? "#16a34a" : "#dc2626",
   ...(ref ? { intercoLedger: true, sociedadId: ref.sociedadId, contraparteId: ref.contraparteId } : {}),
 });
+
+// Ledger (extracto) de una cuenta corriente CxC/CxP: factura (+) − pago/cobro (−) por fecha, saldo
+// corriente. `final` = pendiente del grupo. Mismo shape que financiacionLedger/intercoLedger.
+function cxLedger(entries = []) {
+  entries.sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)));
+  let saldo = 0;
+  for (const e of entries) { saldo += e.delta; e.saldo = saldo; }
+  return { opening: 0, entries, final: saldo };
+}
 
 // Vista CONSOLIDADA del interco sobre un set de sociedades: las posiciones núcleo↔núcleo internas
 // al set se ELIMINAN (intra-grupo); las demás (fondeadas/externas) se muestran. Devuelve {activo,pasivo}.
@@ -84,6 +93,9 @@ export function derivarSaldos({
   }
 
   // ── Cuentas con saldo calculado desde movimientos ──
+  // Una cuenta puesta como inactiva (activo=false) se OCULTA, pero SOLO si quedó en $0: si todavía
+  // tiene saldo la seguimos mostrando para no esconder plata del total (desactivar ≠ borrar el saldo).
+  const cuentaInactiva = (c) => /^(false|no|0)$/i.test(String(c.activo ?? "").trim());
   const cuentas = cuentasBancarias
     .filter(c => (c.sociedad ?? "").toLowerCase() === _soc)
     .map(cuenta => {
@@ -91,7 +103,8 @@ export function derivarSaldos({
         m.cuenta_bancaria === cuenta.id && !esIgnorado(m) && (!corte || (m.fecha ?? "") <= corte));
       const saldo = movsCuenta.reduce((s, m) => s + (Number(m.monto) || 0), 0);
       return { ...cuenta, tipo: (cuenta.tipo ?? "").toLowerCase(), saldo };
-    });
+    })
+    .filter(c => !cuentaInactiva(c) || Math.abs(Number(c.saldo) || 0) > 0.005);
 
   const cuentaById     = new Map(cuentasContables.map(c => [c.id, c]));
   const cuentaByNombre = new Map(cuentasContables.map(c => [(c.nombre ?? "").toLowerCase(), c]));
@@ -99,20 +112,27 @@ export function derivarSaldos({
   // ── A cobrar (comprobantes de ingreso pendientes) ──
   const cobros = pagosCobros.filter(p => p.tipo === "COBRO" && (!corte || (p.fecha ?? "") <= corte));
   const grpCob = {};
+  const ledCob = {};   // ledger por grupo (label||moneda): TODAS las facturas + sus cobros
   for (const ing of ingresos) {
     if ((ing.sociedad ?? "").toLowerCase() !== _soc) continue;
     if (corte && (ing.fecha ?? "") > corte) continue;
     const pagosDoc = cobros.filter(c => c.documento_id === ing.id);
     const saldo    = calcSaldoPendiente(ing.importe, pagosDoc);
-    if (saldo <= 0) continue;
     const cuentaDef = resolveCuenta(cuentaById, cuentaByNombre, ing.cuentaId, ing.cuenta);
     const label     = cuentaDef?.cuenta_pasivo || ing.cuenta || "Sin cuenta";
     const key       = `${label}||${ing.moneda ?? "ARS"}`;
+    (ledCob[key] ??= []).push({ fecha: ing.fecha, delta: Math.abs(Number(ing.importe) || 0),
+      concepto: `Factura${ing.nroComp || ing.nro_comp ? " " + (ing.nroComp || ing.nro_comp) : ""} · ${ing.cliente || ing.proveedor || "—"}`,
+      sub: ing.vto ? `vto ${ing.vto}` : "" });
+    for (const c of pagosDoc) ledCob[key].push({ fecha: c.fecha, delta: -Math.abs(Number(c.monto) || 0),
+      concepto: `Cobro · ${ing.cliente || ing.proveedor || "—"}` });
+    if (saldo <= 0) continue;
     if (!grpCob[key]) grpCob[key] = { label, moneda: ing.moneda ?? "ARS", saldo: 0, docs: [], headerColor: "#16a34a" };
     grpCob[key].saldo += saldo;
     grpCob[key].docs.push({ contraparte: ing.cliente || ing.proveedor || "Sin nombre", vto: ing.vto, saldo, moneda: ing.moneda ?? "ARS" });
   }
   const aCobrarComp = Object.values(grpCob).sort((a, b) => b.saldo - a.saldo);
+  for (const it of aCobrarComp) it.ledger = cxLedger(ledCob[`${it.label}||${it.moneda}`] || []);
 
   // ── Franquiciados (Bigg Franquicias, read-only): activo/pasivo por empresa+moneda ──
   const now    = new Date();
@@ -153,37 +173,46 @@ export function derivarSaldos({
   const pagos = pagosCobros.filter(p => (p.tipo === "PAGO" || p.tipo === "EGRESO_GASTO") && (!corte || (p.fecha ?? "") <= corte));
   const pasivoLabel = { proveedores: "Proveedores", sueldos: "Sueldos", impuestos: "Impuestos", financiero: "Financiero", ventas: "Ventas" };
   const grpPag = {};
+  const ledPag = {};   // ledger por grupo (label||moneda): TODAS las facturas + sus pagos
   for (const eg of egresos) {
     if ((eg.sociedad ?? "").toLowerCase() !== _soc) continue;
     if (corte && (eg.fecha ?? "") > corte) continue;
     const pagosDoc = pagos.filter(p => p.documento_id === eg.id);
     const saldo    = calcSaldoPendiente(eg.importe, pagosDoc);
-    if (saldo <= 0) continue;
     const cuentaDef = resolveCuenta(cuentaById, cuentaByNombre, eg.cuentaId, eg.cuenta);
     const bucket    = (cuentaDef?.cuenta_pasivo ?? "").toLowerCase() || "proveedores";
     const label     = /^tarjeta/i.test(eg.proveedor ?? "") ? "Tarjeta de crédito"
                       : (pasivoLabel[bucket] ?? cuentaDef?.cuenta_pasivo ?? "Proveedores");
     const key       = `${label}||${eg.moneda ?? "ARS"}`;
+    (ledPag[key] ??= []).push({ fecha: eg.fecha, delta: Math.abs(Number(eg.importe) || 0),
+      concepto: `Factura${eg.nroComp || eg.nro_comp ? " " + (eg.nroComp || eg.nro_comp) : ""} · ${eg.proveedor || "—"}`,
+      sub: eg.vto ? `vto ${eg.vto}` : "" });
+    for (const p of pagosDoc) ledPag[key].push({ fecha: p.fecha, delta: -Math.abs(Number(p.monto) || 0),
+      concepto: `Pago · ${eg.proveedor || "—"}` });
+    if (saldo <= 0) continue;
     if (!grpPag[key]) grpPag[key] = { label, moneda: eg.moneda ?? "ARS", saldo: 0, docs: [], headerColor: "#dc2626" };
     grpPag[key].saldo += saldo;
     grpPag[key].docs.push({ contraparte: eg.proveedor || "Sin proveedor", vto: eg.vto, saldo, moneda: eg.moneda ?? "ARS" });
   }
   const aPagarComp = Object.values(grpPag).sort((a, b) => b.saldo - a.saldo);
+  for (const it of aPagarComp) it.ledger = cxLedger(ledPag[`${it.label}||${it.moneda}`] || []);
 
   // ── Pasivo de financiaciones (planes AFIP + créditos) ──
   const finPasivo = (() => {
     const b = financiacionPasivoBuckets(financiaciones, sociedad);
     const items = [];
-    const armar = (bucket, label) => {
+    const armar = (bucket, label, tipo) => {
       for (const mon of ["ARS", "USD", "EUR"]) {
         if (bucket.tot[mon] <= 0) continue;
         const docs = bucket.docs.filter(d => d.moneda === mon)
           .map(d => ({ contraparte: `${d.acreedor || "—"}${d.nro_plan ? " · " + d.nro_plan : ""}`, vto: d.prox_vto, saldo: d.saldo, moneda: mon }));
-        items.push({ label, moneda: mon, saldo: bucket.tot[mon], docs, headerColor: "#dc2626" });
+        // ledger = extracto del pasivo (apertura + cuotas pagadas/devengadas con saldo corriente)
+        const ledger = financiacionLedger(financiaciones, { tipo, moneda: mon });
+        items.push({ label, moneda: mon, saldo: bucket.tot[mon], docs, ledger, headerColor: "#dc2626" });
       }
     };
-    armar(b.impuestos, "Planes de pago");
-    armar(b.financiero, "Créditos");
+    armar(b.impuestos, "Planes de pago", "plan_afip");
+    armar(b.financiero, "Créditos", "prestamo");
     return items;
   })();
 

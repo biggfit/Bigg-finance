@@ -11,8 +11,10 @@ import { request as httpsRequest } from 'https';
 
 const NUMBERS_URL = process.env.VITE_NUMBERS_API_URL;
 
-/** Hace la petición HTTPS siguiendo redirects server-side (sin restricciones CORS). */
-function proxyToSheets(targetUrl, method, body, res) {
+/** Hace la petición HTTPS siguiendo redirects server-side (sin restricciones CORS).
+ *  `cacheable` = la petición ORIGINAL fue GET (un POST redirige a GET internamente, pero su
+ *  resultado NUNCA debe cachearse) → se propaga tal cual a través del redirect. */
+function proxyToSheets(targetUrl, method, body, res, cacheable) {
   let url;
   try { url = new URL(targetUrl); } catch (e) {
     res.statusCode = 500;
@@ -32,11 +34,17 @@ function proxyToSheets(targetUrl, method, body, res) {
   const req = httpsRequest(options, (upstream) => {
     // Seguir redirect 302 server-side
     if (upstream.statusCode >= 300 && upstream.statusCode < 400 && upstream.headers.location) {
-      proxyToSheets(upstream.headers.location, 'GET', null, res);
+      proxyToSheets(upstream.headers.location, 'GET', null, res, cacheable);
       return;
     }
     res.setHeader('Content-Type', 'application/json');
     res.statusCode = upstream.statusCode;
+    // Caché de borde (CDN Vercel): comparte la lectura entre todo el equipo por 30s. Solo GET 200
+    // (nunca POST, redirects ni errores — cachear un 500/error rompería el reintento del cliente).
+    res.setHeader('Cache-Control',
+      cacheable && upstream.statusCode === 200
+        ? 'public, s-maxage=30, stale-while-revalidate=60'
+        : 'no-store');
     upstream.pipe(res);
   });
 
@@ -64,8 +72,8 @@ export default function handler(req, res) {
   if (req.method === 'POST') {
     let body = '';
     req.on('data', (chunk) => { body += chunk; });
-    req.on('end',  ()      => { proxyToSheets(target, 'POST', body, res); });
+    req.on('end',  ()      => { proxyToSheets(target, 'POST', body, res, false); });
   } else {
-    proxyToSheets(target, 'GET', null, res);
+    proxyToSheets(target, 'GET', null, res, true);
   }
 }

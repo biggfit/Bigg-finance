@@ -158,13 +158,14 @@ export function useCcGroups(CC_LIST) {
   return useMemo(() => groupCentrosCosto(CC_LIST), [CC_LIST]);
 }
 
-export function initialFacturaLineas(initialData, resolveCC) {
+export function initialFacturaLineas(initialData, resolveCC, ivaDefault = 21) {
   return initialData?.lineas?.map(l => ({
     id: Date.now() + Math.random(),
     cc: resolveCC(l.cc ?? ""),
     subtotal: String(l.subtotal ?? ""),
-    ivaRate: l.ivaRate ?? 21,
-  })) ?? [newLinea()];
+    // Al editar/duplicar mandan las alicuotas ya guardadas; el default solo aplica a lo que no tiene.
+    ivaRate: l.ivaRate ?? ivaDefault,
+  })) ?? [newLinea("", ivaDefault)];
 }
 
 export function facturaCanSave({ partyId, cuentaId, fecha, lineas }) {
@@ -215,14 +216,21 @@ function calcVtoFromProveedor(proveedor, fechaFactura) {
   return d.toISOString().slice(0, 10);
 }
 
-export function makeFacturaPartyChangeHandler({ setPartyId, list, setCuentaId, setMoneda, setLineas, setVto, getFecha }) {
+export function makeFacturaPartyChangeHandler({ setPartyId, list, setCuentaId, setMoneda, setLineas, setVto, getFecha, ivaDefault = 21 }) {
   return (id) => {
     setPartyId(id);
     const row = list.find(x => x.id === id);
     if (!row) return;
     if (row.cuentaDefault) setCuentaId(row.cuentaDefault);
     if (row.monedaDefault) setMoneda(row.monedaDefault);
-    setLineas([newLinea(row.ccDefault ?? "")]);
+    // NO pisar importes ya cargados: abierto desde Conciliación el subtotal viene del extracto, y
+    // elegir el proveedor despues borraba la plata. Solo se resetea si no hay ningun monto tipeado;
+    // si lo hay, se conserva todo y el ccDefault del proveedor unicamente rellena los cc vacios.
+    setLineas(prev => {
+      const hayMonto = (prev ?? []).some(l => String(l.subtotal ?? "").trim() !== "");
+      if (!hayMonto) return [newLinea(row.ccDefault ?? "", ivaDefault)];
+      return prev.map(l => ({ ...l, cc: l.cc || (row.ccDefault ?? "") }));
+    });
     if (setVto) {
       const vto = calcVtoFromProveedor(row, getFecha?.());
       if (vto) setVto(vto);

@@ -927,7 +927,14 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
       .filter(c => { const code = getCountryCur(c).code; return code !== "USD" && code !== "EUR"; });
   }, [frForCompany]);
 
-  const tcCargados = countriesWithTc.filter(c => parseFloat(tcMap[c]) > 0).length;
+  // TC de Maestros para el país/mes actual (getTcRate, arriba), o null si todavía no está
+  // cargado ahí. Es la ÚNICA fuente cuando existe — así una factura nunca puede salir con
+  // un TC distinto al que Contabilidad tiene cargado (pasó con Paraguay/Chile/Perú en
+  // jul-2026: alguien tipeó un TC a mano en este panel y quedó facturado con ese valor,
+  // no con el real). getTcRate ya existía para esto pero no estaba conectada a nada.
+  const maestrosTcFor = (country) => getTcRate(country, tiposCambio, crmYear, crmMonth);
+
+  const tcCargados = countriesWithTc.filter(c => maestrosTcFor(c) != null || parseFloat(tcMap[c]) > 0).length;
 
   // Sincroniza tcMap con Maestros cuando cambia el mes o llegan los datos
   useEffect(() => {
@@ -1000,7 +1007,9 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
     const cc = getCountryCur(r.country);
     // EUR y USD ya son monedas de facturación final — no se convierten
     if (cc.code === "USD" || cc.code === "EUR") return feeLocal;
-    const tc = parseFloat(tcMap[r.country] ?? "1") || 1;
+    // Maestros manda siempre que tenga el dato; el input manual es solo fallback
+    // para cuando ese mes todavía no se cargó ahí.
+    const tc = maestrosTcFor(r.country) ?? (parseFloat(tcMap[r.country] ?? "1") || 1);
     return feeLocal / tc;
   };
 
@@ -1228,27 +1237,30 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {countriesWithTc.map(country => {
-                      const cc  = getCountryCur(country);
-                      const val = tcMap[country] ?? "";
-                      const ok  = parseFloat(val) > 0;
+                      const cc     = getCountryCur(country);
+                      const fromMaestros = maestrosTcFor(country);
+                      const locked = fromMaestros != null;
+                      const val    = locked ? fromMaestros : (tcMap[country] ?? "");
+                      const ok     = locked || parseFloat(val) > 0;
                       return (
                         <div key={country} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <span style={{ fontSize: 12, fontWeight: 700, minWidth: 78 }}>{country}</span>
                           <span style={{ fontSize: 11, color: "var(--muted)", minWidth: 26 }}>{cc.sym}</span>
-                          <input type="number" value={val}
+                          <input type="number" value={val} disabled={locked}
                             onChange={e => setTcMap(m => ({ ...m, [country]: e.target.value }))}
-                            placeholder="TC" style={{ ...inS, flex: 1 }} />
+                            placeholder="TC" title={locked ? "Viene de Maestros — para cambiarlo, editalo ahí" : "Sin cargar en Maestros — valor manual temporal"}
+                            style={{ ...inS, flex: 1, ...(locked ? { opacity: 0.7, cursor: "not-allowed" } : {}) }} />
                           <span style={{ fontSize: 10, color: "var(--muted)" }}>/ USD</span>
-                          <span style={{ fontSize: 14, fontWeight: 700,
-                            color: ok ? "var(--green, #7ed9a0)" : "var(--red, #ff6b7a)" }}>
-                            {ok ? "✓" : "✗"}
+                          <span style={{ fontSize: 13 }} title={locked ? "Tomado de Maestros" : ok ? "Valor manual (sin Maestros)" : "Falta cargar"}>
+                            {locked ? "🔒" : ok ? "⚠" : "✗"}
                           </span>
                         </div>
                       );
                     })}
                   </div>
                   <div style={{ marginTop: 10, fontSize: 10, color: "var(--muted)", borderTop: "1px solid var(--border)", paddingTop: 8 }}>
-                    Las ventas se obtienen de Bigg Eye automáticamente
+                    🔒 = TC de Maestros, no editable acá. Si falta, cargalo en Maestros → Tipo de Cambio
+                    para que la factura salga con el valor correcto.
                   </div>
                 </div>
               )}
@@ -2189,9 +2201,10 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
         const res = await getNextInvoiceNum(fr.id, invoicePrefix);
         factComp.invoice = res.label;
       }
-      try {
-        await addCompWithEmpresa(fr.id, factComp);
-      } catch {
+      // addComp nunca rechaza (devuelve {ok:false, error} para no romper callers que no
+      // la esperan) — si el guardado post-AFIP falla hay que chequear `ok`, no un catch.
+      const saveResult = await addCompWithEmpresa(fr.id, factComp);
+      if (saveResult?.ok === false) {
         throw new Error(afipSaveFailedMsg(factComp.invoice, factComp.facturanteId));
       }
     } finally {

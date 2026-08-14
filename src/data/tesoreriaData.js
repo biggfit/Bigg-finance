@@ -3,15 +3,19 @@
 // Los saldos arrancan en 0 — se cargan desde backend / carga manual
 
 // ─── Sociedades ───────────────────────────────────────────────────────────────
+// Lista de respaldo (fallback) — se usa SOLO si fetchSociedades() no carga. Debe espejar la hoja
+// nb_sociedades (id/nombre/pais/bandera/moneda/anillo) para no mostrar datos viejos si el GAS falla.
+// La fuente de verdad es la hoja; esto es el bootstrap del primer render y el salvavidas ante caída.
 export const SOCIEDADES = [
-  { id:"nako",     nombre:"Ñako SRL",                    pais:"AR", bandera:"🇦🇷", moneda:"ARS" },
-  { id:"hektor",   nombre:"Hektor SRL",                  pais:"AR", bandera:"🇦🇷", moneda:"ARS" },
-  { id:"eventos",  nombre:"Eventos SRL",                 pais:"AR", bandera:"🇦🇷", moneda:"ARS" },
-  { id:"biggfit",  nombre:"Bigg Fit LLC",                pais:"US", bandera:"🇺🇸", moneda:"USD" },
-  { id:"wellness", nombre:"Gestión Deportiva y Wellness",pais:"ES", bandera:"🇪🇸", moneda:"EUR" },
-  { id:"tigre",    nombre:"Tigre Loco SAS",              pais:"CO", bandera:"🇨🇴", moneda:"COP" },
-  { id:"funfit",   nombre:"Fun Fitness Performance LLC", pais:"US", bandera:"🇺🇸", moneda:"USD" },
-  { id:"b",        nombre:"B",                           pais:"AR", bandera:"🔒",  moneda:"ARS", discreta:true },
+  { id:"nako",       nombre:"Ñako SRL",                     cuit:"30717028305", pais:"AR", bandera:"AR", moneda:"ARS", anillo:"Núcleo",                 activo:true },
+  { id:"hektor",     nombre:"Hektor",                       cuit:"30714015377", pais:"AR", bandera:"AR", moneda:"ARS", anillo:"Núcleo",                 activo:true },
+  { id:"eventos",    nombre:"Eventos",                      cuit:"30714381594", pais:"AR", bandera:"AR", moneda:"ARS", anillo:"Núcleo",                 activo:true },
+  { id:"biggfit",    nombre:"Bigg Fit LLC",                 cuit:"36-5000106",  pais:"US", bandera:"AR", moneda:"USD", anillo:"Núcleo",                 activo:true },
+  { id:"wellness",   nombre:"Gestion Deportiva y Wellness", cuit:"B09706771",   pais:"ES", bandera:"ES", moneda:"EUR", anillo:"Fondeadas / inversión",  activo:true },
+  { id:"beta",       nombre:"Beta",                         cuit:"",            pais:"AR", bandera:"AR", moneda:"ARS", anillo:"Núcleo",                 activo:true },
+  { id:"tigre-loco", nombre:"Tigre Loco",                   cuit:"",            pais:"CO", bandera:"CO", moneda:"COP", anillo:"Fondeadas / inversión",  activo:true },
+  { id:"segui-fit",  nombre:"Segui Fit",                    cuit:"30717067769", pais:"AR", bandera:"AR", moneda:"ARS", anillo:"Externas administradas", activo:true },
+  { id:"puertos",    nombre:"Puertos",                      cuit:"",            pais:"AR", bandera:"AR", moneda:"ARS", anillo:"Fondeadas / inversión",  activo:true },
 ];
 
 // ─── Cuentas bancarias y cajas ────────────────────────────────────────────────
@@ -52,15 +56,12 @@ export const CUENTAS_BANCARIAS = [
   // ── Gestión Deportiva y Wellness ──────────────────────────────────────────
   { id:"wellness-eur",       sociedad:"wellness",nombre:"Cuenta EUR",          banco:null,             tipo:"banco",    moneda:"EUR", saldo:0 },
 
-  // ── Tigre Loco SAS ────────────────────────────────────────────────────────
-  { id:"tigre-cop",          sociedad:"tigre",   nombre:"Cuenta COP",          banco:null,             tipo:"banco",    moneda:"COP", saldo:0 },
+  // ── Tigre Loco ────────────────────────────────────────────────────────────
+  { id:"tigre-cop",          sociedad:"tigre-loco", nombre:"Cuenta COP",        banco:null,             tipo:"banco",    moneda:"COP", saldo:0 },
 
-  // ── Fun Fitness Performance LLC ───────────────────────────────────────────
-  { id:"funfit-usd",         sociedad:"funfit",  nombre:"Cuenta USD",          banco:null,             tipo:"banco",    moneda:"USD", saldo:0 },
-
-  // ── B ─────────────────────────────────────────────────────────────────────
-  { id:"b-ars",              sociedad:"b",       nombre:"Efectivo ARS",        banco:null,             tipo:"caja",     moneda:"ARS", saldo:0 },
-  { id:"b-usd",              sociedad:"b",       nombre:"Efectivo USD",        banco:null,             tipo:"caja",     moneda:"USD", saldo:0 },
+  // ── Beta ──────────────────────────────────────────────────────────────────
+  { id:"b-ars",              sociedad:"beta",    nombre:"Efectivo ARS",        banco:null,             tipo:"caja",     moneda:"ARS", saldo:0 },
+  { id:"b-usd",              sociedad:"beta",    nombre:"Efectivo USD",        banco:null,             tipo:"caja",     moneda:"USD", saldo:0 },
 ];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -77,6 +78,41 @@ export const MONEDA_SYM = {
   EUR: "€",
   COP: "COP",
 };
+
+// Monedas elegibles en los formularios (factura de proveedor/cliente, moneda habitual del
+// maestro). Fuente única para que no vuelvan a quedar listas hardcodeadas desincronizadas:
+// COP existía en MONEDA_SYM y en las cuentas bancarias de Tigre Loco, pero no en los selects,
+// así que en Colombia no se podía cargar una factura en su propia moneda.
+// Moneda con la que abre un formulario nuevo (factura de proveedor/cliente) segun la sociedad
+// activa. Antes arrancaba siempre en ARS, asi que en Tigre Loco (COP), Bigg Fit (USD) y Wellness
+// (EUR) habia que corregir el dropdown en cada carga. Lee de SOCIEDADES, que espeja nb_sociedades;
+// si el id no esta en la lista cae en ARS, que es el comportamiento que habia antes.
+export const monedaDeSociedad = (id) => SOCIEDADES.find(s => s.id === id)?.moneda ?? "ARS";
+
+// Alicuotas de IVA por pais de la sociedad. El circuito de factura estaba cableado a Argentina
+// (opciones 0/10.5/21/27 y default 21), asi que en Tigre Loco no se podia cargar el IVA colombiano
+// —no existia el 19%— y a Bigg Fit LLC, que no lleva IVA, le aparecia 21% preseleccionado.
+// La 1a opcion de cada lista es la que trae una linea nueva.
+const IVA_POR_PAIS = {
+  AR: [21, 10.5, 27, 0],   // general, reducida, incrementada, exento
+  CO: [19, 5, 0],          // general, reducida, exento
+  ES: [21, 10, 4, 0],      // general, reducida, superreducida, exento
+  US: [0],                 // sin IVA
+};
+const ivaListaDeSociedad = (id) => IVA_POR_PAIS[SOCIEDADES.find(s => s.id === id)?.pais] ?? IVA_POR_PAIS.AR;
+
+// Opciones ordenadas de menor a mayor para el <select>, pero el default sale de la lista de arriba
+// (la general del pais), no del primero del select.
+export const ivaOptsDeSociedad = (id) =>
+  [...ivaListaDeSociedad(id)].sort((a, b) => a - b).map(v => ({ value: v, label: `${v}%` }));
+export const ivaDefaultDeSociedad = (id) => ivaListaDeSociedad(id)[0];
+
+export const MONEDA_OPTS = [
+  { value: "ARS", label: "$ ARS", labelLargo: "ARS — Pesos" },
+  { value: "USD", label: "U$D",   labelLargo: "USD — Dólares" },
+  { value: "EUR", label: "€ EUR", labelLargo: "EUR — Euros" },
+  { value: "COP", label: "COP",   labelLargo: "COP — Pesos colombianos" },
+];
 
 export const fmtSaldo = (n, moneda) => {
   const sym  = MONEDA_SYM[moneda] ?? moneda;

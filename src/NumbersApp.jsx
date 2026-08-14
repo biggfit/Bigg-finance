@@ -20,6 +20,7 @@ import PantallaUsuarios          from "./numbers/PantallaUsuarios";
 import { SOCIEDADES as SOC_FALLBACK } from "./data/tesoreriaData";
 import { fetchSociedades, fetchMovimientosPendientes, fetchCorreoBorradores } from "./lib/numbersApi";
 import { inicial } from "./lib/auth";
+import { forzarRefresco } from "./lib/cacheBust";
 
 // ─── Nav button style helpers ─────────────────────────────────────────────────
 const navBtnStyle = (active) => ({
@@ -44,6 +45,7 @@ const MAESTROS_TABS = [
   { id:"cuentas",     label:"Plan de Cuentas",  icon:"📋" },
   { id:"clientes",    label:"Clientes",          icon:"🏢" },
   { id:"proveedores", label:"Proveedores",       icon:"🧾" },
+  { id:"tipos_cambio",label:"Tipos de Cambio",   icon:"💱" },
   { id:"banco_reglas",label:"Reglas de banco",   icon:"⚙" },
 ];
 
@@ -175,25 +177,42 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
   // Carga sociedades PRIMERO — los componentes hijos no montan hasta que socReady=true
   // Esto evita requests concurrentes al proxy de Vite en el arranque inicial
   useEffect(() => {
-    fetchSociedades()
-      .then(data => {
-        const activas = Array.isArray(data) ? data.filter(s => {
-            const a = s.activo;
-            if (a === false || a === 0 || a === "FALSE" || a === "false" || a === "0" || a === "") return false;
-            return true;
-          }) : [];
-        if (activas.length > 0) {
-          setSociedades(activas);
-          // Restaurar la sociedad activa por id (robusto ante reordenamientos de la lista).
-          const savedId = localStorage.getItem("nb_soc");
-          if (savedId) {
-            const idx = activas.findIndex(s => String(s.id) === savedId);
-            if (idx >= 0) setSocIdx(idx);
+    let cancelled = false;
+    (async () => {
+      // Reintento: un solo hipo al arranque dejaba la app TODA la sesión con la lista hardcodeada
+      // de respaldo (vieja, sin Segui Fit/Puertos), porque esto se carga una sola vez y no reintenta.
+      for (let intento = 0; intento < 3; intento++) {
+        try {
+          const data = await fetchSociedades();
+          const activas = Array.isArray(data) ? data.filter(s => {
+              const a = s.activo;
+              if (a === false || a === 0 || a === "FALSE" || a === "false" || a === "0" || a === "") return false;
+              return true;
+            }) : [];
+          if (activas.length > 0) {
+            if (cancelled) return;
+            setSociedades(activas);
+            // Restaurar la sociedad activa por id (robusto ante reordenamientos de la lista).
+            const savedId = localStorage.getItem("nb_soc");
+            if (savedId) {
+              const idx = activas.findIndex(s => String(s.id) === savedId);
+              if (idx >= 0) setSocIdx(idx);
+            }
+            setSocReady(true);
+            return;
           }
+        } catch (err) {
+          console.error(`[Numbers] fetchSociedades intento ${intento + 1} falló:`, err);
         }
-      })
-      .catch(err => console.error("[Numbers] fetchSociedades error:", err))
-      .finally(() => setSocReady(true));
+        if (intento < 2) await new Promise(r => setTimeout(r, 800 * (intento + 1)));
+      }
+      // Si tras los reintentos no cargó, arranca con el respaldo (mejor algo que nada) pero deja rastro.
+      if (!cancelled) {
+        console.error("[Numbers] fetchSociedades no cargó — usando lista de respaldo (puede estar desactualizada)");
+        setSocReady(true);
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   // Contador de movimientos sin conciliar (sociedad activa) para el badge
@@ -689,6 +708,16 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
             </button>
           </div>
           </nav>
+
+          {/* ── Actualizar datos: trae lo último del servidor (saltea la caché compartida) ── */}
+          <div style={{ borderTop:"1px solid rgba(255,255,255,.07)", padding:"6px 0", flexShrink:0 }}>
+            <button onClick={() => { forzarRefresco(); window.location.reload(); }}
+              title="Trae los últimos datos del servidor, salteando la caché compartida. Usalo si un compañero acaba de cargar algo y todavía no lo ves."
+              style={navBtnStyle(false)} {...navBtnHover(false)}>
+              <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>🔄</span>
+              Actualizar datos
+            </button>
+          </div>
 
           {/* ── Pie: usuario logueado (fijo al fondo del sidebar) ── */}
           {sesion && (

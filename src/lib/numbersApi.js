@@ -4,6 +4,8 @@
 //   VITE_NUMBERS_API_URL=https://script.google.com/macros/s/.../exec
 
 import { stamp, firma } from "./auth";
+import { bustToken, forzarRefresco } from "./cacheBust";
+import { fetchLegajos } from "./sueldosApi";   // solo lectura (mapa legajo→sociedad para interco de sueldos)
 
 const CONFIGURED = !!import.meta.env.VITE_NUMBERS_API_URL;
 const TOKEN      = import.meta.env.VITE_SHEETS_TOKEN;   // mismo token
@@ -24,18 +26,24 @@ const CACHE_TTL_MASTER = 600_000;   // maestros (casi nunca cambian en una sesi�
 const MASTER_RES = new Set([
   "nb_cuentas", "nb_centros_costo", "nb_proveedores", "nb_clientes",
   "nb_sociedades", "nb_cuentas_bancarias", "nb_banco_reglas", "nb_usuarios",
+  "nb_tipos_cambio",
 ]);
 const ttlDe = resource => (MASTER_RES.has(resource) ? CACHE_TTL_MASTER : CACHE_TTL);
 
 function _invalidate(sheet) {
   for (const key of _cache.keys()) {
-    if (key.startsWith(`resource=${sheet}`)) _cache.delete(key);
+    // Limpia la hoja Y cualquier batch (__multi) que pueda contenerla → tras escribir, el próximo
+    // primeCache re-trae fresco (si no, un batch cacheado re-sembraría datos viejos por hasta el TTL).
+    if (key.startsWith(`resource=${sheet}`) || key.startsWith("resource=__multi")) _cache.delete(key);
   }
 }
 
 async function get(resource, params = {}) {
   if (!CONFIGURED) throw new Error("VITE_NUMBERS_API_URL no configurada");
-  const qs  = new URLSearchParams({ resource, token: TOKEN, ...params }).toString();
+  // `_cb` (solo dentro de la ventana de refresco) hace que la URL cambie → el CDN de Vercel falla el
+  // match y pide fresco al origen. Fuera de la ventana no va, así el equipo comparte la caché de borde.
+  const cb  = bustToken();
+  const qs  = new URLSearchParams({ resource, token: TOKEN, ...params, ...(cb ? { _cb: cb } : {}) }).toString();
   const key = qs;
 
   // Devolver cache si es fresco (TTL según sea maestro o transaccional)
@@ -69,8 +77,10 @@ async function get(resource, params = {}) {
 }
 
 // Lee una hoja SIN cache (para la verificación de idempotencia en un reintento de escritura).
+// `_nocache` único ⇒ salta también la caché de BORDE (el `no-store` del fetch solo evita la del
+// navegador); leer stale acá podría concluir "la fila no entró" y re-agregarla → duplicado.
 async function _fetchRowsRaw(sheet) {
-  const qs  = new URLSearchParams({ resource: sheet, token: TOKEN }).toString();
+  const qs  = new URLSearchParams({ resource: sheet, token: TOKEN, _nocache: `${Date.now()}.${Math.random()}` }).toString();
   const res = await fetch(`${BASE}?${qs}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
@@ -105,7 +115,7 @@ async function post(body) {
       try {
         const existentes = new Set((await _fetchRowsRaw(body.sheet)).map(r => String(r.id)));
         const faltan = addIds.filter(id => !existentes.has(String(id)));
-        if (!faltan.length) { _invalidate(body.sheet); return { ok: true, deduped: true }; }
+        if (!faltan.length) { _invalidate(body.sheet); forzarRefresco(); return { ok: true, deduped: true }; }
         // Batch parcialmente escrito: no se puede re-mandar solo lo que falta sin duplicar lo que entró.
         if (faltan.length !== addIds.length) throw lastErr;
       } catch { throw lastErr; }   // ante la duda, no arriesgar un duplicado
@@ -120,6 +130,9 @@ async function post(body) {
       const data = await res.json();
       if (data.error) { const e = new Error(data.error); e._serverReject = true; throw e; }
       if (body.sheet) _invalidate(body.sheet);
+      // Abre la ventana de refresco: los próximos GET de este navegador saltan el borde por unos
+      // segundos → ves tu propio cambio al instante (y de paso lo último del resto del equipo).
+      forzarRefresco();
       return data;
     } catch (e) {
       lastErr = e;
@@ -128,6 +141,61 @@ async function post(body) {
     }
   }
   throw lastErr;
+}
+
+// ─── Batch de lectura (getMulti) ──────────────────────────────────────────────
+// Trae VARIAS hojas del GAS en UNA sola llamada (el backend serializa los requests a ~3-4s c/u,
+// así una pantalla de ~10 fetch pasaba de ~8 round-trips a 1). specs = [{ resource, sociedad? }].
+// Devuelve { <resource>: filas[] }. Cachea/deduplica y respeta la ventana de refresco (_cb) igual que get().
+export async function getMulti(specs = []) {
+  if (!CONFIGURED) throw new Error("VITE_NUMBERS_API_URL no configurada");
+  const spec = specs.map(x => (x.sociedad ? { r: x.resource, s: x.sociedad } : { r: x.resource }));
+  const cb   = bustToken();
+  const qs   = new URLSearchParams({ resource: "__multi", spec: JSON.stringify(spec), token: TOKEN, ...(cb ? { _cb: cb } : {}) }).toString();
+  const key  = qs;
+
+  const cached = _cache.get(key);
+  if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.data;
+  if (_inflight.has(key)) return _inflight.get(key);
+
+  const req = (async () => {
+    let lastErr;
+    for (let i = 0; i < 3; i++) {
+      try {
+        const res = await fetch(`${BASE}?${qs}`, { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        _cache.set(key, { data, ts: Date.now() });
+        return data;
+      } catch (e) {
+        lastErr = e;
+        if (i < 2) await new Promise(r => setTimeout(r, (i + 1) * 600));
+      }
+    }
+    throw lastErr;
+  })();
+  _inflight.set(key, req);
+  req.finally(() => _inflight.delete(key));
+  return req;
+}
+
+// Precalienta la caché individual con UN solo batch: los get(resource, {sociedad?}) que dispare la
+// pantalla justo después salen de caché (0 red). Best-effort: si el batch falla (GAS viejo, error),
+// no siembra nada y la pantalla cae a las llamadas de a una — mismo comportamiento que antes.
+// Las claves sembradas replican EXACTO las que arma get() (mismo orden de params + _cb) → hit garantizado.
+export async function primeCache(specs = []) {
+  if (!CONFIGURED || !specs.length) return;
+  const cb = bustToken();
+  let data;
+  try { data = await getMulti(specs); }
+  catch { return; }
+  for (const s of specs) {
+    const rows = data[s.resource];
+    if (rows == null) continue;
+    const key = new URLSearchParams({ resource: s.resource, token: TOKEN, ...(s.sociedad ? { sociedad: s.sociedad } : {}), ...(cb ? { _cb: cb } : {}) }).toString();
+    _cache.set(key, { data: rows, ts: Date.now() });
+  }
 }
 
 // ─── Generador de IDs ────────────────────────────────────────────────────────
@@ -236,6 +304,71 @@ export async function appendEgreso(egreso) {
     });
   }
   return { ok: true, id_comp };
+}
+
+// ── CARGAS SOCIALES (F931 / aportes sindicales / obligaciones por sociedad) ────
+// Cada obligación mensual = un EGRESO en nb_comprobantes (CxP), con una línea por centro
+// (prorrateo por haberes en blanco, calculado en la UI con baseHaberesPorCentro de sueldosApi).
+// Proveedor y cuenta se eligen por asiento (AFIP/ARCA, UTEDYC, …). Sin hoja propia: el histórico
+// se lee de nb_comprobantes. Se marcan con CS_TAG en la nota para poder listarlas en el módulo.
+export const CS_TAG = "[CARGASOC]";
+
+export async function appendCargaSocial({ sociedad, proveedorId = "", proveedor = "", cuenta, cuentaId = "", mes, anio, vep = "", vto = "", lineas = [], concepto = "" }) {
+  const ud = new Date(Number(anio), Number(mes), 0).getDate();   // último día del mes → cae en el P&L de ese mes
+  const fecha = `${anio}-${String(mes).padStart(2, "0")}-${String(ud).padStart(2, "0")}`;
+  const nota = `${CS_TAG} ${concepto || `Cargas sociales ${mes}/${anio}`}`;
+  const id_comp = newId("EG");
+  const created_at = new Date().toISOString();
+  const cta = String(cuenta || "").replace(/^CUENTA_/, "");
+  // UNA sola escritura atómica (add_batch): todas las líneas de centro en un POST. Evita el
+  // comprobante a medias que dejaba el loop secuencial de appendEgreso cuando el GAS se cuelga.
+  const rows = lineas
+    .filter(l => (Number(l.subtotal) || 0) !== 0)
+    .map((l, i) => {
+      const sub = round2(Number(l.subtotal) || 0);
+      return {
+        id: `${id_comp}-L${pad(i + 1)}`, id_comp, sociedad, fecha, vto,
+        subtipo: "EGRESO",
+        contraparte_id: proveedorId, contraparte_nombre: proveedor,
+        cuenta_contable: cta, cuenta_contable_id: cuentaId,
+        moneda: "ARS", centro_costo: l.cc,
+        subtotal: sub, iva_rate: 0, iva_monto: 0, total: sub,
+        nro_comp: vep,   // el VEP → N° de comprobante (para conciliar el débito del banco)
+        nota, created_at,
+      };
+    });
+  if (!rows.length) return { ok: true, id_comp, n: 0 };
+  await post({ action: "add_batch", sheet: "nb_comprobantes", rows });
+  return { ok: true, id_comp, n: rows.length };
+}
+
+// Lista las cargas sociales de un mes/anio leyendo nb_comprobantes (marca CS_TAG), agrupadas por
+// comprobante, con distribución por centro y estado de pago (vía pagos que las referencian).
+export async function fetchCargasSociales(mes, anio) {
+  const [comps, pagos] = await Promise.all([get("nb_comprobantes", {}), fetchPagosCobros()]);
+  const pagadoByComp = {};
+  for (const p of (pagos || [])) if (p.tipo === "PAGO" && p.documento_id) pagadoByComp[p.documento_id] = (pagadoByComp[p.documento_id] || 0) + Math.abs(Number(p.monto) || 0);
+  const byComp = {};
+  for (const r of (comps || [])) {
+    if (!String(r.nota || "").includes(CS_TAG)) continue;
+    if (String(r.subtipo || "").toUpperCase() !== "EGRESO") continue;
+    const f = String(r.fecha || "");
+    if (f.slice(0, 4) !== String(anio) || Number(f.slice(5, 7)) !== Number(mes)) continue;
+    const k = r.id_comp;
+    if (!byComp[k]) byComp[k] = {
+      id_comp: k, sociedad: r.sociedad, proveedor: r.contraparte_nombre || r.contraparte_id || "",
+      proveedorId: r.contraparte_id || "", cuenta: r.cuenta_contable || "", vep: r.nro_comp || "",
+      vto: r.vto || "", fecha: r.fecha || "", monto_total: 0, distribucion: {},
+    };
+    const t = toNum(r.total);
+    byComp[k].monto_total += t;
+    const cc = r.centro_costo || "";
+    byComp[k].distribucion[cc] = (byComp[k].distribucion[cc] || 0) + t;
+  }
+  return Object.values(byComp).map(c => ({
+    ...c,
+    pagado: c.monto_total > 0 && calcSaldoPendiente(c.monto_total, [{ monto: pagadoByComp[c.id_comp] || 0 }]) <= 0.5,
+  })).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
 }
 
 /** Elimina todas las líneas de un egreso (por id_comp).
@@ -853,6 +986,33 @@ export async function deleteCliente(id) {
   return post({ action: "del", sheet: "nb_clientes", id });
 }
 
+// ─── TIPOS DE CAMBIO (consolidado FX) ────────────────────────────────────────
+// El fetch/save/mapeo de moneda vive más abajo junto a TC_FIELD (§ "Maestro ÚNICO
+// del TC de todo el grupo") — Franquicias ya migró a leer de acá, así que dejamos
+// una sola implementación en vez de las dos que había cuando cada lado la escribió
+// por su cuenta. tcDelMes/montoAUSD quedan acá porque son propios del consolidado FX.
+
+// TC del mes (1-12). Devuelve el objeto de tasas o null si no está cargado.
+export function tcDelMes(tiposCambio, anio, mes) {
+  const ym = `${anio}-${String(mes).padStart(2, "0")}`;
+  return tiposCambio?.[ym] || null;
+}
+
+// Convierte un monto de su moneda a USD con el TC del mes (objeto de tcDelMes).
+// Convención nb_tipos_cambio (= Franquicias): arsUSD/copUSD/uyuUSD/pygUSD/clpUSD/penUSD =
+// unidades de esa moneda por 1 USD (se DIVIDE); eurUSD = USD por 1 EUR (se MULTIPLICA).
+// Sin TC del mes o tasa 0 → devuelve null (dato faltante, para que el reporte lo marque; NO 0
+// silencioso que mezcle monedas sin traducir).
+export function montoAUSD(monto, moneda, tcMes) {
+  const n = Number(monto) || 0;
+  const cur = String(moneda || "").toUpperCase();
+  if (cur === "USD") return n;
+  if (!tcMes) return null;
+  if (cur === "EUR") return tcMes.eurUSD > 0 ? n * tcMes.eurUSD : null;
+  const rate = tcMes[cur.toLowerCase() + "USD"];  // ARS→arsUSD, COP→copUSD, ...
+  return rate > 0 ? n / rate : null;
+}
+
 // ─── SOCIEDADES ──────────────────────────────────────────────────────────────
 
 export async function fetchSociedades() {
@@ -888,6 +1048,112 @@ export async function updateCentroCosto(id, patch) {
 
 export async function deleteCentroCosto(id) {
   return post({ action: "del", sheet: "nb_centros_costo", id });
+}
+
+// ─── TIPOS DE CAMBIO ─────────────────────────────────────────────────────────
+// Maestro ÚNICO del TC de todo el grupo (nb_tipos_cambio): una fila por mes, tasas
+// contra USD. Se edita en Numbers (Maestros › Tipos de Cambio) y lo consumen los dos
+// lados: el consolidado en USD de Numbers y Franquicias (fee en USD + facturación en
+// moneda local). Antes el maestro vivía en Franquicias (hoja `tipos_cambio`) y Numbers
+// no tenía TC — se dio vuelta para no tener dos fuentes de la misma verdad.
+//
+// Convención de campo: <moneda en minúscula>USD = unidades de esa moneda por 1 USD
+// (ej. arsUSD 1560 = 1560 ARS por dólar). USD no tiene campo: es 1 por definición.
+
+// Moneda → campo del maestro. Fuente única del mapeo: que nadie lo re-derive.
+export const TC_FIELD = {
+  USD: null,        // 1 por definición
+  ARS: "arsUSD",
+  EUR: "eurUSD",
+  COP: "copUSD",
+  UYU: "uyuUSD",
+  PYG: "pygUSD",
+  CLP: "clpUSD",
+  PEN: "penUSD",
+};
+
+// Campos del maestro, en el orden en que se muestran/guardan.
+export const TC_FIELDS = Object.values(TC_FIELD).filter(Boolean);
+
+// El yearMonth vive como TEXTO en la hoja ("2026-07"). Si alguien pisa el formato de la
+// columna, Sheets lo interpreta como fecha y el handler genérico lo devuelve "2026-07-01"
+// (o peor, un Date). Normalizar acá es lo que evita que el lookup del mes falle en silencio
+// — ya pasó en la hoja vieja de Franquicias, que quedó con una fila fantasma de julio.
+function normYearMonth(v) {
+  if (v && typeof v.getTime === "function") {
+    return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, "0")}`;
+  }
+  const m = String(v ?? "").trim().match(/^(\d{4})-(\d{2})/);
+  return m ? `${m[1]}-${m[2]}` : "";
+}
+
+/**
+ * Maestro de TC como mapa por mes: { "2026-07": { yearMonth, arsUSD, eurUSD, … } }.
+ * Shape idéntico al que ya esperan ReporteFeeModal / TabFacturador (0 = sin dato).
+ */
+export async function fetchTiposCambio() {
+  const rows = await get("nb_tipos_cambio");
+  const out  = {};
+  for (const r of (Array.isArray(rows) ? rows : [])) {
+    const ym = normYearMonth(r.yearMonth);
+    if (!ym) continue;                                   // fila basura o vacía → se ignora
+    const tc = { yearMonth: ym };
+    for (const f of TC_FIELDS) tc[f] = Number(r[f]) || 0;
+    out[ym] = tc;                                        // si hubiera dos filas del mes, gana la última
+  }
+  return out;
+}
+
+/**
+ * Upsert del TC de un mes. `tc` puede ser parcial: solo se escriben los campos presentes
+ * (así editar ARS no borra el COP que ya estaba cargado).
+ * @param {string} yearMonth  "2026-07"
+ * @param {{ arsUSD?: number, eurUSD?: number, copUSD?: number, … }} tc
+ */
+export async function saveTipoCambio(yearMonth, tc = {}) {
+  const ym = normYearMonth(yearMonth);
+  if (!ym) throw new Error(`yearMonth inválido: ${yearMonth}`);
+
+  const patch = {};
+  for (const f of TC_FIELDS) {
+    if (!(f in tc)) continue;
+    const n = Number(tc[f]);
+    patch[f] = n > 0 ? n : "";                           // vacío en vez de 0 → la hoja queda legible
+  }
+
+  // Lectura FRESCA (sin caché de app ni de borde) para decidir edit vs add: con datos
+  // stale, un mes que ya existe se agregaría de nuevo y quedarían dos filas del mismo mes.
+  const rows = await _fetchRowsRaw("nb_tipos_cambio");
+  const existente = rows.find(r => normYearMonth(r.yearMonth) === ym);
+
+  if (existente) {
+    // El GAS matchea la fila con String(celda) === String(id). Si la celda dejó de ser texto,
+    // el match falla y el edit se pierde → cortamos con un mensaje accionable en vez de
+    // appendear un duplicado silencioso.
+    if (String(existente.yearMonth).trim() !== ym) {
+      throw new Error(
+        `La fila ${ym} de nb_tipos_cambio no está guardada como texto (vale "${existente.yearMonth}"). ` +
+        `Formateá la columna yearMonth como "Texto sin formato" y reescribí ese mes.`
+      );
+    }
+    return post({ action: "edit", sheet: "nb_tipos_cambio", id_field: "yearMonth", id: ym, patch });
+  }
+  return post({ action: "add", sheet: "nb_tipos_cambio", row: { yearMonth: ym, ...patch } });
+}
+
+/**
+ * Tasa moneda→USD del mes: cuántas unidades de `moneda` equivalen a 1 USD.
+ * USD → 1. Sin dato → null (el llamador decide si eso es un error o un cero).
+ * Para pasar un importe a USD: monto / tcRate(...).
+ */
+export function tcRate(tiposCambio, yearMonth, moneda) {
+  const cur = String(moneda ?? "").toUpperCase();
+  if (cur === "USD") return 1;
+  const field = TC_FIELD[cur];
+  if (!field) return null;                               // moneda que el maestro no cubre
+  const tc = tiposCambio?.[normYearMonth(yearMonth)];
+  const v  = Number(tc?.[field]);
+  return v > 0 ? v : null;
 }
 
 // ─── REGLAS DE BANCO (motor de conciliación) ─────────────────────────────────
@@ -1208,6 +1474,17 @@ export async function fetchPendientesTarjeta(sociedad) {
   return rows.filter(m => m.origen === "tarjeta" && !m.documento_id);
 }
 
+// Campos comunes de la pata PARKEADA (interco_park) — una sola fuente para el contrato que leen
+// lecturaInterco / intercoLedger / pendientesInterco (por origen + signo de la caja, sin P&L).
+// Lo usan el conciliador (edit de la línea del extracto) y el alta manual parkearIntercoManual (add).
+const intercoParkFields = ({ id, destino_sociedad = "", destino_nombre = "", cuenta_destino = "" }) => ({
+  tipo: "INTERCOMPANIA",
+  contraparte_id: destino_sociedad || "", contraparte_nombre: destino_nombre || "",
+  cuenta_contable: "", centro_costo: "",
+  cuenta_destino: cuenta_destino || "",   // hint: la cuenta del otro lado (no crea su pata)
+  documento_id: "INTERPARK-" + id, origen: "interco_park", referencia: "1",
+});
+
 // Acepta un movimiento pendiente: lo IMPUTA in-place y lo deja conciliado.
 // Una sola escritura (no crea comprobante): el movimiento es el hecho devengado+caja;
 // el P&L lo lee vía adapter por documento_id que empieza con "CONTAB-".
@@ -1221,6 +1498,12 @@ export async function aceptarMovimiento(mov, prop = {}) {
     // destino, esa línea es duplicado de esta contrapartida → deduplicar / Ignorar.
     const interco  = !!prop.interco;
     const destino  = prop.cuenta_destino || mov.cuenta_destino || "";
+    // Guarda: una transferencia SIEMPRE tiene dos cuentas. Sin destino, la contrapartida (-E) se
+    // crearía con cuenta_bancaria vacía → "pata fantasma": no sube/baja ningún banco y descuadra el
+    // Cash Flow (línea "Transferencias entre cuentas"). Bloquear acá, en el único choke point de
+    // escritura, cubre todos los llamadores (botón, aceptar masivo, futuros), no solo el gate de la UI.
+    if (!String(destino).trim())
+      throw new Error("Transferencia sin cuenta del otro lado: elegí la cuenta destino antes de aceptar.");
     const tipoMov  = interco ? "INTERCOMPANIA" : "TRANSFERENCIA";
     const sharedId = newId(interco ? "INTERCOMPANY" : "TRF");
     await post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
@@ -1261,11 +1544,7 @@ export async function aceptarMovimiento(mov, prop = {}) {
     // No hay contraparte parkeada → PARKEO: se registra SOLO mi pata (posición interco, lecturaInterco la
     // lee por origen). La otra sociedad la va a matchear/declarar cuando concilie su lado (espejo asistido).
     return post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
-      tipo: "INTERCOMPANIA",
-      contraparte_id: prop.destino_sociedad || "", contraparte_nombre: prop.destino_nombre || "",
-      cuenta_contable: "", centro_costo: "",
-      cuenta_destino: prop.cuenta_destino || "",   // hint: la cuenta única del otro lado (no crea pata)
-      documento_id: "INTERPARK-" + mov.id, origen: "interco_park", referencia: "1",
+      ...intercoParkFields({ id: mov.id, destino_sociedad: prop.destino_sociedad, destino_nombre: prop.destino_nombre, cuenta_destino: prop.cuenta_destino }),
       ...firma(),
     }});
   }
@@ -1908,6 +2187,26 @@ export async function updateIntercompania({ salidaId, entradaId, fecha, socOrige
   return { ok:true };
 }
 
+// Alta MANUAL de una interco de UNA sola pata (PARKEAR), sin necesidad de una línea de extracto.
+// Para cross-moneda / fondeo (USD→EUR/COP): registro SOLO mi lado (mi caja, mi moneda) con el MISMO
+// shape que produce el conciliador (aceptarMovimiento branch interco_park). La otra sociedad declara
+// su pata en su moneda cuando concilia. Sin cuenta_contable → NO toca P&L; la posición la lee
+// lecturaInterco por origen="interco_park" + el signo de la caja.
+// monto FIRMADO: <0 salió de mi caja (les puse plata → soy acreedor) · >0 entró (me pusieron → soy deudor).
+export async function parkearIntercoManual({ sociedad, fecha, cuenta_bancaria, moneda, monto, destino_sociedad, destino_nombre = "", cuenta_destino = "", nota = "" }) {
+  const id  = newId("INTERPARK");
+  const m   = Number(monto) || 0;
+  const dst = destino_nombre || destino_sociedad;
+  const concepto = `Interco ${m < 0 ? "→" : "←"} ${dst}${nota ? " · " + nota : ""}`;
+  await post({ action:"add", sheet:"nb_movimientos", row: {
+    id, sociedad, fecha, cuenta_bancaria, moneda, monto: m,
+    ...intercoParkFields({ id, destino_sociedad, destino_nombre, cuenta_destino }),
+    concepto, nota, created_at: new Date().toISOString(),
+    ...firma(),
+  }});
+  return { ok:true, id };
+}
+
 export const deleteIntercompania = _deleteMovRows;
 
 // Saldos de APERTURA interco (go-live): filas `origen="interco_apertura"` en nb_movimientos,
@@ -1918,19 +2217,27 @@ export const deleteIntercompania = _deleteMovRows;
 // ── LECTURA intercompañía (el corazón del módulo — LECTURA, no escribe) ──────────
 // Trae TODO lo necesario para leer lo intercompany (todas las sociedades).
 export async function fetchIntercoData() {
-  const [movs, comps, centros, clientes, sociedades] = await Promise.all([
+  const [movs, comps, centros, clientes, sociedades, legajos] = await Promise.all([
     get("nb_movimientos", {}).catch(() => []),
     get("nb_comprobantes", {}).catch(() => []),
     get("nb_centros_costo", {}).catch(() => []),
     get("nb_clientes", {}).catch(() => []),
     get("nb_sociedades", {}).catch(() => []),
+    fetchLegajos().catch(() => []),   // para derivar la interco de sueldos (legajo → sociedad empleadora)
   ]);
+  // Mapa legajo → sociedad empleadora: cuando la caja que paga un sueldo (mov.sociedad) ≠ la sociedad
+  // del legajo, hubo fondeo cross-society (ej. Beta paga el efectivo de un coach de Segui). lecturaInterco lo lee.
+  const legajoSoc = {};
+  for (const l of (Array.isArray(legajos) ? legajos : [])) {
+    if (l?.id) legajoSoc[String(l.id)] = String(l.sociedad_id || "");
+  }
   return {
     movs:       Array.isArray(movs) ? movs : [],
     comps:      Array.isArray(comps) ? comps : [],
     centros:    Array.isArray(centros) ? centros : [],
     clientes:   Array.isArray(clientes) ? clientes : [],
     sociedades: Array.isArray(sociedades) ? sociedades : [],
+    legajoSoc,
   };
 }
 
@@ -1965,10 +2272,16 @@ export function pendientesInterco({ comps = [], clientes = [], sociedades = [], 
     const key = c.id_comp || c.id;
     if (!ventas.has(key)) ventas.set(key, {
       id_comp: key, vendedor: c.sociedad, vendedorNombre: socNombre(c.sociedad),
-      fecha: c.fecha, nroComp: c.nro_comp, moneda: c.moneda || "ARS", total: 0,
+      fecha: c.fecha, nroComp: c.nro_comp, moneda: c.moneda || "ARS", total: 0, subtotal: 0, iva_monto: 0, iva_rate: 0,
     });
-    ventas.get(key).total += toNum(c.total);
+    const v = ventas.get(key);
+    v.total += toNum(c.total);
+    v.subtotal += toNum(c.subtotal);
+    v.iva_monto += toNum(c.iva_monto);
+    if (!v.iva_rate) v.iva_rate = toNum(c.iva_rate);   // rate de la factura (uniforme por comprobante)
   }
+  // Sin desglose cargado (ventas viejas): subtotal = total, IVA 0 → el reconocer no inventa IVA.
+  for (const v of ventas.values()) if (!(v.subtotal > 0)) { v.subtotal = v.total; v.iva_monto = 0; v.iva_rate = 0; }
   // franqPend = pendientes de documentos de franquicia emitidos a mí (ej. Segui), ya con forma de pendiente
   // y armados por la pantalla (que tiene el mundo Franquicias). Mismo dedup por interco_ref (id_comp "FR-…").
   return [...ventas.values(), ...franqPend].filter(v => !reconocidos.has(v.id_comp))
@@ -1978,18 +2291,23 @@ export function pendientesInterco({ comps = [], clientes = [], sociedades = [], 
 // Reconocer una venta interco = registrar MI compra (factura de proveedor / CxP) en mi sociedad,
 // con MIS cuenta+centro, contraparte = la sociedad vendedora, y link `interco_ref=<id_comp venta>`
 // (así el pendiente desaparece y no se re-crea). Queda como FC por pagar (EGRESO sin pago).
-export async function reconocerVentaInterco({ sociedad, ventaIdComp, vendedorId = "", vendedorNombre = "", cuenta_contable, cuenta_contable_id = "", centro_costo = "", total, moneda = "ARS", fecha, nroComp = "", subtipo = "EGRESO" }) {
+export async function reconocerVentaInterco({ sociedad, ventaIdComp, vendedorId = "", vendedorNombre = "", cuenta_contable, cuenta_contable_id = "", centro_costo = "", total, subtotal, iva_rate, iva_monto, moneda = "ARS", fecha, nroComp = "", subtipo = "EGRESO" }) {
   // subtipo="EGRESO" (default): lo que le compro/debo a la contraparte → CxP. subtipo="INGRESO": un crédito a
   // mi favor (ej. NC de interuso que Ñako me emite) → lo reconozco como venta/ingreso a mi cuenta → CxC.
   const id_comp = newId(subtipo === "INGRESO" ? "IN" : "EG");
   const t = toNum(total);
+  // Hereda la discriminación de IVA de la factura original (la que emitió la otra sociedad) → así la
+  // compra reconocida toma bien el crédito fiscal. Sin desglose → subtotal = total, IVA 0 (como antes).
+  const sub  = toNum(subtotal) > 0 ? toNum(subtotal) : t;
+  const ivaM = toNum(iva_monto) || 0;
+  const ivaR = toNum(iva_rate)  || 0;
   await post({ action: "add", sheet: "nb_comprobantes", row: {
     id: `${id_comp}-L1`, id_comp, sociedad, fecha,
     subtipo,
     contraparte_id: vendedorId, contraparte_nombre: vendedorNombre,
     cuenta_contable: String(cuenta_contable || "").replace(/^CUENTA_/, ""),
     cuenta_contable_id: String(cuenta_contable_id || ""),
-    centro_costo, subtotal: t, iva_rate: 0, iva_monto: 0, total: t,
+    centro_costo, subtotal: sub, iva_rate: ivaR, iva_monto: ivaM, total: t,
     moneda, nro_comp: nroComp, nota: `interco_ref=${ventaIdComp}`,
     created_at: new Date().toISOString(),
   }});
@@ -2051,7 +2369,7 @@ export async function revertirInterusoGestion(movId) {
 //      directos / conciliación contabilizada en nb_movimientos)
 //   2. Préstamos/transferencias del núcleo (pares INTERCOMPANIA).
 // Si `sociedad` viene → solo las posiciones de esa sociedad (mirada propia).
-export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades = [] } = {}, { sociedad = null } = {}) {
+export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades = [], legajoSoc = {} } = {}, { sociedad = null } = {}) {
   const empresaDe = new Map((centros || []).map(c => [String(c.id), c.empresa]));
   // Sociedades del núcleo (por anillo) → para decidir si un interuso de gestión cross-society deja
   // posición: núcleo↔núcleo NO (Hektor); hacia una fondeada/externa SÍ (Wellness).
@@ -2141,6 +2459,22 @@ export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades
     add(A, B, m.moneda || "ARS", +mm);
     add(B, A, m.moneda || "ARS", -mm);
   }
+  // 6. SUELDOS pagados por cuenta de otra sociedad (fondeo POR PAGADO, no devengado). La caja que
+  //    pagó (m.sociedad) frenteó el sueldo de un legajo cuya sociedad empleadora es otra → fondeo.
+  //    Ej.: Beta paga el efectivo de un coach de Segui → Beta acreedor / Segui deudor. Los haberes
+  //    tienen m.sociedad = la del legajo → A===B → sin posición (Segui pagó su propio blanco).
+  //    núcleo↔núcleo se saltea (efectivo de un coach del núcleo pagado con Beta = caja negra, no interco).
+  //    Sin datos de anillo no arriesgo posiciones espurias (mismo criterio que la fuente 5).
+  if (nucleo.size) for (const m of movs) {
+    if (m.origen !== "sueldos" || esIgnorado(m)) continue;
+    const A = String(m.sociedad || ""), B = String(legajoSoc[String(m.legajo_id || "")] || "");
+    if (!A || !B || A === B) continue;
+    if (nucleo.has(A) && nucleo.has(B)) continue;   // ambas del núcleo → sin posición
+    const monto = Math.abs(toNum(m.monto));
+    if (monto < 0.01) continue;
+    add(A, B, m.moneda || "ARS", +monto);   // A (la caja que pagó) acreedor
+    add(B, A, m.moneda || "ARS", -monto);   // B (la sociedad empleadora) deudor
+  }
   const soc = sociedad ? String(sociedad).toLowerCase() : null;
   const out = [];
   for (const [s, porC] of Object.entries(acc)) {
@@ -2155,11 +2489,66 @@ export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades
   return out;
 }
 
+// Fondeo del NÚCLEO a las FONDEADAS (anillo 2: España/Colombia/Puertos), POR MES, en una moneda/año —
+// "la plata que puse este mes en cada negocio". Mismos criterios y convención de signo que lecturaInterco
+// (quien pone la plata = acreedor → invertido = +), pero resuelto por fecha (mes) y filtrado a
+// núcleo→fondeada (excluye Segui = externa/anillo 3, y núcleo↔núcleo). Devuelve { [fondeadaId]: number[12] }
+// (positivo = invertido ese mes; negativo = te devolvieron). Σ meses = el `neto` de lecturaInterco para esa
+// posición. Read-only. Nota: por-moneda (sin FX); consolidación a una moneda = a futuro.
+export function fondeoFondeadasMensual({ movs = [], comps = [], centros = [], sociedades = [] } = {}, { year = null, moneda = "ARS", desde = null } = {}) {
+  const empresaDe = new Map((centros || []).map(c => [String(c.id), String(c.empresa || "")]));
+  const nucleo   = new Set((sociedades || []).filter(s => /n[úu]cleo/i.test(String(s.anillo || ""))).map(s => String(s.id)));
+  const fondeada = new Set((sociedades || []).filter(s => /fondead/i.test(String(s.anillo || ""))).map(s => String(s.id)));
+  const out = {};
+  // Registra un aporte del núcleo A hacia la fondeada B (add(A,B,delta) de lecturaInterco), bucketeado por mes.
+  const rec = (A, B, fecha, mon, delta) => {
+    A = String(A || ""); B = String(B || "");
+    if (!nucleo.has(A) || !fondeada.has(B) || A === B) return;
+    if ((mon || "ARS") !== moneda) return;
+    const f = String(fecha || "");
+    if (year && f.slice(0, 4) !== String(year)) return;
+    // Es el FLUJO del mes (lo que puse ese mes), no el acumulado: la apertura (30/6, pre-go-live) es la
+    // posición inicial, no un movimiento → se excluye lo anterior a `desde`.
+    if (desde && f < desde) return;
+    const m = parseInt(f.slice(5, 7), 10) - 1;
+    if (m < 0 || m > 11 || Math.abs(delta) < 0.01) return;
+    (out[B] ??= new Array(12).fill(0))[m] += delta;
+  };
+  // 1a/1b. Fondeo vía gasto (A paga un gasto imputado a un CECO de B): comprobantes + gastos directos/CONTAB.
+  for (const r of comps) {
+    const sub = String(r.subtipo || "").toUpperCase();
+    if (sub !== "EGRESO" && sub !== "GASTO" && sub !== "EGRESO_FC") continue;
+    rec(r.sociedad, empresaDe.get(String(r.centro_costo || "")), r.fecha, r.moneda, Math.abs(toNum(r.total)));
+  }
+  for (const m of movs) {
+    if (esIgnorado(m)) continue;
+    const tipo = String(m.tipo || "").toUpperCase();
+    if (tipo === "INGRESO" || tipo === "COBRO") continue;
+    const esGasto = m.origen === "gasto_directo" || String(m.documento_id || "").startsWith("CONTAB-");
+    if (!esGasto) continue;
+    rec(m.sociedad, empresaDe.get(String(m.centro_costo || "")), m.fecha, m.moneda, Math.abs(toNum(m.monto)));
+  }
+  // 2. Pares INTERCOMPANIA (transferencias del núcleo): ambas patas, cada una con su fecha.
+  for (const { salida, entrada } of _pairMovs(movs, "INTERCOMPANIA")) {
+    if (!salida || !entrada) continue;
+    rec(salida.sociedad,  entrada.sociedad, salida.fecha,  salida.moneda,  +Math.abs(toNum(salida.monto)));
+    rec(entrada.sociedad, salida.sociedad,  entrada.fecha, entrada.moneda, -Math.abs(toNum(entrada.monto)));
+  }
+  // 3. Apertura interco (30/6, monto firmado). 4. Interco parkeadas (contrib = −monto). 5. Interusos de gestión.
+  for (const m of movs) {
+    if (esIgnorado(m)) continue;
+    if (m.origen === "interco_apertura")      rec(m.sociedad, m.contraparte_id, m.fecha, m.moneda, toNum(m.monto));
+    else if (m.origen === "interco_park")     rec(m.sociedad, m.contraparte_id, m.fecha, m.moneda, -toNum(m.monto));
+    else if (m.origen === "interuso_gestion") rec(m.sociedad, m.contraparte_id, m.fecha, m.moneda, toNum(m.monto));
+  }
+  return out;
+}
+
 // Extracto (ledger) de la posición interco de UNA sociedad contra UNA contraparte+moneda: cada
 // movimiento por fecha con su +/− y saldo corriente, más el saldo de apertura. Mismas reglas y
 // convención de signo que lecturaInterco (quien pone la plata = acreedor) → el saldo final coincide
 // con el `neto` de esa posición. Read-only, no toca datos.
-export function intercoLedger({ movs = [], comps = [], centros = [], sociedades = [] } = {}, { sociedad, contraparte, moneda = "ARS" } = {}) {
+export function intercoLedger({ movs = [], comps = [], centros = [], sociedades = [], legajoSoc = {} } = {}, { sociedad, contraparte, moneda = "ARS" } = {}) {
   const S = String(sociedad || "").toLowerCase();
   const C = String(contraparte || "").toLowerCase();
   const empresaDe = new Map((centros || []).map(c => [String(c.id), c.empresa]));
@@ -2230,6 +2619,15 @@ export function intercoLedger({ movs = [], comps = [], centros = [], sociedades 
     if (!nucleo.size || (nucleo.has(A) && nucleo.has(B))) continue;
     const meta = { tipo: "Interuso gestión", cuenta: m.cuenta_contable || "", centro: cc(m.centro_costo), ref: m.documento_id || m.id || "" };
     pair(A, B, m.moneda, m.fecha, m.concepto || "Interuso gestión", mm, meta);
+  }
+  // 6. SUELDOS pagados por cuenta de otra sociedad (por pagado). Espeja la fuente 6 de lecturaInterco.
+  if (nucleo.size) for (const m of movs) {
+    if (m.origen !== "sueldos" || esIgnorado(m)) continue;
+    const A = String(m.sociedad || ""), B = String(legajoSoc[String(m.legajo_id || "")] || "");
+    if (!A || !B || A === B || (nucleo.has(A) && nucleo.has(B))) continue;
+    const monto = Math.abs(toNum(m.monto)); if (monto < 0.01) continue;
+    const meta = { tipo: "Sueldo", prov: m.legajo_nombre || "", cuenta: m.cuenta_contable || "Sueldos", centro: cc(m.centro_costo), ref: m.documento_id || m.id || "" };
+    pair(A, B, m.moneda, m.fecha, m.concepto || `Sueldo ${m.legajo_nombre || ""}`.trim(), monto, meta);
   }
   const key = f => { const s = String(f || ""); if (/^\d{4}-/.test(s)) return s.slice(0, 10); const [d, mm, y] = s.split("/"); return y ? `${y}-${String(mm).padStart(2, "0")}-${String(d).padStart(2, "0")}` : s; };
   entries.sort((a, b) => key(a.fecha).localeCompare(key(b.fecha)));
@@ -2426,6 +2824,43 @@ export function agruparPlanes(rows = []) {
 export async function fetchFinanciaciones(sociedad) {
   const rows = await get("nb_financiaciones", sociedad ? { sociedad } : {});
   return agruparPlanes(rows);
+}
+
+// Ledger (extracto) del PASIVO de financiaciones de un bucket (plan_afip / prestamo) en una moneda:
+// el saldo es el capital adeudado. Apertura = capital original (o remanente al go-live en aperturas);
+// cada cuota PAGADA lo baja (−capital) por su fecha de pago; las PENDIENTES se muestran como evento
+// (delta 0, el capital ya estaba en la apertura) para ver si la cuota del mes se devengó/está por pagar.
+// `final` = capital pendiente (coincide con el saldo del bucket). Espeja el shape de intercoLedger.
+export function financiacionLedger(planes = [], { tipo = null, moneda = "ARS" } = {}) {
+  const hoy = new Date().toISOString().slice(0, 10);
+  const fmtN = v => (Number(v) || 0).toLocaleString("es-AR", { maximumFractionDigits: 2 });
+  const sel = (planes || []).filter(p =>
+    (p.moneda || "ARS") === moneda &&
+    (tipo == null || (tipo === "plan_afip" ? p.tipo === "plan_afip" : p.tipo !== "plan_afip")));
+  let opening = 0;
+  const entries = [];
+  for (const p of sel) {
+    const acr = p.acreedor_nombre || p.nro_plan || "—";
+    const N = p.n_cuotas || (p.cuotas || []).length;
+    for (const c of (p.cuotas || [])) {
+      if (c.estado === "cancelada") continue;
+      opening += c.capital;                              // capital no cancelado = deuda de apertura
+      if (c.estado === "pagada") {
+        entries.push({ fecha: c.fecha_pago || c.vto, delta: -c.capital,
+          concepto: `${acr} · Cuota ${c.nro_cuota}/${N} pagada`,
+          sub: `capital ${fmtN(c.capital)} · interés ${fmtN(c.interes)}` });
+      } else {
+        const dev = c.vto && String(c.vto) <= hoy;       // vencida = ya devengada (P&L por vto)
+        entries.push({ fecha: c.vto, delta: 0, pend: true,
+          concepto: `${acr} · Cuota ${c.nro_cuota}/${N} ${dev ? "devengada · pendiente de pago" : "programada"}`,
+          sub: `capital ${fmtN(c.capital)} · interés ${fmtN(c.interes)}` });
+      }
+    }
+  }
+  entries.sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)));
+  let saldo = opening;
+  for (const e of entries) { saldo += e.delta; e.saldo = saldo; }
+  return { opening, entries, final: saldo };
 }
 
 /**

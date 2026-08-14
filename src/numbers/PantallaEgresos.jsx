@@ -949,7 +949,10 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
   };
 
   const handlePago = async (data) => {
-    const egreso = egresos.find(e => e.id === data.egresoId);
+    // En "Guardar y pagar" el egreso recién se creó y todavía NO está en `egresos` (cargarEgresos es
+    // posterior) → find() daría undefined y la moneda/cuenta/centro caían al default ("ARS"). `showPago`
+    // ES el egreso que se está pagando (con su moneda real) → fallback confiable en ambos flujos.
+    const egreso = egresos.find(e => e.id === data.egresoId) || showPago;
     const ccHeredado = egreso?.lineas?.find(l => l.cc)?.cc ?? "";
     try {
       await appendPago({

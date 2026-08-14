@@ -50,15 +50,14 @@ const NOV_FP_BUCKET = {
 const rowKeyDe = (legajo_id, sede_id) => `${legajo_id || ""}__${sede_id || ""}`;
 
 // Base sobre la que se aplica el % de objetivo grupal (regla de negocio, depende del rol):
-//  - coaches: horas (normales + feriado) + objetivos individuales (asignado).
-//  - front/fijo (encargado, ventas, limpieza): sueldo básico + feriado.
-// El feriado del front se carga como novedad (no es campo de la fila), así que su monto NO
-// entra acá; para front la base efectiva es el sueldo básico.
-function baseGrupalDe(rol, { horasMonto, feriadosMonto, asignado, sueldoBase }) {
-  if (ROLES_LIMP.includes(rol)) return 0;   // LIMPIEZA está EXENTA de objetivos (individual y grupal)
-  return ROLES_COACHES.includes(rol)
-    ? horasMonto + feriadosMonto + asignado
-    : sueldoBase + feriadosMonto;
+//  - Coach Senior y Coach: horas regulares + feriado + domingo + objetivos individuales (asignado).
+//  - Encargado y Ventas (front): SOLO sueldo básico. El feriado del front viene como novedad (texto
+//    libre), no como campo de la fila → se EXCLUYE a propósito (cruzarlo sería frágil, decisión del usuario).
+//  - Yoga, Huergo A/B y Limpieza: EXENTOS de la comisión grupal (base 0).
+function baseGrupalDe(rol, { horasMonto, feriadosMonto, domingosMonto, asignado, sueldoBase }) {
+  if (rol === "COACH_SENIOR" || rol === "COACH") return horasMonto + feriadosMonto + domingosMonto + asignado;
+  if (rol === "ENCARGADO" || rol === "VENTAS")   return sueldoBase;
+  return 0;   // Yoga, Huergo A/B, Limpieza
 }
 
 // Orden de visualización: primero por rol (Encargados → Vendedores → Limpieza → Coaches),
@@ -235,6 +234,40 @@ function ModalLabel({ children }) {
   return <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>{children}</label>;
 }
 
+// Candado único de liquidación cerrada (mismo diseño que HQ): un 🔒 que abre un modal de
+// confirmación para reabrir. Si NO está cerrada → no muestra nada. Reemplaza el doble candado.
+function ReabrirLock({ empl, onReabrir, reabriendo }) {
+  const [confirm, setConfirm] = useState(false);
+  if (!empl.cerrada) return null;
+  return (
+    <>
+      <button onClick={(e) => { e.stopPropagation(); setConfirm(true); }}
+        title="Cerrada — click para reabrir (vuelve a borrador; no toca los pagos)"
+        style={{ marginLeft: 8, fontSize: 12, color: T.green, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+        🔒
+      </button>
+      {confirm && (
+        <div onClick={() => setConfirm(false)} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, fontFamily: T.font }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: 420, padding: 22, boxShadow: "0 12px 40px rgba(0,0,0,.25)" }}>
+            <h3 style={{ margin: "0 0 8px", fontSize: 16, fontWeight: 700, color: T.text }}>🔓 Reabrir liquidación — {empl.legajo_nombre}</h3>
+            <p style={{ margin: "0 0 16px", fontSize: 13, color: T.muted, lineHeight: 1.5 }}>
+              Vuelve a <strong>borrador</strong> para reeditarla y cerrarla de nuevo. Los pagos ya
+              registrados <strong>no se tocan</strong> (podés seguir pagando).
+            </p>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={() => setConfirm(false)} style={BTN_SECONDARY}>Cancelar</button>
+              <button disabled={reabriendo} onClick={async () => { setConfirm(false); await onReabrir(empl.legajo_id, empl.legajo_nombre); }}
+                style={{ background: T.blue, color: "#fff", border: "none", borderRadius: 7, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: reabriendo ? "default" : "pointer", opacity: reabriendo ? 0.5 : 1 }}>
+                Reabrir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function ctaLabel(c, sociedades) {
   const soc = sociedades.find(s => s.id === c.sociedad)?.nombre ?? c.sociedad;
   const mon = c.moneda !== "ARS" ? ` (${c.moneda})` : "";
@@ -406,8 +439,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   // Reabrir: vuelve a "borrador" TODAS las liquidaciones cerradas del legajo en el
   // período (una por sede, coaches multi-sede incluidos) para poder editar/re-cerrar.
   const [reabriendo, setReabriendo] = useState(false);
-  const handleReabrir = async (legajo_id, legajo_nombre) => {
-    if (!window.confirm(`¿Reabrir la liquidación de ${legajo_nombre}? Vuelve a borrador: vas a poder editarla y tenés que volver a cerrarla para que los cambios (por ej. novedades nuevas) se congelen en el recibo.`)) return;
+  const handleReabrir = async (legajo_id, legajo_nombre) => {   // la confirmación la maneja ReabrirLock (modal)
     setReabriendo(true);
     try {
       const sedeIds = [...new Set(rows.filter(r => r.legajo_id === legajo_id).map(r => r.sede_id ?? ""))];
@@ -520,7 +552,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     const os       = Number(row.q_one_shot) || 0,     osMonto       = os * tarifaOS;
     const asignado  = Number(row.asignado) || 0;
     const cGrupoPct = Number(row.c_grupo_pct) || 0;
-    const cGrupoMonto = baseGrupalDe(row.rol, { horasMonto, feriadosMonto, asignado, sueldoBase: fijo }) * (cGrupoPct / 100);
+    const cGrupoMonto = baseGrupalDe(row.rol, { horasMonto, feriadosMonto, domingosMonto, asignado, sueldoBase: fijo }) * (cGrupoPct / 100);
     const total = fijo + horasMonto + feriadosMonto + domingosMonto + yogaMonto + runningMonto
                 + cdpCoachMonto + cdpFrontMonto + osMonto + asignado + cGrupoMonto;
     return { tarifaHora, tCdpCoach, tCdpFront, tarifaOS, tarifaDom, tarifaYoga, tarifaRun, fijo,
@@ -829,6 +861,12 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         if (isCerrada(r.estado)) map[ek].cerrada = true;
       }
 
+      // Efectivo CONGELADO de una fila CERRADA = escalar `monto_efectivo` (líneas de pago en
+      // efectivo, ya con redondeo) + sus novedades en efectivo (abajo). Es la fuente estable del
+      // pendiente de una liq cerrada; usarlo evita recalcular el efectivo del roster EN VIVO
+      // (horas × tarifas actuales), que deriva y muestra parciales fantasma en coaches ya pagados.
+      if (isCerrada(r.estado)) map[ek]._efCong = (map[ek]._efCong || 0) + (Number(r.monto_efectivo) || 0);
+
       // Novedades de esta fila (extra que suma). Van al total/pendiente del empleado y al
       // bucket de su forma de pago (para que aparezcan como pagables en Paso 5). El split del
       // sueldo (total_sueldo) NO las incluye: se congelan como líneas tipo "novedad" aparte.
@@ -844,14 +882,26 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
           map[ek].total_nov += monto;
           const b = NOV_FP_BUCKET[n.forma_pago] || "efectivo";
           if (b !== "efectivo" && !isCerrada(r.estado)) map[ek][`monto_${b}`] += monto;
+          // Novedad en efectivo de una fila cerrada → suma al efectivo congelado (no está en el escalar).
+          if (b === "efectivo" && isCerrada(r.estado)) map[ek]._efCong = (map[ek]._efCong || 0) + monto;
         }
         map[ek].novedades.push(...novsR);
       }
     });
     const arr = Object.values(map)
       .map(e => {
-        const efectivo  = Math.max(0, e.total - e.monto_haberes - e.monto_deposito - e.monto_transferencia);
-        return { ...e, monto_efectivo: efectivo, pendiente: e.total - e.total_pagado };
+        // Cerrada → efectivo CONGELADO (lo que se liquidó y hay que pagar en cash). Borrador →
+        // efectivo en vivo = remanente del total. Evita el parcial fantasma por recálculo del roster.
+        const efectivo = e.cerrada
+          ? (Number(e._efCong) || 0)
+          : Math.max(0, e.total - e.monto_haberes - e.monto_deposito - e.monto_transferencia);
+        // Cerrada → el pendiente (columna + botón Pagar) se mide contra el total CONGELADO
+        // (baldes de banco + efectivo congelado), no el total del roster en vivo, que deriva y
+        // muestra pendientes fantasma en coaches ya pagados. Borrador → total en vivo.
+        const totalPend = e.cerrada
+          ? (e.monto_haberes + e.monto_deposito + e.monto_transferencia + efectivo)
+          : e.total;
+        return { ...e, monto_efectivo: efectivo, pendiente: totalPend - e.total_pagado };
       });
     return sortByRol(arr);
   }, [rows, legajos, pagos, calcTotal, novsByRowKey]);
@@ -1017,39 +1067,50 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       // entre las sedes del empleado según el total de cada una (cada id_liq queda balanceado
       // y el devengado se imputa al centro de costo donde se ganó). Secuencial: GAS pierde
       // escrituras concurrentes.
-      // Base del prorrateo = suma de los totales de fila SIN redondeo (mismo criterio que rowTotal).
-      // Usar empl.total_sueldo (que INCLUYE el redondeo del efectivo) daba share<1 en un empleado de
-      // una sola sede → escalaba mal los haberes (200.000 → 199.994). Con esto, una sola sede = share 1.
-      const totalSueldoPorLegajo = {};
-      const filasPorLegajo = {};
+      // Cada fila se resuelve UNA sola vez (lineasConceptoDeRow es lo más caro del cierre) y se cachea
+      // con su key + total, para elegir la sede casa y repartir el blanco sin recomputar.
+      const sedeDeLegajo = new Map(legajos.map(l => [String(l.id), String(l.sede_id || "")]));
+      const rowRes = {};        // rowKey → { lineas, total, header }
+      const rowsByLegajo = {};  // legajo_id → [{ r, k, tot }]
       for (const r of rows) {
-        totalSueldoPorLegajo[r.legajo_id] = (totalSueldoPorLegajo[r.legajo_id] || 0) + lineasConceptoDeRow(r, "cerrado").total;
-        filasPorLegajo[r.legajo_id] = (filasPorLegajo[r.legajo_id] || 0) + 1;
+        const k = rowKeyDe(r.legajo_id, r.sede_id);
+        const res = lineasConceptoDeRow(r, "cerrado");
+        rowRes[k] = res;
+        (rowsByLegajo[r.legajo_id] ??= []).push({ r, k, tot: res.total });
+      }
+      // Haberes 1 a 1: el "en blanco" del legajo va COMPLETO a su sede casa (leg.sede_id; si ese mes no
+      // trabajó ahí, la de mayor total), en un solo renglón — no se fragmenta por sede. El efectivo de
+      // cada sede compensa (la casa queda con menos efectivo). Fallback robusto: si el blanco supera el
+      // total de la casa, el excedente derrama a las otras sedes por total desc (no debería pasar: el
+      // coach siempre genera lo más grande en su sede casa). Monotributo se sacó del flujo de Sedes.
+      const habByKey = {};
+      for (const [lid, rs] of Object.entries(rowsByLegajo)) {
+        const blanco = Number((pagoDraft[lid] || {}).monto_haberes) || 0;
+        const homeSede = sedeDeLegajo.get(String(lid)) || "";
+        const casa = rs.find(o => String(o.r.sede_id) === homeSede)
+          || rs.reduce((a, b) => (b.tot > a.tot ? b : a), rs[0]);
+        const orden = [...rs].sort((a, b) => a.k === casa.k ? -1 : b.k === casa.k ? 1 : b.tot - a.tot);
+        let rem = blanco;
+        for (const o of orden) {
+          const put = Math.min(rem, o.tot);
+          habByKey[o.k] = put; rem -= put;
+        }
+        if (rem > 0.005) habByKey[casa.k] = (habByKey[casa.k] || 0) + rem;   // sobrante (blanco > Σtotales, raro) → a la casa
       }
       const entries = [];
       for (const r of rows) {
-        const { lineas, total: rowTotal, header } = lineasConceptoDeRow(r, "cerrado");
-        const empl      = empls.find(e => e.legajo_id === r.legajo_id);
-        // El reparto de forma de pago es del SUELDO (sin redondeo), no de las novedades.
-        const emplTotal = totalSueldoPorLegajo[r.legajo_id] || rowTotal;
-        // Sin sueldo para prorratear (ej. alguien que solo cobra por novedad, sin base ni horas):
-        // share=0 pisaba Haberes/Monotributo con $0 aunque pagoDraft tuviera plata real cargada
-        // (esa plata quedaba en la novedad pero sin línea de pago que la respalde). Reparto
-        // parejo entre las filas del legajo en ese caso — con una sola fila, share=1 (paga todo ahí).
-        const share     = emplTotal > 0 ? rowTotal / emplTotal : 1 / (filasPorLegajo[r.legajo_id] || 1);
-        const d    = pagoDraft[r.legajo_id] || {};
-        const habRow   = Math.round((Number(d.monto_haberes)       || 0) * share);
-        const monoRow  = Math.round((Number(d.monto_transferencia) || 0) * share);
+        const rowKey = rowKeyDe(r.legajo_id, r.sede_id);
+        const { lineas, total: rowTotal, header } = rowRes[rowKey];
+        const habRow   = Math.round(habByKey[rowKey] || 0);
         // Novedades de esta fila: las pagadas EN EFECTIVO entran al redondeo (la plata EN MANO debe quedar redonda).
-        const novsR    = novsByRowKey[rowKeyDe(r.legajo_id, r.sede_id)] || [];
+        const novsR    = novsByRowKey[rowKey] || [];
         const novEfectivo = novsR.reduce((s, n) => ((n.forma_pago || "efectivo") === "efectivo" ? s + (Number(n.monto) || 0) : s), 0);
-        const eftExacto  = Math.max(0, rowTotal - habRow - monoRow);
+        const eftExacto  = Math.max(0, rowTotal - habRow);     // el efectivo compensa el blanco de esta sede
         const cashExacto = eftExacto + novEfectivo;            // efectivo del sueldo + novedades en efectivo
         const redondeo   = Math.ceil(cashExacto / 100) * 100 - cashExacto;  // ajuste para que la plata en mano sea múltiplo de $100
         const eftRow     = eftExacto + redondeo;               // efectivo base + ajuste (sumado a las novedades en efectivo → redondo)
         const pagos = [];
         if (habRow > 0)  pagos.push(lineaLiq(header, { tipo: "pago", concepto: FP_TIPO_LABEL.haberes,     cuenta_contable: "Sueldos", forma_pago: "haberes",     sociedad_id: sociedadDeFormaPago("haberes", "", r.sociedad_id),     monto: habRow }));
-        if (monoRow > 0) pagos.push(lineaLiq(header, { tipo: "pago", concepto: FP_TIPO_LABEL.monotributo, cuenta_contable: "Sueldos", forma_pago: "monotributo", sociedad_id: sociedadDeFormaPago("monotributo", "", r.sociedad_id), monto: monoRow }));
         if (eftRow > 0)  pagos.push(lineaLiq(header, { tipo: "pago", concepto: FP_TIPO_LABEL.efectivo,    cuenta_contable: "Sueldos", forma_pago: "efectivo",    sociedad_id: "beta",                                              monto: eftRow }));
         // Novedades de esta fila (extra): se congelan como líneas tipo "novedad", cada una con
         // SU cuenta contable y forma de pago. No entran en el reparto del sueldo de arriba.
@@ -2033,7 +2094,6 @@ function PasoFormaPago({ empls, pagoDraft, onChangePago, onAtras, onContinuar, o
                 onToggle={toggleEnSet(setFSede)} onSetAll={arr => setFSede(new Set(arr))} />
               <th style={TH({ width: 110, textAlign: "right" })}>Total</th>
               <th style={TH({ width: 100, textAlign: "right" })}>Haberes</th>
-              <th style={TH({ width: 100, textAlign: "right" })}>Monotributo</th>
               <th style={TH({ width: 100, textAlign: "right" })}>Efectivo</th>
             </tr>
           </thead>
@@ -2041,26 +2101,17 @@ function PasoFormaPago({ empls, pagoDraft, onChangePago, onAtras, onContinuar, o
             {emplsFilt.map((empl, i) => {
               const d    = pagoDraft[empl.legajo_id] || {};
               const hab  = Number(d.monto_haberes)       || 0;
-              // "Monotributo" se persiste en la columna monto_transferencia (factura monotributo).
-              const mono = Number(d.monto_transferencia) || 0;
-              // Haberes/Monotributo son el reparto del SUELDO (inputs). El Efectivo es el remanente
-              // del TOTAL (incluye las novedades): así las 3 columnas suman el total mostrado y la
-              // novedad (que se paga en su forma, normalmente efectivo) no queda fuera del reparto.
-              const eft  = Math.max(0, Math.ceil((empl.total - hab - mono) / 100) * 100);  // efectivo en mano → redondeado SIEMPRE hacia arriba a $100
-              const sobra = hab + mono > empl.total;
+              // Haberes es el reparto en blanco del SUELDO (input). El Efectivo es el remanente del
+              // TOTAL (incluye las novedades): así las columnas suman el total mostrado y la novedad
+              // (que se paga en su forma, normalmente efectivo) no queda fuera del reparto.
+              const eft  = Math.max(0, Math.ceil((empl.total - hab) / 100) * 100);  // efectivo en mano → redondeado SIEMPRE hacia arriba a $100
+              const sobra = hab > empl.total;
               const nov  = empl.total_nov || 0;
               return (
                 <tr key={empl.legajo_id} style={{ background: i % 2 === 0 ? T.card : T.bg, borderBottom: `1px solid ${T.border}` }}>
                   <td style={{ padding: "5px 8px", fontWeight: 600 }}>
                     {empl.legajo_nombre}
-                    {empl.cerrada && <span title="Liquidación cerrada" style={{ marginLeft: 6, fontSize: 11, color: T.green }}>🔒</span>}
-                    {empl.cerrada && (
-                      <button onClick={() => onReabrir(empl.legajo_id, empl.legajo_nombre)} disabled={reabriendo}
-                        title="Reabrir liquidación (vuelve a borrador)"
-                        style={{ marginLeft: 4, background: "none", border: "none", cursor: reabriendo ? "default" : "pointer", fontSize: 11, color: T.blue, opacity: reabriendo ? 0.5 : 1 }}>
-                        🔓
-                      </button>
-                    )}
+                    <ReabrirLock empl={empl} onReabrir={onReabrir} reabriendo={reabriendo} />
                   </td>
                   <td style={{ padding: "5px 8px", color: T.muted }}>{empl.rol}</td>
                   <td style={{ padding: "5px 8px", color: T.muted, fontSize: 11 }}>{empl.sedes.join(", ") || "—"}</td>
@@ -2072,14 +2123,10 @@ function PasoFormaPago({ empls, pagoDraft, onChangePago, onAtras, onContinuar, o
                     <input style={MON()} value={d.monto_haberes ?? ""} placeholder="0"
                       onChange={e => onChangePago(empl.legajo_id, "monto_haberes", parseFloat(e.target.value) || 0)} />
                   </td>
-                  <td style={{ padding: "4px 8px", textAlign: "right" }}>
-                    <input style={MON()} value={d.monto_transferencia ?? ""} placeholder="0"
-                      onChange={e => onChangePago(empl.legajo_id, "monto_transferencia", parseFloat(e.target.value) || 0)} />
-                  </td>
                   <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700,
                     color: sobra ? T.red : T.muted }}>
                     {sobra
-                      ? `⚠ ${fmtMoney(hab + mono - empl.total)} de más`
+                      ? `⚠ ${fmtMoney(hab - empl.total)} de más`
                       : fmtMoney(eft)}
                   </td>
                 </tr>
@@ -2184,7 +2231,11 @@ function statsDesdePagoDraft(empls, pagoDraft) {
     const d    = pagoDraft[empl.legajo_id] || {};
     const hab  = Number(d.monto_haberes)       || 0;
     const mono = Number(d.monto_transferencia) || 0;
-    const eft  = Math.max(0, Math.ceil((empl.total - hab - mono) / 100) * 100);
+    // Cerrada → efectivo CONGELADO (empl.monto_efectivo, ya = lo liquidado). Borrador → remanente
+    // en vivo redondeado. Así una liq cerrada no muestra pendiente fantasma por recálculo del roster.
+    const eft  = empl.cerrada
+      ? (Number(empl.monto_efectivo) || 0)
+      : Math.max(0, Math.ceil((empl.total - hab) / 100) * 100);   // monotributo salió de Sedes → mismo criterio que el cierre
     s.haberes.total     += hab;
     s.monotributo.total += mono;
     s.efectivo.total    += eft;
@@ -2347,16 +2398,8 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, on
                 <td style={TD({ fontWeight: 600 })}>
                   <div>
                     {empl.legajo_nombre}
-                    {empl.cerrada && <span title="Liquidación cerrada" style={{ marginLeft: 6, fontSize: 11, color: T.green }}>🔒</span>}
-                    {empl.cerrada && (
-                      <button onClick={() => onReabrir(empl.legajo_id, empl.legajo_nombre)} disabled={reabriendo}
-                        title="Reabrir liquidación (vuelve a borrador)"
-                        style={{ marginLeft: 4, background: "none", border: "none", cursor: reabriendo ? "default" : "pointer", fontSize: 11, color: T.blue, opacity: reabriendo ? 0.5 : 1 }}>
-                        🔓
-                      </button>
-                    )}
+                    <ReabrirLock empl={empl} onReabrir={onReabrir} reabriendo={reabriendo} />
                   </div>
-                  {empl.cbu && <div style={{ fontSize: 10, color: T.dim }}>CBU: {empl.cbu}</div>}
                 </td>
                 <td style={TD({ fontSize: 11, color: T.dim })}>{empl.sedes.join(", ") || "—"}</td>
                 <td style={TD({ textAlign: "right", fontWeight: 700, color: T.blue })}>{fmtMoney(empl.total)}</td>

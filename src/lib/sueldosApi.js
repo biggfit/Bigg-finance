@@ -4,6 +4,7 @@
 // Proxy local/Vercel: /api/sueldos
 
 import { stamp } from "./auth";
+import { bustToken, forzarRefresco } from "./cacheBust";
 
 const BASE    = "/api/sueldos";
 const TOKEN   = import.meta.env.VITE_SHEETS_TOKEN ?? "";
@@ -27,7 +28,9 @@ function cacheGet(key) {
 // ── Helpers HTTP ──────────────────────────────────────────────────────────────
 
 async function get(sheet, params = {}, base = BASE, { retries = 2, retryDelayMs = 1200 } = {}) {
-  const qs = new URLSearchParams({ resource: sheet, token: TOKEN, ...params }).toString();
+  // `_cb` (solo en la ventana de refresco) saltea la caché de borde del CDN — ver cacheBust.js.
+  const cb = bustToken();
+  const qs = new URLSearchParams({ resource: sheet, token: TOKEN, ...params, ...(cb ? { _cb: cb } : {}) }).toString();
   const key = `${base}?${qs}`;
   const hit = cacheGet(key);
   if (hit) return hit;
@@ -85,6 +88,8 @@ async function post(payload, base = BASE, { retries = 2, retryDelayMs = 1200 } =
       throw new Error(`Error del servidor (${res.status}): ${text.slice(0, 120)}`);
     }
     if (data?.error) throw new Error(data.error);
+    // Ventana de refresco: tras escribir, este navegador salta el borde unos segundos → ve su cambio.
+    forzarRefresco();
     return data;
   }
 }
@@ -592,12 +597,63 @@ export const pagoTipoABucket = (tipo) => {
   return "monotributo";  // monotributo | transferencia_financiera
 };
 
-// Devengado de una liquidación desglosado por (balde de forma, sociedad).
-// HQ guarda líneas (formas_pago) con `sociedad_id` por línea de monotributo; Sedes usa
-// los escalares monto_*. Única fuente de la derivación de sociedad por forma.
+// Cuenta contable del P&L por concepto del desglose CONGELADO de la liquidación.
+// El sueldo se reparte a estas cuentas leyendo el desglose por concepto (no la forma de
+// pago ni re-cerrar). Lo no listado → "Sueldos". `campo` = el field del liq parseado.
+const CONCEPTO_CUENTA = {
+  sueldo_base:  "Sueldos",
+  horas:        "Sueldos",
+  feriados:     "Sueldos",
+  domingos:     "Sueldos",
+  yoga:         "Sueldos",
+  running:      "Sueldos",
+  redondeo:     "Sueldos",
+  programacion: "Sueldos",   // legacy (comisión del encargado, hoy es novedad)
+  cdp:          "Incentivos", // legacy CDP único
+  cdp_coach:    "Incentivos",
+  cdp_front:    "Incentivos",
+  one_shot:     "Incentivos",
+  objetivos:    "Comisiones",
+  bonos:        "Comisiones",  // "Objetivo grupal"
+};
+
+// Mezcla de cuentas (Sueldos/Incentivos/Comisiones…) del desglose por concepto congelado.
+// Devuelve { mix: {cuenta: monto}, total }. total 0 → la liq no trae desglose (HQ legacy)
+// y el caller cae al comportamiento viejo ("Sueldos" entero).
+function mezclaCuentasConcepto(liq) {
+  const mix = {};
+  let total = 0;
+  for (const [campo, cuenta] of Object.entries(CONCEPTO_CUENTA)) {
+    const v = campo === "sueldo_base" ? (Number(liq.sueldo_base) || 0) : (Number(liq[`${campo}_total`]) || 0);
+    if (v <= 0) continue;
+    mix[cuenta] = (mix[cuenta] || 0) + v;
+    total += v;
+  }
+  return { mix, total };
+}
+
+// Devengado de una liquidación desglosado por (balde de forma, sociedad, CUENTA).
+// La CUENTA sale del desglose por concepto (Sueldos/Incentivos/Comisiones); la SOCIEDAD y el
+// balde salen de la forma de pago (sin cambios). El monto de cada forma se reparte entre las
+// cuentas con el mismo ratio que el desglose por concepto (proporcional; la última cuenta se
+// lleva el remanente para no perder centavos). Punto 4: dividir Sueldos vs Comisiones/Incentivos
+// en el P&L sin re-cerrar (read-side). No mueve sociedad → deuda/931/cargas/cashflow idénticos.
+// HQ guarda líneas (formas_pago) con `sociedad_id` por línea de monotributo; Sedes usa los escalares monto_*.
 export function devengadoPorFormaYSociedad(liq) {
   const out = [];
-  // Sueldo (cuenta "Sueldos"): por línea (HQ) o por escalares (Sedes).
+  const { mix, total: mixTot } = mezclaCuentasConcepto(liq);
+  const cuentasMix = Object.keys(mix);
+  const pushSueldo = (bucket, sociedad, total) => {
+    if (total <= 0) return;
+    if (mixTot <= 0) { out.push({ bucket, sociedad, total, cuenta_contable: "Sueldos" }); return; }
+    let acc = 0;
+    cuentasMix.forEach((cuenta, i) => {
+      const monto = i === cuentasMix.length - 1 ? total - acc : Math.round(total * (mix[cuenta] / mixTot));
+      acc += monto;
+      if (monto !== 0) out.push({ bucket, sociedad, total: monto, cuenta_contable: cuenta });
+    });
+  };
+  // Sueldo: por línea (HQ) o por escalares (Sedes).
   if (Array.isArray(liq.formas_pago) && liq.formas_pago.length) {
     for (const l of liq.formas_pago) {
       const total = Number(l.importe) || 0;
@@ -609,12 +665,12 @@ export function devengadoPorFormaYSociedad(liq) {
       else if (l.tipo === "transferencia_financiera")  sociedad = "beta";
       else if (l.tipo === "haberes")                   sociedad = liq.sociedad_id || "";
       else                                             sociedad = "beta";  // depósito, efectivo
-      out.push({ bucket: pagoTipoABucket(l.tipo), sociedad, total, cuenta_contable: "Sueldos" });
+      pushSueldo(pagoTipoABucket(l.tipo), sociedad, total);
     }
   } else {
     for (const { bucket, campo } of SALARY_BUCKETS) {
       const total = Number(liq[campo]) || 0;
-      if (total > 0) out.push({ bucket, sociedad: sociedadDeForma(liq, bucket), total, cuenta_contable: "Sueldos" });
+      if (total > 0) pushSueldo(bucket, sociedadDeForma(liq, bucket), total);
     }
   }
   // Novedades congeladas: cada una a SU cuenta contable (Autónomos, Monotributo…).
@@ -900,89 +956,31 @@ export async function deletePago(id, nb_movimiento_id) {
   if (movId) await post({ action: "del", sheet: "nb_movimientos", id: movId }, BASE_NB);
 }
 
-// ── CARGAS SOCIALES ───────────────────────────────────────────────────────────
-
-export async function fetchCargasSociales(mes, anio) {
-  const rows = await get("su_cargas_sociales", { mes, anio });
-  return (Array.isArray(rows) ? rows : []).map(r => ({
-    id:                  r.id,
-    mes:                 r.mes,
-    anio:                r.anio,
-    sociedad_id:         r.sociedad_id ?? "",
-    sociedad_nombre:     r.sociedad_nombre ?? "",
-    monto_total:         Number(r.monto_total) || 0,
-    distribucion:        (() => { try { return JSON.parse(r.distribucion_json || "{}"); } catch { return {}; } })(),
-    fecha_vto:           r.fecha_vto ?? "",
-    nb_comprobante_id:   r.nb_comprobante_id ?? "",
-    nb_movimiento_id:    r.nb_movimiento_id ?? "",
-    pagado:              String(r.pagado ?? "false").toLowerCase() === "true",
-  }));
-}
-
-export async function saveCargasSociales(data) {
-  const id = data.id ?? newId("CS");
-  const row = {
-    ...data,
-    id,
-    distribucion_json: JSON.stringify(data.distribucion ?? {}),
-  };
-  delete row.distribucion;
-  await post({ action: data.id ? "upd" : "add", sheet: "su_cargas_sociales", id, row });
-  return id;
-}
-
-/**
- * Registra el pago del F931. Crea nb_comprobantes + nb_movimientos en Numbers.
- */
-export async function pagarCargasSociales({
-  id, mes, anio, sociedad_id, sociedad_nombre, monto_total,
-  fecha, cuenta_bancaria_id, cuenta_bancaria_nombre,
-}) {
-  const concepto = `F931 ${sociedad_nombre} ${mes}/${anio}`;
-
-  // Egreso en Numbers (proveedor AFIP)
-  const compRow = {
-    sociedad:            sociedad_id,
-    fecha,
-    subtipo:             "EGRESO_FC",
-    contraparte_id:      "AFIP",
-    contraparte_nombre:  "AFIP",
-    moneda:              "ARS",
-    subtotal:            monto_total,
-    iva_rate:            0,
-    iva:                 0,
-    total:               monto_total,
-    nota:                concepto,
-    estado:              "pagado",
-    origen:              "sueldos",
-    created_at:          new Date().toISOString(),
-  };
-  const compRes = await post({ action: "add", sheet: "nb_comprobantes", row: compRow }, BASE_NB);
-  const nb_comprobante_id = compRes?.id ?? "";
-
-  // Movimiento de tesorería
-  const movRow = {
-    sociedad:        sociedad_id,
-    fecha,
-    tipo:            "PAGO",
-    cuenta_bancaria: cuenta_bancaria_id,
-    moneda:          "ARS",
-    monto:           -monto_total,
-    concepto,
-    documento_id:    nb_comprobante_id,
-    origen:          "sueldos",
-    created_at:      new Date().toISOString(),
-  };
-  const movRes = await post({ action: "add", sheet: "nb_movimientos", row: movRow }, BASE_NB);
-  const nb_movimiento_id = movRes?.id ?? "";
-
-  // Actualizar carga social como pagada
-  await post({
-    action: "upd", sheet: "su_cargas_sociales", id,
-    row: { pagado: "true", nb_comprobante_id, nb_movimiento_id },
-  });
-
-  return { nb_comprobante_id, nb_movimiento_id };
+// ── CARGAS SOCIALES — base de prorrateo ───────────────────────────────────────
+// El F931 (y el aporte sindical) se prorratea por los HABERES EN BLANCO de cada centro.
+// Fuente autoritativa = liquidaciones CERRADAS del mes (bucket "haberes"), agrupadas por centro
+// (= la sede del legajo). La ESCRITURA del comprobante (CxP) y la LECTURA del histórico viven en
+// numbersApi (nb_comprobantes) → sin hoja propia (su_cargas_sociales queda sin efecto, cero doble
+// escritura). Acá sólo derivamos la base desde el mundo Sueldos.
+export async function baseHaberesPorCentro(sociedadId, mes, anio) {
+  const liqs = await fetchLiquidacionesCerradas(anio);
+  const porCentro = {};
+  let total = 0;
+  for (const liq of liqs) {
+    if (Number(liq.mes) !== Number(mes) || Number(liq.anio) !== Number(anio)) continue;
+    // Los HQ_OWNER (socios) se pagan como autónomos → NO generan cargas sociales → fuera de la base.
+    if (String(liq.rol || "").toUpperCase() === "HQ_OWNER") continue;
+    for (const row of liquidacionToPnLRows(liq)) {
+      if (row.bucket !== "haberes") continue;                 // solo lo declarado en blanco
+      if (String(row.sociedad) !== String(sociedadId)) continue;
+      const m = Number(row.total) || 0;
+      if (m <= 0) continue;
+      const cc = row.centro_costo || "";
+      porCentro[cc] = (porCentro[cc] || 0) + m;
+      total += m;
+    }
+  }
+  return { porCentro, total };
 }
 
 // ── BIGG Eye ──────────────────────────────────────────────────────────────────

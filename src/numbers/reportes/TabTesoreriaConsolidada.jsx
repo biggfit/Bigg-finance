@@ -8,7 +8,7 @@ import {
   fetchSociedades,
   fetchMovTesoreria, fetchEgresos, fetchIngresos, fetchPagosCobros,
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto,
-  fetchFinanciaciones, fetchSocios, fetchSociosCC, fetchIntercoData, intercoLedger,
+  fetchFinanciaciones, fetchSocios, fetchSociosCC, fetchIntercoData, intercoLedger, primeCache,
 } from "../../lib/numbersApi";
 import { fetchLiquidacionesCerradas } from "../../lib/sueldosApi";
 import { fetchAll } from "../../lib/sheetsApi";        // Franquicias (read-only)
@@ -65,7 +65,21 @@ export default function TabTesoreriaConsolidada() {
     (async () => {
       setLoading(true); setError(null);
       try {
-        const [socs, movs, egs, ings, pcs, cbList, ctaList, ccList, liqsS, fin, sos, sosCC] = await Promise.all([
+        // Liquidaciones vive en el backend de Sueldos → en paralelo al batch de Numbers.
+        const liqsP = fetchLiquidacionesCerradas().catch(() => []);
+        // Batch: 9 hojas group-wide de Numbers en UNA llamada → los fetch de abajo salen de caché.
+        await primeCache([
+          { resource: "nb_sociedades" },
+          { resource: "nb_movimientos" },
+          { resource: "nb_comprobantes" },
+          { resource: "nb_cuentas_bancarias" },
+          { resource: "nb_cuentas" },
+          { resource: "nb_centros_costo" },
+          { resource: "nb_financiaciones" },
+          { resource: "nb_socios" },
+          { resource: "nb_socios_cc" },
+        ]);
+        const [socs, movs, egs, ings, pcs, cbList, ctaList, ccList, fin, sos, sosCC] = await Promise.all([
           fetchSociedades().catch(() => []),
           fetchMovTesoreria().catch(() => []),
           fetchEgresos().catch(() => []),
@@ -74,11 +88,11 @@ export default function TabTesoreriaConsolidada() {
           fetchCuentasBancarias().catch(() => []),
           fetchCuentas().catch(() => []),
           fetchCentrosCosto().catch(() => []),
-          fetchLiquidacionesCerradas().catch(() => []),
           fetchFinanciaciones().catch(() => []),
           fetchSocios().catch(() => []),
           fetchSociosCC().catch(() => []),
         ]);
+        const liqsS = await liqsP;
         if (cancelled) return;
         const activas = (Array.isArray(socs) ? socs : []).filter(s => {
           const a = s.activo;

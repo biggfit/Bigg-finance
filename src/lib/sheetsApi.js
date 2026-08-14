@@ -1,5 +1,6 @@
 // ─── Google Sheets API layer (via Apps Script Web App) ────────────────────────
 import { getFranchiseCurrencies } from "../data/franchisor";
+import { bustToken, forzarRefresco } from "./cacheBust";
 // Todas las operaciones de lectura/escritura pasan por acá.
 // Configurar en .env.local:
 //   VITE_SHEETS_API_URL=https://script.google.com/macros/s/.../exec
@@ -12,15 +13,36 @@ const TOKEN      = import.meta.env.VITE_SHEETS_TOKEN;
 // En prod: idem — Vercel reescribirá /api/sheets hacia el Apps Script
 const PROXY_BASE = "/api/sheets";
 
+// Caché en memoria (igual que numbersApi): `get("all")` es un agregado pesado que Tesorería
+// re-pide en CADA entrada (fuera del boot de App.jsx). Sin caché, cada navegación gatillaba un
+// round-trip al GAS. TTL 90s + dedup de requests en vuelo; toda escritura la invalida (ver post()).
+const _cache    = new Map();  // key → { data, ts }
+const _inflight = new Map();  // key → Promise
+const SHEETS_TTL = 90_000;
+
 /** GET a la Apps Script Web App (via proxy) */
 async function get(resource) {
   if (!CONFIGURED) throw new Error("VITE_SHEETS_API_URL no configurada");
-  const url = `${PROXY_BASE}?resource=${resource}&token=${encodeURIComponent(TOKEN)}`;
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  if (data.error) throw new Error(data.error);
-  return data;
+  // `_cb` (solo en la ventana de refresco) saltea la caché de borde del CDN — ver cacheBust.js.
+  const cb  = bustToken();
+  const url = `${PROXY_BASE}?resource=${resource}&token=${encodeURIComponent(TOKEN)}${cb ? `&_cb=${cb}` : ""}`;
+  const key = url;
+
+  const cached = _cache.get(key);
+  if (cached && Date.now() - cached.ts < SHEETS_TTL) return cached.data;
+  if (_inflight.has(key)) return _inflight.get(key);
+
+  const req = (async () => {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    _cache.set(key, { data, ts: Date.now() });
+    return data;
+  })();
+  _inflight.set(key, req);
+  req.finally(() => _inflight.delete(key));
+  return req;
 }
 
 /** POST a la Apps Script Web App (via proxy) */
@@ -34,6 +56,10 @@ async function post(body) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   if (data.error) throw new Error(data.error);
+  // Toda escritura afecta el agregado "all" (comps/saldos) → invalidar toda la caché de sheets.
+  _cache.clear();
+  // Ventana de refresco: tras escribir, este navegador salta el borde unos segundos → ve su cambio.
+  forzarRefresco();
   return data;
 }
 
@@ -265,25 +291,13 @@ export async function saveRecordatorio({ frId, fecha, ccMes, ccAnio, to, frName,
 }
 
 // ─── Tipos de Cambio ─────────────────────────────────────────────────────────
-
-/**
- * Carga todos los tipos de cambio desde Sheets.
- * @returns {{ [yearMonth: string]: { yearMonth: string, arsUSD: number, eurUSD: number } }}
- */
-export async function fetchTiposCambio() {
-  try {
-    return await get("tiposCambio");
-  } catch (e) { console.error("[fetchTiposCambio]", e); return {}; }
-}
-
-/**
- * Guarda (crea o actualiza) el tipo de cambio de un mes.
- * @param {string} yearMonth  e.g. "2026-04"
- * @param {{ arsUSD: number, eurUSD: number }} tc
- */
-export async function saveTipoCambio(yearMonth, tc) {
-  return post({ action: "saveTC", yearMonth, tc });
-}
+// El maestro del TC ya NO vive acá: se mudó a Numbers (hoja nb_tipos_cambio) porque es un
+// dato de todo el grupo y no solo de franquicias. Se edita en Numbers › Maestros › Tipos de
+// Cambio y se lee con `fetchTiposCambio` de numbersApi — Franquicias es consumidor, no dueño.
+//
+// La hoja vieja `tipos_cambio` y los handlers saveTC/tiposCambio del GAS quedan en pie como
+// respaldo de la migración; ya nadie los lee ni los escribe. Se limpian cuando el consolidado
+// de Numbers esté enganchado y confirmado.
 
 // ─── Mail ─────────────────────────────────────────────────────────────────────
 

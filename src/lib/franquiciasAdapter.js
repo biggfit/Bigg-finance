@@ -21,7 +21,7 @@ const EMPRESA_SOCIEDAD = Object.fromEntries(Object.entries(SOCIEDAD_EMPRESA).map
 // Sufijo del tipo de comprobante (franquicias) → cuenta contable en el chart consolidado de Numbers.
 // Confirmado con el usuario (13/7): FEE es "Regalias s/Ventas"; PAUTA es "Acciones de Mkt" (BIGG le
 // vende pauta a los franquiciados); INTERUSOS es costo que pega en margen; SPONSORS/OTROS directo.
-const FRANQ_CUENTA = { FEE: "Regalias s/Ventas", INTERUSOS: "Interusos", PAUTA: "Acciones de Mkt", SPONSORS: "Sponsor", SPONSOR: "Sponsor", OTROS: "Otros Ingresos" };
+const FRANQ_CUENTA = { FEE: "Regalias s/Ventas", INTERUSOS: "Interusos", PAUTA: "Pauta", SPONSORS: "Sponsor", SPONSOR: "Sponsor", OTROS: "Otros Ingresos" };
 const MONEDAS = ["ARS", "USD", "EUR"];
 // IVA por sociedad EMISORA (los importes de franquicia vienen CON IVA cuando corresponde): Ñako y
 // Gestión Deportiva y Wellness al 21%; BIGG FIT LLC sin IVA. Lineal por emisor. Habilita la vista
