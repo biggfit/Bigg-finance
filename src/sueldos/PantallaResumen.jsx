@@ -707,8 +707,9 @@ function NotaCell({ pago, onSave }) {
           if (e.key === "Enter") commit();
           else if (e.key === "Escape") setEditing(false);
         }}
-        style={{ width: "100%", fontSize: 14, fontFamily: T.font, color: T.text,
-          border: `1px solid ${T.blue}`, borderRadius: 4, padding: "2px 6px", boxSizing: "border-box" }}
+        style={{ width: "100%", fontSize: 14, fontFamily: T.font, color: T.text, background: "#fff",
+          colorScheme: "light", border: `1px solid ${T.blue}`, borderRadius: 4, padding: "2px 6px",
+          boxSizing: "border-box" }}
       />
     );
   }
