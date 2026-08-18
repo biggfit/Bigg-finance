@@ -226,12 +226,15 @@ export default function PantallaResumen({ pais = "AR" }) {
         <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>Resumen de liquidación</h2>
         {cerrada && (
           resumen?.desyncItems?.length ? (
-            <span title={`Novedades cargadas/editadas después del cierre que NO están en este recibo — reabrí la liquidación para que se reflejen:\n${resumen.desyncItems.map(d => `• ${d.descripcion} (${fmt(d.monto)})`).join("\n")}`}
+            <span title={[
+                "El recibo no coincide con las novedades vivas — reabrí la liquidación para corregir:",
+                ...resumen.desyncItems.map(d => `${d.tipo === "eliminada" ? "−" : "+"} ${d.descripcion} (${fmt(d.monto)})${d.tipo === "eliminada" ? " · ya no está en vivo" : " · no está en el recibo"}`),
+              ].join("\n")}
               style={{ fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 5, background: "#fee2e2", color: "#b91c1c", flexShrink: 0, cursor: "help", whiteSpace: "nowrap" }}>
-              🔴 Faltan {resumen.desyncItems.length} novedad{resumen.desyncItems.length > 1 ? "es" : ""}
+              🔴 {resumen.desyncItems.length} cambio{resumen.desyncItems.length > 1 ? "s" : ""} sin reflejar
             </span>
           ) : (
-            <span title="Las novedades cargadas coinciden con las de este recibo"
+            <span title="Las novedades vivas coinciden con las de este recibo"
               style={{ fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 5, background: "#dcfce7", color: "#15803d", flexShrink: 0, whiteSpace: "nowrap" }}>
               🟢 Al día
             </span>
@@ -349,7 +352,8 @@ function buildResumenSedes(emp, categorias, novList = []) {
   const fijoVistos = new Set();   // no duplicar el sueldo base si hay varias filas (multi-sede)
   const sedes = [];
   const novedades = [];
-  const desyncItems = [];   // novedades vivas que no están congeladas en el recibo cerrado
+  const desyncItems = [];      // { tipo: "nueva"|"eliminada", descripcion, monto } — ver bloque de abajo
+  const frozenNovedades = [];  // solo lo efectivamente congelado (filas cerradas) — para detectar bajas
   let tarifas = {};
   const porSede = {};
   // Composición del valor unitario de "Horas Base": la línea combina horas normales + yoga (y varias
@@ -401,18 +405,30 @@ function buildResumenSedes(emp, categorias, novList = []) {
           if (sedeNov === String(row.sede_id ?? "").toLowerCase()) return true;
           return row === primeraRow && !sedesDelEmpleadoLower.has(sedeNov);
         });
-    for (const n of novsR) novedades.push({ cuenta: n.cuenta_contable_nombre || "Novedad", descripcion: n.descripcion || "", monto: Number(n.monto) || 0 });
+    for (const n of novsR) {
+      const item = { cuenta: n.cuenta_contable_nombre || "Novedad", descripcion: n.descripcion || "", monto: Number(n.monto) || 0 };
+      novedades.push(item);
+      if (isCerrada(row.estado)) frozenNovedades.push(item);
+    }
   }
-  // Alarma: TODAS las novedades vivas de este legajo vs. las efectivamente reflejadas arriba.
-  // Si algo no está (porque se cargó/editó después del cierre), avisa acá — reabrir y volver
-  // a cerrar alcanza siempre, ya no importa si la sede de la novedad coincide con alguna fila.
+  // Alarma: TODAS las novedades vivas de este legajo vs. las efectivamente congeladas, EN AMBOS
+  // SENTIDOS — reabrir y volver a cerrar siempre corrige, ya no importa si la sede de la novedad
+  // coincide con alguna fila:
+  //   · "nueva"     → se cargó/editó en Novedades después del cierre y el recibo no la tiene.
+  //   · "eliminada" → el recibo la tiene congelada pero ya no existe (o cambió) en vivo — el
+  //                   recibo puede estar cobrando de más algo que se borró/corrigió después.
   const hayFilaCerrada = emp.rows.some(r => isCerrada(r.estado));
   if (hayFilaCerrada) {
     const liveDelEmpleado = novList.filter(n => n.tipo === "extra" && n.sede_id && String(n.legajo_id) === String(emp.id));
     for (const n of liveDelEmpleado) {
       const yaReflejada = novedades.some(x => x.descripcion === (n.descripcion || "") && x.monto === (Number(n.monto) || 0));
       if (yaReflejada) continue;
-      desyncItems.push({ sede: n.sede_nombre || "—", descripcion: n.descripcion || n.cuenta_contable_nombre || "Novedad", monto: Number(n.monto) || 0 });
+      desyncItems.push({ tipo: "nueva", sede: n.sede_nombre || "—", descripcion: n.descripcion || n.cuenta_contable_nombre || "Novedad", monto: Number(n.monto) || 0 });
+    }
+    for (const f of frozenNovedades) {
+      const sigueViva = liveDelEmpleado.some(n => (n.descripcion || "") === f.descripcion && (Number(n.monto) || 0) === f.monto);
+      if (sigueViva) continue;
+      desyncItems.push({ tipo: "eliminada", descripcion: f.descripcion || f.cuenta || "Novedad", monto: f.monto });
     }
   }
   const principalSede = Object.entries(porSede).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
@@ -433,11 +449,16 @@ function buildResumenHQ(emp, novList = []) {
     totalBruto += Number(row.total_bruto) || 0;
     const liveNovs = novList.filter(n => n.tipo === "extra" && !n.sede_id && String(n.legajo_id) === String(row.legajo_id));
     if (isCerrada(row.estado)) {
-      for (const n of (row.novedades || []))
+      const frozen = row.novedades || [];
+      for (const n of frozen)
         novedades.push({ cuenta: n.cuenta_contable_nombre || "Novedad", monto: Number(n.monto) || 0 });
+      // "nueva": está viva pero no en lo congelado. "eliminada": está congelada pero ya no (o cambió) en vivo.
       const faltantes = liveNovs.filter(n =>
-        !(row.novedades || []).some(f => (f.cuenta_contable_nombre || "") === (n.cuenta_contable_nombre || "") && Number(f.monto) === Number(n.monto)));
-      for (const n of faltantes) desyncItems.push({ descripcion: n.descripcion || n.cuenta_contable_nombre || "Novedad", monto: Number(n.monto) || 0 });
+        !frozen.some(f => (f.cuenta_contable_nombre || "") === (n.cuenta_contable_nombre || "") && Number(f.monto) === Number(n.monto)));
+      for (const n of faltantes) desyncItems.push({ tipo: "nueva", descripcion: n.descripcion || n.cuenta_contable_nombre || "Novedad", monto: Number(n.monto) || 0 });
+      const sobrantes = frozen.filter(f =>
+        !liveNovs.some(n => (n.cuenta_contable_nombre || "") === (f.cuenta_contable_nombre || "") && Number(n.monto) === Number(f.monto)));
+      for (const f of sobrantes) desyncItems.push({ tipo: "eliminada", descripcion: f.descripcion || f.cuenta_contable_nombre || "Novedad", monto: Number(f.monto) || 0 });
     } else if (!addedOpen) {
       addedOpen = true;
       for (const n of liveNovs)
