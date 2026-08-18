@@ -956,6 +956,12 @@ export async function deletePago(id, nb_movimiento_id) {
   if (movId) await post({ action: "del", sheet: "nb_movimientos", id: movId }, BASE_NB);
 }
 
+// Edita solo la nota interna de un pago ya registrado (no toca monto/fecha/cuenta/id) →
+// no afecta matching de Conciliación ni los totales de la ficha.
+export async function updatePagoNota(nb_movimiento_id, nota) {
+  await post({ action: "edit", sheet: "nb_movimientos", id: nb_movimiento_id, patch: { nota } }, BASE_NB);
+}
+
 // ── CARGAS SOCIALES — base de prorrateo ───────────────────────────────────────
 // El F931 (y el aporte sindical) se prorratea por los HABERES EN BLANCO de cada centro.
 // Fuente autoritativa = liquidaciones CERRADAS del mes (bucket "haberes"), agrupadas por centro

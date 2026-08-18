@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
-import { fetchLiquidaciones, fetchCategorias, fetchPagos, fetchLegajos, fetchNovedades, desglosarLiquidacion, isCerrada, ROLES_SEDES, ROLES_HQ } from "../lib/sueldosApi";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { fetchLiquidaciones, fetchCategorias, fetchPagos, fetchLegajos, fetchNovedades, desglosarLiquidacion, isCerrada, ROLES_SEDES, ROLES_HQ, updatePagoNota } from "../lib/sueldosApi";
 
 const T = {
   bg:     "#f8fafc",
@@ -124,6 +124,18 @@ export default function PantallaResumen({ pais = "AR" }) {
   // Pagos individuales del empleado seleccionado (nb_movimientos origen sueldos), ordenados por forma y fecha.
   const pagosEmpleado = useMemo(() => (sel ? pagosDe(sel, pagos, vista) : []), [pagos, sel, vista]);
 
+  // Edita solo la nota interna de un pago ya registrado: optimista en pantalla, revierte si falla.
+  const handleUpdateNota = useCallback(async (pago, nuevaNota) => {
+    const prev = pago.nota;
+    setPagos(ps => ps.map(p => p.id === pago.id ? { ...p, nota: nuevaNota } : p));
+    try {
+      await updatePagoNota(pago.nb_movimiento_id, nuevaNota);
+    } catch (e) {
+      setPagos(ps => ps.map(p => p.id === pago.id ? { ...p, nota: prev } : p));
+      alert("No se pudo guardar la nota: " + e.message);
+    }
+  }, []);
+
   // Desglose Sedes / HQ del empleado seleccionado (los builders son puros → se reusan en "imprimir todo").
   const resumenSedes = useMemo(
     () => (vista === "sedes" && sel) ? buildResumenSedes(sel, categorias, novedades) : null,
@@ -221,8 +233,8 @@ export default function PantallaResumen({ pais = "AR" }) {
       ) : (
         <div id="ficha-solo">
           {vista === "hq"
-            ? <FichaHQ sel={sel} resumen={resumen} pagos={pagosEmpleado} email={emailSel} periodo={periodo} onImprimirTodo={abrirImprimirTodo} />
-            : <FichaSedes sel={sel} resumen={resumen} pagos={pagosEmpleado} email={emailSel} periodo={periodo} onImprimirTodo={abrirImprimirTodo} />}
+            ? <FichaHQ sel={sel} resumen={resumen} pagos={pagosEmpleado} email={emailSel} periodo={periodo} onImprimirTodo={abrirImprimirTodo} onUpdateNota={handleUpdateNota} />
+            : <FichaSedes sel={sel} resumen={resumen} pagos={pagosEmpleado} email={emailSel} periodo={periodo} onImprimirTodo={abrirImprimirTodo} onUpdateNota={handleUpdateNota} />}
         </div>
       )}
 
@@ -444,7 +456,7 @@ function SeleccionImprimir({ empleados, checkSel, count, onToggle, onAll, onCanc
 }
 
 // Marco compartido de la ficha: header + componentes (children) + total + pagos.
-function FichaShell({ sel, subtitulo, totalLiquidar, pagos, periodo, tag, onImprimirTodo, children }) {
+function FichaShell({ sel, subtitulo, totalLiquidar, pagos, periodo, tag, onImprimirTodo, onUpdateNota, children }) {
   const imprimir = () => window.print();
   return (
     <div className="ficha" style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden" }}>
@@ -468,7 +480,7 @@ function FichaShell({ sel, subtitulo, totalLiquidar, pagos, periodo, tag, onImpr
       <TotalLiquidar importe={totalLiquidar} />
 
       <Section titulo="Forma de pago">
-        <FormaPagoTabla pagos={pagos} />
+        <FormaPagoTabla pagos={pagos} onUpdateNota={onUpdateNota} />
       </Section>
 
       <PagosTotales pagos={pagos} totalLiquidar={totalLiquidar} />
@@ -477,7 +489,7 @@ function FichaShell({ sel, subtitulo, totalLiquidar, pagos, periodo, tag, onImpr
 }
 
 // ── Ficha Sedes ──────────────────────────────────────────────────────────────
-function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo }) {
+function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpdateNota }) {
   const sedes = resumen.sedes.length;
   // Nombre → mes (tag); subtítulo → sede(s) · rol.
   const sedeTxt = resumen.principalSede + (sedes > 1 ? ` +${sedes - 1}` : "");
@@ -503,7 +515,7 @@ function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo }) {
     ? ` (${resumen.objGrupalPcts.map(o => `${fmtNum(o.pct)}%: ${fmt(o.monto)}`).join(" + ")})`
     : resumen.objGrupalPct ? ` (${fmtNum(resumen.objGrupalPct)}%)` : "";
   return (
-    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={periodo} onImprimirTodo={onImprimirTodo}>
+    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={periodo} onImprimirTodo={onImprimirTodo} onUpdateNota={onUpdateNota}>
       <Section>
         <table style={tbl}>
           <thead><tr><Th>Concepto</Th><Th right>Cant.</Th><Th right>Valor u.</Th><Th right>Importe</Th></tr></thead>
@@ -545,10 +557,10 @@ function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo }) {
 }
 
 // ── Ficha HQ ─────────────────────────────────────────────────────────────────
-function FichaHQ({ sel, resumen, pagos, email, periodo, onImprimirTodo }) {
+function FichaHQ({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpdateNota }) {
   const subtitulo = `${ROL_LABEL[sel.rol] ?? sel.rol}${sel.sociedad ? ` · ${sel.sociedad}` : ""}`;
   return (
-    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={periodo} onImprimirTodo={onImprimirTodo}>
+    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={periodo} onImprimirTodo={onImprimirTodo} onUpdateNota={onUpdateNota}>
       <Section>
         <table style={tbl}>
           <thead><tr><Th>Concepto</Th><Th right>Importe</Th></tr></thead>
@@ -581,7 +593,7 @@ function notaDePago(p) {
 }
 
 // Una línea por pago real (nb_movimientos origen sueldos): fecha · forma · nota · monto.
-function FormaPagoTabla({ pagos }) {
+function FormaPagoTabla({ pagos, onUpdateNota }) {
   return (
     <table style={tbl}>
       <thead><tr><Th>Fecha</Th><Th>Forma</Th><Th>Nota interna</Th><Th right>Monto</Th></tr></thead>
@@ -594,12 +606,62 @@ function FormaPagoTabla({ pagos }) {
           <tr key={p.id || i} style={{ borderTop: `1px solid ${T.border}` }}>
             <Td dim>{fmtFecha(p.fecha)}</Td>
             <Td>{FP_LABEL[p.tipo_componente] ?? p.tipo_componente}</Td>
-            <Td dim>{notaDePago(p)}</Td>
+            {onUpdateNota
+              ? <td style={{ padding: "4px 4px" }}><NotaCell pago={p} onSave={onUpdateNota} /></td>
+              : <Td dim>{notaDePago(p)}</Td>}
             <Td right>{fmt(p.monto)}</Td>
           </tr>
         ))}
       </tbody>
     </table>
+  );
+}
+
+// Celda "Nota interna" editable: click para entrar en modo edición, Enter/blur guarda, Esc cancela.
+function NotaCell({ pago, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue]     = useState("");
+  const inputRef = useRef(null);
+
+  const startEdit = () => {
+    setValue(pago.nota || "");
+    setEditing(true);
+  };
+  useEffect(() => { if (editing) inputRef.current?.focus(); }, [editing]);
+
+  const commit = () => {
+    setEditing(false);
+    const nuevo = value.trim();
+    if (nuevo !== (pago.nota || "")) onSave(pago, nuevo);
+  };
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={e => setValue(e.target.value)}
+        onBlur={commit}
+        onKeyDown={e => {
+          if (e.key === "Enter") commit();
+          else if (e.key === "Escape") setEditing(false);
+        }}
+        style={{ width: "100%", fontSize: 14, fontFamily: T.font, color: T.text,
+          border: `1px solid ${T.blue}`, borderRadius: 4, padding: "2px 6px", boxSizing: "border-box" }}
+      />
+    );
+  }
+  return (
+    <span
+      onClick={startEdit}
+      title="Click para editar la nota"
+      style={{ color: pago.nota ? T.text : T.dim, cursor: "pointer",
+        borderBottom: "1px dashed transparent" }}
+      onMouseEnter={e => e.currentTarget.style.borderBottomColor = T.dim}
+      onMouseLeave={e => e.currentTarget.style.borderBottomColor = "transparent"}
+    >
+      {notaDePago(pago)}
+    </span>
   );
 }
 
