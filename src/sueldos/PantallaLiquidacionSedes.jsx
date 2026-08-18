@@ -2454,11 +2454,16 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, on
                   {fmtMoney(empl.pendiente)}
                 </td>
                 <td style={TD({ whiteSpace: "nowrap" })}>
-                  {empl.pendiente > 0
-                    ? <button onClick={() => onRegistrarPago(empl.legajo_id)} style={{
+                  {/* total === 0 → todavía no hay nada cargado/devengado este mes, pero se puede
+                      registrar un ADELANTO igual (appendPago no exige liquidación ni pendiente:
+                      queda como activo hasta que se cargue y cierre el mes real). */}
+                  {empl.pendiente > 0 || empl.total === 0
+                    ? <button onClick={() => onRegistrarPago(empl.legajo_id)}
+                        title={empl.pendiente > 0 ? undefined : "Todavía no hay nada cargado este mes — esto registra un adelanto a cuenta"}
+                        style={{
                         background: "#fff", color: T.green, border: `1px solid ${T.green}`,
                         borderRadius: 6, padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer",
-                      }}>💳 Pagar</button>
+                      }}>{empl.pendiente > 0 ? "💳 Pagar" : "💰 Adelanto"}</button>
                     : <span style={{ fontSize: 12, color: T.green, fontWeight: 600 }}>✓</span>
                   }
                 </td>
