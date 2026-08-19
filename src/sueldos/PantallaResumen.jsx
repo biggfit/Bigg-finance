@@ -327,17 +327,21 @@ function pagosDe(emp, pagos, vista) {
       (a.fecha || "").localeCompare(b.fecha || ""));
 }
 
-// Composición de una línea de horas cuando el coach trabaja en varias sedes: muestra cuántas horas
-// aporta cada sede → " (04 - Plaza Libertad 100hs + 06 - Palermo Rosedal 45hs)". Con una sola sede
-// devuelve "" (no hace falta aclarar). Explica por qué la Cant total no es Cant × un solo Valor.
+// Composición de una línea de horas cuando el coach trabaja en varias sedes (o a tarifas distintas
+// dentro de la misma sede): muestra cuántas horas aporta cada una y a qué tarifa →
+// " (04 - Plaza Libertad 100hs x $11.000 + 06 - Palermo Rosedal 45hs x $9.500)". Con una sola
+// tarifa devuelve "" (no hace falta aclarar, el Valor u. ya es exacto).
 function composicionValor(contribs = []) {
-  const porSede = new Map();
+  const porGrupo = new Map();
   for (const c of contribs) {
     if (!(Number(c.cant) > 0)) continue;
-    porSede.set(c.sede, (porSede.get(c.sede) || 0) + c.cant);
+    const key = `${c.sede}|${c.tarifa}`;
+    const prev = porGrupo.get(key);
+    if (prev) prev.cant += c.cant;
+    else porGrupo.set(key, { sede: c.sede, tarifa: c.tarifa, cant: c.cant });
   }
-  if (porSede.size <= 1) return "";
-  return " (" + [...porSede].map(([s, c]) => `${s} ${fmtNum(c)}hs`).join(" + ") + ")";
+  if (porGrupo.size <= 1) return "";
+  return " (" + [...porGrupo.values()].map(g => `${g.sede} ${fmtNum(g.cant)}hs x ${fmt(g.tarifa)}`).join(" + ") + ")";
 }
 
 // Desglose Sedes: suma sobre las filas por sede, recalcula importes con tarifas.
@@ -567,9 +571,13 @@ function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpd
     return list.length ? ` (${list.join(", ")})` : "";
   };
   // "Horas Base" combina horas + yoga (y varias sedes) a tarifas distintas → Cant × Valor u. ≠ Importe.
-  // Si hay más de una tarifa, el paréntesis explica cómo se compone (cant × $tarifa + …); si es una sola,
-  // se cae al annotate de sedes (extra) porque Cant × Valor ya cuadra.
+  // Si hay más de una tarifa, el paréntesis explica cómo se compone (cant × $tarifa + …) y el Valor u.
+  // mostrado es el promedio ponderado (Importe / Cant), no la tarifa de una sede al azar; si es una
+  // sola tarifa, se cae al annotate de sedes (extra) porque Cant × Valor ya cuadra.
   const compHoras = composicionValor(resumen.desgloseHoras) || extra("horas");
+  const horasCantTotal = resumen.horasCant + resumen.yogaCant;
+  const horasMontoTotal = resumen.horasMonto + resumen.yogaMonto;
+  const valorHoras = horasCantTotal > 0 ? horasMontoTotal / horasCantTotal : 0;
   // Objetivo grupal: si hubo más de una tasa (multi-sede con % distinto), mostrar todas en vez
   // de solo la última aplicada (bug: antes se pisaba y se perdía la tasa de la otra sede).
   const objGrupalTxt = resumen.objGrupalPcts?.length > 1
@@ -584,9 +592,9 @@ function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpd
             {/* Sueldo Fijo: base + horas (base/feriado/domingo) + asignaciones */}
             <Linea label="Sueldo Fijo"   importe={resumen.fijo} />
             <Linea label={`Horas Base${compHoras}`}
-              cant={resumen.horasCant + resumen.yogaCant}
-              valor={resumen.horasCant > 0 ? resumen.tarifaHora : resumen.tarifaYoga}
-              importe={resumen.horasMonto + resumen.yogaMonto} />
+              cant={horasCantTotal}
+              valor={valorHoras}
+              importe={horasMontoTotal} />
             <Linea label={`Horas Feriado${extra("feriado")}`} cant={resumen.feriadosCant} valor={resumen.tarifaHora}    importe={resumen.feriadosMonto} />
             <Linea label={`Horas Domingo${extra("domingo")}`} cant={resumen.domingosCant} valor={resumen.tarifaDomingo} importe={resumen.domingosMonto} />
             <Subtotal label="Sueldo Fijo" importe={sueldoFijo} />
