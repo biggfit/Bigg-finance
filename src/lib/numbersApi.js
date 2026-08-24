@@ -2849,7 +2849,9 @@ export async function fetchFinanciaciones(sociedad) {
     if (String(m.origen || "") !== "cuota") continue;
     const ref = String(m.origen_id || m.documento_id || "");
     if (!ref.startsWith("FIN-") || !ref.includes("#")) continue;
-    const key = ref.replace(/^FIN-/, "");   // FIN-<plan_id>#<nro> → <plan_id>#<nro>
+    // La clave es `<plan_id>#<nro>` y plan_id ya trae "FIN-". Movimientos viejos quedaron con
+    // el prefijo duplicado ("FIN-FIN-…"); lo colapsamos para que ambos formatos matcheen.
+    const key = ref.startsWith("FIN-FIN-") ? ref.slice(4) : ref;
     pagadoPorCuota[key] = (pagadoPorCuota[key] || 0) + Math.abs(Number(m.monto) || 0);
   }
   return agruparPlanes(rows, pagadoPorCuota);
@@ -3013,7 +3015,7 @@ export async function appendFinanciacion({ tipo = "plan_afip", nro_plan = "", ac
 export async function imputarCuota(mov, { plan_id, nro_cuota, row_id, concepto = "" }) {
   await post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
     tipo: "PAGO", origen: "cuota",
-    documento_id: `FIN-${plan_id}#${nro_cuota}`,
+    documento_id: `${plan_id}#${nro_cuota}`,
     concepto: concepto || mov.concepto || `Cuota ${nro_cuota} ${plan_id}`,
   }});
   await post({ action: "edit", sheet: "nb_financiaciones", id: row_id, patch: {
@@ -3042,7 +3044,7 @@ export async function pagarCuota({ plan, cuota, fecha, cuenta_bancaria, monto, n
     sociedad: plan.sociedad, fecha, tipo: "PAGO",
     cuenta_bancaria, concepto: `Cuota ${cuota.nro_cuota} ${plan.nro_plan || plan.plan_id}`,
     moneda: plan.moneda, monto: -Math.abs(pagar),
-    origen: "cuota", origen_id: `FIN-${plan.plan_id}#${cuota.nro_cuota}`, nota,
+    origen: "cuota", origen_id: `${plan.plan_id}#${cuota.nro_cuota}`, nota,
   });
   // Marca "pagada" SOLO si este pago cubre el saldo restante. Si es parcial, la cuota queda pendiente y
   // agruparPlanes deriva "parcial" + el saldo remanente de los movimientos (no se pisa el estado).
