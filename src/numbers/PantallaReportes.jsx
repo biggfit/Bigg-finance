@@ -417,7 +417,7 @@ function computeImpuestos(sinClasificar, matchers, resFinal) {
   const byAcc = keys.map(k => ({ name: k, cur: sinClasificar[k] }));
   const total = Array.from({ length: 12 }, (_, m) => byAcc.reduce((s, a) => s + (Number(a.cur[m]) || 0), 0));
   const resNeto = resFinal.map((v, m) => (Number(v) || 0) - total[m]);
-  return { keys, byAcc, resNeto };
+  return { keys, byAcc, total, resNeto };
 }
 
 // ─── Negocios por sociedad (además de Argentina núcleo): mismo P&L de sede, scopeado a UNA sociedad
@@ -438,6 +438,9 @@ const FONDEADAS = {
 // TODO: esta lista curada por nombre debería salir de categoria_pnl="impuestos" en maestros —
 // hoy cada cuenta de impuesto nueva hay que acordarse de agregarla acá o desaparece del resultado.
 const IMPUESTOS_FOND = ["IVA", "Ganancias", "Retenciones"];
+// Cola de resultado financiero (Fondeadas/Rosedal): cuentas de "Sin clasificar" que son financieras
+// (intereses ganados suma, pérdidas financieras resta) → línea debajo de impuestos, antes del neto/FCF.
+const FINANCIEROS_FOND = ["Intereses Ganados", "Perdidas Financieras"];
 
 // Go-live: el P&L arranca el 1/7/2026. Todo lo anterior es migración de saldos iniciales de Contagram
 // (metida en cualquier cuenta/centro) y NO es resultado del período → se excluye de TODOS los P&L. Los
@@ -465,7 +468,7 @@ function traducirFilasUSD(rows, fx) {
 }
 // Overlay de P&L histórico pre go-live (nb_pnl_historico). APAGADO: la data histórica y su motor quedan
 // construidos pero ocultos (los reportes se muestran de julio 2026 en adelante). Poner en true para re-activar.
-const HISTORICO_HABILITADO = false;
+const HISTORICO_HABILITADO = true;
 const PNL_INICIO_ANIO = 2026;
 const PNL_INICIO_MES  = 6;   // julio (0-based): en el año del go-live no se muestran los meses previos
 // En el año del go-live, oculta las columnas de meses anteriores al go-live (Ene–Jun 2026 = vacías).
@@ -658,7 +661,7 @@ function celdasSede(cols, cur, prev, pol, o) {
   });
 }
 
-function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista = "evolucion", mes = 0, cesion = null, impuestos = null, netoLabel = "Resultado Neto", nombreCuenta = (x) => x, hayHistorico = false }) {
+function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista = "evolucion", mes = 0, cesion = null, impuestos = null, financieros = null, netoLabel = "Resultado Neto", nombreCuenta = (x) => x, hayHistorico = false }) {
   const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths: _amRaw } = sub;
   const activeMonths = mesesVisibles(_amRaw, year, hayHistorico);
 
@@ -670,8 +673,10 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
   // Impuestos (Fondeadas/Rosedal): cola debajo del Resultado Operativo/Final. Las cuentas se sacan de
   // "Sin clasificar" (no duplicar) → ver computeImpuestos.
   const impData = impuestos ? computeImpuestos(pnl.sinClasificar, impuestos, resFinal) : null;
+  // Resultado financiero (Fondeadas/Rosedal): intereses ganados − pérdidas, debajo de impuestos.
+  const finData = financieros ? computeImpuestos(pnl.sinClasificar, financieros, resFinal) : null;
 
-  const hidden = new Set([cesKey, ...(impData?.keys || [])].filter(Boolean));
+  const hidden = new Set([cesKey, ...(impData?.keys || []), ...(finData?.keys || [])].filter(Boolean));
   const sinClasView = hidden.size
     ? Object.fromEntries(Object.entries(pnl.sinClasificar).filter(([k]) => !hidden.has(k)))
     : pnl.sinClasificar;
@@ -720,10 +725,18 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
 
     // Impuestos (Fondeadas): cola debajo del Resultado Operativo/Final → Resultado Neto. Es P&L (flujos) →
     // se muestra en las 3 vistas.
-    if (impData) {
-      filas.push({ kind: "banda", label: "Impuestos" });
-      for (const a of impData.byAcc) filas.push({ kind: "cuenta", label: a.name, cur: a.cur, prev: ZERO12, pol: -1 });
-      filas.push({ kind: "result", label: netoLabel, cur: impData.resNeto, prev: ZERO12, pol: 1 });
+    if (impData || finData) {
+      if (impData) {
+        filas.push({ kind: "banda", label: "Impuestos" });
+        for (const a of impData.byAcc) filas.push({ kind: "cuenta", label: a.name, cur: a.cur, prev: ZERO12, pol: -1 });
+      }
+      if (finData) {
+        filas.push({ kind: "banda", label: "Resultado Financiero" });
+        for (const a of finData.byAcc) filas.push({ kind: "cuenta", label: a.name, cur: a.cur, prev: ZERO12, pol: 1 });
+      }
+      // Neto/FCF = Resultado Final − impuestos + financiero (intereses ganados suma).
+      const neto = resFinal.map((v, m) => (Number(v) || 0) - (impData?.total[m] || 0) + (finData?.total[m] || 0));
+      filas.push({ kind: "result", label: netoLabel, cur: neto, prev: ZERO12, pol: 1 });
     }
 
     // Cesión de utilidades (apropiación del resultado; NO afecta Resultado Final). Es una cuenta corriente
@@ -3137,7 +3150,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       {isSedeLike && (
         <PnLTableSede pnl={pnlSede} sub={subSede} pnlPrev={pnlSedePrev} subPrev={subSedePrev}
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} nombreCuenta={nombreCuenta}
-          cesion={cesionSede} impuestos={isFond ? IMPUESTOS_FOND : null} netoLabel={fondCfg?.netoLabel}
+          cesion={cesionSede} impuestos={isFond ? IMPUESTOS_FOND : null} financieros={isFond ? FINANCIEROS_FOND : null} netoLabel={fondCfg?.netoLabel}
           hayHistorico={hayHistorico}
           label={selectedSedeCCs === null ? "Todas las Sedes"
             : selectedSedeCCs.length === 0 ? "Ninguna sede"
