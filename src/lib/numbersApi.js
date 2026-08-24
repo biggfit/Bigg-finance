@@ -742,7 +742,7 @@ export async function fetchMovFranquicias() {
   return rows.filter(m => m.origen === "franquicias" && !esIgnorado(m));
 }
 
-export async function appendMovTesoreria({ sociedad, fecha, tipo, cuenta_bancaria, cuenta_destino = "", cuenta = "", concepto, moneda, monto, origen = "manual", origen_id = "", centro_costo = "" }) {
+export async function appendMovTesoreria({ sociedad, fecha, tipo, cuenta_bancaria, cuenta_destino = "", cuenta = "", concepto, moneda, monto, origen = "manual", origen_id = "", centro_costo = "", nota = "" }) {
   const id = newId("MOV");
   return post({
     action: "add", sheet: "nb_movimientos",
@@ -755,6 +755,7 @@ export async function appendMovTesoreria({ sociedad, fecha, tipo, cuenta_bancari
       moneda, monto,
       documento_id:    origen_id,
       concepto,
+      nota,
       referencia:      "",
       origen,
       created_at:      new Date().toISOString(),
@@ -2751,17 +2752,19 @@ export async function reabrirPeriodo(id) {
 //   estado(pendiente|pagada|cancelada) | movimiento_id | fecha_pago | nota | created_at
 
 function _finRowToCuota(r) {
+  const capital = toNum(r.capital), interes = toNum(r.interes), iva = toNum(r.iva), impuestos = toNum(r.impuestos);
+  // El total de la cuota = suma de sus componentes (invariante del diseño). Si el `total` guardado difiere
+  // (dato mal cargado — ej. herencia con total ≠ capital y sin interés), GANA la suma de componentes → el
+  // pago no arrastra un total inflado. Fallback al stored solo si los componentes suman 0.
+  const totalCalc = capital + interes + iva + impuestos;
   return {
     rowId:          r.id,
     nro_cuota:      Number(r.nro_cuota) || 0,
     vto:            r.vto ?? "",
     vto_tardio:     r.vto_tardio ?? "",
-    capital:        toNum(r.capital),
-    interes:        toNum(r.interes),
-    iva:            toNum(r.iva),
-    impuestos:      toNum(r.impuestos),
+    capital, interes, iva, impuestos,
     interes_resarc: toNum(r.interes_resarc),
-    total:          toNum(r.total),
+    total:          totalCalc || toNum(r.total),
     total_tardio:   toNum(r.total_tardio),
     estado:         r.estado || "pendiente",
     movimiento_id:  r.movimiento_id ?? "",
@@ -2769,8 +2772,10 @@ function _finRowToCuota(r) {
   };
 }
 
-/** Agrupa las filas planas (una por cuota) en planes con su cronograma + derivados. */
-export function agruparPlanes(rows = []) {
+/** Agrupa las filas planas (una por cuota) en planes con su cronograma + derivados.
+ *  `pagadoPorCuota` (opcional) = { "<plan_id>#<nro>": montoPagado } derivado de los movimientos
+ *  (origen "cuota") → habilita PAGO PARCIAL: saldo por cuota = total − pagado, estado "parcial". */
+export function agruparPlanes(rows = [], pagadoPorCuota = {}) {
   const map = new Map();
   for (const r of rows) {
     const key = r.plan_id;
@@ -2801,14 +2806,25 @@ export function agruparPlanes(rows = []) {
   }
   return Array.from(map.values()).map(p => {
     p.cuotas.sort((a, b) => a.nro_cuota - b.nro_cuota);
-    const pagadas        = p.cuotas.filter(c => c.estado === "pagada");
+    // Por cuota: pagado (de los movimientos) → saldoCuota + estado. Se RESPETA lo ya escrito "pagada"/
+    // "cancelada" (aunque no haya movimiento con ref) para no regresionar cierres viejos; sobre las
+    // "pendiente" se aplica el pago parcial derivado de los movimientos.
+    for (const c of p.cuotas) {
+      const pagado = pagadoPorCuota[`${p.plan_id}#${c.nro_cuota}`] || 0;
+      c.pagado = pagado;
+      if (c.estado === "pagada" || c.estado === "cancelada") { c.saldoCuota = 0; continue; }
+      c.saldoCuota = Math.max(0, (Number(c.total) || 0) - pagado);
+      if (c.saldoCuota <= 0.5)    c.estado = "pagada";
+      else if (pagado > 0.5)      c.estado = "parcial";
+    }
+    // Capital remanente de una cuota (para el pasivo): pagada/cancelada → 0; parcial → proporcional al saldo.
+    const capRem = c => (c.estado === "pagada" || c.estado === "cancelada") ? 0
+      : (Number(c.total) > 0 ? c.capital * (c.saldoCuota / c.total) : (c.saldoCuota > 0.5 ? c.capital : 0));
     const capital_total  = p.cuotas.reduce((s, c) => s + c.capital, 0);
-    const capital_pagado = pagadas.reduce((s, c) => s + c.capital, 0);
-    // Pasivo vivo = capital de cuotas PENDIENTES (excluye pagadas Y canceladas). En un plan normal
-    // (sin canceladas) equivale a capital_total − capital_pagado; al precancelar, las cuotas en estado
-    // "cancelada" dejan de sumar al saldo (antes seguían contando y el pasivo no bajaba).
-    const saldo          = p.cuotas.filter(c => c.estado === "pendiente").reduce((s, c) => s + c.capital, 0);
-    const prox           = p.cuotas.find(c => c.estado === "pendiente");
+    const saldo          = p.cuotas.reduce((s, c) => s + capRem(c), 0);
+    const capital_pagado = capital_total - saldo;
+    const pagadas        = p.cuotas.filter(c => c.estado === "pagada");
+    const prox           = p.cuotas.find(c => c.saldoCuota > 0.5 && c.estado !== "cancelada");
     return {
       ...p,
       capital_total, capital_pagado, saldo,
@@ -2820,10 +2836,23 @@ export function agruparPlanes(rows = []) {
   });
 }
 
-/** Trae las financiaciones de una sociedad, ya agrupadas por plan_id con derivados. */
+/** Trae las financiaciones de una sociedad, ya agrupadas por plan_id con derivados.
+ *  Suma los pagos de cuota (movimientos origen "cuota", ref FIN-<plan>#<nro> en origen_id/documento_id)
+ *  → habilita el saldo parcial por cuota (fuente de verdad = los movimientos, como CxC/CxP). */
 export async function fetchFinanciaciones(sociedad) {
-  const rows = await get("nb_financiaciones", sociedad ? { sociedad } : {});
-  return agruparPlanes(rows);
+  const [rows, movs] = await Promise.all([
+    get("nb_financiaciones", sociedad ? { sociedad } : {}),
+    get("nb_movimientos", sociedad ? { sociedad } : {}).catch(() => []),
+  ]);
+  const pagadoPorCuota = {};
+  for (const m of (Array.isArray(movs) ? movs : [])) {
+    if (String(m.origen || "") !== "cuota") continue;
+    const ref = String(m.origen_id || m.documento_id || "");
+    if (!ref.startsWith("FIN-") || !ref.includes("#")) continue;
+    const key = ref.replace(/^FIN-/, "");   // FIN-<plan_id>#<nro> → <plan_id>#<nro>
+    pagadoPorCuota[key] = (pagadoPorCuota[key] || 0) + Math.abs(Number(m.monto) || 0);
+  }
+  return agruparPlanes(rows, pagadoPorCuota);
 }
 
 // Ledger (extracto) del PASIVO de financiaciones de un bucket (plan_afip / prestamo) en una moneda:
@@ -3005,16 +3034,20 @@ export async function registrarAltaPrestamo(mov, { plan_id, concepto = "" }) {
 }
 
 /** Paga una cuota manualmente (sin línea de banco): registra el egreso de caja y marca pagada. */
-export async function pagarCuota({ plan, cuota, fecha, cuenta_bancaria }) {
+export async function pagarCuota({ plan, cuota, fecha, cuenta_bancaria, monto, nota = "" }) {
+  // Saldo restante de la cuota (soporta pagos parciales previos). Si no viene `monto`, paga el saldo entero.
+  const saldoCuota = Number(cuota.saldoCuota != null ? cuota.saldoCuota : cuota.total) || 0;
+  const pagar = monto != null ? Math.abs(Number(monto) || 0) : saldoCuota;
   await appendMovTesoreria({
     sociedad: plan.sociedad, fecha, tipo: "PAGO",
     cuenta_bancaria, concepto: `Cuota ${cuota.nro_cuota} ${plan.nro_plan || plan.plan_id}`,
-    moneda: plan.moneda, monto: -Math.abs(Number(cuota.total) || 0),
-    origen: "cuota", origen_id: `FIN-${plan.plan_id}#${cuota.nro_cuota}`,
+    moneda: plan.moneda, monto: -Math.abs(pagar),
+    origen: "cuota", origen_id: `FIN-${plan.plan_id}#${cuota.nro_cuota}`, nota,
   });
-  await post({ action: "edit", sheet: "nb_financiaciones", id: cuota.rowId, patch: {
-    estado: "pagada", fecha_pago: fecha,
-  }});
+  // Marca "pagada" SOLO si este pago cubre el saldo restante. Si es parcial, la cuota queda pendiente y
+  // agruparPlanes deriva "parcial" + el saldo remanente de los movimientos (no se pisa el estado).
+  if (pagar >= saldoCuota - 0.5)
+    await post({ action: "edit", sheet: "nb_financiaciones", id: cuota.rowId, patch: { estado: "pagada", fecha_pago: fecha } });
 }
 
 /** Aplica un patch a TODAS las filas de un plan (campos de plan repetidos). */

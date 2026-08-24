@@ -19,6 +19,7 @@ const ESTADO_FIN = {
 };
 const ESTADO_CUOTA = {
   pendiente: { label: "Pendiente", bg: "#f3f4f6", color: "#374151" },
+  parcial:   { label: "Parcial",   bg: "#fef9c3", color: "#a16207" },
   pagada:    { label: "Pagada",    bg: T.greenBg, color: T.green },
   cancelada: { label: "Cancelada", bg: "#f3f4f6", color: T.dim },
 };
@@ -86,6 +87,7 @@ export default function PantallaFinanciaciones({ sociedad, tab: tabProp, onTabCh
   const [planes, setPlanes]   = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView]       = useState({ mode: "list" });   // list | alta | detalle
+  const [filtroEstado, setFiltroEstado] = useState("todos");  // todos | vigente | saldado
   const [cuentas, setCuentas] = useState([]);
   const [centros, setCentros] = useState([]);
   const [bancos,  setBancos]  = useState([]);
@@ -109,6 +111,22 @@ export default function PantallaFinanciaciones({ sociedad, tab: tabProp, onTabCh
   const planesTab = useMemo(() => planes.filter(p => p.tipo === tab), [planes, tab]);
   const bancosSoc = useMemo(() => bancos.filter(b => !b.sociedad || b.sociedad === sociedad), [bancos, sociedad]);
   const deudaMon = useMemo(() => montosPorMoneda(planesTab, p => p.saldo), [planesTab]);
+  const nVigentes = useMemo(() => planesTab.filter(p => p.estado !== "saldado").length, [planesTab]);
+  const planesVista = useMemo(
+    () => filtroEstado === "todos" ? planesTab : planesTab.filter(p => filtroEstado === "vigente" ? p.estado !== "saldado" : p.estado === "saldado"),
+    [planesTab, filtroEstado]);
+  // Totales por moneda de lo que se está mostrando (una fila de total por moneda presente).
+  const totalesMon = useMemo(() => {
+    const map = {};
+    for (const p of planesVista) {
+      const m = p.moneda || "ARS";
+      (map[m] ??= { capital: 0, pagado: 0, saldo: 0 });
+      map[m].capital += Number(p.capital_total) || 0;
+      map[m].pagado  += Number(p.capital_pagado) || 0;
+      map[m].saldo   += Number(p.saldo) || 0;
+    }
+    return Object.entries(map);
+  }, [planesVista]);
 
   if (view.mode === "alta") {
     return <AltaFinanciacion tipo={tab} sociedad={sociedad} cuentas={cuentas} centros={centros} bancos={bancosSoc} proveedores={proveedores}
@@ -153,11 +171,41 @@ export default function PantallaFinanciaciones({ sociedad, tab: tabProp, onTabCh
 
       {tab === "anticipo" ? <TabAnticipos sociedad={sociedad} bancos={bancosSoc} alta={antAlta} setAlta={setAntAlta} /> : <>
 
-      <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
-        {(deudaMon.length ? deudaMon : [["ARS", 0]]).map(([m, v]) => (
-          <CompactCard key={m} label={`Deuda vigente${deudaMon.length > 1 ? " " + m : ""}`} value={fmtMoney(v, m)} color={v > 0 ? T.red : T.green} />
-        ))}
-        <CompactCard label={TIPOS[tab].label} value={String(planesTab.length)} />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
+        {/* Filtro por estado (izquierda) */}
+        <div style={{ display: "flex", gap: 3, background: "#fff", border: `1px solid ${T.cardBorder}`, borderRadius: 999, padding: 2 }}>
+          {[["todos", "Todos"], ["vigente", "Vigentes"], ["saldado", "Saldados"]].map(([k, l]) => {
+            const active = filtroEstado === k;
+            return (
+              <button key={k} onClick={() => setFiltroEstado(k)} style={{
+                border: "none", borderRadius: 999, padding: "4px 12px", cursor: "pointer", fontFamily: T.font,
+                fontSize: 12, fontWeight: 700, background: active ? T.accentDark : "transparent",
+                color: active ? T.accent : T.muted,
+              }}>{l}</button>
+            );
+          })}
+        </div>
+        {/* Resumen (derecha) — dos tarjetas compactas: Préstamos vigentes, luego Deuda vigente */}
+        {(() => {
+          const cardSty = { display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap",
+            background: "#fff", border: `1px solid ${T.cardBorder}`, borderRadius: 10, padding: "8px 16px",
+            boxShadow: "rgba(0,0,0,0.08) 0px 1px 4px, rgba(0,0,0,0.05) 0px 2px 12px" };
+          const lblSty = { fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: ".06em" };
+          return (
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <div style={cardSty}>
+                <span style={lblSty}>{TIPOS[tab].label} vigentes:</span>
+                <b style={{ fontFamily: T.mono, fontSize: 14, color: T.text }}>{nVigentes}</b>
+              </div>
+              {(deudaMon.length ? deudaMon : [["ARS", 0]]).map(([m, v]) => (
+                <div key={m} style={cardSty}>
+                  <span style={lblSty}>Deuda vigente{deudaMon.length > 1 ? " " + m : ""}:</span>
+                  <b style={{ fontFamily: T.mono, fontSize: 14, color: v > 0 ? T.red : T.green }}>{fmtMoney(v, m)}</b>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
       </div>
 
       {loading ? (
@@ -177,7 +225,7 @@ export default function PantallaFinanciaciones({ sociedad, tab: tabProp, onTabCh
               </tr>
             </thead>
             <tbody>
-              {planesTab.map(p => (
+              {planesVista.map(p => (
                 <tr key={p.plan_id} style={{ borderTop: `1px solid ${T.cardBorder}`, cursor: "pointer" }}
                   onClick={() => setView({ mode: "detalle", plan: p })}
                   onMouseEnter={e => e.currentTarget.style.background = "#fafafa"}
@@ -195,6 +243,19 @@ export default function PantallaFinanciaciones({ sociedad, tab: tabProp, onTabCh
                 </tr>
               ))}
             </tbody>
+            <tfoot>
+              {totalesMon.map(([m, t]) => (
+                <tr key={m} style={{ borderTop: `2px solid ${T.text}`, background: "#f9fafb" }}>
+                  <td colSpan={4} style={{ padding: "10px 12px", fontWeight: 800, color: T.text }}>
+                    Total{totalesMon.length > 1 ? ` · ${m}` : ""}
+                  </td>
+                  <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: T.mono, fontWeight: 800, color: T.text }}>{fmtMoney(t.capital, m)}</td>
+                  <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: T.mono, fontWeight: 800, color: T.green }}>{fmtMoney(t.pagado, m)}</td>
+                  <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: T.mono, fontWeight: 800, color: t.saldo > 0 ? T.red : T.green }}>{fmtMoney(t.saldo, m)}</td>
+                  <td colSpan={3} />
+                </tr>
+              ))}
+            </tfoot>
           </table>
         </div>
       )}
@@ -647,9 +708,9 @@ function DetalleFinanciacion({ plan, bancos, onBack, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [pagoCuota, setPagoCuota] = useState(null);   // cuota a pagar manualmente
 
-  async function doPagar(cuota, fecha, cuenta_bancaria) {
+  async function doPagar(cuota, fecha, cuenta_bancaria, monto, nota) {
     setBusy(true);
-    try { await pagarCuota({ plan, cuota, fecha, cuenta_bancaria }); onChanged(); }
+    try { await pagarCuota({ plan, cuota, fecha, cuenta_bancaria, monto, nota }); onChanged(); }
     catch (e) { alert("Error: " + (e?.message || e)); setBusy(false); }
   }
   async function doCancelar() {
@@ -708,10 +769,15 @@ function DetalleFinanciacion({ plan, bancos, onBack, onChanged }) {
                 <td style={{ padding: "7px 10px", textAlign: "right", fontFamily: T.mono, color: T.text }}>{fmtMoney(c.interes, plan.moneda)}</td>
                 <td style={{ padding: "7px 10px", textAlign: "right", fontFamily: T.mono, color: T.dim }}>{c.iva ? fmtMoney(c.iva, plan.moneda) : "—"}</td>
                 <td style={{ padding: "7px 10px", textAlign: "right", fontFamily: T.mono, color: T.dim }}>{c.impuestos ? fmtMoney(c.impuestos, plan.moneda) : "—"}</td>
-                <td style={{ padding: "7px 10px", textAlign: "right", fontFamily: T.mono, fontWeight: 600, color: T.text }}>{fmtMoney(c.total, plan.moneda)}</td>
+                <td style={{ padding: "7px 10px", textAlign: "right", fontFamily: T.mono, fontWeight: 600, color: T.text }}>
+                  {fmtMoney(c.total, plan.moneda)}
+                  {c.pagado > 0.5 && (c.saldoCuota ?? 0) > 0.5 && (
+                    <div style={{ fontSize: 10, color: T.dim, fontWeight: 400 }}>resta {fmtMoney(c.saldoCuota, plan.moneda)}</div>
+                  )}
+                </td>
                 <td style={{ padding: "7px 10px" }}><Badge estado={c.estado} cfg={ESTADO_CUOTA} /></td>
                 <td style={{ padding: "7px 10px", textAlign: "right" }}>
-                  {c.estado === "pendiente" && (
+                  {(c.saldoCuota ?? c.total) > 0.5 && c.estado !== "cancelada" && (
                     <button onClick={() => setPagoCuota(c)} style={{ background: "none", border: `1px solid ${T.cardBorder}`, borderRadius: 6, color: T.blue, cursor: "pointer", fontSize: 11, fontWeight: 700, padding: "3px 9px", fontFamily: T.font }}>Pagar</button>
                   )}
                 </td>
@@ -724,22 +790,40 @@ function DetalleFinanciacion({ plan, bancos, onBack, onChanged }) {
       {pagoCuota && (
         <PagoCuotaModal cuota={pagoCuota} plan={plan} bancos={bancos} busy={busy}
           onCancel={() => setPagoCuota(null)}
-          onConfirm={(fecha, banco) => doPagar(pagoCuota, fecha, banco)} />
+          onConfirm={(fecha, banco, monto, nota) => doPagar(pagoCuota, fecha, banco, monto, nota)} />
       )}
     </div>
   );
 }
 
 function PagoCuotaModal({ cuota, plan, bancos, busy, onCancel, onConfirm }) {
-  const [fecha, setFecha] = useState(cuota.vto || new Date().toISOString().slice(0, 10));
-  const [banco, setBanco] = useState(bancos[0]?.id || "");
+  const saldo = Number(cuota.saldoCuota != null ? cuota.saldoCuota : cuota.total) || 0;
+  const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));   // hoy por defecto
+  // Cuenta de débito preseteada a la del préstamo (donde está la plata del crédito); editable en el dropdown.
+  const [banco, setBanco] = useState(plan.cuenta_bancaria || bancos[0]?.id || "");
+  const [monto, setMonto] = useState(String(round2(saldo)));
+  const [nota, setNota] = useState("");
+  const montoNum = Math.abs(Number(monto) || 0);
+  const parcial  = montoNum > 0.5 && montoNum < saldo - 0.5;
+  const excede   = montoNum > saldo + 0.5;
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={onCancel}>
       <div onClick={e => e.stopPropagation()} style={{ background: T.card, borderRadius: T.radius, padding: 22, width: 380, boxShadow: T.shadowMd }}>
         <h3 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800, color: T.text }}>Pagar cuota {cuota.nro_cuota}</h3>
-        <p style={{ margin: "0 0 16px", fontSize: 13, color: T.muted }}>{fmtMoney(cuota.total, plan.moneda)} · {plan.nro_plan || plan.acreedor_nombre}</p>
-        <p style={{ fontSize: 11, color: T.dim, margin: "0 0 14px" }}>Registra el egreso de caja y marca la cuota pagada. (Si el débito ya está en el extracto, mejor imputalo desde Conciliación.)</p>
+        <p style={{ margin: "0 0 16px", fontSize: 13, color: T.muted }}>Saldo: {fmtMoney(saldo, plan.moneda)} · {plan.nro_plan || plan.acreedor_nombre}</p>
+        <p style={{ fontSize: 11, color: T.dim, margin: "0 0 14px" }}>Registra el egreso de caja. Podés pagar parcial: el monto que pongas baja la deuda y el resto queda pendiente. (Si el débito ya está en el extracto, mejor imputalo desde Conciliación.)</p>
         <Field label="Fecha de pago"><input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={inputStyle} /></Field>
+        <div style={{ marginTop: 12 }}>
+          <Field label={`Monto a pagar (${plan.moneda})`}>
+            <input type="number" step="0.01" value={monto} onChange={e => setMonto(e.target.value)} style={inputStyle} />
+          </Field>
+          {parcial && !excede && (
+            <div style={{ fontSize: 11, color: "#a16207", marginTop: 6 }}>Pago parcial — queda pendiente {fmtMoney(saldo - montoNum, plan.moneda)}.</div>
+          )}
+          {excede && (
+            <div style={{ fontSize: 11, color: T.red, marginTop: 6 }}>El monto supera el saldo ({fmtMoney(saldo, plan.moneda)}).</div>
+          )}
+        </div>
         <div style={{ marginTop: 12 }}>
           <Field label="Cuenta de débito">
             <select value={banco} onChange={e => setBanco(e.target.value)} style={inputStyle}>
@@ -748,9 +832,14 @@ function PagoCuotaModal({ cuota, plan, bancos, busy, onCancel, onConfirm }) {
             </select>
           </Field>
         </div>
+        <div style={{ marginTop: 12 }}>
+          <Field label="Nota (opcional)">
+            <input type="text" value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej. transferencia parcial, comprobante…" style={inputStyle} />
+          </Field>
+        </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 18 }}>
           <Btn variant="ghost" onClick={onCancel}>Cancelar</Btn>
-          <Btn variant="accent" onClick={() => onConfirm(fecha, banco)} disabled={busy || !banco}>{busy ? "…" : "Confirmar pago"}</Btn>
+          <Btn variant="accent" onClick={() => onConfirm(fecha, banco, montoNum, nota.trim())} disabled={busy || !banco || montoNum <= 0 || excede}>{busy ? "…" : "Confirmar pago"}</Btn>
         </div>
       </div>
     </div>
