@@ -463,6 +463,9 @@ function traducirFilasUSD(rows, fx) {
   }
   return { rows: out, mesesSinTC: [...sin].sort() };
 }
+// Overlay de P&L histórico pre go-live (nb_pnl_historico). APAGADO: la data histórica y su motor quedan
+// construidos pero ocultos (los reportes se muestran de julio 2026 en adelante). Poner en true para re-activar.
+const HISTORICO_HABILITADO = false;
 const PNL_INICIO_ANIO = 2026;
 const PNL_INICIO_MES  = 6;   // julio (0-based): en el año del go-live no se muestran los meses previos
 // En el año del go-live, oculta las columnas de meses anteriores al go-live (Ene–Jun 2026 = vacías).
@@ -2504,7 +2507,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const [tiposCambio,    setTiposCambio]    = useState({});      // nb_tipos_cambio: mapa YYYY-MM → tasas USD
   useEffect(() => { fetchTiposCambio().then(setTiposCambio).catch(() => {}); }, []);
   const [rawHist,        setRawHist]        = useState([]);      // nb_pnl_historico: leaf rows pre go-live (USD, sin IVA)
-  useEffect(() => { fetchPnLHistorico().then(r => setRawHist(Array.isArray(r) ? r : [])).catch(() => {}); }, []);
+  useEffect(() => { if (!HISTORICO_HABILITADO) return; fetchPnLHistorico().then(r => setRawHist(Array.isArray(r) ? r : [])).catch(() => {}); }, []);
   // Modo de consolidación FX derivado del selector. "native" = filtra por moneda (como siempre);
   // "real" = traduce TODO a USD al TC de cierre de cada mes. ("USD · Constante" / constant currency = WIP.)
   const fxMode   = monedaSel === "USD_REAL" ? "real" : "native";
