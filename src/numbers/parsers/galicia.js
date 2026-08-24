@@ -38,12 +38,16 @@ export function toISO(v, dayFirst = false) {
 
 // Número robusto (compartido por los parsers): si ya es number lo devuelve; si es texto
 // acepta formato AR/EU (miles con punto, decimal con coma) o formato con punto decimal. Vacío → 0.
+// Contabilidad: un importe entre paréntesis es NEGATIVO (ej. Santander CSV: "(50.208,05)" = −50208,05).
 export function num(v) {
   if (typeof v === "number") return v;
-  const s = String(v ?? "").trim();
+  let s = String(v ?? "").trim();
   if (!s) return 0;
+  let neg = false;
+  if (/^\(.*\)$/.test(s)) { neg = true; s = s.slice(1, -1).trim(); }   // (123,45) → negativo
   const norm = s.includes(",") ? s.replace(/\./g, "").replace(",", ".") : s;
-  return Number(norm.replace(/[^0-9.\-]/g, "")) || 0;
+  const n = Number(norm.replace(/[^0-9.\-]/g, "")) || 0;
+  return neg ? -Math.abs(n) : n;
 }
 
 // Cabeceras esperadas del extracto Galicia
