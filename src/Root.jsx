@@ -7,7 +7,12 @@ import { sesionActual, cerrarSesion } from "./lib/auth";
 
 // ─── ROOT: switch entre BIGG Numbers, Bigg Franquicias y BIGG Sueldos ──────
 export default function Root() {
-  const [activeApp, setActiveApp] = useState("numbers");
+  // Persistido: al refrescar (F5) la app se remonta; sin esto activeApp volvía siempre a "numbers"
+  // y sacaba al usuario de Sueldos/Franquicias a Numbers. Se guarda en localStorage como activeCompany.
+  const [activeApp, setActiveApp] = useState(() => {
+    try { return localStorage.getItem("activeApp") || "numbers"; } catch { return "numbers"; }
+  });
+  useEffect(() => { try { localStorage.setItem("activeApp", activeApp); } catch { /* storage no disponible */ } }, [activeApp]);
   // Gate de login: sin sesión NO se renderiza ninguna app. La sesión se lee en el
   // inicializador (no en efecto) para no parpadear al Login en el doble-montaje de StrictMode.
   const [sesion, setSesion] = useState(sesionActual);
