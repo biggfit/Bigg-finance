@@ -700,6 +700,7 @@ export function liquidacionToPnLRows(liq) {
     sociedad,
     total,
     bucket,
+    legajo_nombre:   liq.legajo_nombre || liq.legajo_id || "",   // para el detalle de Egresos (col Proveedor / Legajo)
   }));
 }
 
