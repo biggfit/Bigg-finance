@@ -379,6 +379,10 @@ const SEDE_CUENTA_A_GRUPO = (() => {
   return m;
 })();
 const grupoSede = (key) => SEDE_GRUPOS.find(g => g.key === key);
+// Alias de cuenta → línea del P&L Sede: cuentas que deben plegarse a una línea existente (mismo grupo y misma
+// fila). Ej.: "Mantenimiento" se contabiliza dentro de "Equipamiento y Mantenimiento".
+const SEDE_CUENTA_ALIAS = { "mantenimiento": "Equipamiento y Mantenimiento" };
+const aliasCuentaSede = (nombre) => SEDE_CUENTA_ALIAS[_nkSede(nombre)] || nombre;
 
 // ─── Cesión de utilidades (apropiación del resultado, DEBAJO de Resultado Final) ────────────────
 // Hektor cede el 49% del resultado de Barrio Norte a una contraparte (NO es gasto: es reparto del
@@ -493,7 +497,7 @@ function buildPnLSede(inRows, egRows, ccFilter, year, moneda, sinIva = false) {
       if (ccFilter !== "todos" && !ccEnFiltro(ccFilter, row.centro_costo)) continue;
       const m = parseInt(row.fecha.slice(5,7), 10) - 1;
       if (m < 0 || m > 11) continue;
-      const nombre = (row.cuenta_contable ?? "").trim() || "Sin cuenta";
+      const nombre = aliasCuentaSede((row.cuenta_contable ?? "").trim() || "Sin cuenta");
       const gkey   = SEDE_CUENTA_A_GRUPO.get(_nkSede(nombre));
       const bucket = gkey ? grupos[gkey] : sinClasificar;
       if (!bucket[nombre]) bucket[nombre] = new Array(12).fill(0);
