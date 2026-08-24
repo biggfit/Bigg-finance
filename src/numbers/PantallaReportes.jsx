@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, Fragment } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef, Fragment } from "react";
 import { T, PageHeader } from "./theme";
 import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco, fondeoFondeadasMensual, calcSaldoPendiente, primeCache, fetchTiposCambio, tcDelMes, montoAUSD, fetchPnLHistorico } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, pendienteSueldosPorLegajo, adelantoSueldosPorLegajo } from "../lib/sueldosApi";
@@ -114,7 +114,10 @@ function movimientoToPnLRows(movs, sociedad, cuentaMap) {
       total = monto;
       _tipo = "Interuso gestión";
     } else {
-      const esIngreso = normCat(cuenta?.categoria_pnl) === "ventas";
+      // Ingreso = ventas, o un INGRESO de cuenta financiera (ej. Intereses Ganados): son ingresos, no gastos
+      // → no negar. (Antes solo "ventas" era ingreso y el interés ganado quedaba negativo.)
+      const esFinancIn = m.tipo === "INGRESO" && String(cuenta?.categoria_pnl || "").toLowerCase().includes("financ");
+      const esIngreso = normCat(cuenta?.categoria_pnl) === "ventas" || esFinancIn;
       total = esIngreso ? monto : -monto;
       _tipo = esIngreso ? "Ingreso" : "Gasto";
     }
@@ -441,6 +444,30 @@ const IMPUESTOS_FOND = ["IVA", "Ganancias", "Retenciones"];
 // Cola de resultado financiero (Fondeadas/Rosedal): cuentas de "Sin clasificar" que son financieras
 // (intereses ganados suma, pérdidas financieras resta) → línea debajo de impuestos, antes del neto/FCF.
 const FINANCIEROS_FOND = ["Intereses Ganados", "Perdidas Financieras"];
+// Distribución de resultados de Rosedal (Segui Fit): cuenta corriente por parte (Socios / Ñako-BIGG) debajo
+// del Free Cash Flow. INTERINO/hardcodeado del Excel del usuario (el módulo socios/inversores todavía no lleva
+// esto). Reparto ~50/50 salvo el arranque (ago-2025 = 100% Socios, hasta consumir el saldo de apertura).
+// Arrays month-indexed 0-11. Cuando exista el módulo, los Retiros saldrán de la cuenta Inversores por proveedor.
+const Z12 = () => new Array(12).fill(0);
+const _fill = (obj) => { const a = Z12(); for (const k in obj) a[k] = obj[k]; return a; };
+const DISTRIB_ROSEDAL = {
+  2025: {
+    gananciaSocios: _fill({ 7:-2371243, 8:1130406, 9:1909142, 10:1793001, 11:1302583 }),
+    gananciaBigg:   _fill({ 8:1130406, 9:1909142, 10:1793001, 11:1302583 }),
+    retiroSocios:   _fill({ 7:7955000, 8:1360977, 10:1732096, 11:1732096 }),
+    retiroBigg:     _fill({ 8:1349873, 10:1732096, 11:1732096 }),
+    saldoSocios:    _fill({ 6:10337347, 7:11104, 8:-219467, 9:1689674, 10:1750580, 11:1321067 }),
+    saldoBigg:      _fill({ 8:-219467, 9:1689674, 10:1750580, 11:1321067 }),
+  },
+  2026: {
+    gananciaSocios: _fill({ 0:1812859, 1:4027135, 2:4127125, 3:3480096, 4:5181676, 5:863232 }),
+    gananciaBigg:   _fill({ 0:1812859, 1:4027135, 2:4127125, 3:3480096, 4:5181676, 5:863232 }),
+    retiroSocios:   _fill({ 0:1310100, 1:1963271, 2:3970800, 3:4657000, 4:2930000, 5:3500000 }),
+    retiroBigg:     _fill({ 0:1310200, 1:1963170, 2:3970803, 3:4657189, 4:2930000, 5:3500000 }),
+    saldoSocios:    _fill({ 0:1823826, 1:3887690, 2:4044015, 3:2867111, 4:5118787, 5:2482019 }),
+    saldoBigg:      _fill({ 0:1823726, 1:3887691, 2:4044013, 3:2866920, 4:5118596, 5:2481828 }),
+  },
+};
 
 // Go-live: el P&L arranca el 1/7/2026. Todo lo anterior es migración de saldos iniciales de Contagram
 // (metida en cualquier cuenta/centro) y NO es resultado del período → se excluye de TODOS los P&L. Los
@@ -474,8 +501,10 @@ const PNL_INICIO_MES  = 6;   // julio (0-based): en el año del go-live no se mu
 // En el año del go-live, oculta las columnas de meses anteriores al go-live (Ene–Jun 2026 = vacías).
 // En el año del go-live se ocultan los meses previos (Ene–Jun 2026 vacíos)… salvo cuando hay histórico cargado
 // (nb_pnl_historico), donde esos meses SÍ tienen datos → se muestran.
-const mesesVisibles = (activeMonths, year, hayHistorico = false) =>
-  (Number(year) === PNL_INICIO_ANIO && !hayHistorico) ? activeMonths.filter(m => m >= PNL_INICIO_MES) : activeMonths;
+const mesesVisibles = (activeMonths, year, hayHistorico = false, mesMax = null) => {
+  const a = (Number(year) === PNL_INICIO_ANIO && !hayHistorico) ? activeMonths.filter(m => m >= PNL_INICIO_MES) : activeMonths;
+  return mesMax == null ? a : a.filter(m => m <= mesMax);
+};
 
 // Monto de una fila del P&L: bruto (con IVA) o NETO (sin IVA → resultado real / EBITDA). El neto resta
 // el iva_monto de la fila (facturas y movimientos imputados lo traen; sueldos/otros sin IVA → neto = total).
@@ -652,7 +681,13 @@ function celdasSede(cols, cur, prev, pol, o) {
         ...(col.total ? { borderLeft: `1px solid ${T.cardBorder}` } : {}) }}>
         {pct == null ? "—" : `${d > 0 ? "↑" : d < 0 ? "↓" : ""}${Math.abs(pct).toFixed(1)}%`}</td>;
     }
-    const v = col.get(cur, prev);
+    // Stock (saldo corriente): en la col TOTAL de Evolución no se suma; muestra el saldo del último mes CON
+    // dato (≤ lastM), porque los meses vivos sin distribución vienen en 0 y no deben pisar el saldo.
+    let v;
+    if (o.stock && col.total) {
+      let lm = o.lastM; while (lm > 0 && !(Number(cur?.[lm]) || 0)) lm--;
+      v = Number(cur?.[lm]) || 0;
+    } else v = col.get(cur, prev);
     const color = o.bySign ? (v > 0 ? T.green : v < 0 ? T.red : T.dim) : (v ? (o.color || T.text) : T.dim);
     return <td key={i} style={{ padding: o.pad, fontSize: o.fs || 13, textAlign: "right",
       fontFamily: "var(--mono)", fontWeight: o.fw || 400, color, whiteSpace: "nowrap", ...bord,
@@ -661,9 +696,9 @@ function celdasSede(cols, cur, prev, pol, o) {
   });
 }
 
-function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista = "evolucion", mes = 0, cesion = null, impuestos = null, financieros = null, netoLabel = "Resultado Neto", nombreCuenta = (x) => x, hayHistorico = false }) {
+function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista = "evolucion", mes = 0, cesion = null, impuestos = null, financieros = null, distribucion = null, retirosVivos = null, feeIvaVivo = null, netoLabel = "Resultado Neto", nombreCuenta = (x) => x, hayHistorico = false, mesMax = null }) {
   const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths: _amRaw } = sub;
-  const activeMonths = mesesVisibles(_amRaw, year, hayHistorico);
+  const activeMonths = mesesVisibles(_amRaw, year, hayHistorico, mesMax);
 
   // Cesión de utilidades (cola de apropiación, solo cuando el scope es la sede con cesión, ej. Barrio Norte).
   // Los retiros son la cuenta "Inversores" de sinClasificar → se saca de ahí para no mostrarla dos veces.
@@ -673,10 +708,21 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
   // Impuestos (Fondeadas/Rosedal): cola debajo del Resultado Operativo/Final. Las cuentas se sacan de
   // "Sin clasificar" (no duplicar) → ver computeImpuestos.
   const impData = impuestos ? computeImpuestos(pnl.sinClasificar, impuestos, resFinal) : null;
+  // Fee IVA VIVO (Rosedal): el IVA del fee a Ñako (21%) se suma a la línea "IVA Compra" como crédito fiscal
+  // (costo del mes; se recupera el mes siguiente). Es un derivado, no una cuenta → se inyecta acá.
+  if (impData && feeIvaVivo && feeIvaVivo.some(v => Math.abs(v) > 0.5)) {
+    const ic = impData.byAcc.find(a => _nkSede(a.name).includes(_nkSede("IVA Compra")));
+    if (ic) ic.cur = ic.cur.map((v, m) => (Number(v) || 0) + (feeIvaVivo[m] || 0));
+    else impData.byAcc.push({ name: "IVA Compra", cur: feeIvaVivo.map(v => Number(v) || 0) });
+    impData.total = impData.total.map((v, m) => v + (feeIvaVivo[m] || 0));
+  }
   // Resultado financiero (Fondeadas/Rosedal): intereses ganados − pérdidas, debajo de impuestos.
   const finData = financieros ? computeImpuestos(pnl.sinClasificar, financieros, resFinal) : null;
 
-  const hidden = new Set([cesKey, ...(impData?.keys || []), ...(finData?.keys || [])].filter(Boolean));
+  // Con distribución (Rosedal), la cuenta "Inversores" se muestra en el bloque de distribución → ocultarla de
+  // "Sin clasificar" para no duplicar el display.
+  const invKey = distribucion ? Object.keys(pnl.sinClasificar).find(k => _nkSede(k) === _nkSede("Inversores")) : null;
+  const hidden = new Set([cesKey, invKey, ...(impData?.keys || []), ...(finData?.keys || [])].filter(Boolean));
   const sinClasView = hidden.size
     ? Object.fromEntries(Object.entries(pnl.sinClasificar).filter(([k]) => !hidden.has(k)))
     : pnl.sinClasificar;
@@ -719,24 +765,67 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
     if (!isCol("sec_gop")) { pushGrupo("gp_pers", -1); pushGrupo("gp_ocup", -1); pushGrupo("gp_mkt", -1); pushGrupo("gp_otros", -1); }
     filas.push({ kind: "subtotal", label: "Total Gastos Operativos", cur: totGastosOp, prev: subPrev.totGastosOp, pol: -1 });
     filas.push({ kind: "result", label: "Resultado Operativo", cur: resOp, prev: subPrev.resOp, pol: 1 });
-    pushGrupo("com_res", -1);
-    pushGrupo("inv_no_op", -1);
-    filas.push({ kind: "result", label: "Resultado Final", cur: resFinal, prev: subPrev.resFinal, pol: 1 });
 
-    // Impuestos (Fondeadas): cola debajo del Resultado Operativo/Final → Resultado Neto. Es P&L (flujos) →
-    // se muestra en las 3 vistas.
+    let fcfArr = resFinal;   // FCF (o Resultado Final sin cola) → base de la ganancia viva de la distribución
     if (impData || finData) {
-      if (impData) {
-        filas.push({ kind: "banda", label: "Impuestos" });
-        for (const a of impData.byAcc) filas.push({ kind: "cuenta", label: a.name, cur: a.cur, prev: ZERO12, pol: -1 });
-      }
+      // Vista con cola (Fondeadas/Rosedal): Op → Financiero → Impuestos → Resultado Final → Comisión/Inversiones
+      // → Free Cash Flow. El FCF es el mismo valor de siempre; solo cambia dónde caen las líneas.
       if (finData) {
         filas.push({ kind: "banda", label: "Resultado Financiero" });
         for (const a of finData.byAcc) filas.push({ kind: "cuenta", label: a.name, cur: a.cur, prev: ZERO12, pol: 1 });
       }
-      // Neto/FCF = Resultado Final − impuestos + financiero (intereses ganados suma).
-      const neto = resFinal.map((v, m) => (Number(v) || 0) - (impData?.total[m] || 0) + (finData?.total[m] || 0));
-      filas.push({ kind: "result", label: netoLabel, cur: neto, prev: ZERO12, pol: 1 });
+      if (impData) {
+        filas.push({ kind: "banda", label: "Impuestos" });
+        for (const a of impData.byAcc) filas.push({ kind: "cuenta", label: a.name, cur: a.cur, prev: ZERO12, pol: -1 });
+      }
+      const resFin = resOp.map((v, m) => (Number(v) || 0) + (finData?.total[m] || 0) - (impData?.total[m] || 0));
+      filas.push({ kind: "result", label: "Resultado Final", cur: resFin, prev: ZERO12, pol: 1 });
+      pushGrupo("com_res", -1);
+      pushGrupo("inv_no_op", -1);
+      fcfArr = resFin.map((v, m) => v - (sub.st.com_res?.[m] || 0) - (sub.st.inv_no_op?.[m] || 0));
+      filas.push({ kind: "result", label: netoLabel, cur: fcfArr, prev: ZERO12, pol: 1 });
+    } else {
+      // Vista estándar (P&L Sedes): Comisión/Inversiones → Resultado Final (sin cola).
+      pushGrupo("com_res", -1);
+      pushGrupo("inv_no_op", -1);
+      filas.push({ kind: "result", label: "Resultado Final", cur: resFinal, prev: subPrev.resFinal, pol: 1 });
+    }
+
+    // Distribución del FCF (Rosedal): cuenta corriente por parte (Socios / Ñako-BIGG). Apropiación del resultado
+    // (NO lo afecta) → diseño VIOLETA (igual que la cesión) para diferenciarla del P&L. Es serie de saldo →
+    // solo en Evolución. Datos del Excel del usuario (interino, DISTRIB_ROSEDAL).
+    if (distribucion && vista === "evolucion") {
+      const d = distribucion;
+      const rv = retirosVivos || { socios: ZERO12, bigg: ZERO12 };
+      // Primer mes VIVO del año: en el año de go-live desde PNL_INICIO_MES; años posteriores todo vivo; años
+      // previos todo histórico. Histórico = hardcodeo (matchea el Excel, incl. el arranque no-50/50); vivo =
+      // Ganancia = FCF/2 (50/50) y Retiros = movimientos de la cuenta Inversores por proveedor.
+      const primerVivo = year === PNL_INICIO_ANIO ? PNL_INICIO_MES : (year > PNL_INICIO_ANIO ? 0 : 12);
+      const combinar = (histGan, histRet, histSaldo, rvSide) => {
+        const gan = new Array(12).fill(0), ret = new Array(12).fill(0), saldo = new Array(12).fill(0);
+        let prev = 0;
+        for (let m = 0; m < 12; m++) {
+          if (m < primerVivo) { gan[m] = histGan?.[m] || 0; ret[m] = histRet?.[m] || 0; saldo[m] = histSaldo?.[m] || 0; }
+          else { gan[m] = (Number(fcfArr[m]) || 0) / 2; ret[m] = rvSide?.[m] || 0; saldo[m] = prev + gan[m] - ret[m]; }
+          prev = saldo[m];
+        }
+        return { gan, ret, saldo };
+      };
+      const soc = combinar(d.gananciaSocios, d.retiroSocios, d.saldoSocios, rv.socios);
+      const big = combinar(d.gananciaBigg, d.retiroBigg, d.saldoBigg, rv.bigg);
+      filas.push({ kind: "spacer" });
+      // Banda maestra colapsable: agrupa toda la distribución (Socios + Ñako/BIGG) en un solo desplegable.
+      filas.push({ kind: "banda", violet: true, key: "distrib", label: "Distribución" });
+      if (!isCol("distrib")) {
+        filas.push({ kind: "banda", violet: true, label: "Distribución — Socios" });
+        filas.push({ kind: "cesion", signed: true, cur: soc.gan, label: "Ganancia del período" });
+        filas.push({ kind: "cesion", cur: soc.ret, label: "Retiros" });
+        filas.push({ kind: "cesion", bold: true, signed: true, stock: true, cur: soc.saldo, label: "Saldo acumulado" });
+        filas.push({ kind: "banda", violet: true, label: "Distribución — Ñako / BIGG" });
+        filas.push({ kind: "cesion", signed: true, cur: big.gan, label: "Ganancia del período" });
+        filas.push({ kind: "cesion", cur: big.ret, label: "Retiros" });
+        filas.push({ kind: "cesion", bold: true, signed: true, stock: true, cur: big.saldo, label: "Saldo acumulado" });
+      }
     }
 
     // Cesión de utilidades (apropiación del resultado; NO afecta Resultado Final). Es una cuenta corriente
@@ -760,7 +849,9 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
     // Celdas de una fila de cesión (violeta, con signo). Stock (saldo) → la col TOTAL muestra el saldo final.
     const cesionCells = (f) => cols.map((col, i) => {
       if (col.kind === "var") return <td key={i} style={{ padding: "9px 12px", textAlign: "right", color: T.dim }}>—</td>;
-      const v = f.stock && col.total ? (f.cur[lastM] ?? 0) : col.get(f.cur);
+      let v;
+      if (f.stock && col.total) { let lm = lastM; while (lm > 0 && !(Number(f.cur?.[lm]) || 0)) lm--; v = Number(f.cur?.[lm]) || 0; }
+      else v = col.get(f.cur);
       return <td key={i} style={{ padding: "9px 12px", fontSize: 13, textAlign: "right", fontFamily: "var(--mono)",
         fontWeight: f.bold ? 800 : 700, color: "#6d28d9", whiteSpace: "nowrap",
         ...(col.total ? { borderLeft: `1px solid ${T.cardBorder}` } : {}) }}>{f.signed ? fmtSigned(v) : fmtN(v)}</td>;
@@ -793,13 +884,19 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
               if (f.kind === "spacer")
                 return <tr key={idx}><td colSpan={cols.length + 1} style={{ height: 16, background: "#f8fafc", borderTop: `2px solid ${T.cardBorder}` }} /></tr>;
               if (f.kind === "banda") {
-                if (f.amber) return (
-                  <tr key={idx} style={{ background: "#fffbeb" }}>
-                    <td style={{ padding: "6px 16px", fontSize: 10, fontWeight: 800, color: "#b45309", letterSpacing: ".12em",
-                      textTransform: "uppercase", ...stickyCol, background: "#fffbeb" }}>{f.label}</td>
-                    <td colSpan={cols.length} style={{ background: "#fffbeb" }} />
-                  </tr>
-                );
+                if (f.amber || f.violet) {
+                  const c = f.violet ? { bg: "#ede9fe", fg: "#6d28d9" } : { bg: "#fffbeb", fg: "#b45309" };
+                  const clickable = !!f.key;
+                  return (
+                    <tr key={idx} style={{ background: c.bg, cursor: clickable ? "pointer" : "default" }}
+                      onClick={clickable ? () => toggle(f.key) : undefined}>
+                      <td style={{ padding: "6px 16px", fontSize: 10, fontWeight: 800, color: c.fg, letterSpacing: ".12em",
+                        textTransform: "uppercase", userSelect: "none", ...stickyCol, background: c.bg }}>
+                        {clickable && <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{isCol(f.key) ? "▶" : "▼"}</span>}{f.label}</td>
+                      <td colSpan={cols.length} style={{ background: c.bg }} />
+                    </tr>
+                  );
+                }
                 return <BandaRow key={idx} label={f.label} span={cols.length + 1}
                   expanded={f.key ? !isCol(f.key) : true} onToggle={f.key ? () => toggle(f.key) : undefined} />;
               }
@@ -848,7 +945,7 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
                   <td style={{ padding: "12px 14px", fontSize: 15, fontWeight: 900, color: rc,
                     borderTop: `3px solid ${rc}`, borderBottom: `2px solid ${rc}`, ...stickyCol, background: rbg }}>{f.label}</td>
                   {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: 15, fw: 900, bySign: true,
-                    bt: `3px solid ${rc}`, bb: `2px solid ${rc}` })}
+                    stock: f.stock, lastM, bt: `3px solid ${rc}`, bb: `2px solid ${rc}` })}
                 </tr>
               );
             })}
@@ -895,9 +992,9 @@ function computeSubtotalsHuergo(pnl) {
   return { totIng, totCos, margen, ivaDeb: pnl.ivaDeb || new Array(12).fill(0), ivaCred: pnl.ivaCred || new Array(12).fill(0),
            activeMonths: [...months].sort((a, b) => a - b) };
 }
-function PnLTableHuergo({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolucion", mes = 0, hayHistorico = false }) {
+function PnLTableHuergo({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolucion", mes = 0, hayHistorico = false, mesMax = null }) {
   const { totIng, totCos, margen, activeMonths: _amRaw } = sub;
-  const activeMonths = mesesVisibles(_amRaw, year, hayHistorico);
+  const activeMonths = mesesVisibles(_amRaw, year, hayHistorico, mesMax);
   if (activeMonths.length === 0) return (
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
       padding: "60px 24px", textAlign: "center", boxShadow: T.shadow }}>
@@ -1154,10 +1251,10 @@ function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) {
 
 // P&L BIGG = P&L de HOLDING. Arriba el RESULTADO de cada negocio operativo (no la venta); después HQ
 // (ingresos − opex), y al final financieros + impuestos del grupo. `sub` = computeSubtotalsHolding.
-function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolucion", mes = 0, hayHistorico = false }) {
+function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolucion", mes = 0, hayHistorico = false, mesMax = null }) {
   const { sar, fg, wre, hqAccounts, ghqAccounts, gpvAccounts, capexAccounts,
           resOperaciones, resOpMasIngHQ, margen, resOpGrupo, resAntesImp, resGrupo, resFinal, activeMonths: _amRaw } = sub;
-  const activeMonths = mesesVisibles(_amRaw, year, hayHistorico);
+  const activeMonths = mesesVisibles(_amRaw, year, hayHistorico, mesMax);
   const hayCapex = Object.keys(capexAccounts || {}).length > 0;
   const ALLKEYS = ["sec_op", "sec_ing", "sec_gpv", "sec_opex", "sec_fin", "sec_imp", "sec_capex"];
   const [collapsed, setCollapsed] = useState(() => Object.fromEntries(ALLKEYS.map(k => [k, true])));   // arranca compactado
@@ -2512,6 +2609,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const [vistaPnl,       setVistaPnl]       = useState("evolucion");   // P&L Sedes: evolucion | mensual | ytd
   const [sinIva,         setSinIva]         = useState(() => { try { return localStorage.getItem("pnlSinIva") === "1"; } catch { return false; } });   // toggle Con/Sin IVA (recordado)
   const [mesSel,         setMesSel]         = useState(new Date().getMonth());   // mes para vistas mensual/ytd
+  const [mesCorte,       setMesCorte]       = useState(null);   // Evolución: cortar meses > mesCorte (null = todos). Para ocultar el mes en curso incompleto.
   const [year,           setYear]           = useState(CUR_YEAR);
   const [selectedSedeCCs, setSelectedSedeCCs] = useState(null);   // null = todas · [] = ninguna · [ids] = subconjunto
   const [sedeOpen,        setSedeOpen]        = useState(false);
@@ -2787,6 +2885,59 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
   const egConSueldos = useMemo(() => [...rawEg, ...salaryRows, ...gastoMovRows, ...finRows, ...histEg], [rawEg, salaryRows, gastoMovRows, finRows, histEg]);
 
+  // Traductor FX del P&L Sedes (piloto de consolidación). null en modo nativo. "real" = a USD al TC de cierre
+  // del mes de cada fila (traducí mes por mes y sumá). tcConst (constant currency) = WIP.
+  const fxConv = useMemo(
+    () => fxMode === "real" ? ((monto, moneda, anio, mes) => montoAUSD(monto, moneda, tcDelMes(tiposCambio, anio, mes))) : null,
+    [fxMode, tiposCambio]
+  );
+  // Traduce un array mensual ARS [12] a USD al TC de cierre de cada mes (o lo deja igual en modo nativo).
+  const fxArrARS = useCallback((arr, anio) => {
+    if (!fxConv || !arr) return arr;
+    return arr.map((v, m) => v ? (fxConv(v, "ARS", anio, m + 1) ?? 0) : 0);
+  }, [fxConv]);
+
+  // Retiros VIVOS de Rosedal (Segui Fit): movimientos a la cuenta "Inversores" del centro Rosedal, agrupados
+  // por proveedor → Ñako = BIGG, resto (individuos) = Socios. Alimenta la distribución del período post go-live
+  // (el histórico sigue del hardcodeo DISTRIB_ROSEDAL). { year → { socios:[12], bigg:[12], feeIva:[12] } }.
+  const retirosRosedal = useMemo(() => {
+    const out = {};
+    for (const l of egConSueldos) {
+      if (String(l.cuenta_contable || "").trim() !== "Inversores") continue;
+      if (String(l.centro_costo || "") !== "cc-2026-rosedal") continue;
+      const f = String(l.fecha || ""); if (!f) continue;
+      const y = parseInt(f.slice(0, 4), 10), m = parseInt(f.slice(5, 7), 10) - 1;
+      if (m < 0 || m > 11) continue;
+      // Solo meses VIVOS (>= go-live). Los meses históricos ya traen su distribución+fee del hardcodeo
+      // (DISTRIB_ROSEDAL) → un movimiento en un mes histórico duplicaría el fee IVA / los retiros.
+      const esVivo = (y > PNL_INICIO_ANIO) || (y === PNL_INICIO_ANIO && m >= PNL_INICIO_MES);
+      if (!esVivo) continue;
+      const prov = String(l.contraparte_nombre || l.proveedor_nombre || "").toLowerCase();
+      // Traducir al MISMO TC que el P&L (modo USD). En modo nativo, ARS crudo.
+      const amt = fxConv ? (fxConv(Math.abs(Number(l.total) || 0), "ARS", y, m + 1) ?? 0) : Math.abs(Number(l.total) || 0);
+      const o = out[y] = out[y] || { socios: new Array(12).fill(0), bigg: new Array(12).fill(0), feeIva: new Array(12).fill(0) };
+      if (/[ñn]ako/.test(prov)) {
+        // Ñako = fee facturado con IVA (el movimiento es bruto): retiro NETO = bruto/1,21; el IVA (21%) sube
+        // a la línea "IVA Compra" (crédito fiscal), no queda en el retiro de la distribución.
+        const net = amt / 1.21;
+        o.bigg[m] += net;
+        o.feeIva[m] += amt - net;
+      } else {
+        o.socios[m] += amt;   // individuos = monotributistas, sin IVA
+      }
+    }
+    return out;
+  }, [egConSueldos, fxConv]);
+
+  // Distribución histórica (DISTRIB_ROSEDAL) traducida a USD al TC de cada mes (idéntica en modo nativo).
+  const distribRosedalFx = useMemo(() => {
+    const base = DISTRIB_ROSEDAL[year];
+    if (!base || !fxConv) return base;
+    const out = {};
+    for (const k of Object.keys(base)) out[k] = fxArrARS(base[k], year);
+    return out;
+  }, [year, fxConv, fxArrARS]);
+
   // Facturación a franquiciados (read-only) → ingreso del P&L HQ, en el centro HQ de Ventas.
   const ventasCcId = useMemo(
     () => ccs.find(c => (c.grupo ?? "").toLowerCase() === "hq" && normCat(c.categoria_pnl) === "ventas")?.id ?? "",
@@ -2804,12 +2955,6 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const egDetalle  = useMemo(() => egConSueldos.filter(r => !r._tipo || ["Gasto", "Sueldo", "Financiación"].includes(r._tipo)), [egConSueldos]);
   const ingDetalle = useMemo(() => [...inConFranq, ...gastoMovRows.filter(r => r._tipo === "Ingreso" || r._tipo === "Retención")], [inConFranq, gastoMovRows]);
 
-  // Traductor FX del P&L Sedes (piloto de consolidación). null en modo nativo. "real" = a USD al TC de cierre
-  // del mes de cada fila (traducí mes por mes y sumá). tcConst (constant currency) = WIP.
-  const fxConv = useMemo(
-    () => fxMode === "real" ? ((monto, moneda, anio, mes) => montoAUSD(monto, moneda, tcDelMes(tiposCambio, anio, mes))) : null,
-    [fxMode, tiposCambio]
-  );
   // Filas pre-traducidas a USD para el consolidado (UNA vez, mes por mes). En modo nativo (fxConv null) son
   // las mismas filas → todos los P&L (Sedes/Huergo/BIGG) corren nativos en USD sin tocar su lógica. Mecanismo
   // único de traducción del consolidado.
@@ -3062,6 +3207,18 @@ export default function PantallaReportes({ sociedad = "nako" }) {
           </div>
         )}
 
+        {/* Hasta — corta la vista Evolución en un mes (para ocultar el mes en curso incompleto). */}
+        {(isPnlTiempo || isBigg) && vistaPnl === "evolucion" && (
+          <div style={{ order: isSedeLike ? 3 : 0 }}>
+            <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
+              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Hasta</label>
+            <select value={mesCorte ?? ""} onChange={e => setMesCorte(e.target.value === "" ? null : Number(e.target.value))} style={selStyle}>
+              <option value="">Todos</option>
+              {MESES.map((m, i) => <option key={i} value={i}>{m}</option>)}
+            </select>
+          </div>
+        )}
+
         {/* Sedes dropdown — jerárquico: Operación (agrupador) › Sede */}
         {showSedes && (
           <div ref={sedeRef} style={{ position: "relative", order: isSedeLike ? 1 : 0 }}>
@@ -3150,8 +3307,11 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       {isSedeLike && (
         <PnLTableSede pnl={pnlSede} sub={subSede} pnlPrev={pnlSedePrev} subPrev={subSedePrev}
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} nombreCuenta={nombreCuenta}
-          cesion={cesionSede} impuestos={isFond ? IMPUESTOS_FOND : null} financieros={isFond ? FINANCIEROS_FOND : null} netoLabel={fondCfg?.netoLabel}
-          hayHistorico={hayHistorico}
+          cesion={cesionSede} impuestos={isFond ? IMPUESTOS_FOND : null} financieros={isFond ? FINANCIEROS_FOND : null}
+          distribucion={activeTab === "op_rosedal" ? distribRosedalFx : null}
+          retirosVivos={activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null}
+          feeIvaVivo={activeTab === "op_rosedal" ? (retirosRosedal[year]?.feeIva || null) : null} netoLabel={fondCfg?.netoLabel}
+          hayHistorico={hayHistorico} mesMax={mesCorte}
           label={selectedSedeCCs === null ? "Todas las Sedes"
             : selectedSedeCCs.length === 0 ? "Ninguna sede"
             : `${selectedSedeCCs.length} seleccionada${selectedSedeCCs.length > 1 ? "s" : ""}`} />
@@ -3160,13 +3320,13 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       {/* ── P&L Huergo (Wellness Real Estate): Ingresos − Costos (horas de coaches) = Margen ── */}
       {isHuergo && (
         <PnLTableHuergo pnl={pnlHuergo} sub={subHuergo} pnlPrev={pnlHuergoPrev} subPrev={subHuergoPrev}
-          vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} hayHistorico={hayHistorico} />
+          vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} hayHistorico={hayHistorico} mesMax={mesCorte} />
       )}
 
       {/* ── P&L BIGG consolidado (subgrupos, hasta Margen Bruto) ── */}
       {activeTab === "pl_bigg" && (
         <PnLTableBigg pnl={pnlBigg} sub={subBigg} pnlPrev={pnlBiggPrev} subPrev={subBiggPrev}
-          vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} hayHistorico={hayHistorico} />
+          vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} hayHistorico={hayHistorico} mesMax={mesCorte} />
       )}
 
       {/* ── Cash Flow ── */}
