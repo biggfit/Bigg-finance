@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, Fragment } from "react";
 import { T, PageHeader } from "./theme";
-import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco, fondeoFondeadasMensual, calcSaldoPendiente, primeCache, fetchTiposCambio, tcDelMes, montoAUSD } from "../lib/numbersApi";
+import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco, fondeoFondeadasMensual, calcSaldoPendiente, primeCache, fetchTiposCambio, tcDelMes, montoAUSD, fetchPnLHistorico } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, pendienteSueldosPorLegajo, adelantoSueldosPorLegajo } from "../lib/sueldosApi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
 import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
@@ -462,8 +462,10 @@ function traducirFilasUSD(rows, fx) {
 const PNL_INICIO_ANIO = 2026;
 const PNL_INICIO_MES  = 6;   // julio (0-based): en el año del go-live no se muestran los meses previos
 // En el año del go-live, oculta las columnas de meses anteriores al go-live (Ene–Jun 2026 = vacías).
-const mesesVisibles = (activeMonths, year) =>
-  Number(year) === PNL_INICIO_ANIO ? activeMonths.filter(m => m >= PNL_INICIO_MES) : activeMonths;
+// En el año del go-live se ocultan los meses previos (Ene–Jun 2026 vacíos)… salvo cuando hay histórico cargado
+// (nb_pnl_historico), donde esos meses SÍ tienen datos → se muestran.
+const mesesVisibles = (activeMonths, year, hayHistorico = false) =>
+  (Number(year) === PNL_INICIO_ANIO && !hayHistorico) ? activeMonths.filter(m => m >= PNL_INICIO_MES) : activeMonths;
 
 // Monto de una fila del P&L: bruto (con IVA) o NETO (sin IVA → resultado real / EBITDA). El neto resta
 // el iva_monto de la fila (facturas y movimientos imputados lo traen; sueldos/otros sin IVA → neto = total).
@@ -486,7 +488,7 @@ function buildPnLSede(inRows, egRows, ccFilter, year, moneda, sinIva = false) {
   const ivaDeb = new Array(12).fill(0), ivaCred = new Array(12).fill(0);
   const add = (rows) => {
     for (const row of rows) {
-      if (!row.fecha || row.fecha < PNL_INICIO || row.fecha.slice(0,4) !== String(year)) continue;
+      if (!row.fecha || (row.fecha < PNL_INICIO && !row._historico) || row.fecha.slice(0,4) !== String(year)) continue;
       if ((row.moneda ?? "ARS") !== moneda) continue;
       if (ccFilter !== "todos" && !ccEnFiltro(ccFilter, row.centro_costo)) continue;
       const m = parseInt(row.fecha.slice(5,7), 10) - 1;
@@ -649,9 +651,9 @@ function celdasSede(cols, cur, prev, pol, o) {
   });
 }
 
-function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista = "evolucion", mes = 0, cesion = null, impuestos = null, netoLabel = "Resultado Neto", nombreCuenta = (x) => x }) {
+function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista = "evolucion", mes = 0, cesion = null, impuestos = null, netoLabel = "Resultado Neto", nombreCuenta = (x) => x, hayHistorico = false }) {
   const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths: _amRaw } = sub;
-  const activeMonths = mesesVisibles(_amRaw, year);
+  const activeMonths = mesesVisibles(_amRaw, year, hayHistorico);
 
   // Cesión de utilidades (cola de apropiación, solo cuando el scope es la sede con cesión, ej. Barrio Norte).
   // Los retiros son la cuenta "Inversores" de sinClasificar → se saca de ahí para no mostrarla dos veces.
@@ -851,7 +853,7 @@ function buildPnLHuergo(inRows, egRows, ccFilter, year, moneda, sinIva = false) 
   const ivaDeb = new Array(12).fill(0), ivaCred = new Array(12).fill(0);   // ingreso → débito, costo → crédito
   const add = (rows, bucket, esIng) => {
     for (const row of rows) {
-      if (!row.fecha || row.fecha < PNL_INICIO || row.fecha.slice(0, 4) !== String(year)) continue;
+      if (!row.fecha || (row.fecha < PNL_INICIO && !row._historico) || row.fecha.slice(0, 4) !== String(year)) continue;
       if ((row.moneda ?? "ARS") !== moneda) continue;
       if (!ccEnFiltro(ccFilter, row.centro_costo)) continue;
       const m = parseInt(row.fecha.slice(5, 7), 10) - 1; if (m < 0 || m > 11) continue;
@@ -873,9 +875,9 @@ function computeSubtotalsHuergo(pnl) {
   return { totIng, totCos, margen, ivaDeb: pnl.ivaDeb || new Array(12).fill(0), ivaCred: pnl.ivaCred || new Array(12).fill(0),
            activeMonths: [...months].sort((a, b) => a - b) };
 }
-function PnLTableHuergo({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolucion", mes = 0 }) {
+function PnLTableHuergo({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolucion", mes = 0, hayHistorico = false }) {
   const { totIng, totCos, margen, activeMonths: _amRaw } = sub;
-  const activeMonths = mesesVisibles(_amRaw, year);
+  const activeMonths = mesesVisibles(_amRaw, year, hayHistorico);
   if (activeMonths.length === 0) return (
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
       padding: "60px 24px", textAlign: "center", boxShadow: T.shadow }}>
@@ -997,7 +999,7 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
   const ivaDeb = new Array(12).fill(0), ivaCred = new Array(12).fill(0);
   const add = (rows, forcedSide) => {
     for (const row of rows) {
-      if (!row.fecha || row.fecha < PNL_INICIO || row.fecha.slice(0, 4) !== String(year)) continue;
+      if (!row.fecha || (row.fecha < PNL_INICIO && !row._historico) || row.fecha.slice(0, 4) !== String(year)) continue;
       if ((row.moneda ?? "ARS") !== moneda) continue;
       const m = parseInt(row.fecha.slice(5, 7), 10) - 1;
       if (m < 0 || m > 11) continue;
@@ -1132,10 +1134,10 @@ function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) {
 
 // P&L BIGG = P&L de HOLDING. Arriba el RESULTADO de cada negocio operativo (no la venta); después HQ
 // (ingresos − opex), y al final financieros + impuestos del grupo. `sub` = computeSubtotalsHolding.
-function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolucion", mes = 0 }) {
+function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolucion", mes = 0, hayHistorico = false }) {
   const { sar, fg, wre, hqAccounts, ghqAccounts, gpvAccounts, capexAccounts,
           resOperaciones, resOpMasIngHQ, margen, resOpGrupo, resAntesImp, resGrupo, resFinal, activeMonths: _amRaw } = sub;
-  const activeMonths = mesesVisibles(_amRaw, year);
+  const activeMonths = mesesVisibles(_amRaw, year, hayHistorico);
   const hayCapex = Object.keys(capexAccounts || {}).length > 0;
   const ALLKEYS = ["sec_op", "sec_ing", "sec_gpv", "sec_opex", "sec_fin", "sec_imp", "sec_capex"];
   const [collapsed, setCollapsed] = useState(() => Object.fromEntries(ALLKEYS.map(k => [k, true])));   // arranca compactado
@@ -2497,6 +2499,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const [monedaSel,      setMonedaSel]      = useState("ARS");   // valor crudo del selector (incl. modos FX consolidados)
   const [tiposCambio,    setTiposCambio]    = useState({});      // nb_tipos_cambio: mapa YYYY-MM → tasas USD
   useEffect(() => { fetchTiposCambio().then(setTiposCambio).catch(() => {}); }, []);
+  const [rawHist,        setRawHist]        = useState([]);      // nb_pnl_historico: leaf rows pre go-live (USD, sin IVA)
+  useEffect(() => { fetchPnLHistorico().then(r => setRawHist(Array.isArray(r) ? r : [])).catch(() => {}); }, []);
   // Modo de consolidación FX derivado del selector. "native" = filtra por moneda (como siempre);
   // "real" = traduce TODO a USD al TC de cierre de cada mes. ("USD · Constante" / constant currency = WIP.)
   const fxMode   = monedaSel === "USD_REAL" ? "real" : "native";
@@ -2734,7 +2738,34 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   // Financiaciones: capital del impuesto (plan AFIP) + interés/IVA/impuestos por cuota (mes a mes).
   const finRows = useMemo(() => financiacionToPnLRows(rawFin, ""), [rawFin]);
 
-  const egConSueldos = useMemo(() => [...rawEg, ...salaryRows, ...gastoMovRows, ...finRows], [rawEg, salaryRows, gastoMovRows, finRows]);
+  // Histórico pre go-live (nb_pnl_historico): leaf rows en moneda nativa, con dos columnas de IVA (`neto` = sin
+  // IVA, `total` = con IVA → iva_monto = total − neto). Se parten en ingreso/egreso por la naturaleza de la
+  // cuenta (mismo criterio que lo vivo) y se taguean `_historico` → saltan el corte del go-live en los builders.
+  const { histIn, histEg } = useMemo(() => {
+    const ins = [], egs = [];
+    for (const r of (rawHist || [])) {
+      const cuenta  = String(r.cuenta_contable || "").trim();
+      const meta    = cuentaMap?.get(cuenta);
+      const catPnl  = normCat(meta?.categoria_pnl);
+      const catSede = String(meta?.categoria_pnl_sede || "").trim().toLowerCase();
+      // Solo VENTAS/otros ingresos van por el lado ingreso (rutean a vta/int/ger/wre/hq). Financieros (incl.
+      // Intereses Ganados), impuestos, costos y opex van por egRows → caen en su branch del motor por cuenta.
+      const esIngreso = catSede === "ventas" || catSede === "otros ingresos" || catPnl === "ventas";
+      const total = Number(r.total) || 0, neto = Number(r.neto) || 0;
+      const row = {
+        fecha: String(r.fecha || "").slice(0, 10), centro_costo: r.centro_costo || "",
+        cuenta_contable: cuenta, sociedad: String(r.sociedad || "").trim(),
+        moneda: String(r.moneda || "ARS").trim().toUpperCase(),
+        total, iva_monto: total - neto, subtipo: esIngreso ? "INGRESO" : "EGRESO",
+        _historico: true, _tipo: "Histórico",
+      };
+      (esIngreso ? ins : egs).push(row);
+    }
+    return { histIn: ins, histEg: egs };
+  }, [rawHist, cuentaMap]);
+  const hayHistorico = rawHist.length > 0;   // hay overlay pre go-live → mostrar los meses previos al go-live
+
+  const egConSueldos = useMemo(() => [...rawEg, ...salaryRows, ...gastoMovRows, ...finRows, ...histEg], [rawEg, salaryRows, gastoMovRows, finRows, histEg]);
 
   // Facturación a franquiciados (read-only) → ingreso del P&L HQ, en el centro HQ de Ventas.
   const ventasCcId = useMemo(
@@ -2745,7 +2776,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     () => franquiciasIngresoPnLRows(rawFranq, "", ventasCcId).map(r => ({ ...r, _tipo: "Franquicia" })),
     [rawFranq, ventasCcId]
   );
-  const inConFranq = useMemo(() => [...rawIn, ...franqRows], [rawIn, franqRows]);
+  const inConFranq = useMemo(() => [...rawIn, ...franqRows, ...histIn], [rawIn, franqRows, histIn]);
 
   // Detalle de Informes: las MISMAS fuentes que el P&L (comprobantes + gastos directos + sueldos +
   // financiaciones), tagueadas por `_tipo`. Egresos = todo lo que resta en el resultado; Ingresos = ventas
@@ -2820,7 +2851,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     for (const r of inBigg) {
       if (_nkSede(r.cuenta_contable) !== _nkSede("Fee de Gestion y Adm")) continue;
       if (!nucleoEmpresas.has((r.sociedad ?? "").trim())) continue;
-      if (!r.fecha || r.fecha < PNL_INICIO || r.fecha.slice(0, 4) !== String(yr)) continue;
+      if (!r.fecha || (r.fecha < PNL_INICIO && !r._historico) || r.fecha.slice(0, 4) !== String(yr)) continue;
       if ((r.moneda ?? "ARS") !== monedaPL) continue;
       const m = parseInt(r.fecha.slice(5, 7), 10) - 1;
       if (m >= 0 && m < 12) { fRes[m] += montoPnL(r, sinIva); if (sinIva) fDeb[m] += Number(r.iva_monto) || 0; }
@@ -3100,6 +3131,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         <PnLTableSede pnl={pnlSede} sub={subSede} pnlPrev={pnlSedePrev} subPrev={subSedePrev}
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} nombreCuenta={nombreCuenta}
           cesion={cesionSede} impuestos={isFond ? IMPUESTOS_FOND : null} netoLabel={fondCfg?.netoLabel}
+          hayHistorico={hayHistorico}
           label={selectedSedeCCs === null ? "Todas las Sedes"
             : selectedSedeCCs.length === 0 ? "Ninguna sede"
             : `${selectedSedeCCs.length} seleccionada${selectedSedeCCs.length > 1 ? "s" : ""}`} />
@@ -3108,13 +3140,13 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       {/* ── P&L Huergo (Wellness Real Estate): Ingresos − Costos (horas de coaches) = Margen ── */}
       {isHuergo && (
         <PnLTableHuergo pnl={pnlHuergo} sub={subHuergo} pnlPrev={pnlHuergoPrev} subPrev={subHuergoPrev}
-          vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} />
+          vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} hayHistorico={hayHistorico} />
       )}
 
       {/* ── P&L BIGG consolidado (subgrupos, hasta Margen Bruto) ── */}
       {activeTab === "pl_bigg" && (
         <PnLTableBigg pnl={pnlBigg} sub={subBigg} pnlPrev={pnlBiggPrev} subPrev={subBiggPrev}
-          vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} />
+          vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} hayHistorico={hayHistorico} />
       )}
 
       {/* ── Cash Flow ── */}

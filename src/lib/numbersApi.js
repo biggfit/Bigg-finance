@@ -72,7 +72,9 @@ async function get(resource, params = {}) {
   })();
 
   _inflight.set(key, req);
-  req.finally(() => _inflight.delete(key));
+  // La cadena de limpieza no debe generar un unhandled-rejection propio si `req` rechaza (el error real
+  // se propaga por el `req` devuelto, que el caller sí maneja).
+  req.finally(() => _inflight.delete(key)).catch(() => {});
   return req;
 }
 
@@ -176,7 +178,9 @@ export async function getMulti(specs = []) {
     throw lastErr;
   })();
   _inflight.set(key, req);
-  req.finally(() => _inflight.delete(key));
+  // La cadena de limpieza no debe generar un unhandled-rejection propio si `req` rechaza (el error real
+  // se propaga por el `req` devuelto, que el caller sí maneja).
+  req.finally(() => _inflight.delete(key)).catch(() => {});
   return req;
 }
 
@@ -1049,6 +1053,16 @@ export async function updateCentroCosto(id, patch) {
 
 export async function deleteCentroCosto(id) {
   return post({ action: "del", sheet: "nb_centros_costo", id });
+}
+
+// ─── P&L HISTÓRICO (overlay pre go-live) ─────────────────────────────────────
+// Totales mensuales pre-agregados del período anterior al go-live (Ene-2025 → Jun-2026),
+// cargados a mano desde el Excel del usuario (USD, ya neto/sin IVA). Cada fila = un leaf del P&L
+// (mismo shape que una línea viva) → los motores de P&L los agregan igual que lo vivo, sin lógica
+// aparte. Columnas: fecha (YYYY-MM-01), centro_costo (id), cuenta_contable, sociedad, moneda, total.
+export async function fetchPnLHistorico() {
+  const rows = await get("nb_pnl_historico").catch(() => []);
+  return (Array.isArray(rows) ? rows : []).filter(r => r && r.fecha && (Number(r.total) || 0) !== 0);
 }
 
 // ─── TIPOS DE CAMBIO ─────────────────────────────────────────────────────────
