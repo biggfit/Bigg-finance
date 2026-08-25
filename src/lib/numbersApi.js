@@ -1826,6 +1826,73 @@ export async function appendRetenciones({ sociedad, documento_id, fecha, moneda 
   return { ok: true, n: rows.length };
 }
 
+// ── Retenciones PRACTICADAS sobre una factura de COMPRA (somos agentes de retención) ──
+// El caso inverso a la retención sufrida: cuando le pagamos a un proveedor le retenemos un impuesto
+// (Ganancias/IVA/IIBB) y se lo depositamos a AFIP por VEP. Contablemente NO es un gasto nuestro — el
+// gasto ya devengó completo en la factura de compra; la retención sólo RECLASIFICA el pasivo: baja lo
+// que le debemos al proveedor y crea un "por pagar" a AFIP. Por eso NINGUNA de las dos patas toca el
+// P&L ni la caja (no hay banco). Consolidado POR VEP: N retenciones de una acción → un comprobante AFIP.
+//   · Pata proveedor: N filas nb_movimientos tipo=PAGO, SIN cuenta_bancaria (no es caja),
+//     documento_id = la factura → bajan su saldo (calcSaldoPendiente cuenta todo PAGO). origen=
+//     "retencion_practicada" (NO "retencion"): así movimientoToPnLRows las SALTEA y no las cuenta como costo.
+//   · Pata AFIP: UN comprobante EGRESO (nb_comprobantes) a nombre de AFIP, nro_comp=VEP, vto=venc. del VEP,
+//     tag RETDEP_TAG en la nota → aparece en "A Pagar"/CxP y se cancela al pagar el VEP; el P&L lo excluye por el tag.
+// Orden: primero el "por pagar" AFIP, después el neteo del proveedor. Si el 2º POST falla, el pasivo
+// queda SOBREvaluado (proveedor entero + AFIP) y VISIBLE — nunca subvaluado (plata que se esfuma).
+// retenciones: [{ cuenta, cuentaNombre, monto }]   afip: { proveedorId, proveedor, vep, vto, centro }
+export const RETDEP_TAG = "[RETDEP]";
+export async function aplicarRetencionPracticada({
+  sociedad, factura_id, factura_nro = "", fecha, moneda = "ARS",
+  proveedor_id = "", proveedor_nombre = "", retenciones = [], afip = {},
+}) {
+  const rets = (retenciones || []).filter(r => Math.abs(Number(r?.monto) || 0) > 0.01 && r?.cuenta);
+  if (!rets.length) throw new Error("No hay retenciones para aplicar.");
+  if (!factura_id) throw new Error("Falta la factura sobre la que se aplican las retenciones.");
+  const created_at = new Date().toISOString();
+  const vep = afip.vep || "";
+  const refFC = factura_nro || factura_id;
+  const lbl = (r) => `Ret. ${r.cuentaNombre || ""} s/ ${refFC}`.replace(/\s+/g, " ").trim();
+
+  // 1) Pata AFIP — comprobante EGRESO consolidado por VEP (una línea por retención).
+  const id_comp = newId("EG");
+  const compRows = rets.map((r, i) => {
+    const monto = round2(Math.abs(Number(r.monto) || 0));
+    return {
+      id: `${id_comp}-L${pad(i + 1)}`, id_comp, sociedad, fecha,
+      vto: afip.vto || "",
+      subtipo: "EGRESO",
+      contraparte_id: afip.proveedorId || "",
+      contraparte_nombre: afip.proveedor || "AFIP",
+      cuenta_contable: r.cuentaNombre || "",
+      cuenta_contable_id: r.cuenta || "",
+      moneda, centro_costo: afip.centro || "",
+      subtotal: monto, iva_rate: 0, iva_monto: 0, total: monto,
+      nro_comp: vep,
+      nota: `${RETDEP_TAG} ${lbl(r)}${vep ? ` · VEP ${vep}` : ""}`.trim(),
+      created_at,
+    };
+  });
+  await post({ action: "add_batch", sheet: "nb_comprobantes", rows: compRows });
+
+  // 2) Pata proveedor — neteo SIN caja que baja el saldo de la factura.
+  const netRows = rets.map(r => ({
+    id: newId("RETP"), sociedad, fecha,
+    tipo: "PAGO", cuenta_bancaria: "", cuenta_destino: "",
+    cuenta_contable: "", centro_costo: "", moneda,
+    monto: -round2(Math.abs(Number(r.monto) || 0)),
+    documento_id: factura_id,
+    concepto: lbl(r),
+    contraparte_id: proveedor_id, contraparte_nombre: proveedor_nombre || "",
+    origen: "retencion_practicada",
+    nota: `${RETDEP_TAG}${vep ? ` VEP ${vep}` : ""}`.trim(),
+    created_at,
+  }));
+  await post({ action: "add_batch", sheet: "nb_movimientos", rows: netRows });
+
+  const totalRetenido = rets.reduce((s, r) => s + round2(Math.abs(Number(r.monto) || 0)), 0);
+  return { ok: true, id_comp, totalRetenido, n: rets.length };
+}
+
 // Ignora una línea del extracto: la descarta sin contabilizar. Soft-mark (no borra):
 // la fila conserva su `saldo=` en referencia → el dedup la ve y NO la re-crea al re-subir.
 // Reversible con restaurarMovimiento. motivo: texto libre (para haberes = "haberes:<lote>").

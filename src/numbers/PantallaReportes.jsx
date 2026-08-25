@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect, useRef, Fragment } from "react";
 import { T, PageHeader } from "./theme";
-import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco, fondeoFondeadasMensual, calcSaldoPendiente, primeCache, fetchTiposCambio, tcDelMes, montoAUSD, fetchPnLHistorico } from "../lib/numbersApi";
+import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco, fondeoFondeadasMensual, calcSaldoPendiente, primeCache, fetchTiposCambio, tcDelMes, montoAUSD, fetchPnLHistorico, RETDEP_TAG } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, pendienteSueldosPorLegajo, adelantoSueldosPorLegajo } from "../lib/sueldosApi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
 import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
@@ -2966,7 +2966,11 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   }, [rawHist, cuentaMap]);
   const hayHistorico = rawHist.length > 0;   // hay overlay pre go-live → mostrar los meses previos al go-live
 
-  const egConSueldos = useMemo(() => [...rawEg, ...salaryRows, ...gastoMovRows, ...finRows, ...histEg], [rawEg, salaryRows, gastoMovRows, finRows, histEg]);
+  // Los comprobantes de retención practicada (tag RETDEP) son el "por pagar a AFIP" que nace al retenerle
+  // a un proveedor: son PASIVO (viven en CxP vía rawEg), NO resultado del período (el gasto ya devengó en la
+  // factura de compra). Se excluyen de TODOS los P&L acá, en el único punto donde rawEg alimenta el resultado.
+  const egParaPnL = useMemo(() => rawEg.filter(r => !String(r.nota || "").includes(RETDEP_TAG)), [rawEg]);
+  const egConSueldos = useMemo(() => [...egParaPnL, ...salaryRows, ...gastoMovRows, ...finRows, ...histEg], [egParaPnL, salaryRows, gastoMovRows, finRows, histEg]);
 
   // Traductor FX del P&L Sedes (piloto de consolidación). null en modo nativo. "real" = a USD al TC de cierre
   // del mes de cada fila (traducí mes por mes y sumá). tcConst (constant currency) = WIP.

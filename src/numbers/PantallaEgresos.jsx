@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import { T, ESTADO_EGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
-import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, deleteMovTesoreria, updateMovTesoreria, shortId, appendProveedor, appendCuenta } from "../lib/numbersApi";
+import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, deleteMovTesoreria, updateMovTesoreria, shortId, appendProveedor, appendCuenta, aplicarRetencionPracticada } from "../lib/numbersApi";
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 import { makeResolveCC, makeResolveCB, inputStyle, CCSelectOptions, makeCrearMaestro, stripForDuplicate } from "./formUtils";
 import NuevoEgresoModal from "./NuevoEgresoModal";
@@ -144,6 +144,132 @@ function AgregarPagoModal({ egreso, saldoPendiente, cuentas, onClose, onSave }) 
   );
 }
 
+// ─── Modal: Aplicar Retención (practicada) ────────────────────────────────────
+// Sobre una factura de compra YA cargada: retenemos impuestos (Ganancias/IVA/IIBB) y los depositamos
+// a AFIP por VEP. Baja el saldo al proveedor y crea el "por pagar a AFIP" con el vencimiento del VEP.
+function RegistrarRetencionPracticadaModal({ egreso, saldoPendiente, cuentas = [], centros = [], proveedores = [], onClose, onSave }) {
+  const cuentasOrd = useMemo(() => [...cuentas].sort((a, b) => String(a.nombre ?? "").localeCompare(String(b.nombre ?? ""))), [cuentas]);
+  const cuentaMap  = useMemo(() => new Map(cuentas.map(c => [String(c.id), c])), [cuentas]);
+  // Proveedor AFIP: se detecta por nombre; si no existe uno, el usuario lo elige del maestro.
+  const afipDetectado = useMemo(() => proveedores.find(p => /afip|arca|a\.?f\.?i\.?p/i.test(p.nombre ?? "")) || null, [proveedores]);
+  // Centro de las retenciones = "HQ - Impuestos" (cosmético: el pasivo AFIP se excluye del P&L por su tag).
+  const centroImpuestos = useMemo(
+    () => (centros.find(c => (c.grupo ?? "").toLowerCase() === "hq" && /impuesto/i.test(c.nombre ?? "")) || centros.find(c => /impuesto/i.test(c.nombre ?? "")))?.id || "",
+    [centros]);
+
+  const [fecha, setFecha]     = useState(new Date().toISOString().slice(0, 10));
+  const [vep, setVep]         = useState("");
+  const [vto, setVto]         = useState("");
+  const [afipId, setAfipId]   = useState("");
+  const [lineas, setLineas]   = useState([{ cuenta: "", monto: "" }]);
+  const afipProvId = afipId || afipDetectado?.id || "";
+  const afipProv   = proveedores.find(p => String(p.id) === String(afipProvId));
+
+  const saldo  = saldoPendiente ?? egreso.importe ?? 0;
+  const total  = lineas.reduce((s, l) => s + (Number(l.monto) || 0), 0);
+  const excede = total > saldo + 0.01;
+  const alProveedor = Math.max(0, saldo - total);
+  const canSave = fecha && vto && vep.trim() && afipProvId && lineas.some(l => l.cuenta && Number(l.monto) > 0) && !excede;
+  const upd = (i, k, v) => setLineas(ls => ls.map((l, idx) => idx === i ? { ...l, [k]: v } : l));
+
+  const inp = { width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`, borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text, fontFamily:T.font, outline:"none", boxSizing:"border-box" };
+  const lbl = { fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:5 };
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.5)", zIndex:500,
+      display:"flex", alignItems:"center", justifyContent:"center", padding:16 }} onClick={onClose}>
+      <div className="fade" style={{ background:T.card, borderRadius:10, width:540, maxWidth:"97vw",
+        boxShadow:"0 20px 60px rgba(0,0,0,.3)", overflow:"hidden" }} onClick={e => e.stopPropagation()}>
+
+        <div style={{ background:"#5b21b6", padding:"14px 22px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <div>
+            <div style={{ fontSize:15, fontWeight:800, color:"#ddd6fe" }}>Aplicar Retención</div>
+            <div style={{ fontSize:11, color:"rgba(221,214,254,.55)", marginTop:2 }}>{egreso.proveedor} · Total: {fmtMoney(egreso.importe, egreso.moneda)}</div>
+            <div style={{ fontSize:11, color:"#c4b5fd", marginTop:2, fontWeight:700 }}>Saldo pendiente: {fmtMoney(saldo, egreso.moneda)}</div>
+          </div>
+          <button onClick={onClose} style={{ background:"transparent", border:"none", color:"rgba(255,255,255,.5)", fontSize:20, cursor:"pointer", lineHeight:1 }}>✕</button>
+        </div>
+
+        <div style={{ padding:24, display:"flex", flexDirection:"column", gap:14 }}>
+          {/* Retenciones */}
+          <div>
+            <label style={lbl}>Retenciones <span style={{ color:T.red }}>*</span></label>
+            <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+              {lineas.map((l, i) => (
+                <div key={i} style={{ display:"flex", gap:8, alignItems:"center" }}>
+                  <select value={l.cuenta} onChange={e => upd(i, "cuenta", e.target.value)} style={{ ...inp, flex:1 }}>
+                    <option value="">— cuenta (Ganancias, IVA, IIBB…) —</option>
+                    {cuentasOrd.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                  </select>
+                  <input type="number" value={l.monto} onChange={e => upd(i, "monto", e.target.value)} placeholder="monto"
+                    style={{ ...inp, width:120, textAlign:"right" }} />
+                  {lineas.length > 1 && <button onClick={() => setLineas(ls => ls.filter((_, idx) => idx !== i))} title="Quitar"
+                    style={{ border:"none", background:"transparent", color:T.muted, cursor:"pointer", fontSize:14 }}>✕</button>}
+                </div>
+              ))}
+              <button onClick={() => setLineas(ls => [...ls, { cuenta:"", monto:"" }])}
+                style={{ alignSelf:"flex-start", fontSize:12, border:"none", background:"transparent", color:"#7c3aed", cursor:"pointer", fontWeight:700 }}>+ otra retención</button>
+            </div>
+            <div style={{ fontSize:11, marginTop:6, fontWeight:700, color: excede ? "#dc2626" : T.muted }}>
+              Total retención: {fmtMoney(total, egreso.moneda)}{excede ? " — supera el saldo pendiente" : ""}
+            </div>
+          </div>
+
+          {/* VEP: número + vencimiento + fecha */}
+          <div style={{ display:"grid", gridTemplateColumns:"1.3fr 1fr 1fr", gap:12 }}>
+            <div>
+              <label style={lbl}>N° VEP <span style={{ color:T.red }}>*</span></label>
+              <input value={vep} onChange={e => setVep(e.target.value)} placeholder="1661738826" style={inp} />
+            </div>
+            <div>
+              <label style={lbl}>Vto. VEP <span style={{ color:T.red }}>*</span></label>
+              <input type="date" value={vto} onChange={e => setVto(e.target.value)} style={inp} />
+            </div>
+            <div>
+              <label style={lbl}>Fecha</label>
+              <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={inp} />
+            </div>
+          </div>
+
+          {/* Proveedor AFIP (destino del VEP) */}
+          <div>
+            <label style={lbl}>Organismo (destino del VEP) <span style={{ color:T.red }}>*</span></label>
+            <select value={afipProvId} onChange={e => setAfipId(e.target.value)} style={inp}>
+              <option value="">— elegí el proveedor AFIP/ARCA —</option>
+              {[...proveedores].sort((a, b) => String(a.nombre ?? "").localeCompare(String(b.nombre ?? ""))).map(p => (
+                <option key={p.id} value={p.id}>{p.nombre}</option>
+              ))}
+            </select>
+            {!afipProvId && <div style={{ fontSize:11, color:"#dc2626", marginTop:4 }}>No hay un proveedor AFIP/ARCA cargado — creá uno en Maestros o elegí el que corresponda.</div>}
+          </div>
+
+          {/* Resumen del reparto */}
+          <div style={{ background:"#faf5ff", border:"1px solid #e9d5ff", borderRadius:8, padding:"10px 14px", fontSize:12.5, color:T.text }}>
+            <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+              <span>Queda a pagar al proveedor:</span><b>{fmtMoney(alProveedor, egreso.moneda)}</b>
+            </div>
+            <div style={{ display:"flex", justifyContent:"space-between", color:"#6d28d9" }}>
+              <span>A depositar a AFIP (VEP):</span><b>{fmtMoney(total, egreso.moneda)}</b>
+            </div>
+          </div>
+
+          <div style={{ display:"flex", justifyContent:"flex-end", gap:10, paddingTop:4 }}>
+            <button onClick={onClose} style={{ background:"#dc2626", border:"none", borderRadius:8, padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff", cursor:"pointer", fontFamily:T.font }}>Cancelar ✕</button>
+            <button disabled={!canSave} onClick={() => { onSave({
+                factura_id: egreso.id, factura_nro: egreso.nroComp || "", fecha, moneda: egreso.moneda,
+                proveedor_id: egreso.proveedorId || "", proveedor_nombre: egreso.proveedor || "",
+                retenciones: lineas.filter(l => l.cuenta && Number(l.monto) > 0)
+                  .map(l => ({ cuenta: l.cuenta, cuentaNombre: cuentaMap.get(String(l.cuenta))?.nombre || "", monto: Number(l.monto) })),
+                afip: { proveedorId: afipProvId, proveedor: afipProv?.nombre || "AFIP", vep: vep.trim(), vto, centro: centroImpuestos },
+              }); }}
+              style={{ background: canSave ? "#7c3aed" : "#9ca3af", border:"none", borderRadius:8, padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff", cursor: canSave ? "pointer" : "default", fontFamily:T.font }}>Guardar ✓</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Modal: Editar Pago ───────────────────────────────────────────────────────
 function EditarPagoModal({ pago, sociedad, cuentasSoc, onClose, onSaved }) {
   const [form, setForm] = useState({
@@ -265,7 +391,7 @@ function EditarPagoModal({ pago, sociedad, cuentasSoc, onClose, onSaved }) {
 }
 
 // ─── Modal: Ver Detalle (estilo Contagram) ───────────────────────────────────
-function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClose, onAgregarPago, onEditar, onEditarPago, onIrACaja, asPage = false }) {
+function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClose, onAgregarPago, onAplicarRetencion, onEditar, onEditarPago, onIrACaja, asPage = false }) {
   const resolveCB = makeResolveCB(cuentasBancarias);
   const resolveCC = makeResolveCC(centrosCosto);
   const pagado  = egreso.pagosVinculados?.reduce((s,p) => s + Math.abs(Number(p.monto)||0), 0) ?? 0;
@@ -399,12 +525,19 @@ function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClos
                   }
                 </tbody>
               </table>
-              <div style={{ padding:"10px 14px", borderTop:`1px solid ${T.cardBorder}` }}>
+              <div style={{ padding:"10px 14px", borderTop:`1px solid ${T.cardBorder}`, display:"flex", gap:8, flexWrap:"wrap" }}>
                 <button onClick={() => { if (!asPage) onClose?.(); onAgregarPago(egreso); }} style={{
                   background:"transparent", border:`1.5px dashed ${T.cardBorder}`,
                   borderRadius:7, padding:"6px 16px", fontSize:12, color:"#0e7490",
                   cursor:"pointer", fontFamily:T.font, fontWeight:700,
                   display:"flex", alignItems:"center", gap:6 }}>+ Agregar Pago</button>
+                {onAplicarRetencion && (egreso.saldoPendiente ?? egreso.importe ?? 0) > 0 && (
+                  <button onClick={() => { if (!asPage) onClose?.(); onAplicarRetencion(egreso); }} style={{
+                    background:"transparent", border:`1.5px dashed #ddd6fe`,
+                    borderRadius:7, padding:"6px 16px", fontSize:12, color:"#7c3aed",
+                    cursor:"pointer", fontFamily:T.font, fontWeight:700,
+                    display:"flex", alignItems:"center", gap:6 }}>% Aplicar Retención</button>
+                )}
               </div>
             </div>
           </div>
@@ -648,7 +781,7 @@ function CtaCteModal({ proveedor, documentos, onClose }) {
 }
 
 // ─── Dropdown de acciones por fila ────────────────────────────────────────────
-function RowMenu({ egreso, onPago, onDetalle, onEditar, onDuplicar, onCtaCte, onMigrar, onEliminar }) {
+function RowMenu({ egreso, onPago, onRetencion, onDetalle, onEditar, onDuplicar, onCtaCte, onMigrar, onEliminar }) {
   const [open, setOpen] = useState(false);
   const [pos,  setPos]  = useState({ top:0, left:0 });
   const btnRef = useRef(null);
@@ -719,6 +852,7 @@ function RowMenu({ egreso, onPago, onDetalle, onEditar, onDuplicar, onCtaCte, on
           {onMigrar && item("Cambiar de sociedad", onMigrar)}
           {divider}
           {item("Agregar Pago",  onPago, "#0e7490")}
+          {onRetencion && item("Aplicar Retención", onRetencion, "#7c3aed")}
           {item("Cta. Cte.",     onCtaCte)}
           {divider}
           {item("Eliminar",      onEliminar, T.red)}
@@ -771,6 +905,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
   const [loading, setLoading]           = useState(true);
   const [error, setError]               = useState(null);
   const [showPago, setShowPago]             = useState(null);
+  const [showRetencion, setShowRetencion]   = useState(null);
   const [showDetalle, setShowDetalle]       = useState(null);
   const [showEditar, setShowEditar]         = useState(null);
   const [editingPago, setEditingPago]       = useState(null);
@@ -974,6 +1109,18 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
     }
   };
 
+  const handleRetencion = async (data) => {
+    try {
+      const r = await aplicarRetencionPracticada({ ...data, sociedad });
+      setShowRetencion(null);
+      await cargarEgresos();
+      return r;
+    } catch (e) {
+      alert("Error al aplicar la retención: " + e.message);
+      throw e;
+    }
+  };
+
   // ── Páginas de alta: no esperan el loading de la lista ───────────────────────
   // ── Detalle como página ──────────────────────────────────────────────────────
   if (showDetalle && subView !== "new-compra") {
@@ -986,11 +1133,13 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
           centrosCosto={centrosCosto}
           onClose={() => setShowDetalle(null)}
           onAgregarPago={e => setShowPago(e)}
+          onAplicarRetencion={e => setShowRetencion(e)}
           onEditar={e => { setShowDetalle(null); setShowEditar(e); }}
           onEditarPago={p => setEditingPago(p)}
           onIrACaja={onIrACaja}
         />
         {showPago    && <AgregarPagoModal egreso={showPago} saldoPendiente={showPago.saldoPendiente ?? showPago.importe} cuentas={cuentasSoc} onClose={() => setShowPago(null)} onSave={handlePago} />}
+        {showRetencion && <RegistrarRetencionPracticadaModal egreso={showRetencion} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentas={cuentas} centros={centrosCosto} proveedores={proveedores} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
         {editingPago && <EditarPagoModal  pago={editingPago} sociedad={sociedad} cuentasSoc={cuentasSoc} onClose={() => setEditingPago(null)} onSaved={() => { setEditingPago(null); cargarEgresos(); }} />}
       </>
     );
@@ -1102,6 +1251,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
                     <RowMenu
                       egreso={e}
                       onPago={()     => setShowPago(e)}
+                      onRetencion={(e.saldoPendiente ?? e.importe ?? 0) > 0 ? () => setShowRetencion(e) : undefined}
                       onDetalle={()  => setShowDetalle(e)}
                       onEditar={()   => setShowEditar(e)}
                       onDuplicar={() => duplicarEgreso(e)}
@@ -1158,6 +1308,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
       {/* Modales */}
       {showEditar  && <NuevoEgresoModal  sociedad={sociedad} proveedores={proveedores} cuentas={cuentas} centrosCosto={centrosCosto} initialData={showEditar} onClose={() => setShowEditar(null)} onSave={handleSave} onCrearProveedor={crearProveedor} onCrearCuenta={crearCuenta} />}
       {showPago    && <AgregarPagoModal  egreso={showPago} saldoPendiente={showPago.saldoPendiente ?? showPago.importe} cuentas={cuentasSoc} onClose={() => setShowPago(null)} onSave={handlePago} />}
+      {showRetencion && <RegistrarRetencionPracticadaModal egreso={showRetencion} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentas={cuentas} centros={centrosCosto} proveedores={proveedores} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
       {editingPago && <EditarPagoModal   pago={editingPago} sociedad={sociedad} cuentasSoc={cuentasSoc} onClose={() => setEditingPago(null)} onSaved={() => { setEditingPago(null); cargarEgresos(); }} />}
       {showCtaCte  && <CtaCteModal       proveedor={showCtaCte.proveedor} documentos={showCtaCte.docs} onClose={() => setShowCtaCte(null)} />}
       {showMigrar  && <MigrarSociedadModal egreso={showMigrar} sociedades={sociedades} actual={sociedad} onClose={() => setShowMigrar(null)} onConfirm={handleMigrar} />}
