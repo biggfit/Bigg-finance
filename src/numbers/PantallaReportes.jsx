@@ -5,6 +5,7 @@ import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, pendi
 import { MONEDA_SYM } from "../data/tesoreriaData";
 import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
 import { franquiciasIngresoPnLRows } from "../lib/franquiciasAdapter";
+import { exportarPackReportes } from "./exportReportes";
 import TabTesoreriaConsolidada from "./reportes/TabTesoreriaConsolidada";
 import TabCxPProveedores from "./reportes/TabCxPProveedores";
 import TabCxCClientes from "./reportes/TabCxCClientes";
@@ -376,6 +377,9 @@ const SEDE_GRUPOS = [
   { key: "inv_no_op", label: "Inversiones no operativas", color: SEDE_HDR, cuentas: ["Inversiones / Gastos no Operativos"] },
 ];
 const _nkSede = s => (s ?? "").trim().toLowerCase();
+// Cuentas que se OCULTAN si están vacías (todo el año en cero). Ing.Stripe / Ing. Datafono son naturales de
+// España → en el resto de las sedes vienen en 0 y ensucian; en España, donde sí hay dato, se muestran solas.
+const SEDE_OCULTAR_SI_VACIA = new Set([_nkSede("Ing.Stripe"), _nkSede("Ing. Datafono")]);
 const SEDE_CUENTA_A_GRUPO = (() => {
   const m = new Map();
   for (const g of SEDE_GRUPOS) for (const c of g.cuentas) m.set(_nkSede(c), g.key);
@@ -696,7 +700,14 @@ function celdasSede(cols, cur, prev, pol, o) {
   });
 }
 
-function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista = "evolucion", mes = 0, cesion = null, impuestos = null, financieros = null, distribucion = null, retirosVivos = null, feeIvaVivo = null, netoLabel = "Resultado Neto", nombreCuenta = (x) => x, hayHistorico = false, mesMax = null }) {
+// Constructor PURO de las filas + columnas del P&L Sede (waterfall + colas Fondeadas/Rosedal). Lo usan tanto el
+// render (PnLTableSede) como el exportador a Excel → una sola fuente de verdad para que la planilla salga
+// idéntica a la pantalla. `isCol(key)` decide qué grupos van colapsados (el export pasa `() => false` = todo
+// expandido). Devuelve { cols, filas, activeMonths, lastM }.
+export function buildPnLSedeFilas(props, isCol) {
+  const { pnl, sub, pnlPrev, subPrev, year, vista = "evolucion", mes = 0, cesion = null, impuestos = null,
+          financieros = null, distribucion = null, retirosVivos = null, feeIvaVivo = null,
+          netoLabel = "Resultado Neto", nombreCuenta = (x) => x, hayHistorico = false, mesMax = null } = props;
   const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths: _amRaw } = sub;
   const activeMonths = mesesVisibles(_amRaw, year, hayHistorico, mesMax);
 
@@ -726,35 +737,21 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
   const sinClasView = hidden.size
     ? Object.fromEntries(Object.entries(pnl.sinClasificar).filter(([k]) => !hidden.has(k)))
     : pnl.sinClasificar;
-
-  // Colapso jerárquico: bandas de sección (Ingresos / Gastos Op) + cada sub-grupo + toggle maestro.
-  const ALLKEYS = ["sec_ing", "sec_gop", ...SEDE_GRUPOS.map(g => g.key)];
-  const [collapsed, setCollapsed] = useState(() => Object.fromEntries(ALLKEYS.map(k => [k, true])));   // arranca compactado
-  const isCol  = k => !!collapsed[k];
-  const toggle = k => setCollapsed(c => ({ ...c, [k]: !c[k] }));
-  const allCol = ALLKEYS.every(k => collapsed[k]);
-  const toggleAll = () => setCollapsed(allCol ? {} : Object.fromEntries(ALLKEYS.map(k => [k, true])));
-
   const sinCls = Object.keys(sinClasView).length > 0;
 
-  if (activeMonths.length === 0) return (
-    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
-      padding: "60px 24px", textAlign: "center", boxShadow: T.shadow }}>
-      <div style={{ fontSize: 14, color: T.muted }}>Sin datos para {year} en {moneda}{label ? ` · ${label}` : ""}.</div>
-    </div>
-  );
-
-  // ── Un solo render para las 3 vistas: MISMAS filas, distinto bloque de columnas (cols) ──
+  const cols = vista === "evolucion" ? colsEvolucion(activeMonths) : colsSedeVista(vista, mes, year);
+  const lastM = activeMonths[activeMonths.length - 1];
+  const Pg = pnlPrev?.grupos || {};
+  const stP = k => (subPrev?.st?.[k]) || ZERO12;
+  const filas = [];
   {
-    const cols = vista === "evolucion" ? colsEvolucion(activeMonths) : colsSedeVista(vista, mes, year);
-    const lastM = activeMonths[activeMonths.length - 1];
-    const Pg = pnlPrev?.grupos || {};
-    const stP = k => (subPrev?.st?.[k]) || ZERO12;
-    const filas = [];
     const pushGrupo = (gk, pol) => {
       filas.push({ kind: "grupo", key: gk, label: grupoSede(gk).label, cur: sub.st[gk], prev: stP(gk), pol });
-      if (!isCol(gk)) for (const name of grupoSede(gk).cuentas)
-        filas.push({ kind: "cuenta", label: name, cur: pnl.grupos[gk][name], prev: (Pg[gk]?.[name] || ZERO12), pol });
+      if (!isCol(gk)) for (const name of grupoSede(gk).cuentas) {
+        const cur = pnl.grupos[gk][name];
+        if (SEDE_OCULTAR_SI_VACIA.has(_nkSede(name)) && !(cur || []).some(v => Number(v))) continue;
+        filas.push({ kind: "cuenta", label: name, cur, prev: (Pg[gk]?.[name] || ZERO12), pol });
+      }
     };
     filas.push({ kind: "banda", key: "sec_ing", label: "Ingresos" });
     if (!isCol("sec_ing")) { pushGrupo("vta_cf", 1); pushGrupo("int_bigg", 1); pushGrupo("int_corp", 1); }
@@ -845,9 +842,31 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
       for (const [name, arr] of Object.entries(sinClasView))
         filas.push({ kind: "cuenta", label: nombreCuenta(name), cur: arr, prev: ZERO12, pol: 1, color: "#b45309" });
     }
+  }
+  return { cols, filas, activeMonths, lastM, sinCls };
+}
 
-    // Celdas de una fila de cesión (violeta, con signo). Stock (saldo) → la col TOTAL muestra el saldo final.
-    const cesionCells = (f) => cols.map((col, i) => {
+function PnLTableSede(props) {
+  const { moneda, label, year, vista = "evolucion", mes = 0 } = props;
+  // Colapso jerárquico: bandas de sección (Ingresos / Gastos Op) + cada sub-grupo + Distribución + toggle maestro.
+  const ALLKEYS = ["sec_ing", "sec_gop", "distrib", ...SEDE_GRUPOS.map(g => g.key)];
+  const [collapsed, setCollapsed] = useState(() => Object.fromEntries(ALLKEYS.map(k => [k, true])));   // arranca compactado
+  const isCol  = k => !!collapsed[k];
+  const toggle = k => setCollapsed(c => ({ ...c, [k]: !c[k] }));
+  const allCol = ALLKEYS.every(k => collapsed[k]);
+  const toggleAll = () => setCollapsed(allCol ? {} : Object.fromEntries(ALLKEYS.map(k => [k, true])));
+
+  const { cols, filas, activeMonths, lastM, sinCls } = buildPnLSedeFilas(props, isCol);
+
+  if (activeMonths.length === 0) return (
+    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
+      padding: "60px 24px", textAlign: "center", boxShadow: T.shadow }}>
+      <div style={{ fontSize: 14, color: T.muted }}>Sin datos para {year} en {moneda}{label ? ` · ${label}` : ""}.</div>
+    </div>
+  );
+
+  // Celdas de una fila de cesión (violeta, con signo). Stock (saldo) → la col TOTAL muestra el saldo final.
+  const cesionCells = (f) => cols.map((col, i) => {
       if (col.kind === "var") return <td key={i} style={{ padding: "9px 12px", textAlign: "right", color: T.dim }}>—</td>;
       let v;
       if (f.stock && col.total) { let lm = lastM; while (lm > 0 && !(Number(f.cur?.[lm]) || 0)) lm--; v = Number(f.cur?.[lm]) || 0; }
@@ -959,7 +978,6 @@ function PnLTableSede({ pnl, sub, pnlPrev, subPrev, year, moneda, label, vista =
         )}
       </div>
     );
-  }
 }
 
 // ─── P&L HUERGO (Wellness Real Estate, anillo 1) — negocio de MARGEN, no sede ──────────────────────
@@ -2603,6 +2621,70 @@ function WipReport({ tab }) {
   );
 }
 
+// Modal "Descargar reportes a Excel": elige qué vistas incluir (Evolución/Mensual/YTD) y hasta qué mes.
+// YTD arranca destildado si no hay datos del año anterior para comparar (defaultYtd).
+function ExportModal({ open, onClose, onConfirm, defaultMes, hayAnioAnterior }) {
+  const [vistas, setVistas] = useState({ evolucion: true, mensual: true, ytd: !!hayAnioAnterior });
+  const [mes, setMes] = useState(defaultMes);
+  useEffect(() => {
+    if (open) { setVistas({ evolucion: true, mensual: true, ytd: !!hayAnioAnterior }); setMes(defaultMes); }
+  }, [open, defaultMes, hayAnioAnterior]);
+  if (!open) return null;
+  const any = vistas.evolucion || vistas.mensual || vistas.ytd;
+  const mesAnt = mes > 0 ? MESES[mes - 1] : "Dic";
+  const OPCS = [
+    { key: "evolucion", titulo: "Evolución", desc: `Mes a mes, Ene–${MESES[mes]} + TOTAL`, nota: null },
+    { key: "mensual", titulo: "Mensual", desc: `${MESES[mes]} vs ${mesAnt} (y vs año anterior)`, nota: null },
+    { key: "ytd", titulo: "YTD (acumulado)", desc: `Acumulado del año hasta ${MESES[mes]}`,
+      nota: hayAnioAnterior ? null : "sin datos del año anterior para comparar" },
+  ];
+  const check = { width: 18, height: 18, cursor: "pointer", accentColor: "#065f46" };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, width: 460,
+        maxWidth: "92vw", padding: 24, boxShadow: "0 20px 50px rgba(0,0,0,.3)", fontFamily: T.font }}>
+        <div style={{ fontSize: 17, fontWeight: 800, color: T.text, marginBottom: 4 }}>Descargar reportes a Excel</div>
+        <div style={{ fontSize: 13, color: T.muted, marginBottom: 18 }}>Elegí qué vistas incluir y hasta qué mes.</div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 18 }}>
+          {OPCS.map(o => (
+            <label key={o.key} style={{ display: "flex", gap: 11, alignItems: "flex-start", cursor: "pointer",
+              padding: "10px 12px", border: `1px solid ${vistas[o.key] ? "#065f46" : T.cardBorder}`,
+              borderRadius: 10, background: vistas[o.key] ? "#ecfdf5" : "#fff" }}>
+              <input type="checkbox" checked={vistas[o.key]} style={check}
+                onChange={() => setVistas(v => ({ ...v, [o.key]: !v[o.key] }))} />
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: T.text }}>{o.titulo}</div>
+                <div style={{ fontSize: 12, color: T.muted }}>{o.desc}</div>
+                {o.nota && <div style={{ fontSize: 11.5, color: "#b45309", fontWeight: 600, marginTop: 2 }}>⚠ {o.nota}</div>}
+              </div>
+            </label>
+          ))}
+        </div>
+
+        <div style={{ marginBottom: 22 }}>
+          <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
+            textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Hasta el mes</label>
+          <select value={mes} onChange={e => setMes(Number(e.target.value))} style={selStyle}>
+            {MESES.map((m, i) => <option key={i} value={i}>{m}</option>)}
+          </select>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+          <button onClick={onClose} style={{ background: "#f3f4f6", border: `1px solid ${T.cardBorder}`,
+            borderRadius: 8, color: T.text, fontFamily: T.font, fontSize: 13, fontWeight: 700,
+            padding: "9px 18px", cursor: "pointer" }}>Cancelar</button>
+          <button disabled={!any} onClick={() => onConfirm({ vistas, mes })} style={{
+            background: any ? "#065f46" : "#9ca3af", border: "none", borderRadius: 8, color: "#fff",
+            fontFamily: T.font, fontSize: 13, fontWeight: 700, padding: "9px 18px",
+            cursor: any ? "pointer" : "not-allowed" }}>⬇ Descargar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Pantalla principal ───────────────────────────────────────────────────────
 export default function PantallaReportes({ sociedad = "nako" }) {
   const [activeTab,      setActiveTab]      = useState(null);   // null = menú-landing de reportes
@@ -2610,6 +2692,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const [sinIva,         setSinIva]         = useState(() => { try { return localStorage.getItem("pnlSinIva") === "1"; } catch { return false; } });   // toggle Con/Sin IVA (recordado)
   const [mesSel,         setMesSel]         = useState(new Date().getMonth());   // mes para vistas mensual/ytd
   const [mesCorte,       setMesCorte]       = useState(null);   // Evolución: cortar meses > mesCorte (null = todos). Para ocultar el mes en curso incompleto.
+  const [dlgExport,      setDlgExport]      = useState(false);  // modal "Descargar reportes a Excel"
   const [year,           setYear]           = useState(CUR_YEAR);
   const [selectedSedeCCs, setSelectedSedeCCs] = useState(null);   // null = todas · [] = ninguna · [ids] = subconjunto
   const [sedeOpen,        setSedeOpen]        = useState(false);
@@ -3108,6 +3191,43 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     </div>
   );
 
+  // ── Exportación a Excel (P&L Sede/Fondeadas): una hoja por vista, reusando las MISMAS filas del render. ──
+  const hayAnioAnterior = (subSedePrev?.totIngresos || []).some(v => Number(v));
+  // Default "hasta": último mes COMPLETO (excluye el mes en curso, que está incompleto y se ve feo).
+  const mesExportDefault = (() => {
+    const curCal = new Date().getMonth(), act = subSede?.activeMonths || [];
+    const completos = act.filter(m => m < curCal);
+    return completos.length ? completos[completos.length - 1] : (act.length ? act[act.length - 1] : curCal);
+  })();
+  const ejecutarExport = ({ vistas, mes }) => {
+    const base = {
+      pnl: pnlSede, sub: subSede, pnlPrev: pnlSedePrev, subPrev: subSedePrev, year,
+      nombreCuenta, cesion: cesionSede,
+      impuestos: isFond ? IMPUESTOS_FOND : null, financieros: isFond ? FINANCIEROS_FOND : null,
+      distribucion: activeTab === "op_rosedal" ? distribRosedalFx : null,
+      retirosVivos: activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null,
+      feeIvaVivo: activeTab === "op_rosedal" ? (retirosRosedal[year]?.feeIva || null) : null,
+      netoLabel: fondCfg?.netoLabel, hayHistorico,
+    };
+    const monLabel = MONEDA_SYM[monedaPL] || monedaPL;
+    const scopeLabel = selectedSedeCCs === null ? "Todas las sedes"
+      : selectedSedeCCs.length === 0 ? "Ninguna sede" : `${selectedSedeCCs.length} sede(s)`;
+    const sedeLabel = curTab?.label || "Reporte";
+    const VIS = [
+      { key: "evolucion", sheet: "Evolución",            vista: "evolucion", extra: { mesMax: mes } },
+      { key: "mensual",   sheet: `Mensual ${MESES[mes]}`, vista: "mensual",   extra: { mes } },
+      { key: "ytd",       sheet: `YTD ${MESES[mes]}`,      vista: "ytd",       extra: { mes } },
+    ];
+    const hojas = VIS.filter(v => vistas[v.key]).map(v => {
+      const { cols, filas, lastM } = buildPnLSedeFilas({ ...base, vista: v.vista, ...v.extra }, () => false);
+      return { sheetName: v.sheet, cols, filas, lastM, titulo: `${sedeLabel} — ${v.sheet}`,
+        meta: [`Año ${year} · hasta ${MESES[mes]}`, `Moneda: ${monLabel}${fxMode !== "native" ? " · TC real" : ""}`, scopeLabel, sinIva ? "Sin IVA" : "Con IVA"] };
+    });
+    if (hojas.length) exportarPackReportes({ archivo: `${sedeLabel.replace(/[^\w]+/g, "_")}_${year}_hasta_${MESES[mes]}.xlsx`, hojas })
+      .catch(e => { console.error("Export Excel falló:", e); alert("No se pudo generar el Excel. Revisá la consola."); });
+    setDlgExport(false);
+  };
+
   return (
     // --border (dark, del theme global del shell) → cardBorder claro: las tablas de reportes viven en
     // cards blancas; así la regla global `td/th{border:var(--border)}` no pinta líneas oscuras sobre blanco.
@@ -3120,6 +3240,17 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         action={
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             {(isPnlTiempo || isBigg) && <VistaToggle value={vistaPnl} onChange={setVistaPnl} />}
+            {isSedeLike && (
+              <button onClick={() => setDlgExport(true)} title="Descargar reportes a Excel" style={{
+                display: "inline-flex", alignItems: "center", gap: 6,
+                background: "#065f46", border: "1px solid #065f46", borderRadius: 8,
+                color: "#fff", fontFamily: T.font, fontSize: 13, fontWeight: 700,
+                padding: "8px 16px", cursor: "pointer" }}
+                onMouseEnter={e => e.currentTarget.style.background = "#047857"}
+                onMouseLeave={e => e.currentTarget.style.background = "#065f46"}>
+                ⬇ Excel
+              </button>
+            )}
             <button onClick={() => setActiveTab(null)} style={{
               display: "inline-flex", alignItems: "center", gap: 6,
               background: "#f3f4f6", border: `1px solid ${T.cardBorder}`, borderRadius: 8,
@@ -3316,6 +3447,9 @@ export default function PantallaReportes({ sociedad = "nako" }) {
             : selectedSedeCCs.length === 0 ? "Ninguna sede"
             : `${selectedSedeCCs.length} seleccionada${selectedSedeCCs.length > 1 ? "s" : ""}`} />
       )}
+
+      {isSedeLike && <ExportModal open={dlgExport} onClose={() => setDlgExport(false)}
+        onConfirm={ejecutarExport} defaultMes={mesExportDefault} hayAnioAnterior={hayAnioAnterior} />}
 
       {/* ── P&L Huergo (Wellness Real Estate): Ingresos − Costos (horas de coaches) = Margen ── */}
       {isHuergo && (
