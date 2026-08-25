@@ -1,7 +1,12 @@
 import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import { T, ESTADO_EGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
-import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, deleteMovTesoreria, updateMovTesoreria, shortId, appendProveedor, appendCuenta, aplicarRetencionPracticada } from "../lib/numbersApi";
+import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, deleteMovTesoreria, updateMovTesoreria, shortId, appendProveedor, appendCuenta, aplicarRetencionPracticada, RETDEP_TAG } from "../lib/numbersApi";
+
+// Una factura admite UNA sola retención practicada: se detecta por sus líneas de neteo
+// (tipo=PAGO origen="retencion_practicada" / tag RETDEP) ya vinculadas al comprobante.
+const tieneRetPracticada = (e) => (e?.pagosVinculados ?? []).some(
+  p => p.origen === "retencion_practicada" || String(p.nota || "").includes(RETDEP_TAG));
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 import { makeResolveCC, makeResolveCB, inputStyle, CCSelectOptions, makeCrearMaestro, stripForDuplicate } from "./formUtils";
 import NuevoEgresoModal from "./NuevoEgresoModal";
@@ -391,7 +396,7 @@ function EditarPagoModal({ pago, sociedad, cuentasSoc, onClose, onSaved }) {
 }
 
 // ─── Modal: Ver Detalle (estilo Contagram) ───────────────────────────────────
-function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClose, onAgregarPago, onAplicarRetencion, onEditar, onEditarPago, onIrACaja, asPage = false }) {
+function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClose, onAgregarPago, onAplicarRetencion, retencionAplicada = false, onEditar, onEditarPago, onIrACaja, asPage = false }) {
   const resolveCB = makeResolveCB(cuentasBancarias);
   const resolveCC = makeResolveCC(centrosCosto);
   const pagado  = egreso.pagosVinculados?.reduce((s,p) => s + Math.abs(Number(p.monto)||0), 0) ?? 0;
@@ -537,6 +542,11 @@ function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClos
                     borderRadius:7, padding:"6px 16px", fontSize:12, color:"#7c3aed",
                     cursor:"pointer", fontFamily:T.font, fontWeight:700,
                     display:"flex", alignItems:"center", gap:6 }}>% Aplicar Retención</button>
+                )}
+                {retencionAplicada && (
+                  <span style={{ fontSize:12, color:"#7c3aed", fontWeight:700, display:"flex", alignItems:"center", gap:6, padding:"6px 4px" }}>
+                    ✓ Retención aplicada
+                  </span>
                 )}
               </div>
             </div>
@@ -1110,6 +1120,13 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
   };
 
   const handleRetencion = async (data) => {
+    // Guarda anti-duplicado (además de ocultar el botón): una factura = una retención.
+    const eg = egresos.find(e => e.id === data.factura_id);
+    if (eg && tieneRetPracticada(eg)) {
+      alert("Esta factura ya tiene una retención aplicada. Si necesitás corregirla, borrá primero la existente (el por-pagar AFIP y su neteo en la factura).");
+      setShowRetencion(null);
+      return;
+    }
     try {
       const r = await aplicarRetencionPracticada({ ...data, sociedad });
       setShowRetencion(null);
@@ -1133,7 +1150,8 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
           centrosCosto={centrosCosto}
           onClose={() => setShowDetalle(null)}
           onAgregarPago={e => setShowPago(e)}
-          onAplicarRetencion={e => setShowRetencion(e)}
+          onAplicarRetencion={tieneRetPracticada(showDetalle) ? undefined : e => setShowRetencion(e)}
+          retencionAplicada={tieneRetPracticada(showDetalle)}
           onEditar={e => { setShowDetalle(null); setShowEditar(e); }}
           onEditarPago={p => setEditingPago(p)}
           onIrACaja={onIrACaja}
@@ -1251,7 +1269,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
                     <RowMenu
                       egreso={e}
                       onPago={()     => setShowPago(e)}
-                      onRetencion={(e.saldoPendiente ?? e.importe ?? 0) > 0 ? () => setShowRetencion(e) : undefined}
+                      onRetencion={(e.saldoPendiente ?? e.importe ?? 0) > 0 && !tieneRetPracticada(e) ? () => setShowRetencion(e) : undefined}
                       onDetalle={()  => setShowDetalle(e)}
                       onEditar={()   => setShowEditar(e)}
                       onDuplicar={() => duplicarEgreso(e)}
