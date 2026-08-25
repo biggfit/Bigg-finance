@@ -152,15 +152,14 @@ function AgregarPagoModal({ egreso, saldoPendiente, cuentas, onClose, onSave }) 
 // ─── Modal: Aplicar Retención (practicada) ────────────────────────────────────
 // Sobre una factura de compra YA cargada: retenemos impuestos (Ganancias/IVA/IIBB) y los depositamos
 // a AFIP por VEP. Baja el saldo al proveedor y crea el "por pagar a AFIP" con el vencimiento del VEP.
-function RegistrarRetencionPracticadaModal({ egreso, saldoPendiente, cuentas = [], centros = [], proveedores = [], onClose, onSave }) {
+function RegistrarRetencionPracticadaModal({ egreso, saldoPendiente, cuentas = [], proveedores = [], onClose, onSave }) {
   const cuentasOrd = useMemo(() => [...cuentas].sort((a, b) => String(a.nombre ?? "").localeCompare(String(b.nombre ?? ""))), [cuentas]);
   const cuentaMap  = useMemo(() => new Map(cuentas.map(c => [String(c.id), c])), [cuentas]);
   // Proveedor AFIP: se detecta por nombre; si no existe uno, el usuario lo elige del maestro.
   const afipDetectado = useMemo(() => proveedores.find(p => /afip|arca|a\.?f\.?i\.?p/i.test(p.nombre ?? "")) || null, [proveedores]);
-  // Centro de las retenciones = "HQ - Impuestos" (cosmético: el pasivo AFIP se excluye del P&L por su tag).
-  const centroImpuestos = useMemo(
-    () => (centros.find(c => (c.grupo ?? "").toLowerCase() === "hq" && /impuesto/i.test(c.nombre ?? "")) || centros.find(c => /impuesto/i.test(c.nombre ?? "")))?.id || "",
-    [centros]);
+  // Centro del por-pagar AFIP = el de la factura (trazabilidad: la deuda nació de esa operación).
+  // Es cosmético para el P&L: el pasivo AFIP se excluye por su tag [RETDEP], no afecta el resultado.
+  const centroFactura = egreso.lineas?.find(l => l.cc)?.cc || egreso.cc || "";
 
   const [fecha, setFecha]     = useState(new Date().toISOString().slice(0, 10));
   const [vep, setVep]         = useState("");
@@ -265,7 +264,7 @@ function RegistrarRetencionPracticadaModal({ egreso, saldoPendiente, cuentas = [
                 proveedor_id: egreso.proveedorId || "", proveedor_nombre: egreso.proveedor || "",
                 retenciones: lineas.filter(l => l.cuenta && Number(l.monto) > 0)
                   .map(l => ({ cuenta: l.cuenta, cuentaNombre: cuentaMap.get(String(l.cuenta))?.nombre || "", monto: Number(l.monto) })),
-                afip: { proveedorId: afipProvId, proveedor: afipProv?.nombre || "AFIP", vep: vep.trim(), vto, centro: centroImpuestos },
+                afip: { proveedorId: afipProvId, proveedor: afipProv?.nombre || "AFIP", vep: vep.trim(), vto, centro: centroFactura },
               }); }}
               style={{ background: canSave ? "#7c3aed" : "#9ca3af", border:"none", borderRadius:8, padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff", cursor: canSave ? "pointer" : "default", fontFamily:T.font }}>Guardar ✓</button>
           </div>
@@ -1157,7 +1156,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
           onIrACaja={onIrACaja}
         />
         {showPago    && <AgregarPagoModal egreso={showPago} saldoPendiente={showPago.saldoPendiente ?? showPago.importe} cuentas={cuentasSoc} onClose={() => setShowPago(null)} onSave={handlePago} />}
-        {showRetencion && <RegistrarRetencionPracticadaModal egreso={showRetencion} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentas={cuentas} centros={centrosCosto} proveedores={proveedores} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
+        {showRetencion && <RegistrarRetencionPracticadaModal egreso={showRetencion} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentas={cuentas} proveedores={proveedores} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
         {editingPago && <EditarPagoModal  pago={editingPago} sociedad={sociedad} cuentasSoc={cuentasSoc} onClose={() => setEditingPago(null)} onSaved={() => { setEditingPago(null); cargarEgresos(); }} />}
       </>
     );
@@ -1326,7 +1325,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
       {/* Modales */}
       {showEditar  && <NuevoEgresoModal  sociedad={sociedad} proveedores={proveedores} cuentas={cuentas} centrosCosto={centrosCosto} initialData={showEditar} onClose={() => setShowEditar(null)} onSave={handleSave} onCrearProveedor={crearProveedor} onCrearCuenta={crearCuenta} />}
       {showPago    && <AgregarPagoModal  egreso={showPago} saldoPendiente={showPago.saldoPendiente ?? showPago.importe} cuentas={cuentasSoc} onClose={() => setShowPago(null)} onSave={handlePago} />}
-      {showRetencion && <RegistrarRetencionPracticadaModal egreso={showRetencion} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentas={cuentas} centros={centrosCosto} proveedores={proveedores} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
+      {showRetencion && <RegistrarRetencionPracticadaModal egreso={showRetencion} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentas={cuentas} proveedores={proveedores} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
       {editingPago && <EditarPagoModal   pago={editingPago} sociedad={sociedad} cuentasSoc={cuentasSoc} onClose={() => setEditingPago(null)} onSaved={() => { setEditingPago(null); cargarEgresos(); }} />}
       {showCtaCte  && <CtaCteModal       proveedor={showCtaCte.proveedor} documentos={showCtaCte.docs} onClose={() => setShowCtaCte(null)} />}
       {showMigrar  && <MigrarSociedadModal egreso={showMigrar} sociedades={sociedades} actual={sociedad} onClose={() => setShowMigrar(null)} onConfirm={handleMigrar} />}
