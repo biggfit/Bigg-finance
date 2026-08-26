@@ -395,25 +395,27 @@ const aliasCuentaSede = (nombre) => SEDE_CUENTA_ALIAS[_nkSede(nombre)] || nombre
 // Hektor cede el 49% del resultado de Barrio Norte a una contraparte (NO es gasto: es reparto del
 // resultado). Los retiros se imputan a la cuenta "Inversores" (hoy caen en "Sin clasificar"). v1 read-only:
 // muestra acreditado (pct×resFinal) − retirado (mov. "Inversores") = saldo de cuenta corriente acumulado.
-// apertura = saldo heredado de Contagram al 30/6 (deuda con la contraparte; >0 = le debemos). Se siembra en
-// `aperturaMes` (5 = junio, corte de go-live): ya incluye todo lo previo, así que julio lo hereda y acumula.
-const CESION = { matchNombre: "Barrio Norte", pct: 0.49, contraparte: "", apertura: 15_500_000, aperturaMes: 5 };
+// apertura = saldo heredado con la contraparte al CIERRE del año anterior a `aperturaYear` (deuda; >0 = le
+// debemos). Es un CARRY-IN: entra al inicio de `aperturaYear` y la CC acumula los 12 meses (acreditado −
+// retirado) desde enero. Ej.: saldo socios BN al 31/12/2025 = 7.840.230 → siembra 2026 y corre hasta hoy.
+const CESION = { matchNombre: "Barrio Norte", pct: 0.49, contraparte: "", apertura: 7_840_230, aperturaYear: 2026 };
 const CESION_CUENTA = "Inversores";   // cuenta contable donde se imputan los retiros
 
 // Helper puro: dado el resFinal[12] de la sede y los retiros[12] (cuenta "Inversores"), arma la cola.
-function computeCesion(resFinal = [], retiros = [], { pct, apertura = 0, aperturaMes = 0 }) {
+function computeCesion(resFinal = [], retiros = [], { pct, apertura = 0, aperturaYear }, year) {
   const acreditado = Array.from({ length: 12 }, (_, m) => (Number(resFinal[m]) || 0) * pct);
-  const retenido   = Array.from({ length: 12 }, (_, m) => (Number(resFinal[m]) || 0) * (1 - pct));
   // El retiro es un egreso (viene con signo negativo): tomamos la magnitud pagada, que REDUCE lo que se debe.
   const retirado   = Array.from({ length: 12 }, (_, m) => Math.abs(Number(retiros[m]) || 0));
-  // La CC arranca en `aperturaMes` con el saldo heredado (que ya incluye todo lo previo); los meses anteriores
-  // quedan sin saldo (null). Desde ahí acumula (acreditado − retirado). >0 = le debemos · <0 = adelantado.
-  const saldoAcum = new Array(12).fill(null); let acc = 0;
-  for (let m = aperturaMes; m < 12; m++) {
-    acc = m === aperturaMes ? (Number(apertura) || 0) : acc + acreditado[m] - retirado[m];
-    saldoAcum[m] = acc;
+  // Carry-in: en `aperturaYear` la CC arranca con el saldo heredado al 1/1 (que ya incluye todo lo previo) y
+  // acumula los 12 meses (acreditado − retirado) desde enero. Años previos al ancla: sin CC (null).
+  // >0 = le debemos · <0 = adelantado.  (v1: años posteriores a `aperturaYear` reinician en 0, sin carry-forward.)
+  const saldoAcum = new Array(12).fill(null);
+  const saldoPrev = new Array(12).fill(null);   // saldo pendiente al inicio del mes (= saldo acumulado del mes anterior)
+  if (year >= aperturaYear) {
+    let acc = year === aperturaYear ? (Number(apertura) || 0) : 0;
+    for (let m = 0; m < 12; m++) { saldoPrev[m] = acc; acc += acreditado[m] - retirado[m]; saldoAcum[m] = acc; }
   }
-  return { acreditado, retirado, saldoAcum, retenido };
+  return { acreditado, retirado, saldoAcum, saldoPrev };
 }
 
 // Cola de impuestos (Fondeadas/Rosedal): cuentas de "Sin clasificar" cuyo nombre matchea `matchers`
@@ -667,7 +669,7 @@ function colsSedeVista(vista, mes, year) {
 // Columnas de la vista Evolución: una por mes activo + TOTAL (marcada con `total` para el separador/stock).
 const colsEvolucion = months => [
   ...months.map(m => ({ header: MESES[m], kind: "val", get: c => Number(c[m]) || 0 })),
-  { header: "TOTAL", kind: "val", total: true, get: c => (c || []).reduce((s, v) => s + (Number(v) || 0), 0) },
+  { header: "TOTAL", kind: "val", total: true, get: c => months.reduce((s, m) => s + (Number(c?.[m]) || 0), 0) },
 ];
 
 // Celdas de una fila. o = estilo base. o.bt/o.bb = borde sup/inf (se pone EN LA CELDA, no en el <tr>:
@@ -707,14 +709,15 @@ function celdasSede(cols, cur, prev, pol, o) {
 export function buildPnLSedeFilas(props, isCol) {
   const { pnl, sub, pnlPrev, subPrev, year, vista = "evolucion", mes = 0, cesion = null, impuestos = null,
           financieros = null, distribucion = null, retirosVivos = null, feeIvaVivo = null,
-          netoLabel = "Resultado Neto", nombreCuenta = (x) => x, hayHistorico = false, mesMax = null } = props;
+          netoLabel = "Resultado Neto", nombreCuenta = (x) => x, hayHistorico = false, mesMax = null,
+          cesionResFinal = null, cesionRetiros = null } = props;
   const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths: _amRaw } = sub;
   const activeMonths = mesesVisibles(_amRaw, year, hayHistorico, mesMax);
 
   // Cesión de utilidades (cola de apropiación, solo cuando el scope es la sede con cesión, ej. Barrio Norte).
   // Los retiros son la cuenta "Inversores" de sinClasificar → se saca de ahí para no mostrarla dos veces.
   const cesKey = cesion && Object.keys(pnl.sinClasificar).find(k => _nkSede(k) === _nkSede(CESION_CUENTA));
-  const cesData = cesion ? computeCesion(resFinal, cesKey ? pnl.sinClasificar[cesKey] : [], cesion) : null;
+  const cesData = cesion ? computeCesion(cesionResFinal || resFinal, cesionRetiros || (cesKey ? pnl.sinClasificar[cesKey] : []), cesion, year) : null;
 
   // Impuestos (Fondeadas/Rosedal): cola debajo del Resultado Operativo/Final. Las cuentas se sacan de
   // "Sin clasificar" (no duplicar) → ver computeImpuestos.
@@ -829,11 +832,11 @@ export function buildPnLSedeFilas(props, isCol) {
     // (serie de tiempo) → solo en Evolución; comparar un saldo corriente M-1/A-1/YTD no tiene sentido.
     if (cesData && vista === "evolucion") {
       filas.push({ kind: "spacer" });
-      filas.push({ kind: "cesion", bold: true, top: true, signed: true, cur: cesData.acreditado,
-        label: `Cesión de utilidades — ${Math.round(cesion.pct * 100)}%${cesion.contraparte ? ` · ${cesion.contraparte}` : ""} (acreditado)` });
-      filas.push({ kind: "cesion", cur: cesData.retirado, label: "Retiros del período (cuenta Inversores)" });
-      filas.push({ kind: "cesion", signed: true, stock: true, cur: cesData.saldoAcum, label: "Saldo cuenta corriente (acumulado)" });
-      filas.push({ kind: "result", label: "Resultado retenido BIGG", cur: cesData.retenido, prev: ZERO12, pol: 1 });
+      filas.push({ kind: "banda", violet: true, label: `Cesión de utilidades — ${Math.round(cesion.pct * 100)}%${cesion.contraparte ? ` · ${cesion.contraparte}` : ""}` });
+      filas.push({ kind: "cesion", signed: true, stock: true, cur: cesData.saldoPrev, label: "Saldo pendiente" });
+      filas.push({ kind: "cesion", signed: true, cur: cesData.acreditado, label: "Utilidades del período" });
+      filas.push({ kind: "cesion", cur: cesData.retirado, label: "Retiros del período" });
+      filas.push({ kind: "cesion", bold: true, signed: true, stock: true, cur: cesData.saldoAcum, label: "Saldo acumulado" });
     }
     // Sin clasificar (cuentas con movimiento fuera del P&L de la sede) — solo en Evolución (diagnóstico).
     if (sinCls && vista === "evolucion") {
@@ -1178,8 +1181,9 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
         gkey = "gpv";                                     // cuenta intermediada: la venta es ingreso HQ, la COMPRA (egreso) = costo por venta (Pauta)
       } else if (catRaw.includes("financ")) {
         gkey = "fin";                                     // Financieros: filas = CUENTA (Intereses Ganados / Pérdidas Fin.)
-      } else if (catRaw.includes("impuesto")) {
-        gkey = "imp";                                     // Impuestos: filas = CUENTA (IVA / Ganancias / Plan AFIP…)
+      } else if (catRaw.includes("impuesto") || BIGG_ORDEN_IMP.includes(cuenta)) {
+        gkey = "imp";                                     // Impuestos: filas = CUENTA (IVA / Ganancias / Plan AFIP…).
+        // BIGG_ORDEN_IMP captura las que no tienen categoria en el maestro (ej. "IVA Inversiones") y si no caerían a OPEX.
       } else {
         gkey = "ghq";                                     // Gastos HQ (operativos): filas = CENTRO
         rowKey = cc?.nombre ?? cuenta;
@@ -2951,7 +2955,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       const catSede = String(meta?.categoria_pnl_sede || "").trim().toLowerCase();
       // Solo VENTAS/otros ingresos van por el lado ingreso (rutean a vta/int/ger/wre/hq). Financieros (incl.
       // Intereses Ganados), impuestos, costos y opex van por egRows → caen en su branch del motor por cuenta.
-      const esIngreso = catSede === "ventas" || catSede === "otros ingresos" || catPnl === "ventas";
+      // "Pauta" es ingreso HQ (netea con su compra vía ING_CONTRA_HQ) aunque no esté categorizada en el maestro.
+      const esIngreso = catSede === "ventas" || catSede === "otros ingresos" || catPnl === "ventas" || cuenta.toLowerCase() === "pauta";
       const total = Number(r.total) || 0, neto = Number(r.neto) || 0;
       const row = {
         fecha: String(r.fecha || "").slice(0, 10), centro_costo: r.centro_costo || "",
@@ -3065,6 +3070,19 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   );
   const subSede     = useMemo(() => computeSubtotalsSede(pnlSede), [pnlSede]);
   const subSedePrev = useMemo(() => computeSubtotalsSede(pnlSedePrev), [pnlSedePrev]);
+  // Resultado NETO (sin IVA) de la sede → base para el ACREDITADO de la cesión: el 49% se apropia sobre la
+  // ganancia real, NO sobre el resultado bruto (en Con IVA el acreditado se infla). Independiente del toggle.
+  const subSedeNet  = useMemo(
+    () => sinIva ? subSede : computeSubtotalsSede(buildPnLSede(inFx, egFx, resolvedCCSede, year, monedaPL, true)),
+    [inFx, egFx, resolvedCCSede, year, monedaPL, sinIva, subSede]
+  );
+  // Retiros de la cesión (cuenta "Inversores") SIEMPRE con IVA (total), independiente del toggle: el retiro es
+  // el efectivo real pagado al inversor. Tomo la versión Con IVA del pnl de sede.
+  const cesionRetirosCI = useMemo(() => {
+    const p = sinIva ? buildPnLSede(inFx, egFx, resolvedCCSede, year, monedaPL, false) : pnlSede;
+    const k = Object.keys(p.sinClasificar).find(x => _nkSede(x) === _nkSede(CESION_CUENTA));
+    return k ? p.sinClasificar[k] : null;
+  }, [inFx, egFx, resolvedCCSede, year, monedaPL, sinIva, pnlSede]);
 
   // Huergo (WRE): negocio de margen. Scope = centro con operacion "Wellness Real Estate".
   const huergoCCs = useMemo(
@@ -3093,11 +3111,32 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   // Holding (P&L BIGG) para un año dado → { pnl (grupos+capex con fondeo), sub (subtotales) }. Se calcula para
   // `year` y `year-1` (comparativas Mensual/YTD). Usa las filas pre-traducidas inBigg/egBigg (USD en consolidado).
   const holdingDe = (yr) => {
-    // Sedes Propias AR neto del 49% de Barrio Norte (IVA cedido en la misma proporción).
+    // Sedes Propias AR neto del 49% de Barrio Norte. La cesión es una apropiación del resultado NETO (no lleva
+    // IVA): se resta 0,49 × resultado neto de BN al `res` y NO se toca el tracking de IVA. Así coincide con los
+    // DIVIDENDOS BN y no se infla en la vista Con IVA (antes cedía 0,49 × resultado bruto → sobrestimaba ~1,7M/mes).
     const sAR = computeSubtotalsSede(buildPnLSede(inBigg, egBigg, arNucleoCCs, yr, monedaPL, sinIva));
-    const sBN = bnCcId ? computeSubtotalsSede(buildPnLSede(inBigg, egBigg, [bnCcId], yr, monedaPL, sinIva)) : null;
-    const ceder = (ar, bn) => ar.map((v, m) => v - CESION.pct * (Number(bn?.[m]) || 0));
-    const resSedesAR = { res: ceder(sAR.resFinal, sBN?.resFinal), ivaDeb: ceder(sAR.ivaDeb, sBN?.ivaDeb), ivaCred: ceder(sAR.ivaCred, sBN?.ivaCred) };
+    const sBNnet = bnCcId ? computeSubtotalsSede(buildPnLSede(inBigg, egBigg, [bnCcId], yr, monedaPL, true)) : null;
+    // IVA de aranceles de sedes AR (total − neto): el histórico no trae iva_monto, así que la sede computa aranceles
+    // BRUTO. Ese IVA es un costo que NO va a la sede (los socios se liquidan neto → sus saldos ya cierran): se
+    // DEVUELVE al resultado de sede (queda neto) y se reconoce como costo en HQ (abajo). No toca el dato de sede.
+    const arIVASedes = new Array(12).fill(0);
+    const sumaArIVA = (r) => {
+      if (!/aranceles/i.test(String(r.cuenta_contable || ""))) return;
+      if (!r.fecha || (r.fecha < PNL_INICIO && !r._historico) || r.fecha.slice(0, 4) !== String(yr)) return;
+      if ((r.moneda ?? "ARS") !== monedaPL) return;
+      if (!ccEnFiltro(arNucleoCCs, r.centro_costo)) return;
+      const m = parseInt(r.fecha.slice(5, 7), 10) - 1;
+      const t = Number(r.total) || 0, n = Number(r.neto);
+      // iva_monto no viene en el histórico y `neto` se pierde en el pipeline → derivo el IVA (21%) del total.
+      const iva = Number(r.iva_monto) || (Number.isFinite(n) && n ? t - n : t * 0.21 / 1.21);
+      if (m >= 0 && m < 12 && Number.isFinite(iva)) arIVASedes[m] += iva;
+    };
+    for (const r of inBigg) sumaArIVA(r);
+    for (const r of egBigg) sumaArIVA(r);
+    const resSedesAR = {
+      res:    sAR.resFinal.map((v, m) => v - CESION.pct * (Number(sBNnet?.resFinal?.[m]) || 0) + arIVASedes[m]),
+      ivaDeb: sAR.ivaDeb, ivaCred: sAR.ivaCred,
+    };
     // Gerenciamiento (Rosedal) = fee Ñako→Segui (cuenta "Fee de Gestion y Adm" exacta, núcleo; venta → IVA débito).
     const fRes = new Array(12).fill(0), fDeb = new Array(12).fill(0);
     for (const r of inBigg) {
@@ -3114,11 +3153,17 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     const resWRE = { res: sH.margen, ivaDeb: sH.ivaDeb, ivaCred: sH.ivaCred };
     // HQ + fondeo de las fondeadas (anillo 2) dentro de Inversiones/Capex. El fondeo interco ya está en USD.
     const pnl = buildPnLBigg(inBigg, egBigg, ccMap, cuentaMap, nucleoEmpresas, yr, monedaPL, sinIva);
+    // Nota: el IVA de aranceles de sedes (arIVASedes) YA se devolvió al resultado de sede arriba (queda neta). NO
+    // se reconoce como gasto en HQ: es crédito fiscal recuperable, no un costo del P&L → sale del resultado.
     const fondeo = fondeoFondeadasMensual(intercoData, { year: yr, moneda: monedaPL, desde: PNL_INICIO });
     const nomSoc = new Map((intercoData?.sociedades || []).map(s => [String(s.id), s.nombre || s.id]));
     for (const [fid, arr] of Object.entries(fondeo)) {
       if (!arr.some(v => Math.abs(v) > 0.01)) continue;
-      pnl.grupos.capex[`Fondeo · ${nomSoc.get(String(fid)) || fid}`] = arr;
+      // SUMA (no sobrescribe): la misma línea puede traer históricos por cuenta_contable
+      // (ej. "Fondeo · Gestion Deportiva y Wellness" = inversión España Ene-Jun) + el fondeo en vivo (Jul+).
+      const k = `Fondeo · ${nomSoc.get(String(fid)) || fid}`;
+      const prev = pnl.grupos.capex[k] || new Array(12).fill(0);
+      pnl.grupos.capex[k] = prev.map((v, i) => v + (arr[i] || 0));
     }
     return { pnl, sub: computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) };
   };
@@ -3206,7 +3251,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const ejecutarExport = ({ vistas, mes }) => {
     const base = {
       pnl: pnlSede, sub: subSede, pnlPrev: pnlSedePrev, subPrev: subSedePrev, year,
-      nombreCuenta, cesion: cesionSede,
+      nombreCuenta, cesion: cesionSede, cesionResFinal: subSedeNet?.resFinal, cesionRetiros: cesionRetirosCI,
       impuestos: isFond ? IMPUESTOS_FOND : null, financieros: isFond ? FINANCIEROS_FOND : null,
       distribucion: activeTab === "op_rosedal" ? distribRosedalFx : null,
       retirosVivos: activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null,
@@ -3442,7 +3487,8 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       {isSedeLike && (
         <PnLTableSede pnl={pnlSede} sub={subSede} pnlPrev={pnlSedePrev} subPrev={subSedePrev}
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} nombreCuenta={nombreCuenta}
-          cesion={cesionSede} impuestos={isFond ? IMPUESTOS_FOND : null} financieros={isFond ? FINANCIEROS_FOND : null}
+          cesion={cesionSede} cesionResFinal={subSedeNet?.resFinal} cesionRetiros={cesionRetirosCI}
+          impuestos={isFond ? IMPUESTOS_FOND : null} financieros={isFond ? FINANCIEROS_FOND : null}
           distribucion={activeTab === "op_rosedal" ? distribRosedalFx : null}
           retirosVivos={activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null}
           feeIvaVivo={activeTab === "op_rosedal" ? (retirosRosedal[year]?.feeIva || null) : null} netoLabel={fondCfg?.netoLabel}
