@@ -57,6 +57,10 @@ function construirHoja(wb, { sheetName, cols, filas, lastM, titulo, meta }) {
   const ws = wb.addWorksheet((sheetName || "Hoja").slice(0, 31), {
     views: [{ state: "frozen", xSplit: 1, ySplit: 0 }],   // ySplit se ajusta abajo (header)
   });
+  // Esquema/agrupado nativo de Excel: el detalle (filas de cuenta) va a nivel 1 y arranca COLAPSADO; el
+  // resumen (grupo/subtotal/banda) queda ARRIBA del grupo (summaryBelow: false) y lleva el [+] para desplegar.
+  ws.properties.outlineLevelRow = 1;
+  ws.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
   const nCols = cols.length + 1;
 
   // Título + meta
@@ -105,6 +109,8 @@ function construirHoja(wb, { sheetName, cols, filas, lastM, titulo, meta }) {
         cell.numFmt = cols[col - 2]?.kind === "var" ? FMT_PCT : FMT_NUM;
       }
     });
+    // Detalle de cuenta → nivel 1 del esquema, oculto de arranque (se despliega desde su resumen de arriba).
+    if (f.kind === "cuenta") { r.outlineLevel = 1; r.hidden = true; }
   }
 
   // Anchos
