@@ -742,9 +742,11 @@ export function buildPnLSedeFilas(props, isCol) {
   // Resultado financiero (Fondeadas/Rosedal): intereses ganados − pérdidas, debajo de impuestos.
   const finData = financieros ? computeImpuestos(pnl.sinClasificar, financieros, resFinal) : null;
 
-  // Con distribución (Rosedal), la cuenta "Inversores" se muestra en el bloque de distribución → ocultarla de
-  // "Sin clasificar" para no duplicar el display.
-  const invKey = distribucion ? Object.keys(pnl.sinClasificar).find(k => _nkSede(k) === _nkSede("Inversores")) : null;
+  // "Inversores" es la cuenta de retiros de cesión/distribución (reparto del resultado, NO gasto del P&L): se
+  // muestra en su cola cuando el scope la tiene (Barrio Norte / Rosedal). En cualquier otro scope (ej. las 5
+  // sedes juntas) NO es una cuenta "sin clasificar" real → se oculta SIEMPRE del diagnóstico. Es un match por
+  // nombre exacto a esa única cuenta: cualquier otra cuenta genuinamente sin clasificar sigue con su alerta.
+  const invKey = Object.keys(pnl.sinClasificar).find(k => _nkSede(k) === _nkSede(CESION_CUENTA));
   const hidden = new Set([cesKey, invKey, ...(impData?.keys || []), ...(finData?.keys || [])].filter(Boolean));
   const sinClasView = hidden.size
     ? Object.fromEntries(Object.entries(pnl.sinClasificar).filter(([k]) => !hidden.has(k)))
