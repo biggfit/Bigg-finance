@@ -80,11 +80,14 @@ export function CompactCard({ label, value, color, sub }) {
   );
 }
 
-export function PageHeader({ title, subtitle, action }) {
+export function PageHeader({ title, subtitle, action, back }) {
   return (
     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:24 }}>
       <div>
-        <h1 style={{ fontSize:24, fontWeight:900, color:T.text, margin:0, letterSpacing:"-.02em" }}>{title}</h1>
+        <div style={{ display:"flex", alignItems:"center", gap:14 }}>
+          <h1 style={{ fontSize:24, fontWeight:900, color:T.text, margin:0, letterSpacing:"-.02em" }}>{title}</h1>
+          {back}
+        </div>
         {subtitle && <p style={{ fontSize:13, color:T.muted, margin:"4px 0 0" }}>{subtitle}</p>}
       </div>
       {action}

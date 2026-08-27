@@ -84,3 +84,16 @@ button:focus-visible {
 .nb-hscroll::-webkit-scrollbar-corner { background: #eceff3; }
 /* Firefox */
 .nb-hscroll { scrollbar-width: auto; scrollbar-color: #64748b #eceff3; }
+
+/* Tooltip por hover, 100% CSS (sin estado de React → no re-renderiza). El disparador lleva .nb-tip y,
+   dentro, un .nb-tip-box con el texto; aparece al pasar el mouse. No ocupa lugar en el layout. */
+.nb-tip { position: relative; display: inline-flex; cursor: default; }
+.nb-tip-box {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 50;
+  width: max-content; max-width: 320px; white-space: normal; text-align: left;
+  background: #1e2937; color: #fff; font-size: 12px; font-weight: 500; line-height: 1.45;
+  padding: 8px 11px; border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.22);
+  opacity: 0; visibility: hidden; transform: translateY(-3px); transition: opacity .12s, transform .12s;
+  pointer-events: none;
+}
+.nb-tip:hover .nb-tip-box { opacity: 1; visibility: visible; transform: translateY(0); }

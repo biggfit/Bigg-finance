@@ -6,6 +6,7 @@ import { MONEDA_SYM } from "../data/tesoreriaData";
 import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
 import { franquiciasIngresoPnLRows } from "../lib/franquiciasAdapter";
 import { exportarPackReportes } from "./exportReportes";
+import { copiarReporteComoImagen, clonarParaFoto, medirContenido } from "./fotoReporte";
 import TabTesoreriaConsolidada from "./reportes/TabTesoreriaConsolidada";
 import TabCxPProveedores from "./reportes/TabCxPProveedores";
 import TabCxCClientes from "./reportes/TabCxCClientes";
@@ -643,6 +644,47 @@ function VistaToggle({ value, onChange }) {
     </div>
   );
 }
+
+// Overlay "Ampliar": muestra el reporte apuntado por `srcRef` como una foto a pantalla completa, escalada
+// para entrar entera (sin scroll). Cierra con ✕, click en el fondo, o Esc.
+function FotoOverlay({ srcRef, onClose, caption }) {
+  const boxRef = useRef(null);
+  const [scale, setScale] = useState(1);
+  useEffect(() => {
+    const src = srcRef.current, box = boxRef.current;
+    if (!src || !box) return;
+    const clon = clonarParaFoto(src, { caption });   // clon expandido (ancho real) + encabezado, colgado fuera de pantalla
+    const { w, h } = medirContenido(clon);   // extensión real (evita que se corte la última columna)
+    clon.style.position = "static"; clon.style.left = "auto";   // lo traigo al box
+    box.innerHTML = ""; box.appendChild(clon);
+    const availW = window.innerWidth * 0.96, availH = window.innerHeight * 0.9;
+    setScale(Math.min(availW / w, availH / h, 1));
+  }, [srcRef, caption]);
+  useEffect(() => {
+    const h = e => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", h);
+    return () => document.removeEventListener("keydown", h);
+  }, [onClose]);
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(15,23,42,.78)",
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <button onClick={onClose} title="Cerrar" style={{ position: "absolute", top: 18, right: 22, zIndex: 1001,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        width: 40, height: 40, borderRadius: 999, border: "none", background: "rgba(255,255,255,.16)",
+        color: "#fff", fontSize: 20, cursor: "pointer", padding: 0 }}>✕</button>
+      <div onClick={e => e.stopPropagation()} style={{ transform: `scale(${scale})`, transformOrigin: "center center" }}>
+        <div ref={boxRef} />
+      </div>
+    </div>
+  );
+}
+
+// Ítem del menú ⋮ de acciones del reporte (Excel / Ampliar / Copiar).
+const actMenuItem = {
+  display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left",
+  background: "transparent", border: "none", borderRadius: 7, padding: "9px 12px",
+  fontFamily: T.font, fontSize: 13, fontWeight: 600, color: T.text, cursor: "pointer",
+};
 
 const ZERO12 = new Array(12).fill(0);
 const sumTo = (arr, m) => { let s = 0; for (let i = 0; i <= m && i < 12; i++) s += Number(arr?.[i]) || 0; return s; };
@@ -1300,33 +1342,18 @@ function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) {
            resOperaciones, resOpMasIngHQ, margen, resOpGrupo, resAntesImp, resGrupo, resFinal, activeMonths: [...months].sort((a, b) => a - b) };
 }
 
-// P&L BIGG = P&L de HOLDING. Arriba el RESULTADO de cada negocio operativo (no la venta); después HQ
-// (ingresos − opex), y al final financieros + impuestos del grupo. `sub` = computeSubtotalsHolding.
-function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolucion", mes = 0, hayHistorico = false, mesMax = null, soloIngresos = false, sedesApertura = null, pctMode = false }) {
+// Construye cols + filas del P&L BIGG (holding). PURA y reutilizable: la usa el render (PnLTableBigg) Y la
+// exportación a Excel → la planilla sale idéntica a la pantalla. `isCol(key)` decide qué secciones van
+// expandidas (en export = () => false: todas abiertas, y el agrupado nativo de Excel las colapsa).
+export function buildPnLBiggFilas({ pnl, sub, pnlPrev, subPrev, year, vista = "evolucion", mes = 0, hayHistorico = false, mesMax = null, soloIngresos = false, sedesApertura = null }, isCol) {
   const { sar, fg, wre, hqAccounts, ghqAccounts, gpvAccounts, capexAccounts,
           resOperaciones, resOpMasIngHQ, margen, resOpGrupo, resAntesImp, resGrupo, resFinal, activeMonths: _amRaw } = sub;
   const activeMonths = mesesVisibles(_amRaw, year, hayHistorico, mesMax);
   const hayCapex = Object.keys(capexAccounts || {}).length > 0;
-  const ALLKEYS = ["sec_op", "sec_sedes", "sec_ing", "sec_gpv", "sec_opex", "sec_fin", "sec_imp", "sec_capex"];
-  const [collapsed, setCollapsed] = useState(() => Object.fromEntries(ALLKEYS.map(k => [k, true])));   // arranca compactado
-  const isCol  = k => !!collapsed[k];
-  const toggle = k => setCollapsed(c => ({ ...c, [k]: !c[k] }));
-  const allCol = ALLKEYS.every(k => collapsed[k]);
-  const toggleAll = () => setCollapsed(allCol ? {} : Object.fromEntries(ALLKEYS.map(k => [k, true])));
-
-  if (activeMonths.length === 0) return (
-    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
-      padding: "60px 24px", textAlign: "center", boxShadow: T.shadow }}>
-      <div style={{ fontSize: 14, color: T.muted }}>Sin datos para {year} en {moneda}.</div>
-    </div>
-  );
-
-  // ── Un solo render para las 3 vistas: MISMAS filas, distinto bloque de columnas (cols) ──
   const cols = vista === "evolucion" ? colsEvolucion(activeMonths) : colsSedeVista(vista, mes, year);
+  const lastM = activeMonths.length ? activeMonths[activeMonths.length - 1] : 0;
   const P = subPrev || {};
   const Pg = pnlPrev?.grupos || {};
-  // Modo % (flag del reporte "Composición de Ingresos"): las celdas muestran share del Total de Ingresos.
-  const pctOpt = pctMode ? { pct: true, pctTotalCur: resOpMasIngHQ, pctTotalPrev: P.resOpMasIngHQ } : {};
   const sumMap = obj => MESES.map((_, m) => Object.values(obj || {}).reduce((s, a) => s + (a[m] || 0), 0));
   const ivaOn = sub.ivaDeb?.some(v => v) || sub.ivaCred?.some(v => v);
   const impBlockTot     = MESES.map((_, m) => (sub.ivaDeb?.[m] || 0) + (sub.ivaCred?.[m] || 0) - (sub.impuestos?.[m] || 0));
@@ -1377,7 +1404,6 @@ function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolu
   secc("sec_gpv", "Gastos por Ventas", gpvAccounts, P.gpvAccounts, BIGG_ORDEN_GPV, -1);
   filas.push({ kind: "subtotal", strong: true, label: "Margen de Contribución", cur: margen, prev: P.margen, pol: 1 });
   secc("sec_opex", "OPEX HQ", ghqAccounts, P.ghqAccounts, BIGG_ORDEN_GHQ, -1);
-  filas.push({ kind: "subtotal", label: "Total OPEX HQ", cur: sub.opexHQ, prev: P.opexHQ, pol: -1 });
   filas.push({ kind: "result", label: "Resultado Operativo del Grupo", cur: resOpGrupo, prev: P.resOpGrupo, pol: 1 });
   secc("sec_fin", "Financieros", pnl.grupos.fin, Pg.fin, BIGG_ORDEN_FIN, -1);
   filas.push({ kind: "result", label: "Resultado antes de Impuestos", cur: resAntesImp, prev: P.resAntesImp, pol: 1 });
@@ -1398,6 +1424,31 @@ function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolu
     filas.push({ kind: "result", strong: true, label: "Resultado Final del Grupo", cur: resFinal, prev: P.resFinal, pol: 1 });
   }
   }
+  return { cols, filas, lastM, activeMonths };
+}
+
+// P&L BIGG = P&L de HOLDING. Arriba el RESULTADO de cada negocio operativo (no la venta); después HQ
+// (ingresos − opex), y al final financieros + impuestos del grupo. `sub` = computeSubtotalsHolding.
+function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolucion", mes = 0, hayHistorico = false, mesMax = null, soloIngresos = false, sedesApertura = null, pctMode = false }) {
+  const ALLKEYS = ["sec_op", "sec_sedes", "sec_ing", "sec_gpv", "sec_opex", "sec_fin", "sec_imp", "sec_capex"];
+  const [collapsed, setCollapsed] = useState(() => Object.fromEntries(ALLKEYS.map(k => [k, true])));   // arranca compactado
+  const isCol  = k => !!collapsed[k];
+  const toggle = k => setCollapsed(c => ({ ...c, [k]: !c[k] }));
+  const allCol = ALLKEYS.every(k => collapsed[k]);
+  const toggleAll = () => setCollapsed(allCol ? {} : Object.fromEntries(ALLKEYS.map(k => [k, true])));
+
+  const { cols, filas, activeMonths } = buildPnLBiggFilas(
+    { pnl, sub, pnlPrev, subPrev, year, vista, mes, hayHistorico, mesMax, soloIngresos, sedesApertura }, isCol);
+
+  if (activeMonths.length === 0) return (
+    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
+      padding: "60px 24px", textAlign: "center", boxShadow: T.shadow }}>
+      <div style={{ fontSize: 14, color: T.muted }}>Sin datos para {year} en {moneda}.</div>
+    </div>
+  );
+
+  // Modo % (flag del reporte "Composición de Ingresos"): las celdas muestran share del Total de Ingresos.
+  const pctOpt = pctMode ? { pct: true, pctTotalCur: sub.resOpMasIngHQ, pctTotalPrev: (subPrev || {}).resOpMasIngHQ } : {};
 
   return (
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
@@ -2759,9 +2810,14 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const [activeTab,      setActiveTab]      = useState(null);   // null = menú-landing de reportes
   const [vistaPnl,       setVistaPnl]       = useState("evolucion");   // P&L Sedes: evolucion | mensual | ytd
   const [sinIva,         setSinIva]         = useState(() => { try { return localStorage.getItem("pnlSinIva") === "1"; } catch { return false; } });   // toggle Con/Sin IVA (recordado)
-  const [mesSel,         setMesSel]         = useState(new Date().getMonth());   // mes para vistas mensual/ytd
+  const [mesSel,         setMesSel]         = useState(Math.max(0, new Date().getMonth() - 1));   // mes para vistas mensual/ytd (default: último mes completo, no el en curso)
   const [mesCorte,       setMesCorte]       = useState(null);   // Evolución: cortar meses > mesCorte (null = todos). Para ocultar el mes en curso incompleto.
   const [dlgExport,      setDlgExport]      = useState(false);  // modal "Descargar reportes a Excel"
+  const [showActMenu,    setShowActMenu]    = useState(false);  // menú ⋮ de acciones del reporte
+  const [fotoOpen,       setFotoOpen]       = useState(false);  // overlay "Ampliar" (reporte a pantalla completa)
+  const [fotoMsg,        setFotoMsg]        = useState(null);   // feedback del "Copiar imagen" ("copiado"/error)
+  const actMenuRef = useRef(null);   // menú ⋮ (outside-click)
+  const reportRef  = useRef(null);   // contenedor de la tabla del reporte (fuente de la "foto")
   const [year,           setYear]           = useState(CUR_YEAR);
   const [selectedSedeCCs, setSelectedSedeCCs] = useState(null);   // null = todas · [] = ninguna · [ids] = subconjunto
   const [sedeOpen,        setSedeOpen]        = useState(false);
@@ -2772,8 +2828,10 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const [rawHist,        setRawHist]        = useState([]);      // nb_pnl_historico: leaf rows pre go-live (USD, sin IVA)
   useEffect(() => { if (!HISTORICO_HABILITADO) return; fetchPnLHistorico().then(r => setRawHist(Array.isArray(r) ? r : [])).catch(() => {}); }, []);
   // Modo de consolidación FX derivado del selector. "native" = filtra por moneda (como siempre);
-  // "real" = traduce TODO a USD al TC de cierre de cada mes. ("USD · Constante" / constant currency = WIP.)
-  const fxMode   = monedaSel === "USD_REAL" ? "real" : "native";
+  // "real" = traduce TODO a USD al TC de cierre de CADA mes (mezcla operación + efecto cambiario);
+  // "const" = traduce TODO a USD al TC de UN mes ancla (el del selector Mes) → comparable, aísla el FX
+  // (ARS vs USD y EUR vs USD quedan fijos, sin ruido de devaluación/caída del euro).
+  const fxMode   = monedaSel === "USD_REAL" ? "real" : monedaSel === "USD_CONST" ? "const" : "native";
   const monedaPL = fxMode === "native" ? monedaSel : "USD";
   const setMonedaPL = setMonedaSel;   // los efectos que forzaban moneda (fondeadas/Huergo) siguen andando
   const [monedaCF,       setMonedaCF]       = useState("ARS");
@@ -2807,6 +2865,15 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [sedeOpen]);
+
+  // Outside-click del menú ⋮ de acciones del reporte.
+  useEffect(() => {
+    if (!showActMenu) return;
+    const handler = (e) => { if (actMenuRef.current && !actMenuRef.current.contains(e.target)) setShowActMenu(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showActMenu]);
+
 
   useEffect(() => {
     let cancelled = false;
@@ -3042,12 +3109,20 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const egParaPnL = useMemo(() => rawEg.filter(r => !String(r.nota || "").includes(RETDEP_TAG)), [rawEg]);
   const egConSueldos = useMemo(() => [...egParaPnL, ...salaryRows, ...gastoMovRows, ...finRows, ...histEg], [egParaPnL, salaryRows, gastoMovRows, finRows, histEg]);
 
-  // Traductor FX del P&L Sedes (piloto de consolidación). null en modo nativo. "real" = a USD al TC de cierre
-  // del mes de cada fila (traducí mes por mes y sumá). tcConst (constant currency) = WIP.
-  const fxConv = useMemo(
-    () => fxMode === "real" ? ((monto, moneda, anio, mes) => montoAUSD(monto, moneda, tcDelMes(tiposCambio, anio, mes))) : null,
-    [fxMode, tiposCambio]
-  );
+  // Mes ancla del modo constante: sigue al selector Mes en Mensual/YTD; en Evolución usa "Hasta" (o el
+  // último mes completo). 0-based. El TC de ESTE mes (del año en curso) traduce TODOS los meses de AMBOS años.
+  const anchorMes = (vistaPnl === "evolucion")
+    ? (mesCorte ?? (year >= CUR_YEAR ? Math.max(0, new Date().getMonth() - 1) : 11))
+    : mesSel;
+  const fxConstTC   = useMemo(() => fxMode === "const" ? tcDelMes(tiposCambio, year, anchorMes + 1) : null, [fxMode, tiposCambio, year, anchorMes]);
+  const fxConstFalta = fxMode === "const" && !fxConstTC;   // el mes ancla no tiene TC cargado
+  // Traductor FX del P&L (consolidación). null en modo nativo. "real" = a USD al TC de cierre del mes de cada
+  // fila (traducí mes por mes y sumá). "const" = a USD al TC del mes ancla, ignorando el mes de la fila.
+  const fxConv = useMemo(() => {
+    if (fxMode === "real")  return (monto, moneda, anio, mes) => montoAUSD(monto, moneda, tcDelMes(tiposCambio, anio, mes));
+    if (fxMode === "const") return (monto, moneda) => montoAUSD(monto, moneda, fxConstTC);
+    return null;
+  }, [fxMode, tiposCambio, fxConstTC]);
   // Traduce un array mensual ARS [12] a USD al TC de cierre de cada mes (o lo deja igual en modo nativo).
   const fxArrARS = useCallback((arr, anio) => {
     if (!fxConv || !arr) return arr;
@@ -3163,6 +3238,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   // ── P&L BIGG = P&L de HOLDING (Núcleo/anillo 1). Se computa solo en la pestaña pl_bigg. ──
   const isBigg = activeTab === "pl_bigg";
   const isVentasHQ = activeTab === "an_ventas";   // reporte "Aporte a los ingresos" — reusa el holding
+  const ordControls = isSedeLike || isBigg || isVentasHQ;   // ordena Año→Mes a la izquierda y Moneda/IVA a la derecha (como P&L Sedes)
   // Scope fijo del holding (independiente del tab): sedes propias AR del núcleo + el centro Barrio Norte.
   const arNucleoCCs = useMemo(
     () => ccs.filter(c => (c.grupo ?? "").toLowerCase() === "operaciones" &&
@@ -3340,16 +3416,26 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     </div>
   );
 
-  // ── Exportación a Excel (P&L Sede/Fondeadas): una hoja por vista, reusando las MISMAS filas del render. ──
-  const hayAnioAnterior = (subSedePrev?.totIngresos || []).some(v => Number(v));
+  // ── Exportación a Excel (P&L Sede/Fondeadas y P&L BIGG): una hoja por vista, reusando las MISMAS filas del
+  //    render (buildPnLSedeFilas / buildPnLBiggFilas) → la planilla sale idéntica a pantalla, con las filas de
+  //    detalle agrupadas y colapsadas (esquema nativo de Excel). ──
+  const expSub     = isBigg ? subBigg     : subSede;
+  const expSubPrev = isBigg ? subBiggPrev : subSedePrev;
+  const hayAnioAnterior = (isBigg ? (expSubPrev?.resOpMasIngHQ || []) : (subSedePrev?.totIngresos || [])).some(v => Number(v));
   // Default "hasta": último mes COMPLETO (excluye el mes en curso, que está incompleto y se ve feo).
   const mesExportDefault = (() => {
-    const curCal = new Date().getMonth(), act = subSede?.activeMonths || [];
+    const curCal = new Date().getMonth(), act = expSub?.activeMonths || [];
     const completos = act.filter(m => m < curCal);
     return completos.length ? completos[completos.length - 1] : (act.length ? act[act.length - 1] : curCal);
   })();
   const ejecutarExport = ({ vistas, mes }) => {
-    const base = {
+    const monLabel = MONEDA_SYM[monedaPL] || monedaPL;
+    const repLabel = curTab?.label || "Reporte";
+    const monMeta  = `Moneda: ${monLabel}${fxMode === "const" ? " · constante" : fxMode === "real" ? " · TC real" : ""}`;
+    const scopeLabel = isBigg ? "Grupo BIGG (holding · todas las sociedades)"
+      : selectedSedeCCs === null ? "Todas las sedes"
+      : selectedSedeCCs.length === 0 ? "Ninguna sede" : `${selectedSedeCCs.length} sede(s)`;
+    const baseSede = {
       pnl: pnlSede, sub: subSede, pnlPrev: pnlSedePrev, subPrev: subSedePrev, year,
       nombreCuenta, cesion: cesionSede, cesionResFinal: subSedeNet?.resFinal, cesionRetiros: cesionRetirosCI,
       impuestos: isFond ? IMPUESTOS_FOND : null, financieros: isFond ? FINANCIEROS_FOND : null,
@@ -3358,23 +3444,43 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       feeIvaVivo: activeTab === "op_rosedal" ? (retirosRosedal[year]?.feeIva || null) : null,
       netoLabel: fondCfg?.netoLabel, hayHistorico,
     };
-    const monLabel = MONEDA_SYM[monedaPL] || monedaPL;
-    const scopeLabel = selectedSedeCCs === null ? "Todas las sedes"
-      : selectedSedeCCs.length === 0 ? "Ninguna sede" : `${selectedSedeCCs.length} sede(s)`;
-    const sedeLabel = curTab?.label || "Reporte";
+    const buildFilas = isBigg
+      ? (vista, extra) => buildPnLBiggFilas({ pnl: pnlBigg, sub: subBigg, pnlPrev: pnlBiggPrev, subPrev: subBiggPrev, year, hayHistorico, vista, ...extra }, () => false)
+      : (vista, extra) => buildPnLSedeFilas({ ...baseSede, vista, ...extra }, () => false);
     const VIS = [
       { key: "evolucion", sheet: "Evolución",            vista: "evolucion", extra: { mesMax: mes } },
       { key: "mensual",   sheet: `Mensual ${MESES[mes]}`, vista: "mensual",   extra: { mes } },
       { key: "ytd",       sheet: `YTD ${MESES[mes]}`,      vista: "ytd",       extra: { mes } },
     ];
     const hojas = VIS.filter(v => vistas[v.key]).map(v => {
-      const { cols, filas, lastM } = buildPnLSedeFilas({ ...base, vista: v.vista, ...v.extra }, () => false);
-      return { sheetName: v.sheet, cols, filas, lastM, titulo: `${sedeLabel} — ${v.sheet}`,
-        meta: [`Año ${year} · hasta ${MESES[mes]}`, `Moneda: ${monLabel}${fxMode !== "native" ? " · TC real" : ""}`, scopeLabel, sinIva ? "Sin IVA" : "Con IVA"] };
+      const { cols, filas, lastM } = buildFilas(v.vista, v.extra);
+      return { sheetName: v.sheet, cols, filas, lastM, titulo: `${repLabel} — ${v.sheet}`,
+        meta: [`Año ${year} · hasta ${MESES[mes]}`, monMeta, scopeLabel, sinIva ? "Sin IVA" : "Con IVA"] };
     });
-    if (hojas.length) exportarPackReportes({ archivo: `${sedeLabel.replace(/[^\w]+/g, "_")}_${year}_hasta_${MESES[mes]}.xlsx`, hojas })
+    if (hojas.length) exportarPackReportes({ archivo: `${repLabel.replace(/[^\w]+/g, "_")}_${year}_hasta_${MESES[mes]}.xlsx`, hojas })
       .catch(e => { console.error("Export Excel falló:", e); alert("No se pudo generar el Excel. Revisá la consola."); });
     setDlgExport(false);
+  };
+
+  // Encabezado de la "foto" (Ampliar / Copiar imagen): título + año + vista + moneda + IVA, para entender
+  // qué se está viendo (igual criterio que la bajada a Excel).
+  const monedaFotoLabel = { ARS: "$ ARS", USD: "U$D", EUR: "€ EUR", COP: "COP",
+    USD_REAL: "U$D · TC Real", USD_CONST: `U$D constante (${MESES[anchorMes]} ${year})` }[monedaSel] || monedaSel;
+  const vistaFotoLabel = vistaPnl === "evolucion" ? "Evolución mensual"
+    : vistaPnl === "mensual" ? `Mensual · ${MESES[mesSel]}`
+    : `YTD a ${MESES[mesSel]}`;
+  const fotoCaption = `${curTab?.label ?? "Reporte"}  ·  ${year}  ·  ${vistaFotoLabel}  ·  ${monedaFotoLabel}  ·  ${sinIva ? "Sin IVA" : "Con IVA"}`;
+
+  // Copiar el reporte visible como imagen (para pegar en PowerPoint). Feedback efímero.
+  const copiarFoto = async () => {
+    if (!reportRef.current) return;
+    try {
+      await copiarReporteComoImagen(reportRef.current, { caption: fotoCaption });
+      setFotoMsg("✔ Imagen copiada — pegala en PowerPoint (Ctrl+V).");
+    } catch (err) {
+      setFotoMsg("No se pudo copiar la imagen en este navegador.");
+    }
+    setTimeout(() => setFotoMsg(null), 3500);
   };
 
   return (
@@ -3382,36 +3488,67 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     // cards blancas; así la regla global `td/th{border:var(--border)}` no pinta líneas oscuras sobre blanco.
     <div style={{ padding: "28px 32px", maxWidth: 1400, "--border": T.cardBorder }} className="fade">
 
-      {/* ── Header del reporte + volver al menú ── */}
+      {/* ── Header del reporte: "← Reportes" al lado del título; a la derecha vista + menú ⋮ ── */}
       <PageHeader
         title={curTab?.label ?? "Reporte"}
-        subtitle={(isPnlTiempo || isVentasHQ) ? undefined : curLente?.label}
+        subtitle={(isPnlTiempo || isBigg || isVentasHQ) ? undefined : curLente?.label}
+        back={
+          <button onClick={() => setActiveTab(null)} style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            background: "#f3f4f6", border: `1px solid ${T.cardBorder}`, borderRadius: 8,
+            color: T.text, fontFamily: T.font, fontSize: 13, fontWeight: 700,
+            padding: "6px 14px", cursor: "pointer" }}
+            onMouseEnter={e => e.currentTarget.style.background = "#e5e7eb"}
+            onMouseLeave={e => e.currentTarget.style.background = "#f3f4f6"}>
+            ← Reportes
+          </button>
+        }
         action={
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            {(isPnlTiempo || isBigg || isVentasHQ) && <VistaToggle value={vistaPnl} onChange={setVistaPnl} />}
-            {isSedeLike && (
-              <button onClick={() => setDlgExport(true)} title="Descargar reportes a Excel" style={{
-                display: "inline-flex", alignItems: "center", gap: 6,
-                background: "#065f46", border: "1px solid #065f46", borderRadius: 8,
-                color: "#fff", fontFamily: T.font, fontSize: 13, fontWeight: 700,
-                padding: "8px 16px", cursor: "pointer" }}
-                onMouseEnter={e => e.currentTarget.style.background = "#047857"}
-                onMouseLeave={e => e.currentTarget.style.background = "#065f46"}>
-                ⬇ Excel
-              </button>
+            {(isPnlTiempo || isBigg || isVentasHQ) && <VistaToggle value={vistaPnl} onChange={v => {
+              // El mes persiste al cambiar de vista (como Moneda/IVA): "Hasta" (Evolución) y "Mes" (Mensual/YTD)
+              // comparten el mes elegido. Al entrar a Evolución llevo Mes→Hasta; al salir, Hasta→Mes (si no es "Todos").
+              if (v !== vistaPnl) {
+                if (v === "evolucion") setMesCorte(mesSel);
+                else if (vistaPnl === "evolucion" && mesCorte != null) setMesSel(mesCorte);
+              }
+              setVistaPnl(v);
+            }} />}
+            {/* Menú ⋮: Bajar a Excel / Ampliar (foto) / Copiar imagen (para PowerPoint). Solo en reportes con tabla P&L. */}
+            {(isPnlTiempo || isBigg || isVentasHQ) && (
+              <div ref={actMenuRef} style={{ position: "relative" }}>
+                <button onClick={() => setShowActMenu(o => !o)} title="Acciones" style={{
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                  background: showActMenu ? "#e5e7eb" : "#f3f4f6", border: `1px solid ${T.cardBorder}`,
+                  borderRadius: 8, color: T.text, fontSize: 20, fontWeight: 700, lineHeight: 1,
+                  width: 38, height: 36, cursor: "pointer" }}>⋮</button>
+                {showActMenu && (
+                  <div style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 40,
+                    background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10,
+                    boxShadow: T.shadowMd, padding: 4, minWidth: 210 }}>
+                    {(isSedeLike || isBigg) && (
+                      <button onClick={() => { setShowActMenu(false); setDlgExport(true); }} style={actMenuItem}>
+                        <span style={{ width: 20 }}>⬇</span> Bajar a Excel
+                      </button>
+                    )}
+                    <button onClick={() => { setShowActMenu(false); setFotoOpen(true); }} style={actMenuItem}>
+                      <span style={{ width: 20 }}>⛶</span> Ampliar
+                    </button>
+                    <button onClick={() => { setShowActMenu(false); copiarFoto(); }} style={actMenuItem}>
+                      <span style={{ width: 20 }}>⧉</span> Copiar imagen
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
-            <button onClick={() => setActiveTab(null)} style={{
-              display: "inline-flex", alignItems: "center", gap: 6,
-              background: "#f3f4f6", border: `1px solid ${T.cardBorder}`, borderRadius: 8,
-              color: T.text, fontFamily: T.font, fontSize: 13, fontWeight: 700,
-              padding: "8px 16px", cursor: "pointer" }}
-              onMouseEnter={e => e.currentTarget.style.background = "#e5e7eb"}
-              onMouseLeave={e => e.currentTarget.style.background = "#f3f4f6"}>
-              ← Reportes
-            </button>
           </div>
         }
       />
+      {/* Feedback efímero del "Copiar imagen". */}
+      {fotoMsg && (
+        <div style={{ marginBottom: 12, background: "#eef2ff", border: "1px solid #c7d2fe", borderRadius: 8,
+          padding: "8px 14px", fontSize: 12, color: "#3730a3", fontWeight: 600 }}>{fotoMsg}</div>
+      )}
 
       {/* ── Toolbar / Filters (Consolidado y los detalles traen su propia barra; los WIP no llevan) ── */}
       {activeTab !== "consolidado" && activeTab !== "cxp_prov" && activeTab !== "cxc_cli" && !curTab?.wip && activeTab !== "inf_egresos" && activeTab !== "inf_ingresos" && (
@@ -3421,7 +3558,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         padding: "12px 16px", boxShadow: "0 1px 3px rgba(0,0,0,.04)",
       }}>
         {/* Año */}
-        <div style={{ order: isSedeLike ? 2 : 0 }}>
+        <div style={{ order: ordControls ? 2 : 0 }}>
           <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
             textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Año</label>
           <select value={year} onChange={e => setYear(Number(e.target.value))} style={selStyle}>
@@ -3431,9 +3568,22 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
         {/* Moneda — P&L (en sede, arranca el grupo derecho) */}
         {showMonedaPL && (
-          <div style={{ order: isSedeLike ? 4 : 0, marginLeft: (isSedeLike || isBigg || isVentasHQ) ? "auto" : undefined }}>
-            <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
-              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Moneda</label>
+          <div style={{ order: ordControls ? 4 : 0, marginLeft: ordControls ? "auto" : undefined }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 700, color: T.muted,
+              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>
+              Moneda
+              {/* Estado del modo constante: badge chico con tooltip por hover (no ocupa fila en el reporte). */}
+              {fxMode === "const" && (
+                <span className="nb-tip" style={{ fontSize: 12, lineHeight: 1 }}>
+                  {fxConstFalta ? "⚠️" : "🔒"}
+                  <span className="nb-tip-box">
+                    {fxConstFalta
+                      ? `Falta el tipo de cambio de ${MESES[anchorMes]} ${year} (mes ancla del modo constante). Cargalo en Maestros (nb_tipos_cambio) o elegí otro mes.`
+                      : `U$D constante — todo valuado al TC de ${MESES[anchorMes]} ${year} (comparable, sin efecto cambiario). El mes ancla lo fija el selector ${vistaPnl === "evolucion" ? "Hasta" : "Mes"}.`}
+                  </span>
+                </span>
+              )}
+            </label>
             <select value={monedaSel} onChange={e => setMonedaSel(e.target.value)} style={selStyle}>
               <optgroup label="Monedas">
                 {Object.entries(MONEDA_SYM).map(([k, v]) => (
@@ -3442,7 +3592,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
               </optgroup>
               <optgroup label="Consolidado">
                 <option value="USD_REAL">U$D · TC Real</option>
-                <option value="USD_CONST" disabled>U$D · Constante (WIP)</option>
+                <option value="USD_CONST">U$D · Constante</option>
               </optgroup>
             </select>
           </div>
@@ -3478,7 +3628,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
         {/* Mes — solo para vistas comparativas (Mensual / YTD) */}
         {(isPnlTiempo || isBigg || isVentasHQ) && vistaPnl !== "evolucion" && (
-          <div style={{ order: isSedeLike ? 3 : 0 }}>
+          <div style={{ order: ordControls ? 3 : 0 }}>
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Mes</label>
             <select value={mesSel} onChange={e => setMesSel(Number(e.target.value))} style={selStyle}>
@@ -3489,7 +3639,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
         {/* Hasta — corta la vista Evolución en un mes (para ocultar el mes en curso incompleto). */}
         {(isPnlTiempo || isBigg || isVentasHQ) && vistaPnl === "evolucion" && (
-          <div style={{ order: isSedeLike ? 3 : 0 }}>
+          <div style={{ order: ordControls ? 3 : 0 }}>
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Hasta</label>
             <select value={mesCorte ?? ""} onChange={e => setMesCorte(e.target.value === "" ? null : Number(e.target.value))} style={selStyle}>
@@ -3575,7 +3725,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       )}
 
       {/* Aviso de meses PASADOS sin TC en modo consolidado (el mes en curso queda en blanco, es esperado). */}
-      {fxMode !== "native" && mesesSinTC.length > 0 && (
+      {fxMode === "real" && mesesSinTC.length > 0 && (
         <div style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 8, padding: "8px 14px",
           marginBottom: 16, fontSize: 12, color: "#92400e", fontWeight: 600 }}>
           ⚠ Faltan tipos de cambio de: {mesesSinTC.join(", ")} → esos meses no se tradujeron a USD. Cargalos en Maestros (nb_tipos_cambio).
@@ -3585,6 +3735,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       {/* ── P&L Sedes (Argentina núcleo) y Fondeadas (España/Colombia/Puertos): mismo reporte, distinto
              universo de sedes (scopeEmpresas) + cola de impuestos en Fondeadas ── */}
       {isSedeLike && (
+        <div ref={reportRef}>
         <PnLTableSede pnl={pnlSede} sub={subSede} pnlPrev={pnlSedePrev} subPrev={subSedePrev}
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} nombreCuenta={nombreCuenta}
           cesion={cesionSede} cesionResFinal={subSedeNet?.resFinal} cesionRetiros={cesionRetirosCI}
@@ -3596,21 +3747,26 @@ export default function PantallaReportes({ sociedad = "nako" }) {
           label={selectedSedeCCs === null ? "Todas las Sedes"
             : selectedSedeCCs.length === 0 ? "Ninguna sede"
             : `${selectedSedeCCs.length} seleccionada${selectedSedeCCs.length > 1 ? "s" : ""}`} />
+        </div>
       )}
 
-      {isSedeLike && <ExportModal open={dlgExport} onClose={() => setDlgExport(false)}
+      {(isSedeLike || isBigg) && <ExportModal open={dlgExport} onClose={() => setDlgExport(false)}
         onConfirm={ejecutarExport} defaultMes={mesExportDefault} hayAnioAnterior={hayAnioAnterior} />}
 
       {/* ── P&L Huergo (Wellness Real Estate): Ingresos − Costos (horas de coaches) = Margen ── */}
       {isHuergo && (
+        <div ref={reportRef}>
         <PnLTableHuergo pnl={pnlHuergo} sub={subHuergo} pnlPrev={pnlHuergoPrev} subPrev={subHuergoPrev}
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} hayHistorico={hayHistorico} mesMax={mesCorte} />
+        </div>
       )}
 
       {/* ── P&L BIGG consolidado (subgrupos, hasta Margen Bruto) ── */}
       {activeTab === "pl_bigg" && (
+        <div ref={reportRef}>
         <PnLTableBigg pnl={pnlBigg} sub={subBigg} pnlPrev={pnlBiggPrev} subPrev={subBiggPrev}
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} hayHistorico={hayHistorico} mesMax={mesCorte} />
+        </div>
       )}
 
       {/* ── Cash Flow ── */}
@@ -3650,9 +3806,11 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       )}
 
       {isVentasHQ && subBigg && (
+        <div ref={reportRef}>
         <PnLTableBigg pnl={pnlBigg} sub={subBigg} pnlPrev={pnlBiggPrev} subPrev={subBiggPrev}
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} hayHistorico={hayHistorico} mesMax={mesCorte}
           soloIngresos pctMode sedesApertura={{ cur: sedesApCur, prev: sedesApPrev }} />
+        </div>
       )}
 
       {activeTab === "consolidado" && (
@@ -3677,6 +3835,9 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
       {/* ── Reportes en construcción (esqueleto navegable, sin cálculo todavía) ── */}
       {curTab?.wip && <WipReport tab={curTab} />}
+
+      {/* ── "Ampliar": el reporte como foto a pantalla completa ── */}
+      {fotoOpen && <FotoOverlay srcRef={reportRef} onClose={() => setFotoOpen(false)} caption={fotoCaption} />}
 
     </div>
   );
