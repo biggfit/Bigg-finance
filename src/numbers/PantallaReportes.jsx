@@ -656,6 +656,7 @@ function colsSedeVista(vista, mes, year) {
   if (vista === "ytd") return [
     { header: `YTD ${year}`,     kind: "val", get: c => sumTo(c, mes) },
     { header: `YTD ${year - 1}`, kind: "val", get: (c, p) => sumTo(p, mes) },
+    { header: "Δ",               kind: "var", abs: true, a: c => sumTo(c, mes), b: (c, p) => sumTo(p, mes) },
     { header: "Var%",            kind: "var", a: c => sumTo(c, mes), b: (c, p) => sumTo(p, mes) },
   ];
   return [   // mensual
@@ -679,6 +680,14 @@ function celdasSede(cols, cur, prev, pol, o) {
   return cols.map((col, i) => {
     if (col.kind === "var") {
       const a = col.a(cur, prev), b = col.b(cur, prev), d = a - b;
+      if (col.abs) {
+        // Δ absoluto: misma convención de signo que el resto del P&L (paréntesis = movió para el lado malo),
+        // color por MEJORA (ingresos/resultados +1, costos −1).
+        const dcolor = d * pol > 0 ? T.green : d * pol < 0 ? T.red : T.dim;
+        return <td key={i} style={{ padding: o.pad, fontSize: (o.fs || 13) - 1, textAlign: "right",
+          fontFamily: "var(--mono)", fontWeight: 700, color: dcolor, whiteSpace: "nowrap", ...bord,
+          ...(col.total ? { borderLeft: `1px solid ${T.cardBorder}` } : {}) }}>{fmtPar(d, pol < 0)}</td>;
+      }
       const pct = b ? d / b * 100 : null;
       // flecha por signo crudo; color por MEJORA (polaridad: ingresos/resultados +1, costos −1).
       const color = pct == null ? T.dim : (d * pol > 0 ? T.green : d * pol < 0 ? T.red : T.dim);

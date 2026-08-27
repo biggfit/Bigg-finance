@@ -27,6 +27,7 @@ function cellVal(fila, col, lastM) {
   if (col.kind === "var") {
     if (fila.kind === "cesion" || !fila.cur) return null;
     const a = col.a(fila.cur, fila.prev), b = col.b(fila.cur, fila.prev);
+    if (col.abs) return (fila.pol < 0 ? -1 : 1) * (a - b);   // Δ absoluto, con el signo del P&L (costos negativos → paréntesis)
     return b ? (a - b) / b : null;
   }
   let v;
@@ -106,7 +107,7 @@ function construirHoja(wb, { sheetName, cols, filas, lastM, titulo, meta }) {
       if (col === 1) { cell.alignment = { horizontal: "left" }; }
       else {
         cell.alignment = { horizontal: "right" };
-        cell.numFmt = cols[col - 2]?.kind === "var" ? FMT_PCT : FMT_NUM;
+        cell.numFmt = (cols[col - 2]?.kind === "var" && !cols[col - 2]?.abs) ? FMT_PCT : FMT_NUM;
       }
     });
     // Detalle de cuenta → nivel 1 del esquema, oculto de arranque (se despliega desde su resumen de arriba).
