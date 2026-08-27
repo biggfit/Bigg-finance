@@ -15,7 +15,6 @@ import PantallaIntercompania    from "./numbers/PantallaIntercompania";
 import PantallaGastos           from "./numbers/PantallaGastos";
 import PantallaReconciliacion   from "./numbers/PantallaReconciliacion";
 import PantallaFinanciaciones   from "./numbers/PantallaFinanciaciones";
-import PantallaSocios            from "./numbers/PantallaSocios";
 import PantallaUsuarios          from "./numbers/PantallaUsuarios";
 import { SOCIEDADES as SOC_FALLBACK } from "./data/tesoreriaData";
 import { fetchSociedades, fetchMovimientosPendientes, fetchCorreoBorradores } from "./lib/numbersApi";
@@ -102,6 +101,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
   const [sociedades,     setSociedades]     = useState(SOC_FALLBACK);
   const [socIdx,         setSocIdx]         = useState(0);
   const [showSocDrop,    setShowSocDrop]    = useState(false);
+  const [showUserMenu,   setShowUserMenu]   = useState(false);   // menú de usuario (topbar, arriba a la derecha)
   const [socReady,       setSocReady]       = useState(false);
   const [activeSpecial,  setActiveSpecial]  = useState(() => localStorage.getItem("nb_activeSpecial") || null);
   // Deep-link a un comprobante: desde Tesorería, "Editar" de un PAGO/COBRO abre el detalle del
@@ -150,6 +150,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
   const [activeMaestrosTab, setActiveMaestrosTab] = useState(null);
   const showMaestros = activeMaestrosTab !== null;
   const socDropRef = useRef(null);
+  const userMenuRef = useRef(null);
   const activeSoc = sociedades[socIdx] ?? sociedades[0];
 
   // Persistir sociedad + pantalla activa → al recargar (Ctrl+Shift+R) se vuelve donde estabas (AD-307).
@@ -173,6 +174,16 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [showSocDrop]);
+
+  // Cerrar el menú de usuario al hacer click afuera (mismo patrón que el dropdown de sociedad)
+  useEffect(() => {
+    if (!showUserMenu) return;
+    const handler = (e) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target)) setShowUserMenu(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showUserMenu]);
 
   // Carga sociedades PRIMERO — los componentes hijos no montan hasta que socReady=true
   // Esto evita requests concurrentes al proxy de Vite en el arranque inicial
@@ -286,68 +297,11 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
           borderRight:`2px solid ${T.sidebarBorder}`,
           display:"flex", flexDirection:"column", overflow:"hidden" }}>
 
-          {/* ── Logo + selector de sociedad ── */}
-          <div style={{ padding:"14px 12px 10px", borderBottom:"1px solid rgba(255,255,255,.07)" }}>
-            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
+          {/* ── Logo ── */}
+          <div style={{ padding:"16px 12px", borderBottom:"1px solid rgba(255,255,255,.07)" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
               <img src={LOGO_SRC} alt="BIGG" style={{ height:32, width:"auto", objectFit:"contain", flexShrink:0, filter:"invert(1) sepia(1) saturate(10) hue-rotate(52deg)" }} />
               <span style={{ fontSize:11, color:T.sidebarMuted, fontWeight:700, letterSpacing:".08em", marginLeft:8 }}>NUMBERS</span>
-            </div>
-            {/* Dropdown selector de sociedad */}
-            <div ref={socDropRef} style={{ position:"relative" }}>
-              <button
-                onClick={() => setShowSocDrop(v => !v)}
-                aria-haspopup="listbox"
-                aria-expanded={showSocDrop}
-                title="Seleccionar sociedad"
-                style={{
-                  padding:"7px 10px", fontSize:11,
-                  background: showSocDrop ? T.sidebarActive : T.sidebarHover,
-                  border:`1px solid ${showSocDrop ? "rgba(173,255,25,.35)" : "rgba(255,255,255,.12)"}`,
-                  color:"rgba(255,255,255,.9)",
-                  borderRadius:8, fontFamily:T.font, cursor:"pointer",
-                  fontWeight:700, width:"100%", textAlign:"left",
-                  overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
-                  display:"flex", alignItems:"center", gap:6,
-                  transition:"background .15s, border-color .15s",
-                }}
-              >
-                <span style={{ fontSize:14, lineHeight:1, display:"flex", alignItems:"center" }}>{activeSoc.bandera}</span>
-                <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", lineHeight:1 }}>{activeSoc.nombre.toUpperCase()}</span>
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{ flexShrink:0, transform: showSocDrop ? "rotate(180deg)" : "rotate(0deg)", transition:"transform .2s" }}>
-                  <path d="M2 3.5L5 6.5L8 3.5" stroke="rgba(255,255,255,.4)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-              </button>
-              {showSocDrop && (
-                <div role="listbox" aria-label="Sociedades" style={{
-                  position:"absolute", top:"calc(100% + 4px)", left:0, right:0, zIndex:999,
-                  background:"#1a1d20", border:"1px solid rgba(255,255,255,.12)",
-                  borderRadius:8, overflow:"hidden", padding:"4px",
-                  boxShadow:"0 8px 24px rgba(0,0,0,.5)",
-                }}>
-                  {sociedades.map((s, i) => (
-                    <button key={s.id} role="option" aria-selected={i === socIdx}
-                      onClick={() => { setSocIdx(i); setShowSocDrop(false); }}
-                      style={{
-                        display:"flex", alignItems:"center", gap:8,
-                        width:"100%", padding:"7px 10px", borderRadius:6,
-                        background: i === socIdx ? T.sidebarActive : "transparent",
-                        border:"none",
-                        color: i === socIdx ? T.accent : "rgba(255,255,255,.7)",
-                        fontFamily:T.font, fontSize:12, fontWeight: i === socIdx ? 700 : 500,
-                        cursor:"pointer", textAlign:"left", transition:"background .12s",
-                      }}
-                      onMouseEnter={e => { if (i !== socIdx) e.currentTarget.style.background = T.sidebarHover; }}
-                      onMouseLeave={e => { if (i !== socIdx) e.currentTarget.style.background = "transparent"; }}
-                    >
-                      <span style={{ fontSize:13 }}>{s.bandera ?? ""}</span>
-                      <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                        {s.nombre}
-                      </span>
-                      {i === socIdx && <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 7L6 10L11 4" stroke={T.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
           </div>
 
@@ -636,13 +590,11 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
               );
             })}
 
-          {/* ── Módulos especiales ── */}
-          <div style={{ borderTop:"1px solid rgba(255,255,255,.07)", padding:"8px 0 4px" }}>
-            <div style={{ padding:"4px 16px 6px", fontSize:10, fontWeight:700, letterSpacing:".1em", color:T.sidebarMuted, textTransform:"uppercase" }}>Navegación consolidada</div>
+          {/* ── Cluster inferior: Correo · Reportes · Sueldos · Franquicias (pegado al fondo, junto a Maestros) ── */}
+          <div style={{ borderTop:"1px solid rgba(255,255,255,.07)", padding:"8px 0 4px", marginTop:"auto" }}>
             {[
-              { id:"correo",          icon:"✉", label:"Correo",             soon:false, badge: correoPend, onClick: () => { setActiveSpecial("correo"); } },
-              { id:"reportes",        icon:"▦", label:"Reportes",          soon:false, onClick: () => { setActiveSpecial("reportes"); } },
-              { id:"socios",          icon:"◎", label:"Socios",             soon:false, onClick: () => { setActiveSpecial("socios"); } },
+              { id:"correo",          icon:"✉", label:"Correo",   soon:false, badge: correoPend, onClick: () => { setActiveSpecial("correo"); } },
+              { id:"reportes",        icon:"▦", label:"Reportes", soon:false, onClick: () => { setActiveSpecial("reportes"); } },
             ].map(item => {
               const active = !item.soon && activeSpecial === item.id;
               return (
@@ -654,18 +606,9 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
                   {item.badge > 0 && (
                     <span style={{ fontSize:10, fontWeight:800, minWidth:18, height:16, padding:"0 5px", borderRadius:999, display:"inline-flex", alignItems:"center", justifyContent:"center", lineHeight:1, boxSizing:"border-box", background:"#dc2626", color:"#fff", flexShrink:0, marginRight:18 }}>{item.badge}</span>
                   )}
-                  {item.soon && (
-                    <span style={{ fontSize:9, fontWeight:700, letterSpacing:".06em", color:"rgba(255,255,255,.2)",
-                      background:"rgba(255,255,255,.06)", borderRadius:4, padding:"2px 5px" }}>PRONTO</span>
-                  )}
                 </button>
               );
             })}
-          </div>
-
-          {/* ── Otras apps BIGG (saltos fuera de Numbers) ── */}
-          <div style={{ borderTop:"1px solid rgba(255,255,255,.07)", padding:"8px 0 4px" }}>
-            <div style={{ padding:"4px 16px 6px", fontSize:10, fontWeight:700, letterSpacing:".1em", color:T.sidebarMuted, textTransform:"uppercase" }}>Otras apps</div>
             {onGoToSueldos && (
               <button onClick={onGoToSueldos} style={{
                 display:"flex", alignItems:"center", gap:10,
@@ -698,8 +641,10 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
             </button>
           </div>
 
-          {/* ── Pie: Maestros ── */}
-          <div style={{ borderTop:"1px solid rgba(255,255,255,.07)", padding:"6px 0" }}>
+          </nav>
+
+          {/* ── Pie: Maestros (bajado al pie para liberar espacio; Actualizar datos ahora vive en el topbar) ── */}
+          <div style={{ borderTop:"1px solid rgba(255,255,255,.07)", padding:"6px 0", flexShrink:0 }}>
             <button onClick={() => { setActiveMaestrosTab("sociedades"); setActiveSpecial(null); }}
               aria-current={showMaestros ? "page" : undefined}
               style={navBtnStyle(showMaestros)} {...navBtnHover(showMaestros)}>
@@ -707,41 +652,6 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
               Maestros
             </button>
           </div>
-          </nav>
-
-          {/* ── Actualizar datos: trae lo último del servidor (saltea la caché compartida) ── */}
-          <div style={{ borderTop:"1px solid rgba(255,255,255,.07)", padding:"6px 0", flexShrink:0 }}>
-            <button onClick={() => { forzarRefresco(); window.location.reload(); }}
-              title="Trae los últimos datos del servidor, salteando la caché compartida. Usalo si un compañero acaba de cargar algo y todavía no lo ves."
-              style={navBtnStyle(false)} {...navBtnHover(false)}>
-              <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>🔄</span>
-              Actualizar datos
-            </button>
-          </div>
-
-          {/* ── Pie: usuario logueado (fijo al fondo del sidebar) ── */}
-          {sesion && (
-            <div style={{ borderTop:"1px solid rgba(255,255,255,.07)", padding:"8px 10px",
-              display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
-              <div style={{ width:30, height:30, borderRadius:"50%", background:T.accent, color:T.accentDark,
-                display:"flex", alignItems:"center", justifyContent:"center", fontWeight:800, fontSize:13, flexShrink:0 }}>
-                {inicial(sesion.nombre)}
-              </div>
-              <div style={{ flex:1, minWidth:0 }}>
-                <div style={{ fontSize:12.5, fontWeight:700, color:"rgba(255,255,255,.85)",
-                  whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{sesion.nombre}</div>
-                {sesion.rol && <div style={{ fontSize:10.5, color:"rgba(255,255,255,.4)",
-                  whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{sesion.rol}</div>}
-              </div>
-              <button onClick={() => { setActiveMaestrosTab(null); setActiveSpecial("usuarios"); }}
-                title="Usuarios del sistema"
-                aria-current={activeSpecial === "usuarios" ? "page" : undefined}
-                style={{ background:"transparent", border:"none", cursor:"pointer", padding:4, borderRadius:6, flexShrink:0,
-                  color: activeSpecial === "usuarios" ? T.accent : "rgba(255,255,255,.5)", fontSize:16 }}
-                onMouseEnter={e=>e.currentTarget.style.background=T.sidebarHover}
-                onMouseLeave={e=>e.currentTarget.style.background="transparent"}>⚙</button>
-            </div>
-          )}
 
         </div>
       )}
@@ -751,6 +661,65 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
         <div style={{ background:T.card, borderBottom:`1px solid ${T.cardBorder}`,
           padding:"10px 24px", display:"flex", alignItems:"center", gap:10,
           flexShrink:0, boxShadow:"0 1px 3px rgba(0,0,0,.06)" }}>
+          {/* Selector de sociedad — primero, arriba a la izquierda (estilo BIGG EYE) */}
+          {!showMaestros && (
+            <>
+              <div ref={socDropRef} style={{ position:"relative", flexShrink:0 }}>
+                <button
+                  onClick={() => setShowSocDrop(v => !v)}
+                  aria-haspopup="listbox" aria-expanded={showSocDrop}
+                  title="Seleccionar sociedad"
+                  style={{
+                    padding:"8px 14px", fontSize:16, fontWeight:600,
+                    background: showSocDrop ? "#3a3f45" : "#2f3339",
+                    border:`1px solid ${showSocDrop ? "rgba(255,255,255,.28)" : "rgba(255,255,255,.14)"}`,
+                    color:"#fff", borderRadius:10, fontFamily:T.font, cursor:"pointer",
+                    textAlign:"left", whiteSpace:"nowrap",
+                    display:"flex", alignItems:"center", gap:8,
+                    transition:"background .15s, border-color .15s",
+                  }}
+                >
+                  <span style={{ fontSize:17, lineHeight:1, display:"flex", alignItems:"center" }}>{activeSoc.bandera}</span>
+                  <span style={{ lineHeight:1 }}>{activeSoc.nombre}</span>
+                  <svg width="12" height="12" viewBox="0 0 10 10" fill="none" style={{ flexShrink:0, transform: showSocDrop ? "rotate(180deg)" : "rotate(0deg)", transition:"transform .2s" }}>
+                    <path d="M2 3.5L5 6.5L8 3.5" stroke="rgba(255,255,255,.55)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </button>
+                {showSocDrop && (
+                  <div role="listbox" aria-label="Sociedades" style={{
+                    position:"absolute", top:"calc(100% + 4px)", left:0, zIndex:999, minWidth:220,
+                    background:T.card, border:`1px solid ${T.cardBorder}`,
+                    borderRadius:8, overflow:"hidden", padding:"4px",
+                    boxShadow:"0 10px 30px rgba(0,0,0,.15)",
+                  }}>
+                    {sociedades.map((s, i) => (
+                      <button key={s.id} role="option" aria-selected={i === socIdx}
+                        onClick={() => { setSocIdx(i); setShowSocDrop(false); }}
+                        style={{
+                          display:"flex", alignItems:"center", gap:8,
+                          width:"100%", padding:"7px 10px", borderRadius:6,
+                          background: i === socIdx ? "#f1f5f9" : "transparent",
+                          border:"none",
+                          color: i === socIdx ? T.accentDark : T.text,
+                          fontFamily:T.font, fontSize:12.5, fontWeight: i === socIdx ? 800 : 500,
+                          cursor:"pointer", textAlign:"left", transition:"background .12s",
+                        }}
+                        onMouseEnter={e => { if (i !== socIdx) e.currentTarget.style.background = "#f1f5f9"; }}
+                        onMouseLeave={e => { if (i !== socIdx) e.currentTarget.style.background = "transparent"; }}
+                      >
+                        <span style={{ fontSize:13 }}>{s.bandera ?? ""}</span>
+                        <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                          {s.nombre}
+                        </span>
+                        {i === socIdx && <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 7L6 10L11 4" stroke={T.accentDark} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div style={{ width:1, height:20, background:T.cardBorder, flexShrink:0 }} />
+            </>
+          )}
           <span style={{ fontSize:12, fontWeight:700, color:T.muted,
             letterSpacing:".08em", textTransform:"uppercase" }}>BIGG Numbers</span>
           {String(
@@ -760,7 +729,6 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
               : activeSpecial === "correo"         ? "Correo — facturas"
               : activeSpecial === "intercompania"  ? "Intercompañía"
               : activeSpecial === "cambio"         ? "Cambio de moneda"
-              : activeSpecial === "socios"         ? "Socios"
               : activeSpecial === "usuarios"       ? "Usuarios del sistema"
               : egresoSubView  === "new-compra" ? "Egresos › Nueva Compra"
               : egresoSubView  === "new-gasto"  ? "Gastos › Nuevo Gasto"
@@ -774,13 +742,52 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
             <span key={`sep${i}`} style={{ fontSize:12, color:T.dim }}>›</span>,
             <span key={`crumb${i}`} style={{ fontSize:12, fontWeight:700, color:T.text }}>{part}</span>,
           ])}
-          {/* Badge sociedad activa — oculto en módulos transversales */}
-          {!showMaestros && activeSpecial !== "socios" && activeSpecial !== "usuarios" && activeSpecial !== "correo" && (
-            <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6,
-              background:"#f0f9ff", border:"1px solid #bae6fd", borderRadius:999,
-              padding:"3px 10px", fontSize:11, fontWeight:700, color:"#0369a1" }}>
-              <span>{activeSoc.bandera}</span>
-              <span>{activeSoc.nombre}</span>
+          {/* Actualizar datos — traído del sidebar al topbar (a la izquierda del usuario) */}
+          <button onClick={() => { forzarRefresco(); window.location.reload(); }}
+            title="Actualizar datos"
+            style={{ marginLeft:"auto", background:"transparent", border:"none",
+              cursor:"pointer", fontSize:19, lineHeight:1, padding:6, borderRadius:8,
+              flexShrink:0, display:"flex", alignItems:"center", color:T.muted }}
+            onMouseEnter={e=>e.currentTarget.style.background="#f1f5f9"}
+            onMouseLeave={e=>e.currentTarget.style.background="transparent"}>🔄</button>
+          {/* Menú de usuario (arriba a la derecha) — identidad + Usuarios + Cerrar sesión */}
+          {sesion && (
+            <div ref={userMenuRef} style={{ position:"relative", flexShrink:0 }}>
+              <button onClick={() => setShowUserMenu(v => !v)}
+                title={sesion.nombre} aria-haspopup="menu" aria-expanded={showUserMenu}
+                style={{ width:32, height:32, borderRadius:"50%", background:T.accent, color:T.accentDark,
+                  border:"none", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center",
+                  fontWeight:800, fontSize:13, flexShrink:0 }}>
+                {inicial(sesion.nombre)}
+              </button>
+              {showUserMenu && (
+                <div role="menu" style={{ position:"absolute", top:"calc(100% + 6px)", right:0, minWidth:200,
+                  background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:10,
+                  boxShadow:"0 10px 30px rgba(0,0,0,.15)", overflow:"hidden", zIndex:50 }}>
+                  <div style={{ padding:"10px 14px", borderBottom:`1px solid ${T.cardBorder}` }}>
+                    <div style={{ fontSize:13, fontWeight:700, color:T.text,
+                      whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{sesion.nombre}</div>
+                    {sesion.rol && <div style={{ fontSize:11, color:T.muted }}>{sesion.rol}</div>}
+                  </div>
+                  <button role="menuitem"
+                    onClick={() => { setShowUserMenu(false); setActiveMaestrosTab(null); setActiveSpecial("usuarios"); }}
+                    style={{ width:"100%", textAlign:"left", background:"transparent", border:"none", cursor:"pointer",
+                      padding:"9px 14px", fontSize:13, color:T.text, display:"flex", alignItems:"center", gap:8 }}
+                    onMouseEnter={e=>e.currentTarget.style.background="#f1f5f9"}
+                    onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                    <span style={{ fontSize:15 }}>⚙</span> Usuarios del sistema
+                  </button>
+                  <button role="menuitem"
+                    onClick={() => { setShowUserMenu(false); onCerrarSesion?.(); }}
+                    style={{ width:"100%", textAlign:"left", background:"transparent", border:"none", cursor:"pointer",
+                      padding:"9px 14px", fontSize:13, color:"#dc2626", display:"flex", alignItems:"center", gap:8,
+                      borderTop:`1px solid ${T.cardBorder}` }}
+                    onMouseEnter={e=>e.currentTarget.style.background="#fef2f2"}
+                    onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                    <span style={{ fontSize:15 }}>⎋</span> Cerrar sesión
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -799,8 +806,6 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
             : activeSpecial === "cambio"
             ? <PantallaCambioMoneda sociedad={activeSoc.id} openNew={nuevaOpTarget === "cambio"} onOpenNewConsumed={() => setNuevaOpTarget(null)}
                 openEditDoc={deepCambio} onEditConsumed={() => setDeepCambio(null)} />
-            : activeSpecial === "socios"
-            ? <PantallaSocios />
             : activeSpecial === "usuarios"
             ? <PantallaUsuarios sesion={sesion} onCerrarSesion={onCerrarSesion} />
             : activeSpecial === "correo"

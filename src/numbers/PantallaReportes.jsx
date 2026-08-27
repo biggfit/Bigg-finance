@@ -9,6 +9,7 @@ import { exportarPackReportes } from "./exportReportes";
 import TabTesoreriaConsolidada from "./reportes/TabTesoreriaConsolidada";
 import TabCxPProveedores from "./reportes/TabCxPProveedores";
 import TabCxCClientes from "./reportes/TabCxCClientes";
+import PantallaSocios from "./PantallaSocios";
 
 const MESES    = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
 const CUR_YEAR = new Date().getFullYear();
@@ -2234,6 +2235,7 @@ const TABS = [
   { id: "consolidado", label: "Tesorería consolidada", icon: "🏦", desc: "Saldos y movimientos de todas las sociedades del grupo." },
   { id: "cxp_prov", label: "CxP por proveedor", icon: "📋", desc: "Cuentas por pagar consolidadas por proveedor (todas las sociedades), con antigüedad." },
   { id: "cxc_cli", label: "CxC por cliente", icon: "📥", desc: "Cuentas por cobrar consolidadas por cliente (todas las sociedades), con antigüedad." },
+  { id: "socios",  label: "Socios", icon: "◎", desc: "Cuenta corriente de socios: dividendos, aportes y préstamos (balance, no P&L)." },
 
   // ── WIP (solo esqueleto navegable; sin cálculo todavía) ──
   { id: "inf_egresos",  label: "Egresos (detalle)",  icon: "🔎", desc: "Listar y filtrar compras por cuenta · centro · proveedor · moneda · período." },
@@ -2259,7 +2261,7 @@ const TABS = [
 // de dónde sale/va la plata → buscar el detalle → (lo fiscal/interno al fondo). Textos = management
 // (todavía NO simplificados para dueños). El anillo de la sociedad manda cómo consolida (ver memoria).
 const LENTES = [
-  { id: "grupo",    label: "La foto del grupo",            tabs: ["consol_grupo", "pl_bigg", "cf", "consolidado", "cxp_prov", "cxc_cli"] },
+  { id: "grupo",    label: "La foto del grupo",            tabs: ["consol_grupo", "pl_bigg", "cf", "consolidado", "cxp_prov", "cxc_cli", "socios"] },
   { id: "negocios", label: "Cómo le va a cada negocio",    tabs: ["pl_sede", "op_espana", "op_colombia", "op_rosedal", "op_huergo", "op_puertos"] },
   { id: "flujo",    label: "De dónde sale y a dónde va",   tabs: ["an_ventas", "an_gastos_cc"] },
   { id: "detalle",  label: "Buscar el detalle",            tabs: ["inf_egresos", "inf_ingresos"] },
@@ -3246,8 +3248,24 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   // Menú-landing: sin reporte elegido → tarjetas agrupadas por lente (Operaciones = 1 tarjeta x operación).
   if (!activeTab) return (
     <div style={{ padding: "28px 32px", maxWidth: 1400 }} className="fade">
-      <PageHeader title="Reportes" subtitle="Elegí un reporte" />
+      <PageHeader title="Reportes" />
       <ReportesMenu onPick={setActiveTab} />
+    </div>
+  );
+
+  // Socios: cuenta corriente de socios (pantalla propia embebida como reporte). Página limpia + volver al menú.
+  if (activeTab === "socios") return (
+    <div style={{ padding: "28px 32px", maxWidth: 1400 }} className="fade">
+      <button onClick={() => setActiveTab(null)} style={{
+        display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 16,
+        background: "#f3f4f6", border: `1px solid ${T.cardBorder}`, borderRadius: 8,
+        color: T.text, fontFamily: T.font, fontSize: 13, fontWeight: 700,
+        padding: "8px 16px", cursor: "pointer" }}
+        onMouseEnter={e => e.currentTarget.style.background = "#e5e7eb"}
+        onMouseLeave={e => e.currentTarget.style.background = "#f3f4f6"}>
+        ← Reportes
+      </button>
+      <PantallaSocios />
     </div>
   );
 
