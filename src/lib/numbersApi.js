@@ -1422,6 +1422,27 @@ export async function fetchMovimientosPendientes(sociedad) {
   return rows.filter(m => m.origen === "extracto" && !m.documento_id);
 }
 
+// Última fecha de extracto cargada, por cuenta bancaria. Reduce los movimientos con `extracto_saldo`
+// (el ancla que deja el extracto al subirse y que PERSISTE aunque la línea después se concilie) a la
+// fecha máxima por cuenta → "hasta qué día está cargado cada banco". Devuelve { cuenta_bancaria: "YYYY-MM-DD" }.
+export function ultimaCargaExtractoPorCuenta(movs = []) {
+  const out = {};
+  for (const m of (movs || [])) {
+    if (String(m?.extracto_saldo ?? "").trim() === "") continue;
+    const cta = m.cuenta_bancaria, f = m.fecha;
+    if (!cta || !f) continue;
+    if (!out[cta] || f > out[cta]) out[cta] = f;
+  }
+  return out;
+}
+
+// Última carga de extracto por cuenta de una sociedad. Reusa el fetch cacheado de nb_movimientos
+// (el mismo que ya trae fetchMovimientosPendientes), así que en Conciliación no cuesta un request extra.
+export async function fetchUltimaCargaExtracto(sociedad) {
+  const rows = await get("nb_movimientos", { sociedad });
+  return ultimaCargaExtractoPorCuenta(rows);
+}
+
 // ── RESUMEN DE TARJETA → bandeja (mundo Tarjeta de Conciliaciones) ───────────────
 // El resumen es "un extracto más": precarga cada consumo como PENDIENTE en nb_movimientos
 // (origen "tarjeta"), contra la cuenta-tarjeta de su moneda, con la propuesta (cuenta/centro)

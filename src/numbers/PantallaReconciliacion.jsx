@@ -12,7 +12,7 @@ import {
   fetchFinanciaciones, imputarCuota, pagarTarjeta, esCuentaCredito, fetchMovTesoreria,
   fetchIntercoData, pendientesInterco, reconocerVentaInterco, reconocerInterusoGestion, revertirInterusoGestion, normCuit,
   pendientesIntercoRecibir, declararIntercoRecibida, declararIntercoEnviada, intercoMatchCandidato,
-  esCuentaMercadoPago,
+  esCuentaMercadoPago, ultimaCargaExtractoPorCuenta,
 } from "../lib/numbersApi";
 import { BancoReglaModal } from "./PantallaMaestros";
 import MundoTarjeta from "./reconciliacion/MundoTarjeta";
@@ -189,6 +189,13 @@ const MODAL_INP = { width: "100%", background: "#eceff3", border: `1px solid ${T
 const MODAL_LBL = { fontSize: 12, color: T.muted, fontWeight: 600, display: "block", marginBottom: 5 };
 // El carril Banco concilia extractos → solo cuentas tipo "Banco" (cajas/inversión/tarjeta no tienen extracto).
 const esCuentaBanco = c => String(c?.tipo || "").toLowerCase() === "banco";
+// Semáforo de "última carga" de extracto: verde ≤7 días, ámbar >7 días de atraso, rojo si nunca se cargó.
+const ATRASO_DIAS = 7;
+function estadoUltimaCarga(fechaISO) {
+  if (!fechaISO) return { label: "nunca cargado", color: "#dc2626" };
+  const dias = Math.floor((Date.now() - new Date(fechaISO + "T00:00:00").getTime()) / 86400000);
+  return { label: `últ. ${fmtDate(fechaISO)}`, color: dias > ATRASO_DIAS ? "#d97706" : "#16a34a", dias };
+}
 const sel = { fontSize: 11, padding: "4px 6px", border: "1px solid #94a3b8", borderRadius: 6, fontFamily: T.font, color: "#111827", background: "#f8fafc" };
 // Campo imputado: VERDE si está completo (no tocar) / ÁMBAR si falta elegir. Ancho fijo → columnas alineadas.
 const fld = (lleno, w = 150) => ({ fontSize: 11, padding: "4px 6px", borderRadius: 6, fontFamily: T.font, color: "#111827", width: w, boxSizing: "border-box",
@@ -1285,6 +1292,8 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const countByCuenta = useMemo(() => {
     const o = {}; pendientes.forEach(m => { o[m.cuenta_bancaria] = (o[m.cuenta_bancaria] || 0) + 1; }); return o;
   }, [pendientes]);
+  // Última fecha de extracto cargada por banco (se calcula sobre los movimientos ya en memoria → sin fetch extra).
+  const ultimaCarga = useMemo(() => ultimaCargaExtractoPorCuenta(movsCuenta), [movsCuenta]);
   // Memoizado: puedeAceptarMov es caro (frState/cuotaState/haberesMatch por fila) y esto corre por render.
   const listosCount = useMemo(() => filtered.filter(puedeAceptarMov).length, [filtered, edits, cuotasPendientes]);
 
@@ -1612,18 +1621,38 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         {cuentas.filter(esCuentaBanco).map(c => {
           const active = c.id === cuentaTab;
           const n = countByCuenta[c.id] || 0;
+          const est = estadoUltimaCarga(ultimaCarga[c.id]);
           return (
             <button key={c.id} onClick={() => { setCuentaTab(c.id); setFiltroTipo(""); }}
-              style={{ display: "flex", alignItems: "center", gap: 7, padding: "6px 12px", borderRadius: 8,
+              style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 3, padding: "6px 12px", borderRadius: 8,
                 border: `1px solid ${active ? T.accent : T.cardBorder}`, background: active ? "rgba(173,255,25,.1)" : T.card,
                 color: active ? T.text : T.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: T.font }}>
-              {c.nombre}
-              {n > 0 && <span style={{ fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 999,
-                background: "#dc2626", color: "#fff" }}>{n}</span>}
+              <span style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                {c.nombre}
+                {n > 0 && <span style={{ fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 999,
+                  background: "#dc2626", color: "#fff" }}>{n}</span>}
+              </span>
+              <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 700, color: est.color }}>
+                <span style={{ width: 6, height: 6, borderRadius: 999, background: est.color, flexShrink: 0 }} />
+                {est.label}
+              </span>
             </button>
           );
         })}
       </div>
+
+      {cuentaTab && (() => {
+        const f = ultimaCarga[cuentaTab];
+        const est = estadoUltimaCarga(f);
+        return (
+          <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ width: 7, height: 7, borderRadius: 999, background: est.color, flexShrink: 0 }} />
+            {f
+              ? <span>Última carga de extracto: <b style={{ color: est.color }}>{fmtDate(f)}</b></span>
+              : <span style={{ color: est.color, fontWeight: 700 }}>Este banco no tiene extractos cargados todavía.</span>}
+          </div>
+        );
+      })()}
 
       {msg && <div style={{ fontSize: 12, color: msg.startsWith("Error") ? "#dc2626" : "#16a34a", marginBottom: 10 }}>{msg}</div>}
 
