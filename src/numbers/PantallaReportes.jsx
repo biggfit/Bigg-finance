@@ -704,6 +704,16 @@ function celdasSede(cols, cur, prev, pol, o) {
       let lm = o.lastM; while (lm > 0 && !(Number(cur?.[lm]) || 0)) lm--;
       v = Number(cur?.[lm]) || 0;
     } else v = col.get(cur, prev);
+    if (o.pct && !o.stock) {
+      // Al lado del nominal, el share (chiquito, gris) sobre el Total de Ingresos de la MISMA columna.
+      const tot = col.get(o.pctTotalCur, o.pctTotalPrev);
+      const sh = tot ? v / tot * 100 : null;
+      const color = o.bySign ? (v > 0 ? T.green : v < 0 ? T.red : T.dim) : (v ? (o.color || T.text) : T.dim);
+      return <td key={i} style={{ padding: o.pad, fontSize: o.fs || 13, textAlign: "right",
+        fontFamily: "var(--mono)", fontWeight: o.fw || 400, color, whiteSpace: "nowrap", ...bord,
+        ...(col.total ? { borderLeft: `1px solid ${T.cardBorder}` } : {}) }}>
+        {fmtPar(v, pol < 0)}{v && sh != null ? <span style={{ color: T.muted, fontSize: (o.fs || 13) - 3, marginLeft: 4, fontWeight: 400 }}>({sh.toFixed(0)}%)</span> : ""}</td>;
+    }
     const color = o.bySign ? (v > 0 ? T.green : v < 0 ? T.red : T.dim) : (v ? (o.color || T.text) : T.dim);
     return <td key={i} style={{ padding: o.pad, fontSize: o.fs || 13, textAlign: "right",
       fontFamily: "var(--mono)", fontWeight: o.fw || 400, color, whiteSpace: "nowrap", ...bord,
@@ -1059,13 +1069,20 @@ function PnLTableHuergo({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evo
         <tbody>
           {filas.map((f, idx) => {
             if (f.kind === "banda") return <BandaRow key={idx} label={f.label} span={cols.length + 1} expanded onToggle={undefined} />;
-            if (f.kind === "cuenta") return (
-              <tr key={idx} style={{ borderBottom: `1px solid ${T.cardBorder}`, background: T.card }}>
-                <td style={{ padding: "6px 14px 6px 32px", fontSize: 13, color: T.text, whiteSpace: "nowrap",
-                  borderBottom: `1px solid ${T.cardBorder}`, ...stickyCol, background: T.card }}>{f.label}</td>
-                {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "6px 12px", fs: 13, fw: 400, color: SEDE_HDR })}
-              </tr>
-            );
+            if (f.kind === "cuenta") {
+              const clickable = !!f.toggleKey;
+              const cbg = f.nested ? "#eef1f5" : T.card;                              // filas de sede: fondo un toque más oscuro
+              const pad = f.nested ? "6px 14px 6px 48px" : "6px 14px 6px 32px";        // sangría extra si es sede anidada
+              return (
+                <tr key={idx} onClick={clickable ? () => toggle(f.toggleKey) : undefined}
+                  style={{ borderBottom: `1px solid ${T.cardBorder}`, background: cbg, cursor: clickable ? "pointer" : "default" }}>
+                  <td style={{ padding: pad, fontSize: 13, color: T.text, whiteSpace: "nowrap",
+                    borderBottom: `1px solid ${T.cardBorder}`, userSelect: clickable ? "none" : undefined, ...stickyCol, background: cbg }}>
+                    {clickable && <span style={{ display: "inline-block", width: 18, marginLeft: -18, fontSize: 9, opacity: .7 }}>{isCol(f.toggleKey) ? "▶" : "▼"}</span>}{f.label}</td>
+                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "6px 12px", fs: 13, fw: 400, color: SEDE_HDR })}
+                </tr>
+              );
+            }
             if (f.kind === "subtotal") {
               const bg = f.strong ? "#cbd5e1" : "#f3f4f6";
               return (
@@ -1285,12 +1302,12 @@ function computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) {
 
 // P&L BIGG = P&L de HOLDING. Arriba el RESULTADO de cada negocio operativo (no la venta); después HQ
 // (ingresos − opex), y al final financieros + impuestos del grupo. `sub` = computeSubtotalsHolding.
-function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolucion", mes = 0, hayHistorico = false, mesMax = null }) {
+function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolucion", mes = 0, hayHistorico = false, mesMax = null, soloIngresos = false, sedesApertura = null, pctMode = false }) {
   const { sar, fg, wre, hqAccounts, ghqAccounts, gpvAccounts, capexAccounts,
           resOperaciones, resOpMasIngHQ, margen, resOpGrupo, resAntesImp, resGrupo, resFinal, activeMonths: _amRaw } = sub;
   const activeMonths = mesesVisibles(_amRaw, year, hayHistorico, mesMax);
   const hayCapex = Object.keys(capexAccounts || {}).length > 0;
-  const ALLKEYS = ["sec_op", "sec_ing", "sec_gpv", "sec_opex", "sec_fin", "sec_imp", "sec_capex"];
+  const ALLKEYS = ["sec_op", "sec_sedes", "sec_ing", "sec_gpv", "sec_opex", "sec_fin", "sec_imp", "sec_capex"];
   const [collapsed, setCollapsed] = useState(() => Object.fromEntries(ALLKEYS.map(k => [k, true])));   // arranca compactado
   const isCol  = k => !!collapsed[k];
   const toggle = k => setCollapsed(c => ({ ...c, [k]: !c[k] }));
@@ -1308,6 +1325,8 @@ function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolu
   const cols = vista === "evolucion" ? colsEvolucion(activeMonths) : colsSedeVista(vista, mes, year);
   const P = subPrev || {};
   const Pg = pnlPrev?.grupos || {};
+  // Modo % (flag del reporte "Composición de Ingresos"): las celdas muestran share del Total de Ingresos.
+  const pctOpt = pctMode ? { pct: true, pctTotalCur: resOpMasIngHQ, pctTotalPrev: P.resOpMasIngHQ } : {};
   const sumMap = obj => MESES.map((_, m) => Object.values(obj || {}).reduce((s, a) => s + (a[m] || 0), 0));
   const ivaOn = sub.ivaDeb?.some(v => v) || sub.ivaCred?.some(v => v);
   const impBlockTot     = MESES.map((_, m) => (sub.ivaDeb?.[m] || 0) + (sub.ivaCred?.[m] || 0) - (sub.impuestos?.[m] || 0));
@@ -1324,12 +1343,37 @@ function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolu
   // Resultado de Operaciones (una línea por negocio = SU resultado).
   filas.push({ kind: "grupo", key: "sec_op", label: "Resultado de Operaciones", cur: resOperaciones, prev: P.resOperaciones, pol: 1 });
   if (!isCol("sec_op")) {
-    filas.push({ kind: "cuenta", label: "Sedes Propias Argentina",         cur: sar, prev: P.sar, pol: 1 });
+    if (sedesApertura) {
+      // Sedes Propias Argentina = grupo colapsable (arranca cerrado). Adentro: apertura por sede + una fila de
+      // reconciliación (cesión Barrio Norte 49% + ajustes) para que las sedes cierren EXACTO con el total del holding.
+      // "Sedes Propias Argentina": misma pinta que Rosedal/Huergo (fila cuenta), diferenciada solo por la
+      // flechita (es el agrupador). Adentro, la apertura por sede va anidada (fondo + sangría).
+      filas.push({ kind: "cuenta", toggleKey: "sec_sedes", label: "Sedes Propias Argentina", cur: sar, prev: P.sar, pol: 1 });
+      if (!isCol("sec_sedes")) {
+        const sumList = (list) => MESES.map((_, m) => (list || []).reduce((a, s) => a + (Number(s.arr?.[m]) || 0), 0));
+        // Reconciliación (cesión Barrio Norte 49% + ajuste IVA aranceles) → se pliega dentro de la fila de BN,
+        // que queda NETA de la cesión (se queda con el 51%). Así las sedes cierran EXACTO con el total del holding.
+        const recCur  = MESES.map((_, m) => (Number(sar[m]) || 0)    - sumList(sedesApertura.cur)[m]);
+        const recPrev = MESES.map((_, m) => (Number(P.sar?.[m]) || 0) - sumList(sedesApertura.prev)[m]);
+        for (const s of (sedesApertura.cur || [])) {
+          let curArr = s.arr;
+          let prevArr = (sedesApertura.prev || []).find(x => x.label === s.label)?.arr || ZERO12;
+          if (s.isBN) {
+            curArr  = MESES.map((_, m) => (Number(s.arr?.[m]) || 0)   + recCur[m]);
+            prevArr = MESES.map((_, m) => (Number(prevArr?.[m]) || 0) + recPrev[m]);
+          }
+          filas.push({ kind: "cuenta", nested: true, label: s.isBN ? `${s.label} (51%)` : s.label, cur: curArr, prev: prevArr, pol: 1 });
+        }
+      }
+    } else {
+      filas.push({ kind: "cuenta", label: "Sedes Propias Argentina",         cur: sar, prev: P.sar, pol: 1 });
+    }
     filas.push({ kind: "cuenta", label: "Gerenciamiento de Sedes (Rosedal)", cur: fg,  prev: P.fg,  pol: 1 });
     filas.push({ kind: "cuenta", label: "Wellness Real Estate (Huergo)",    cur: wre, prev: P.wre, pol: 1 });
   }
   secc("sec_ing", "Ingresos HQ", hqAccounts, P.hqAccounts, BIGG_ORDEN, 1);
   filas.push({ kind: "subtotal", strong: true, label: "Total Ingresos", cur: resOpMasIngHQ, prev: P.resOpMasIngHQ, pol: 1 });
+  if (!soloIngresos) {
   secc("sec_gpv", "Gastos por Ventas", gpvAccounts, P.gpvAccounts, BIGG_ORDEN_GPV, -1);
   filas.push({ kind: "subtotal", strong: true, label: "Margen de Contribución", cur: margen, prev: P.margen, pol: 1 });
   secc("sec_opex", "OPEX HQ", ghqAccounts, P.ghqAccounts, BIGG_ORDEN_GHQ, -1);
@@ -1352,6 +1396,7 @@ function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolu
     filas.push({ kind: "spacer" });
     secc("sec_capex", "Inversiones / Capex", capexAccounts, P.capexAccounts, null, -1);
     filas.push({ kind: "result", strong: true, label: "Resultado Final del Grupo", cur: resFinal, prev: P.resFinal, pol: 1 });
+  }
   }
 
   return (
@@ -1379,16 +1424,23 @@ function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolu
                   letterSpacing: ".04em", userSelect: "none", ...stickyCol, background: "#f1f5f9" }}>
                   <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{isCol(f.key) ? "▶" : "▼"}</span>{f.label}
                 </td>
-                {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "7px 12px", fs: 12, fw: 800, color: SEDE_HDR })}
+                {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "7px 12px", fs: 12, fw: 800, color: SEDE_HDR, ...pctOpt })}
               </tr>
             );
-            if (f.kind === "cuenta") return (
-              <tr key={idx} style={{ borderBottom: `1px solid ${T.cardBorder}`, background: T.card }}>
-                <td style={{ padding: "6px 14px 6px 32px", fontSize: 13, color: T.text, whiteSpace: "nowrap",
-                  borderBottom: `1px solid ${T.cardBorder}`, ...stickyCol, background: T.card }}>{f.label}</td>
-                {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "6px 12px", fs: 13, fw: 400, color: SEDE_HDR })}
-              </tr>
-            );
+            if (f.kind === "cuenta") {
+              const clickable = !!f.toggleKey;
+              const cbg = f.nested ? "#eef1f5" : T.card;                              // filas de sede: fondo un toque más oscuro
+              const pad = f.nested ? "6px 14px 6px 48px" : "6px 14px 6px 32px";        // sangría extra si es sede anidada
+              return (
+                <tr key={idx} onClick={clickable ? () => toggle(f.toggleKey) : undefined}
+                  style={{ borderBottom: `1px solid ${T.cardBorder}`, background: cbg, cursor: clickable ? "pointer" : "default" }}>
+                  <td style={{ padding: pad, fontSize: 13, color: T.text, whiteSpace: "nowrap",
+                    borderBottom: `1px solid ${T.cardBorder}`, userSelect: clickable ? "none" : undefined, ...stickyCol, background: cbg }}>
+                    {clickable && <span style={{ display: "inline-block", width: 18, marginLeft: -18, fontSize: 9, opacity: .7 }}>{isCol(f.toggleKey) ? "▶" : "▼"}</span>}{f.label}</td>
+                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "6px 12px", fs: 13, fw: 400, color: SEDE_HDR, ...pctOpt })}
+                </tr>
+              );
+            }
             if (f.kind === "subtotal") {
               const bg = f.strong ? "#cbd5e1" : "#f3f4f6";
               return (
@@ -1396,7 +1448,7 @@ function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolu
                   <td style={{ padding: "12px 14px", fontSize: f.strong ? 15 : 14, fontWeight: 900, color: SEDE_HDR,
                     borderTop: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, borderBottom: `2px solid ${T.cardBorder}`, ...stickyCol, background: bg }}>{f.label}</td>
                   {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: f.strong ? 15 : 14, fw: 900, color: SEDE_HDR,
-                    bt: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, bb: `2px solid ${T.cardBorder}` })}
+                    bt: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, bb: `2px solid ${T.cardBorder}`, ...pctOpt })}
                 </tr>
               );
             }
@@ -2251,7 +2303,7 @@ const TABS = [
 
   { id: "consol_grupo", label: "Consolidado de grupo", icon: "🌐", wip: true, desc: "P&L y patrimonio del grupo: propias full (neto de IVA) + fee/share de administradas + impuestos del anillo al final." },
 
-  { id: "an_ventas",    label: "Ventas por línea de ingreso", icon: "📈", wip: true, desc: "Facturación abierta por línea de ingreso, para explicar de dónde vienen las ventas." },
+  { id: "an_ventas",    label: "Composición de Ingresos", icon: "📈", desc: "Igual que el P&L BIGG hasta Total Ingresos: cada negocio (Sedes AR con apertura por sede / Rosedal / Huergo) y las líneas de HQ." },
   { id: "an_margenes",  label: "Márgenes por negocio", icon: "🧩", wip: true, desc: "Cuánto aporta cada negocio al Margen Bruto del grupo." },
   { id: "an_gastos_cc", label: "Gastos por centro de costo", icon: "🧾", wip: true, desc: "Apertura del gasto por centro de costo y, dentro, por cuenta contable." },
 ];
@@ -2261,9 +2313,9 @@ const TABS = [
 // de dónde sale/va la plata → buscar el detalle → (lo fiscal/interno al fondo). Textos = management
 // (todavía NO simplificados para dueños). El anillo de la sociedad manda cómo consolida (ver memoria).
 const LENTES = [
-  { id: "grupo",    label: "La foto del grupo",            tabs: ["consol_grupo", "pl_bigg", "cf", "consolidado", "cxp_prov", "cxc_cli", "socios"] },
+  { id: "grupo",    label: "La foto del grupo",            tabs: ["consol_grupo", "pl_bigg", "an_ventas", "cf", "consolidado", "cxp_prov", "cxc_cli", "socios"] },
   { id: "negocios", label: "Cómo le va a cada negocio",    tabs: ["pl_sede", "op_espana", "op_colombia", "op_rosedal", "op_huergo", "op_puertos"] },
-  { id: "flujo",    label: "De dónde sale y a dónde va",   tabs: ["an_ventas", "an_gastos_cc"] },
+  { id: "flujo",    label: "De dónde sale y a dónde va",   tabs: ["an_gastos_cc"] },
   { id: "detalle",  label: "Buscar el detalle",            tabs: ["inf_egresos", "inf_ingresos"] },
   { id: "interno",  label: "Interno · fiscal / contable",  tabs: ["er_soc", "interco"] },
 ];
@@ -3110,6 +3162,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
   // ── P&L BIGG = P&L de HOLDING (Núcleo/anillo 1). Se computa solo en la pestaña pl_bigg. ──
   const isBigg = activeTab === "pl_bigg";
+  const isVentasHQ = activeTab === "an_ventas";   // reporte "Aporte a los ingresos" — reusa el holding
   // Scope fijo del holding (independiente del tab): sedes propias AR del núcleo + el centro Barrio Norte.
   const arNucleoCCs = useMemo(
     () => ccs.filter(c => (c.grupo ?? "").toLowerCase() === "operaciones" &&
@@ -3180,14 +3233,32 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     }
     return { pnl, sub: computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) };
   };
-  const biggCur  = useMemo(() => isBigg ? holdingDe(year)     : null,   // eslint-disable-line react-hooks/exhaustive-deps
-    [isBigg, inBigg, egBigg, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva, intercoData]);
-  const biggPrev = useMemo(() => isBigg ? holdingDe(year - 1) : null,   // eslint-disable-line react-hooks/exhaustive-deps
-    [isBigg, inBigg, egBigg, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva, intercoData]);
+  const biggCur  = useMemo(() => (isBigg || isVentasHQ) ? holdingDe(year)     : null,   // eslint-disable-line react-hooks/exhaustive-deps
+    [isBigg, isVentasHQ, inBigg, egBigg, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva, intercoData]);
+  const biggPrev = useMemo(() => (isBigg || isVentasHQ) ? holdingDe(year - 1) : null,   // eslint-disable-line react-hooks/exhaustive-deps
+    [isBigg, isVentasHQ, inBigg, egBigg, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva, intercoData]);
   const pnlBigg     = biggCur?.pnl  || null;
   const subBigg     = biggCur?.sub  || null;
   const pnlBiggPrev = biggPrev?.pnl || null;
   const subBiggPrev = biggPrev?.sub || null;
+
+  // Apertura por sede (reporte "Composición de Ingresos"): resultado final de cada sede del núcleo AR, para
+  // abrir la línea "Sedes Propias Argentina". La fila de reconciliación (en el builder) cierra contra `sar`.
+  const nombreCC = (cc) => {
+    const s = String(cc);
+    const hit = ccMap.get(s) || ccMap.get(s.toLowerCase()) || ccMap.get(s.toUpperCase())
+      || ccs.find(c => String(c.id).toLowerCase() === s.toLowerCase());
+    return hit?.nombre || s;
+  };
+  const sedesAperturaDe = (yr) => arNucleoCCs.map(cc => ({
+    label: nombreCC(cc),
+    isBN: String(cc) === String(bnCcId),
+    arr: computeSubtotalsSede(buildPnLSede(inBigg, egBigg, [cc], yr, monedaPL, sinIva)).resFinal,
+  }));
+  const sedesApCur  = useMemo(() => isVentasHQ ? sedesAperturaDe(year)     : null,   // eslint-disable-line react-hooks/exhaustive-deps
+    [isVentasHQ, inBigg, egBigg, arNucleoCCs, ccMap, year, monedaPL, sinIva]);
+  const sedesApPrev = useMemo(() => isVentasHQ ? sedesAperturaDe(year - 1) : null,   // eslint-disable-line react-hooks/exhaustive-deps
+    [isVentasHQ, inBigg, egBigg, arNucleoCCs, ccMap, year, monedaPL, sinIva]);
 
   const toggleSedeCC = (id) => {
     setSelectedSedeCCs(prev => {
@@ -3241,7 +3312,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     </div>
   );
 
-  const showMonedaPL = isPnlTiempo || activeTab === "pl_bigg";
+  const showMonedaPL = isPnlTiempo || activeTab === "pl_bigg" || isVentasHQ;
   const showMonedaCF = activeTab === "cf";
   const showSedes    = isSedeLike && sedeCCs.length > 0;
 
@@ -3314,10 +3385,10 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       {/* ── Header del reporte + volver al menú ── */}
       <PageHeader
         title={curTab?.label ?? "Reporte"}
-        subtitle={isPnlTiempo ? undefined : curLente?.label}
+        subtitle={(isPnlTiempo || isVentasHQ) ? undefined : curLente?.label}
         action={
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            {(isPnlTiempo || isBigg) && <VistaToggle value={vistaPnl} onChange={setVistaPnl} />}
+            {(isPnlTiempo || isBigg || isVentasHQ) && <VistaToggle value={vistaPnl} onChange={setVistaPnl} />}
             {isSedeLike && (
               <button onClick={() => setDlgExport(true)} title="Descargar reportes a Excel" style={{
                 display: "inline-flex", alignItems: "center", gap: 6,
@@ -3360,7 +3431,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
         {/* Moneda — P&L (en sede, arranca el grupo derecho) */}
         {showMonedaPL && (
-          <div style={{ order: isSedeLike ? 4 : 0, marginLeft: (isSedeLike || isBigg) ? "auto" : undefined }}>
+          <div style={{ order: isSedeLike ? 4 : 0, marginLeft: (isSedeLike || isBigg || isVentasHQ) ? "auto" : undefined }}>
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Moneda</label>
             <select value={monedaSel} onChange={e => setMonedaSel(e.target.value)} style={selStyle}>
@@ -3378,7 +3449,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         )}
 
         {/* IVA — P&L Sedes/BIGG: ver con IVA o neto (EBITDA real). A la derecha, junto a Moneda. */}
-        {(isSedeLike || isBigg) && (
+        {(isSedeLike || isBigg || isVentasHQ) && (
           <div style={{ order: 5 }}>
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>IVA</label>
@@ -3406,7 +3477,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         )}
 
         {/* Mes — solo para vistas comparativas (Mensual / YTD) */}
-        {(isPnlTiempo || isBigg) && vistaPnl !== "evolucion" && (
+        {(isPnlTiempo || isBigg || isVentasHQ) && vistaPnl !== "evolucion" && (
           <div style={{ order: isSedeLike ? 3 : 0 }}>
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Mes</label>
@@ -3417,7 +3488,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         )}
 
         {/* Hasta — corta la vista Evolución en un mes (para ocultar el mes en curso incompleto). */}
-        {(isPnlTiempo || isBigg) && vistaPnl === "evolucion" && (
+        {(isPnlTiempo || isBigg || isVentasHQ) && vistaPnl === "evolucion" && (
           <div style={{ order: isSedeLike ? 3 : 0 }}>
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Hasta</label>
@@ -3576,6 +3647,12 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
       {activeTab === "interco" && (
         <TabInterco data={intercoData} sociedades={sociedades} />
+      )}
+
+      {isVentasHQ && subBigg && (
+        <PnLTableBigg pnl={pnlBigg} sub={subBigg} pnlPrev={pnlBiggPrev} subPrev={subBiggPrev}
+          vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} hayHistorico={hayHistorico} mesMax={mesCorte}
+          soloIngresos pctMode sedesApertura={{ cur: sedesApCur, prev: sedesApPrev }} />
       )}
 
       {activeTab === "consolidado" && (
