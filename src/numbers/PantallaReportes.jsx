@@ -1399,7 +1399,7 @@ export function buildPnLBiggFilas({ pnl, sub, pnlPrev, subPrev, year, vista = "e
     filas.push({ kind: "cuenta", label: "Wellness Real Estate (Huergo)",    cur: wre, prev: P.wre, pol: 1 });
   }
   secc("sec_ing", "Ingresos HQ", hqAccounts, P.hqAccounts, BIGG_ORDEN, 1);
-  filas.push({ kind: "subtotal", strong: true, label: "Total Ingresos", cur: resOpMasIngHQ, prev: P.resOpMasIngHQ, pol: 1 });
+  filas.push({ kind: "subtotal", strong: true, label: "Total Ingresos", cur: resOpMasIngHQ, prev: P.resOpMasIngHQ, pol: 1, pctTotal: true });
   if (!soloIngresos) {
   secc("sec_gpv", "Gastos por Ventas", gpvAccounts, P.gpvAccounts, BIGG_ORDEN_GPV, -1);
   filas.push({ kind: "subtotal", strong: true, label: "Margen de Contribución", cur: margen, prev: P.margen, pol: 1 });
@@ -1499,7 +1499,7 @@ function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolu
                   <td style={{ padding: "12px 14px", fontSize: f.strong ? 15 : 14, fontWeight: 900, color: SEDE_HDR,
                     borderTop: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, borderBottom: `2px solid ${T.cardBorder}`, ...stickyCol, background: bg }}>{f.label}</td>
                   {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: f.strong ? 15 : 14, fw: 900, color: SEDE_HDR,
-                    bt: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, bb: `2px solid ${T.cardBorder}`, ...pctOpt })}
+                    bt: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, bb: `2px solid ${T.cardBorder}`, ...(f.pctTotal ? {} : pctOpt) })}
                 </tr>
               );
             }
