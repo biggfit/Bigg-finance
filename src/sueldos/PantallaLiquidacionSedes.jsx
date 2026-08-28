@@ -2826,7 +2826,11 @@ function ModalPagoHaberesAnticipado({ mes, anio, legajos, pagos, onClose, onSave
             </div>
           ) : (
             <>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                <span style={{ fontSize: 12, color: T.text, fontWeight: 600 }}>
+                  {emplsSelec.length} seleccionado{emplsSelec.length !== 1 ? "s" : ""} · {fmtMoney(total)}
+                </span>
+                <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
                 <button onClick={() => setSelec(new Set(emplsVisibles.map(l => l.id)))}
                   style={{ background: "none", border: "none", cursor: "pointer", color: T.blue, fontSize: 11, textDecoration: "underline", fontFamily: T.font, padding: 0 }}>
                   Seleccionar todos
@@ -2835,6 +2839,7 @@ function ModalPagoHaberesAnticipado({ mes, anio, legajos, pagos, onClose, onSave
                   style={{ background: "none", border: "none", cursor: "pointer", color: T.dim, fontSize: 11, textDecoration: "underline", fontFamily: T.font, padding: 0 }}>
                   Deseleccionar todos
                 </button>
+                </div>
               </div>
               <div style={{ border: `1px solid ${T.border}`, borderRadius: 6, marginBottom: 16, maxHeight: 220, overflowY: "auto" }}>
               {emplsVisibles.map((l, i) => {
