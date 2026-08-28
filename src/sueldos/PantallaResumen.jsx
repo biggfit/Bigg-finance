@@ -691,9 +691,17 @@ function notaDePago(p) {
 }
 
 // Una línea por pago real (nb_movimientos origen sueldos): fecha · forma · nota · monto.
+// table-layout fixed + anchos de columna: una nota larga (p.ej. varios ítems agrupados,
+// ver agruparPorLote) debe ENVOLVER dentro de su columna, no empujar "Monto" fuera de vista.
 function FormaPagoTabla({ pagos, onUpdateNota }) {
   return (
-    <table style={tbl}>
+    <table style={{ ...tbl, tableLayout: "fixed" }}>
+      <colgroup>
+        <col style={{ width: 84 }} />
+        <col style={{ width: 130 }} />
+        <col />
+        <col style={{ width: 110 }} />
+      </colgroup>
       <thead><tr><Th>Fecha</Th><Th>Forma</Th><Th>Nota interna</Th><Th right>Monto</Th></tr></thead>
       <tbody>
         {pagos.length === 0 ? (
