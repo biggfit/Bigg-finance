@@ -891,18 +891,23 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     });
     const arr = Object.values(map)
       .map(e => {
+        // Cerrada → haberes CONGELADO (línea "pago" ya escrita al cerrar). Borrador → haberes en
+        // VIVO = blanco pactado del legajo (mismo criterio que ya usaba Efectivo para no mostrar
+        // todo en "—" hasta cerrar; ver Paso 4, donde el blanco por defecto sale de ahí también).
+        // Solo roles de Sedes: un HQ que dio clases sueltas ya cobra su blanco en HQ, no acá.
+        const habVivo = e.cerrada ? e.monto_haberes : (ROLES_SEDES_ALL.includes(e.rol) ? e.blanco_neto : 0);
         // Cerrada → efectivo CONGELADO (lo que se liquidó y hay que pagar en cash). Borrador →
         // efectivo en vivo = remanente del total. Evita el parcial fantasma por recálculo del roster.
         const efectivo = e.cerrada
           ? (Number(e._efCong) || 0)
-          : Math.max(0, e.total - e.monto_haberes - e.monto_deposito - e.monto_transferencia);
+          : Math.max(0, e.total - habVivo - e.monto_deposito - e.monto_transferencia);
         // Cerrada → el pendiente (columna + botón Pagar) se mide contra el total CONGELADO
         // (baldes de banco + efectivo congelado), no el total del roster en vivo, que deriva y
         // muestra pendientes fantasma en coaches ya pagados. Borrador → total en vivo.
         const totalPend = e.cerrada
           ? (e.monto_haberes + e.monto_deposito + e.monto_transferencia + efectivo)
           : e.total;
-        return { ...e, monto_efectivo: efectivo, pendiente: totalPend - e.total_pagado };
+        return { ...e, monto_haberes: habVivo, monto_efectivo: efectivo, pendiente: totalPend - e.total_pagado };
       });
     return sortByRol(arr);
   }, [rows, legajos, pagos, calcTotal, novsByRowKey]);
