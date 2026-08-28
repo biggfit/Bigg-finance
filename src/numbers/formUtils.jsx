@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useCallback } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useCallback, useState } from "react";
 import { T } from "./theme";
 import { newLinea } from "./useLineas";
 
@@ -382,6 +382,53 @@ export function FacturaFormChrome({
   formBody,
   footer,
 }) {
+  // ── Estado del modal: guarda de cierre + arrastre. En modo página no se usan,
+  //    pero los hooks se declaran siempre (rules of hooks).
+  const [touched, setTouched] = useState(false);        // ¿el usuario cargó/cambió algo?
+  const [confirmOpen, setConfirmOpen] = useState(false); // cartel "¿salir sin guardar?"
+  const [dragging, setDragging] = useState(false);       // arrastre en curso (aclara el velo)
+  const [drag, setDrag] = useState({ x: 0, y: 0 });      // offset del modal respecto al centro
+
+  const markTouched = useCallback(() => setTouched(true), []);
+
+  // Cierre con guarda: si hay datos cargados, muestra el cartel; si no, cierra directo.
+  const requestClose = useCallback(() => {
+    if (touched) setConfirmOpen(true);
+    else onClose?.();
+  }, [touched, onClose]);
+
+  // Escape cierra (con guarda). Solo en modal.
+  useEffect(() => {
+    if (asPage) return;
+    const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); requestClose(); } };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [asPage, requestClose]);
+
+  // Arrastre desde el header (deshabilitado en mobile). Se clampa para no perder la ventana.
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 640;
+  const onHeaderMouseDown = useCallback((e) => {
+    if (isMobile || e.button !== 0 || e.target.closest("button")) return;
+    e.preventDefault();
+    const start = { x: e.clientX, y: e.clientY, baseX: drag.x, baseY: drag.y };
+    setDragging(true);
+    const onMove = (ev) => {
+      const maxX = window.innerWidth * 0.35;
+      const maxY = window.innerHeight * 0.35;
+      setDrag({
+        x: Math.max(-maxX, Math.min(maxX, start.baseX + (ev.clientX - start.x))),
+        y: Math.max(-maxY, Math.min(maxY, start.baseY + (ev.clientY - start.y))),
+      });
+    };
+    const onUp = () => {
+      setDragging(false);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [isMobile, drag.x, drag.y]);
+
   if (asPage) {
     return (
       <div className="fade" style={{ padding: "28px 32px" }}>
@@ -412,7 +459,7 @@ export function FacturaFormChrome({
             padding: "14px 24px", borderTop: `1px solid ${T.cardBorder}`,
             background: "#e2e5eb", display: "flex", justifyContent: "flex-end",
           }}>
-            {footer}
+            {footer(onClose)}
           </div>
         </div>
       </div>
@@ -420,20 +467,27 @@ export function FacturaFormChrome({
   }
 
   return (
+    // El click en el velo NO cierra (a propósito): el modal se cierra solo por ✕, Cancelar o Escape,
+    // y con guarda si hay datos cargados. El velo se aclara mientras arrastrás para ver lo de atrás.
     <div style={{
-      position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 400,
+      position: "fixed", inset: 0,
+      background: dragging ? "rgba(0,0,0,.12)" : "rgba(0,0,0,.5)",
+      transition: "background .2s ease", zIndex: 400,
       display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
-    }}
-    onClick={onClose}>
-      <div className="fade" onClick={e => e.stopPropagation()} style={{
+    }}>
+      <div className="fade" style={{
         background: "#f8f9fa", borderRadius: 12, width: 780, maxWidth: "98vw",
         maxHeight: "94vh", display: "flex", flexDirection: "column",
         boxShadow: "0 24px 64px rgba(0,0,0,.3)", overflow: "hidden",
+        transform: (drag.x || drag.y) ? `translate(${drag.x}px, ${drag.y}px)` : undefined,
       }}>
-        <div style={{
-          background: headerBg, padding: "18px 24px",
-          display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0,
-        }}>
+        <div
+          onMouseDown={onHeaderMouseDown}
+          style={{
+            background: headerBg, padding: "18px 24px",
+            display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0,
+            cursor: isMobile ? "default" : (dragging ? "grabbing" : "grab"), userSelect: "none",
+          }}>
           <div>
             <div style={{ fontSize: 17, fontWeight: 900, color: titleColor, letterSpacing: "-.02em" }}>
               {title}
@@ -442,7 +496,7 @@ export function FacturaFormChrome({
               {subtitleModal}
             </div>
           </div>
-          <button type="button" onClick={onClose} aria-label="Cerrar"
+          <button type="button" onClick={requestClose} aria-label="Cerrar"
             style={{
               background: "transparent", border: "none",
               color: "rgba(255,255,255,.45)", fontSize: 22, cursor: "pointer", lineHeight: 1,
@@ -452,15 +506,50 @@ export function FacturaFormChrome({
             onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,.45)"; }}>✕</button>
         </div>
 
-        <div style={{ flex: 1, overflowY: "auto" }}>{formBody}</div>
+        <div style={{ flex: 1, overflowY: "auto" }} onInput={markTouched} onChange={markTouched}>{formBody}</div>
 
         <div style={{
           padding: "14px 24px", borderTop: `1px solid ${T.cardBorder}`,
           background: "#fff", display: "flex", justifyContent: "flex-end", flexShrink: 0,
         }}>
-          {footer}
+          {footer(requestClose)}
         </div>
       </div>
+
+      {confirmOpen && (
+        <div style={{
+          position: "absolute", inset: 0, background: "rgba(0,0,0,.35)", zIndex: 10,
+          display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+        }}>
+          <div className="fade" style={{
+            background: "#fff", borderRadius: 12, width: 400, maxWidth: "90%",
+            padding: "22px 24px", boxShadow: "0 20px 50px rgba(0,0,0,.35)",
+          }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: T.text, marginBottom: 8 }}>
+              ¿Salir sin guardar?
+            </div>
+            <div style={{ fontSize: 13, color: T.muted, lineHeight: 1.5, marginBottom: 20 }}>
+              Perdés la carga de esta operación que estás ejecutando. Esta acción no se puede deshacer.
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <button type="button" onClick={() => setConfirmOpen(false)} style={{
+                background: "#fff", border: `1px solid ${T.cardBorder}`, borderRadius: 8,
+                padding: "10px 18px", fontSize: 13, fontWeight: 700, color: T.text,
+                cursor: "pointer", fontFamily: T.font,
+              }}>
+                Seguir editando
+              </button>
+              <button type="button" onClick={() => { setConfirmOpen(false); onClose?.(); }} style={{
+                background: "#dc2626", border: "none", borderRadius: 8,
+                padding: "10px 18px", fontSize: 13, fontWeight: 800, color: "#fff",
+                cursor: "pointer", fontFamily: T.font,
+              }}>
+                Salir sin guardar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
