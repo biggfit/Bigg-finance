@@ -345,6 +345,21 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   const lastDraftRef = useRef(null);  // último JSON escrito a localStorage (no-op guard)
   const originalRows = useRef({});  // rowKey → sueldo_base snapshot (baseline % aumento)
 
+  // "Mes cerrado" personal — independiente del estado real de la liquidación (podés marcarlo sin
+  // haber cerrado nada, o dejar sin marcar un mes ya cerrado si volviste a tocarlo). Solo un
+  // recordatorio visual fuerte para no confundirse de mes; vive en este navegador (localStorage),
+  // no en el backend — no es un dato de negocio, es un tilde personal.
+  const [marcados, setMarcados] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("sedesMesesMarcados") || "{}"); } catch { return {}; }
+  });
+  const marcadoKey = `${pais}:${anio}-${mes}`;
+  const marcado = !!marcados[marcadoKey];
+  const toggleMarcado = () => setMarcados(prev => {
+    const next = { ...prev, [marcadoKey]: !prev[marcadoKey] };
+    try { localStorage.setItem("sedesMesesMarcados", JSON.stringify(next)); } catch { /* storage lleno o no disponible */ }
+    return next;
+  });
+
   // Wizard state
   const [actualizarLegs, setActualizarLegs] = useState(false);
   const [pagoDraft,      setPagoDraft]      = useState({});
@@ -1168,7 +1183,12 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   const legajosCoaches = legajos.filter(l => ROLES_COACHES.includes(l.rol));
 
   return (
-    <div style={{ padding: 24, fontFamily: T.font, color: T.text }}>
+    <div style={{
+      padding: 24, fontFamily: T.font, color: T.text, minHeight: "100vh", boxSizing: "border-box",
+      background: marcado ? "#bbf7d0" : "transparent",
+      borderTop: marcado ? "10px solid #15803d" : "10px solid transparent",
+      transition: "background .15s, border-color .15s",
+    }}>
 
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
@@ -1181,6 +1201,16 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
           <button onClick={nextMes}
             style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 5, padding: "4px 9px", cursor: "pointer", fontSize: 13, color: T.muted }}>›</button>
         </div>
+
+        <button onClick={toggleMarcado}
+          title={marcado ? "Marcado por vos como mes cerrado — click para desmarcar (no afecta la liquidación real)" : "Marcar este mes como cerrado (tilde personal, no afecta la liquidación)"}
+          style={{
+            background: marcado ? "#15803d" : "#fff", color: marcado ? "#fff" : T.muted,
+            border: `1px solid ${marcado ? "#15803d" : T.border}`, borderRadius: 7,
+            padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font,
+          }}>
+          {marcado ? "✅ Mes cerrado" : "☐ Marcar cerrado"}
+        </button>
 
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
           {categorias.length === 0 && (

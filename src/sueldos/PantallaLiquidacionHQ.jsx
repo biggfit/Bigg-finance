@@ -213,6 +213,21 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
   const [showPago,         setShowPago]         = useState(null);
   const [showCerrar,       setShowCerrar]       = useState(false);
 
+  // "Mes cerrado" personal — independiente del estado real de la liquidación (podés marcarlo sin
+  // haber cerrado nada, o dejar sin marcar un mes ya cerrado si volviste a tocarlo). Solo un
+  // recordatorio visual fuerte para no confundirse de mes; vive en este navegador (localStorage),
+  // no en el backend — no es un dato de negocio, es un tilde personal.
+  const [marcados, setMarcados] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("hqMesesMarcados") || "{}"); } catch { return {}; }
+  });
+  const marcadoKey = `${pais}:${anio}-${mes}`;
+  const marcado = !!marcados[marcadoKey];
+  const toggleMarcado = () => setMarcados(prev => {
+    const next = { ...prev, [marcadoKey]: !prev[marcadoKey] };
+    try { localStorage.setItem("hqMesesMarcados", JSON.stringify(next)); } catch { /* storage lleno o no disponible */ }
+    return next;
+  });
+
   useEffect(() => { load(); }, [mes, anio]);
 
   async function load() {
@@ -563,7 +578,12 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
   );
 
   return (
-    <div style={{ padding: 24, fontFamily: T.font, color: T.text }}>
+    <div style={{
+      padding: 24, fontFamily: T.font, color: T.text, minHeight: "100vh", boxSizing: "border-box",
+      background: marcado ? "#bbf7d0" : "transparent",
+      borderTop: marcado ? "10px solid #15803d" : "10px solid transparent",
+      transition: "background .15s, border-color .15s",
+    }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
         <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Liquidación — HQ</h2>
@@ -573,6 +593,15 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
         </select>
         <input type="number" value={anio} onChange={e => setAnio(Number(e.target.value))}
           style={{ border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 10px", fontSize: 13, width: 80, fontFamily: T.font }} />
+        <button onClick={toggleMarcado}
+          title={marcado ? "Marcado por vos como mes cerrado — click para desmarcar (no afecta la liquidación real)" : "Marcar este mes como cerrado (tilde personal, no afecta la liquidación)"}
+          style={{
+            background: marcado ? "#15803d" : "#fff", color: marcado ? "#fff" : T.muted,
+            border: `1px solid ${marcado ? "#15803d" : T.border}`, borderRadius: 7,
+            padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font,
+          }}>
+          {marcado ? "✅ Mes cerrado" : "☐ Marcar cerrado"}
+        </button>
         <button onClick={() => setShowCerrar(true)} disabled={saving || !liqs.length}
           style={{ marginLeft: "auto", ...BTN_PRIMARY(saving || !liqs.length) }}>
           {saving ? "Procesando…" : "🔒 Cerrar liquidación"}
