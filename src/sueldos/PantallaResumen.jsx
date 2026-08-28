@@ -125,13 +125,16 @@ export default function PantallaResumen({ pais = "AR" }) {
   const pagosEmpleado = useMemo(() => (sel ? pagosDe(sel, pagos, vista) : []), [pagos, sel, vista]);
 
   // Edita solo la nota interna de un pago ya registrado: optimista en pantalla, revierte si falla.
+  // Si la fila es un grupo (varios movimientos del mismo lote_pago, ver agruparPorLote), la nota
+  // se aplica a todos los movimientos internos para que sigan viéndose como una sola fila.
   const handleUpdateNota = useCallback(async (pago, nuevaNota) => {
-    const prev = pago.nota;
-    setPagos(ps => ps.map(p => p.id === pago.id ? { ...p, nota: nuevaNota } : p));
+    const targets = pago._grupo || [pago];
+    const prevNotas = new Map(targets.map(t => [t.id, t.nota]));
+    setPagos(ps => ps.map(p => prevNotas.has(p.id) ? { ...p, nota: nuevaNota } : p));
     try {
-      await updatePagoNota(pago.nb_movimiento_id, nuevaNota);
+      for (const t of targets) await updatePagoNota(t.nb_movimiento_id, nuevaNota);
     } catch (e) {
-      setPagos(ps => ps.map(p => p.id === pago.id ? { ...p, nota: prev } : p));
+      setPagos(ps => ps.map(p => prevNotas.has(p.id) ? { ...p, nota: prevNotas.get(p.id) } : p));
       alert("No se pudo guardar la nota: " + e.message);
     }
   }, []);
@@ -319,12 +322,38 @@ export default function PantallaResumen({ pais = "AR" }) {
 
 // ── Builders puros (reusados en la vista individual y en "imprimir todo") ─────
 function pagosDe(emp, pagos, vista) {
-  return pagos
+  const filtrados = pagos
     .filter(p => (p.legajo_id === emp.id || p.legajo_nombre === emp.nombre)
-      && (p.ambito === vista || (!p.ambito && vista === "sedes")))
+      && (p.ambito === vista || (!p.ambito && vista === "sedes")));
+  return agruparPorLote(filtrados)
     .sort((a, b) =>
       ordenForma(a.tipo_componente) - ordenForma(b.tipo_componente) ||
       (a.fecha || "").localeCompare(b.fecha || ""));
+}
+
+// Un "pagar" en Sedes/HQ puede generar VARIOS nb_movimientos (uno por línea/novedad
+// subyacente, ver ModalBatchPago/ModalPagoImputar) que comparten el mismo lote_pago:
+// para quien mira el resumen es UN solo pago, así que los mostramos en una sola fila
+// (suma de montos, notas combinadas) en vez de una fila por movimiento interno.
+function agruparPorLote(pagos) {
+  const porLote = new Map();
+  const sueltos = [];
+  for (const p of pagos) {
+    if (!p.lote_pago) { sueltos.push(p); continue; }
+    const arr = porLote.get(p.lote_pago);
+    if (arr) arr.push(p); else porLote.set(p.lote_pago, [p]);
+  }
+  const agrupados = [...porLote.values()].map(grupo => {
+    if (grupo.length === 1) return grupo[0];
+    const notas = [...new Set(grupo.map(p => p.nota).filter(Boolean))];
+    return {
+      ...grupo[0],
+      monto: grupo.reduce((s, p) => s + (Number(p.monto) || 0), 0),
+      nota: notas.join(" + "),
+      _grupo: grupo,
+    };
+  });
+  return [...sueltos, ...agrupados];
 }
 
 // Composición de una línea de horas cuando el coach trabaja en varias sedes (o a tarifas distintas
