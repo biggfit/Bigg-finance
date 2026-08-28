@@ -99,8 +99,7 @@ export function ProveedorModal({ initial, onClose, onSave, cuentas = [], centros
 
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.5)", zIndex:500,
-      display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
-      onClick={onClose}>
+      display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
       <div className="fade" style={{ background:"#f1f5f9", borderRadius:16, width:580,
         maxWidth:"97vw", maxHeight:"92vh", overflowY:"auto",
         boxShadow:"0 24px 80px rgba(0,0,0,.3)" }}
@@ -225,8 +224,7 @@ export function ClienteModal({ initial, onClose, onSave, cuentas = [], centrosCo
 
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.5)", zIndex:500,
-      display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
-      onClick={onClose}>
+      display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
       <div className="fade" style={{ background:"#f1f5f9", borderRadius:16, width:580,
         maxWidth:"97vw", maxHeight:"92vh", overflowY:"auto",
         boxShadow:"0 24px 80px rgba(0,0,0,.3)" }}
@@ -695,7 +693,7 @@ export function CuentaModal({ initial, onClose, onSave }) {
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.45)", zIndex:500,
       display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
-      onClick={onClose}>
+      >
       <div className="fade" style={{ background:T.card, borderRadius:14, width:420,
         maxWidth:"97vw", boxShadow:"0 20px 60px rgba(0,0,0,.25)" }}
         onClick={e => e.stopPropagation()}>

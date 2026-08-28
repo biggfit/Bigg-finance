@@ -194,11 +194,12 @@ export default function NuevoIngresoModal({ onClose, onSave, sociedad, clientes 
     </div>
   );
 
-  const footerBtns = (
+  // `requestClose` lo inyecta FacturaFormChrome: aplica la guarda (cartel si hay datos cargados).
+  const footerBtns = (requestClose) => (
     <InvoiceFormFooter
       asPage={asPage}
       canSave={canSave}
-      onClose={onClose}
+      onClose={requestClose}
       onSave={handleSave}
       showSecondary={asPage}
       secondaryAction={{
