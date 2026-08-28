@@ -35,11 +35,20 @@ const FORM_VACIO = {
   formas_pago: [],
 };
 
-const fmtFecha = (s) => {
-  if (!s) return "—";
-  const d = s.slice(0, 10); // "2021-02-22"
-  const [y, m, dd] = d.split("-");
-  return `${dd}/${m}/${y}`;
+function fmtMoney(n) {
+  const v = Number(n) || 0;
+  if (!v) return "—";
+  return "$" + Math.round(v).toLocaleString("es-AR");
+}
+
+// Edición inline en la tabla (Haberes / Sueldo total / CBU) — compactos, sin label (van bajo el header de columna).
+const inlineMoneyStyle = {
+  border: `1px solid ${T.border}`, borderRadius: 5, padding: "5px 8px",
+  fontSize: 12, fontFamily: T.font, width: 100, textAlign: "right", boxSizing: "border-box",
+};
+const inlineTextStyle = {
+  border: `1px solid ${T.border}`, borderRadius: 5, padding: "5px 8px",
+  fontSize: 12, fontFamily: T.font, width: 150, boxSizing: "border-box",
 };
 
 function chip(label, bg, color) {
@@ -76,6 +85,47 @@ export default function PantallaLegajos({ pais = "" }) {
   const [busqueda,      setBusqueda]      = useState("");
   const [sortKey,       setSortKey]       = useState(null);
   const [sortDir,       setSortDir]       = useState("asc");
+
+  // Edición inline (tabla): Haberes / Sueldo total / CBU sin abrir la ficha completa.
+  // Por defecto la tabla es de SOLO LECTURA (mismo look de siempre); "✏️ Editar valores" la
+  // pasa a modo edición para las 3 columnas, y solo se puede volver a cerrar sin cambios
+  // pendientes (evita quedar en un estado ambiguo de "¿esto está confirmado o no?").
+  const [editMode, setEditMode] = useState(false);
+  // { [legajo_id]: { blanco_neto?, sueldo_total?, cbu? } } — solo campos tocados, se guardan en lote.
+  const [pending, setPending] = useState({});
+  const [savingInline, setSavingInline] = useState(false);
+  const inlineVal = (l, campo) => pending[l.id]?.[campo] ?? l[campo] ?? "";
+  const setInlineVal = (id, campo, val) =>
+    setPending(prev => ({ ...prev, [id]: { ...(prev[id] || {}), [campo]: val } }));
+  const pendingIds = Object.keys(pending);
+
+  function handleCerrarEdicion() {
+    if (pendingIds.length) return;   // guard: hay que guardar o descartar antes de cerrar
+    setEditMode(false);
+  }
+
+  async function handleGuardarInline() {
+    if (savingInline || !pendingIds.length) return;
+    setSavingInline(true);
+    try {
+      // Secuencial: el GAS pierde escrituras concurrentes (mismo criterio que el resto del módulo).
+      for (const id of pendingIds) {
+        const patch = pending[id];
+        const clean = {};
+        if ("blanco_neto"  in patch) clean.blanco_neto  = parseFloat(patch.blanco_neto)  || 0;
+        if ("sueldo_total" in patch) clean.sueldo_total = parseFloat(patch.sueldo_total) || 0;
+        if ("cbu"          in patch) clean.cbu          = String(patch.cbu ?? "").trim();
+        await updateLegajo(id, clean);
+      }
+      setPending({});
+      setEditMode(false);
+      await load();
+    } catch (e) {
+      alert("Error al guardar: " + e.message);
+    } finally {
+      setSavingInline(false);
+    }
+  }
   const toggleSort = (k) => {
     if (sortKey === k) setSortDir(d => (d === "asc" ? "desc" : "asc"));
     else { setSortKey(k); setSortDir("asc"); }
@@ -143,15 +193,58 @@ export default function PantallaLegajos({ pais = "" }) {
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
         <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Legajos</h2>
         <span style={{ fontSize: 13, color: T.muted }}>({visibles.length} empleados)</span>
-        <button
-          onClick={handleNuevo}
-          style={{
-            marginLeft: "auto", background: T.blue, color: "#fff",
-            border: "none", borderRadius: 7, padding: "8px 16px",
-            fontSize: 13, fontWeight: 600, cursor: "pointer",
-          }}>
-          + Nuevo legajo
-        </button>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+          {editMode && pendingIds.length > 0 && (
+            <>
+              <span style={{ fontSize: 12, color: T.muted }}>{pendingIds.length} sin guardar</span>
+              <button onClick={() => setPending({})} disabled={savingInline}
+                style={{
+                  background: "transparent", border: `1px solid ${T.border}`, borderRadius: 7,
+                  padding: "8px 14px", fontSize: 13, color: T.muted, cursor: savingInline ? "default" : "pointer",
+                }}>
+                Descartar
+              </button>
+              <button onClick={handleGuardarInline} disabled={savingInline}
+                style={{
+                  background: savingInline ? T.dim : T.green, color: "#fff", border: "none",
+                  borderRadius: 7, padding: "8px 16px", fontSize: 13, fontWeight: 600,
+                  cursor: savingInline ? "default" : "pointer",
+                }}>
+                {savingInline ? "Guardando…" : `💾 Guardar cambios (${pendingIds.length})`}
+              </button>
+            </>
+          )}
+          {editMode ? (
+            <button onClick={handleCerrarEdicion} disabled={pendingIds.length > 0}
+              title={pendingIds.length > 0 ? "Guardá o descartá los cambios pendientes antes de cerrar" : undefined}
+              style={{
+                background: "transparent", border: `1px solid ${T.border}`, borderRadius: 7,
+                padding: "8px 16px", fontSize: 13, fontWeight: 600,
+                color: pendingIds.length > 0 ? T.dim : T.text,
+                cursor: pendingIds.length > 0 ? "not-allowed" : "pointer",
+              }}>
+              🔒 Cerrar edición
+            </button>
+          ) : (
+            <button onClick={() => setEditMode(true)}
+              title="Editar Haberes / Sueldo total / CBU de todos los empleados en la misma tabla"
+              style={{
+                background: "transparent", border: `1px solid ${T.blue}`, borderRadius: 7,
+                padding: "8px 16px", fontSize: 13, fontWeight: 600, color: T.blue, cursor: "pointer",
+              }}>
+              ✏️ Editar valores
+            </button>
+          )}
+          <button
+            onClick={handleNuevo}
+            style={{
+              background: T.blue, color: "#fff",
+              border: "none", borderRadius: 7, padding: "8px 16px",
+              fontSize: 13, fontWeight: 600, cursor: "pointer",
+            }}>
+            + Nuevo legajo
+          </button>
+        </div>
       </div>
 
       {/* Filtros */}
@@ -210,11 +303,14 @@ export default function PantallaLegajos({ pais = "" }) {
                 {[
                   { h: "Nombre", k: "nombre" }, { h: "Rol", k: "rol" },
                   { h: "Contratación", k: "tipo_contratacion" }, { h: "Sociedad", k: "sociedad_nombre" },
-                  { h: "Centro de costo", k: "sede_nombre" }, { h: "Ingreso", k: "fecha_ingreso" },
-                  { h: "Alta", k: "fecha_alta" }, { h: "", k: null },
-                ].map(({ h, k }) => (
+                  { h: "Centro de costo", k: "sede_nombre" },
+                  { h: "Haberes", k: "blanco_neto", align: "right" },
+                  { h: "Sueldo total", k: "sueldo_total", align: "right" },
+                  { h: "CBU", k: "cbu" },
+                  { h: "", k: null },
+                ].map(({ h, k, align }) => (
                   <th key={h || "acc"} onClick={k ? () => toggleSort(k) : undefined} style={{
-                    padding: "8px 12px", textAlign: "left", fontWeight: 600,
+                    padding: "8px 12px", textAlign: align || "left", fontWeight: 600,
                     color: T.muted, fontSize: 11, letterSpacing: ".04em",
                     borderBottom: `1px solid ${T.border}`, whiteSpace: "nowrap",
                     cursor: k ? "pointer" : "default", userSelect: "none",
@@ -223,21 +319,53 @@ export default function PantallaLegajos({ pais = "" }) {
               </tr>
             </thead>
             <tbody>
-              {ordenados.map((l, i) => (
-                <tr key={l.id} style={{ background: i % 2 === 0 ? T.card : T.bg, opacity: l.activo ? 1 : 0.5 }}>
+              {ordenados.map((l, i) => {
+                const dirty = !!pending[l.id];
+                const cbuVal = inlineVal(l, "cbu");
+                const cbuWarn = /^\d+$/.test(String(cbuVal).trim()) && String(cbuVal).trim().length !== 22
+                  ? `CBU típico: 22 dígitos (tiene ${String(cbuVal).trim().length})` : null;
+                return (
+                <tr key={l.id} style={{ background: dirty ? "#fffbeb" : (i % 2 === 0 ? T.card : T.bg), opacity: l.activo ? 1 : 0.5 }}>
                   <td style={{ padding: "9px 12px", fontWeight: 600 }}>{l.nombre}</td>
                   <td style={{ padding: "9px 12px" }}>{rolChip(l.rol)}</td>
                   <td style={{ padding: "9px 12px" }}>{tipoChip(l.tipo_contratacion)}</td>
                   <td style={{ padding: "9px 12px", color: T.muted }}>{l.sociedad_nombre || l.sociedad_id || "—"}</td>
                   <td style={{ padding: "9px 12px", color: T.muted }}>{l.sede_nombre || l.sede_id || "—"}</td>
-                  <td style={{ padding: "9px 12px", color: T.muted }}>{fmtFecha(l.fecha_ingreso)}</td>
-                  <td style={{ padding: "9px 12px", color: T.muted }}>
-                    {l.fecha_alta
-                      ? fmtFecha(l.fecha_alta)
-                      : l.fecha_ingreso
-                        ? <span style={{ color: T.dim }}>= ingreso</span>
-                        : "—"}
-                  </td>
+                  {editMode ? (
+                    <>
+                      <td style={{ padding: "6px 12px", textAlign: "right" }}>
+                        <MoneyInput
+                          value={inlineVal(l, "blanco_neto")}
+                          onChange={v => setInlineVal(l.id, "blanco_neto", v)}
+                          placeholder="0"
+                          style={inlineMoneyStyle}
+                        />
+                      </td>
+                      <td style={{ padding: "6px 12px", textAlign: "right" }}>
+                        <MoneyInput
+                          value={inlineVal(l, "sueldo_total")}
+                          onChange={v => setInlineVal(l.id, "sueldo_total", v)}
+                          placeholder="0"
+                          style={inlineMoneyStyle}
+                        />
+                      </td>
+                      <td style={{ padding: "6px 12px" }}>
+                        <input
+                          value={cbuVal}
+                          onChange={e => setInlineVal(l.id, "cbu", e.target.value)}
+                          placeholder="CBU / CVU / Alias"
+                          style={inlineTextStyle}
+                        />
+                        {cbuWarn && <div style={{ fontSize: 10, color: "#ca8a04", marginTop: 2, whiteSpace: "nowrap" }}>{cbuWarn}</div>}
+                      </td>
+                    </>
+                  ) : (
+                    <>
+                      <td style={{ padding: "9px 12px", textAlign: "right", color: T.muted }}>{fmtMoney(l.blanco_neto)}</td>
+                      <td style={{ padding: "9px 12px", textAlign: "right", color: T.muted }}>{fmtMoney(l.sueldo_total)}</td>
+                      <td style={{ padding: "9px 12px", color: T.muted, fontVariantNumeric: "tabular-nums" }}>{l.cbu || "—"}</td>
+                    </>
+                  )}
                   <td style={{ padding: "9px 12px", whiteSpace: "nowrap" }}>
                     <button
                       onClick={() => handleEditar(l)}
@@ -255,7 +383,8 @@ export default function PantallaLegajos({ pais = "" }) {
                       }}>🗑</button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
