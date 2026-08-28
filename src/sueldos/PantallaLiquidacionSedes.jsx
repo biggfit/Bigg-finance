@@ -356,6 +356,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
 
   // Paso 4 modal
   const [showPago, setShowPago] = useState(null);  // legajo_id
+  const [showPagoHaberes, setShowPagoHaberes] = useState(false);  // pago anticipado de haberes (sin liquidación cerrada)
 
   const load = useCallback(async (m, a, p) => {
     if (!p) return;
@@ -1208,6 +1209,12 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
               {reabriendo ? "Reabriendo…" : `🔓 Reabrir ${idsLiqCerrados.length} cerradas`}
             </button>
           )}
+          <button onClick={() => setShowPagoHaberes(true)}
+            title="Pagar el blanco (haberes) de los legajos ya, sin esperar a cerrar la liquidación del mes"
+            style={{ background: "none", border: `1px solid ${T.green}`, borderRadius: 7, padding: "7px 14px",
+              fontSize: 13, fontWeight: 600, color: T.green, cursor: "pointer", fontFamily: T.font }}>
+            💳 Pagar Haberes
+          </button>
           <button onClick={handleGuardarBorrador} disabled={saving || !rows.length}
             style={{ ...BTN_PRIMARY(saving || !rows.length), padding: "7px 14px" }}>
             {saving ? "Guardando…" : "💾 Guardar borrador"}
@@ -1341,6 +1348,16 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
           />
         );
       })()}
+
+      {showPagoHaberes && (
+        <ModalPagoHaberesAnticipado
+          mes={mes} anio={anio}
+          legajos={legajos}
+          pagos={pagos}
+          onClose={() => setShowPagoHaberes(false)}
+          onSaved={async () => { setShowPagoHaberes(false); await refreshLiqs(); }}
+        />
+      )}
     </div>
   );
 }
@@ -2664,6 +2681,201 @@ function ModalBatchPago({ tipo, empls, mes, anio, onClose, onSaved }) {
         </div>
 
         <div style={{ display: "flex", gap: 8, marginTop: 18, justifyContent: "flex-end" }}>
+          <button onClick={onClose} style={BTN_SECONDARY}>Cancelar</button>
+          <button onClick={handleSave} disabled={saving || !emplsSelec.length} style={{
+            background: (saving || !emplsSelec.length) ? T.dim : T.green, color: "#fff", border: "none",
+            borderRadius: 7, padding: "7px 16px", fontSize: 13, fontWeight: 600,
+            cursor: (saving || !emplsSelec.length) ? "not-allowed" : "pointer",
+          }}>
+            {saving ? "Procesando…" : `Confirmar ${emplsSelec.length} pago${emplsSelec.length !== 1 ? "s" : ""}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Modal pago Haberes anticipado ──────────────────────────────────────────────
+// Paga el "blanco" (monto_haberes) directo desde la ficha del legajo (blanco_neto), sin
+// depender de que la liquidación del mes esté cargada/cerrada — a diferencia de PasoPagos,
+// que solo conoce `monto_haberes` una vez cerrada (ver handleConfirmarFormaPago). Usa el mismo
+// appendPago(s) que el resto del módulo: cuando la liquidación cierre, este pago ya hecho
+// se netea contra lo declarado (_netoSueldos en sueldosApi.js) sin duplicar ni bloquear nada.
+function ModalPagoHaberesAnticipado({ mes, anio, legajos, pagos, onClose, onSaved }) {
+  const pagadoPorLegajo = useMemo(() => {
+    const m = {};
+    for (const p of pagos) {
+      if (p.tipo_componente !== "haberes") continue;
+      m[p.legajo_id] = (m[p.legajo_id] || 0) + (Number(p.monto) || 0);
+    }
+    return m;
+  }, [pagos]);
+
+  // Elegibles: legajos de Sedes con blanco pactado y algo pendiente de ese blanco este período
+  // (ya descontando lo que se haya pagado antes, evita re-sugerir un pago ya hecho).
+  const elegibles = useMemo(() => legajos
+    .filter(l => ROLES_SEDES_ALL.includes(l.rol) && Number(l.blanco_neto) > 0)
+    .map(l => ({ ...l, pendiente: Math.max(0, Number(l.blanco_neto) - (pagadoPorLegajo[l.id] || 0)) }))
+    .filter(l => l.pendiente > 0.5),
+  [legajos, pagadoPorLegajo]);
+
+  const [form, setForm] = useState({
+    fecha:       new Date().toISOString().slice(0, 10),
+    sociedad_id: "",
+    cuenta_id:   "",
+  });
+  const [sociedades,  setSociedades]  = useState([]);
+  const [cuentas,     setCuentas]     = useState([]);
+  const [loadingMeta, setLoadingMeta] = useState(true);
+  const [selec,  setSelec]  = useState(() => new Set());
+  const [montos, setMontos] = useState({});   // legajo_id → monto editable (sugerido = pendiente)
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  useEffect(() => {
+    Promise.all([fetchSociedadesNumbers(), fetchCuentasBancariasNumbers()])
+      .then(([socs, ctas]) => { setSociedades(socs); setCuentas(ctas); })
+      .finally(() => setLoadingMeta(false));
+  }, []);
+
+  // Haberes se paga por sociedad (cada legajo cobra de la suya, una sociedad por vez — mismo criterio que ModalBatchPago).
+  const emplsVisibles = useMemo(() =>
+    form.sociedad_id ? elegibles.filter(l => l.sociedad_id === form.sociedad_id) : elegibles,
+  [elegibles, form.sociedad_id]);
+
+  // Al cambiar de sociedad (o cargar datos): preseleccionar a todos los visibles con su pendiente sugerido.
+  useEffect(() => {
+    setSelec(new Set(emplsVisibles.map(l => l.id)));
+    setMontos(prev => {
+      const next = { ...prev };
+      for (const l of emplsVisibles) if (next[l.id] == null) next[l.id] = l.pendiente;
+      return next;
+    });
+  }, [emplsVisibles]);
+
+  const cuentasFiltradas = useMemo(() =>
+    form.sociedad_id ? cuentas.filter(c => c.sociedad === form.sociedad_id) : cuentas,
+  [cuentas, form.sociedad_id]);
+
+  const toggleSelec = (id) => setSelec(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+
+  const emplsSelec = emplsVisibles.filter(l => selec.has(l.id) && (Number(montos[l.id]) || 0) > 0);
+  const total = emplsSelec.reduce((s, l) => s + (Number(montos[l.id]) || 0), 0);
+
+  const handleSave = async () => {
+    if (savingRef.current) return;
+    if (!form.sociedad_id) { alert("Elegí la sociedad (se paga una por vez; cada legajo cobra de la suya)."); return; }
+    if (!emplsSelec.length) { alert("Seleccioná al menos un empleado con monto > 0."); return; }
+    if (!form.cuenta_id) { alert("Seleccioná una cuenta bancaria."); return; }
+    savingRef.current = true; setSaving(true);
+    try {
+      const ctaNombre = cuentas.find(c => c.id === form.cuenta_id)?.nombre ?? form.cuenta_id;
+      const lote_pago = nuevoLote();
+      const items = emplsSelec.map(l => ({
+        mes, anio, lote_pago,
+        legajo_id:              l.id,
+        legajo_nombre:          l.nombre,
+        sociedad_id:            l.sociedad_id,
+        sociedad_nombre:        l.sociedad_nombre,
+        tipo_componente:        "haberes",
+        monto:                  Number(montos[l.id]) || 0,
+        fecha:                  form.fecha,
+        cuenta_bancaria_id:     form.cuenta_id,
+        cuenta_bancaria_nombre: ctaNombre,
+        cuenta_contable_id:     "CUENTA_Sueldos",
+        cuenta_contable_nombre: "Sueldos",
+        ambito:                 "sedes",
+        nota:                   "Anticipado — sin liquidación cerrada",
+      }));
+      await appendPagos(items);
+      await onSaved();
+    } catch (e) {
+      alert("Error: " + e.message);
+      setSaving(false);
+    } finally {
+      savingRef.current = false;
+    }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+      <div style={{ background: "#fff", borderRadius: 12, padding: 24, width: 460, boxShadow: "0 8px 32px rgba(0,0,0,.18)", fontFamily: T.font, maxHeight: "90vh", overflowY: "auto" }}>
+        <h3 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 700 }}>💳 Pagar Haberes — anticipado</h3>
+        <p style={{ margin: "0 0 14px", fontSize: 12, color: T.muted }}>
+          Paga el blanco de cada legajo (ficha → "Neto en blanco") sin esperar a cerrar la liquidación de {MESES[mes - 1]} {anio}.
+          Al cerrarla, este pago se descuenta automáticamente de lo declarado — no se duplica.
+        </p>
+
+        <div style={{ marginBottom: 12 }}>
+          <ModalLabel>Sociedad (se paga una por vez)</ModalLabel>
+          <select style={MODAL_INPUT} value={form.sociedad_id} onChange={e => { set("sociedad_id", e.target.value); set("cuenta_id", ""); }}>
+            <option value="">— Seleccioná —</option>
+            {sociedades.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+          </select>
+        </div>
+
+        {form.sociedad_id && (
+          emplsVisibles.length === 0 ? (
+            <div style={{ fontSize: 12, color: T.muted, padding: "10px 0 16px" }}>
+              No hay legajos de esa sociedad con blanco pendiente este período.
+            </div>
+          ) : (
+            <div style={{ border: `1px solid ${T.border}`, borderRadius: 6, marginBottom: 16, maxHeight: 220, overflowY: "auto" }}>
+              {emplsVisibles.map((l, i) => {
+                const checked = selec.has(l.id);
+                return (
+                  <div key={l.id} style={{
+                    display: "flex", alignItems: "center", gap: 10,
+                    padding: "7px 10px", fontSize: 13,
+                    borderBottom: i < emplsVisibles.length - 1 ? `1px solid ${T.border}` : "none",
+                    background: checked ? "#f0fdf4" : "#fff",
+                  }}>
+                    <input type="checkbox" checked={checked} onChange={() => toggleSelec(l.id)}
+                      disabled={!l.cbu}
+                      style={{ accentColor: T.green, width: 14, height: 14, cursor: l.cbu ? "pointer" : "not-allowed" }} />
+                    <span style={{ flex: 1, color: T.text }}>
+                      {l.nombre}
+                      {!l.cbu && <span style={{ color: T.red, fontSize: 10, marginLeft: 6 }}>sin CBU</span>}
+                    </span>
+                    <input type="number" value={montos[l.id] ?? ""} disabled={!checked}
+                      onChange={e => setMontos(m => ({ ...m, [l.id]: e.target.value }))}
+                      style={{ ...MODAL_INPUT, width: 110, textAlign: "right", padding: "4px 6px" }} />
+                  </div>
+                );
+              })}
+            </div>
+          )
+        )}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div>
+            <ModalLabel>Fecha</ModalLabel>
+            <input style={MODAL_INPUT} type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)} />
+          </div>
+          <div>
+            <ModalLabel>Cuenta bancaria</ModalLabel>
+            {loadingMeta
+              ? <div style={{ fontSize: 12, color: T.muted }}>Cargando cuentas…</div>
+              : <select style={MODAL_INPUT} value={form.cuenta_id} onChange={e => set("cuenta_id", e.target.value)}>
+                  <option value="">— Seleccioná —</option>
+                  {cuentasFiltradas.map(c => (
+                    <option key={c.id} value={c.id}>{ctaLabel(c, sociedades)}</option>
+                  ))}
+                </select>
+            }
+          </div>
+        </div>
+
+        <p style={{ margin: "12px 0 0", fontSize: 12, color: T.muted }}>
+          {emplsSelec.length} empleado{emplsSelec.length !== 1 ? "s" : ""} · Total <strong>{fmtMoney(total)}</strong>
+        </p>
+
+        <div style={{ display: "flex", gap: 8, marginTop: 14, justifyContent: "flex-end" }}>
           <button onClick={onClose} style={BTN_SECONDARY}>Cancelar</button>
           <button onClick={handleSave} disabled={saving || !emplsSelec.length} style={{
             background: (saving || !emplsSelec.length) ? T.dim : T.green, color: "#fff", border: "none",
