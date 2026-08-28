@@ -2836,11 +2836,10 @@ function ModalPagoHaberesAnticipado({ mes, anio, legajos, pagos, onClose, onSave
                     background: checked ? "#f0fdf4" : "#fff",
                   }}>
                     <input type="checkbox" checked={checked} onChange={() => toggleSelec(l.id)}
-                      disabled={!l.cbu}
-                      style={{ accentColor: T.green, width: 14, height: 14, cursor: l.cbu ? "pointer" : "not-allowed" }} />
+                      style={{ accentColor: T.green, width: 14, height: 14, cursor: "pointer" }} />
                     <span style={{ flex: 1, color: T.text }}>
                       {l.nombre}
-                      {!l.cbu && <span style={{ color: T.red, fontSize: 10, marginLeft: 6 }}>sin CBU</span>}
+                      {!l.cbu && <span style={{ color: T.yellow, fontSize: 10, marginLeft: 6 }}>sin CBU cargado</span>}
                     </span>
                     <input type="number" value={montos[l.id] ?? ""} disabled={!checked}
                       onChange={e => setMontos(m => ({ ...m, [l.id]: e.target.value }))}
