@@ -2825,7 +2825,18 @@ function ModalPagoHaberesAnticipado({ mes, anio, legajos, pagos, onClose, onSave
               No hay legajos de esa sociedad con blanco pendiente este período.
             </div>
           ) : (
-            <div style={{ border: `1px solid ${T.border}`, borderRadius: 6, marginBottom: 16, maxHeight: 220, overflowY: "auto" }}>
+            <>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 6 }}>
+                <button onClick={() => setSelec(new Set(emplsVisibles.map(l => l.id)))}
+                  style={{ background: "none", border: "none", cursor: "pointer", color: T.blue, fontSize: 11, textDecoration: "underline", fontFamily: T.font, padding: 0 }}>
+                  Seleccionar todos
+                </button>
+                <button onClick={() => setSelec(new Set())}
+                  style={{ background: "none", border: "none", cursor: "pointer", color: T.dim, fontSize: 11, textDecoration: "underline", fontFamily: T.font, padding: 0 }}>
+                  Deseleccionar todos
+                </button>
+              </div>
+              <div style={{ border: `1px solid ${T.border}`, borderRadius: 6, marginBottom: 16, maxHeight: 220, overflowY: "auto" }}>
               {emplsVisibles.map((l, i) => {
                 const checked = selec.has(l.id);
                 return (
@@ -2847,7 +2858,8 @@ function ModalPagoHaberesAnticipado({ mes, anio, legajos, pagos, onClose, onSave
                   </div>
                 );
               })}
-            </div>
+              </div>
+            </>
           )
         )}
 
