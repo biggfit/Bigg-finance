@@ -313,7 +313,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
                 const isChecked = checked.has(rid);
                 return (
                 <tr key={r._id} style={{ borderBottom: `1px solid ${T.border}`,
-                  background: isChecked ? "#f0fdf4" : undefined }}>
+                  background: isChecked ? "#bbf7d0" : undefined }}>
                   <td style={{ padding: "6px 10px" }}>
                     <select style={{ ...iStyle, ...(r.legajo_id ? {} : invStyle) }} value={r.legajo_id} onChange={e => setLegajo(r._id, e.target.value)}>
                       <option value="">— Elegir legajo —</option>
