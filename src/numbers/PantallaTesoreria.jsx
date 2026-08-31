@@ -1239,6 +1239,15 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
 
   const cuentaNombre = filtroCuenta ? (cuentaMap[filtroCuenta] ?? filtroCuenta) : null;
 
+  // Paginado: la tabla puede tener cientos/miles de filas y sin límite el scroll se vuelve interminable.
+  const [pageSize, setPageSize] = useState(50);
+  const [page, setPage] = useState(0);
+  useEffect(() => { setPage(0); }, [filtroCuenta, filtroRef, pageSize]);
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
+  const pageClamped = Math.min(page, totalPages - 1);
+  const desde = pageClamped * pageSize;
+  const visible = sorted.slice(desde, desde + pageSize);
+
   if (rows.length === 0) {
     return (
       <div>
@@ -1282,6 +1291,14 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
               padding:"2px 10px", cursor:"pointer", fontFamily:T.font }}>✕ Ver todas</button>
           </>}
         </div>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <span style={{ fontSize:11, color:T.muted }}>Filas por página</span>
+          <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))} style={{
+            fontSize:12, color:T.text, background:T.card, border:`1px solid ${T.cardBorder}`,
+            borderRadius:6, padding:"3px 8px", cursor:"pointer", fontFamily:T.font }}>
+            {[25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </div>
       </div>
 
       <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`,
@@ -1299,7 +1316,7 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
             </tr>
           </thead>
           <tbody>
-            {sorted.map((m, i) => {
+            {visible.map((m, i) => {
               const base   = TIPO_CFG[m.tipo] ?? { bg:"#f3f4f6", color:"#374151", label:m.tipo };
               const cfg    = esSinConciliar(m) ? { ...base, ...TIPO_SIN_CONCILIAR } : base;
               const monto  = Number(m.monto) || 0;
@@ -1350,7 +1367,10 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
                     {fmtDate(m.fecha)}
                   </td>
                   <td style={{ padding:"10px 14px", fontSize:12, color:T.muted }}>{nombre}</td>
-                  <td style={{ padding:"10px 14px", fontSize:13, color:T.text }}>{m.concepto ?? "—"}</td>
+                  <td style={{ padding:"10px 14px", fontSize:13, color:T.text }}>
+                    <div style={{ maxWidth:280, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}
+                      title={m.concepto || undefined}>{m.concepto ?? "—"}</div>
+                  </td>
                   <td style={{ padding:"10px 14px", fontSize:11, color:T.muted }}>
                     {String(m.cuenta_contable || m.cuenta || "").replace(/^CUENTA_/, "") || "—"}
                   </td>
@@ -1373,6 +1393,25 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
           </tbody>
         </table>
         </div>
+        {totalPages > 1 && (
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between",
+            padding:"10px 14px", borderTop:`1px solid ${T.cardBorder}` }}>
+            <span style={{ fontSize:12, color:T.muted }}>
+              Mostrando {desde + 1}–{Math.min(desde + pageSize, sorted.length)} de {sorted.length}
+            </span>
+            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={pageClamped === 0}
+                style={{ fontSize:12, color: pageClamped === 0 ? T.dim : T.text, background:"#f3f4f6",
+                  border:`1px solid ${T.cardBorder}`, borderRadius:6, padding:"4px 12px",
+                  cursor: pageClamped === 0 ? "not-allowed" : "pointer", fontFamily:T.font }}>← Anterior</button>
+              <span style={{ fontSize:12, color:T.muted }}>Página {pageClamped + 1} de {totalPages}</span>
+              <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={pageClamped >= totalPages - 1}
+                style={{ fontSize:12, color: pageClamped >= totalPages - 1 ? T.dim : T.text, background:"#f3f4f6",
+                  border:`1px solid ${T.cardBorder}`, borderRadius:6, padding:"4px 12px",
+                  cursor: pageClamped >= totalPages - 1 ? "not-allowed" : "pointer", fontFamily:T.font }}>Siguiente →</button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
