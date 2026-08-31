@@ -5,6 +5,7 @@ import {
   FP_TIPOS, FP_TIPO_LABEL, ROLES_FRONT, ROLES_COACHES, ROLES_LIMP, ROLES_HQ,
   fmtMiles, limpiarMonto,
 } from "../lib/sueldosApi";
+import { useRowChecks } from "../lib/useRowChecks";
 
 // Orden del picker de legajos (pedido del usuario): encargado/vendedor → coach → limpieza → HQ.
 // Incluye TODOS los legajos activos (un HQ que presta servicios en una sede se elige acá).
@@ -89,6 +90,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState("asc");
   const savingRef = useRef(false);
+  const { checked, toggle: toggleCheck } = useRowChecks(`novedades_check_sedes_${anio}_${mes}`);
   const toggleSort = (k) => {
     if (sortKey === k) setSortDir(d => (d === "asc" ? "desc" : "asc"));
     else { setSortKey(k); setSortDir("asc"); }
@@ -296,16 +298,21 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
                   </th>
                 ))}
                 <th style={{ ...thStyle, width: 40 }}></th>
+                <th style={{ ...thStyle, width: 40 }}></th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 && (
-                <tr><td colSpan={7} style={{ padding: "14px 10px", color: T.dim, fontSize: 13 }}>
+                <tr><td colSpan={8} style={{ padding: "14px 10px", color: T.dim, fontSize: 13 }}>
                   Sin novedades de Sedes este mes. Agregá una fila abajo.
                 </td></tr>
               )}
-              {vista.map(r => (
-                <tr key={r._id} style={{ borderBottom: `1px solid ${T.border}` }}>
+              {vista.map(r => {
+                const rid = r.id ?? r._id;
+                const isChecked = checked.has(rid);
+                return (
+                <tr key={r._id} style={{ borderBottom: `1px solid ${T.border}`,
+                  background: isChecked ? "#f0fdf4" : undefined }}>
                   <td style={{ padding: "6px 10px" }}>
                     <select style={{ ...iStyle, ...(r.legajo_id ? {} : invStyle) }} value={r.legajo_id} onChange={e => setLegajo(r._id, e.target.value)}>
                       <option value="">— Elegir legajo —</option>
@@ -349,8 +356,18 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
                     <button onClick={() => delRow(r._id)}
                       style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: T.dim, padding: 2 }}>🗑</button>
                   </td>
+                  <td style={{ padding: "6px 8px", textAlign: "center" }}>
+                    <button onClick={() => toggleCheck(rid)} title="Marcar como revisado (solo en esta máquina)"
+                      style={{
+                        width: 18, height: 18, borderRadius: 4, cursor: "pointer", padding: 0,
+                        border: `1px solid ${isChecked ? T.green : T.border}`,
+                        background: isChecked ? T.green : "transparent",
+                        color: "#fff", fontSize: 12, lineHeight: "16px",
+                      }}>{isChecked ? "✓" : ""}</button>
+                  </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
             <tfoot>
               <tr style={{ background: T.bg, fontWeight: 700 }}>
@@ -358,7 +375,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
                 <td style={{ padding: "8px 10px", textAlign: "right" }}>
                   ${total.toLocaleString("es-AR")}
                 </td>
-                <td colSpan={4}></td>
+                <td colSpan={5}></td>
               </tr>
             </tfoot>
           </table>

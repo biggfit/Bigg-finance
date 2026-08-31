@@ -5,6 +5,7 @@ import {
   FP_TIPOS, FP_TIPO_LABEL, ROLES_HQ,
   fmtMiles, limpiarMonto,
 } from "../lib/sueldosApi";
+import { useRowChecks } from "../lib/useRowChecks";
 
 const T = {
   bg:     "#f8fafc",
@@ -86,6 +87,7 @@ export default function PantallaNovedades({ pais = "" }) {
   const [saving,   setSaving]   = useState(false);
   const [dirty,    setDirty]    = useState(false);
   const savingRef = useRef(false);
+  const { checked, toggle: toggleCheck } = useRowChecks(`novedades_check_hq_${anio}_${mes}`);
 
   const load = useCallback(async (m, a, p) => {
     if (!p) return;
@@ -299,19 +301,23 @@ export default function PantallaNovedades({ pais = "" }) {
                 {esOtros && <th style={{ ...thStyle, width: 170 }}>Cuenta contable</th>}
                 <th style={thStyle}>Nota</th>
                 <th style={{ ...thStyle, width: 40 }}></th>
+                <th style={{ ...thStyle, width: 40 }}></th>
               </tr>
             </thead>
             <tbody>
               {tabRows.length === 0 && (
-                <tr><td colSpan={esOtros ? 8 : 7} style={{ padding: "14px 10px", color: T.dim, fontSize: 13 }}>
+                <tr><td colSpan={esOtros ? 9 : 8} style={{ padding: "14px 10px", color: T.dim, fontSize: 13 }}>
                   Sin novedades en esta solapa. Agregá una fila abajo.
                 </td></tr>
               )}
               {tabRows.map(r => {
                 const prev = montoAnterior(r);
                 const diff = (parseFloat(r.monto) || 0) - prev;
+                const rid = r.id ?? r._id;
+                const isChecked = checked.has(rid);
                 return (
-                <tr key={r._id} style={{ borderBottom: `1px solid ${T.border}` }}>
+                <tr key={r._id} style={{ borderBottom: `1px solid ${T.border}`,
+                  background: isChecked ? "#f0fdf4" : undefined }}>
                   <td style={{ padding: "6px 10px" }}>
                     <select style={iStyle} value={r.legajo_id} onChange={e => setLegajo(r._id, e.target.value)}>
                       <option value="">— Elegir legajo —</option>
@@ -346,6 +352,15 @@ export default function PantallaNovedades({ pais = "" }) {
                     <button onClick={() => delRow(r._id)}
                       style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: T.dim, padding: 2 }}>🗑</button>
                   </td>
+                  <td style={{ padding: "6px 8px", textAlign: "center" }}>
+                    <button onClick={() => toggleCheck(rid)} title="Marcar como revisado (solo en esta máquina)"
+                      style={{
+                        width: 18, height: 18, borderRadius: 4, cursor: "pointer", padding: 0,
+                        border: `1px solid ${isChecked ? T.green : T.border}`,
+                        background: isChecked ? T.green : "transparent",
+                        color: "#fff", fontSize: 12, lineHeight: "16px",
+                      }}>{isChecked ? "✓" : ""}</button>
+                  </td>
                 </tr>
                 );
               })}
@@ -355,7 +370,7 @@ export default function PantallaNovedades({ pais = "" }) {
                 <td colSpan={2} style={{ padding: "8px 10px" }}>Total</td>
                 <td style={{ padding: "8px 10px", textAlign: "right" }}>{fmt(totalTab)}</td>
                 <td style={{ padding: "8px 10px", textAlign: "right", color: diffCol(totalDiff) }}>{fmtDiff(totalDiff)}</td>
-                <td colSpan={esOtros ? 4 : 3}></td>
+                <td colSpan={esOtros ? 5 : 4}></td>
               </tr>
             </tfoot>
           </table>
