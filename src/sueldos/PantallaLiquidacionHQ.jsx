@@ -584,6 +584,15 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
       borderTop: marcado ? "10px solid #334155" : "10px solid transparent",
       transition: "background .15s, border-color .15s",
     }}>
+      {marcado && (
+        <div style={{
+          position: "sticky", top: 0, zIndex: 20, margin: "-24px -24px 20px", padding: "10px 24px",
+          background: "#334155", color: "#fff", fontSize: 13, fontWeight: 700,
+          display: "flex", alignItems: "center", gap: 8,
+        }}>
+          🔒 MES CERRADO — {MESES[mes - 1]} {anio} <span style={{ fontWeight: 400, color: "#cbd5e1" }}>(marcado por vos, no afecta la liquidación real)</span>
+        </div>
+      )}
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
         <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Liquidación — HQ</h2>
