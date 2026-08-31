@@ -59,6 +59,11 @@ const IDS_MONOTRIBUTISTAS_FIJOS = [
   "LEG-nako-0007", // Victoria "Vicky" Mendez Casariego
 ];
 
+// Victoria está casada con Gigio: su devolución se carga en el legajo de él, nunca en el propio.
+const ALIAS_MONOTRIBUTO = {
+  "LEG-nako-0007": "LEG-nako-0001", // Victoria Mendez Casariego → Gigio Mazzoni
+};
+
 // A qué solapa pertenece una novedad: por su cuenta contable; si no matchea ninguna nombrada → "otros".
 function conceptoDeNovedad(nov) {
   const c = CONCEPTOS.find(x => x.cuenta && norm(x.cuenta) === norm(nov.cuenta_contable_nombre));
@@ -293,7 +298,7 @@ export default function PantallaNovedades({ pais = "" }) {
   }
   const legajoNombre = (id) => legajos.find(l => l.id === id)?.nombre ?? id;
   const monotributistasFaltantes = IDS_MONOTRIBUTISTAS_FIJOS
-    .filter(id => !(montoMonotributoPorLegajo.get(id) > 0))
+    .filter(id => !(montoMonotributoPorLegajo.get(ALIAS_MONOTRIBUTO[id] ?? id) > 0))
     .map(legajoNombre);
 
   return (
