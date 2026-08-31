@@ -44,13 +44,17 @@ function fmtMoney(n) {
 
 // Edición inline en la tabla (Haberes / Sueldo total / CBU) — compactos, sin label (van bajo el header de columna).
 const inlineMoneyStyle = {
-  border: `1px solid ${T.border}`, borderRadius: 5, padding: "5px 8px",
-  fontSize: 12, fontFamily: T.font, width: 100, textAlign: "right", boxSizing: "border-box",
+  border: `1px solid ${T.border}`, borderRadius: 5, padding: "5px 6px",
+  fontSize: 12, fontFamily: T.font, width: 84, textAlign: "right", boxSizing: "border-box",
 };
 const inlineTextStyle = {
-  border: `1px solid ${T.border}`, borderRadius: 5, padding: "5px 8px",
-  fontSize: 12, fontFamily: T.font, width: 150, boxSizing: "border-box",
+  border: `1px solid ${T.border}`, borderRadius: 5, padding: "5px 6px",
+  fontSize: 12, fontFamily: T.font, width: 120, boxSizing: "border-box",
 };
+// Trunca texto largo (Sociedad/Centro de costo/CBU) con "…"; el valor completo queda en el title (tooltip).
+const ellipsisStyle = (maxWidth) => ({
+  maxWidth, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+});
 
 function chip(label, bg, color) {
   return (
@@ -298,23 +302,24 @@ export default function PantallaLegajos({ pais = "" }) {
         <p style={{ color: T.muted, fontSize: 13 }}>No hay legajos con los filtros aplicados.</p>
       ) : (
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", minWidth: 900, borderCollapse: "collapse", fontSize: 13 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr style={{ background: T.bg }}>
                 {[
                   { h: "Nombre", k: "nombre" }, { h: "Rol", k: "rol" },
-                  { h: "Contratación", k: "tipo_contratacion" }, { h: "Sociedad", k: "sociedad_nombre" },
-                  { h: "Centro de costo", k: "sede_nombre" },
+                  { h: "Contratación", k: "tipo_contratacion" }, { h: "Sociedad", k: "sociedad_nombre", w: 100 },
+                  { h: "Centro de costo", k: "sede_nombre", w: 140 },
                   { h: "Haberes", k: "blanco_neto", align: "right" },
                   { h: "Sueldo total", k: "sueldo_total", align: "right" },
-                  { h: "CBU", k: "cbu" },
+                  { h: "CBU", k: "cbu", w: 110 },
                   { h: "", k: null },
-                ].map(({ h, k, align }) => (
+                ].map(({ h, k, align, w }) => (
                   <th key={h || "acc"} onClick={k ? () => toggleSort(k) : undefined} style={{
-                    padding: "8px 12px", textAlign: align || "left", fontWeight: 600,
+                    padding: "6px 8px", textAlign: align || "left", fontWeight: 600,
                     color: T.muted, fontSize: 11, letterSpacing: ".04em",
                     borderBottom: `1px solid ${T.border}`, whiteSpace: "nowrap",
                     cursor: k ? "pointer" : "default", userSelect: "none",
+                    ...(w ? { maxWidth: w } : {}),
                     ...(k === "nombre" ? { position: "sticky", left: 0, zIndex: 2, background: T.bg } : {}),
                   }}>{h}{k && sortKey === k ? (sortDir === "asc" ? " ▲" : " ▼") : ""}</th>
                 ))}
@@ -329,14 +334,14 @@ export default function PantallaLegajos({ pais = "" }) {
                 const rowBg = dirty ? "#fffbeb" : (i % 2 === 0 ? T.card : T.bg);
                 return (
                 <tr key={l.id} style={{ background: rowBg, opacity: l.activo ? 1 : 0.5 }}>
-                  <td style={{ padding: "9px 12px", fontWeight: 600, position: "sticky", left: 0, zIndex: 1, background: rowBg }}>{l.nombre}</td>
-                  <td style={{ padding: "9px 12px" }}>{rolChip(l.rol)}</td>
-                  <td style={{ padding: "9px 12px" }}>{tipoChip(l.tipo_contratacion)}</td>
-                  <td style={{ padding: "9px 12px", color: T.muted }}>{l.sociedad_nombre || l.sociedad_id || "—"}</td>
-                  <td style={{ padding: "9px 12px", color: T.muted }}>{l.sede_nombre || l.sede_id || "—"}</td>
+                  <td style={{ padding: "7px 8px", fontWeight: 600, position: "sticky", left: 0, zIndex: 1, background: rowBg }}>{l.nombre}</td>
+                  <td style={{ padding: "7px 8px" }}>{rolChip(l.rol)}</td>
+                  <td style={{ padding: "7px 8px" }}>{tipoChip(l.tipo_contratacion)}</td>
+                  <td style={{ padding: "7px 8px", color: T.muted, ...ellipsisStyle(100) }} title={l.sociedad_nombre || l.sociedad_id || ""}>{l.sociedad_nombre || l.sociedad_id || "—"}</td>
+                  <td style={{ padding: "7px 8px", color: T.muted, ...ellipsisStyle(140) }} title={l.sede_nombre || l.sede_id || ""}>{l.sede_nombre || l.sede_id || "—"}</td>
                   {editMode ? (
                     <>
-                      <td style={{ padding: "6px 12px", textAlign: "right" }}>
+                      <td style={{ padding: "5px 8px", textAlign: "right" }}>
                         <MoneyInput
                           value={inlineVal(l, "blanco_neto")}
                           onChange={v => setInlineVal(l.id, "blanco_neto", v)}
@@ -344,7 +349,7 @@ export default function PantallaLegajos({ pais = "" }) {
                           style={inlineMoneyStyle}
                         />
                       </td>
-                      <td style={{ padding: "6px 12px", textAlign: "right" }}>
+                      <td style={{ padding: "5px 8px", textAlign: "right" }}>
                         <MoneyInput
                           value={inlineVal(l, "sueldo_total")}
                           onChange={v => setInlineVal(l.id, "sueldo_total", v)}
@@ -352,7 +357,7 @@ export default function PantallaLegajos({ pais = "" }) {
                           style={inlineMoneyStyle}
                         />
                       </td>
-                      <td style={{ padding: "6px 12px" }}>
+                      <td style={{ padding: "5px 8px" }}>
                         <input
                           value={cbuVal}
                           onChange={e => setInlineVal(l.id, "cbu", e.target.value)}
@@ -364,12 +369,12 @@ export default function PantallaLegajos({ pais = "" }) {
                     </>
                   ) : (
                     <>
-                      <td style={{ padding: "9px 12px", textAlign: "right", color: T.muted }}>{fmtMoney(l.blanco_neto)}</td>
-                      <td style={{ padding: "9px 12px", textAlign: "right", color: T.muted }}>{fmtMoney(l.sueldo_total)}</td>
-                      <td style={{ padding: "9px 12px", color: T.muted, fontVariantNumeric: "tabular-nums" }}>{l.cbu || "—"}</td>
+                      <td style={{ padding: "7px 8px", textAlign: "right", color: T.muted }}>{fmtMoney(l.blanco_neto)}</td>
+                      <td style={{ padding: "7px 8px", textAlign: "right", color: T.muted }}>{fmtMoney(l.sueldo_total)}</td>
+                      <td style={{ padding: "7px 8px", color: T.muted, fontVariantNumeric: "tabular-nums", ...ellipsisStyle(110) }} title={l.cbu || ""}>{l.cbu || "—"}</td>
                     </>
                   )}
-                  <td style={{ padding: "9px 12px", whiteSpace: "nowrap" }}>
+                  <td style={{ padding: "7px 8px", whiteSpace: "nowrap" }}>
                     <button
                       onClick={() => handleEditar(l)}
                       style={{
