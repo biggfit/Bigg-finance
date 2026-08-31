@@ -153,6 +153,30 @@ export default function PantallaNovedades({ pais = "" }) {
 
   const tabRows = rows.filter(r => r.concepto === tab);
 
+  // Arrastrar y soltar para reordenar filas dentro de la solapa (útil para ubicar una fila recién agregada).
+  const dragIdRef = useRef(null);
+  const handleDragStart = (rid) => (e) => { dragIdRef.current = rid; e.dataTransfer.effectAllowed = "move"; };
+  const handleDragOver = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; };
+  const handleDrop = (targetRid) => (e) => {
+    e.preventDefault();
+    const draggedRid = dragIdRef.current;
+    dragIdRef.current = null;
+    if (!draggedRid || draggedRid === targetRid) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const antesDelTarget = e.clientY < rect.top + rect.height / 2;
+    setRows(prev => {
+      const arr = [...prev];
+      const fromIdx = arr.findIndex(r => r._id === draggedRid);
+      if (fromIdx === -1) return prev;
+      const [item] = arr.splice(fromIdx, 1);
+      let toIdx = arr.findIndex(r => r._id === targetRid);
+      if (toIdx === -1) return prev;
+      arr.splice(antesDelTarget ? toIdx : toIdx + 1, 0, item);
+      return arr;
+    });
+    setDirty(true);
+  };
+
   const setRow = (rid, patch) => {
     setRows(prev => prev.map(r => r._id === rid ? { ...r, ...patch } : r));
     setDirty(true);
@@ -342,6 +366,7 @@ export default function PantallaNovedades({ pais = "" }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: T.bg }}>
+                <th style={{ ...thStyle, width: 24 }}></th>
                 <th style={thStyle}>Legajo</th>
                 <th style={{ ...thStyle, width: 120, textAlign: "right" }}>Mes anterior</th>
                 <th style={{ ...thStyle, width: 130 }}>Monto $</th>
@@ -355,7 +380,7 @@ export default function PantallaNovedades({ pais = "" }) {
             </thead>
             <tbody>
               {tabRows.length === 0 && (
-                <tr><td colSpan={esOtros ? 9 : 8} style={{ padding: "14px 10px", color: T.dim, fontSize: 13 }}>
+                <tr><td colSpan={esOtros ? 10 : 9} style={{ padding: "14px 10px", color: T.dim, fontSize: 13 }}>
                   Sin novedades en esta solapa. Agregá una fila abajo.
                 </td></tr>
               )}
@@ -366,7 +391,10 @@ export default function PantallaNovedades({ pais = "" }) {
                 const isChecked = checked.has(rid);
                 return (
                 <tr key={r._id} style={{ borderBottom: `1px solid ${T.border}`,
-                  background: isChecked ? "#bbf7d0" : undefined }}>
+                  background: isChecked ? "#bbf7d0" : undefined }}
+                  onDragOver={handleDragOver} onDrop={handleDrop(r._id)}>
+                  <td style={{ padding: "6px 4px", textAlign: "center", cursor: "grab", color: T.dim }}
+                    draggable onDragStart={handleDragStart(r._id)} title="Arrastrar para reordenar">⠿</td>
                   <td style={{ padding: "6px 10px" }}>
                     <select style={iStyle} value={r.legajo_id} onChange={e => setLegajo(r._id, e.target.value)}>
                       <option value="">— Elegir legajo —</option>
@@ -416,7 +444,7 @@ export default function PantallaNovedades({ pais = "" }) {
             </tbody>
             <tfoot>
               <tr style={{ background: T.bg, fontWeight: 700 }}>
-                <td colSpan={2} style={{ padding: "8px 10px" }}>Total</td>
+                <td colSpan={3} style={{ padding: "8px 10px" }}>Total</td>
                 <td style={{ padding: "8px 10px", textAlign: "right" }}>{fmt(totalTab)}</td>
                 <td style={{ padding: "8px 10px", textAlign: "right", color: diffCol(totalDiff) }}>{fmtDiff(totalDiff)}</td>
                 <td colSpan={esOtros ? 5 : 4}></td>

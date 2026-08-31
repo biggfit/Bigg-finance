@@ -130,6 +130,30 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
     else setMes(m => m + 1);
   };
 
+  // Arrastrar y soltar para reordenar filas (solo con orden natural: un sort por columna activo lo pisaría al instante).
+  const dragIdRef = useRef(null);
+  const handleDragStart = (rid) => (e) => { dragIdRef.current = rid; e.dataTransfer.effectAllowed = "move"; };
+  const handleDragOver = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; };
+  const handleDrop = (targetRid) => (e) => {
+    e.preventDefault();
+    const draggedRid = dragIdRef.current;
+    dragIdRef.current = null;
+    if (!draggedRid || draggedRid === targetRid) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const antesDelTarget = e.clientY < rect.top + rect.height / 2;
+    setRows(prev => {
+      const arr = [...prev];
+      const fromIdx = arr.findIndex(r => r._id === draggedRid);
+      if (fromIdx === -1) return prev;
+      const [item] = arr.splice(fromIdx, 1);
+      let toIdx = arr.findIndex(r => r._id === targetRid);
+      if (toIdx === -1) return prev;
+      arr.splice(antesDelTarget ? toIdx : toIdx + 1, 0, item);
+      return arr;
+    });
+    setDirty(true);
+  };
+
   const setRow = (rid, patch) => {
     setRows(prev => prev.map(r => r._id === rid ? { ...r, ...patch } : r));
     setDirty(true);
@@ -288,6 +312,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: T.bg }}>
+                <th style={{ ...thStyle, width: 24 }}></th>
                 {[
                   { h: "Legajo", k: "legajo", w: null }, { h: "Sede", k: "sede", w: 170 },
                   { h: "Monto $", k: "monto", w: 120 }, { h: "Forma de pago", k: "forma_pago", w: 150 },
@@ -304,16 +329,23 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
             </thead>
             <tbody>
               {rows.length === 0 && (
-                <tr><td colSpan={8} style={{ padding: "14px 10px", color: T.dim, fontSize: 13 }}>
+                <tr><td colSpan={9} style={{ padding: "14px 10px", color: T.dim, fontSize: 13 }}>
                   Sin novedades de Sedes este mes. Agregá una fila abajo.
                 </td></tr>
               )}
               {vista.map(r => {
                 const rid = r.id ?? r._id;
                 const isChecked = checked.has(rid);
+                const ordenNatural = sortKey === null;
                 return (
                 <tr key={r._id} style={{ borderBottom: `1px solid ${T.border}`,
-                  background: isChecked ? "#bbf7d0" : undefined }}>
+                  background: isChecked ? "#bbf7d0" : undefined }}
+                  onDragOver={ordenNatural ? handleDragOver : undefined}
+                  onDrop={ordenNatural ? handleDrop(r._id) : undefined}>
+                  <td style={{ padding: "6px 4px", textAlign: "center", color: ordenNatural ? T.dim : "#cbd5e1",
+                    cursor: ordenNatural ? "grab" : "not-allowed" }}
+                    draggable={ordenNatural} onDragStart={ordenNatural ? handleDragStart(r._id) : undefined}
+                    title={ordenNatural ? "Arrastrar para reordenar" : "Quitá el orden por columna para reordenar a mano"}>⠿</td>
                   <td style={{ padding: "6px 10px" }}>
                     <select style={{ ...iStyle, ...(r.legajo_id ? {} : invStyle) }} value={r.legajo_id} onChange={e => setLegajo(r._id, e.target.value)}>
                       <option value="">— Elegir legajo —</option>
@@ -372,7 +404,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
             </tbody>
             <tfoot>
               <tr style={{ background: T.bg, fontWeight: 700 }}>
-                <td colSpan={2} style={{ padding: "8px 10px" }}>Total</td>
+                <td colSpan={3} style={{ padding: "8px 10px" }}>Total</td>
                 <td style={{ padding: "8px 10px", textAlign: "right" }}>
                   ${total.toLocaleString("es-AR")}
                 </td>
