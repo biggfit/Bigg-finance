@@ -315,6 +315,7 @@ export default function PantallaLegajos({ pais = "" }) {
                     color: T.muted, fontSize: 11, letterSpacing: ".04em",
                     borderBottom: `1px solid ${T.border}`, whiteSpace: "nowrap",
                     cursor: k ? "pointer" : "default", userSelect: "none",
+                    ...(k === "nombre" ? { position: "sticky", left: 0, zIndex: 2, background: T.bg } : {}),
                   }}>{h}{k && sortKey === k ? (sortDir === "asc" ? " ▲" : " ▼") : ""}</th>
                 ))}
               </tr>
@@ -325,9 +326,10 @@ export default function PantallaLegajos({ pais = "" }) {
                 const cbuVal = inlineVal(l, "cbu");
                 const cbuWarn = /^\d+$/.test(String(cbuVal).trim()) && String(cbuVal).trim().length !== 22
                   ? `CBU típico: 22 dígitos (tiene ${String(cbuVal).trim().length})` : null;
+                const rowBg = dirty ? "#fffbeb" : (i % 2 === 0 ? T.card : T.bg);
                 return (
-                <tr key={l.id} style={{ background: dirty ? "#fffbeb" : (i % 2 === 0 ? T.card : T.bg), opacity: l.activo ? 1 : 0.5 }}>
-                  <td style={{ padding: "9px 12px", fontWeight: 600 }}>{l.nombre}</td>
+                <tr key={l.id} style={{ background: rowBg, opacity: l.activo ? 1 : 0.5 }}>
+                  <td style={{ padding: "9px 12px", fontWeight: 600, position: "sticky", left: 0, zIndex: 1, background: rowBg }}>{l.nombre}</td>
                   <td style={{ padding: "9px 12px" }}>{rolChip(l.rol)}</td>
                   <td style={{ padding: "9px 12px" }}>{tipoChip(l.tipo_contratacion)}</td>
                   <td style={{ padding: "9px 12px", color: T.muted }}>{l.sociedad_nombre || l.sociedad_id || "—"}</td>
