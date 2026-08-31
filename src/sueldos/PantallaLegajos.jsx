@@ -4,6 +4,7 @@ import {
   ROLES_SEDES, ROLES_HQ, TIPOS_CONTRATACION, FP_TIPO_LABEL,
   fetchSociedadesNumbers, fetchCentrosCostoNumbers,
 } from "../lib/sueldosApi";
+import { useRowChecks } from "../lib/useRowChecks";
 
 const T = {
   bg:     "#f8fafc",
@@ -297,7 +298,7 @@ export default function PantallaLegajos({ pais = "" }) {
         <p style={{ color: T.muted, fontSize: 13 }}>No hay legajos con los filtros aplicados.</p>
       ) : (
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <table style={{ width: "100%", minWidth: 900, borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: T.bg }}>
                 {[
@@ -459,6 +460,7 @@ function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
   const fpUpd = (id, k, v) => set("formas_pago", lineas.map(l => l.id === id ? { ...l, [k]: v } : l));
   const fpDel = (id) => set("formas_pago", lineas.filter(l => l.id !== id));
   const fpSum = lineas.reduce((s, l) => s + (parseFloat(l.importe) || 0), 0);
+  const { checked: fpChecked, toggle: fpToggleCheck } = useRowChecks("formas_pago_check");
 
   // Centros de costo filtrados por la sociedad seleccionada
   const ccFiltrados = useMemo(() => {
@@ -702,7 +704,7 @@ function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 720 }}>
                 <thead>
                   <tr>
-                    {["Tipo", "Importe", "Titular", "CUIT", "Banco", "Tipo cta", "Cuenta", "CBU", "Nota interna", ""].map((h, i) => (
+                    {["Tipo", "Importe", "Titular", "CUIT", "Banco", "Tipo cta", "Cuenta", "CBU", "Nota interna", "", ""].map((h, i) => (
                       <th key={i} style={fpTh}>{h}</th>
                     ))}
                   </tr>
@@ -710,8 +712,9 @@ function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
                 <tbody>
                   {lineas.map(l => {
                     const esEfectivo = l.tipo === "efectivo";
+                    const isChecked = fpChecked.has(l.id);
                     return (
-                      <tr key={l.id}>
+                      <tr key={l.id} style={{ background: isChecked ? "#bbf7d0" : undefined }}>
                         <td style={{ ...fpTd, minWidth: 110 }}>
                           <select style={fpInput} value={l.tipo} onChange={e => fpUpd(l.id, "tipo", e.target.value)}>
                             {Object.entries(FP_TIPO_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
@@ -746,6 +749,15 @@ function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
                             background: "transparent", border: `1px solid #fca5a5`, borderRadius: 5,
                             padding: "3px 7px", cursor: "pointer", fontSize: 12, color: T.red, lineHeight: 1,
                           }}>🗑</button>
+                        </td>
+                        <td style={{ ...fpTd, width: 28, textAlign: "center" }}>
+                          <button onClick={() => fpToggleCheck(l.id)} title="Marcar como revisado (solo en esta máquina)"
+                            style={{
+                              width: 18, height: 18, borderRadius: 4, cursor: "pointer", padding: 0,
+                              border: `1px solid ${isChecked ? T.green : T.border}`,
+                              background: isChecked ? T.green : "transparent",
+                              color: "#fff", fontSize: 12, lineHeight: "16px",
+                            }}>{isChecked ? "✓" : ""}</button>
                         </td>
                       </tr>
                     );
