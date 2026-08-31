@@ -1185,7 +1185,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   return (
     <div style={{
       padding: 24, fontFamily: T.font, color: T.text, minHeight: "100vh", boxSizing: "border-box",
-      background: marcado ? "#e2e8f0" : "transparent",
+      background: marcado ? "#cbd5e1" : "transparent",
       borderTop: marcado ? "10px solid #334155" : "10px solid transparent",
       transition: "background .15s, border-color .15s",
     }}>
