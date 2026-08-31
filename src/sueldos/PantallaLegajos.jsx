@@ -754,8 +754,8 @@ function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
                           <button onClick={() => fpToggleCheck(l.id)} title="Marcar como revisado (solo en esta máquina)"
                             style={{
                               width: 18, height: 18, borderRadius: 4, cursor: "pointer", padding: 0,
-                              border: `1px solid ${isChecked ? T.green : T.border}`,
-                              background: isChecked ? T.green : "transparent",
+                              border: `1.5px solid ${isChecked ? T.green : "#94a3b8"}`,
+                              background: isChecked ? T.green : "rgba(148, 163, 184, 0.15)",
                               color: "#fff", fontSize: 12, lineHeight: "16px",
                             }}>{isChecked ? "✓" : ""}</button>
                         </td>
