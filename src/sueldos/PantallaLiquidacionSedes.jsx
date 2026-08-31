@@ -1185,8 +1185,8 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   return (
     <div style={{
       padding: 24, fontFamily: T.font, color: T.text, minHeight: "100vh", boxSizing: "border-box",
-      background: marcado ? "#bbf7d0" : "transparent",
-      borderTop: marcado ? "10px solid #15803d" : "10px solid transparent",
+      background: marcado ? "#e2e8f0" : "transparent",
+      borderTop: marcado ? "10px solid #334155" : "10px solid transparent",
       transition: "background .15s, border-color .15s",
     }}>
 
@@ -1205,8 +1205,8 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         <button onClick={toggleMarcado}
           title={marcado ? "Marcado por vos como mes cerrado — click para desmarcar (no afecta la liquidación real)" : "Marcar este mes como cerrado (tilde personal, no afecta la liquidación)"}
           style={{
-            background: marcado ? "#15803d" : "#fff", color: marcado ? "#fff" : T.muted,
-            border: `1px solid ${marcado ? "#15803d" : T.border}`, borderRadius: 7,
+            background: marcado ? "#334155" : "#fff", color: marcado ? "#fff" : T.muted,
+            border: `1px solid ${marcado ? "#334155" : T.border}`, borderRadius: 7,
             padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font,
           }}>
           {marcado ? "✅ Mes cerrado" : "☐ Marcar cerrado"}
