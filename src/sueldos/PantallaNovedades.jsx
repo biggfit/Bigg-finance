@@ -37,6 +37,28 @@ const CONCEPTOS = [
 
 const norm = (s) => String(s || "").trim().toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
 
+// Monotributistas a los que siempre hay que devolverles el monto del monotributo (pedido manual, no viene de una hoja).
+const IDS_MONOTRIBUTISTAS_FIJOS = [
+  "LEG-nako-0011", // Ana Leber
+  "LEG-nako-0026", // Facundo Martino
+  "LEG-nako-0006", // Federico Bosch
+  "LEG-nako-0016", // Federico Bracco
+  "LEG-nako-0017", // Florencia Silveyra
+  "LEG-nako-0003", // Francisco Bosch
+  "LEG-nako-0001", // Guillermo "Gigio" Mazzoni
+  "LEG-nako-0005", // Guido Mazzoni
+  "LEG-nako-0004", // Ignacio Alsogaray
+  "LEG-nako-0019", // Jennifer Schwimmer
+  "LEG-nako-0010", // Lucia Pini
+  "LEG-nako-0002", // Martin Bergara
+  "LEG-nako-0008", // Martin Miauro
+  "LEG-nako-0009", // Matias Soloaga
+  "LEG-nako-0012", // Santiago Paz
+  "LEG-nako-0021", // Sara Salviu
+  "LEG-nako-0015", // Tomas Mogaburu
+  "LEG-nako-0007", // Victoria "Vicky" Mendez Casariego
+];
+
 // A qué solapa pertenece una novedad: por su cuenta contable; si no matchea ninguna nombrada → "otros".
 function conceptoDeNovedad(nov) {
   const c = CONCEPTOS.find(x => x.cuenta && norm(x.cuenta) === norm(nov.cuenta_contable_nombre));
@@ -237,6 +259,18 @@ export default function PantallaNovedades({ pais = "" }) {
   const totalPrev = tabRows.reduce((s, r) => s + montoAnterior(r), 0);
   const totalDiff = totalTab - totalPrev;
   const esOtros = tab === "otros";
+  const esMonotributo = tab === "monotributo";
+
+  // Chequeo del piso fijo de monotributistas: alguno de sus renglones de Monotributo debe tener monto > 0.
+  const montoMonotributoPorLegajo = new Map();
+  for (const r of rows) {
+    if (r.concepto !== "monotributo") continue;
+    montoMonotributoPorLegajo.set(r.legajo_id, (montoMonotributoPorLegajo.get(r.legajo_id) || 0) + (parseFloat(r.monto) || 0));
+  }
+  const legajoNombre = (id) => legajos.find(l => l.id === id)?.nombre ?? id;
+  const monotributistasFaltantes = IDS_MONOTRIBUTISTAS_FIJOS
+    .filter(id => !(montoMonotributoPorLegajo.get(id) > 0))
+    .map(legajoNombre);
 
   return (
     <div style={{ padding: 24, fontFamily: T.font, color: T.text }}>
@@ -285,6 +319,20 @@ export default function PantallaNovedades({ pais = "" }) {
           );
         })}
       </div>
+
+      {esMonotributo && !loading && (
+        monotributistasFaltantes.length === 0 ? (
+          <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534",
+            borderRadius: 7, padding: "8px 12px", fontSize: 13, marginBottom: 14 }}>
+            ✅ Los {IDS_MONOTRIBUTISTAS_FIJOS.length} monotributistas fijos tienen monto cargado este mes.
+          </div>
+        ) : (
+          <div style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b",
+            borderRadius: 7, padding: "8px 12px", fontSize: 13, marginBottom: 14 }}>
+            ⚠️ Faltan cargar {monotributistasFaltantes.length} de {IDS_MONOTRIBUTISTAS_FIJOS.length} monotributistas fijos: {monotributistasFaltantes.join(", ")}.
+          </div>
+        )
+      )}
 
       {loading ? (
         <p style={{ color: T.muted, fontSize: 13 }}>Cargando…</p>
