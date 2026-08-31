@@ -284,6 +284,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
         <p style={{ color: T.muted, fontSize: 13 }}>Cargando…</p>
       ) : (
         <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, overflow: "hidden" }}>
+          <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: T.bg }}>
@@ -379,6 +380,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
               </tr>
             </tfoot>
           </table>
+          </div>
           <div style={{ padding: "8px 10px" }}>
             <button onClick={addRow}
               style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: T.blue, fontFamily: T.font, padding: 0 }}>
