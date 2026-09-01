@@ -1253,12 +1253,6 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
               {reabriendo ? "Reabriendo…" : `🔓 Reabrir ${idsLiqCerrados.length} cerradas`}
             </button>
           )}
-          <button onClick={() => setShowPagoHaberes(true)}
-            title="Pagar el blanco (haberes) de los legajos ya, sin esperar a cerrar la liquidación del mes"
-            style={{ background: "none", border: `1px solid ${T.green}`, borderRadius: 7, padding: "7px 14px",
-              fontSize: 13, fontWeight: 600, color: T.green, cursor: "pointer", fontFamily: T.font }}>
-            💳 Pagar Haberes
-          </button>
           <button onClick={handleGuardarBorrador} disabled={saving || !rows.length}
             style={{ ...BTN_PRIMARY(saving || !rows.length), padding: "7px 14px" }}>
             {saving ? "Guardando…" : "💾 Guardar borrador"}
@@ -1375,6 +1369,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
               onBatchPaid={() => refreshLiqs()}
               onReabrir={handleReabrir}
               reabriendo={reabriendo}
+              onPagarHaberes={() => setShowPagoHaberes(true)}
             />
           )}
         </>
@@ -2380,7 +2375,7 @@ function FondeoBand({ stats }) {
 
 // ── Componente PasoPagos ──────────────────────────────────────────────────────
 
-function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, onReabrir, reabriendo }) {
+function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, onReabrir, reabriendo, onPagarHaberes }) {
   const [batchModal,  setBatchModal]  = useState(null);
   const [anularModal, setAnularModal] = useState(null);
 
@@ -2414,6 +2409,15 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, on
 
   return (
     <div>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+        <button onClick={onPagarHaberes}
+          title="Pagar el blanco (haberes) de los legajos ya, sin esperar a cerrar la liquidación del mes"
+          style={{ background: "none", border: `1px solid ${T.green}`, borderRadius: 7, padding: "7px 14px",
+            fontSize: 13, fontWeight: 600, color: T.green, cursor: "pointer", fontFamily: T.font }}>
+          💳 Pagar Haberes anticipado
+        </button>
+      </div>
+
       {/* Totales y pendientes por forma de pago. */}
       <ResumenPagosBand stats={tipoStats} />
 
