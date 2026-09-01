@@ -22,8 +22,8 @@ const T = {
 const TODOS_LOS_ROLES = [...ROLES_SEDES, ...ROLES_HQ];
 
 const FORM_VACIO = {
-  nombre: "", cuil: "", email: "", cbu: "", numero_cuenta: "", banco: "",
-  cbu_sec: "", numero_cuenta_sec: "", banco_sec: "",
+  nombre: "", cuil: "", email: "", cbu: "", numero_cuenta: "", banco: "", tipo_cuenta: "",
+  cbu_sec: "", numero_cuenta_sec: "", banco_sec: "", tipo_cuenta_sec: "",
   bigg_eye_id: "", horas_contratadas: "",
   sociedad_id: "", sociedad_nombre: "", pais: "",
   sede_id: "", sede_nombre: "",
@@ -641,18 +641,22 @@ function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
         {/* Cuenta principal — una fila */}
         <div>
           <span style={{ fontSize: 11, fontWeight: 700, color: T.text, display: "block", marginBottom: 4 }}>Cuenta principal</span>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 0.7fr 1fr 1fr", gap: 16 }}>
             <div>
               <label style={labelStyle}>Banco</label>
               <input style={inputStyle} value={form.banco} onChange={e => set("banco", e.target.value)} placeholder="Ej: Galicia" />
             </div>
             <div>
-              <label style={labelStyle}>CBU</label>
-              <input style={inputStyle} value={form.cbu} onChange={e => set("cbu", e.target.value)} />
+              <label style={labelStyle}>Tipo de cuenta</label>
+              <input style={inputStyle} value={form.tipo_cuenta} onChange={e => set("tipo_cuenta", e.target.value)} placeholder="Ej: CA / Cta Cte $" />
             </div>
             <div>
               <label style={labelStyle}>Número de cuenta</label>
               <input style={inputStyle} value={form.numero_cuenta} onChange={e => set("numero_cuenta", e.target.value)} placeholder="Ej: 003-123456/7" />
+            </div>
+            <div>
+              <label style={labelStyle}>CBU</label>
+              <input style={inputStyle} value={form.cbu} onChange={e => set("cbu", e.target.value)} />
             </div>
           </div>
         </div>
@@ -662,18 +666,22 @@ function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
           <span style={{ fontSize: 11, fontWeight: 700, color: T.muted, display: "block", marginBottom: 4 }}>
             Cuenta secundaria <span style={{ fontWeight: 400, color: T.dim }}>(opcional)</span>
           </span>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 0.7fr 1fr 1fr", gap: 16 }}>
             <div>
               <label style={labelStyle}>Banco</label>
               <input style={inputStyle} value={form.banco_sec} onChange={e => set("banco_sec", e.target.value)} placeholder="Ej: Santander" />
             </div>
             <div>
-              <label style={labelStyle}>CBU</label>
-              <input style={inputStyle} value={form.cbu_sec} onChange={e => set("cbu_sec", e.target.value)} />
+              <label style={labelStyle}>Tipo de cuenta</label>
+              <input style={inputStyle} value={form.tipo_cuenta_sec} onChange={e => set("tipo_cuenta_sec", e.target.value)} placeholder="Ej: CA / Cta Cte $" />
             </div>
             <div>
               <label style={labelStyle}>Número de cuenta</label>
               <input style={inputStyle} value={form.numero_cuenta_sec} onChange={e => set("numero_cuenta_sec", e.target.value)} placeholder="Ej: 003-123456/7" />
+            </div>
+            <div>
+              <label style={labelStyle}>CBU</label>
+              <input style={inputStyle} value={form.cbu_sec} onChange={e => set("cbu_sec", e.target.value)} />
             </div>
           </div>
         </div>
