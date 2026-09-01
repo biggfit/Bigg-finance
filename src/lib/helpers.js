@@ -291,29 +291,37 @@ export function buildCuentaCorriente(frId, comps, saldoInicial, frCurrency = nul
 
 /**
  * Calcula cuánto falta facturar de pagos a cuenta (PAGO_PAUTA).
- * Matching por importe exacto: cada PAGO_PAUTA necesita una FACTURA|PAUTA del mismo monto.
- * Una FACTURA|PAUTA de distinto importe (ej. emitida contra saldo acumulado) no cancela el pago.
+ * Compara lo cobrado contra lo facturado de pauta en una ventana de dos meses —el del pago y el
+ * anterior, consumiendo primero el anterior—, no factura contra pago. Exigir importes iguales
+ * dejaba pendiente una pauta bien facturada (la factura puede cubrir el cobro MÁS el saldo a favor
+ * de la sede); exigir el mismo mes rompía las sedes que facturan la pauta por adelantado, que
+ * fechan la factura un mes antes del período que dice el concepto. Se netean las NC|PAUTA porque
+ * anulan facturación del mes. Mismo criterio que el panel de Pendientes.
  */
 export function computePautaPendiente(frId, comps, upToYear, upToMonth, frCurrency = null, filterCurrency = null, empresa = null) {
   const key = String(frId);
-  const all = comps[key] ?? [];
   const matchCur = c => filterCurrency === null || compCurrency(c) === filterCurrency;
   const matchEmp = c => empresa === null || compEmpresa(c) === empresa;
+  const all = (comps[key] ?? []).filter(c => upToPeriod(c, upToYear, upToMonth) && matchCur(c) && matchEmp(c));
+  const idxMes = c => c.year * 12 + c.month;
 
-  const pagos = all
-    .filter(c => c.type === "PAGO_PAUTA" && upToPeriod(c, upToYear, upToMonth) && matchCur(c) && matchEmp(c))
-    .sort((a, b) => cmpDate(a.date, b.date));
-
-  const factsPool = all
-    .filter(c => c.type === makeType("FACTURA", "PAUTA") && upToPeriod(c, upToYear, upToMonth) && matchCur(c) && matchEmp(c))
-    .map(c => ({ ...c, _used: false }));
+  const facturado = {};
+  for (const c of all) {
+    if (c.type === makeType("FACTURA", "PAUTA")) facturado[idxMes(c)] = (facturado[idxMes(c)] ?? 0) + (c.amount ?? 0);
+    else if (c.type === makeType("NC", "PAUTA"))  facturado[idxMes(c)] = (facturado[idxMes(c)] ?? 0) - (c.amount ?? 0);
+  }
 
   let total = 0;
-  for (const pago of pagos) {
+  for (const pago of all.filter(c => c.type === "PAGO_PAUTA").sort((a, b) => cmpDate(a.date, b.date))) {
     if (pago.invoice) continue; // vinculado manualmente a un comprobante ya existente
-    const match = factsPool.find(f => !f._used && Math.round(Math.abs(f.amount - pago.amount) * 100) <= 1);
-    if (match) { match._used = true; }
-    else { total += pago.amount; }
+    let resta = pago.amount ?? 0;
+    for (let atras = 1; atras >= 0 && resta > 0.01; atras--) {
+      const k = idxMes(pago) - atras;
+      const usa = Math.min(Math.max(facturado[k] ?? 0, 0), resta);
+      facturado[k] = (facturado[k] ?? 0) - usa;
+      resta -= usa;
+    }
+    if (resta > 0.01) total += resta;
   }
   return total;
 }

@@ -2228,7 +2228,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
     <>
     <div className="fade">
       {/* Pendientes */}
-      <PendientesPanel onEmitir={handleEmitirDesde} onEmitirAfip={handleEmitirAfip} onEmitirPago={handleEmitirPago} onFetchAfipNumero={handleFetchAfipNumero} onAddComp={addCompWithEmpresa} franchisor={franchisor} />
+      <PendientesPanel onEmitir={handleEmitirDesde} onEmitirAfip={handleEmitirAfip} onEmitirPago={handleEmitirPago} onFetchAfipNumero={handleFetchAfipNumero} franchisor={franchisor} month={month} year={year} />
 
       {/* Selector de modo */}
       {mode === EMIT_MODE.SELECT ? (
