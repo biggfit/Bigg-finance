@@ -24,5 +24,15 @@ export function useRowChecks(storageKey) {
     });
   }, [storageKey]);
 
-  return { checked, toggle };
+  // Marca/desmarca de una todos los ids dados (ej: "tildar todas las filas visibles").
+  const setMany = useCallback((ids, value) => {
+    setChecked(prev => {
+      const next = new Set(prev);
+      for (const id of ids) { if (value) next.add(id); else next.delete(id); }
+      try { localStorage.setItem(storageKey, JSON.stringify([...next])); } catch { /* localStorage no disponible */ }
+      return next;
+    });
+  }, [storageKey]);
+
+  return { checked, toggle, setMany };
 }

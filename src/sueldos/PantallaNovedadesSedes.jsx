@@ -90,7 +90,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState("asc");
   const savingRef = useRef(false);
-  const { checked, toggle: toggleCheck } = useRowChecks(`novedades_check_sedes_${anio}_${mes}`);
+  const { checked, toggle: toggleCheck, setMany: setManyChecked } = useRowChecks(`novedades_check_sedes_${anio}_${mes}`);
   const toggleSort = (k) => {
     if (sortKey === k) setSortDir(d => (d === "asc" ? "desc" : "asc"));
     else { setSortKey(k); setSortDir("asc"); }
@@ -271,6 +271,9 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
     });
   }, [rows, sortKey, sortDir, nombreMaps]);
 
+  const idsConDatos = rows.filter(r => r.legajo_id && r.sede_id).map(r => r.id ?? r._id);
+  const todosMarcados = idsConDatos.length > 0 && idsConDatos.every(id => checked.has(id));
+
   return (
     <div style={{ padding: 24, fontFamily: T.font, color: T.text }}>
 
@@ -324,7 +327,12 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
                   </th>
                 ))}
                 <th style={{ ...thStyle, width: 40 }}></th>
-                <th style={{ ...thStyle, width: 40 }}></th>
+                <th style={{ ...thStyle, width: 40, textAlign: "center" }}>
+                  <input type="checkbox" checked={todosMarcados}
+                    onChange={() => setManyChecked(idsConDatos, !todosMarcados)}
+                    title="Marcar/desmarcar todas como revisadas"
+                    style={{ cursor: "pointer", accentColor: T.green }} />
+                </th>
               </tr>
             </thead>
             <tbody>
