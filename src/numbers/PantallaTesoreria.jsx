@@ -14,6 +14,9 @@ import {
 import { fetchLiquidacionesCerradas } from "../lib/sueldosApi";
 import { fetchAll } from "../lib/sheetsApi";        // Franquicias (read-only)
 import { derivarSaldos, sociedadNombreMap } from "./tesoreriaDerive";  // saldos + activo/pasivo (compartido con Reportes)
+import CierrePanel from "../components/CierrePanel";
+import { useCierres } from "./useCierres";
+import { useCierreGuard } from "./CierreGuard";
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 // Tesorería muestra montos SIN decimales (pesos enteros). Local: no toca fmtSaldo global (pdf.js).
@@ -1436,6 +1439,10 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
   const [editTransfer,     setEditTransfer]     = useState(null);  // { salidaId, entradaId, initial }
   const [editTarjeta,      setEditTarjeta]      = useState(null);  // { realId, tarjetaId, initial }
   const [editingMov,       setEditingMov]       = useState(null);
+  // Candado de período cerrado: avisa (no bloquea) al editar/borrar/ignorar un movimiento
+  // de un mes ya cerrado en Conciliación. "Confirmar igualmente" deja pasar la excepción.
+  const { isCerrado, cerrar, reabrir } = useCierres(sociedad);
+  const { guardSave, CierreModal }     = useCierreGuard(isCerrado);
   const [filtroCuenta,     setFiltroCuenta]     = useState(null);
   const [filtroRef,        setFiltroRef]        = useState(null);   // "ir al movimiento" desde el extracto interco
   const [cuentasBancarias, setCuentasBancarias] = useState([]);
@@ -1642,6 +1649,7 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
   // ── Editar movimiento manual (solo campos básicos, para TRANSFERENCIA) ───────
   const handleEditarMovManual = async (form) => {
     if (!editingMov) return;
+    if (!(await guardSave(editingMov.fecha))) return;
     try {
       const monto = Math.abs(Number(form.monto));
       await updateMovTesoreria(editingMov.id, {
@@ -1671,6 +1679,7 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
       : [mov];
     const extra = patas.length > 1 ? ` y su contrapartida (${patas.length} movimientos)` : "";
     if (!confirm(`¿Eliminar movimiento "${mov.concepto ?? mov.id}"${extra}?`)) return;
+    if (!(await guardSave(mov.fecha))) return;
     try {
       await Promise.all(patas.map(m => deleteMovTesoreria(m.id)));
       const ids = new Set(patas.map(m => m.id));
@@ -1685,6 +1694,7 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
   // → soft-mark documento_id="IGN-", sale del ledger pero sobrevive el dedup. Reversible en Conciliación.
   const handleIgnorarMov = async (mov) => {
     if (!confirm(`¿Ignorar "${mov.concepto ?? mov.id}" (${fmtSaldo(Number(mov.monto) || 0, mov.moneda)})?\nSale del listado pero no se borra; podés restaurarla desde Conciliación.`)) return;
+    if (!(await guardSave(mov.fecha))) return;
     try {
       await ignorarMovimiento(mov);
       setMovimientos(prev => prev.map(m => m.id === mov.id ? { ...m, documento_id: "IGN-" + mov.id } : m));
@@ -1787,6 +1797,14 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
             </button>
           )}
         </div>
+      </div>
+
+      {CierreModal}
+      <div style={{
+        marginBottom: 22, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
+        overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,.04)",
+      }}>
+        <CierrePanel sociedad={sociedad} isCerrado={isCerrado} cerrar={cerrar} reabrir={reabrir} />
       </div>
 
       {/* Barra de filtros — tarjeta como toolbar de Reportes */}
