@@ -3,6 +3,8 @@ import { toISO, num } from "./galicia";
 
 // Extracto BBVA Colombia (Tigre Loco, COP). Cabecera real del banco:
 //   FECHA VALOR, CONCEPTO, IMPORTE (COP), SALDO (COP)
+// …con el sufijo de moneda opcional: hay export del mismo banco que titula la última columna
+// simplemente "Saldo" (ver normH).
 // El archivo de trabajo puede traer una hoja por mes (ej. JUN26/JUL26/AGO26) y columnas
 // propias de seguimiento a la derecha (ej. ROSALES/PQ 93 = split manual de sede) → se
 // ignoran, solo se toman las 4 columnas del banco. Todas las hojas con ese formato se
@@ -12,11 +14,18 @@ import { toISO, num } from "./galicia";
 // de Galicia). Fecha DD-MM-AAAA (Colombia = día primero, como Caixa).
 // Identidad de dedup = SALDO (COP), igual criterio que Galicia/Caixa (ver ingestarExtracto).
 
-const BBVA_REQ = ["FECHA VALOR", "CONCEPTO", "IMPORTE (COP)", "SALDO (COP)"];
+// El sufijo de moneda entre paréntesis es OPCIONAL: el mismo banco/cuenta exporta a veces
+// "IMPORTE (COP)" / "SALDO (COP)" y a veces solo "Importe" / "Saldo". Comparar contra el nombre
+// con sufijo hacía que el archivo no se reconociera y la carga se rechazara entera, aunque las
+// 4 columnas estuvieran ahí. Por eso el header se normaliza sin el paréntesis final.
+const BBVA_REQ = ["FECHA VALOR", "CONCEPTO", "IMPORTE", "SALDO"];
+
+// trim + mayúsculas + espacios colapsados + sin sufijo "(COP)"/"(USD)"/… al final.
+const normH = (c) => String(c).trim().toUpperCase().replace(/\s+/g, " ").replace(/\s*\([^)]*\)$/, "");
 
 function findHeaderIdx(rows) {
   for (let i = 0; i < Math.min(rows.length, 15); i++) {
-    const h = (rows[i] || []).map(c => String(c).trim().toUpperCase());
+    const h = (rows[i] || []).map(normH);
     if (BBVA_REQ.every(col => h.includes(col))) return i;
   }
   return -1;
@@ -38,9 +47,9 @@ export function parseBBVA(file) {
           const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: "" });
           const hi = findHeaderIdx(rows);
           if (hi < 0) continue;
-          const H = rows[hi].map(c => String(c).trim().toUpperCase());
+          const H = rows[hi].map(normH);
           const col = (n) => H.indexOf(n);
-          const ci = { fecha: col("FECHA VALOR"), concepto: col("CONCEPTO"), importe: col("IMPORTE (COP)"), saldo: col("SALDO (COP)") };
+          const ci = { fecha: col("FECHA VALOR"), concepto: col("CONCEPTO"), importe: col("IMPORTE"), saldo: col("SALDO") };
 
           rows.slice(hi + 1)
             .filter(r => String(r[ci.fecha] ?? "").trim() !== "" && /\d/.test(String(r[ci.importe] ?? "")))
