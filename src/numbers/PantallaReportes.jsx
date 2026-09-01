@@ -1767,7 +1767,7 @@ const addVals = (a, b) => ({ ARS: a.ARS + b.ARS, USD: a.USD + b.USD, EUR: a.EUR 
 const subVals = (a, b) => ({ ARS: a.ARS - b.ARS, USD: a.USD - b.USD, EUR: a.EUR - b.EUR });
 const ZERO    = { ARS: 0, USD: 0, EUR: 0 };
 
-const SALARY_BUCKET_LABEL = { haberes: "Haberes", deposito: "Depósito", monotributo: "Monotributo", efectivo: "Efectivo" };
+const SALARY_BUCKET_LABEL = { haberes: "Haberes", deposito: "Depósito", monotributo: "Trf. monotributo", efectivo: "Efectivo" };
 
 // CxC / CxP del Balance = saldo PENDIENTE por comprobante. Los comprobantes NO tienen campo `estado`
 // (el estado de pago se deriva); por eso NO se filtra por r.estado (que era siempre undefined → sumaba

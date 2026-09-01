@@ -31,7 +31,7 @@ const ROL_LABEL = {
 const FP_LABEL = {
   haberes: "Haberes", deposito: "Depósito",
   transferencia_financiera: "Transferencia financiera",
-  monotributo: "Monotributo", efectivo: "Efectivo",
+  monotributo: "Trf. monotributo", efectivo: "Efectivo",
 };
 
 // Orden de las formas en el listado de pagos (haberes siempre primero).

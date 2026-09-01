@@ -132,7 +132,7 @@ export const FP_TIPO_LABEL = {
   haberes: "Haberes",
   deposito: "Depósito",
   transferencia_financiera: "Trf. financiera",
-  monotributo: "Monotributo",
+  monotributo: "Trf. monotributo",
   efectivo: "Efectivo",
 };
 export const FP_TIPO_COLOR = {

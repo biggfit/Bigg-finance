@@ -1527,7 +1527,7 @@ function exportarTransferenciaFinanciera(liqs, mes, anio) {
 // (Monotributo/Obra Social/Otros Gastos/Viáticos) y marca Estado (PAGADO/PARCIAL/PENDIENTE).
 const MONO_EF_HEADERS = ["Legajo", "Forma", "Estado", "Titular", "Importe", "Pagado", "Pendiente", "CBU", "CUIT", "Incluye"];
 function exportarMonotributoEfectivo(liqs, mes, anio) {
-  const FORMAS = [["efectivo", "Efectivo"], ["monotributo", "Monotributo"]];
+  const FORMAS = [["efectivo", "Efectivo"], ["monotributo", "Trf. monotributo"]];
   const filas = [];
   for (const liq of liqs) {
     for (const [tipo, label] of FORMAS) {

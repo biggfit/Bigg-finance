@@ -2246,7 +2246,7 @@ function exportarEfectivoSedes(empls, mes, anio) {
   for (const e of empls) {
     const sede = (e.sedes || []).join(", ");
     // "transferencia" persiste el monotributo en Sedes; el tipo_componente del pago es "monotributo".
-    for (const [tipo, label] of [["efectivo", "Efectivo"], ["monotributo", "Monotributo"]]) {
+    for (const [tipo, label] of [["efectivo", "Efectivo"], ["monotributo", "Trf. monotributo"]]) {
       const total = Math.round(getMontoTipo(e, tipo) || 0);
       if (total <= 0) continue;
       const pagado = abs(getPagosTipo(e, tipo));
