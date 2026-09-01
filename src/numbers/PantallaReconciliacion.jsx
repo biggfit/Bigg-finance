@@ -1095,7 +1095,12 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     } else {
       const ed = edits[mov.id] || {};
       const meta = parseMeta(mov.referencia);
-      const tipo = meta.tipo || (Number(mov.monto) > 0 ? "ingreso" : "");
+      // "Volver a normal (no es transferencia)" pisa el modo en la UI, pero `meta.tipo` sigue viniendo
+      // del `referencia` grabado en la ingesta (ej. MP trae transferencias con tipo=transferencia_interna
+      // baked-in) → sin este override se reenviaba igual y el guard de aceptarMovimiento lo rechazaba
+      // siempre por falta de cuenta_destino, sin importar qué eligiera el usuario acá.
+      const tipoMeta = ed.noTransfer ? "" : meta.tipo;
+      const tipo = tipoMeta || (Number(mov.monto) > 0 ? "ingreso" : "");
       // Resolver el NOMBRE del proveedor de la regla (ej. impuesto→AFIP, comisión Galicia→Banco Galicia)
       // para que quede como contraparte (y no la glosa del banco).
       const provId  = ed.proveedor_id || meta.prov || "";
