@@ -86,6 +86,8 @@ export default function PantallaCategorias({ pais = "" }) {
     try { localStorage.setItem("sedesCategoriasRevisadas", JSON.stringify(next)); } catch { /* storage lleno o no disponible */ }
     return next;
   });
+  const conConcepto = tarifas.filter(r => r.concepto);
+  const todasRevisadas = conConcepto.length > 0 && conConcepto.every(r => isRevisada(r.concepto));
 
   const load = useCallback(async (m, a, p) => {
     if (!p) return;
@@ -224,20 +226,9 @@ export default function PantallaCategorias({ pais = "" }) {
       ) : (
         <>
           {/* ── Tarifas ── */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 24, marginBottom: 10 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: T.muted, letterSpacing: ".08em", textTransform: "uppercase" }}>
-              Tarifas
-            </div>
-            <div style={{ display: "flex", gap: 10 }}>
-              <button onClick={() => marcarLoteRevisadas(true)}
-                style={{ background: "none", border: "none", cursor: "pointer", color: T.green, fontSize: 11, textDecoration: "underline", fontFamily: T.font, padding: 0 }}>
-                ✓ Marcar todas revisadas
-              </button>
-              <button onClick={() => marcarLoteRevisadas(false)}
-                style={{ background: "none", border: "none", cursor: "pointer", color: T.dim, fontSize: 11, textDecoration: "underline", fontFamily: T.font, padding: 0 }}>
-                Desmarcar todas
-              </button>
-            </div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: T.muted, letterSpacing: ".08em",
+            textTransform: "uppercase", marginBottom: 10, marginTop: 24 }}>
+            Tarifas
           </div>
           <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, overflow: "hidden" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -258,7 +249,12 @@ export default function PantallaCategorias({ pais = "" }) {
                     </div>
                   </th>
                   <th style={{ ...thStyle, width: 140, textAlign: "right" }}>Valor $</th>
-                  <th style={{ ...thStyle, width: 36, textAlign: "center" }} title="Revisado">✓</th>
+                  <th style={{ ...thStyle, width: 36, textAlign: "center" }}>
+                    <input type="checkbox" checked={todasRevisadas}
+                      onChange={() => marcarLoteRevisadas(!todasRevisadas)}
+                      title="Marcar/desmarcar todas como revisadas"
+                      style={{ cursor: "pointer", accentColor: T.green }} />
+                  </th>
                   <th style={{ ...thStyle, width: 40 }}></th>
                 </tr>
               </thead>

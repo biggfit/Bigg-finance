@@ -66,6 +66,8 @@ export default function PantallaObjetivos({ pais = "" }) {
     try { localStorage.setItem("sedesObjetivosRevisadas", JSON.stringify(next)); } catch { /* storage lleno o no disponible */ }
     return next;
   });
+  const conSede = objetivos.filter(r => r.sede_id || r.sede_nombre);
+  const todasRevisadas = conSede.length > 0 && conSede.every(r => isRevisada(r));
 
   const load = useCallback(async (m, a, p) => {
     if (!p) return;
@@ -184,24 +186,18 @@ export default function PantallaObjetivos({ pais = "" }) {
       {loading ? (
         <p style={{ color: T.muted, fontSize: 13 }}>Cargando…</p>
       ) : (
-        <>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 10 }}>
-            <button onClick={() => marcarLoteRevisadas(true)}
-              style={{ background: "none", border: "none", cursor: "pointer", color: "#16a34a", fontSize: 11, textDecoration: "underline", fontFamily: T.font, padding: 0 }}>
-              ✓ Marcar todas revisadas
-            </button>
-            <button onClick={() => marcarLoteRevisadas(false)}
-              style={{ background: "none", border: "none", cursor: "pointer", color: T.dim, fontSize: 11, textDecoration: "underline", fontFamily: T.font, padding: 0 }}>
-              Desmarcar todas
-            </button>
-          </div>
-          <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, overflow: "hidden" }}>
+        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, overflow: "hidden" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: T.bg }}>
                 <th style={thStyle}>Sede</th>
                 <th style={{ ...thStyle, width: 140 }}>% Staff</th>
-                <th style={{ ...thStyle, width: 36, textAlign: "center" }} title="Revisado">✓</th>
+                <th style={{ ...thStyle, width: 36, textAlign: "center" }}>
+                  <input type="checkbox" checked={todasRevisadas}
+                    onChange={() => marcarLoteRevisadas(!todasRevisadas)}
+                    title="Marcar/desmarcar todas como revisadas"
+                    style={{ cursor: "pointer", accentColor: "#16a34a" }} />
+                </th>
                 <th style={{ ...thStyle, width: 40 }}></th>
               </tr>
             </thead>
@@ -263,8 +259,7 @@ export default function PantallaObjetivos({ pais = "" }) {
               + Agregar sede
             </button>
           </div>
-          </div>
-        </>
+        </div>
       )}
     </div>
   );
