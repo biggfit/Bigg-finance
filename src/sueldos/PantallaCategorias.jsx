@@ -76,6 +76,16 @@ export default function PantallaCategorias({ pais = "" }) {
     try { localStorage.setItem("sedesCategoriasRevisadas", JSON.stringify(next)); } catch { /* storage lleno o no disponible */ }
     return next;
   });
+  const marcarLoteRevisadas = (marcar) => setRevisadas(prev => {
+    const next = { ...prev };
+    for (const r of tarifas) {
+      if (!r.concepto) continue;
+      if (marcar) next[revisadaKey(r.concepto)] = true;
+      else delete next[revisadaKey(r.concepto)];
+    }
+    try { localStorage.setItem("sedesCategoriasRevisadas", JSON.stringify(next)); } catch { /* storage lleno o no disponible */ }
+    return next;
+  });
 
   const load = useCallback(async (m, a, p) => {
     if (!p) return;
@@ -175,13 +185,6 @@ export default function PantallaCategorias({ pais = "" }) {
     fontFamily: T.font,
   });
 
-  const sectionTitle = (title) => (
-    <div style={{ fontSize: 11, fontWeight: 700, color: T.muted, letterSpacing: ".08em",
-      textTransform: "uppercase", marginBottom: 10, marginTop: 24 }}>
-      {title}
-    </div>
-  );
-
   const thStyle = { padding: "7px 10px", textAlign: "left", fontWeight: 600,
     color: T.muted, fontSize: 11, letterSpacing: ".04em",
     borderBottom: `1px solid ${T.border}` };
@@ -221,7 +224,21 @@ export default function PantallaCategorias({ pais = "" }) {
       ) : (
         <>
           {/* ── Tarifas ── */}
-          {sectionTitle("Tarifas")}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 24, marginBottom: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: T.muted, letterSpacing: ".08em", textTransform: "uppercase" }}>
+              Tarifas
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button onClick={() => marcarLoteRevisadas(true)}
+                style={{ background: "none", border: "none", cursor: "pointer", color: T.green, fontSize: 11, textDecoration: "underline", fontFamily: T.font, padding: 0 }}>
+                ✓ Marcar todas revisadas
+              </button>
+              <button onClick={() => marcarLoteRevisadas(false)}
+                style={{ background: "none", border: "none", cursor: "pointer", color: T.dim, fontSize: 11, textDecoration: "underline", fontFamily: T.font, padding: 0 }}>
+                Desmarcar todas
+              </button>
+            </div>
+          </div>
           <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, overflow: "hidden" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>

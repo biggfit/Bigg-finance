@@ -56,6 +56,16 @@ export default function PantallaObjetivos({ pais = "" }) {
     try { localStorage.setItem("sedesObjetivosRevisadas", JSON.stringify(next)); } catch { /* storage lleno o no disponible */ }
     return next;
   });
+  const marcarLoteRevisadas = (marcar) => setRevisadas(prev => {
+    const next = { ...prev };
+    for (const r of objetivos) {
+      if (!r.sede_id && !r.sede_nombre) continue;
+      if (marcar) next[revisadaKey(r)] = true;
+      else delete next[revisadaKey(r)];
+    }
+    try { localStorage.setItem("sedesObjetivosRevisadas", JSON.stringify(next)); } catch { /* storage lleno o no disponible */ }
+    return next;
+  });
 
   const load = useCallback(async (m, a, p) => {
     if (!p) return;
@@ -174,7 +184,18 @@ export default function PantallaObjetivos({ pais = "" }) {
       {loading ? (
         <p style={{ color: T.muted, fontSize: 13 }}>Cargando…</p>
       ) : (
-        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, overflow: "hidden" }}>
+        <>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 10 }}>
+            <button onClick={() => marcarLoteRevisadas(true)}
+              style={{ background: "none", border: "none", cursor: "pointer", color: "#16a34a", fontSize: 11, textDecoration: "underline", fontFamily: T.font, padding: 0 }}>
+              ✓ Marcar todas revisadas
+            </button>
+            <button onClick={() => marcarLoteRevisadas(false)}
+              style={{ background: "none", border: "none", cursor: "pointer", color: T.dim, fontSize: 11, textDecoration: "underline", fontFamily: T.font, padding: 0 }}>
+              Desmarcar todas
+            </button>
+          </div>
+          <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, overflow: "hidden" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: T.bg }}>
@@ -242,7 +263,8 @@ export default function PantallaObjetivos({ pais = "" }) {
               + Agregar sede
             </button>
           </div>
-        </div>
+          </div>
+        </>
       )}
     </div>
   );
