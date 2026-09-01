@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "rea
 import * as XLSX from "xlsx";
 import {
   fetchLegajos, fetchLiquidaciones, updateLegajo,
-  fetchPagos, appendPago, deletePago, nuevoLote, fetchNovedades, ROLES_HQ,
+  fetchPagos, appendPago, deletePago, nuevoLote, fetchNovedades, updateNovedad, ROLES_HQ,
   FP_TIPOS, FP_TIPO_LABEL, FP_TIPO_COLOR,
   fetchSociedadesNumbers, fetchCuentasBancariasNumbers, fetchCuentasContablesNumbers,
   idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionLines, delLiquidacionComp, isCerrada,
@@ -657,6 +657,9 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
               onChangeActualizar={setActualizarRecetas}
               onSaveLegajo={handleSaveLegajoReceta}
               savingLegajo={savingLegajo}
+              onNovFormaSaved={(id, forma_pago) =>
+                setNovedades(prev => prev.map(n => n.id === id ? { ...n, forma_pago } : n))
+              }
               onAtras={() => setPaso(1)}
               onSiguiente={handleConfirmarPago}
               saving={saving}
@@ -1006,10 +1009,49 @@ function PasoSueldos({ liqStaff, liqOwners, liqExternos, sueldosDraft, onChangeD
 
 // ── Paso 2: Forma de pago ─────────────────────────────────────────────────────
 
-function PasoPago({ liqStaff, liqOwners, liqExternos, sueldosDraft, formasDraft, sociedades = [], onChangeLineas, actualizarRecetas, onChangeActualizar, onSaveLegajo, savingLegajo, onAtras, onSiguiente, saving }) {
+function PasoPago({ liqStaff, liqOwners, liqExternos, sueldosDraft, formasDraft, sociedades = [], onChangeLineas, actualizarRecetas, onChangeActualizar, onSaveLegajo, savingLegajo, onNovFormaSaved, onAtras, onSiguiente, saving }) {
   const getTarget = (liq) => sueldosDraft[liq.legajo_id]?.total ?? liq.sueldo_total_legajo;
   const todos = [...liqStaff, ...liqOwners, ...liqExternos];
   const [expandido, setExpandido] = useState(null); // legajo_id desplegado
+
+  // Forma de pago de una novedad, editable desde acá: mismo dato/destino que la
+  // pantalla de Novedades (su_novedades), solo que se guarda con botón propio.
+  const [novFormaOverride, setNovFormaOverride] = useState({});   // id novedad → forma_pago elegida
+  const [novDirty, setNovDirty]                 = useState(() => new Set()); // ids con cambio sin guardar
+  const [savingNov, setSavingNov]               = useState(null); // id de la novedad guardándose
+
+  const withNovOverride = (novs) =>
+    novs.map(n => (n.id in novFormaOverride ? { ...n, forma_pago: novFormaOverride[n.id] } : n));
+
+  const handleNovFormaChange = (n, value) => {
+    setNovFormaOverride(o => ({ ...o, [n.id]: value }));
+    setNovDirty(s => {
+      const next = new Set(s);
+      value === n.forma_pago ? next.delete(n.id) : next.add(n.id);
+      return next;
+    });
+  };
+
+  const handleNovGuardar = async (n) => {
+    const forma_pago = novFormaOverride[n.id];
+    if (!forma_pago || forma_pago === n.forma_pago) return;
+    setSavingNov(n.id);
+    try {
+      await updateNovedad(n.id, {
+        mes: n.mes, anio: n.anio, legajo_id: n.legajo_id, legajo_nombre: n.legajo_nombre,
+        sede_id: n.sede_id ?? "", sede_nombre: n.sede_nombre ?? "",
+        tipo: n.tipo ?? "extra", descripcion: n.descripcion ?? "",
+        monto: Number(n.monto) || 0, forma_pago,
+        cuenta_contable_id: n.cuenta_contable_id ?? "", cuenta_contable_nombre: n.cuenta_contable_nombre ?? "",
+      });
+      setNovDirty(s => { const next = new Set(s); next.delete(n.id); return next; });
+      onNovFormaSaved?.(n.id, forma_pago);
+    } catch (e) {
+      alert("No se pudo guardar la forma de pago de la novedad: " + (e?.message || e));
+    } finally {
+      setSavingNov(null);
+    }
+  };
 
   const COLS = FP_TIPOS.map(id => ({ id, label: FP_TIPO_LABEL[id] }));
   const EXP_BG = "#cbd5e1";   // fondo del desglose (Sueldo + Novedades), más oscuro para destacar
@@ -1018,7 +1060,7 @@ function PasoPago({ liqStaff, liqOwners, liqExternos, sueldosDraft, formasDraft,
   const fondeoTotals = {};
   for (const t of FP_TIPOS) fondeoTotals[t] = 0;
   for (const liq of todos) {
-    const s = sumByFormaPago(formasDraft[liq.legajo_id] || [], liq.novedades || []);
+    const s = sumByFormaPago(formasDraft[liq.legajo_id] || [], withNovOverride(liq.novedades || []));
     for (const t of FP_TIPOS) fondeoTotals[t] += s[t] || 0;
   }
   const FONDEO = [
@@ -1068,7 +1110,7 @@ function PasoPago({ liqStaff, liqOwners, liqExternos, sueldosDraft, formasDraft,
             {todos.map((liq, i) => {
               const lineas = formasDraft[liq.legajo_id] || [];
               const target = getTarget(liq);
-              const novs   = liq.novedades || [];
+              const novs   = withNovOverride(liq.novedades || []);
               const sums   = sumByTipoRaw(lineas);                  // sólo sueldo: base de la reconciliación
               const colSums = sumByFormaPago(lineas, novs);         // sueldo + novedades: totales por columna
               const dif    = sums.total - target;
@@ -1106,9 +1148,25 @@ function PasoPago({ liqStaff, liqOwners, liqExternos, sueldosDraft, formasDraft,
                   )}
                   {open && novs.map((n, ni) => {
                     const m = Number(n.monto) || 0;
+                    const dirty      = novDirty.has(n.id);
+                    const savingThis = savingNov === n.id;
                     return (
                       <tr key={n.id} style={{ background: EXP_BG, borderBottom: `1px solid ${T.border}` }}>
-                        <td style={TD({ paddingLeft: 34, fontSize: 12, color: T.text })}>{n.cuenta_contable_nombre || n.descripcion || "Novedad"}</td>
+                        <td style={TD({ paddingLeft: 34, fontSize: 12, color: T.text })}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <span>{n.cuenta_contable_nombre || n.descripcion || "Novedad"}</span>
+                            <select value={n.forma_pago} onChange={e => handleNovFormaChange(n, e.target.value)}
+                              style={{ border: `1px solid ${T.border}`, borderRadius: 5, padding: "2px 5px", fontSize: 11, fontFamily: T.font, background: "#fff", color: T.text }}>
+                              {FP_TIPOS.map(t => <option key={t} value={t}>{FP_TIPO_LABEL[t]}</option>)}
+                            </select>
+                            {dirty && (
+                              <button onClick={() => handleNovGuardar(n)} disabled={savingThis} title="Guardar forma de pago de esta novedad"
+                                style={{ border: `1px solid ${T.green}`, background: savingThis ? T.bg : "#f0fdf4", color: T.green, borderRadius: 5, padding: "2px 8px", fontSize: 11, fontWeight: 600, cursor: savingThis ? "default" : "pointer", fontFamily: T.font }}>
+                                {savingThis ? "Guardando…" : "💾 Guardar"}
+                              </button>
+                            )}
+                          </div>
+                        </td>
                         <td style={TD({ textAlign: "right", fontSize: 12, fontWeight: 700, color: T.purple })}>{fmtMoney(m)}</td>
                         {COLS.map(c => (
                           <td key={c.id} style={TD({ textAlign: "right", fontSize: 12, color: c.id === n.forma_pago ? FP_TIPO_COLOR[c.id] || T.text : T.dim })}>
