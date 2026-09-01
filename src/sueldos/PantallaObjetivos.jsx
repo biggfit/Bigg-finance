@@ -43,6 +43,20 @@ export default function PantallaObjetivos({ pais = "" }) {
   const [dirty,     setDirty]     = useState(false);
   const savingRef = useRef(false);
 
+  // Tilde personal por fila ("ya cargué / revisé este dato"): vive en este navegador
+  // (localStorage), no afecta los objetivos guardados.
+  const [revisadas, setRevisadas] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("sedesObjetivosRevisadas") || "{}"); } catch { return {}; }
+  });
+  const revisadaKey = (r) => `${pais}:${anio}-${mes}:${r.sede_id || r.sede_nombre}`;
+  const isRevisada = (r) => !!revisadas[revisadaKey(r)];
+  const toggleRevisada = (r) => setRevisadas(prev => {
+    const key = revisadaKey(r);
+    const next = { ...prev, [key]: !prev[key] };
+    try { localStorage.setItem("sedesObjetivosRevisadas", JSON.stringify(next)); } catch { /* storage lleno o no disponible */ }
+    return next;
+  });
+
   const load = useCallback(async (m, a, p) => {
     if (!p) return;
     setLoading(true);
@@ -166,12 +180,15 @@ export default function PantallaObjetivos({ pais = "" }) {
               <tr style={{ background: T.bg }}>
                 <th style={thStyle}>Sede</th>
                 <th style={{ ...thStyle, width: 140 }}>% Staff</th>
+                <th style={{ ...thStyle, width: 36, textAlign: "center" }} title="Revisado">✓</th>
                 <th style={{ ...thStyle, width: 40 }}></th>
               </tr>
             </thead>
             <tbody>
-              {objetivos.map((r, i) => (
-                <tr key={r._id} style={{ borderBottom: `1px solid ${T.border}` }}>
+              {objetivos.map((r, i) => {
+                const revisada = isRevisada(r);
+                return (
+                <tr key={r._id} style={{ borderBottom: `1px solid ${T.border}`, background: revisada ? "#dcfce7" : undefined }}>
                   <td style={{ padding: "6px 10px" }}>
                     {sedes.length > 0 ? (
                       <select
@@ -203,12 +220,19 @@ export default function PantallaObjetivos({ pais = "" }) {
                     </div>
                   </td>
                   <td style={{ padding: "6px 8px", textAlign: "center" }}>
+                    <input type="checkbox" checked={revisada} disabled={!r.sede_id && !r.sede_nombre}
+                      onChange={() => toggleRevisada(r)}
+                      title="Marcar como revisado (tilde personal, no afecta el objetivo)"
+                      style={{ cursor: (r.sede_id || r.sede_nombre) ? "pointer" : "default", accentColor: "#16a34a" }} />
+                  </td>
+                  <td style={{ padding: "6px 8px", textAlign: "center" }}>
                     <button onClick={() => delObjetivo(i)}
                       style={{ background: "none", border: "none", cursor: "pointer",
                         fontSize: 13, color: T.muted, padding: 2 }}>🗑</button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
           <div style={{ padding: "8px 10px" }}>

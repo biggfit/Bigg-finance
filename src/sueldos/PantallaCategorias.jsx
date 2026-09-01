@@ -63,6 +63,20 @@ export default function PantallaCategorias({ pais = "" }) {
   const [pctGlobal, setPctGlobal] = useState("");
   const savingRef = useRef(false);
 
+  // Tilde personal por fila ("ya cargué / revisé este dato"): vive en este navegador
+  // (localStorage), no afecta las tarifas guardadas.
+  const [revisadas, setRevisadas] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("sedesCategoriasRevisadas") || "{}"); } catch { return {}; }
+  });
+  const revisadaKey = (concepto) => `${pais}:${anio}-${mes}:${normC(concepto)}`;
+  const isRevisada = (concepto) => !!revisadas[revisadaKey(concepto)];
+  const toggleRevisada = (concepto) => setRevisadas(prev => {
+    const key = revisadaKey(concepto);
+    const next = { ...prev, [key]: !prev[key] };
+    try { localStorage.setItem("sedesCategoriasRevisadas", JSON.stringify(next)); } catch { /* storage lleno o no disponible */ }
+    return next;
+  });
+
   const load = useCallback(async (m, a, p) => {
     if (!p) return;
     setLoading(true);
@@ -227,14 +241,16 @@ export default function PantallaCategorias({ pais = "" }) {
                     </div>
                   </th>
                   <th style={{ ...thStyle, width: 140, textAlign: "right" }}>Valor $</th>
+                  <th style={{ ...thStyle, width: 36, textAlign: "center" }} title="Revisado">✓</th>
                   <th style={{ ...thStyle, width: 40 }}></th>
                 </tr>
               </thead>
               <tbody>
                 {tarifas.map((r, i) => {
                   const ant = montoAnteriorDe(r.concepto);
+                  const revisada = isRevisada(r.concepto);
                   return (
-                  <tr key={r._id} style={{ borderBottom: `1px solid ${T.border}` }}>
+                  <tr key={r._id} style={{ borderBottom: `1px solid ${T.border}`, background: revisada ? "#dcfce7" : undefined }}>
                     <td style={{ padding: "6px 10px" }}>
                       <input
                         style={{ ...iStyle, maxWidth: 420 }}
@@ -262,6 +278,12 @@ export default function PantallaCategorias({ pais = "" }) {
                         placeholder="0"
                         onChange={e => setTarifa(i, "monto", e.target.value)}
                       />
+                    </td>
+                    <td style={{ padding: "6px 8px", textAlign: "center" }}>
+                      <input type="checkbox" checked={revisada} disabled={!r.concepto}
+                        onChange={() => toggleRevisada(r.concepto)}
+                        title="Marcar como revisado (tilde personal, no afecta la tarifa)"
+                        style={{ cursor: r.concepto ? "pointer" : "default", accentColor: T.green }} />
                     </td>
                     <td style={{ padding: "6px 8px", textAlign: "center" }}>
                       <button onClick={() => delTarifa(i)}
