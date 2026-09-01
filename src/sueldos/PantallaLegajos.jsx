@@ -467,7 +467,9 @@ function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
   const fpUpd = (id, k, v) => set("formas_pago", lineas.map(l => l.id === id ? { ...l, [k]: v } : l));
   const fpDel = (id) => set("formas_pago", lineas.filter(l => l.id !== id));
   const fpSum = lineas.reduce((s, l) => s + (parseFloat(l.importe) || 0), 0);
-  const { checked: fpChecked, toggle: fpToggleCheck } = useRowChecks("formas_pago_check");
+  const { checked: fpChecked, toggle: fpToggleCheck, setMany: fpSetManyChecked } = useRowChecks("formas_pago_check");
+  const fpIds = lineas.map(l => l.id);
+  const fpTodasMarcadas = fpIds.length > 0 && fpIds.every(id => fpChecked.has(id));
 
   // Centros de costo filtrados por la sociedad seleccionada
   const ccFiltrados = useMemo(() => {
@@ -719,9 +721,15 @@ function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 720 }}>
                 <thead>
                   <tr>
-                    {["Tipo", "Importe", "Titular", "CUIT", "Banco", "Tipo cta", "Cuenta", "CBU", "Nota interna", "", ""].map((h, i) => (
+                    {["Tipo", "Importe", "Titular", "CUIT", "Banco", "Tipo cta", "Cuenta", "CBU", "Nota interna", ""].map((h, i) => (
                       <th key={i} style={fpTh}>{h}</th>
                     ))}
+                    <th style={{ ...fpTh, textAlign: "center" }}>
+                      <input type="checkbox" checked={fpTodasMarcadas}
+                        onChange={() => fpSetManyChecked(fpIds, !fpTodasMarcadas)}
+                        title="Marcar/desmarcar todas como revisadas"
+                        style={{ cursor: "pointer", accentColor: T.green }} />
+                    </th>
                   </tr>
                 </thead>
                 <tbody>

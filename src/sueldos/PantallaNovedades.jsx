@@ -114,7 +114,7 @@ export default function PantallaNovedades({ pais = "" }) {
   const [saving,   setSaving]   = useState(false);
   const [dirty,    setDirty]    = useState(false);
   const savingRef = useRef(false);
-  const { checked, toggle: toggleCheck } = useRowChecks(`novedades_check_hq_${anio}_${mes}`);
+  const { checked, toggle: toggleCheck, setMany: setManyChecked } = useRowChecks(`novedades_check_hq_${anio}_${mes}`);
 
   const load = useCallback(async (m, a, p) => {
     if (!p) return;
@@ -289,6 +289,8 @@ export default function PantallaNovedades({ pais = "" }) {
   const totalDiff = totalTab - totalPrev;
   const esOtros = tab === "otros";
   const esMonotributo = tab === "monotributo";
+  const idsConDatos = tabRows.filter(r => r.legajo_id).map(r => r.id ?? r._id);
+  const todosMarcados = idsConDatos.length > 0 && idsConDatos.every(id => checked.has(id));
 
   // Chequeo del piso fijo de monotributistas: alguno de sus renglones de Monotributo debe tener monto > 0.
   const montoMonotributoPorLegajo = new Map();
@@ -380,7 +382,12 @@ export default function PantallaNovedades({ pais = "" }) {
                 {esOtros && <th style={{ ...thStyle, width: 170 }}>Cuenta contable</th>}
                 <th style={thStyle}>Nota</th>
                 <th style={{ ...thStyle, width: 40 }}></th>
-                <th style={{ ...thStyle, width: 40 }}></th>
+                <th style={{ ...thStyle, width: 40, textAlign: "center" }}>
+                  <input type="checkbox" checked={todosMarcados}
+                    onChange={() => setManyChecked(idsConDatos, !todosMarcados)}
+                    title="Marcar/desmarcar todas como revisadas"
+                    style={{ cursor: "pointer", accentColor: T.green }} />
+                </th>
               </tr>
             </thead>
             <tbody>
