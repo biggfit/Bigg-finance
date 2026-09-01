@@ -1450,38 +1450,66 @@ function descargarExcelDetalle(filas, nombreArchivo) {
   descargarExcelHoja({ headers: DETALLE_HEADERS, anchos: [24, 28, 14, 14, 12, 18, 26, 16, 26], hoja: "Sheet1", filas, nombreArchivo });
 }
 
-// Una fila por cada línea de pago del tipo indicado, con datos de cuenta.
+// Una fila por cada CUENTA DESTINO distinta dentro del legajo (CBU, o Cuenta si no hay CBU).
+// Si varias líneas/novedades del mismo tipo apuntan al mismo destino (ej: sueldo + adelanto a
+// la misma cuenta) se suman en un único importe; destinos distintos (ej: expensas a otra cuenta)
+// siguen en filas separadas.
 function lineasDetalle(liqs, tipo) {
   const filas = [];
   for (const liq of liqs) {
+    const grupos = new Map();
+
+    const agregar = (key, datos, importe, nota) => {
+      const k = key || `__sin_cuenta_${grupos.size}`; // sin CBU/cuenta: no agrupar con otras filas sin datos
+      let g = grupos.get(k);
+      if (!g) {
+        g = { ...datos, importe: 0, notas: [] };
+        grupos.set(k, g);
+      }
+      g.importe += importe;
+      if (nota) g.notas.push(nota);
+    };
+
     for (const l of liq.lineas || []) {
       if (l.tipo !== tipo) continue;
       if (!(Number(l.importe) > 0)) continue;
-      filas.push([
-        liq.legajo_nombre,
-        l.titular || liq.legajo_nombre || "",
-        Number(l.importe),
-        l.banco || "",
-        l.tipo_cuenta || "",
-        l.cuenta || "",
-        l.cbu || "",
-        l.cuit || "",
-        l.nota || "",
-      ]);
+      agregar((l.cbu || l.cuenta || "").trim(), {
+        titular: l.titular || liq.legajo_nombre || "",
+        banco: l.banco || "",
+        tipo_cuenta: l.tipo_cuenta || "",
+        cuenta: l.cuenta || "",
+        cbu: l.cbu || "",
+        cuit: l.cuit || "",
+      }, Number(l.importe), l.nota);
     }
     // Novedades ruteadas a este tipo (depósito / transf. financiera): también deben instruirse al banco.
-    // Igual que lineasGalicia. La novedad no trae banco/cuenta/cuit propios → caen al CBU del empleado.
+    // Igual que lineasGalicia. La novedad no trae banco/cuenta/cuit propios → caen al CBU del empleado,
+    // y si ese CBU coincide con el de una línea ya cargada, se suman en la misma fila.
     for (const n of liq.novedades || []) {
       if (n.forma_pago !== tipo) continue;
       if (!(Number(n.monto) > 0)) continue;
+      agregar((liq.cbu || "").trim(), {
+        titular: liq.legajo_nombre || "",
+        banco: "",
+        tipo_cuenta: "",
+        cuenta: "",
+        cbu: liq.cbu || "",
+        cuit: "",
+      }, Number(n.monto), n.cuenta_contable_nombre || n.descripcion);
+    }
+
+    for (const g of grupos.values()) {
+      const notasUnicas = [...new Set(g.notas)];
       filas.push([
         liq.legajo_nombre,
-        liq.legajo_nombre || "",
-        Number(n.monto),
-        "", "", "",
-        liq.cbu || "",
-        "",
-        n.cuenta_contable_nombre || n.descripcion || "",
+        g.titular,
+        g.importe,
+        g.banco,
+        g.tipo_cuenta,
+        g.cuenta,
+        g.cbu,
+        g.cuit,
+        notasUnicas.length > 1 ? "Incluye: " + notasUnicas.join(", ") : (notasUnicas[0] || ""),
       ]);
     }
   }
@@ -1490,7 +1518,8 @@ function lineasDetalle(liqs, tipo) {
 
 // Depósito: UNA línea por legajo (todo va a la misma cuenta del empleado → se suman
 // depósito base + novedades ruteadas a depósito, ej. Monotributo/Obra Social). La nota
-// aclara qué conceptos se incluyen. (Trf. financiera NO se agrupa: varias cuentas destino.)
+// aclara qué conceptos se incluyen. (Trf. financiera usa lineasDetalle: agrupa por cuenta
+// destino, así que una persona puede tener varias filas si tiene varias cuentas destino.)
 function exportarDeposito(liqs, mes, anio) {
   const filas = [];
   for (const liq of liqs) {
