@@ -245,6 +245,11 @@ export default function ImportBankModal({ franchises, month, year, addComp, onCl
   const [minimized,  setMinimized] = useState(false);
   const [savedItems, setSavedItems]= useState([]); // filas guardadas individualmente
   const fileRef = useRef(null);
+  // Guarda sincrónica (no state) de ids ya enviados: evita que un doble click en "Guardar"
+  // (individual o en "Guardar N confirmados") dispare addComp dos veces para la misma fila
+  // antes de que el re-render la saque de la lista de confirmados.
+  const savingIdsRef = useRef(new Set());
+  const importingRef = useRef(false);
 
   // Auto-mostrar resumen cuando todos los movimientos fueron guardados o eliminados
   useEffect(() => {
@@ -309,9 +314,11 @@ export default function ImportBankModal({ franchises, month, year, addComp, onCl
           setParseErr(`No se encontraron movimientos para ${MONTHS[selMonth]} ${selYear} en el extracto.`);
           return;
         }
-        // Deduplicación: marcar rows cuyo nroComp ya existe en el store
+        // Deduplicación: marcar rows cuyo nroComp ya existe en el store (bankRef persiste
+        // entre sesiones vía columna `referencia`; a diferencia de `invoice`, que es el
+        // vínculo manual a factura y nunca se completa al importar).
         const allComps = Object.values(comps).flat();
-        const existingNros = new Set(allComps.map(c => c.invoice).filter(Boolean));
+        const existingNros = new Set(allComps.map(c => c.bankRef).filter(Boolean));
         const deduped = parsed.map(r =>
           r.nroComp && existingNros.has(r.nroComp)
             ? { ...r, isDuplicate: true, deleted: true }
@@ -328,17 +335,21 @@ export default function ImportBankModal({ franchises, month, year, addComp, onCl
 
   const deleteRow   = useCallback((id) =>
     setRows((p) => p.map((r) => r.id === id ? { ...r, deleted: true } : r)), []);
-  const restoreRow  = useCallback((id) =>
-    setRows((p) => p.map((r) => r.id === id ? { ...r, deleted: false, isDuplicate: false } : r)), []);
+  const restoreRow  = useCallback((id) => {
+    savingIdsRef.current.delete(id);
+    setRows((p) => p.map((r) => r.id === id ? { ...r, deleted: false, isDuplicate: false } : r));
+  }, []);
 
   const handleSaveRow = useCallback((row) => {
+    if (savingIdsRef.current.has(row.id)) return; // ya se está guardando/guardó — ignorar click repetido
+    savingIdsRef.current.add(row.id);
     const [, mm, yy] = row.fecha.split("/");
     const amount = row.monto;
     const comp = {
       id: uid(), type: row.movType, amount,
       date: row.fecha, month: parseInt(mm, 10) - 1, year: parseInt(yy, 10),
       currency: "ARS",
-      ...(row.nroComp ? { invoice: row.nroComp } : {}),
+      ...(row.nroComp ? { bankRef: row.nroComp } : {}),
       ...(row.entidad ? { nota: row.entidad }   : {}),
     };
     addComp(row.frId, comp);
@@ -367,6 +378,8 @@ export default function ImportBankModal({ franchises, month, year, addComp, onCl
   }, [franchises]);
 
   const handleImport = useCallback(async () => {
+    if (importingRef.current) return; // guarda contra doble click antes de que se pinte el disabled
+    importingRef.current = true;
     setImporting(true);
     const toImport = rows.filter((r) => !r.deleted);
 
@@ -394,7 +407,7 @@ export default function ImportBankModal({ franchises, month, year, addComp, onCl
         id: uid(), type: row.movType, amount: row.monto,
         date: row.fecha, month: parseInt(mm, 10) - 1, year: parseInt(yy, 10),
         currency: "ARS",
-        ...(row.nroComp ? { invoice: row.nroComp } : {}),
+        ...(row.nroComp ? { bankRef: row.nroComp } : {}),
         ...(row.entidad ? { nota: row.entidad }   : {}),
       };
       addComp(row.frId, comp);

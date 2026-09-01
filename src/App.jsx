@@ -199,7 +199,7 @@ export default function App({ onVolverNumbers } = {}) {
         id: comp.id, sociedad: comp.sociedad, fecha: dmyToIso(comp.date), fr_tipo: comp.type,
         franquicia_id: frId, franquicia_nombre: fr?.name || "",
         monto: comp.amount, moneda: comp.currency, cuenta_bancaria: comp.cuenta_bancaria,
-        concepto: comp.nota || comp.ref || "",
+        concepto: comp.nota || comp.ref || "", referencia: comp.bankRef || "",
       }))
         .then(() => ({ ok: true }))
         .catch(err => ({ ok: false, error: err }));

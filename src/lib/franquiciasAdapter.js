@@ -132,6 +132,9 @@ export function movimientoToCompRow(mov) {
     // Vínculo manual a un comprobante ya existente (ej. un PAGO_PAUTA cubierto por una
     // factura de distinto importe) → excluye de "pendientes" sin alterar CC ni P&L.
     invoice:  mov.documento_id || undefined,
+    // N° de comprobante del extracto bancario que originó este movimiento (si vino del
+    // importador) → permite detectar duplicados entre sesiones de importación distintas.
+    bankRef:  mov.referencia || undefined,
     date,
     // month (0-11) / year — igual que parseComps, para computePautaPendiente/upToPeriod.
     month:    mm ? Number(mm) - 1 : undefined,
