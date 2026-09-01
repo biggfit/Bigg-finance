@@ -646,6 +646,110 @@ function VistaToggle({ value, onChange }) {
 }
 
 // Overlay "Ampliar": muestra el reporte apuntado por `srcRef` como una foto a pantalla completa, escalada
+// Gráfico de composición de ingresos: barras apiladas al 100% mes a mes (cada banda un negocio → se lee cómo
+// evoluciona el mix). Paleta categórica validada CVD-safe (dataviz). SVG puro, sin dependencias. Se abre desde ⋮.
+const GRAF_CATS = [
+  { key: "sar",     label: "Sedes Propias AR", color: "#2a78d6" },
+  { key: "oper",    label: "Rosedal + Huergo", color: "#eb6834" },
+  { key: "reg",     label: "Regalías",         color: "#1baf7a" },
+  { key: "corp",    label: "Coorporativos",    color: "#eda100" },
+  { key: "lic",     label: "Licencia de Marca",color: "#e87ba4" },
+  { key: "app",     label: "Gympass",          color: "#008300" },
+  { key: "spon",    label: "Sponsor",          color: "#4a3aa7" },
+  { key: "otros",   label: "Otros HQ",         color: "#e34948" },
+];
+function GraficoComposicion({ sub, year, caption, hayHistorico, mesMax, onClose }) {
+  const hq = sub.hqAccounts || {};
+  const g = k => hq[k] || ZERO12;
+  const serie = {
+    sar: sub.sar || ZERO12,
+    oper: MESES.map((_, m) => (Number(sub.fg?.[m]) || 0) + (Number(sub.wre?.[m]) || 0)),
+    reg: g("Regalias s/Ventas"), corp: g("Coorporativos"), lic: g("Licencia Uso de Marca"),
+    app: g("APP (Gympass)"), spon: g("Sponsor"),
+    otros: MESES.map((_, m) => (Number(g("Pauta")[m]) || 0) + (Number(g("Otros Ingresos")[m]) || 0)),
+  };
+  // Total (positivo) de ingresos de un mes. Descarta el mes en curso incompleto (total muy chico vs el pico),
+  // que si no llenaría el 100% con una sola banda y distorsiona la lectura.
+  const totMes = m => GRAF_CATS.reduce((s, c) => s + Math.max(0, Number(serie[c.key]?.[m]) || 0), 0);
+  const rawMonths = mesesVisibles(sub.activeMonths || [], year, hayHistorico, mesMax);
+  const maxT = Math.max(...rawMonths.map(totMes), 1);
+  const months = rawMonths.filter(m => totMes(m) >= 0.25 * maxT);
+  useEffect(() => {
+    const h = e => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", h);
+    return () => document.removeEventListener("keydown", h);
+  }, [onClose]);
+
+  // Geometría del SVG (viewBox fijo, responsive).
+  const W = 900, H = 380, padL = 42, padR = 14, padT = 14, padB = 30;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const n = months.length || 1;
+  const band = plotW / n, barW = Math.min(54, band * 0.6);
+  const [hover, setHover] = useState(null);   // { x, y, cat, sh, val, mes }
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(15,23,42,.78)",
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <button onClick={onClose} title="Cerrar" style={{ position: "absolute", top: 18, right: 22, zIndex: 1001,
+        display: "flex", alignItems: "center", justifyContent: "center", width: 40, height: 40, borderRadius: 999,
+        border: "none", background: "rgba(255,255,255,.16)", color: "#fff", fontSize: 20, cursor: "pointer" }}>✕</button>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, padding: "22px 24px",
+        width: "min(1040px, 94vw)", maxHeight: "92vh", overflow: "auto", boxShadow: "0 18px 48px rgba(0,0,0,.28)" }}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "#0f172a", marginBottom: 2 }}>Composición de Ingresos — Evolución</div>
+        <div style={{ fontSize: 12, color: T.muted, marginBottom: 16 }}>{caption} · participación de cada negocio, mes a mes</div>
+
+        <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block" }} onMouseLeave={() => setHover(null)}>
+          {/* grid + eje % */}
+          {[0, 25, 50, 75, 100].map(p => {
+            const y = padT + plotH * (1 - p / 100);
+            return <g key={p}>
+              <line x1={padL} y1={y} x2={W - padR} y2={y} stroke="#e1e0d9" strokeWidth="1" />
+              <text x={padL - 8} y={y + 3} textAnchor="end" fontSize="10" fill="#898781">{p}%</text>
+            </g>;
+          })}
+          {months.map((m, i) => {
+            const total = totMes(m) || 1;
+            const x = padL + i * band + (band - barW) / 2;
+            let acc = 0;
+            return <g key={m}>
+              {GRAF_CATS.map(c => {
+                const v = Math.max(0, Number(serie[c.key]?.[m]) || 0);
+                if (v <= 0) return null;
+                const frac = v / total, hSeg = frac * plotH - 2;
+                const yTop = padT + plotH * (1 - (acc + frac));
+                acc += frac;
+                if (hSeg <= 0.5) return null;
+                return <rect key={c.key} x={x} y={yTop} width={barW} height={hSeg} rx="2" fill={c.color}
+                  onMouseEnter={() => setHover({ x: x + barW / 2, y: yTop + hSeg / 2, cat: c, sh: frac * 100, val: Number(serie[c.key]?.[m]) || 0, mes: MESES[m] })}>
+                  <title>{`${c.label} · ${MESES[m]}: ${(frac * 100).toFixed(0)}%`}</title>
+                </rect>;
+              })}
+              <text x={x + barW / 2} y={H - padB + 16} textAnchor="middle" fontSize="10" fill="#898781">{MESES[m]}</text>
+            </g>;
+          })}
+        </svg>
+
+        {/* tooltip */}
+        {hover && (
+          <div style={{ fontSize: 12, color: "#0f172a", marginTop: 4, textAlign: "center" }}>
+            <b>{hover.cat.label}</b> · {hover.mes}: <b>{hover.sh.toFixed(0)}%</b>
+            <span style={{ color: T.muted }}> ({(hover.val).toLocaleString("es-AR", { maximumFractionDigits: 0 })})</span>
+          </div>
+        )}
+
+        {/* leyenda */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 18px", marginTop: 16, justifyContent: "center" }}>
+          {GRAF_CATS.map(c => (
+            <span key={c.key} style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12, color: "#52514e" }}>
+              <span style={{ width: 11, height: 11, borderRadius: 3, background: c.color, flexShrink: 0 }} />{c.label}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // para entrar entera (sin scroll). Cierra con ✕, click en el fondo, o Esc.
 function FotoOverlay({ srcRef, onClose, caption }) {
   const boxRef = useRef(null);
@@ -723,21 +827,31 @@ function celdasSede(cols, cur, prev, pol, o) {
   return cols.map((col, i) => {
     if (col.kind === "var") {
       const a = col.a(cur, prev), b = col.b(cur, prev), d = a - b;
+      const varTd = (color, content) => <td key={i} style={{ padding: o.pad, fontSize: (o.fs || 13) - 1,
+        textAlign: "right", fontFamily: "var(--mono)", fontWeight: 700, color, whiteSpace: "nowrap", ...bord,
+        ...(col.total ? { borderLeft: `1px solid ${T.cardBorder}` } : {}) }}>{content}</td>;
+      const pctVistaOn = o.pct && o.pctVista === "pct";   // modo % de Composición
+      // Cambio de PARTICIPACIÓN en puntos porcentuales (share cur − share prev) vs el baseline de ESTA columna.
+      const ppTd = () => {
+        const totA = col.a(o.pctTotalCur, o.pctTotalPrev), totB = col.b(o.pctTotalCur, o.pctTotalPrev);
+        const shA = totA ? a / totA * 100 : null, shB = totB ? b / totB * 100 : null;
+        const dpp = (shA != null && shB != null) ? shA - shB : null;
+        return varTd(dpp == null ? T.dim : dpp > 0 ? T.green : dpp < 0 ? T.red : T.dim,
+          dpp == null ? "—" : `${dpp > 0 ? "+" : ""}${dpp.toFixed(0)} pp`);
+      };
       if (col.abs) {
+        if (pctVistaOn) return ppTd();   // modo %: la Δ muestra pp, no el delta nominal
         // Δ absoluto: misma convención de signo que el resto del P&L (paréntesis = movió para el lado malo),
         // color por MEJORA (ingresos/resultados +1, costos −1).
-        const dcolor = d * pol > 0 ? T.green : d * pol < 0 ? T.red : T.dim;
-        return <td key={i} style={{ padding: o.pad, fontSize: (o.fs || 13) - 1, textAlign: "right",
-          fontFamily: "var(--mono)", fontWeight: 700, color: dcolor, whiteSpace: "nowrap", ...bord,
-          ...(col.total ? { borderLeft: `1px solid ${T.cardBorder}` } : {}) }}>{fmtPar(d, pol < 0)}</td>;
+        return varTd(d * pol > 0 ? T.green : d * pol < 0 ? T.red : T.dim, fmtPar(d, pol < 0));
       }
+      // Modo % en la VAR%: si ya hay una columna Δ (que en % muestra pp, ej. YTD) no dupliques → vacía; si no
+      // (ej. Mensual, donde la VAR% es la única comparación) mostrá el pp vs su baseline.
+      if (pctVistaOn) return cols.some(c => c.kind === "var" && c.abs) ? varTd(T.dim, "") : ppTd();
       const pct = b ? d / b * 100 : null;
       // flecha por signo crudo; color por MEJORA (polaridad: ingresos/resultados +1, costos −1).
       const color = pct == null ? T.dim : (d * pol > 0 ? T.green : d * pol < 0 ? T.red : T.dim);
-      return <td key={i} style={{ padding: o.pad, fontSize: (o.fs || 13) - 1, textAlign: "right",
-        fontFamily: "var(--mono)", fontWeight: 700, color, whiteSpace: "nowrap", ...bord,
-        ...(col.total ? { borderLeft: `1px solid ${T.cardBorder}` } : {}) }}>
-        {pct == null ? "—" : `${d > 0 ? "↑" : d < 0 ? "↓" : ""}${Math.abs(pct).toFixed(1)}%`}</td>;
+      return varTd(color, pct == null ? "—" : `${d > 0 ? "↑" : d < 0 ? "↓" : ""}${Math.abs(pct).toFixed(1)}%`);
     }
     // Stock (saldo corriente): en la col TOTAL de Evolución no se suma; muestra el saldo del último mes CON
     // dato (≤ lastM), porque los meses vivos sin distribución vienen en 0 y no deben pisar el saldo.
@@ -747,14 +861,18 @@ function celdasSede(cols, cur, prev, pol, o) {
       v = Number(cur?.[lm]) || 0;
     } else v = col.get(cur, prev);
     if (o.pct && !o.stock) {
-      // Al lado del nominal, el share (chiquito, gris) sobre el Total de Ingresos de la MISMA columna.
+      // Share sobre el Total de Ingresos de la MISMA columna. Dos modos (evita saturar la vista con número+% en
+      // cada celda): "pct" = solo el %; "nominal" (default) = el número, con el % (chiquito, gris) SOLO en la col TOTAL.
       const tot = col.get(o.pctTotalCur, o.pctTotalPrev);
       const sh = tot ? v / tot * 100 : null;
       const color = o.bySign ? (v > 0 ? T.green : v < 0 ? T.red : T.dim) : (v ? (o.color || T.text) : T.dim);
-      return <td key={i} style={{ padding: o.pad, fontSize: o.fs || 13, textAlign: "right",
+      const tdStyle = { padding: o.pad, fontSize: o.fs || 13, textAlign: "right",
         fontFamily: "var(--mono)", fontWeight: o.fw || 400, color, whiteSpace: "nowrap", ...bord,
-        ...(col.total ? { borderLeft: `1px solid ${T.cardBorder}` } : {}) }}>
-        {fmtPar(v, pol < 0)}{v && sh != null ? <span style={{ color: T.muted, fontSize: (o.fs || 13) - 3, marginLeft: 4, fontWeight: 400 }}>({sh.toFixed(0)}%)</span> : ""}</td>;
+        ...(col.total ? { borderLeft: `1px solid ${T.cardBorder}` } : {}) };
+      if (o.pctVista === "pct")
+        return <td key={i} style={tdStyle}>{v && sh != null ? `${sh.toFixed(0)}%` : "—"}</td>;
+      return <td key={i} style={tdStyle}>
+        {fmtPar(v, pol < 0)}{col.total && v && sh != null ? <span style={{ color: T.muted, fontSize: (o.fs || 13) - 3, marginLeft: 4, fontWeight: 400 }}>({sh.toFixed(0)}%)</span> : ""}</td>;
     }
     const color = o.bySign ? (v > 0 ? T.green : v < 0 ? T.red : T.dim) : (v ? (o.color || T.text) : T.dim);
     return <td key={i} style={{ padding: o.pad, fontSize: o.fs || 13, textAlign: "right",
@@ -1429,7 +1547,7 @@ export function buildPnLBiggFilas({ pnl, sub, pnlPrev, subPrev, year, vista = "e
 
 // P&L BIGG = P&L de HOLDING. Arriba el RESULTADO de cada negocio operativo (no la venta); después HQ
 // (ingresos − opex), y al final financieros + impuestos del grupo. `sub` = computeSubtotalsHolding.
-function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolucion", mes = 0, hayHistorico = false, mesMax = null, soloIngresos = false, sedesApertura = null, pctMode = false }) {
+function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolucion", mes = 0, hayHistorico = false, mesMax = null, soloIngresos = false, sedesApertura = null, pctMode = false, pctVista = "nominal" }) {
   const ALLKEYS = ["sec_op", "sec_sedes", "sec_ing", "sec_gpv", "sec_opex", "sec_fin", "sec_imp", "sec_capex"];
   const [collapsed, setCollapsed] = useState(() => Object.fromEntries(ALLKEYS.map(k => [k, true])));   // arranca compactado
   const isCol  = k => !!collapsed[k];
@@ -1448,7 +1566,7 @@ function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolu
   );
 
   // Modo % (flag del reporte "Composición de Ingresos"): las celdas muestran share del Total de Ingresos.
-  const pctOpt = pctMode ? { pct: true, pctTotalCur: sub.resOpMasIngHQ, pctTotalPrev: (subPrev || {}).resOpMasIngHQ } : {};
+  const pctOpt = pctMode ? { pct: true, pctTotalCur: sub.resOpMasIngHQ, pctTotalPrev: (subPrev || {}).resOpMasIngHQ, pctVista } : {};
 
   return (
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
@@ -2810,11 +2928,13 @@ export default function PantallaReportes({ sociedad = "nako" }) {
   const [activeTab,      setActiveTab]      = useState(null);   // null = menú-landing de reportes
   const [vistaPnl,       setVistaPnl]       = useState("evolucion");   // P&L Sedes: evolucion | mensual | ytd
   const [sinIva,         setSinIva]         = useState(() => { try { return localStorage.getItem("pnlSinIva") === "1"; } catch { return false; } });   // toggle Con/Sin IVA (recordado)
+  const [compPctVista,   setCompPctVista]   = useState("nominal");   // Composición de Ingresos: "nominal" (números + % en TOTAL) | "pct" (solo %)
   const [mesSel,         setMesSel]         = useState(Math.max(0, new Date().getMonth() - 1));   // mes para vistas mensual/ytd (default: último mes completo, no el en curso)
   const [mesCorte,       setMesCorte]       = useState(null);   // Evolución: cortar meses > mesCorte (null = todos). Para ocultar el mes en curso incompleto.
   const [dlgExport,      setDlgExport]      = useState(false);  // modal "Descargar reportes a Excel"
   const [showActMenu,    setShowActMenu]    = useState(false);  // menú ⋮ de acciones del reporte
   const [fotoOpen,       setFotoOpen]       = useState(false);  // overlay "Ampliar" (reporte a pantalla completa)
+  const [graficoOpen,    setGraficoOpen]    = useState(false);  // overlay gráfico de composición (Composición de Ingresos)
   const [fotoMsg,        setFotoMsg]        = useState(null);   // feedback del "Copiar imagen" ("copiado"/error)
   const actMenuRef = useRef(null);   // menú ⋮ (outside-click)
   const reportRef  = useRef(null);   // contenedor de la tabla del reporte (fuente de la "foto")
@@ -3531,6 +3651,11 @@ export default function PantallaReportes({ sociedad = "nako" }) {
                         <span style={{ width: 20 }}>⬇</span> Bajar a Excel
                       </button>
                     )}
+                    {isVentasHQ && (
+                      <button onClick={() => { setShowActMenu(false); setGraficoOpen(true); }} style={actMenuItem}>
+                        <span style={{ width: 20 }}>📊</span> Ver gráfico
+                      </button>
+                    )}
                     <button onClick={() => { setShowActMenu(false); setFotoOpen(true); }} style={actMenuItem}>
                       <span style={{ width: 20 }}>⛶</span> Ampliar
                     </button>
@@ -3604,6 +3729,29 @@ export default function PantallaReportes({ sociedad = "nako" }) {
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>IVA</label>
             <IvaToggle value={sinIva} onChange={setSinIva} />
+          </div>
+        )}
+
+        {/* Valores — Composición de Ingresos: montos o % de aporte (nunca los dos juntos, para no saturar la vista). */}
+        {isVentasHQ && (
+          <div style={{ order: 6 }}>
+            <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
+              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Valores</label>
+            <div style={{ display: "inline-flex", gap: 2, background: "#f3f4f6", borderRadius: 9, padding: 3 }}>
+              {[{ id: "nominal", label: "Nominal" }, { id: "pct", label: "%" }].map(o => {
+                const active = compPctVista === o.id;
+                return (
+                  <button key={o.id} onClick={() => setCompPctVista(o.id)} style={{
+                    background: active ? T.accentDark : "transparent", border: "none", borderRadius: 7,
+                    color: active ? T.accent : T.muted, fontFamily: T.font, fontSize: 12.5,
+                    fontWeight: active ? 800 : 600, padding: "6px 14px", cursor: "pointer", transition: "all .15s ease" }}
+                    onMouseEnter={e => { if (!active) e.currentTarget.style.background = "#e5e7eb"; }}
+                    onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}>
+                    {o.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -3809,7 +3957,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
         <div ref={reportRef}>
         <PnLTableBigg pnl={pnlBigg} sub={subBigg} pnlPrev={pnlBiggPrev} subPrev={subBiggPrev}
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} hayHistorico={hayHistorico} mesMax={mesCorte}
-          soloIngresos pctMode sedesApertura={{ cur: sedesApCur, prev: sedesApPrev }} />
+          soloIngresos pctMode pctVista={compPctVista} sedesApertura={{ cur: sedesApCur, prev: sedesApPrev }} />
         </div>
       )}
 
@@ -3838,6 +3986,12 @@ export default function PantallaReportes({ sociedad = "nako" }) {
 
       {/* ── "Ampliar": el reporte como foto a pantalla completa ── */}
       {fotoOpen && <FotoOverlay srcRef={reportRef} onClose={() => setFotoOpen(false)} caption={fotoCaption} />}
+
+      {/* ── "Ver gráfico": composición de ingresos apilada al 100%, mes a mes ── */}
+      {graficoOpen && isVentasHQ && subBigg && (
+        <GraficoComposicion sub={subBigg} year={year} caption={fotoCaption}
+          hayHistorico={hayHistorico} mesMax={mesCorte} onClose={() => setGraficoOpen(false)} />
+      )}
 
     </div>
   );
