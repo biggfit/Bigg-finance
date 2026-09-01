@@ -1,16 +1,20 @@
 import { useMemo, useState } from "react";
 import { useStore } from "../lib/context";
-import { makeType, MONTHS, AVAILABLE_YEARS, fmt, compCurrency, compEmpresa, CUENTAS, CUENTA_LABEL, COMPANIES, uid, cmpDate } from "../lib/helpers";
+import { makeType, MONTHS, AVAILABLE_YEARS, fmt, compCurrency, compEmpresa, computeSaldo, CUENTAS, CUENTA_LABEL, COMPANIES, cmpDate } from "../lib/helpers";
 import { inPeriod, dateMonth, dateYear, todayDmy } from "../data/franchisor";
 import { sendMailFr } from "../lib/sheetsApi";
 
+// Mes absoluto de un comprobante (año*12+mes) para comparar meses de años distintos sin casos borde.
+const idxMes = c => c.year * 12 + c.month;
+
 // ── Pendientes panel ────────────────────────────────────────────────────────
-export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, onFetchAfipNumero, onAddComp }) {
-  const { franchises, comps, editComp, deleteComp, activeCompany, recordatorios, addRecordatorioEntry } = useStore();
+export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, onFetchAfipNumero, month, year }) {
+  const { franchises, comps, saldoInicial, editComp, moveComp, deleteComp, activeCompany, recordatorios, addRecordatorioEntry } = useStore();
   const [showAfip,       setShowAfip]       = useState(false);
   const [showSinNumero,  setShowSinNumero]  = useState(false);
   const [showSinAsignar, setShowSinAsignar] = useState(false);
   const [showPago,       setShowPago]       = useState(false);
+  const [showSaldoAFavor, setShowSaldoAFavor] = useState(true);  // abierta por defecto: es la lista de trabajo
   const [showFcRecibidas, setShowFcRecibidas] = useState(false);
   const [fetchingNumero, setFetchingNumero] = useState({}); // { [compId]: true }
   const [fetchNumeroErr, setFetchNumeroErr] = useState({}); // { [compId]: string }
@@ -78,78 +82,22 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
   const [pagoPreviewQueue, setPagoPreviewQueue]   = useState(null); // null = no preview, array = mostrando preview
   const [pagoPreviewEdits, setPagoPreviewEdits]   = useState({});   // { [comp.id]: { cuenta, concepto } }
 
-  // "Ya emitida" para PAGO_PAUTA — adjuntar nro. de factura existente en Facturante
-  const [pagoAdjuntando, setPagoAdjuntando] = useState({}); // { [compId]: true }
-  const [pagoAdjuntarVal, setPagoAdjuntarVal] = useState({}); // { [compId]: string }
-  const [pagoAdjuntarErr, setPagoAdjuntarErr] = useState({}); // { [compId]: string }
-  const [pagoAdjuntarSaving, setPagoAdjuntarSaving] = useState({});
+  // Cambio de sede de un pago a cuenta mal imputado. El pago llega del extracto bancario y la
+  // sede se adivina por el titular de la transferencia, así que a veces cae en la sede equivocada
+  // y se detecta recién acá, al ir a facturarlo. `moveComp` reubica la fila en el backend que
+  // corresponda (nb_movimientos para los pagos nuevos, `comprobantes` para los viejos).
+  const [sedeEditId, setSedeEditId] = useState(null); // compId con el selector de sede abierto
+  const sedesOrdenadas = useMemo(
+    () => [...franchises].sort((a, b) => a.name.localeCompare(b.name, "es")),
+    [franchises]
+  );
 
-  // "Ya cubierto" para PAGO_PAUTA — vincular a una factura de OTRO importe que ya lo
-  // contempló (ej. facturada contra saldo acumulado). Solo marca comp.invoice; no crea
-  // ninguna factura nueva ni toca el saldo de la CC.
-  const [pagoVincular, setPagoVincular] = useState({}); // { [compId]: true }
-  const [pagoVincularVal, setPagoVincularVal] = useState({}); // { [compId]: string }
-  const [pagoVincularErr, setPagoVincularErr] = useState({}); // { [compId]: string }
-  const [pagoVincularSaving, setPagoVincularSaving] = useState({});
-
-  const handlePagoAbrirVincular = (compId) => {
-    setPagoVincular(p => ({ ...p, [compId]: true }));
-    setPagoVincularVal(p => ({ ...p, [compId]: "" }));
-    setPagoVincularErr(p => { const n = { ...p }; delete n[compId]; return n; });
-  };
-  const handlePagoCerrarVincular = (compId) => {
-    setPagoVincular(p => { const n = { ...p }; delete n[compId]; return n; });
-  };
-  const handlePagoConfirmVincular = async (fr, pagoComp) => {
-    const invoice = (pagoVincularVal[pagoComp.id] ?? "").trim();
-    if (!invoice) { setPagoVincularErr(p => ({ ...p, [pagoComp.id]: "Ingresá el número de factura" })); return; }
-    setPagoVincularSaving(p => ({ ...p, [pagoComp.id]: true }));
-    try {
-      await editComp(fr.id, pagoComp.id, { invoice });
-      handlePagoCerrarVincular(pagoComp.id);
-    } catch (err) {
-      setPagoVincularErr(p => ({ ...p, [pagoComp.id]: err.message ?? "Error al guardar" }));
-    } finally {
-      setPagoVincularSaving(p => { const n = { ...p }; delete n[pagoComp.id]; return n; });
-    }
-  };
-
-  const handlePagoAbrirAdjuntar = (compId) => {
-    setPagoAdjuntando(p => ({ ...p, [compId]: true }));
-    setPagoAdjuntarVal(p => ({ ...p, [compId]: "" }));
-    setPagoAdjuntarErr(p => { const n = { ...p }; delete n[compId]; return n; });
-  };
-  const handlePagoCerrarAdjuntar = (compId) => {
-    setPagoAdjuntando(p => { const n = { ...p }; delete n[compId]; return n; });
-  };
-  const handlePagoConfirmAdjuntar = async (fr, pagoComp) => {
-    const invoice = (pagoAdjuntarVal[pagoComp.id] ?? "").trim();
-    if (!invoice) { setPagoAdjuntarErr(p => ({ ...p, [pagoComp.id]: "Ingresá el número de factura" })); return; }
-    if (!onAddComp) { setPagoAdjuntarErr(p => ({ ...p, [pagoComp.id]: "No disponible" })); return; }
-    setPagoAdjuntarSaving(p => ({ ...p, [pagoComp.id]: true }));
-    try {
-      const applyIVA = !!(COMPANIES[activeCompany]?.applyIVA);
-      const total    = pagoComp.amount ?? 0;
-      const neto     = applyIVA ? Math.round(total / 1.21 * 100) / 100 : total;
-      const iva      = applyIVA ? Math.round((total - neto) * 100) / 100 : 0;
-      const m        = dateMonth(pagoComp.date);
-      const y        = dateYear(pagoComp.date);
-      const factComp = {
-        id: uid(), type: makeType("FACTURA", "PAUTA"),
-        amount: total, amountNeto: applyIVA ? neto : undefined, amountIVA: applyIVA ? iva : undefined,
-        date: pagoComp.date, month: m, year: y,
-        currency: pagoComp.currency ?? "ARS",
-        ref: `Pauta ${MONTHS[m]} ${y}`, nota: `Pauta ${MONTHS[m]} ${y}`,
-        invoice, contado: true,
-      };
-      await onAddComp(fr.id, factComp);
-      handlePagoCerrarAdjuntar(pagoComp.id);
-    } catch (err) {
-      setPagoAdjuntarErr(p => ({ ...p, [pagoComp.id]: err.message ?? "Error al guardar" }));
-    } finally {
-      setPagoAdjuntarSaving(p => { const n = { ...p }; delete n[pagoComp.id]; return n; });
-    }
-  };
+  // "Ya emitida →" y "Ya cubierto →" vivían acá. Los dos escribían el número de factura a mano
+  // sobre el pago: el primero además creaba una FACTURA|PAUTA por el importe del pago, el segundo
+  // solo lo sacaba de la lista. Eran el parche para los casos que el matching por importe exacto
+  // no sabe representar —cuando la factura cubre el pago MÁS el saldo a favor de la sede— y por
+  // ese camino entraron facturas cargadas dos veces. La salida correcta es emitir por
+  // min(pautado, cobertura); mientras tanto la cobertura se muestra en cada fila.
 
   const initPreview = (queue) => {
     const edits = {};
@@ -436,25 +384,91 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
   }, [franchises, comps, activeCompany]);
 
   // 3. Pagos a cuenta sin factura de pauta
-  // Matching por importe exacto: cada PAGO_PAUTA necesita una FACTURA|PAUTA del mismo monto.
-  // Una FACTURA|PAUTA de distinto importe (ej. contra saldo acumulado) no cancela el pago —
-  // salvo que se lo haya vinculado a mano (comp.invoice) a la factura que ya lo cubrió.
+  // Se compara lo cobrado contra lo facturado en una VENTANA de dos meses —el del pago y el
+  // anterior— consumiendo primero el mes anterior. No se comparan importes uno a uno, porque el
+  // criterio viejo (una FACTURA|PAUTA del mismo importe exacto) fallaba de tres formas:
+  //   · sin mirar el mes, una sede que pauta siempre lo mismo apareaba el cobro nuevo con una
+  //     factura vieja (MDQ pagó 600.000 en jun, jul y ago; los tres se cruzaron con facturas de
+  //     feb/mar/abr "financiadas por BIGG"), y la pauta del mes quedaba sin facturar;
+  //   · exigiendo importes iguales, una factura que cubre el pago MÁS el saldo a favor nunca
+  //     apareaba (Canning cobró 701.756 y facturó 739.000, lo correcto, y seguía "pendiente");
+  //   · exigiendo el mismo mes, se rompen las sedes que facturan la pauta por adelantado. La
+  //     convención no es uniforme: MDQ y Saavedra fechan la factura en el mes de la pauta, Devoto
+  //     la fecha un mes antes ("Pauta Septiembre 2026" emitida el 31/08), y su cobro llega recién
+  //     en septiembre. La ventana de dos meses cubre las dos convenciones sin aflojar el criterio:
+  //     una factura ya consumida por el cobro de su propio mes no queda disponible para el siguiente.
+  // Se netean las NC|PAUTA porque anulan facturación del mes. `falta` es lo que queda sin cubrir:
+  // si es menor al pago, la factura lo cubrió en parte.
   const pagosSinFactura = useMemo(() => {
     return franchises.filter(f => f.activa !== false).flatMap(fr => {
-      const frComps = comps[fr.id] ?? [];
-      const pagos = frComps
-        .filter(c => c.type === "PAGO_PAUTA" && !c.invoice && (!activeCompany || compEmpresa(c) === activeCompany))
-        .sort((a, b) => cmpDate(a.date, b.date));
-      const factsPool = frComps
-        .filter(c => c.type === makeType("FACTURA","PAUTA") && (!activeCompany || compEmpresa(c) === activeCompany))
-        .map(c => ({ ...c, _used: false }));
-      return pagos.filter(pago => {
-        const match = factsPool.find(f => !f._used && Math.round(Math.abs(f.amount - pago.amount) * 100) <= 1);
-        if (match) { match._used = true; return false; }
-        return true;
-      }).map(c => ({ fr, comp: c }));
+      const frComps = (comps[fr.id] ?? []).filter(c => !activeCompany || compEmpresa(c) === activeCompany);
+      const facturado = {};
+      for (const c of frComps) {
+        if (c.type === makeType("FACTURA", "PAUTA")) facturado[idxMes(c)] = (facturado[idxMes(c)] ?? 0) + (c.amount ?? 0);
+        else if (c.type === makeType("NC", "PAUTA"))  facturado[idxMes(c)] = (facturado[idxMes(c)] ?? 0) - (c.amount ?? 0);
+      }
+      const pendientes = [];
+      for (const pago of frComps.filter(c => c.type === "PAGO_PAUTA" && !c.invoice).sort((a, b) => cmpDate(a.date, b.date))) {
+        let resta = pago.amount ?? 0;
+        for (let atras = 1; atras >= 0 && resta > 0.01; atras--) {
+          const k = idxMes(pago) - atras;
+          const usa = Math.min(Math.max(facturado[k] ?? 0, 0), resta);
+          facturado[k] = (facturado[k] ?? 0) - usa;
+          resta -= usa;
+        }
+        if (resta > 0.01) pendientes.push({ fr, comp: pago, falta: resta });
+      }
+      return pendientes;
     });
   }, [franchises, comps, activeCompany]);
+
+  // Cuánto hay para facturar de pauta detrás de cada pago a cuenta: lo transferido más el
+  // saldo a favor que la sede YA traía. `computeSaldo` da el saldo al cierre del mes con este
+  // pago adentro (entra como crédito), así que hay que descontarlo para no contarlo dos veces
+  // — un saldo a favor "de 1.000.000" en una sede que transfirió 700.000 son 300.000 propios.
+  //   sin saldo a favor previo → cobertura = el pago              (caso 1)
+  //   con saldo a favor previo → cobertura = pago + ese saldo     (caso 2 y 3)
+  // El tope es lo pautado, que todavía no existe como dato: hasta que exista, esto informa
+  // el máximo facturable, no el monto final. Hoy `handleEmitirPago` emite solo por el pago,
+  // así que sin este dato el caso 2 se factura de menos.
+  const coberturaPorPago = useMemo(() => {
+    const out = {};
+    for (const { fr, comp } of pagosSinFactura) {
+      const pago  = comp.amount ?? 0;
+      const saldo = computeSaldo(fr.id, comp.year, comp.month, comps, saldoInicial, null, compCurrency(comp), activeCompany);
+      const saldoSinPago = saldo + pago;                                  // deshace el crédito del pago
+      const aFavorPrevio = saldoSinPago < 0 ? -saldoSinPago : 0;
+      out[comp.id] = { cobertura: pago + aFavorPrevio, extra: aFavorPrevio };
+    }
+    return out;
+  }, [pagosSinFactura, comps, saldoInicial, activeCompany]);
+
+  // Sedes que pueden facturar pauta SIN haber transferido: el saldo a favor la cubre sola.
+  // Sin pago entrante no hay nada en la lista de arriba, así que hasta ahora este caso no
+  // aparecía en ningún lado y la factura se emitía solo si alguien se acordaba. Se listan TODAS
+  // las que tienen saldo a favor; las que ya facturaron algo de pauta este mes van al final y
+  // marcadas, no escondidas: una factura parcial no cierra el caso y hay que poder verlo.
+  // Única exclusión: las que tienen un cobro pendiente arriba, que ya salen ahí con su cobertura.
+  const refMonth = month ?? dateMonth(todayDmy());
+  const refYear  = year  ?? dateYear(todayDmy());
+  const sedesSaldoAFavor = useMemo(() => {
+    const conPagoPendiente = new Set(pagosSinFactura.map(({ fr }) => String(fr.id)));
+    return franchises
+      .filter(f => f.activa !== false && !conPagoPendiente.has(String(f.id)))
+      .map(fr => {
+        const cur   = fr.currencies?.[0] ?? null;
+        const saldo = computeSaldo(fr.id, refYear, refMonth, comps, saldoInicial, cur, cur, activeCompany);
+        const delMes = (comps[fr.id] ?? []).filter(c =>
+          c.month === refMonth && c.year === refYear && (!activeCompany || compEmpresa(c) === activeCompany));
+        const yaFacturado =
+          delMes.filter(c => c.type === makeType("FACTURA", "PAUTA")).reduce((a, c) => a + (c.amount ?? 0), 0) -
+          delMes.filter(c => c.type === makeType("NC", "PAUTA")).reduce((a, c) => a + (c.amount ?? 0), 0);
+        return { fr, aFavor: saldo < 0 ? -saldo : 0, currency: cur ?? "ARS", yaFacturado };
+      })
+      .filter(x => x.aFavor > 1)
+      .sort((a, b) => (a.yaFacturado > 0) - (b.yaFacturado > 0) || b.aFavor - a.aFavor);
+  }, [franchises, pagosSinFactura, comps, saldoInicial, activeCompany, refMonth, refYear]);
+  const sinFacturarAun = sedesSaldoAFavor.filter(x => x.yaFacturado <= 0).length;
 
   // 4. FC Recibidas pendientes de recibir factura (sin invoice)
   const fcRecibidasPendientes = useMemo(() => {
@@ -619,7 +633,11 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
     return m;
   }, [sinAsignar, fcRecibidasPendientes, recordatorios]);
 
-  if (sinAfipAll.length === 0 && sinNumeroAfip.length === 0 && sinAsignar.length === 0 && pagosSinFactura.length === 0 && fcRecibidasPendientes.length === 0) return null;
+  // El panel entero se oculta solo si NINGUNA de sus listas tiene algo. `sedesSaldoAFavor` cuenta:
+  // sin ella, cerrar todos los cobros pendientes hacía desaparecer también el caso 3, que no
+  // depende de que haya entrado un pago.
+  if (sinAfipAll.length === 0 && sinNumeroAfip.length === 0 && sinAsignar.length === 0 &&
+      pagosSinFactura.length === 0 && sedesSaldoAFavor.length === 0 && fcRecibidasPendientes.length === 0) return null;
 
   const selS = { background: "var(--bg)", border: "1px solid var(--border2)", color: "var(--text)", borderRadius: 6, padding: "4px 8px", fontSize: 11, fontFamily: "var(--font)", cursor: "pointer" };
   const thS  = { fontSize: 10, fontWeight: 700, color: "var(--muted)", padding: "6px 10px", letterSpacing: ".04em", textAlign: "left", borderBottom: "1px solid var(--border)" };
@@ -1337,17 +1355,11 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                   </span>
                 </div>
               )}
-              {pagosSinFactura.map(({ fr, comp }, i) => {
-                const openPagoAdj = !!pagoAdjuntando[comp.id];
-                const pagoAdjErr  = pagoAdjuntarErr[comp.id];
-                const pagoSaving  = !!pagoAdjuntarSaving[comp.id];
-                const openPagoVinc = !!pagoVincular[comp.id];
-                const pagoVincErr  = pagoVincularErr[comp.id];
-                const pagoVincSaving = !!pagoVincularSaving[comp.id];
-                const anyPanelOpen = openPagoAdj || pagoAdjErr || openPagoVinc || pagoVincErr;
+              {pagosSinFactura.map(({ fr, comp, falta }, i) => {
+                const parcial = falta != null && falta < (comp.amount ?? 0) - 0.01;
                 return (
                 <div key={i}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12, background: "var(--bg2)", borderRadius: anyPanelOpen ? "7px 7px 0 0" : 7, padding: "8px 12px", opacity: pagoBatchRunning ? 0.6 : 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, background: "var(--bg2)", borderRadius: 7, padding: "8px 12px", opacity: pagoBatchRunning ? 0.6 : 1 }}>
                   {!pagoBatchRunning && (
                     <input
                       type="checkbox"
@@ -1356,9 +1368,58 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                       style={{ cursor: "pointer", flexShrink: 0 }}
                     />
                   )}
-                  <span style={{ fontSize: 12, fontWeight: 700, flex: 1 }}>{fr.name}</span>
+                  {sedeEditId === comp.id ? (
+                    <span style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0 }}>
+                      <select
+                        autoFocus
+                        value={fr.id}
+                        onChange={e => {
+                          const nuevaFrId = Number(e.target.value);
+                          if (nuevaFrId !== fr.id && moveComp) moveComp(fr.id, nuevaFrId, comp.id, {});
+                          setSedeEditId(null);
+                        }}
+                        onKeyDown={e => { if (e.key === "Escape") setSedeEditId(null); }}
+                        style={{ flex: 1, minWidth: 0, background: "var(--bg)", border: "1px solid var(--accent)", color: "var(--text)", borderRadius: 5, padding: "3px 6px", fontSize: 11, fontFamily: "var(--font)", cursor: "pointer" }}
+                      >
+                        {sedesOrdenadas.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                      </select>
+                      <button
+                        className="ghost"
+                        style={{ fontSize: 10, padding: "2px 6px", whiteSpace: "nowrap" }}
+                        onClick={() => setSedeEditId(null)}
+                      >Cancelar</button>
+                    </span>
+                  ) : (
+                    <button
+                      className="ghost"
+                      title="Cambiar sede"
+                      style={{ fontSize: 12, fontWeight: 700, flex: 1, minWidth: 0, textAlign: "left", padding: "1px 4px", color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                      disabled={pagoBatchRunning}
+                      onClick={() => setSedeEditId(comp.id)}
+                    >{fr.name}</button>
+                  )}
                   <span style={{ fontSize: 11, color: "var(--muted)" }}>{MONTHS[comp.month]} {comp.year}</span>
                   <span className="mono" style={{ fontSize: 12, color: "var(--gold)", fontWeight: 700 }}>{fmt(comp.amount, compCurrency(comp))}</span>
+                  {(() => {
+                    const cob = coberturaPorPago[comp.id];
+                    if (!cob || cob.extra <= 1) return null;
+                    return (
+                      <span
+                        className="pill mono"
+                        title={`${fr.name} tiene saldo a favor al cierre de ${MONTHS[comp.month]}. Entre ese saldo y lo transferido hay ${fmt(cob.cobertura, compCurrency(comp))} para facturar, no solo los ${fmt(comp.amount, compCurrency(comp))} de la transferencia — hasta el tope de lo que haya pautado.`}
+                        style={{ color: "var(--cyan)", background: "rgba(34,211,238,.1)", fontSize: 9, whiteSpace: "nowrap", cursor: "help" }}
+                      >
+                        +{fmt(cob.extra, compCurrency(comp))} A FAVOR
+                      </span>
+                    );
+                  })()}
+                  {parcial && (
+                    <span className="pill mono"
+                      title={`De este cobro ya hay factura de pauta por ${fmt((comp.amount ?? 0) - falta, compCurrency(comp))}. Falta facturar el resto.`}
+                      style={{ color: "var(--orange)", background: "rgba(251,146,60,.1)", fontSize: 9, whiteSpace: "nowrap", cursor: "help" }}>
+                      FALTA {fmt(falta, compCurrency(comp))}
+                    </span>
+                  )}
                   <span className="pill" style={{ color: "var(--gold)", background: "rgba(222,251,151,.1)", fontSize: 9 }}>PAGO A CTA</span>
                   <button
                     className="ghost"
@@ -1368,26 +1429,6 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                   >
                     Emitir factura →
                   </button>
-                  {onAddComp && (
-                    <button
-                      className="ghost"
-                      title="La factura ya existe en Facturante — adjuntar número sin re-emitir"
-                      style={{ fontSize: 10, padding: "2px 8px", color: openPagoAdj ? "var(--muted)" : "var(--cyan)", whiteSpace: "nowrap" }}
-                      disabled={pagoBatchRunning}
-                      onClick={() => { if (openPagoVinc) handlePagoCerrarVincular(comp.id); openPagoAdj ? handlePagoCerrarAdjuntar(comp.id) : handlePagoAbrirAdjuntar(comp.id); }}
-                    >
-                      {openPagoAdj ? "Cancelar" : "Ya emitida →"}
-                    </button>
-                  )}
-                  <button
-                    className="ghost"
-                    title="Ya está contemplado en una factura de otro importe (ej. contra saldo acumulado) — no requiere factura propia"
-                    style={{ fontSize: 10, padding: "2px 8px", color: openPagoVinc ? "var(--muted)" : "var(--green)", whiteSpace: "nowrap" }}
-                    disabled={pagoBatchRunning}
-                    onClick={() => { if (openPagoAdj) handlePagoCerrarAdjuntar(comp.id); openPagoVinc ? handlePagoCerrarVincular(comp.id) : handlePagoAbrirVincular(comp.id); }}
-                  >
-                    {openPagoVinc ? "Cancelar" : "Ya cubierto →"}
-                  </button>
                   <button
                     className="ghost"
                     style={{ fontSize: 11, padding: "0 5px", color: "var(--text2)" }}
@@ -1396,60 +1437,58 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                     onClick={() => deleteComp(fr.id, comp.id)}
                   >✕</button>
                   </div>
-                  {openPagoVinc && (
-                    <div style={{ background: "rgba(173,255,25,.05)", border: "1px solid rgba(173,255,25,.2)", borderTop: "none", borderRadius: pagoVincErr ? 0 : "0 0 7px 7px", padding: "8px 12px", display: "flex", gap: 8, alignItems: "center" }}>
-                      <span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>Factura que ya lo cubrió:</span>
-                      <input
-                        autoFocus
-                        value={pagoVincularVal[comp.id] ?? ""}
-                        onChange={e => setPagoVincularVal(p => ({ ...p, [comp.id]: e.target.value }))}
-                        onKeyDown={e => { if (e.key === "Enter") handlePagoConfirmVincular(fr, comp); if (e.key === "Escape") handlePagoCerrarVincular(comp.id); }}
-                        placeholder="Ej: FA 0004-00000171"
-                        style={{ flex: 1, background: "var(--bg)", border: "1px solid var(--border2)", borderRadius: 5, padding: "4px 8px", fontSize: 12, color: "var(--text)", fontFamily: "var(--font)" }}
-                      />
-                      <button
-                        className="btn"
-                        style={{ fontSize: 11, padding: "3px 12px", background: "rgba(173,255,25,.15)", color: "var(--green)", border: "1px solid rgba(173,255,25,.3)", opacity: pagoVincSaving ? 0.5 : 1 }}
-                        disabled={pagoVincSaving}
-                        onClick={() => handlePagoConfirmVincular(fr, comp)}
-                      >
-                        {pagoVincSaving ? "Guardando…" : "Guardar"}
-                      </button>
-                    </div>
-                  )}
-                  {pagoVincErr && (
-                    <div style={{ background: "rgba(255,107,122,.08)", border: "1px solid rgba(255,107,122,.2)", borderTop: "none", borderRadius: "0 0 7px 7px", padding: "6px 12px", fontSize: 11, color: "var(--red)" }}>
-                      ✕ {pagoVincErr}
-                    </div>
-                  )}
-                  {openPagoAdj && (
-                    <div style={{ background: "rgba(34,211,238,.05)", border: "1px solid rgba(34,211,238,.2)", borderTop: "none", borderRadius: pagoAdjErr ? 0 : "0 0 7px 7px", padding: "8px 12px", display: "flex", gap: 8, alignItems: "center" }}>
-                      <span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>Nro. factura AFIP:</span>
-                      <input
-                        autoFocus
-                        value={pagoAdjuntarVal[comp.id] ?? ""}
-                        onChange={e => setPagoAdjuntarVal(p => ({ ...p, [comp.id]: e.target.value }))}
-                        onKeyDown={e => { if (e.key === "Enter") handlePagoConfirmAdjuntar(fr, comp); if (e.key === "Escape") handlePagoCerrarAdjuntar(comp.id); }}
-                        placeholder="Ej: FA 0004-00000108 o 0004-00000108"
-                        style={{ flex: 1, background: "var(--bg)", border: "1px solid var(--border2)", borderRadius: 5, padding: "4px 8px", fontSize: 12, color: "var(--text)", fontFamily: "var(--font)" }}
-                      />
-                      <button
-                        className="btn"
-                        style={{ fontSize: 11, padding: "3px 12px", background: "rgba(34,211,238,.15)", color: "var(--cyan)", border: "1px solid rgba(34,211,238,.3)", opacity: pagoSaving ? 0.5 : 1 }}
-                        disabled={pagoSaving}
-                        onClick={() => handlePagoConfirmAdjuntar(fr, comp)}
-                      >
-                        {pagoSaving ? "Guardando…" : "Guardar"}
-                      </button>
-                    </div>
-                  )}
-                  {pagoAdjErr && (
-                    <div style={{ background: "rgba(255,107,122,.08)", border: "1px solid rgba(255,107,122,.2)", borderTop: "none", borderRadius: "0 0 7px 7px", padding: "6px 12px", fontSize: 11, color: "var(--red)" }}>
-                      ✕ {pagoAdjErr}
-                    </div>
-                  )}
                 </div>);
               })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── PUEDEN FACTURAR CONTRA SALDO A FAVOR (sin transferencia) ── */}
+      {sedesSaldoAFavor.length > 0 && (
+        <div style={{ background: "rgba(34,211,238,.04)", border: "1px solid rgba(34,211,238,.22)", borderRadius: 10, padding: "14px 18px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: showSaldoAFavor ? 10 : 0 }}>
+            <span
+              style={{ fontSize: 10, fontWeight: 800, color: "var(--cyan)", letterSpacing: ".1em", flex: 1, cursor: "pointer" }}
+              onClick={() => setShowSaldoAFavor(v => !v)}
+            >
+              ◆ CON SALDO A FAVOR — {sedesSaldoAFavor.length} sede{sedesSaldoAFavor.length !== 1 ? "s" : ""}
+              {sinFacturarAun < sedesSaldoAFavor.length && ` · ${sinFacturarAun} sin pauta facturada`}
+            </span>
+            <span style={{ fontSize: 11, color: "var(--muted)", cursor: "pointer" }} onClick={() => setShowSaldoAFavor(v => !v)}>
+              {showSaldoAFavor ? "▲" : "▼"}
+            </span>
+          </div>
+          {showSaldoAFavor && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ fontSize: 10, color: "var(--muted)", paddingBottom: 4, borderBottom: "1px solid var(--border2)" }}>
+                Saldo a favor al cierre de {MONTHS[refMonth]} {refYear} — es el techo, no el monto de la factura.
+                Se factura lo pautado y el excedente se les transfiere.
+              </div>
+              {sedesSaldoAFavor.map(({ fr, aFavor, currency, yaFacturado }) => (
+                <div key={fr.id} style={{ display: "flex", alignItems: "center", gap: 12, background: "var(--bg2)", borderRadius: 7, padding: "8px 12px", opacity: yaFacturado > 0 ? 0.62 : 1 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fr.name}</span>
+                  <span style={{ fontSize: 11, color: "var(--muted)" }}>{MONTHS[refMonth]} {refYear}</span>
+                  <span className="mono" style={{ fontSize: 12, color: "var(--cyan)", fontWeight: 700 }}>{fmt(aFavor, currency)}</span>
+                  <span className="pill" style={{ color: "var(--cyan)", background: "rgba(34,211,238,.1)", fontSize: 9, whiteSpace: "nowrap" }}>SALDO A FAVOR</span>
+                  {yaFacturado > 0 && (
+                    <span className="pill mono" title={`Ya se emitió pauta de ${MONTHS[refMonth]} por ${fmt(yaFacturado, currency)}. Si eso es todo lo pautado, esta sede está cerrada.`}
+                      style={{ color: "var(--muted)", background: "rgba(255,255,255,.06)", fontSize: 9, whiteSpace: "nowrap", cursor: "help" }}>
+                      YA FACTURADO {fmt(yaFacturado, currency)}
+                    </span>
+                  )}
+                  <button
+                    className="ghost"
+                    title="Cargar la factura de pauta del mes — el monto lo define lo pautado, no el saldo"
+                    style={{ fontSize: 10, padding: "2px 8px", color: "var(--cyan)", whiteSpace: "nowrap" }}
+                    /* Prefill sin importe: abre el formulario con la sede, el tipo y el concepto
+                       resueltos y el monto vacío, porque acá lo pautado lo pone la persona. */
+                    onClick={() => onEmitir(fr, { type: makeType("FACTURA", "PAUTA"), month: refMonth, year: refYear })}
+                  >
+                    Facturar pauta →
+                  </button>
+                </div>
+              ))}
             </div>
           )}
         </div>
