@@ -132,6 +132,7 @@ function buildRows(franchises, comps, year, month, tiposCambio = {}, saldoInicia
 
     rows.push({
       sede: fr.name, sociedad: fr.sociedad ?? "—", pais: fr.country ?? "—",
+      operador: (fr.titular ?? "").toString().trim(), // Maestros › Sedes › "Nombre Operador"
       moneda: feeCurrency, feeMes, feePrev,
       feeMes_USD, feePrev_USD, feeYTD_USD, varPct,
       deuda_USD, saludRatio,
@@ -141,11 +142,36 @@ function buildRows(franchises, comps, year, month, tiposCambio = {}, saldoInicia
       tcFound: tc !== null,
     });
   }
-  return rows.sort((a, b) => {
+  rows.sort((a, b) => {
     if (a.hasOpened !== b.hasOpened) return a.hasOpened ? -1 : 1;
     if (a.sinFeeMes !== b.sinFeeMes) return a.sinFeeMes ? 1 : -1;
     return b.feeMes_USD - a.feeMes_USD;
   });
+  return canonizarOperadores(rows);
+}
+
+// ─── operador ────────────────────────────────────────────────────────────────
+// Etiqueta para las sedes sin "Nombre Operador" cargado en Maestros.
+const SIN_OPERADOR = "Sin operador";
+
+// Clave normalizada (sin acentos/mayúsculas/espacios de más) para reconocer al mismo operador
+// escrito distinto en cada sede.
+const normOper = s => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
+
+/**
+ * El "Nombre Operador" se tipea a mano en Maestros, así que el mismo dueño puede venir como
+ * "Gómez" en una sede y "Gomez " en otra. Unifica todas las variantes a una sola grafía —
+ * la primera que aparece — para que el filtro liste una opción por operador y el conteo no
+ * lo duplique. Se hace acá y no en la vista para que el mail reciba el dato ya unificado.
+ */
+function canonizarOperadores(rows) {
+  const canon = new Map();
+  for (const r of rows) {
+    if (!r.operador) continue;
+    const k = normOper(r.operador);
+    if (!canon.has(k)) canon.set(k, r.operador);
+  }
+  return rows.map(r => r.operador ? { ...r, operador: canon.get(normOper(r.operador)) } : r);
 }
 
 // ─── descarga Excel ──────────────────────────────────────────────────────────
@@ -467,8 +493,9 @@ function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef, resumen 
       : C.orange;
     const contratoLabel = r.royaltyContrato ? r.royaltyContrato + '%' : '—';
     return '<tr class="em-row" style="background:' + bg + ';border-bottom:1px solid ' + C.rowBorder + ';">' +
-      '<td style="padding:8px 12px;font-size:13px;color:' + (r.hasOpened ? C.tdMain : C.tdMuted) + ';font-weight:600;">' + r.sede + '</td>' +
+      '<td class="' + (r.hasOpened ? 'em-td-main' : '') + '" style="padding:8px 12px;font-size:13px;color:' + (r.hasOpened ? C.tdMain : C.tdMuted) + ';font-weight:600;">' + r.sede + '</td>' +
       '<td style="padding:8px 12px;font-size:13px;color:' + C.tdSec + ';">' + r.pais + '</td>' +
+      '<td style="padding:8px 12px;font-size:13px;color:' + C.tdSec + ';">' + (r.operador || '—') + '</td>' +
       '<td style="padding:8px 12px;font-size:13px;color:' + (r.sinFeeMes ? C.tdMuted : C.tdMain) + ';font-family:monospace;text-align:right;">' + (r.sinFeeMes ? '—' : fmtN(r.feeMes_USD)) + '</td>' +
       '<td style="padding:8px 12px;font-size:13px;color:' + cobradoColor + ';font-family:monospace;text-align:center;font-weight:700;">' + cobradoLabel + '</td>' +
       '<td style="padding:8px 12px;font-size:13px;color:' + C.tdSec + ';font-family:monospace;text-align:center;">' + contratoLabel + '</td>' +
@@ -495,6 +522,10 @@ function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef, resumen 
     '<tr style="background:' + C.tableBg + ';border-top:2px solid ' + C.thBorder + ';">' +
     '<td style="padding:8px 12px;font-size:13px;font-weight:700;color:' + C.tdMain + ';">Total</td>' +
     '<td style="padding:8px 12px;font-size:13px;font-weight:700;color:' + C.tdSec + ';">' + rows.length + ' sedes</td>' +
+    '<td style="padding:8px 12px;font-size:13px;font-weight:700;color:' + C.tdSec + ';">' + (() => {
+      const n = new Set(rows.map(r => r.operador).filter(Boolean)).size;
+      return n + ' operador' + (n !== 1 ? 'es' : '');
+    })() + '</td>' +
     '<td style="padding:8px 12px;font-size:13px;font-weight:700;color:' + C.tdMain + ';font-family:monospace;text-align:right;">' + fmtN(tot.fee) + '</td>' +
     '<td style="padding:8px 12px;font-size:13px;font-weight:700;color:' + C.tdMain + ';font-family:monospace;text-align:center;">' + (totPct != null ? totPct.toFixed(1) + '%' : '—') + '</td>' +
     '<td style="padding:8px 12px;font-size:13px;font-weight:700;color:' + C.tdSec + ';font-family:monospace;text-align:center;">—</td>' +
@@ -596,6 +627,7 @@ function buildEmailHtml({ rows, month, year, prev, tcActual, tcPrevRef, resumen 
     '<tr>' +
     '<th class="em-th" style="padding:8px 12px;text-align:left;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">Sede</th>' +
     '<th class="em-th" style="padding:8px 12px;text-align:left;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">País</th>' +
+    '<th class="em-th" style="padding:8px 12px;text-align:left;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">Operador</th>' +
     '<th class="em-th" style="padding:8px 12px;text-align:right;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">Fee ' + mesLabel + '<br><span style="font-size:9px;font-weight:400;color:' + C.tdMuted + ';">U$D · ' + year + '</span></th>' +
     '<th class="em-th" style="padding:8px 12px;text-align:center;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">% Cobrado</th>' +
     '<th class="em-th" style="padding:8px 12px;text-align:center;color:' + C.thText + ';font-size:14px;font-weight:600;background:' + C.thBg + ';border-bottom:2px solid ' + C.thBorder + ';">% Contrato</th>' +
@@ -622,6 +654,7 @@ export default function ReporteFeeModal({ franchises, comps, saldoInicial = {}, 
   const [sortDir,      setSortDir]      = useState("desc");
   const [filterSedes,  setFilterSedes]  = useState(new Set());
   const [filterPaises, setFilterPaises] = useState(new Set());
+  const [filterOpers,  setFilterOpers]  = useState(new Set());
   const [showSendPanel, setShowSendPanel] = useState(false);
   const [sendEmails,    setSendEmails]    = useState(() => { try { return localStorage.getItem("bigg_feeReportEmails") || ""; } catch { return ""; } });
   const [resumenEjecutivo, setResumenEjecutivo] = useState("");
@@ -682,19 +715,28 @@ export default function ReporteFeeModal({ franchises, comps, saldoInicial = {}, 
 
   const allSedes  = useMemo(() => [...new Set(baseRows.map(r => r.sede))].sort((a,b) => a.localeCompare(b)), [baseRows]);
   const allPaises = useMemo(() => [...new Set(baseRows.map(r => r.pais))].sort((a,b) => a.localeCompare(b)), [baseRows]);
+  // Opciones del filtro de operador: una entrada por operador cargado (ya unificado por
+  // buildRows), más "Sin operador" al final para aislar las sedes sin el dato en Maestros.
+  const allOpers  = useMemo(() => {
+    const conOper = [...new Set(baseRows.map(r => r.operador).filter(Boolean))].sort((a,b) => a.localeCompare(b));
+    return baseRows.some(r => !r.operador) ? [...conOper, SIN_OPERADOR] : conOper;
+  }, [baseRows]);
 
   const rows = useMemo(() => {
     const dir = sortDir === "asc" ? 1 : -1;
     return baseRows
       .filter(r =>
         (filterSedes.size  === 0 || filterSedes.has(r.sede)) &&
-        (filterPaises.size === 0 || filterPaises.has(r.pais))
+        (filterPaises.size === 0 || filterPaises.has(r.pais)) &&
+        (filterOpers.size  === 0 || filterOpers.has(r.operador || SIN_OPERADOR))
       )
       .sort((a, b) => {
         if (a.sinFeeMes !== b.sinFeeMes) return a.sinFeeMes ? 1 : -1;
         let cmp = 0;
         if      (sortCol === "sede")      cmp = a.sede.localeCompare(b.sede);
         else if (sortCol === "pais")      cmp = a.pais.localeCompare(b.pais);
+        // Sin operador va siempre al final del orden alfabético, no mezclado entre las "S".
+        else if (sortCol === "operador")  cmp = (a.operador || "￿").localeCompare(b.operador || "￿");
         else if (sortCol === "feeMesUSD") cmp = a.feeMes_USD - b.feeMes_USD;
         else if (sortCol === "pctCobrado") cmp = (a.pctCobrado ?? -Infinity) - (b.pctCobrado ?? -Infinity);
         else if (sortCol === "royaltyContrato") cmp = (a.royaltyContrato ?? 0) - (b.royaltyContrato ?? 0);
@@ -703,14 +745,14 @@ export default function ReporteFeeModal({ franchises, comps, saldoInicial = {}, 
         else if (sortCol === "deuda")     cmp = (a.deuda_USD ?? 0) - (b.deuda_USD ?? 0);
         return cmp * dir;
       });
-  }, [baseRows, filterSedes, filterPaises, sortCol, sortDir]);
+  }, [baseRows, filterSedes, filterPaises, filterOpers, sortCol, sortDir]);
 
   function toggleSort(col) {
     if (sortCol === col) setSortDir(d => d === "asc" ? "desc" : "asc");
     else { setSortCol(col); setSortDir("desc"); }
   }
 
-  const anyFilter = filterSedes.size > 0 || filterPaises.size > 0;
+  const anyFilter = filterSedes.size > 0 || filterPaises.size > 0 || filterOpers.size > 0;
 
   const handleSendReport = async () => {
     const to = sendEmails.split(",").map(s => s.trim()).filter(Boolean).join(",");
@@ -1035,6 +1077,7 @@ export default function ReporteFeeModal({ franchises, comps, saldoInicial = {}, 
                 <tr>
                   <SortFilterTh col="sede" label="Sede" options={allSedes}  selected={filterSedes}  onChange={setFilterSedes}  {...sortProps} />
                   <SortFilterTh col="pais" label="País" options={allPaises} selected={filterPaises} onChange={setFilterPaises} {...sortProps} />
+                  <SortFilterTh col="operador" label="Operador" options={allOpers} selected={filterOpers} onChange={setFilterOpers} {...sortProps} />
                   <SortTh col="feeMesUSD" {...sortProps}>
                     Fee {MONTHS[month]}
                   </SortTh>
@@ -1072,6 +1115,9 @@ export default function ReporteFeeModal({ franchises, comps, saldoInicial = {}, 
                     }}>
                       <td style={{ ...tdS, textAlign: "left", fontWeight: 600, fontFamily: "inherit" }}>{r.sede}</td>
                       <td style={{ ...tdS, textAlign: "left", color: "var(--text2)", fontFamily: "inherit" }}>{r.pais}</td>
+                      <td style={{ ...tdS, textAlign: "left", color: "var(--text2)", fontFamily: "inherit", opacity: r.operador ? 1 : .55 }}>
+                        {r.operador || "—"}
+                      </td>
                       <td style={{ ...tdS, fontWeight: 700, color: r.sinFeeMes ? "var(--text2)" : "var(--text)" }}>
                         {!r.hasOpened
                           ? <span style={{ color: "var(--text2)", fontSize: 10 }}>Sin abrir</span>
@@ -1143,6 +1189,12 @@ export default function ReporteFeeModal({ franchises, comps, saldoInicial = {}, 
                     <tr>
                       <td style={{ ...ft, textAlign: "left", fontFamily: "inherit" }}>Total</td>
                       <td style={{ ...ft, textAlign: "left", color: "var(--text2)", fontFamily: "inherit" }}>{rows.length} sedes</td>
+                      <td style={{ ...ft, textAlign: "left", color: "var(--text2)", fontFamily: "inherit" }}>
+                        {(() => {
+                          const n = new Set(rows.map(r => r.operador).filter(Boolean)).size;
+                          return `${n} operador${n !== 1 ? "es" : ""}`;
+                        })()}
+                      </td>
                       <td style={ft}>{fmtNum(tot.fee)}</td>
                       <td style={{ ...ft, textAlign: "center" }}>{totPct != null ? totPct.toFixed(1) + "%" : "—"}</td>
                       <td style={{ ...ft, textAlign: "center", color: "var(--text2)" }}>—</td>
