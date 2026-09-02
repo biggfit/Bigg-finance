@@ -8,7 +8,7 @@ import PendientesPanel from "../components/PendientesPanel";
 import { buildFacturaPDF, downloadTextAsPDF } from "../lib/pdf";
 import { downloadInvoicePdf, downloadBatchInvoicePdf } from "../lib/invoicePdf";
 import { emitirComprobante, formatInvoiceLabel, invoiceFromResult, fetchAfipNumero, downloadFacturantePdfBlob, afipSaveFailedMsg } from "../lib/facturanteApi";
-import { getNextInvoiceNum } from "../lib/sheetsApi";
+import { getNextInvoiceNum, fetchComps } from "../lib/sheetsApi";
 import { fetchCuentasBancarias } from "../lib/numbersApi";       // cuentas de Numbers (destino de la plata)
 import { SOCIEDAD_EMPRESA } from "../lib/franquiciasAdapter";
 
@@ -1038,6 +1038,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
 
   const handleConfirm = async (skipFacturante = false) => {
     const log = [];
+    const dudosos = [];   // escrituras sin confirmación — se resuelven releyendo al final del lote
     const total = toProcess.length;
     setBatchProg({ current: 0, total, name: "" });
     for (let idx = 0; idx < toProcess.length; idx++) {
@@ -1091,21 +1092,49 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
         }
       }
       const saveResult = await onAddComp(r.frId, comp);
+      const entry = { frName: r.frName, fee, country: r.country, dto, facturanteStatus, invoice: comp.invoice ?? null };
+      // Una escritura rechazada NO significa que la fila no se haya guardado: el POST puede llegar
+      // al Apps Script, escribirse, y perderse la respuesta (timeout del proxy). Se anota como
+      // dudosa y se confirma al final releyendo la hoja — dar por fallida una que sí entró es lo
+      // que lleva a cargarla a mano y terminar con la factura duplicada.
       if (saveResult?.ok === false && comp.facturanteId) {
-        facturanteStatus = `GUARDADO_FALLIDO (AFIP OK, ID=${comp.facturanteId}) — cargar a mano en el sistema`;
+        entry.facturanteStatus = "verificando…";
+        dudosos.push({ entry, facturanteId: String(comp.facturanteId) });
       }
-      log.push({ frName: r.frName, fee, country: r.country, dto, facturanteStatus, invoice: comp.invoice ?? null });
+      log.push(entry);
     }
+
+    if (dudosos.length > 0) {
+      try {
+        const frescos = await fetchComps();
+        const guardados = new Set(
+          Object.values(frescos).flat().map(c => String(c.facturanteId ?? "")).filter(Boolean));
+        for (const { entry, facturanteId } of dudosos) {
+          entry.facturanteStatus = guardados.has(facturanteId)
+            ? `guardado (se perdió la respuesta, ID=${facturanteId})`
+            : `GUARDADO_FALLIDO (AFIP OK, ID=${facturanteId}) — cargar a mano en el sistema`;
+        }
+      } catch {
+        // Sin relectura no se puede afirmar ninguna de las dos cosas: se pide revisar antes de cargar.
+        for (const { entry, facturanteId } of dudosos) {
+          entry.facturanteStatus = `VERIFICAR (AFIP OK, ID=${facturanteId}) — no se pudo releer la hoja; buscá la factura en la sede antes de cargarla a mano`;
+        }
+      }
+    }
+
     setBatchProg(null);
     setProcessed(log);
     setStage("done");
   };
 
   if (stage === "done") {
-    const failedCount = processed.filter(p => p.facturanteStatus?.startsWith("GUARDADO_FALLIDO")).length;
+    // Solo cuentan las confirmadas como faltantes tras releer la hoja. Las que quedaron en
+    // VERIFICAR (no se pudo releer) se avisan aparte: no se sabe si entraron o no.
+    const failedCount   = processed.filter(p => p.facturanteStatus?.startsWith("GUARDADO_FALLIDO")).length;
+    const verificarCount = processed.filter(p => p.facturanteStatus?.startsWith("VERIFICAR")).length;
     return (
     <div className="fade" style={{ textAlign: "center", padding: 40 }}>
-      <div style={{ fontSize: 40, marginBottom: 12 }}>{failedCount > 0 ? "⚠️" : "✅"}</div>
+      <div style={{ fontSize: 40, marginBottom: 12 }}>{failedCount > 0 || verificarCount > 0 ? "⚠️" : "✅"}</div>
       <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 8 }}>Lote CRM procesado</div>
       <div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 16 }}>
         {processed.length} comprobante{processed.length !== 1 ? "s" : ""} · {MONTHS[crmMonth]} {crmYear}
@@ -1113,6 +1142,17 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
       {failedCount > 0 && (
         <div style={{ color: "var(--red)", fontWeight: 700, fontSize: 13, marginBottom: 16 }}>
           {failedCount} factura{failedCount !== 1 ? "s" : ""} emitida{failedCount !== 1 ? "s" : ""} en Facturante pero NO guardada{failedCount !== 1 ? "s" : ""} en el sistema
+          <div style={{ fontWeight: 400, fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+            Verificado releyendo la hoja: estas no están. Cargalas a mano con el ID que figura abajo.
+          </div>
+        </div>
+      )}
+      {verificarCount > 0 && (
+        <div style={{ color: "var(--orange)", fontWeight: 700, fontSize: 13, marginBottom: 16 }}>
+          {verificarCount} factura{verificarCount !== 1 ? "s" : ""} sin confirmar
+          <div style={{ fontWeight: 400, fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+            No se pudo releer la hoja para verificarlas. Buscá cada una en su sede antes de cargarla a mano — puede estar guardada.
+          </div>
         </div>
       )}
       <div className="card" style={{ textAlign: "left", maxWidth: 540, margin: "0 auto 20px" }}>

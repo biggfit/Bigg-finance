@@ -88,8 +88,15 @@ export function formatInvoiceLabel(tipoComprobante, afipNumero, puntoVenta) {
  * Devuelve undefined si AFIP aún no asignó número (afipNumero es null).
  * Nunca usa idComprobante (ID interno de Facturante) como número de factura.
  */
+/**
+ * Mensaje para cuando la emisión en AFIP salió bien pero no llegó la confirmación del guardado.
+ * No afirma que no se guardó: el POST puede haber escrito la fila y perderse la respuesta, y dar
+ * por fallida una que sí entró termina en la factura cargada dos veces.
+ */
 export function afipSaveFailedMsg(invoice, facturanteId) {
-  return `Emitida en AFIP (${invoice ?? facturanteId}) pero falló al guardar. Reintentá o anotá ID=${facturanteId}`;
+  return `Emitida en AFIP (${invoice ?? facturanteId}) pero no llegó la confirmación del guardado. `
+       + `Puede haberse guardado igual: buscala en la sede antes de cargarla a mano. `
+       + `Si no está, cargala con ID=${facturanteId}`;
 }
 
 export function invoiceFromResult(result) {
