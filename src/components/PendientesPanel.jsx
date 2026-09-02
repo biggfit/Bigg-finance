@@ -7,6 +7,25 @@ import { sendMailFr } from "../lib/sheetsApi";
 // Mes absoluto de un comprobante (año*12+mes) para comparar meses de años distintos sin casos borde.
 const idxMes = c => c.year * 12 + c.month;
 
+// Período que una factura de pauta dice cubrir, leído del concepto ("Pauta Septiembre 2026",
+// "Factura - Pauta - Agosto 2026", "Pauta Sep 2026"). La fecha no alcanza para saberlo: la
+// convención no es uniforme entre sedes —Florida y Corrientes fechan el 31/08 la pauta de
+// septiembre, Palermo Rosedal fecha el 31/08 la de agosto— así que preguntar por la fecha marca
+// como pendientes a sedes ya facturadas. Si el concepto no nombra un mes, se cae a la fecha.
+const MES_ABREV = MONTHS.map(m => m.slice(0, 3).toLowerCase());
+function periodoPauta(c) {
+  const txt = `${c.nota ?? ""} ${c.ref ?? ""}`.toLowerCase();
+  let mejor = null;
+  for (let m = 0; m < 12; m++) {
+    // \b + abreviatura evita que "General" matchee "ene" o "Enero" matchee dentro de otra palabra.
+    const hit = txt.match(new RegExp(`\\b${MES_ABREV[m]}[a-záéíóú]*\\b[^0-9]{0,10}(20\\d{2})?`));
+    // Gana el mes que aparece ANTES en el texto, no el más chico del calendario: un concepto como
+    // "Pauta Septiembre 2026 - ajuste de agosto" habla de septiembre.
+    if (hit && (mejor === null || hit.index < mejor.index)) mejor = { index: hit.index, month: m, year: hit[1] ? Number(hit[1]) : c.year };
+  }
+  return mejor ? { month: mejor.month, year: mejor.year } : { month: c.month, year: c.year };
+}
+
 // ── Pendientes panel ────────────────────────────────────────────────────────
 export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, onFetchAfipNumero, month, year }) {
   const { franchises, comps, saldoInicial, editComp, moveComp, deleteComp, activeCompany, recordatorios, addRecordatorioEntry } = useStore();
@@ -458,11 +477,17 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
       .map(fr => {
         const cur   = fr.currencies?.[0] ?? null;
         const saldo = computeSaldo(fr.id, refYear, refMonth, comps, saldoInicial, cur, cur, activeCompany);
-        const delMes = (comps[fr.id] ?? []).filter(c =>
-          c.month === refMonth && c.year === refYear && (!activeCompany || compEmpresa(c) === activeCompany));
+        // "Ya facturado" se mide por el período que declara el concepto de la factura, no por su
+        // fecha de emisión — ver periodoPauta.
+        const delPeriodo = (comps[fr.id] ?? []).filter(c => {
+          if (activeCompany && compEmpresa(c) !== activeCompany) return false;
+          if (c.type !== makeType("FACTURA", "PAUTA") && c.type !== makeType("NC", "PAUTA")) return false;
+          const p = periodoPauta(c);
+          return p.month === refMonth && p.year === refYear;
+        });
         const yaFacturado =
-          delMes.filter(c => c.type === makeType("FACTURA", "PAUTA")).reduce((a, c) => a + (c.amount ?? 0), 0) -
-          delMes.filter(c => c.type === makeType("NC", "PAUTA")).reduce((a, c) => a + (c.amount ?? 0), 0);
+          delPeriodo.filter(c => c.type === makeType("FACTURA", "PAUTA")).reduce((a, c) => a + (c.amount ?? 0), 0) -
+          delPeriodo.filter(c => c.type === makeType("NC", "PAUTA")).reduce((a, c) => a + (c.amount ?? 0), 0);
         return { fr, aFavor: saldo < 0 ? -saldo : 0, currency: cur ?? "ARS", yaFacturado };
       })
       .filter(x => x.aFavor > 1)
