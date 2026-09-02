@@ -332,6 +332,10 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
             tipo: "pago", concepto: FP_TIPO_LABEL[l.tipo] || l.tipo,
             cuenta_contable: CUENTA_CONTABLE_SUELDOS, forma_pago: l.tipo,
             sociedad_id: sociedadDeFormaPago(l.tipo, l.sociedad_id, liq.sociedad_id), monto: imp,
+            // Datos de la cuenta destino: se congelan también, si no se pierden al cerrar
+            // (quedaban en blanco para siempre en la liquidación ya cerrada).
+            titular: l.titular ?? "", banco: l.banco ?? "", tipo_cuenta: l.tipo_cuenta ?? "",
+            cuenta: l.cuenta ?? "", cbu: l.cbu ?? "", cuit: l.cuit ?? "", nota: l.nota ?? "",
           }));
         }
         // novedad: congelar cada una con su cuenta contable.

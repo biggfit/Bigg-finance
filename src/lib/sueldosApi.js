@@ -403,7 +403,11 @@ function liqFromLineas(idLiq, lineas) {
     } else if (l.tipo === "pago") {
       const bucket = FP_SCALAR_BUCKET[l.forma_pago] ?? "deposito";
       out[`monto_${bucket}`] += monto;
-      out.formas_pago.push({ id: l.id, tipo: l.forma_pago, importe: monto, sociedad_id: l.sociedad_id ?? "" });
+      out.formas_pago.push({
+        id: l.id, tipo: l.forma_pago, importe: monto, sociedad_id: l.sociedad_id ?? "",
+        titular: l.titular ?? "", banco: l.banco ?? "", tipo_cuenta: l.tipo_cuenta ?? "",
+        cuenta: l.cuenta ?? "", cbu: l.cbu ?? "", cuit: l.cuit ?? "", nota: l.nota ?? "",
+      });
       if (l.forma_pago === "monotributo" && l.sociedad_id) out.sociedad_monotributo = l.sociedad_id;
       out.total_bruto += monto;
     } else if (l.tipo === "novedad") {
