@@ -1212,13 +1212,13 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         </div>
 
         <button onClick={toggleMarcado}
-          title={marcado ? "Marcado por vos como mes cerrado — click para desmarcar (no afecta la liquidación real)" : "Marcar este mes como cerrado (tilde personal, no afecta la liquidación)"}
+          title={marcado ? "Marcado por vos como finalizado — click para desmarcar (no afecta la liquidación real)" : "Marcar este mes como finalizado (tilde personal, no afecta la liquidación)"}
           style={{
             background: marcado ? "#334155" : "#fff", color: marcado ? "#fff" : T.muted,
             border: `1px solid ${marcado ? "#334155" : T.border}`, borderRadius: 7,
             padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font,
           }}>
-          {marcado ? "✅ Mes cerrado" : "☐ Marcar cerrado"}
+          {marcado ? "✅ Finalizado" : "☐ En proceso"}
         </button>
 
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
