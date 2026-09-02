@@ -207,10 +207,24 @@ const cuentaGestionPorNota = (nota) => /gympass|corpo/i.test(String(nota || ""))
 
 // Modal para DECLARAR una interco recibida (lado receptor): la plata que entró a mi banco/caja → fondeo,
 // sin P&L, sin posición nueva. Costo de clearing opcional → Perdidas Financieras (P&L). Marca la pata parkeada.
-function DeclararRecibidaModal({ pend, sociedad, cuentas = [], planCuentas = [], onClose, onDone }) {
+function DeclararRecibidaModal({ pend, sociedad, cuentas = [], planCuentas = [], centros = [], onClose, onDone }) {
   const envio = pend?.dir === "envie";   // envié = EGRESO (cierro mi salida); recibí = INGRESO (fondeo)
   const ctasContables = (planCuentas || []).slice().sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
+  // Opciones de centro AGRUPADAS por país / HQ / otros (mismo criterio que el dropdown de los movimientos).
+  // El costo se imputa en la sociedad que recibe; el usuario elige el centro que corresponde (ej. Operaciones · España).
+  const cecoOptEls = (() => {
+    const { hq, ops, rest } = groupCentrosCosto(centros || []);
+    const porPais = {};
+    for (const c of ops) { const p = c.pais || "Sin país"; (porPais[p] ||= []).push(c); }
+    const opt = c => <option key={c.id} value={c.id}>{c.nombre}</option>;
+    return <>
+      {Object.keys(porPais).sort().map(p => <optgroup key={p} label={`Operaciones · ${p}`}>{porPais[p].map(opt)}</optgroup>)}
+      {hq.length > 0 && <optgroup label="HQ">{hq.map(opt)}</optgroup>}
+      {rest.length > 0 && <optgroup label="Otros">{rest.map(opt)}</optgroup>}
+    </>;
+  })();
   const [costoCuenta, setCostoCuenta] = useState("Perdidas Financieras");   // cuenta contable del costo (editable)
+  const [costoCentro, setCostoCentro] = useState("");   // centro de costo del costo — OBLIGATORIO si hay costo (si no, queda "en el aire" y se filtra al OPEX HQ)
   // El que parkeó dejó su caja destino como hint (cuenta_mia desde mi lado) → precargar la cuenta.
   const ctaHint = (cuentas || []).find(c => String(c.id) === String(pend?.cuenta_mia));
   // Precargar el monto SOLO si la moneda de la caja coincide con la parkeada. Cross-moneda (recibís EUR/COP
@@ -223,7 +237,8 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], planCuentas = [],
   const [busy, setBusy]     = useState(false);
   const ctas = (cuentas || []).slice().sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
   const monedaCta = ctas.find(c => String(c.id) === String(cuenta))?.moneda || pend?.moneda || "USD";
-  const canSave = cuenta && Number(monto) > 0 && !busy;
+  const faltaCentro = Number(costo) > 0 && !costoCentro;   // hay costo pero sin CECO → bloquea (si no, se filtra al OPEX HQ)
+  const canSave = cuenta && Number(monto) > 0 && !faltaCentro && !busy;
 
   const guardar = async () => {
     if (!canSave) return;
@@ -233,13 +248,13 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], planCuentas = [],
         await declararIntercoEnviada({
           sociedad, cuenta_bancaria: cuenta, fecha,
           destino_sociedad: pend.origen_sociedad, destino_nombre: pend.origen_nombre,
-          monto: Number(monto), moneda: monedaCta, costo: Number(costo) || 0, costo_cuenta: costoCuenta, parked_leg_id: pend.id,
+          monto: Number(monto), moneda: monedaCta, costo: Number(costo) || 0, costo_cuenta: costoCuenta, costo_centro: costoCentro, parked_leg_id: pend.id,
         });
       } else {
         await declararIntercoRecibida({
           sociedad, cuenta_bancaria: cuenta, fecha,
           origen_sociedad: pend.origen_sociedad, origen_nombre: pend.origen_nombre,
-          monto: Number(monto), moneda: monedaCta, costo: Number(costo) || 0, costo_cuenta: costoCuenta, parked_leg_id: pend.id,
+          monto: Number(monto), moneda: monedaCta, costo: Number(costo) || 0, costo_cuenta: costoCuenta, costo_centro: costoCentro, parked_leg_id: pend.id,
         });
       }
       await onDone();   // refresca la CC + cierra el modal
@@ -251,7 +266,10 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], planCuentas = [],
     } finally { setBusy(false); }
   };
 
-  const inp = MODAL_INP, lbl = MODAL_LBL;
+  const inp = MODAL_INP;
+  // Labels de 2 líneas de alto fijo: así, aunque un rótulo sea largo (ej. "Monto bruto…post-TC") y wrapee y otro no,
+  // los inputs de la misma fila arrancan a la MISMA altura (alineados).
+  const lbl = { ...MODAL_LBL, minHeight: 30, boxSizing: "border-box" };
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={onClose}>
@@ -272,17 +290,26 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], planCuentas = [],
             <div style={{ flex: 1 }}><label style={lbl}>Fecha</label>
               <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={inp} /></div>
           </div>
-          <div><label style={lbl}>{envio ? `Monto que salió de tu caja (${monedaCta}) *` : `Monto bruto que ingresó (post-TC) (${monedaCta}) *`}</label>
-            <input value={monto} onChange={e => setMonto(e.target.value)} style={inp} placeholder={envio ? "lo que salió" : "el bruto, antes del costo"} /></div>
           <div style={{ display: "flex", gap: 12 }}>
+            <div style={{ flex: 1 }}><label style={lbl}>{envio ? `Monto que salió de tu caja (${monedaCta}) *` : `Monto bruto que ingresó (post-TC) (${monedaCta}) *`}</label>
+              <input value={monto} onChange={e => setMonto(e.target.value)} style={inp} placeholder={envio ? "lo que salió" : "el bruto, antes del costo"} /></div>
             <div style={{ flex: 1 }}><label style={lbl}>Costo de transferencia / clearing</label>
               <input value={costo} onChange={e => setCosto(e.target.value)} style={inp} placeholder="si la financiera te lo informa" /></div>
-            <div style={{ flex: 1.2 }}><label style={lbl}>Cuenta contable del costo</label>
+          </div>
+          <div style={{ display: "flex", gap: 12 }}>
+            <div style={{ flex: 1 }}><label style={lbl}>Cuenta contable del costo</label>
               <select value={costoCuenta} onChange={e => setCostoCuenta(e.target.value)} style={inp}>
                 {!ctasContables.some(c => c.nombre === costoCuenta) && <option value={costoCuenta}>{costoCuenta}</option>}
                 {ctasContables.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
               </select></div>
+            <div style={{ flex: 1 }}><label style={lbl}>Centro de costo del costo</label>
+              <select value={costoCentro} onChange={e => setCostoCentro(e.target.value)}
+                style={{ ...inp, ...(faltaCentro ? { border: "1px solid #fb923c", background: "#fff7ed" } : {}) }}>
+                <option value="">— Elegí el centro —</option>
+                {cecoOptEls}
+              </select></div>
           </div>
+          {faltaCentro && <div style={{ fontSize: 11, color: "#b45309", marginTop: -4 }}>Obligatorio si hay costo: sin centro, se cuela en el OPEX de HQ.</div>}
           {Number(costo) > 0 && (
             <div style={{ fontSize: 11.5, color: T.text, background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 6, padding: "6px 10px" }}>
               Neto en tu caja: <b>{monedaCta} {Math.round((Number(monto) || 0) - (Number(costo) || 0)).toLocaleString("es-AR")}</b>
@@ -2188,6 +2215,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
           sociedad={sociedad}
           cuentas={cuentas}
           planCuentas={cuentasTodas}
+          centros={centros}
           onClose={() => setDeclararFor(null)}
           onDone={async () => {
             const closedId = declararFor?.id;   // pata parkeada que se acaba de cerrar
