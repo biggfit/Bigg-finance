@@ -2196,7 +2196,7 @@ function PasoFormaPago({ empls, pagoDraft, onChangePago, onAtras, onContinuar, o
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           <button onClick={onContinuar} style={BTN_SECONDARY}>Continuar →</button>
           <button onClick={onSiguiente} disabled={saving} style={BTN_PRIMARY(saving)}>
-            {saving ? "Guardando…" : "Guardar y continuar →"}
+            {saving ? "Cerrando…" : "🔒 Cerrar liquidación y continuar →"}
           </button>
         </div>
       </div>
