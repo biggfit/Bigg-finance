@@ -109,6 +109,23 @@ export function derivarSaldos({
   const cuentaById     = new Map(cuentasContables.map(c => [c.id, c]));
   const cuentaByNombre = new Map(cuentasContables.map(c => [(c.nombre ?? "").toLowerCase(), c]));
 
+  // ── CC comercial con OTRAS SOCIEDADES del grupo (facturas reales, NO funding) ──
+  // Comprobantes cuya contraparte es otra sociedad = deuda comercial real (ej. Ñako le factura
+  // alquiler/pauta a Segui, Segui le hace una NC). Se consolidan por contraparte (neto CxC−CxP) y
+  // van a Activo (nos deben) o Pasivo (les debemos), en UNA fila — separado del bloque
+  // "Intercompañía" (que es funding: transferencias / pagar con caja ajena, saldo fluctuante).
+  const socIds = sociedadesMap ? new Set([...sociedadesMap.keys()].map(x => String(x).toLowerCase())) : null;
+  const nomSoc = id => sociedadesMap?.get?.(String(id)) || sociedadesMap?.get?.(String(id).toLowerCase()) || String(id);
+  const esContraparteSociedad = cpId => !!socIds && !!cpId && socIds.has(String(cpId).toLowerCase()) && String(cpId).toLowerCase() !== _soc;
+  const ccGrupo = new Map();   // `${cpId}||${moneda}` → { cpId, nombre, moneda, cobrar, pagar, docs }
+  const accCC = (cpId, moneda, side, saldo, doc) => {
+    const k = `${String(cpId).toLowerCase()}||${moneda}`;
+    let e = ccGrupo.get(k);
+    if (!e) { e = { cpId, nombre: nomSoc(cpId), moneda, cobrar: 0, pagar: 0, docs: [] }; ccGrupo.set(k, e); }
+    e[side] += saldo;
+    e.docs.push({ ...doc, _side: side, monto: saldo });
+  };
+
   // ── A cobrar (comprobantes de ingreso pendientes) ──
   const cobros = pagosCobros.filter(p => p.tipo === "COBRO" && (!corte || (p.fecha ?? "") <= corte));
   const grpCob = {};
@@ -118,6 +135,12 @@ export function derivarSaldos({
     if (corte && (ing.fecha ?? "") > corte) continue;
     const pagosDoc = cobros.filter(c => c.documento_id === ing.id);
     const saldo    = calcSaldoPendiente(ing.importe, pagosDoc);
+    // Contraparte = otra sociedad → CC comercial (no va al bucket por cuenta; se netea aparte).
+    if (esContraparteSociedad(ing.clienteId)) {
+      if (saldo > 0) accCC(ing.clienteId, ing.moneda ?? "ARS", "cobrar", saldo,
+        { fecha: ing.fecha, cuenta: ing.cuenta || "—", nroComp: ing.nroComp || ing.nro_comp || "", vto: ing.vto, moneda: ing.moneda ?? "ARS" });
+      continue;
+    }
     const cuentaDef = resolveCuenta(cuentaById, cuentaByNombre, ing.cuentaId, ing.cuenta);
     const label     = cuentaDef?.cuenta_pasivo || ing.cuenta || "Sin cuenta";
     const key       = `${label}||${ing.moneda ?? "ARS"}`;
@@ -179,6 +202,12 @@ export function derivarSaldos({
     if (corte && (eg.fecha ?? "") > corte) continue;
     const pagosDoc = pagos.filter(p => p.documento_id === eg.id);
     const saldo    = calcSaldoPendiente(eg.importe, pagosDoc);
+    // Contraparte = otra sociedad → CC comercial (no va al bucket por cuenta; se netea aparte).
+    if (esContraparteSociedad(eg.proveedorId)) {
+      if (saldo > 0) accCC(eg.proveedorId, eg.moneda ?? "ARS", "pagar", saldo,
+        { fecha: eg.fecha, cuenta: eg.cuenta || "—", nroComp: eg.nroComp || eg.nro_comp || "", vto: eg.vto, moneda: eg.moneda ?? "ARS" });
+      continue;
+    }
     const cuentaDef = resolveCuenta(cuentaById, cuentaByNombre, eg.cuentaId, eg.cuenta);
     const bucket    = (cuentaDef?.cuenta_pasivo ?? "").toLowerCase() || "proveedores";
     const label     = /^tarjeta/i.test(eg.proveedor ?? "") ? "Tarjeta de crédito"
@@ -259,5 +288,29 @@ export function derivarSaldos({
   // Interco = bloque propio (abajo de Inversiones), NO mezclado en Activo/Pasivo.
   const interco = [...intercoAct, ...intercoPas];
 
-  return { cuentas, aCobrar, aPagar, interco };
+  // ── CC comercial del grupo: neto por contraparte → Activo (nos deben) / Pasivo (les debemos) ──
+  // Una fila por contraparte, deuda REAL en el Balance (a diferencia del bloque Intercompañía/funding).
+  // El neteo saca la NC del Activo y la compensa contra el Pasivo → no distorsiona el PN.
+  const ccAct = [], ccPas = [];
+  for (const e of ccGrupo.values()) {
+    const neto = e.cobrar - e.pagar;   // >0 nos deben (activo) · <0 les debemos (pasivo)
+    if (Math.abs(neto) < 0.5) continue;
+    const ladoSuma = neto > 0 ? "cobrar" : "pagar";   // el otro lado resta (p.ej. una NC en un pasivo)
+    const docs = e.docs.map(d => ({
+      fecha: d.fecha, cuenta: d.cuenta, nroComp: d.nroComp, side: d._side, monto: d.monto,
+      vto: d.vto, moneda: d.moneda,
+      contraparte: `${d.cuenta || "—"}${d.nroComp ? " " + d.nroComp : ""}`,   // fallback para la vista aging
+      saldo: (d._side === ladoSuma ? 1 : -1) * d.monto,                        // firmado → el total reconcilia al neto
+    }));
+    const item = { label: e.nombre, moneda: e.moneda, saldo: Math.abs(neto), docs,
+      headerColor: neto > 0 ? "#16a34a" : "#dc2626", ccGrupo: true };
+    (neto > 0 ? ccAct : ccPas).push(item);
+  }
+
+  return {
+    cuentas,
+    aCobrar: ccAct.length ? [...aCobrar, ...ccAct].sort(franqFirst) : aCobrar,
+    aPagar:  ccPas.length ? [...aPagar,  ...ccPas].sort(franqFirst) : aPagar,
+    interco,
+  };
 }

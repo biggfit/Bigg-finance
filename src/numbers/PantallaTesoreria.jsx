@@ -547,7 +547,8 @@ export function PaginaAging({ item, fechaCorte, headerColor, onBack }) {
   }), { avencer:0, d0_30:0, d31_60:0, d61_90:0, dmas90:0, total:0 });
 
   const mon    = item.moneda ?? "ARS";
-  const contraparteLabel = headerColor === "#16a34a" ? "Cliente" : "Proveedor";
+  // CC comercial del grupo: las filas son cuentas/comprobantes, no proveedores/clientes.
+  const contraparteLabel = item.ccGrupo ? "Cuenta" : (headerColor === "#16a34a" ? "Cliente" : "Proveedor");
   const fmt    = v => v > 0 ? fmtSaldo(v, mon) : <span style={{ color:T.dim }}>—</span>;
   const thS    = { padding:"10px 16px", fontSize:11, fontWeight:800, color:"rgba(255,255,255,.85)",
                    textAlign:"right", letterSpacing:".04em", textTransform:"uppercase", whiteSpace:"nowrap" };
@@ -570,7 +571,7 @@ export function PaginaAging({ item, fechaCorte, headerColor, onBack }) {
             {item.label}
           </h1>
           <div style={{ fontSize:12, color:T.muted, marginTop:2 }}>
-            Detalle por {contraparteLabel.toLowerCase()}
+            {item.ccGrupo ? "Cuenta corriente · por fecha" : `Detalle por ${contraparteLabel.toLowerCase()}`}
             {fechaCorte && <span style={{ marginLeft:8 }}>· Al {fmtDate(fechaCorte)}</span>}
           </div>
         </div>
@@ -592,8 +593,56 @@ export function PaginaAging({ item, fechaCorte, headerColor, onBack }) {
         </div>
       </div>
 
-      {/* Movimientos (extracto del pasivo, saldo corriente) o Aging por vencimiento */}
-      {verLedger && hayLedger ? (() => {
+      {/* CC del grupo: extracto por fecha con saldo corriente · si no, Movimientos o Aging */}
+      {item.ccGrupo ? (() => {
+        const docsOrd = [...(item.docs || [])].sort((a, b) => String(a.fecha || "").localeCompare(String(b.fecha || "")));
+        const fmtF = f => { const s = String(f || ""); return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10).split("-").reverse().join("/") : (s || "—"); };
+        let run = 0, totP = 0, totC = 0;
+        // Saldo corriente en orden cronológico; se muestra al revés (más reciente arriba, más viejo abajo).
+        const filas = docsOrd.map(d => {
+          const esPagar = d.side === "pagar";
+          run += esPagar ? d.monto : -d.monto;
+          if (esPagar) totP += d.monto; else totC += d.monto;
+          return { ...d, esPagar, saldo: run };
+        }).reverse();
+        return (
+          <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:T.radius, boxShadow:T.shadow, overflow:"hidden" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse" }}>
+              <thead>
+                <tr style={{ background:headerColor }}>
+                  <th style={{ ...thS, textAlign:"left" }}>Fecha</th>
+                  <th style={{ ...thS, textAlign:"left" }}>Cuenta</th>
+                  <th style={{ ...thS, textAlign:"left" }}>N° Factura</th>
+                  <th style={thS}>A pagar</th>
+                  <th style={thS}>A cobrar</th>
+                  <th style={{ ...thS, color:"#fff" }}>Saldo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filas.length === 0 && <tr><td colSpan={6} style={{ padding:16, fontSize:13, color:T.muted, textAlign:"center" }}>Sin comprobantes.</td></tr>}
+                {filas.map((d, i) => (
+                    <tr key={i} style={{ borderBottom:`1px solid ${T.cardBorder}`, background:i % 2 === 0 ? T.card : "#fafbfc" }}>
+                      <td style={{ padding:"9px 16px", fontSize:12.5, color:T.muted, whiteSpace:"nowrap" }}>{fmtF(d.fecha)}</td>
+                      <td style={{ padding:"9px 16px", fontSize:13, color:T.text }}>{d.cuenta || "—"}</td>
+                      <td style={{ padding:"9px 16px", fontSize:12.5, color:T.muted, fontFamily:"var(--mono)" }}>{d.nroComp || "—"}</td>
+                      <td style={tdS}>{d.esPagar ? fmtSaldo(d.monto, mon) : <span style={{ color:T.dim }}>—</span>}</td>
+                      <td style={{ ...tdS, color: d.esPagar ? undefined : "#16a34a" }}>{d.esPagar ? <span style={{ color:T.dim }}>—</span> : fmtSaldo(d.monto, mon)}</td>
+                      <td style={{ ...tdS, fontWeight:800 }}>{fmtSaldo(d.saldo, mon)}</td>
+                    </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{ background:"#f3f4f6", borderTop:`2px solid ${headerColor}` }}>
+                  <td style={{ padding:"10px 16px", fontSize:13, fontWeight:800, color:T.text }} colSpan={3}>Saldo</td>
+                  <td style={{ ...tdS, fontWeight:800 }}>{fmtSaldo(totP, mon)}</td>
+                  <td style={{ ...tdS, fontWeight:800, color:"#16a34a" }}>{fmtSaldo(totC, mon)}</td>
+                  <td style={{ ...tdS, fontWeight:900, color:headerColor }}>{fmtSaldo(run, mon)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        );
+      })() : verLedger && hayLedger ? (() => {
         const led = item.ledger;
         const rowsL = [...(led.entries || [])].reverse();   // más reciente arriba
         const fmtF = f => { const s = String(f || ""); return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10).split("-").reverse().join("/") : s; };
