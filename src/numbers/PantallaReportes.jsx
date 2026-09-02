@@ -2924,7 +2924,7 @@ function ExportModal({ open, onClose, onConfirm, defaultMes, hayAnioAnterior }) 
 }
 
 // ─── Pantalla principal ───────────────────────────────────────────────────────
-export default function PantallaReportes({ sociedad = "nako" }) {
+export default function PantallaReportes({ sociedad = "nako", onVerComprobante }) {
   const [activeTab,      setActiveTab]      = useState(null);   // null = menú-landing de reportes
   const [vistaPnl,       setVistaPnl]       = useState("evolucion");   // P&L Sedes: evolucion | mensual | ytd
   const [sinIva,         setSinIva]         = useState(() => { try { return localStorage.getItem("pnlSinIva") === "1"; } catch { return false; } });   // toggle Con/Sin IVA (recordado)
@@ -3608,10 +3608,12 @@ export default function PantallaReportes({ sociedad = "nako" }) {
     // cards blancas; así la regla global `td/th{border:var(--border)}` no pinta líneas oscuras sobre blanco.
     <div style={{ padding: "28px 32px", maxWidth: 1400, "--border": T.cardBorder }} className="fade">
 
-      {/* ── Header del reporte: "← Reportes" al lado del título; a la derecha vista + menú ⋮ ── */}
+      {/* ── Header del reporte: "← Reportes" al lado del título; a la derecha vista + menú ⋮ ──
+           CxP/CxC arman su propio header (Volver reemplaza a Reportes en el drill), así que acá se omite. */}
+      {activeTab !== "cxp_prov" && activeTab !== "cxc_cli" && (
       <PageHeader
         title={curTab?.label ?? "Reporte"}
-        subtitle={(isPnlTiempo || isBigg || isVentasHQ) ? undefined : curLente?.label}
+        subtitle={(isPnlTiempo || isBigg || isVentasHQ || activeTab === "cxp_prov" || activeTab === "cxc_cli") ? undefined : curLente?.label}
         back={
           <button onClick={() => setActiveTab(null)} style={{
             display: "inline-flex", alignItems: "center", gap: 6,
@@ -3669,6 +3671,7 @@ export default function PantallaReportes({ sociedad = "nako" }) {
           </div>
         }
       />
+      )}
       {/* Feedback efímero del "Copiar imagen". */}
       {fotoMsg && (
         <div style={{ marginBottom: 12, background: "#eef2ff", border: "1px solid #c7d2fe", borderRadius: 8,
@@ -3966,11 +3969,11 @@ export default function PantallaReportes({ sociedad = "nako" }) {
       )}
 
       {activeTab === "cxp_prov" && (
-        <TabCxPProveedores />
+        <TabCxPProveedores onBack={() => setActiveTab(null)} onVerComprobante={onVerComprobante} />
       )}
 
       {activeTab === "cxc_cli" && (
-        <TabCxCClientes />
+        <TabCxCClientes onBack={() => setActiveTab(null)} onVerComprobante={onVerComprobante} />
       )}
 
       {/* ── Informes · detalle de comprobantes (Egresos / Ingresos) ── */}

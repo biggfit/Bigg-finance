@@ -3,7 +3,9 @@
 // Reusa calcSaldoPendiente (mismo neteo que Tesorería/Ingresos) y la matemática de aging de PaginaAging.
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, fmtDate, fmtMoney } from "../theme";
-import { fetchIngresos, fetchPagosCobros, fetchSociedades, calcSaldoPendiente } from "../../lib/numbersApi";
+import { fetchIngresos, fetchPagosCobros, fetchSociedades, calcSaldoPendiente, fetchCuentasBancarias, appendCobro } from "../../lib/numbersApi";
+import { exportarCxPExcel } from "./exportCxP";
+import RegistrarCobroModal from "../pagos/RegistrarCobroModal";
 
 const arr = x => Array.isArray(x) ? x : [];
 
@@ -35,7 +37,7 @@ const BANDAS = [
 
 const HEADER = "#16a34a";  // activo / clientes (verde, como el bloque A Cobrar)
 
-export default function TabCxCClientes() {
+export default function TabCxCClientes({ onBack, onVerComprobante }) {
   const [ingresos,   setIngresos]   = useState([]);
   const [cobros,     setCobros]     = useState([]);
   const [sociedades, setSociedades] = useState([]);
@@ -43,20 +45,36 @@ export default function TabCxCClientes() {
   const [error,      setError]      = useState(null);
   const [filtroMoneda, setFiltroMoneda] = useState("ARS");
   const [fechaCorte,   setFechaCorte]   = useState("");
-  const [drill,        setDrill]        = useState(null);   // fila de cliente en drill-down
+  const [drill,        setDrill]        = useState(null);   // drill-down: {nombre, sociedadNombre|null, total, docs}
+  const [menuOpen,     setMenuOpen]     = useState(false);  // menú ⋮
+  const [hover,        setHover]        = useState(null);   // hover de fila: {key, soc} — soc "__ALL__" = todo el cliente
+  const [cuentasBanc,  setCuentasBanc]  = useState([]);     // cuentas bancarias (para el modal de cobro)
+  const [cobrar,       setCobrar]       = useState(null);   // comprobante a cobrar: {ingreso, saldo, cuentas}
+  const [reloadKey,    setReloadKey]    = useState(0);      // fuerza recarga tras registrar un cobro
   const dateRef = useRef(null);
+  const menuRef = useRef(null);
+
+  // Cierre del menú ⋮ al hacer click afuera.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const h = e => { if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [menuOpen]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true); setError(null);
       try {
-        const [ings, pcs, socs] = await Promise.all([
+        const [ings, pcs, socs, cbs] = await Promise.all([
           fetchIngresos().catch(() => []),       // todos los INGRESO, todas las sociedades
           fetchPagosCobros().catch(() => []),
           fetchSociedades().catch(() => []),
+          fetchCuentasBancarias().catch(() => []),   // todas las cuentas (medios de cobro)
         ]);
         if (cancelled) return;
+        setCuentasBanc(arr(cbs));
         setIngresos(arr(ings));
         setCobros(arr(pcs).filter(p => p.tipo === "COBRO"));   // incluye retenciones (netean la CxC)
         setSociedades(arr(socs));
@@ -67,7 +85,7 @@ export default function TabCxCClientes() {
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [reloadKey]);
 
   const socMap = useMemo(() => {
     const m = new Map();
@@ -103,16 +121,22 @@ export default function TabCxCClientes() {
       const banda = bandaDe(dias);
       const key = ing.clienteId || `N:${(ing.cliente || "").trim().toLowerCase()}`;
       let c = clis.get(key);
-      if (!c) { c = { key, nombre: ing.cliente || "Sin cliente", socs: new Set(),
-        avencer:0, d0_30:0, d31_60:0, d61_90:0, dmas90:0, total:0, docs:[] }; clis.set(key, c); }
-      c[banda] += saldo;
-      c.total  += saldo;
-      c.socs.add(String(ing.sociedad || ""));
-      c.docs.push({ sociedad: ing.sociedad, nroComp: ing.nroComp || "—", vto: ing.vto || "", saldo, dias, banda });
+      if (!c) { c = { key, nombre: ing.cliente || "Sin cliente", total:0, lineasMap: new Map() }; clis.set(key, c); }
+      // Una línea por sociedad dentro del cliente: el monto NO se junta, se separa por sociedad.
+      const socId = String(ing.sociedad || "");
+      let ln = c.lineasMap.get(socId);
+      if (!ln) { ln = { sociedad: socId, avencer:0, d0_30:0, d31_60:0, d61_90:0, dmas90:0, total:0, docs:[] }; c.lineasMap.set(socId, ln); }
+      ln[banda] += saldo;
+      ln.total  += saldo;
+      ln.docs.push({ sociedad: ing.sociedad, nroComp: ing.nroComp || "—", vto: ing.vto || "", saldo, dias, banda, ing });
+      c.total   += saldo;
     }
-    const rows = [...clis.values()].sort((a, b) => b.total - a.total);
+    const rows = [...clis.values()].map(c => ({
+      key: c.key, nombre: c.nombre, total: c.total,
+      lineas: [...c.lineasMap.values()].sort((a, b) => b.total - a.total),   // sociedades del cliente, mayor primero
+    })).sort((a, b) => b.total - a.total);
     const totales = rows.reduce((t, r) => {
-      for (const b of BANDAS) t[b.key] += r[b.key];
+      for (const ln of r.lineas) { for (const b of BANDAS) t[b.key] += ln[b.key]; }
       t.total += r.total; return t;
     }, { avencer:0, d0_30:0, d31_60:0, d61_90:0, dmas90:0, total:0 });
     return { rows, totales };
@@ -123,24 +147,61 @@ export default function TabCxCClientes() {
     fontFamily:"var(--mono)", fontWeight: bold ? 800 : 600, color: red ? "#dc2626" : T.text });
   const thS = { padding:"10px 14px", fontSize:11, fontWeight:800, color:"rgba(255,255,255,.9)",
     textAlign:"right", letterSpacing:".04em", textTransform:"uppercase", whiteSpace:"nowrap" };
+  const backBtn = { display:"inline-flex", alignItems:"center", gap:6, background:"#f3f4f6",
+    border:`1px solid ${T.cardBorder}`, borderRadius:8, color:T.text, fontFamily:T.font,
+    fontSize:13, fontWeight:700, padding:"6px 14px", cursor:"pointer" };
+  const h1S = { fontSize:24, fontWeight:900, color:T.text, margin:0, letterSpacing:"-.02em" };
 
-  const socChips = (socsSet) => {
-    const ids = [...socsSet].filter(Boolean);
-    if (ids.length === 0) return <span style={{ color: T.dim }}>—</span>;
-    if (ids.length > 2) return <span style={{ fontSize:12, color: T.muted, fontWeight:600 }}>{ids.length} sociedades</span>;
+  // Chip de una sociedad (una por línea).
+  const socChipUno = (id) => {
+    if (!id) return <span style={{ color: T.dim }}>—</span>;
+    const s = socMap.get(String(id));
     return (
-      <span style={{ display:"inline-flex", gap:6, flexWrap:"wrap" }}>
-        {ids.map(id => {
-          const s = socMap.get(String(id));
-          return (
-            <span key={id} style={{ fontSize:11, fontWeight:700, color: T.text, background:"#eef1f4",
-              border:`1px solid ${T.cardBorder}`, borderRadius:999, padding:"2px 9px", whiteSpace:"nowrap" }}>
-              {s?.bandera ? s.bandera + " " : ""}{s?.nombre || id}
-            </span>
-          );
-        })}
+      <span style={{ fontSize:11, fontWeight:700, color: T.text, background:"#eef1f4",
+        border:`1px solid ${T.cardBorder}`, borderRadius:999, padding:"2px 9px", whiteSpace:"nowrap", display:"inline-block" }}>
+        {s?.bandera ? s.bandera + " " : ""}{s?.nombre || id}
       </span>
     );
+  };
+
+  // Descarga a Excel: aplana las líneas (cliente × sociedad) con el nombre de sociedad resuelto.
+  const bajarExcel = () => {
+    setMenuOpen(false);
+    const rowsX = rows.map(r => ({
+      nombre: r.nombre, total: r.total,
+      lineas: r.lineas.map(ln => ({ ...ln, sociedadNombre: socNombre(ln.sociedad) })),
+    }));
+    exportarCxPExcel({ tipo: "cxc", rows: rowsX, totales, moneda: filtroMoneda, fechaCorte });
+  };
+
+  // Abrir el modal de cobro (el MISMO de Ingresos) sobre un comprobante del detalle.
+  const abrirCobro = (d) => {
+    if (!d?.ing) return;
+    const soc = String(d.ing.sociedad ?? "").toLowerCase();
+    setCobrar({ ingreso: d.ing, saldo: d.saldo, cuentas: cuentasBanc.filter(c => (c.sociedad ?? "").toLowerCase() === soc) });
+  };
+
+  // Guardar el cobro → appendCobro (mismo registro que Ingresos) → recargar el reporte.
+  const guardarCobro = async (data) => {
+    const ing = cobrar?.ingreso;
+    if (!ing) return;
+    try {
+      await appendCobro({
+        documento_id:    data.ingresoId,
+        sociedad:        ing.sociedad,
+        fecha:           data.fecha,
+        monto:           Number(data.monto),
+        moneda:          ing.moneda ?? "ARS",
+        cuenta_bancaria: data.medioCobro,
+        cuenta:          ing.cuenta ?? "",
+        referencia:      "",
+        nota:            "",
+      });
+      setCobrar(null);
+      setReloadKey(k => k + 1);
+    } catch (e) {
+      alert("Error al registrar el cobro: " + e.message);
+    }
   };
 
   // ── Drill-down: comprobantes de un cliente ──
@@ -148,23 +209,34 @@ export default function TabCxCClientes() {
     const docs = [...drill.docs].sort((a, b) => (parseVto(a.vto)?.getTime() || 0) - (parseVto(b.vto)?.getTime() || 0));
     return (
       <div className="fade" style={{ padding:"4px 0" }}>
-        <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:20 }}>
-          <button onClick={() => setDrill(null)} style={{ background:"#f3f4f6", border:`1px solid ${T.cardBorder}`,
-            borderRadius:8, padding:"6px 14px", fontSize:13, fontWeight:700, color:T.muted, cursor:"pointer", fontFamily:T.font }}>
-            ← Volver
-          </button>
-          <div style={{ width:4, height:28, borderRadius:2, background:HEADER }} />
-          <div>
-            <h1 style={{ fontSize:20, fontWeight:900, color:T.text, margin:0, letterSpacing:"-.02em" }}>{drill.nombre}</h1>
-            <div style={{ fontSize:12, color:T.muted, marginTop:2 }}>
-              {docs.length} comprobante{docs.length !== 1 ? "s" : ""} pendiente{docs.length !== 1 ? "s" : ""} · {filtroMoneda}
-              {fechaCorte && <span style={{ marginLeft:8 }}>· Al {fmtDate(fechaCorte)}</span>}
+        {/* Header unificado: título + Volver (izq) · cliente + total pendiente (der), a la misma altura */}
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:16, marginBottom:20 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:14 }}>
+            <h1 style={h1S}>CxC por cliente</h1>
+            <button onClick={() => setDrill(null)} style={backBtn}>← Volver</button>
+          </div>
+          <div style={{ minWidth:360 }}>
+            {/* Fila 1: nombre (izq) + monto (der) — center para que no desalinee la barra roja del nombre */}
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:18 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:9, minWidth:0 }}>
+                <div style={{ width:4, height:20, borderRadius:2, background:HEADER, flexShrink:0, alignSelf:"center" }} />
+                <h2 style={{ fontSize:18, fontWeight:900, color:T.text, margin:0, letterSpacing:"-.01em", whiteSpace:"nowrap" }}>{drill.nombre}</h2>
+              </div>
+              <span style={{ fontSize:20, fontWeight:900, color:HEADER, fontFamily:"var(--mono)", whiteSpace:"nowrap" }}>{fmtMoney(drill.total, filtroMoneda)}</span>
+            </div>
+            {/* Fila 2: detalle bajo el nombre (izq) + "total pendiente" bajo el número (der) */}
+            <div style={{ display:"flex", alignItems:"baseline", justifyContent:"space-between", gap:18, marginTop:2 }}>
+              <div style={{ fontSize:12, color:T.muted, paddingLeft:13 }}>
+                {drill.sociedadNombre ? <span style={{ fontWeight:700, color:T.text }}>{drill.sociedadNombre}</span> : null}
+                {drill.sociedadNombre ? " · " : ""}{docs.length} comprobante{docs.length !== 1 ? "s" : ""} pendiente{docs.length !== 1 ? "s" : ""} · {filtroMoneda}
+                {fechaCorte && <span> · Al {fmtDate(fechaCorte)}</span>}
+              </div>
+              <span style={{ fontSize:10, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", fontWeight:700, whiteSpace:"nowrap" }}>Total pendiente</span>
             </div>
           </div>
-          <div style={{ marginLeft:"auto", textAlign:"right" }}>
-            <div style={{ fontSize:11, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", fontWeight:700 }}>Total pendiente</div>
-            <div style={{ fontSize:20, fontWeight:900, color:HEADER, fontFamily:"var(--mono)" }}>{fmtMoney(drill.total, filtroMoneda)}</div>
-          </div>
+        </div>
+        <div style={{ fontSize:12, color:T.muted, marginBottom:8, display:"flex", alignItems:"center", gap:6 }}>
+          <span aria-hidden>💵</span> Tocá un comprobante para registrar el cobro.
         </div>
         <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:T.radius, boxShadow:T.shadow, overflow:"hidden" }}>
           <div style={{ overflowX:"auto" }}>
@@ -178,7 +250,10 @@ export default function TabCxCClientes() {
               {docs.map((d, i) => {
                 const vencido = d.dias >= 0 && d.vto;
                 return (
-                  <tr key={i} style={{ borderBottom:`1px solid ${T.cardBorder}`, background: i%2===0 ? T.card : "#fafbfc" }}>
+                  <tr key={i} onClick={() => abrirCobro(d)} title="Registrar cobro"
+                    style={{ borderBottom:`1px solid ${T.cardBorder}`, background: i%2===0 ? T.card : "#fafbfc", cursor:"pointer" }}
+                    onMouseEnter={e => e.currentTarget.style.background = "#eef6ff"}
+                    onMouseLeave={e => e.currentTarget.style.background = i%2===0 ? T.card : "#fafbfc"}>
                     <td style={{ padding:"9px 14px", fontSize:13, color:T.text }}>{socNombre(d.sociedad)}</td>
                     <td style={{ padding:"9px 14px", fontSize:13, color:T.muted, fontFamily:"var(--mono)" }}>{d.nroComp}</td>
                     <td style={{ padding:"9px 14px", fontSize:13, color:T.text }}>{d.vto ? fmtDate(d.vto) : "—"}</td>
@@ -193,12 +268,24 @@ export default function TabCxCClientes() {
           </table>
           </div>
         </div>
+        {cobrar && (
+          <RegistrarCobroModal ingreso={cobrar.ingreso} saldoPendiente={cobrar.saldo} cuentas={cobrar.cuentas}
+            sociedadNombre={socNombre(cobrar.ingreso.sociedad)}
+            onVerComprobante={onVerComprobante ? () => onVerComprobante("ingresos", cobrar.ingreso.sociedad, cobrar.ingreso.id) : undefined}
+            onClose={() => setCobrar(null)} onSave={guardarCobro} />
+        )}
       </div>
     );
   }
 
   return (
     <div className="fade">
+      {/* Header propio: título + volver a Reportes (el PageHeader global se omite para este reporte) */}
+      <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:24 }}>
+        <h1 style={h1S}>CxC por cliente</h1>
+        <button onClick={onBack} style={backBtn}>← Reportes</button>
+      </div>
+
       {/* Toolbar: moneda + fecha de corte */}
       <div style={{ display:"flex", gap:16, margin:"4px 0 20px", flexWrap:"wrap", alignItems:"center",
         background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:T.radius, padding:"12px 16px", boxShadow:"0 1px 3px rgba(0,0,0,.04)" }}>
@@ -231,6 +318,27 @@ export default function TabCxCClientes() {
               style={{ background:"transparent", border:"none", color:T.muted, fontSize:16, cursor:"pointer", lineHeight:1, padding:4 }}>✕</button>
           )}
         </div>
+
+        {/* Menú ⋮ (Bajar a Excel) */}
+        <div ref={menuRef} style={{ marginLeft:"auto", position:"relative" }}>
+          <button type="button" onClick={() => setMenuOpen(o => !o)} title="Opciones" aria-haspopup="menu" aria-expanded={menuOpen}
+            style={{ border:`1px solid ${T.cardBorder}`, borderRadius:8, background: menuOpen ? "#eceff3" : "#fff",
+              width:34, height:34, cursor:"pointer", fontSize:18, color:T.muted, lineHeight:1,
+              display:"inline-flex", alignItems:"center", justifyContent:"center" }}>⋮</button>
+          {menuOpen && (
+            <div role="menu" style={{ position:"absolute", top:"calc(100% + 6px)", right:0, minWidth:180, background:T.card,
+              border:`1px solid ${T.cardBorder}`, borderRadius:10, boxShadow:"0 8px 24px rgba(0,0,0,.12)", padding:6, zIndex:30 }}>
+            <button type="button" role="menuitem" onClick={bajarExcel} disabled={rows.length === 0}
+              style={{ display:"flex", alignItems:"center", gap:9, width:"100%", textAlign:"left", background:"transparent",
+                border:"none", borderRadius:7, padding:"9px 11px", fontSize:13, fontWeight:600, fontFamily:T.font,
+                color: rows.length === 0 ? T.dim : T.text, cursor: rows.length === 0 ? "not-allowed" : "pointer" }}
+              onMouseEnter={e => { if (rows.length) e.currentTarget.style.background = "#eceff3"; }}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+              <span aria-hidden style={{ fontSize:15 }}>⬇️</span> Bajar a Excel
+            </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {loading && <div style={{ padding:"60px 32px", textAlign:"center", color:T.muted, fontSize:14 }}>Cargando cuentas por cobrar…</div>}
@@ -247,33 +355,50 @@ export default function TabCxCClientes() {
         ) : (
           <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:T.radius, boxShadow:T.shadow, overflow:"hidden" }}>
             <div style={{ overflowX:"auto" }}>
-            <table style={{ width:"100%", borderCollapse:"collapse", minWidth:920, tableLayout:"fixed" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", minWidth:1040 }}>
               <colgroup>
-                <col style={{ width:"20%" }} /><col style={{ width:"16%" }} />
-                {[...BANDAS, { key:"total" }].map(b => <col key={b.key} style={{ width:"10.6%" }} />)}
+                <col style={{ width:210 }} /><col style={{ width:132 }} />
+                {[...BANDAS, { key:"total" }].map(b => <col key={b.key} />)}
               </colgroup>
               <thead><tr style={{ background:HEADER }}>
                 <th style={{ ...thS, textAlign:"left" }}>Cliente</th>
-                <th style={{ ...thS, textAlign:"left" }}>Sociedad(es)</th>
+                <th style={{ ...thS, textAlign:"left" }}>Sociedad</th>
                 {BANDAS.map(b => <th key={b.key} style={thS}>{b.label}</th>)}
                 <th style={thS}>Total</th>
               </tr></thead>
               <tbody>
-                {rows.map((r, i) => (
-                  <tr key={r.key} onClick={() => setDrill(r)}
-                    style={{ borderBottom:`1px solid ${T.cardBorder}`, background: i%2===0 ? T.card : "#fafbfc", cursor:"pointer" }}
-                    onMouseEnter={e => e.currentTarget.style.background = "#eceff3"}
-                    onMouseLeave={e => e.currentTarget.style.background = i%2===0 ? T.card : "#fafbfc"}>
-                    <td style={{ padding:"9px 14px", fontSize:13, fontWeight:700, color:T.text }}>{r.nombre}</td>
-                    <td style={{ padding:"9px 14px" }}>{socChips(r.socs)}</td>
-                    <td style={cellS(false)}>{fmt(r.avencer)}</td>
-                    <td style={cellS(false)}>{fmt(r.d0_30)}</td>
-                    <td style={cellS(false)}>{fmt(r.d31_60)}</td>
-                    <td style={cellS(false, true)}>{fmt(r.d61_90)}</td>
-                    <td style={cellS(false, true)}>{fmt(r.dmas90)}</td>
-                    <td style={cellS(true)}>{fmtMoney(r.total, filtroMoneda)}</td>
-                  </tr>
-                ))}
+                {rows.map((r, pi) => {
+                  const bg = pi % 2 === 0 ? T.card : "#fafbfc";
+                  // Click en el nombre → detalle de TODAS las sociedades del cliente.
+                  const drillTodo = () => setDrill({ nombre: r.nombre, sociedadNombre: null, total: r.total, docs: r.lineas.flatMap(l => l.docs) });
+                  return r.lineas.map((ln, li) => {
+                    const ultima = li === r.lineas.length - 1;
+                    const grupoHover = hover && hover.key === r.key && hover.soc === "__ALL__";   // hover del nombre → todo el grupo
+                    const lineaHover = hover && hover.key === r.key && (hover.soc === "__ALL__" || hover.soc === ln.sociedad);
+                    const lineBg = lineaHover ? "#eceff3" : bg;
+                    const nameBg = grupoHover ? "#eceff3" : bg;
+                    return (
+                      <tr key={r.key + "|" + ln.sociedad}
+                        onClick={() => setDrill({ nombre: r.nombre, sociedadNombre: socNombre(ln.sociedad), total: ln.total, docs: ln.docs })}
+                        onMouseEnter={() => setHover({ key: r.key, soc: ln.sociedad })}
+                        onMouseLeave={() => setHover(null)}
+                        style={{ borderBottom: ultima ? `1px solid ${T.cardBorder}` : "1px solid #eef1f4", cursor:"pointer" }}>
+                        {li === 0 && (
+                          <td rowSpan={r.lineas.length} onClick={e => { e.stopPropagation(); drillTodo(); }}
+                            onMouseEnter={() => setHover({ key: r.key, soc: "__ALL__" })}
+                            style={{ padding:"9px 14px", fontSize:13, fontWeight:700, color:T.text, verticalAlign:"middle", background:nameBg }}>{r.nombre}</td>
+                        )}
+                        <td style={{ padding:"9px 14px", background:lineBg }}>{socChipUno(ln.sociedad)}</td>
+                        <td style={{ ...cellS(false), background:lineBg }}>{fmt(ln.avencer)}</td>
+                        <td style={{ ...cellS(false), background:lineBg }}>{fmt(ln.d0_30)}</td>
+                        <td style={{ ...cellS(false), background:lineBg }}>{fmt(ln.d31_60)}</td>
+                        <td style={{ ...cellS(false, true), background:lineBg }}>{fmt(ln.d61_90)}</td>
+                        <td style={{ ...cellS(false, true), background:lineBg }}>{fmt(ln.dmas90)}</td>
+                        <td style={{ ...cellS(true), background:lineBg }}>{fmtMoney(ln.total, filtroMoneda)}</td>
+                      </tr>
+                    );
+                  });
+                })}
               </tbody>
               <tfoot><tr style={{ background:"#f3f4f6", borderTop:`2px solid ${T.cardBorder}` }}>
                 <td style={{ padding:"10px 14px", fontSize:12, fontWeight:800, color:T.text, textTransform:"uppercase", letterSpacing:".04em" }}>Total ({rows.length})</td>

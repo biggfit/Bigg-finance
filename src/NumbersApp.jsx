@@ -115,6 +115,14 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
     setActiveId(section);
     setDeepDoc({ section, id });
   };
+  // Desde un reporte multi-sociedad (CxP/CxC): abrir la ficha del comprobante en SU sociedad.
+  const irAComprobante = (section, sociedadId, id) => {
+    if (sociedadId) {
+      const idx = sociedades.findIndex(s => String(s.id) === String(sociedadId));
+      if (idx >= 0) setSocIdx(idx);
+    }
+    irADoc(section, id);
+  };
   // Deep-link inverso: desde el detalle de un comprobante, el "medio de pago" abre Tesorería
   // filtrada a esa caja (pestaña Movimientos).
   const [deepCaja, setDeepCaja] = useState(null);
@@ -811,7 +819,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
             : activeSpecial === "correo"
             ? <TabCorreo onPend={setCorreoPend} />
             : activeSpecial === "reportes"
-            ? <PantallaReportes sociedad={activeSoc.id} />
+            ? <PantallaReportes sociedad={activeSoc.id} onVerComprobante={irAComprobante} />
             : section?.component
             ? section.id === "egresos" && (egresoSubView === "gastos" || egresoSubView === "new-gasto")
               ? <PantallaGastos   sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView} navPulse={navPulse} />
