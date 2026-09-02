@@ -573,6 +573,10 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
   const liqOwners   = liqsView.filter(l => l.rol === "HQ_OWNER");
   const liqExternos = liqsView.filter(l => l.rol === "HQ_EXT");
 
+  // Mismo criterio que ModalCerrar (l.estado !== "cerrada") para que el botón de arriba
+  // refleje si realmente queda algo por cerrar este mes.
+  const cerrablesCount = liqsView.filter(l => l.estado !== "cerrada").length;
+
   if (loading) return (
     <div style={{ padding: 40, color: T.muted, fontFamily: T.font, fontSize: 13 }}>Cargando…</div>
   );
@@ -590,7 +594,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
           background: "#334155", color: "#fff", fontSize: 13, fontWeight: 700,
           display: "flex", alignItems: "center", gap: 8,
         }}>
-          🔒 MES CERRADO — {MESES[mes - 1]} {anio} <span style={{ fontWeight: 400, color: "#cbd5e1" }}>(marcado por vos, no afecta la liquidación real)</span>
+          🔒 MES FINALIZADO — {MESES[mes - 1]} {anio} <span style={{ fontWeight: 400, color: "#cbd5e1" }}>(marcado por vos, no afecta la liquidación real)</span>
         </div>
       )}
       {/* Header */}
@@ -603,17 +607,18 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
         <input type="number" value={anio} onChange={e => setAnio(Number(e.target.value))}
           style={{ border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 10px", fontSize: 13, width: 80, fontFamily: T.font }} />
         <button onClick={toggleMarcado}
-          title={marcado ? "Marcado por vos como mes cerrado — click para desmarcar (no afecta la liquidación real)" : "Marcar este mes como cerrado (tilde personal, no afecta la liquidación)"}
+          title={marcado ? "Marcado por vos como finalizado — click para desmarcar (no afecta la liquidación real)" : "Marcar este mes como finalizado (tilde personal, no afecta la liquidación)"}
           style={{
             background: marcado ? "#334155" : "#fff", color: marcado ? "#fff" : T.muted,
             border: `1px solid ${marcado ? "#334155" : T.border}`, borderRadius: 7,
             padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font,
           }}>
-          {marcado ? "✅ Mes cerrado" : "☐ Marcar cerrado"}
+          {marcado ? "✅ Finalizado" : "☐ En proceso"}
         </button>
-        <button onClick={() => setShowCerrar(true)} disabled={saving || !liqs.length}
-          style={{ marginLeft: "auto", ...BTN_PRIMARY(saving || !liqs.length) }}>
-          {saving ? "Procesando…" : "🔒 Cerrar liquidación"}
+        <button onClick={() => setShowCerrar(true)} disabled={saving || !liqs.length || !cerrablesCount}
+          title={cerrablesCount ? (cerrablesCount === 1 ? "1 liquidación sin cerrar" : `${cerrablesCount} liquidaciones sin cerrar`) : undefined}
+          style={{ marginLeft: "auto", ...BTN_PRIMARY(saving || !liqs.length || !cerrablesCount) }}>
+          {saving ? "Procesando…" : cerrablesCount ? "🔒 Cerrar liquidación" : "🔒 Liquidaciones cerradas"}
         </button>
       </div>
 
