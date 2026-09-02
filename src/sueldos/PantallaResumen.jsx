@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import html2canvas from "html2canvas";
 import { fetchLiquidaciones, fetchCategorias, fetchPagos, fetchLegajos, fetchNovedades, desglosarLiquidacion, isCerrada, idLiqDe, reabrirLiquidaciones, ROLES_SEDES, ROLES_HQ, updatePagoNota } from "../lib/sueldosApi";
 
 const T = {
@@ -551,9 +552,32 @@ function SeleccionImprimir({ empleados, checkSel, count, onToggle, onAll, onCanc
 
 // Marco compartido de la ficha: header + componentes (children) + total + pagos.
 function FichaShell({ sel, subtitulo, totalLiquidar, pagos, periodo, tag, onImprimirTodo, onUpdateNota, children }) {
+  const fichaRef = useRef(null);
+  const [descargando, setDescargando] = useState(false);
   const imprimir = () => window.print();
+  const descargarImagen = async () => {
+    if (!fichaRef.current || descargando) return;
+    setDescargando(true);
+    try {
+      // scale 2 = nitidez razonable en pantallas retina/zoom sin generar un PNG gigante.
+      // ignoreElements descarta los botones (mismo criterio que "no-print" del CSS de impresión).
+      const canvas = await html2canvas(fichaRef.current, {
+        backgroundColor: "#ffffff",
+        scale: 2,
+        ignoreElements: (el) => el.classList?.contains("no-print"),
+      });
+      const link = document.createElement("a");
+      link.download = `${sel.nombre} - ${tag || periodo}.png`.replace(/[\\/:*?"<>|]/g, "");
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    } catch (e) {
+      alert("Error al generar la imagen: " + e.message);
+    } finally {
+      setDescargando(false);
+    }
+  };
   return (
-    <div className="ficha" style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden" }}>
+    <div ref={fichaRef} className="ficha" style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden" }}>
       <div className="banda-oscura" style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12,
         padding: "11px 20px", background: "#BFBFBF" }}>
         <div>
@@ -566,6 +590,9 @@ function FichaShell({ sel, subtitulo, totalLiquidar, pagos, periodo, tag, onImpr
         <div className="no-print" style={{ display: "flex", gap: 8, flexShrink: 0 }}>
           <button onClick={imprimir} style={fichaBtn}>🖨 Imprimir</button>
           {onImprimirTodo && <button onClick={onImprimirTodo} style={fichaBtn}>🖨 Imprimir todo</button>}
+          <button onClick={descargarImagen} disabled={descargando} style={fichaBtn}>
+            {descargando ? "⏳ Generando…" : "🖼️ Descargar imagen"}
+          </button>
         </div>
       </div>
 
