@@ -795,13 +795,18 @@ function FormaPagoTabla({ pagos, onUpdateNota }) {
 function NotaCell({ pago, onSave }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue]     = useState("");
+  const inicialRef = useRef("");   // lo que se precargó al entrar en edición (ver startEdit)
   const inputRef = useRef(null);
 
   // Arranca con lo que se ve en la celda (nota propia o, en su ausencia, la de la forma de
-  // pago) para poder editarlo, no reescribirlo de cero — salvo que no haya nada ("—").
+  // pago) para poder editarlo, no reescribirlo de cero — salvo que no haya nada ("—"). Guarda
+  // ese valor precargado para no confundirlo con un cambio real al hacer commit (ver abajo):
+  // solo abrir y cerrar sin tocar nada NO debe grabar el respaldo como si fuera nota propia.
   const startEdit = () => {
     const actual = notaDePago(pago);
-    setValue(actual === "—" ? "" : actual);
+    const inicial = actual === "—" ? "" : actual;
+    inicialRef.current = inicial;
+    setValue(inicial);
     setEditing(true);
   };
   useEffect(() => { if (editing) inputRef.current?.focus(); }, [editing]);
@@ -809,7 +814,7 @@ function NotaCell({ pago, onSave }) {
   const commit = () => {
     setEditing(false);
     const nuevo = value.trim();
-    if (nuevo !== (pago.nota || "")) onSave(pago, nuevo);
+    if (nuevo !== inicialRef.current) onSave(pago, nuevo);
   };
 
   if (editing) {
