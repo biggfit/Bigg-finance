@@ -31,7 +31,7 @@ const ROL_LABEL = {
 
 const FP_LABEL = {
   haberes: "Haberes", deposito: "Depósito",
-  transferencia_financiera: "Transferencia financiera",
+  transferencia_financiera: "Trf. financiera",
   monotributo: "Trf. monotributo", efectivo: "Efectivo",
 };
 
