@@ -117,14 +117,16 @@ export default function PantallaResumen({ pais = "AR" }) {
     return empleados.find(e => e.id === selId) || empleados[0];
   }, [empleados, selId]);
 
-  // Email del legajo del empleado seleccionado (destinatario al enviar la ficha).
-  const emailSel = useMemo(() => {
-    if (!sel) return "";
-    return legajos.find(l => l.id === sel.id || l.nombre === sel.nombre)?.email || "";
+  // Legajo del empleado seleccionado: email (destinatario al enviar la ficha) + datos
+  // bancarios/formas de pago (para resolver a qué cuenta fue cada transferencia).
+  const legajoSel = useMemo(() => {
+    if (!sel) return null;
+    return legajos.find(l => l.id === sel.id || l.nombre === sel.nombre) || null;
   }, [sel, legajos]);
+  const emailSel = legajoSel?.email || "";
 
   // Pagos individuales del empleado seleccionado (nb_movimientos origen sueldos), ordenados por forma y fecha.
-  const pagosEmpleado = useMemo(() => (sel ? pagosDe(sel, pagos, vista, agrupar) : []), [pagos, sel, vista, agrupar]);
+  const pagosEmpleado = useMemo(() => (sel ? pagosDe(sel, pagos, vista, agrupar, legajoSel) : []), [pagos, sel, vista, agrupar, legajoSel]);
 
   // Edita solo la nota interna de un pago ya registrado: optimista en pantalla, revierte si falla.
   // Si la fila es un grupo (vista "Agrupado", varios movimientos del mismo lote_pago, ver
@@ -296,7 +298,8 @@ export default function PantallaResumen({ pais = "AR" }) {
                 if (!emp) return null;
                 const r = vista === "hq" ? buildResumenHQ(emp, novedades) : buildResumenSedes(emp, categorias, novedades);
                 if (!r) return null;
-                const pg = pagosDe(emp, pagos, vista, agrupar);
+                const legajoEmp = legajos.find(l => l.id === emp.id || l.nombre === emp.nombre) || null;
+                const pg = pagosDe(emp, pagos, vista, agrupar, legajoEmp);
                 return (
                   <div className="ficha-col" key={id}>
                     {vista === "hq"
@@ -326,14 +329,30 @@ export default function PantallaResumen({ pais = "AR" }) {
 // Detallado (default): cada nb_movimiento es una transferencia real, se lista por separado
 // para que el empleado vea qué compone el total transferido. Agrupado: los movimientos de
 // un mismo lote_pago se combinan en una sola fila (más compacto para uso interno).
-function pagosDe(emp, pagos, vista, agrupar) {
+function pagosDe(emp, pagos, vista, agrupar, legajo) {
   const filtrados = pagos
     .filter(p => (p.legajo_id === emp.id || p.legajo_nombre === emp.nombre)
       && (p.ambito === vista || (!p.ambito && vista === "sedes")));
   return (agrupar ? agruparPorLote(filtrados) : filtrados)
+    .map(p => ({ ...p, _destino: destinoDePago(p, legajo) }))
     .sort((a, b) =>
       ordenForma(a.tipo_componente) - ordenForma(b.tipo_componente) ||
       (a.fecha || "").localeCompare(b.fecha || ""));
+}
+
+// Cuenta/titular adonde fue una transferencia: busca la línea de "forma de pago" del legajo
+// que originó el pago (forma_pago_id, ver PantallaLegajos/PantallaLiquidacionHQ); si el pago
+// no tiene ese dato (ej. Sedes, que solo registra la cuenta de ORIGEN de la empresa) cae a la
+// cuenta bancaria propia del legajo, que es el destino real en esos casos.
+function destinoDePago(p, legajo) {
+  if (!legajo || p.tipo_componente === "efectivo") return "";
+  const forma = (legajo.formas_pago || []).find(f => f.id && String(f.id) === String(p.forma_pago_id));
+  const titular = (forma?.titular || legajo.nombre || "").trim();
+  const banco   = forma?.banco  || legajo.banco;
+  const cuenta  = forma?.cuenta || forma?.cbu || legajo.numero_cuenta || legajo.cbu;
+  const base = [banco, cuenta].filter(Boolean).join(" · ");
+  if (!base) return "";
+  return titular && titular !== (legajo.nombre || "").trim() ? `${base} — ${titular}` : base;
 }
 
 // Un "pagar" en Sedes/HQ puede generar VARIOS nb_movimientos (uno por línea/novedad
@@ -732,21 +751,23 @@ function FormaPagoTabla({ pagos, onUpdateNota }) {
   return (
     <table style={{ ...tbl, tableLayout: "fixed" }}>
       <colgroup>
-        <col style={{ width: 84 }} />
-        <col style={{ width: 130 }} />
+        <col style={{ width: 76 }} />
+        <col style={{ width: 108 }} />
+        <col style={{ width: 150 }} />
         <col />
-        <col style={{ width: 110 }} />
+        <col style={{ width: 96 }} />
       </colgroup>
-      <thead><tr><Th>Fecha</Th><Th>Forma</Th><Th>Nota interna</Th><Th right>Monto</Th></tr></thead>
+      <thead><tr><Th>Fecha</Th><Th>Forma</Th><Th>Cuenta</Th><Th>Nota interna</Th><Th right>Monto</Th></tr></thead>
       <tbody>
         {pagos.length === 0 ? (
           <tr style={{ borderTop: `1px solid ${T.border}` }}>
-            <Td dim>Sin pagos registrados</Td><Td /><Td /><Td right dim>—</Td>
+            <Td dim>Sin pagos registrados</Td><Td /><Td /><Td /><Td right dim>—</Td>
           </tr>
         ) : pagos.map((p, i) => (
           <tr key={p.id || i} style={{ borderTop: `1px solid ${T.border}` }}>
             <Td dim>{fmtFecha(p.fecha)}</Td>
             <Td>{FP_LABEL[p.tipo_componente] ?? p.tipo_componente}</Td>
+            <Td dim={!p._destino}>{p._destino || "—"}</Td>
             {onUpdateNota
               ? <td style={{ padding: "4px 4px" }}><NotaCell pago={p} onSave={onUpdateNota} /></td>
               : <Td dim>{notaDePago(p)}</Td>}
