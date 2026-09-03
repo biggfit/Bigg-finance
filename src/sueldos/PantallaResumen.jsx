@@ -117,14 +117,16 @@ export default function PantallaResumen({ pais = "AR" }) {
     return empleados.find(e => e.id === selId) || empleados[0];
   }, [empleados, selId]);
 
-  // Email del legajo del empleado seleccionado (destinatario al enviar la ficha).
-  const emailSel = useMemo(() => {
-    if (!sel) return "";
-    return legajos.find(l => l.id === sel.id || l.nombre === sel.nombre)?.email || "";
+  // Legajo del empleado seleccionado: email (destinatario al enviar la ficha) + formas de pago
+  // (para completar la nota con la que se cargó cada línea, si el pago no tiene nota propia).
+  const legajoSel = useMemo(() => {
+    if (!sel) return null;
+    return legajos.find(l => l.id === sel.id || l.nombre === sel.nombre) || null;
   }, [sel, legajos]);
+  const emailSel = legajoSel?.email || "";
 
   // Pagos individuales del empleado seleccionado (nb_movimientos origen sueldos), ordenados por forma y fecha.
-  const pagosEmpleado = useMemo(() => (sel ? pagosDe(sel, pagos, vista, agrupar) : []), [pagos, sel, vista, agrupar]);
+  const pagosEmpleado = useMemo(() => (sel ? pagosDe(sel, pagos, vista, agrupar, legajoSel) : []), [pagos, sel, vista, agrupar, legajoSel]);
 
   // Edita solo la nota interna de un pago ya registrado: optimista en pantalla, revierte si falla.
   // Si la fila es un grupo (vista "Agrupado", varios movimientos del mismo lote_pago, ver
@@ -296,7 +298,8 @@ export default function PantallaResumen({ pais = "AR" }) {
                 if (!emp) return null;
                 const r = vista === "hq" ? buildResumenHQ(emp, novedades) : buildResumenSedes(emp, categorias, novedades);
                 if (!r) return null;
-                const pg = pagosDe(emp, pagos, vista, agrupar);
+                const legajoEmp = legajos.find(l => l.id === emp.id || l.nombre === emp.nombre) || null;
+                const pg = pagosDe(emp, pagos, vista, agrupar, legajoEmp);
                 return (
                   <div className="ficha-col" key={id}>
                     {vista === "hq"
@@ -326,14 +329,23 @@ export default function PantallaResumen({ pais = "AR" }) {
 // Detallado (default): cada nb_movimiento es una transferencia real, se lista por separado
 // para que el empleado vea qué compone el total transferido. Agrupado: los movimientos de
 // un mismo lote_pago se combinan en una sola fila (más compacto para uso interno).
-function pagosDe(emp, pagos, vista, agrupar) {
+function pagosDe(emp, pagos, vista, agrupar, legajo) {
   const filtrados = pagos
     .filter(p => (p.legajo_id === emp.id || p.legajo_nombre === emp.nombre)
       && (p.ambito === vista || (!p.ambito && vista === "sedes")));
   return (agrupar ? agruparPorLote(filtrados) : filtrados)
+    .map(p => ({ ...p, _notaForma: notaFormaDePago(p, legajo) }))
     .sort((a, b) =>
       ordenForma(a.tipo_componente) - ordenForma(b.tipo_componente) ||
       (a.fecha || "").localeCompare(b.fecha || ""));
+}
+
+// Nota cargada en Legajos para la línea de "forma de pago" que originó este pago
+// (forma_pago_id): respaldo cuando el pago en sí no tiene una nota propia tipeada.
+function notaFormaDePago(p, legajo) {
+  if (!legajo) return "";
+  const forma = (legajo.formas_pago || []).find(f => f.id && String(f.id) === String(p.forma_pago_id));
+  return (forma?.nota || "").trim();
 }
 
 // Un "pagar" en Sedes/HQ puede generar VARIOS nb_movimientos (uno por línea/novedad
@@ -715,10 +727,12 @@ function FichaHQ({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpdate
   );
 }
 
-// Nota a mostrar: la nota interna guardada en el pago; si no hay, el concepto
-// del pago salvo que sea el autogenerado ("Sueldo <nombre> <m>/<a> · <forma>").
+// Nota a mostrar: la nota interna guardada en el pago; si no hay, la nota cargada en la
+// línea de forma de pago que lo originó (_notaForma, ver notaFormaDePago); si tampoco hay,
+// el concepto del pago salvo que sea el autogenerado ("Sueldo <nombre> <m>/<a> · <forma>").
 function notaDePago(p) {
   if (p.nota) return p.nota;
+  if (p._notaForma) return p._notaForma;
   const auto = `Sueldo ${p.legajo_nombre} ${p.mes}/${p.anio} · ${p.tipo_componente}`;
   if (!p.concepto || p.concepto === auto) return "—";
   // El nombre del empleado es redundante en su propia ficha → lo quitamos.
