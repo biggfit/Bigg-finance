@@ -797,8 +797,11 @@ function NotaCell({ pago, onSave }) {
   const [value, setValue]     = useState("");
   const inputRef = useRef(null);
 
+  // Arranca con lo que se ve en la celda (nota propia o, en su ausencia, la de la forma de
+  // pago) para poder editarlo, no reescribirlo de cero — salvo que no haya nada ("—").
   const startEdit = () => {
-    setValue(pago.nota || "");
+    const actual = notaDePago(pago);
+    setValue(actual === "—" ? "" : actual);
     setEditing(true);
   };
   useEffect(() => { if (editing) inputRef.current?.focus(); }, [editing]);
