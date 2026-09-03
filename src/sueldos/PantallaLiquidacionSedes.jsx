@@ -849,6 +849,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
           legajo_id:           r.legajo_id,
           legajo_nombre:       r.legajo_nombre,
           rol:                 r.rol,
+          legajo_rol:          leg?.rol || r.rol,
           sociedad_id:         r.sociedad_id,
           sociedad_nombre:     r.sociedad_nombre,
           sedes:               r.sede_nombre ? [r.sede_nombre] : [],
@@ -909,8 +910,10 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         // Cerrada → haberes CONGELADO (línea "pago" ya escrita al cerrar). Borrador → haberes en
         // VIVO = blanco pactado del legajo (mismo criterio que ya usaba Efectivo para no mostrar
         // todo en "—" hasta cerrar; ver Paso 4, donde el blanco por defecto sale de ahí también).
-        // Solo roles de Sedes: un HQ que dio clases sueltas ya cobra su blanco en HQ, no acá.
-        const habVivo = e.cerrada ? e.monto_haberes : (ROLES_SEDES_ALL.includes(e.rol) ? e.blanco_neto : 0);
+        // Solo si el LEGAJO es de Sedes: un HQ que dio clases sueltas en una sede tiene rol de fila
+        // (tarifa) de Sedes (ej. HUERGO_B) pero su legajo sigue siendo HQ y ya cobra su blanco allá,
+        // no acá — por eso se mira legajo_rol (rol real del legajo), no el rol de la fila/tarifa.
+        const habVivo = e.cerrada ? e.monto_haberes : (ROLES_SEDES_ALL.includes(e.legajo_rol) ? e.blanco_neto : 0);
         // Cerrada → efectivo CONGELADO (lo que se liquidó y hay que pagar en cash). Borrador →
         // efectivo en vivo = remanente del total. Evita el parcial fantasma por recálculo del roster.
         const efectivo = e.cerrada
@@ -938,10 +941,11 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       const next = { ...prev };
       for (const empl of empls) {
         if (next[empl.legajo_id]) continue;
-        // El blanco (haberes registrados) solo aplica a roles de Sedes. Un empleado de HQ que dio
-        // clases sueltas cobra ese trabajo acá (cae en efectivo), pero su blanco YA se paga en HQ
-        // → no sembrarlo en Sedes o se duplica (su sociedad aparecería de más en el fondeo de banco).
-        const esSedes = ROLES_SEDES_ALL.includes(empl.rol);
+        // El blanco (haberes registrados) solo aplica si el LEGAJO es de Sedes. Un empleado de HQ que
+        // dio clases sueltas cobra ese trabajo acá (cae en efectivo) con rol de fila/tarifa de Sedes
+        // (ej. HUERGO_B), pero su legajo sigue siendo HQ y su blanco YA se paga allá → no sembrarlo
+        // en Sedes o se duplica (su sociedad aparecería de más en el fondeo de banco).
+        const esSedes = ROLES_SEDES_ALL.includes(empl.legajo_rol);
         next[empl.legajo_id] = {
           monto_haberes:       empl.monto_haberes       || (esSedes ? empl.blanco_neto : 0) || 0,
           monto_transferencia: empl.monto_transferencia || 0,  // = Monotributo

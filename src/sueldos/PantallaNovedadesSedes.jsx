@@ -214,7 +214,15 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
           cuenta_contable_nombre: r.cuenta_contable_nombre,
         };
         if (!r.id) {
-          ops.push(() => appendNovedad(payload));
+          // Fila nueva: el tilde verde (si ya se había marcado) quedó guardado en localStorage bajo
+          // el _id temporal (Date.now()+random). Al crearse en el backend nace un id real distinto,
+          // y el reload de abajo reconstruye las filas con ese id → sin esto, el tilde se "perdía" en
+          // el primer guardado (la fila quedaba sin marcar hasta que la tildaras de nuevo).
+          const wasChecked = checked.has(r._id);
+          ops.push(async () => {
+            const nuevoId = await appendNovedad(payload);
+            if (wasChecked) setManyChecked([nuevoId], true);
+          });
         } else {
           const orig = loadedById.get(r.id);
           if (!orig || rowSig(r) !== rowSig(novToRow(orig))) ops.push(() => updateNovedad(r.id, payload));
