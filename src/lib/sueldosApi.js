@@ -854,7 +854,7 @@ export function parsePagoFromMov(m) {
     nota:                     m.nota ?? "",
     registrado_por:           m.registrado_por ?? "",
     ambito:                   m.ambito ?? "",   // "hq" | "sedes" — separa pagos de un legajo con liquidación en ambos
-    lote_pago:                m.lote_pago ?? "",  // agrupa los N movimientos de UNA acción de pago (ver agruparPorLote)
+    lote_pago:                m.lote_pago ?? "",  // agrupa los N movimientos de UNA acción de pago
   };
 }
 

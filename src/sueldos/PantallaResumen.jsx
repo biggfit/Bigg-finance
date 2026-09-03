@@ -74,6 +74,7 @@ export default function PantallaResumen({ pais = "AR" }) {
   const [showSel, setShowSel]   = useState(false);   // modal de selección "imprimir todo"
   const [checkSel, setCheckSel] = useState({});      // { [id]: bool }
   const [idsPrint, setIdsPrint] = useState(null);    // ids a imprimir (activa el modo #ficha-todos)
+  const [agrupar, setAgrupar] = useState(false);     // "Forma de pago": detallado (default) o agrupado por lote
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -123,11 +124,11 @@ export default function PantallaResumen({ pais = "AR" }) {
   }, [sel, legajos]);
 
   // Pagos individuales del empleado seleccionado (nb_movimientos origen sueldos), ordenados por forma y fecha.
-  const pagosEmpleado = useMemo(() => (sel ? pagosDe(sel, pagos, vista) : []), [pagos, sel, vista]);
+  const pagosEmpleado = useMemo(() => (sel ? pagosDe(sel, pagos, vista, agrupar) : []), [pagos, sel, vista, agrupar]);
 
   // Edita solo la nota interna de un pago ya registrado: optimista en pantalla, revierte si falla.
-  // Si la fila es un grupo (varios movimientos del mismo lote_pago, ver agruparPorLote), la nota
-  // se aplica a todos los movimientos internos para que sigan viéndose como una sola fila.
+  // Si la fila es un grupo (vista "Agrupado", varios movimientos del mismo lote_pago, ver
+  // agruparPorLote), la nota se aplica a todos los movimientos internos.
   const handleUpdateNota = useCallback(async (pago, nuevaNota) => {
     const targets = pago._grupo || [pago];
     const prevNotas = new Map(targets.map(t => [t.id, t.nota]));
@@ -280,8 +281,8 @@ export default function PantallaResumen({ pais = "AR" }) {
       ) : (
         <div id="ficha-solo">
           {vista === "hq"
-            ? <FichaHQ sel={sel} resumen={resumen} pagos={pagosEmpleado} email={emailSel} periodo={periodo} onImprimirTodo={abrirImprimirTodo} onUpdateNota={handleUpdateNota} />
-            : <FichaSedes sel={sel} resumen={resumen} pagos={pagosEmpleado} email={emailSel} periodo={periodo} onImprimirTodo={abrirImprimirTodo} onUpdateNota={handleUpdateNota} />}
+            ? <FichaHQ sel={sel} resumen={resumen} pagos={pagosEmpleado} email={emailSel} periodo={periodo} onImprimirTodo={abrirImprimirTodo} onUpdateNota={handleUpdateNota} agrupar={agrupar} onToggleAgrupar={setAgrupar} />
+            : <FichaSedes sel={sel} resumen={resumen} pagos={pagosEmpleado} email={emailSel} periodo={periodo} onImprimirTodo={abrirImprimirTodo} onUpdateNota={handleUpdateNota} agrupar={agrupar} onToggleAgrupar={setAgrupar} />}
         </div>
       )}
 
@@ -295,7 +296,7 @@ export default function PantallaResumen({ pais = "AR" }) {
                 if (!emp) return null;
                 const r = vista === "hq" ? buildResumenHQ(emp, novedades) : buildResumenSedes(emp, categorias, novedades);
                 if (!r) return null;
-                const pg = pagosDe(emp, pagos, vista);
+                const pg = pagosDe(emp, pagos, vista, agrupar);
                 return (
                   <div className="ficha-col" key={id}>
                     {vista === "hq"
@@ -322,11 +323,14 @@ export default function PantallaResumen({ pais = "AR" }) {
 }
 
 // ── Builders puros (reusados en la vista individual y en "imprimir todo") ─────
-function pagosDe(emp, pagos, vista) {
+// Detallado (default): cada nb_movimiento es una transferencia real, se lista por separado
+// para que el empleado vea qué compone el total transferido. Agrupado: los movimientos de
+// un mismo lote_pago se combinan en una sola fila (más compacto para uso interno).
+function pagosDe(emp, pagos, vista, agrupar) {
   const filtrados = pagos
     .filter(p => (p.legajo_id === emp.id || p.legajo_nombre === emp.nombre)
       && (p.ambito === vista || (!p.ambito && vista === "sedes")));
-  return agruparPorLote(filtrados)
+  return (agrupar ? agruparPorLote(filtrados) : filtrados)
     .sort((a, b) =>
       ordenForma(a.tipo_componente) - ordenForma(b.tipo_componente) ||
       (a.fecha || "").localeCompare(b.fecha || ""));
@@ -334,8 +338,7 @@ function pagosDe(emp, pagos, vista) {
 
 // Un "pagar" en Sedes/HQ puede generar VARIOS nb_movimientos (uno por línea/novedad
 // subyacente, ver ModalBatchPago/ModalPagoImputar) que comparten el mismo lote_pago:
-// para quien mira el resumen es UN solo pago, así que los mostramos en una sola fila
-// (suma de montos, notas combinadas) en vez de una fila por movimiento interno.
+// en la vista "Agrupado" se muestran como una sola fila (suma de montos, notas combinadas).
 function agruparPorLote(pagos) {
   const porLote = new Map();
   const sueltos = [];
@@ -551,7 +554,7 @@ function SeleccionImprimir({ empleados, checkSel, count, onToggle, onAll, onCanc
 }
 
 // Marco compartido de la ficha: header + componentes (children) + total + pagos.
-function FichaShell({ sel, subtitulo, totalLiquidar, pagos, periodo, tag, onImprimirTodo, onUpdateNota, children }) {
+function FichaShell({ sel, subtitulo, totalLiquidar, pagos, periodo, tag, onImprimirTodo, onUpdateNota, agrupar, onToggleAgrupar, children }) {
   const fichaRef = useRef(null);
   const [descargando, setDescargando] = useState(false);
   const imprimir = () => window.print();
@@ -600,7 +603,12 @@ function FichaShell({ sel, subtitulo, totalLiquidar, pagos, periodo, tag, onImpr
 
       <TotalLiquidar importe={totalLiquidar} />
 
-      <Section titulo="Forma de pago">
+      <Section titulo="Forma de pago" accesorio={onToggleAgrupar && (
+        <div className="no-print" style={{ display: "flex", gap: 2, background: T.head, borderRadius: 6, padding: 2 }}>
+          <button onClick={() => onToggleAgrupar(false)} style={toggleBtnSm(!agrupar)}>Detallado</button>
+          <button onClick={() => onToggleAgrupar(true)}  style={toggleBtnSm(agrupar)}>Agrupado</button>
+        </div>
+      )}>
         <FormaPagoTabla pagos={pagos} onUpdateNota={onUpdateNota} />
       </Section>
 
@@ -610,7 +618,7 @@ function FichaShell({ sel, subtitulo, totalLiquidar, pagos, periodo, tag, onImpr
 }
 
 // ── Ficha Sedes ──────────────────────────────────────────────────────────────
-function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpdateNota }) {
+function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpdateNota, agrupar, onToggleAgrupar }) {
   const sedes = resumen.sedes.length;
   // Nombre → mes (tag); subtítulo → sede(s) · rol.
   const sedeTxt = resumen.principalSede + (sedes > 1 ? ` +${sedes - 1}` : "");
@@ -640,7 +648,7 @@ function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpd
     ? ` (${resumen.objGrupalPcts.map(o => `${fmtNum(o.pct)}%: ${fmt(o.monto)}`).join(" + ")})`
     : resumen.objGrupalPct ? ` (${fmtNum(resumen.objGrupalPct)}%)` : "";
   return (
-    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={periodo} onImprimirTodo={onImprimirTodo} onUpdateNota={onUpdateNota}>
+    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={periodo} onImprimirTodo={onImprimirTodo} onUpdateNota={onUpdateNota} agrupar={agrupar} onToggleAgrupar={onToggleAgrupar}>
       <Section>
         <table style={tbl}>
           <thead><tr><Th>Concepto</Th><Th right>Cant.</Th><Th right>Valor u.</Th><Th right>Importe</Th></tr></thead>
@@ -682,10 +690,10 @@ function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpd
 }
 
 // ── Ficha HQ ─────────────────────────────────────────────────────────────────
-function FichaHQ({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpdateNota }) {
+function FichaHQ({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpdateNota, agrupar, onToggleAgrupar }) {
   const subtitulo = `${ROL_LABEL[sel.rol] ?? sel.rol}${sel.sociedad ? ` · ${sel.sociedad}` : ""}`;
   return (
-    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={periodo} onImprimirTodo={onImprimirTodo} onUpdateNota={onUpdateNota}>
+    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={periodo} onImprimirTodo={onImprimirTodo} onUpdateNota={onUpdateNota} agrupar={agrupar} onToggleAgrupar={onToggleAgrupar}>
       <Section>
         <table style={tbl}>
           <thead><tr><Th>Concepto</Th><Th right>Importe</Th></tr></thead>
@@ -718,8 +726,8 @@ function notaDePago(p) {
 }
 
 // Una línea por pago real (nb_movimientos origen sueldos): fecha · forma · nota · monto.
-// table-layout fixed + anchos de columna: una nota larga (p.ej. varios ítems agrupados,
-// ver agruparPorLote) debe ENVOLVER dentro de su columna, no empujar "Monto" fuera de vista.
+// table-layout fixed + anchos de columna: una nota larga debe ENVOLVER dentro de su
+// columna, no empujar "Monto" fuera de vista.
 function FormaPagoTabla({ pagos, onUpdateNota }) {
   return (
     <table style={{ ...tbl, tableLayout: "fixed" }}>
@@ -828,11 +836,15 @@ function TotalLiquidar({ importe }) {
     </div>
   );
 }
-function Section({ titulo, children }) {
+function Section({ titulo, accesorio, children }) {
   return (
     <div style={{ borderTop: `1px solid ${T.border}` }}>
-      {titulo && <div style={{ fontSize: 11, fontWeight: 700, color: T.muted, letterSpacing: ".05em",
-        textTransform: "uppercase", padding: "10px 20px 4px" }}>{titulo}</div>}
+      {titulo && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 20px 4px" }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: T.muted, letterSpacing: ".05em", textTransform: "uppercase" }}>{titulo}</span>
+          {accesorio}
+        </div>
+      )}
       <div style={{ padding: "0 20px 12px" }}>{children}</div>
     </div>
   );
@@ -875,5 +887,7 @@ const toggleBtn = (active) => ({
   color: active ? T.blue : T.muted, fontFamily: T.font,
   boxShadow: active ? "0 1px 2px rgba(0,0,0,0.08)" : "none",
 });
+// Variante compacta del toggle, para controles dentro de una ficha (ej. "Forma de pago").
+const toggleBtnSm = (active) => ({ ...toggleBtn(active), padding: "3px 9px", fontSize: 11 });
 const muted  = { fontSize: 13, color: T.muted };
 const tbl    = { width: "100%", borderCollapse: "collapse" };
