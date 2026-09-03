@@ -333,19 +333,38 @@ function pagosDe(emp, pagos, vista, agrupar, legajo) {
   const filtrados = pagos
     .filter(p => (p.legajo_id === emp.id || p.legajo_nombre === emp.nombre)
       && (p.ambito === vista || (!p.ambito && vista === "sedes")));
+  const usadas = new Set();   // líneas de formas_pago ya asignadas a un pago (ver matchFormaDePago)
   return (agrupar ? agruparPorLote(filtrados) : filtrados)
-    .map(p => ({ ...p, _notaForma: notaFormaDePago(p, legajo) }))
+    .map(p => ({ ...p, _notaForma: notaFormaDePago(p, legajo, usadas) }))
     .sort((a, b) =>
       ordenForma(a.tipo_componente) - ordenForma(b.tipo_componente) ||
       (a.fecha || "").localeCompare(b.fecha || ""));
 }
 
-// Nota cargada en Legajos para la línea de "forma de pago" que originó este pago
-// (forma_pago_id): respaldo cuando el pago en sí no tiene una nota propia tipeada.
-function notaFormaDePago(p, legajo) {
-  if (!legajo) return "";
-  const forma = (legajo.formas_pago || []).find(f => f.id && String(f.id) === String(p.forma_pago_id));
-  return (forma?.nota || "").trim();
+// Línea de "forma de pago" (Legajos) que originó un pago. Primero por forma_pago_id (caso
+// normal); si no matchea — liquidaciones viejas guardan un id genérico ("leg-transferencia")
+// que no corresponde a ninguna línea real — cae a matchear por tipo + monto exacto, que
+// identifica la línea correcta cuando cada una tiene un importe distinto (caso típico:
+// el sueldo se reparte en varias transferencias a cuentas/titulares distintos). `usadas`
+// evita repetir la misma línea para dos pagos si dos importes coincidieran.
+function matchFormaDePago(p, legajo, usadas) {
+  const formas = legajo?.formas_pago || [];
+  let forma = formas.find(f => f.id && String(f.id) === String(p.forma_pago_id) && !usadas.has(f));
+  if (!forma) {
+    const monto = Number(p.monto) || 0;
+    forma = formas.find(f => f.tipo === p.tipo_componente && !usadas.has(f)
+      && Math.abs((Number(f.importe) || 0) - monto) < 1);
+  }
+  if (forma) usadas.add(forma);
+  return forma;
+}
+
+// Titular/nota cargados en Legajos para la línea de forma de pago que originó este pago:
+// respaldo cuando el pago en sí no tiene una nota propia tipeada.
+function notaFormaDePago(p, legajo, usadas) {
+  if (!legajo || p.tipo_componente === "efectivo") return "";
+  const forma = matchFormaDePago(p, legajo, usadas);
+  return (forma?.titular || forma?.nota || "").trim();
 }
 
 // Un "pagar" en Sedes/HQ puede generar VARIOS nb_movimientos (uno por línea/novedad
