@@ -81,8 +81,9 @@ async function get(resource, params = {}) {
 // Lee una hoja SIN cache (para la verificación de idempotencia en un reintento de escritura).
 // `_nocache` único ⇒ salta también la caché de BORDE (el `no-store` del fetch solo evita la del
 // navegador); leer stale acá podría concluir "la fila no entró" y re-agregarla → duplicado.
-async function _fetchRowsRaw(sheet) {
-  const qs  = new URLSearchParams({ resource: sheet, token: TOKEN, _nocache: `${Date.now()}.${Math.random()}` }).toString();
+// La usa TODA lectura cuyo resultado decide si se escribe (dedup de ingestas), no solo el reintento.
+async function _fetchRowsRaw(sheet, params = {}) {
+  const qs  = new URLSearchParams({ resource: sheet, token: TOKEN, ...params, _nocache: `${Date.now()}.${Math.random()}` }).toString();
   const res = await fetch(`${BASE}?${qs}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
@@ -142,6 +143,12 @@ async function post(body) {
       if (attempt < 2) await new Promise(r => setTimeout(r, (attempt + 1) * 600));
     }
   }
+  // Se agotaron los reintentos y NO sabemos si la escritura entró (el caso típico: el GAS commitea y
+  // la respuesta se pierde). Dejar la caché con el snapshot previo es lo PEOR posible: la pantalla
+  // muestra "no entró", el usuario reintenta y el dedup —que lee esa misma caché— duplica todo.
+  // Invalidamos igual que en el éxito: lo próximo que se lea sale del origen y muestra la verdad.
+  if (body.sheet) _invalidate(body.sheet);
+  forzarRefresco();
   throw lastErr;
 }
 
@@ -1347,7 +1354,11 @@ const _r2 = n => Math.round((Number(n) || 0) * 100);   // monto a centavos, para
 //  3) Si no hay match → crea la pendiente (como antes).
 export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "ARS", lineas = [], onProgress } = {}) {
   const VENTANA_DIAS = 3;   // tolerancia de fecha para el auto-match (banco liquida ±días de la operación)
-  const todos = await get("nb_movimientos", { sociedad });
+  // Lectura SIN caché (ni local de 90s ni de borde de 30s+60s stale): de esta lista sale el set de
+  // dedup, así que un snapshot viejo de nb_movimientos = "esta línea no está" = extracto duplicado.
+  // Pasó de verdad: subida OK a las 18:16, la respuesta del GAS se perdió → se reportó error sin
+  // invalidar la caché → el reintento 86s después leyó el snapshot previo y recreó las 28 líneas.
+  const todos = await _fetchRowsRaw("nb_movimientos", { sociedad });
   const dela  = todos.filter(m => String(m.cuenta_bancaria) === String(cuenta_bancaria));
   const seen  = new Set(dela.map(_extractoRef).filter(Boolean));   // dedup vs DB + dentro del archivo
   // Candidatos a auto-match: cargados por un humano/otro módulo, sin atar a línea de banco, no ignorados.
@@ -1457,7 +1468,9 @@ const _normCom = s => String(s || "").toUpperCase().replace(/\s+/g, " ").trim();
 export const metaVal = (ref, k) => { const x = String(ref || "").match(new RegExp(`${k}=([^;]*)`)); return x ? x[1] : ""; };
 
 export async function ingestarResumenTarjeta({ sociedad, tarjeta = "", periodo = "", fecha, lineas = [] } = {}) {
-  const todos = await get("nb_movimientos", { sociedad });
+  // Sin caché, por lo mismo que ingestarExtracto: de esta lista salen el borrado de pendientes y el
+  // pool de ya-autorizados. Leer stale = no borrar/no reconocer nada = resumen duplicado.
+  const todos = await _fetchRowsRaw("nb_movimientos", { sociedad });
   const cardIds = new Set(lineas.map(l => String(l.cuenta_bancaria)).filter(Boolean));
   const delMismoResumen = m => m.origen === "tarjeta" && cardIds.has(String(m.cuenta_bancaria))
     && (!periodo || metaVal(m.referencia, "per") === String(periodo));
