@@ -829,16 +829,20 @@ function NotaCell({ pago, onSave }) {
       />
     );
   }
+  // Mismo color tenga o no nota propia tipeada: lo que importa es si HAY algo que mostrar
+  // (nota, o su respaldo de la forma de pago) — no de dónde salió, para que la columna no
+  // quede dispareja entre filas editadas y sin editar. Solo el "—" (nada) va en gris tenue.
+  const texto = notaDePago(pago);
   return (
     <span
       onClick={startEdit}
       title="Click para editar la nota"
-      style={{ color: pago.nota ? T.text : T.dim, cursor: "pointer",
+      style={{ color: texto === "—" ? T.dim : T.text, cursor: "pointer",
         borderBottom: "1px dashed transparent" }}
       onMouseEnter={e => e.currentTarget.style.borderBottomColor = T.dim}
       onMouseLeave={e => e.currentTarget.style.borderBottomColor = "transparent"}
     >
-      {notaDePago(pago)}
+      {texto}
     </span>
   );
 }
