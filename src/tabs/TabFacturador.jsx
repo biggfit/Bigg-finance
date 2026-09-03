@@ -291,9 +291,18 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
       });
     };
     const esSedePropia   = fr?.esSedePropia === true;   // interuso de sede propia → gestión (no fiscal)
-    const usaFacturante  = isAR && currency === "ARS" && (doc === "FACTURA" || doc === "NC") && !esSedePropia;
     // Para NC: la FA referenciada (necesitamos su invoice label, ej "FA 0100-00000014")
     const refFAComp      = doc === "NC" ? (comps[String(fr?.id)] ?? []).find(c => c.id === refCompId) : null;
+    // Una NC solo puede anular en el MISMO plano que la factura que referencia: si esa FA salió ante
+    // ARCA, la NC tiene que salir ante ARCA — aunque la sede esté marcada como propia. Si no, queda
+    // una factura fiscal viva anulada solo por un asiento interno (que es lo que venía pasando en
+    // Botánico: el modo CRM le factura fiscal ignorando esSedePropia, y acá la NC se degradaba).
+    const refEsFiscal    = !!(refFAComp?.facturanteId || refFAComp?.invoice);
+    // Sede propia + factura/NC = asiento de GESTIÓN: no se emite ante ARCA, no lleva número, no hay
+    // PDF, y `SKIP_CC_TYPES` lo esconde de toda la CC de Franquicias. Se avisa ANTES de confirmar:
+    // el botón decía "generar Nota de Crédito ARCA" y guardaba una fila invisible y sin documento.
+    const esGestion      = esSedePropia && (doc === "FACTURA" || doc === "NC") && !refEsFiscal;
+    const usaFacturante  = isAR && currency === "ARS" && (doc === "FACTURA" || doc === "NC") && !esGestion;
     const ncSinRef       = usaFacturante && doc === "NC" && !refFAComp?.invoice;
 
     const doConfirm = async (skipFacturante = false) => {
@@ -326,7 +335,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
           setEmitError(err.message ?? "Error al emitir ante ARCA");
           return;
         }
-      } else if (!usaFacturante && !skipFacturante && (doc === "FACTURA" || doc === "NC") && !esSedePropia) {
+      } else if (!usaFacturante && !skipFacturante && (doc === "FACTURA" || doc === "NC") && !esGestion) {
         // ── Invoice USA: asignar correlativo ──────────────────────────────
         setEmitState("emitting");
         setEmitError(null);
@@ -343,16 +352,20 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
       }
 
       // Sede propia: guardar como asiento de GESTIÓN (type GFAC|/GNC|) → no fiscal, no CxC/CxP.
-      if (esSedePropia && (doc === "FACTURA" || doc === "NC")) {
+      // `esGestion`, NO `esSedePropia`: una NC que sí se emitió ante ARCA tiene que quedar como NC
+      // fiscal. Guardarla como GNC la escondía de la CC y dejaba la factura sin anular a la vista.
+      if (esGestion) {
         enriched = { ...enriched, type: makeType(doc === "NC" ? "GNC" : "GFAC", cuenta) };
       }
-      try {
-        onAddComp(fr.id, enriched);
-      } catch {
-        setEmitState("error");
-        setEmitError(afipSaveFailedMsg(enriched.invoice, enriched.facturanteId));
-        return;
-      }
+      // `addComp` NO rechaza: agrega la fila optimista al estado local y devuelve { ok, error }.
+      // El try/catch de antes por lo tanto nunca se disparaba: un fallo de escritura en la planilla
+      // pasaba por éxito → el comprobante se veía en pantalla, desaparecía al recargar y nadie se
+      // enteraba. Ahora se mira el `ok` (el aviso se da recién después de bajar el PDF: si AFIP ya
+      // emitió, el documento hay que tenerlo igual).
+      let saveResult;
+      try { saveResult = await onAddComp(fr.id, enriched); }
+      catch (e) { saveResult = { ok: false, error: e }; }
+      const saveFailed = saveResult?.ok === false;
 
       if (isAR && enriched.facturanteId) {
         // AR emitida por Facturante: bajar el PDF oficial de AFIP
@@ -370,7 +383,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
             downloadTextAsPDF(buildFacturaPDF(fr, franchisor, enriched),
               `Factura_${fr.name}_${MONTHS[preview.month]}_${preview.year}.html`);
           });
-      } else if (isAR && !esSedePropia) {
+      } else if (isAR && !esGestion) {
         // AR guardada sin emitir: HTML de respaldo
         downloadTextAsPDF(buildFacturaPDF(fr, franchisor, enriched),
           `Factura_${fr.name}_${MONTHS[preview.month]}_${preview.year}.html`);
@@ -378,8 +391,15 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
         // No-AR con número asignado: descarga PDF propio
         downloadInvoicePdf(fr, franchisor, enriched).catch(console.error);
       }
-      // Sin número (skipFacturante=true): guarda silenciosamente, sin descarga
+      // Sin número (skipFacturante=true, o asiento de gestión): no hay documento que descargar.
 
+      if (saveFailed) {
+        setEmitState("error");
+        setEmitError(enriched.facturanteId
+          ? afipSaveFailedMsg(enriched.invoice, enriched.facturanteId)
+          : `No se pudo guardar en la planilla (${saveResult?.error?.message || "error de red"}). Se ve en pantalla pero NO quedó guardado: reintentá antes de recargar.`);
+        return;
+      }
       setDone(true);
     };
     const handleConfirm = () => doConfirm(false);
@@ -549,6 +569,28 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
             </div>
           </div>
         )}
+        {esGestion && (
+          <div style={{ marginBottom: 12, padding: "10px 14px", background: "rgba(167,139,250,.08)", border: "1px solid rgba(167,139,250,.3)", borderRadius: 8, fontSize: 12 }}>
+            <div style={{ color: "var(--purple, #a78bfa)", fontWeight: 700, marginBottom: 4 }}>
+              ◆ {fr?.name} es SEDE PROPIA — esto NO es un documento fiscal
+            </div>
+            <div style={{ color: "var(--muted)", lineHeight: 1.5 }}>
+              Se guarda como asiento de gestión ({doc === "NC" ? "GNC" : "GFAC"}): sin emisión ante ARCA,
+              sin número, sin PDF, y no aparece en la cuenta corriente de la sede.
+              {doc === "NC" && " Para anular una factura fiscal ya emitida, elegila abajo en «Factura de referencia»: la NC sale entonces ante ARCA."}
+            </div>
+          </div>
+        )}
+        {esSedePropia && doc === "NC" && refEsFiscal && (
+          <div style={{ marginBottom: 12, padding: "10px 14px", background: "rgba(255,85,112,.08)", border: "1px solid rgba(255,85,112,.25)", borderRadius: 8, fontSize: 12 }}>
+            <div style={{ color: "var(--red)", fontWeight: 700, marginBottom: 4 }}>
+              ⚠ NC FISCAL ante ARCA — {fr?.name} es sede propia, pero {refFAComp?.invoice} se emitió ante ARCA
+            </div>
+            <div style={{ color: "var(--muted)", lineHeight: 1.5 }}>
+              La NC se emite ante ARCA para anularla de verdad. Es irreversible.
+            </div>
+          </div>
+        )}
         <div style={{ display: "flex", gap: 12 }}>
           {!preview
             ? <button className="btn" style={{ flex: 1, height: 48, fontSize: 15 }} disabled={importeNeto <= 0 || !fechaIso} onClick={handlePreview}>Vista previa →</button>
@@ -564,7 +606,11 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
                 )}
                 <button className="btn" style={{ flex: 3, height: 48, fontSize: 15 }} disabled={emitState === "emitting" || ncSinRef} onClick={handleConfirm}
                   title={ncSinRef ? "Seleccioná la factura de referencia antes de emitir" : undefined}>
-                  {emitState === "emitting" ? (usaFacturante ? "Emitiendo ante ARCA…" : "Generando Invoice…") : `✓ Confirmar y generar ${isAR && currency === "ARS" ? (doc === "NC" ? "Nota de Crédito ARCA" : "Factura ARCA") : isAR ? (doc === "NC" ? "Nota de Crédito" : "Factura") : "Invoice"}`}
+                  {emitState === "emitting"
+                    ? (usaFacturante ? "Emitiendo ante ARCA…" : esGestion ? "Guardando…" : "Generando Invoice…")
+                    : esGestion
+                      ? `✓ Guardar asiento de gestión (${doc === "NC" ? "NC" : "factura"} interna, sin ARCA)`
+                      : `✓ Confirmar y generar ${isAR && currency === "ARS" ? (doc === "NC" ? "Nota de Crédito ARCA" : "Factura ARCA") : isAR ? (doc === "NC" ? "Nota de Crédito" : "Factura") : "Invoice"}`}
                 </button>
               </>
           }
@@ -817,14 +863,16 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
 // ── Modo CRM ────────────────────────────────────────────────────────────────
 // TC por país: moneda local → USD. Estas son las monedas locales de los países LATAM
 const COUNTRY_CURRENCY = {
-  "Paraguay":   { code: "PYG", label: "Guaraní",    sym: "₲",   tcField: "pygUSD", defaultTc: "7500" },
-  "Chile":      { code: "CLP", label: "Peso CLP",   sym: "CL$", tcField: "clpUSD", defaultTc: "950"  },
-  "Perú":       { code: "PEN", label: "Sol",        sym: "S/",  tcField: "penUSD", defaultTc: "3.7"  },
-  "Panamá":     { code: "USD", label: "USD",        sym: "U$D", tcField: null,      defaultTc: "1"    },
-  "España":     { code: "EUR", label: "Euro",       sym: "€",   tcField: "eurUSD",  defaultTc: "1.08" },
-  "Portugal":   { code: "EUR", label: "Euro",       sym: "€",   tcField: "eurUSD",  defaultTc: "1.08" },
-  "Uruguay":    { code: "UYU", label: "Peso UYU",   sym: "U$",  tcField: "uyuUSD", defaultTc: "39"   },
-  "Argentina":  { code: "ARS", label: "Peso ARS",   sym: "$",   tcField: null,      defaultTc: null   },
+  // Sin valores por defecto a propósito: el TC sale de Maestros o no se factura. Un default
+  // hardcodeado acá es un TC viejo esperando a que alguien facture con él sin darse cuenta.
+  "Paraguay":   { code: "PYG", label: "Guaraní",    sym: "₲",   tcField: "pygUSD" },
+  "Chile":      { code: "CLP", label: "Peso CLP",   sym: "CL$", tcField: "clpUSD" },
+  "Perú":       { code: "PEN", label: "Sol",        sym: "S/",  tcField: "penUSD" },
+  "Panamá":     { code: "USD", label: "USD",        sym: "U$D", tcField: null     },
+  "España":     { code: "EUR", label: "Euro",       sym: "€",   tcField: "eurUSD" },
+  "Portugal":   { code: "EUR", label: "Euro",       sym: "€",   tcField: "eurUSD" },
+  "Uruguay":    { code: "UYU", label: "Peso UYU",   sym: "U$",  tcField: "uyuUSD" },
+  "Argentina":  { code: "ARS", label: "Peso ARS",   sym: "$",   tcField: null     },
 };
 function getCountryCur(country) {
   return COUNTRY_CURRENCY[country] ?? { code: "USD", label: "USD", sym: "U$D", tcField: null };
@@ -864,21 +912,10 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
 
   const [crmDate, setCrmDate] = useState(() => monthRange(monthProp, yearProp).mesFin);
 
-  // tcMap: valores editables en el panel CRM. Se inicializa desde Maestros si hay dato, sino desde defaultTc
-  const [tcMap, setTcMap] = useState(() => {
-    const map = {};
-    activeFr.forEach(fr => {
-      if (!fr.country || fr.country === "Argentina") return;
-      const cc  = getCountryCur(fr.country);
-      if (map[fr.country]) return;
-      // Preferir dato de Maestros del mes actual si existe
-      const key = `${yearProp}-${String(monthProp + 1).padStart(2, "0")}`;
-      const maestros = tiposCambio[key];
-      const fromMaestros = cc.tcField && maestros?.[cc.tcField] > 0 ? String(maestros[cc.tcField]) : null;
-      map[fr.country] = fromMaestros ?? cc.defaultTc ?? "";
-    });
-    return map;
-  });
+  // No hay estado de TC en este panel: el del mes que se factura se lee de Maestros cada vez
+  // (maestrosTcFor). Antes había un `tcMap` sembrado con un default hardcodeado por país que,
+  // al cambiar de mes acá, NO se limpiaba: quedaba el TC del mes anterior presentado como
+  // "valor manual", y con el panel en agosto y Maestros vacío la factura salía con el de julio.
 
   const makeRows = (fr_list = frForCompany) => fr_list.map(fr => ({
     frId: fr.id, frName: fr.name, currency: activeCurrency, country: fr.country,
@@ -934,24 +971,16 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
   // no con el real). getTcRate ya existía para esto pero no estaba conectada a nada.
   const maestrosTcFor = (country) => getTcRate(country, tiposCambio, crmYear, crmMonth);
 
-  const tcCargados = countriesWithTc.filter(c => maestrosTcFor(c) != null || parseFloat(tcMap[c]) > 0).length;
+  const tcCargados = countriesWithTc.filter(c => maestrosTcFor(c) != null).length;
 
-  // Sincroniza tcMap con Maestros cuando cambia el mes o llegan los datos
-  useEffect(() => {
-    const key = `${crmYear}-${String(crmMonth + 1).padStart(2, "0")}`;
-    const maestros = tiposCambio[key];
-    if (!maestros) return;
-    setTcMap(prev => {
-      const next = { ...prev };
-      countriesWithTc.forEach(country => {
-        const cc = getCountryCur(country);
-        if (cc.tcField && maestros[cc.tcField] > 0) {
-          next[country] = String(maestros[cc.tcField]);
-        }
-      });
-      return next;
-    });
-  }, [tiposCambio, crmYear, crmMonth]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** true si al país le falta el TC del mes que se está facturando → no se puede facturar. */
+  const tcFalta = (country) => {
+    const cc = getCountryCur(country);
+    if (!cc.tcField) return false;                        // ARS/USD no convierten
+    if (cc.code === "USD" || cc.code === "EUR") return false;  // ya son moneda de facturación
+    return maestrosTcFor(country) == null;
+  };
+
 
   const [crmFetchErrors, setCrmFetchErrors] = useState([]);
 
@@ -1007,10 +1036,10 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
     const cc = getCountryCur(r.country);
     // EUR y USD ya son monedas de facturación final — no se convierten
     if (cc.code === "USD" || cc.code === "EUR") return feeLocal;
-    // Maestros manda siempre que tenga el dato; el input manual es solo fallback
-    // para cuando ese mes todavía no se cargó ahí.
-    const tc = maestrosTcFor(r.country) ?? (parseFloat(tcMap[r.country] ?? "1") || 1);
-    return feeLocal / tc;
+    // Maestros es la ÚNICA fuente. Sin TC del mes no hay fee posible: el fallback anterior
+    // dividía por 1, que en guaraníes o pesos chilenos da una factura miles de veces mayor.
+    const tc = maestrosTcFor(r.country);
+    return tc > 0 ? feeLocal / tc : null;
   };
 
   const dtoDisplay = (r) => {
@@ -1018,8 +1047,20 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
     return Math.round((1 - r.royaltyFactura / r.royaltyContrato) * 10000) / 100;
   };
 
+  /** Sede que NO se factura por fee: `paysFee: false` o sede propia (su interuso va por gestión).
+   *  Mismo criterio que ReporteFeeModal, el wizard manual y el modo Excel — este panel era el único
+   *  que los ignoraba, y por eso le emitió 7 facturas fiscales ante ARCA a una sede propia. */
+  const noPagaFee = (frId) => {
+    const fr = activeFr.find(f => f.id === frId);
+    return fr?.paysFee === false || fr?.esSedePropia === true;
+  };
+
   const ventasN = (r) => parseFloat(String(r.ventas).replace(/\./g, "").replace(",", ".")) || 0;
-  const billableRows  = rows.map((r, i) => ({ ...r, _origIdx: i })).filter(r => ventasN(r) > 0);
+  // Una fila sin el TC del mes no entra al lote: se avisa aparte para que no se facture callada.
+  const conVentas     = rows.map((r, i) => ({ ...r, _origIdx: i })).filter(r => ventasN(r) > 0);
+  const sinTcRows     = conVentas.filter(r => tcFalta(r.country));
+  const noFeeRows     = conVentas.filter(r => !tcFalta(r.country) && noPagaFee(r.frId));
+  const billableRows  = conVentas.filter(r => !tcFalta(r.country) && !noPagaFee(r.frId));
   const fullDtoCount  = rows.filter(r => ventasN(r) > 0 && r.royaltyFactura === 0).length;
   // Si hay checkboxes marcados, solo los seleccionados con ventas; si no, todos con ventas
   const toProcess = selected.size > 0
@@ -1045,6 +1086,9 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
       const r  = toProcess[idx];
       const fr = activeFr.find(f => f.id === r.frId);
       if (!fr) continue;
+      // Última línea de defensa antes de emitir ante ARCA: una sede propia / sin fee no se factura
+      // por más que haya llegado hasta acá (selección manual, fila vieja en estado, etc.).
+      if (fr.paysFee === false || fr.esSedePropia === true) continue;
       setBatchProg({ current: idx + 1, total, name: r.frName });
       const fee = rowFee(r);
       const dto = dtoDisplay(r);
@@ -1279,28 +1323,29 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
                     {countriesWithTc.map(country => {
                       const cc     = getCountryCur(country);
                       const fromMaestros = maestrosTcFor(country);
-                      const locked = fromMaestros != null;
-                      const val    = locked ? fromMaestros : (tcMap[country] ?? "");
-                      const ok     = locked || parseFloat(val) > 0;
+                      const ok     = fromMaestros != null;
                       return (
                         <div key={country} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <span style={{ fontSize: 12, fontWeight: 700, minWidth: 78 }}>{country}</span>
                           <span style={{ fontSize: 11, color: "var(--muted)", minWidth: 26 }}>{cc.sym}</span>
-                          <input type="number" value={val} disabled={locked}
-                            onChange={e => setTcMap(m => ({ ...m, [country]: e.target.value }))}
-                            placeholder="TC" title={locked ? "Viene de Maestros — para cambiarlo, editalo ahí" : "Sin cargar en Maestros — valor manual temporal"}
-                            style={{ ...inS, flex: 1, ...(locked ? { opacity: 0.7, cursor: "not-allowed" } : {}) }} />
+                          <input type="number" value={ok ? fromMaestros : ""} disabled readOnly
+                            placeholder="falta en Maestros"
+                            title={ok ? "Viene de Maestros — para cambiarlo, editalo ahí"
+                                      : `Sin cargar para ${MONTHS[crmMonth]} ${crmYear} — estas sedes no se facturan hasta cargarlo en Maestros`}
+                            style={{ ...inS, flex: 1, opacity: ok ? 0.7 : 1, cursor: "not-allowed",
+                                     ...(ok ? {} : { borderColor: "var(--red)", color: "var(--red)" }) }} />
                           <span style={{ fontSize: 10, color: "var(--muted)" }}>/ USD</span>
-                          <span style={{ fontSize: 13 }} title={locked ? "Tomado de Maestros" : ok ? "Valor manual (sin Maestros)" : "Falta cargar"}>
-                            {locked ? "🔒" : ok ? "⚠" : "✗"}
+                          <span style={{ fontSize: 13 }} title={ok ? "Tomado de Maestros" : "Falta cargar en Maestros"}>
+                            {ok ? "🔒" : "✗"}
                           </span>
                         </div>
                       );
                     })}
                   </div>
                   <div style={{ marginTop: 10, fontSize: 10, color: "var(--muted)", borderTop: "1px solid var(--border)", paddingTop: 8 }}>
-                    🔒 = TC de Maestros, no editable acá. Si falta, cargalo en Maestros → Tipo de Cambio
-                    para que la factura salga con el valor correcto.
+                    El TC sale solo de Maestros → Tipo de Cambio, para el mes que se factura. Acá no se
+                    edita: un valor tipeado a mano acá ya dejó facturas emitidas con un TC distinto al de
+                    Contabilidad. Lo que falte (✗) no se factura hasta cargarlo ahí.
                   </div>
                 </div>
               )}
@@ -1440,12 +1485,18 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
                             : <span style={{ color: "var(--muted)", fontSize: 11 }}>—</span>}
                         </td>
                         <td className="mono" style={{ textAlign: "right", fontSize: 12, fontWeight: 700 }}>
-                          {hasV
-                            ? <span style={{ color: fee <= 0 ? "var(--muted)" : "var(--green)" }}>
-                                {`${SYM[billingCur] || cc.sym} ${fee.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                                {fee <= 0 && <div style={{ fontSize: 9, color: "var(--muted)", fontWeight: 400 }}>100% dto.</div>}
-                              </span>
-                            : <span style={{ color: "var(--muted)" }}>—</span>}
+                          {!hasV
+                            ? <span style={{ color: "var(--muted)" }}>—</span>
+                            : fee == null
+                              ? <span title={`Falta el TC de ${MONTHS[crmMonth]} ${crmYear} para ${r.country}. Cargalo en Maestros → Tipo de Cambio.`}
+                                  style={{ color: "var(--red)", cursor: "help" }}>
+                                  sin TC
+                                  <div style={{ fontSize: 9, color: "var(--muted)", fontWeight: 400 }}>no se factura</div>
+                                </span>
+                              : <span style={{ color: fee <= 0 ? "var(--muted)" : "var(--green)" }}>
+                                  {`${SYM[billingCur] || cc.sym} ${fee.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                                  {fee <= 0 && <div style={{ fontSize: 9, color: "var(--muted)", fontWeight: 400 }}>100% dto.</div>}
+                                </span>}
                         </td>
                         <td>
                           <button onClick={() => { deleteRow(i); setSelected(p => { const n=new Set(p); n.delete(i); return n; }); }}
@@ -1469,6 +1520,18 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
           {selected.size > 0 && <span style={{ color: "var(--accent)", marginLeft: 6 }}>· {toProcess.length} seleccionado{toProcess.length !== 1 ? "s" : ""}</span>}
           {fullDtoCount > 0 &&
             <span style={{ marginLeft: 6 }}>· {fullDtoCount} con 100% dto.</span>}
+          {sinTcRows.length > 0 && (
+            <span style={{ color: "var(--red)", marginLeft: 6, fontWeight: 700 }}
+              title={`${[...new Set(sinTcRows.map(r => r.country))].join(", ")} — cargá el TC de ${MONTHS[crmMonth]} ${crmYear} en Maestros → Tipo de Cambio`}>
+              · {sinTcRows.length} sin TC, fuera del lote
+            </span>
+          )}
+          {noFeeRows.length > 0 && (
+            <span style={{ color: "var(--purple, #a78bfa)", marginLeft: 6, fontWeight: 700 }}
+              title={`${noFeeRows.map(r => r.frName).join(", ")} — sede propia o "sin fee" en Maestros: su interuso va por gestión, no se le emite factura de fee`}>
+              · {noFeeRows.length} sin fee, fuera del lote
+            </span>
+          )}
         </span>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: "auto" }}>
           <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)" }}>Fecha emisión</label>
