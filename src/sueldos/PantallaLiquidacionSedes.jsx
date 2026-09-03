@@ -323,6 +323,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   const [legajos,    setLegajos]    = useState([]);
   const [legajosInactivos, setLegajosInactivos] = useState([]);  // dados de baja (para reconocer check-ins de ex/suplentes)
   const [liqsSaved,  setLiqsSaved]  = useState([]);  // su_liquidaciones guardadas (se mergean en rosterBase)
+  const [liqsFetchOk, setLiqsFetchOk] = useState(false);  // ¿la última lectura de liquidaciones resolvió? (si no, no confiamos en "qué hay en el sheet" y borramos por las dudas al cerrar)
   const [eyeItems,   setEyeItems]   = useState([]);  // items de BIGG Eye (coach × sede × horas)
   const [eyeSource,  setEyeSource]  = useState(null); // { source: "vivo"|"cache"|"cache-fallback"|"error", ts }
   // Aplica la respuesta de Eye (items + de dónde vinieron, para el cartel en vivo/cache).
@@ -408,6 +409,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       setCategorias(cats);
       const norm = mkNorm(sedesArr);
       setLiqsSaved(liqs.map(r => ({ ...r, sede_nombre: norm(r.sede_id, r.sede_nombre) })));
+      setLiqsFetchOk(w1[2].status === "fulfilled");   // solo confiamos en "qué hay en el sheet" si la lectura resolvió
       legIds = new Set(liqs.map(l => l.legajo_id));
       // BIGG Eye NO se trae en la carga (llamada en vivo lenta, el Paso 1 no la necesita): manual.
       setEyeItems([]);
@@ -432,10 +434,12 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   // Refresh LIVIANO tras guardar/pagar: solo re-trae liquidaciones + pagos (lo único que cambió),
   // sin re-descargar las 9 fuentes ni bloquear la pantalla con "Cargando…". Reusa `sedes` de estado.
   const refreshLiqs = useCallback(async () => {
-    const [liqs, pags] = await Promise.all([
-      fetchLiquidacionesSedes(mes, anio, pais).catch(() => []),
+    const [liqsRes, pags] = await Promise.all([
+      fetchLiquidacionesSedes(mes, anio, pais).then(v => ({ ok: true, v })).catch(() => ({ ok: false, v: [] })),
       fetchPagos(mes, anio).catch(() => []),
     ]);
+    setLiqsFetchOk(liqsRes.ok);
+    const liqs = liqsRes.v;
     const byId = new Map(sedes.map(s => [s.id, s]));
     const norm = (sedeId, sedeName) => {
       const hit = byId.get(sedeId);
@@ -763,6 +767,11 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   const idsLiqCerrados = useMemo(
     () => [...new Set(rows.filter(r => isCerrada(r.estado)).map(r => idLiqDe(r.legajo_id, mes, anio, r.sede_id)))],
     [rows, mes, anio]);
+
+  // id_liq que YA tienen líneas en el sheet (cerradas previas o reabiertas). Al cerrar solo hay que
+  // borrar-antes-de-escribir estas; una liquidación nueva (sin borrador persistido en el sheet) no
+  // tiene nada que borrar → su cierre es un único add_batch, sin el borrado fila-por-fila que hacía timeout.
+  const idLiqEnSheet = useMemo(() => new Set(liqsSaved.map(l => l.id)), [liqsSaved]);
 
   // Detalle base (sin ediciones) por fila, para el editor de líneas de clase.
   const baseDetalle = useMemo(
@@ -1153,11 +1162,13 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         const lineasFin = redondeo > 0
           ? [...lineas, lineaLiq(header, { tipo: "concepto", concepto: "Redondeo", cuenta_contable: "Sueldos", cantidad: 0, monto_unit: 0, monto: redondeo })]
           : lineas;
-        // replace SIEMPRE true: el cierre debe ser IDEMPOTENTE (borrar-y-reescribir), aunque sea lento.
-        // Confiar en r.id era peligroso: si la consulta de liquidaciones falló al cargar, r.id venía
-        // vacío → no borraba → el add_batch duplicaba sobre lo ya guardado. La velocidad la resuelve el
-        // del_comp_batch en el GAS (pendiente), no saltear el borrado.
-        entries.push({ id_liq: idLiqDe(r.legajo_id, mes, anio, r.sede_id), lineas: [...lineasFin, ...pagos, ...novLineas], replace: true });
+        // replace SOLO si esa liquidación ya tiene líneas en el sheet (cerrada previa o reabierta): ahí sí
+        // hay que borrar-antes-de-reescribir para no duplicar. Un cierre nuevo (sin borrador persistido en
+        // el sheet — hoy "Guardar borrador" está deshabilitado) no borra nada → el cierre es un único
+        // add_batch, sin el borrado fila-por-fila que hacía timeout con muchos empleados. Si la lectura de
+        // liquidaciones falló (liqsFetchOk=false) no sabemos qué hay → borramos por las dudas (viejo, seguro).
+        const idLiqR = idLiqDe(r.legajo_id, mes, anio, r.sede_id);
+        entries.push({ id_liq: idLiqR, lineas: [...lineasFin, ...pagos, ...novLineas], replace: !liqsFetchOk || idLiqEnSheet.has(idLiqR) });
       }
       // Un solo add_batch para todas las liquidaciones (replace: reescribe el borrador como "cerrado").
       await saveLiquidacionesLinesBatch(entries);
@@ -1257,9 +1268,13 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
               {reabriendo ? "Reabriendo…" : `🔓 Reabrir ${idsLiqCerrados.length} cerradas`}
             </button>
           )}
-          <button onClick={handleGuardarBorrador} disabled={saving || !rows.length}
-            style={{ ...BTN_PRIMARY(saving || !rows.length), padding: "7px 14px" }}>
-            {saving ? "Guardando…" : "💾 Guardar borrador"}
+          {/* "Guardar borrador" deshabilitado por ahora: persistía el borrador en el sheet, y eso obligaba
+              al cierre a borrar-antes-de-escribir (fila por fila → timeout). El borrador vive en memoria +
+              autosave local; el sheet solo guarda liquidaciones CERRADAS. Reactivar = quitar disabled. */}
+          <button onClick={handleGuardarBorrador} disabled
+            title="Deshabilitado por ahora — el borrador se guarda solo en este navegador (autosave local); al sheet va únicamente al cerrar la liquidación."
+            style={{ ...BTN_PRIMARY(true), padding: "7px 14px" }}>
+            💾 Guardar borrador
           </button>
         </div>
       </div>
