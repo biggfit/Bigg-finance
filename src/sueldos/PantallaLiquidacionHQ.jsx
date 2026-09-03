@@ -2420,8 +2420,10 @@ function ModalBatchPago({ tipo, items, mes, anio, onClose, onSaved }) {
     : (it.ref.cuenta_contable_nombre || "Novedad");
 
   const toggle = (i) => setSel(s => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
-  const itemsSel = items.filter((_, i) => sel.has(i));
-  const total    = itemsSel.reduce((s, it) => s + montoItem(it), 0);
+  const itemsSel   = items.filter((_, i) => sel.has(i));
+  const total      = itemsSel.reduce((s, it) => s + montoItem(it), 0);
+  const todasMarcadas = items.length > 0 && sel.size === items.length;
+  const toggleTodas   = () => setSel(todasMarcadas ? new Set() : new Set(items.map((_, i) => i)));
 
   const handleSave = async () => {
     if (savingRef.current) return;
@@ -2468,9 +2470,17 @@ function ModalBatchPago({ tipo, items, mes, anio, onClose, onSaved }) {
         <h3 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 700 }}>
           Imputar en masa — <span style={{ color: FP_TIPO_COLOR[tipo] || T.text }}>{FP_TIPO_LABEL[tipo] || tipo}</span>
         </h3>
-        <p style={{ margin: "0 0 14px", fontSize: 12, color: T.muted }}>
-          {itemsSel.length} ítem{itemsSel.length !== 1 ? "s" : ""} · Total <strong style={{ color: T.text }}>{fmtMoney(total)}</strong>
-        </p>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 14 }}>
+          <p style={{ margin: 0, fontSize: 12, color: T.muted }}>
+            {itemsSel.length} ítem{itemsSel.length !== 1 ? "s" : ""} · Total <strong style={{ color: T.text }}>{fmtMoney(total)}</strong>
+          </p>
+          <button onClick={toggleTodas} style={{
+            background: "none", border: "none", color: T.blue, fontSize: 12, fontWeight: 600,
+            cursor: "pointer", fontFamily: T.font, padding: "2px 4px", whiteSpace: "nowrap",
+          }}>
+            {todasMarcadas ? "Destildar todos" : "Marcar todos"}
+          </button>
+        </div>
 
         <div style={{ border: `1px solid ${T.border}`, borderRadius: 6, marginBottom: 16, maxHeight: 200, overflowY: "auto" }}>
           {items.map((it, i) => {
