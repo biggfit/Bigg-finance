@@ -855,7 +855,8 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
   const rows = useMemo(() => egresos.filter(e => {
     const matchEstado = filtroEstado === "todos" || e.estado === filtroEstado;
     const q = busqueda.toLowerCase();
-    const matchQ = !q || (e.proveedor ?? "").toLowerCase().includes(q) || (e.cuenta ?? "").toLowerCase().includes(q) || (e.cc ?? "").toLowerCase().includes(q);
+    const matchQ = !q || (e.proveedor ?? "").toLowerCase().includes(q) || (e.cuenta ?? "").toLowerCase().includes(q) || (e.cc ?? "").toLowerCase().includes(q)
+      || (e.nota ?? "").toLowerCase().includes(q) || (e.nroComp ?? "").toLowerCase().includes(q);
     return matchEstado && matchQ && filtroFecha.inRange(e.fecha);
   }).sort((a, b) => String(b.fecha ?? "").localeCompare(String(a.fecha ?? ""))), [busqueda, filtroEstado, egresos, filtroFecha.inRange]);
 
@@ -863,7 +864,8 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
     // Los totales acompañan la BÚSQUEDA (proveedor/cuenta/CC) pero NO las pestañas de estado
     // (esas tarjetas SON el desglose por estado). Así, al buscar un proveedor, muestran su total.
     const q = busqueda.toLowerCase();
-    const matchQ = e => !q || (e.proveedor ?? "").toLowerCase().includes(q) || (e.cuenta ?? "").toLowerCase().includes(q) || (e.cc ?? "").toLowerCase().includes(q);
+    const matchQ = e => !q || (e.proveedor ?? "").toLowerCase().includes(q) || (e.cuenta ?? "").toLowerCase().includes(q) || (e.cc ?? "").toLowerCase().includes(q)
+      || (e.nota ?? "").toLowerCase().includes(q) || (e.nroComp ?? "").toLowerCase().includes(q);
     const enPeriodo = egresos.filter(e => filtroFecha.inRange(e.fecha) && matchQ(e));
     const monedas = [...new Set(enPeriodo.map(e => e.moneda))].filter(Boolean).sort();
     return monedas.map(moneda => {
@@ -1098,7 +1100,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
         padding:"12px 16px", marginBottom:16, boxShadow:T.shadow,
         display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
         <input value={busqueda} onChange={e=>setBusqueda(e.target.value)}
-          placeholder="Buscar proveedor, cuenta, CC..."
+          placeholder="Buscar proveedor, cuenta, CC, nota, N° comp..."
           style={{ flex:1, minWidth:200, background:"#eceff3", border:`1px solid ${T.cardBorder}`,
             borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text, outline:"none", fontFamily:T.font }} />
         <FiltroFecha {...filtroFecha} />

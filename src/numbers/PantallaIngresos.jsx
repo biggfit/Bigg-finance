@@ -913,14 +913,16 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
   const rows = useMemo(() => ingresos.filter(e => {
     const matchEstado = filtroEstado === "todos" || e.estado === filtroEstado;
     const q = busqueda.toLowerCase();
-    const matchQ = !q || (e.cliente ?? "").toLowerCase().includes(q) || (e.cuenta ?? "").toLowerCase().includes(q) || (e.cc ?? "").toLowerCase().includes(q);
+    const matchQ = !q || (e.cliente ?? "").toLowerCase().includes(q) || (e.cuenta ?? "").toLowerCase().includes(q) || (e.cc ?? "").toLowerCase().includes(q)
+      || (e.nota ?? "").toLowerCase().includes(q) || (e.nroComp ?? "").toLowerCase().includes(q);
     return matchEstado && matchQ && filtroFecha.inRange(e.fecha);
   }).sort((a, b) => String(b.fecha ?? "").localeCompare(String(a.fecha ?? ""))), [busqueda, filtroEstado, ingresos, filtroFecha.inRange]);
 
   const totalesPorMoneda = useMemo(() => {
     // Los totales acompañan la BÚSQUEDA (cliente/cuenta/CC) pero NO las pestañas de estado.
     const q = busqueda.toLowerCase();
-    const matchQ = e => !q || (e.cliente ?? "").toLowerCase().includes(q) || (e.cuenta ?? "").toLowerCase().includes(q) || (e.cc ?? "").toLowerCase().includes(q);
+    const matchQ = e => !q || (e.cliente ?? "").toLowerCase().includes(q) || (e.cuenta ?? "").toLowerCase().includes(q) || (e.cc ?? "").toLowerCase().includes(q)
+      || (e.nota ?? "").toLowerCase().includes(q) || (e.nroComp ?? "").toLowerCase().includes(q);
     const enPeriodo = ingresos.filter(e => filtroFecha.inRange(e.fecha) && matchQ(e));
     const monedas = [...new Set(enPeriodo.map(e => e.moneda))].filter(Boolean).sort();
     return monedas.map(moneda => {
@@ -1020,7 +1022,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
         padding:"12px 16px", marginBottom:16, boxShadow:T.shadow,
         display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
         <input value={busqueda} onChange={e => setBusqueda(e.target.value)}
-          placeholder="Buscar cliente, cuenta, CC..."
+          placeholder="Buscar cliente, cuenta, CC, nota, N° comp..."
           style={{ flex:1, minWidth:200, background:"#eceff3", border:`1px solid ${T.cardBorder}`,
             borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text, outline:"none", fontFamily:T.font }} />
         <FiltroFecha {...filtroFecha} />
