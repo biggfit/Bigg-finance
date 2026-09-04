@@ -856,7 +856,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
     const matchEstado = filtroEstado === "todos" || e.estado === filtroEstado;
     const q = busqueda.toLowerCase();
     const matchQ = !q || (e.proveedor ?? "").toLowerCase().includes(q) || (e.cuenta ?? "").toLowerCase().includes(q) || (e.cc ?? "").toLowerCase().includes(q)
-      || (e.nota ?? "").toLowerCase().includes(q) || (e.nroComp ?? "").toLowerCase().includes(q);
+      || String(e.nota ?? "").toLowerCase().includes(q) || String(e.nroComp ?? "").toLowerCase().includes(q);
     return matchEstado && matchQ && filtroFecha.inRange(e.fecha);
   }).sort((a, b) => String(b.fecha ?? "").localeCompare(String(a.fecha ?? ""))), [busqueda, filtroEstado, egresos, filtroFecha.inRange]);
 
@@ -865,7 +865,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
     // (esas tarjetas SON el desglose por estado). Así, al buscar un proveedor, muestran su total.
     const q = busqueda.toLowerCase();
     const matchQ = e => !q || (e.proveedor ?? "").toLowerCase().includes(q) || (e.cuenta ?? "").toLowerCase().includes(q) || (e.cc ?? "").toLowerCase().includes(q)
-      || (e.nota ?? "").toLowerCase().includes(q) || (e.nroComp ?? "").toLowerCase().includes(q);
+      || String(e.nota ?? "").toLowerCase().includes(q) || String(e.nroComp ?? "").toLowerCase().includes(q);
     const enPeriodo = egresos.filter(e => filtroFecha.inRange(e.fecha) && matchQ(e));
     const monedas = [...new Set(enPeriodo.map(e => e.moneda))].filter(Boolean).sort();
     return monedas.map(moneda => {
