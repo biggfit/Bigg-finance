@@ -914,7 +914,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
     const matchEstado = filtroEstado === "todos" || e.estado === filtroEstado;
     const q = busqueda.toLowerCase();
     const matchQ = !q || (e.cliente ?? "").toLowerCase().includes(q) || (e.cuenta ?? "").toLowerCase().includes(q) || (e.cc ?? "").toLowerCase().includes(q)
-      || (e.nota ?? "").toLowerCase().includes(q) || (e.nroComp ?? "").toLowerCase().includes(q);
+      || String(e.nota ?? "").toLowerCase().includes(q) || String(e.nroComp ?? "").toLowerCase().includes(q);
     return matchEstado && matchQ && filtroFecha.inRange(e.fecha);
   }).sort((a, b) => String(b.fecha ?? "").localeCompare(String(a.fecha ?? ""))), [busqueda, filtroEstado, ingresos, filtroFecha.inRange]);
 
@@ -922,7 +922,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
     // Los totales acompañan la BÚSQUEDA (cliente/cuenta/CC) pero NO las pestañas de estado.
     const q = busqueda.toLowerCase();
     const matchQ = e => !q || (e.cliente ?? "").toLowerCase().includes(q) || (e.cuenta ?? "").toLowerCase().includes(q) || (e.cc ?? "").toLowerCase().includes(q)
-      || (e.nota ?? "").toLowerCase().includes(q) || (e.nroComp ?? "").toLowerCase().includes(q);
+      || String(e.nota ?? "").toLowerCase().includes(q) || String(e.nroComp ?? "").toLowerCase().includes(q);
     const enPeriodo = ingresos.filter(e => filtroFecha.inRange(e.fecha) && matchQ(e));
     const monedas = [...new Set(enPeriodo.map(e => e.moneda))].filter(Boolean).sort();
     return monedas.map(moneda => {
