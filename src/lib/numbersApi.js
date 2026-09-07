@@ -1852,6 +1852,35 @@ export async function imputarCobroIngreso(mov, { documento_id, cuenta_contable =
   }
 }
 
+// Deshace una imputación hecha por el motor de conciliación (imputarPagoFC / imputarCobroIngreso):
+// el pago/cobro NO es una fila propia, es la LÍNEA DEL EXTRACTO editada in-place. Borrarla con `del`
+// destruiría el movimiento bancario real (rompe el saldo del extracto y pierde el nro. de operación,
+// así que al re-subir el extracto entraría como duplicado). En cambio, esto la REVIERTE a "pendiente":
+// deshace solo lo que puso imputarPagoFC (tipo, documento_id, cuenta_contable, centro, contraparte) y
+// deja intactos origen="extracto", extracto_saldo (dedup) y la propuesta del parser en `referencia` →
+// la línea reaparece sola en el motor de conciliación con su nro. de operación, y la FC vuelve a "a pagar".
+// Solo para pagos/cobros con origen="extracto"; los manuales (origen="pago"/"cobro") se borran con del.
+export async function desimputarPago(mov) {
+  return post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
+    tipo:               (Number(mov.monto) || 0) > 0 ? "INGRESO" : "EGRESO",   // igual criterio que la ingesta (por signo)
+    documento_id:       "",   // se despega de la FC → vuelve a la cola del motor
+    cuenta_contable:    "",   // vuelve a la propuesta del parser (que sigue viva en `referencia`)
+    centro_costo:       "",
+    contraparte_id:     "",
+    concepto:           mov.concepto || "",
+    ...firma(),
+  }});
+}
+
+// Borra un pago/cobro vinculado a una factura, respetando su origen: si vino del motor de
+// conciliación (origen="extracto") NO se borra el movimiento bancario real → se desimputa y
+// vuelve a la conciliación; si es manual se borra con del. Usar en lugar de deleteMovTesoreria
+// para cualquier pago/cobro que cuelgue de un comprobante.
+export async function borrarPagoImputado(mov) {
+  if (mov?.origen === "extracto") return desimputarPago(mov);
+  return deleteMovTesoreria(mov.id);
+}
+
 // Registra retenciones sufridas sobre una factura de venta SIN cobro de caja (ej. al recibir la
 // orden de pago, antes de cobrar, o como saldo de apertura). Cada retención = fila nb_movimientos
 // origen="retencion" (tipo COBRO, sin cuenta_bancaria) que netea la CxC por documento_id y entra al

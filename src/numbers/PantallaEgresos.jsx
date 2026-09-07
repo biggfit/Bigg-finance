@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import { T, ESTADO_EGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
-import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, deleteMovTesoreria, updateMovTesoreria, shortId, appendProveedor, appendCuenta, aplicarRetencionPracticada, RETDEP_TAG } from "../lib/numbersApi";
+import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, updateMovTesoreria, borrarPagoImputado, shortId, appendProveedor, appendCuenta, aplicarRetencionPracticada, RETDEP_TAG } from "../lib/numbersApi";
 
 // Una factura admite UNA sola retención practicada: se detecta por sus líneas de neteo
 // (tipo=PAGO origen="retencion_practicada" / tag RETDEP) ya vinculadas al comprobante.
@@ -158,6 +158,7 @@ function EditarPagoModal({ pago, sociedad, cuentasSoc, onClose, onSaved }) {
   });
   const [saving,   setSaving]   = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);   // confirmación inline (no dependemos de window.confirm, que Chrome puede bloquear)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const canSave = form.fecha && form.monto && Number(form.monto) > 0;
 
@@ -174,11 +175,13 @@ function EditarPagoModal({ pago, sociedad, cuentasSoc, onClose, onSaved }) {
     finally { _savingRef.current = false; setSaving(false); }
   };
 
+  // Un pago que vino del motor de conciliación (origen="extracto") ES la línea del banco: no se
+  // borra (destruiría el movimiento real) → se desimputa y vuelve a la conciliación. El manual sí se borra.
+  const delMotor = pago.origen === "extracto";
   const handleBorrar = async () => {
-    if (!window.confirm("¿Eliminar este pago? Esta acción no se puede deshacer.")) return;
     setDeleting(true);
     try {
-      await deleteMovTesoreria(pago.id);
+      await borrarPagoImputado(pago);
       onSaved();
     } catch (e) { alert("Error al eliminar: " + e.message); }
     finally { setDeleting(false); }
@@ -243,13 +246,29 @@ function EditarPagoModal({ pago, sociedad, cuentasSoc, onClose, onSaved }) {
         </div>
 
         {/* Footer */}
-        <div style={{ padding:"12px 22px 18px", display:"flex", gap:8 }}>
-          <button onClick={handleBorrar} disabled={deleting}
-            style={{ padding:"9px 16px", borderRadius:8, border:"none", cursor:"pointer",
-              background:"#dc2626", color:"#fff", fontWeight:700, fontSize:13, fontFamily:"inherit",
-              display:"flex", alignItems:"center", gap:6 }}>
-            🗑 {deleting ? "Eliminando…" : "Borrar"}
-          </button>
+        <div style={{ padding:"12px 22px 18px", display:"flex", gap:8, alignItems:"center" }}>
+          {!confirmDel ? (
+            <button onClick={() => setConfirmDel(true)} disabled={deleting}
+              style={{ padding:"9px 16px", borderRadius:8, border:"none", cursor:"pointer",
+                background:"#dc2626", color:"#fff", fontWeight:700, fontSize:13, fontFamily:"inherit",
+                display:"flex", alignItems:"center", gap:6 }}>
+              {delMotor ? "↩︎ Quitar de la factura" : "🗑 Borrar"}
+            </button>
+          ) : (
+            <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+              <span style={{ fontSize:12, color:T.muted, fontWeight:700, maxWidth:190 }}>
+                {delMotor ? "Vuelve a conciliación (no se borra del banco). ¿Seguro?" : "¿Eliminar este pago?"}
+              </span>
+              <button onClick={handleBorrar} disabled={deleting}
+                style={{ padding:"9px 14px", borderRadius:8, border:"none", cursor:"pointer",
+                  background:"#dc2626", color:"#fff", fontWeight:700, fontSize:13, fontFamily:"inherit" }}>
+                {deleting ? (delMotor ? "Desimputando…" : "Eliminando…") : (delMotor ? "Sí, quitar" : "Sí, borrar")}
+              </button>
+              <button onClick={() => setConfirmDel(false)} disabled={deleting}
+                style={{ padding:"9px 12px", borderRadius:8, border:`1px solid ${T.cardBorder}`,
+                  cursor:"pointer", background:"#f3f4f6", color:T.muted, fontWeight:700, fontSize:13, fontFamily:"inherit" }}>No</button>
+            </div>
+          )}
           <div style={{ flex:1 }} />
           <button onClick={onClose}
             style={{ padding:"9px 18px", borderRadius:8, border:`1px solid ${T.cardBorder}`,
@@ -934,11 +953,17 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
   };
 
   const handleEliminar = async (id_comp) => {
-    if (!confirm("¿Eliminar este egreso? Se eliminarán también los pagos asociados.")) return;
+    const egreso = egresos.find(e => e.id === id_comp);
+    // Los pagos que vinieron del motor (origen="extracto") NO se borran: se desimputan y vuelven a la
+    // conciliación (no se pierde el movimiento del banco). Los manuales sí se borran. borrarPagoImputado decide.
+    const delMotor = (egreso?.pagosVinculados ?? []).filter(p => p.origen === "extracto").length;
+    const msg = delMotor
+      ? `¿Eliminar este egreso? Tiene ${delMotor} pago(s) conciliado(s) del banco: NO se borran, vuelven a la conciliación. El resto de pagos manuales se eliminan.`
+      : "¿Eliminar este egreso? Se eliminarán también los pagos asociados.";
+    if (!confirm(msg)) return;
     try {
-      const egreso = egresos.find(e => e.id === id_comp);
       if (egreso?.pagosVinculados?.length > 0) {
-        await Promise.all(egreso.pagosVinculados.map(p => deleteMovTesoreria(p.id)));
+        await Promise.all(egreso.pagosVinculados.map(p => borrarPagoImputado(p)));
       }
       await deleteEgreso(id_comp);
       setEgresos(prev => prev.filter(e => e.id !== id_comp));
