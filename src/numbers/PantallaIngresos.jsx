@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import { T, ESTADO_INGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
-import { fetchIngresos, appendIngreso, deleteIngreso, updateIngreso, appendCobro, fetchPagosCobros, calcSaldoPendiente, calcEstadoIngreso, fetchClientes, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, deleteMovTesoreria, updateMovTesoreria, shortId, agruparAnticipos, cobrarContraAnticipo, appendRetenciones, appendCliente, appendCuenta } from "../lib/numbersApi";
+import { fetchIngresos, appendIngreso, deleteIngreso, updateIngreso, appendCobro, fetchPagosCobros, calcSaldoPendiente, calcEstadoIngreso, fetchClientes, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, updateMovTesoreria, borrarPagoImputado, shortId, agruparAnticipos, cobrarContraAnticipo, appendRetenciones, appendCliente, appendCuenta } from "../lib/numbersApi";
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 import { makeResolveCC, makeResolveCB, byNombre, makeCrearMaestro, stripForDuplicate } from "./formUtils";
 import NuevoIngresoModal from "./NuevoIngresoModal";
@@ -121,6 +121,7 @@ function EditarCobroModal({ cobro, sociedad, cuentasSoc, cuentasContables = [], 
   });
   const [saving,   setSaving]   = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);   // confirmación inline (no dependemos de window.confirm, que Chrome puede bloquear)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const canSave = form.fecha && form.monto && Number(form.monto) > 0 && (!esRet || (form.cuenta_contable && form.centro_costo));
 
@@ -140,11 +141,13 @@ function EditarCobroModal({ cobro, sociedad, cuentasSoc, cuentasContables = [], 
     finally { _savingRef.current = false; setSaving(false); }
   };
 
+  // Un cobro que vino del motor (origen="extracto") ES la línea del banco: no se borra → se desimputa y
+  // vuelve a la conciliación. Las retenciones y cobros manuales sí se borran. borrarPagoImputado decide.
+  const delMotorCobro = cobro.origen === "extracto";
   const handleBorrar = async () => {
-    if (!window.confirm(`¿Eliminar esta ${esRet ? "retención" : "cobro"}? Esta acción no se puede deshacer.`)) return;
     setDeleting(true);
     try {
-      await deleteMovTesoreria(cobro.id);
+      await borrarPagoImputado(cobro);
       onSaved();
     } catch (e) { alert("Error al eliminar: " + e.message); }
     finally { setDeleting(false); }
@@ -231,13 +234,29 @@ function EditarCobroModal({ cobro, sociedad, cuentasSoc, cuentasContables = [], 
           </div>
         </div>
 
-        <div style={{ padding:"12px 22px 18px", display:"flex", gap:8 }}>
-          <button onClick={handleBorrar} disabled={deleting}
-            style={{ padding:"9px 16px", borderRadius:8, border:"none", cursor:"pointer",
-              background:"#dc2626", color:"#fff", fontWeight:700, fontSize:13, fontFamily:"inherit",
-              display:"flex", alignItems:"center", gap:6 }}>
-            🗑 {deleting ? "Eliminando…" : "Borrar"}
-          </button>
+        <div style={{ padding:"12px 22px 18px", display:"flex", gap:8, alignItems:"center" }}>
+          {!confirmDel ? (
+            <button onClick={() => setConfirmDel(true)} disabled={deleting}
+              style={{ padding:"9px 16px", borderRadius:8, border:"none", cursor:"pointer",
+                background:"#dc2626", color:"#fff", fontWeight:700, fontSize:13, fontFamily:"inherit",
+                display:"flex", alignItems:"center", gap:6 }}>
+              {delMotorCobro ? "↩︎ Quitar de la factura" : "🗑 Borrar"}
+            </button>
+          ) : (
+            <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+              <span style={{ fontSize:12, color:T.muted, fontWeight:700, maxWidth:190 }}>
+                {delMotorCobro ? "Vuelve a conciliación (no se borra del banco). ¿Seguro?" : `¿Eliminar esta ${esRet ? "retención" : "cobro"}?`}
+              </span>
+              <button onClick={handleBorrar} disabled={deleting}
+                style={{ padding:"9px 14px", borderRadius:8, border:"none", cursor:"pointer",
+                  background:"#dc2626", color:"#fff", fontWeight:700, fontSize:13, fontFamily:"inherit" }}>
+                {deleting ? (delMotorCobro ? "Desimputando…" : "Eliminando…") : (delMotorCobro ? "Sí, quitar" : "Sí, borrar")}
+              </button>
+              <button onClick={() => setConfirmDel(false)} disabled={deleting}
+                style={{ padding:"9px 12px", borderRadius:8, border:`1px solid ${T.cardBorder}`,
+                  cursor:"pointer", background:"#f3f4f6", color:T.muted, fontWeight:700, fontSize:13, fontFamily:"inherit" }}>No</button>
+            </div>
+          )}
           <div style={{ flex:1 }} />
           <button onClick={onClose}
             style={{ padding:"9px 18px", borderRadius:8, border:`1px solid ${T.cardBorder}`,
@@ -830,11 +849,17 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
   };
 
   const handleEliminar = async (id_comp) => {
-    if (!confirm("¿Eliminar este ingreso? Se eliminarán también los cobros asociados.")) return;
+    const ingreso = ingresos.find(e => e.id === id_comp);
+    // Los cobros que vinieron del motor (origen="extracto") NO se borran: se desimputan y vuelven a la
+    // conciliación (no se pierde el movimiento del banco). Retenciones y cobros manuales sí se borran.
+    const delMotor = (ingreso?.pagosVinculados ?? []).filter(c => c.origen === "extracto").length;
+    const msg = delMotor
+      ? `¿Eliminar este ingreso? Tiene ${delMotor} cobro(s) conciliado(s) del banco: NO se borran, vuelven a la conciliación. El resto (retenciones/cobros manuales) se elimina.`
+      : "¿Eliminar este ingreso? Se eliminarán también los cobros asociados.";
+    if (!confirm(msg)) return;
     try {
-      const ingreso = ingresos.find(e => e.id === id_comp);
       if (ingreso?.pagosVinculados?.length > 0) {
-        await Promise.all(ingreso.pagosVinculados.map(c => deleteMovTesoreria(c.id)));
+        await Promise.all(ingreso.pagosVinculados.map(c => borrarPagoImputado(c)));
       }
       await deleteIngreso(id_comp);
       setIngresos(prev => prev.filter(e => e.id !== id_comp));

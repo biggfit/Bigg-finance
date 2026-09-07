@@ -5,7 +5,7 @@ import {
 } from "../data/tesoreriaData";
 import { CENTROS_COSTO } from "../data/numbersData";
 import {
-  fetchMovTesoreria, fetchMovFranquicias, appendMovTesoreria, appendTransferencia, updateTransferencia, updatePagoTarjeta, deleteMovTesoreria, updateMovTesoreria,
+  fetchMovTesoreria, fetchMovFranquicias, appendMovTesoreria, appendTransferencia, updateTransferencia, updatePagoTarjeta, deleteMovTesoreria, updateMovTesoreria, borrarPagoImputado,
   fetchEgresos, fetchIngresos, fetchPagosCobros,
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto, fetchSaldoMercadoPago, esCuentaMercadoPago,
   appendGastoDirecto, esIgnorado, ignorarMovimiento, esCuentaCredito, fetchFinanciaciones,
@@ -1711,6 +1711,18 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
 
   // ── Eliminar un movimiento ────────────────────────────────────────────────
   const handleEliminarMov = async (mov) => {
+    // Un PAGO/COBRO que vino del motor de conciliación (origen="extracto") ES la línea del banco: no se
+    // borra (destruiría el movimiento real y su nro. de operación) → se desimputa y vuelve a la
+    // conciliación, dejando la factura "a pagar/cobrar". Mismo criterio que en Egresos/Ingresos.
+    if ((mov.tipo === "PAGO" || mov.tipo === "COBRO") && mov.origen === "extracto") {
+      const kind = mov.tipo === "COBRO" ? "cobro" : "pago";
+      if (!confirm(`Este ${kind} vino del extracto bancario. No se borra el movimiento del banco: se despega de la factura y vuelve a la conciliación. ¿Continuar?`)) return;
+      try {
+        await borrarPagoImputado(mov);
+        await cargarMovimientos();
+      } catch (e) { alert("Error al eliminar: " + e.message); }
+      return;
+    }
     // Transferencia/interco/cambio = PAR de patas con el mismo documento_id. Hay que borrar AMBAS,
     // o la contrapartida queda huérfana y sigue sumando al saldo (la transferencia se "duplica").
     // Solo se juntan las patas cargadas en la sociedad activa (interco cross-sociedad borra su lado).
