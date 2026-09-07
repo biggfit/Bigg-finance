@@ -70,12 +70,22 @@ async function fetchJson(url) {
 
 // Fetch REST report_json/<id>/ por sede — la ruta que SÍ funciona con el token
 // (el /report?id= y el worker MCP quedaron obsoletos/rotos). Devuelve array de filas.
-async function fetchReportJson(id, locId, start, end) {
+// Con reintento + backoff (igual criterio que sueldosApi.get()): un timeout o 500
+// puntual de BIGG Eye en UNA sede no debe dejarla en 0 horas en silencio — la sede
+// con más volumen de check-ins es justamente la más propensa a esto.
+async function fetchReportJson(id, locId, start, end, { retries = 2, retryDelayMs = 1500 } = {}) {
   const url = `${BIGG_EYE_API}/report_json/${id}/?location_id=${locId}&start_date=${start}&end_date=${end}`;
-  const res = await fetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${TOKEN}` } });
-  if (!res.ok) return [];
-  const data = await res.json().catch(() => null);
-  return Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : []);
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (attempt) await new Promise(r => setTimeout(r, retryDelayMs * attempt));
+    try {
+      const res = await fetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${TOKEN}` } });
+      if (!res.ok) { lastErr = new Error(`HTTP ${res.status}`); continue; }
+      const data = await res.json().catch(() => null);
+      return Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : []);
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr ?? new Error("fetch falló sin detalle");
 }
 
 // Igual que fetchJson pero también devuelve el texto crudo para debug
@@ -328,8 +338,14 @@ export default async function handler(req, res) {
   const endExcl = `${nextY}-${pad(nextM)}-01`;
 
   try {
+    // Sedes que fallaron los reintentos de fetchReportJson (se reportan en rejected_*
+    // en vez de quedar en 0 horas en silencio).
+    const rejectedMsgs = [];
     const perSede = await Promise.all(
-      sedesTarget.map(s => fetchReportJson(12, s.id, start, endExcl).catch(() => []))
+      sedesTarget.map(s => fetchReportJson(12, s.id, start, endExcl).catch(err => {
+        rejectedMsgs.push(`${s.nombre} (id ${s.id}): ${err.message}`);
+        return [];
+      }))
     );
     const allRows = perSede.flat();
     const items   = eyeLineasDe(allRows, sedesTargetIds, sedesById);
@@ -343,7 +359,7 @@ export default async function handler(req, res) {
         locations_count: sedesTarget.length,
         total_locations: sedesTarget.length,
         location_names:  sedesTarget.map(s => `${s.id}:${s.nombre}`),
-        rejected_count:  0, rejected_msgs: [],
+        rejected_count:  rejectedMsgs.length, rejected_msgs: rejectedMsgs,
         _source:         "cache-fallback",
         _cache_ts:       cacheData?._meta?.generado ?? null,
         _sample_url:     `cache-fallback:${cacheKey}`,
@@ -358,8 +374,8 @@ export default async function handler(req, res) {
       locations_count:  sedesTarget.length,
       total_locations:  sedesTarget.length,
       location_names:   sedesTarget.map(s => `${s.id}:${s.nombre}`),
-      rejected_count:   0,
-      rejected_msgs:    [],
+      rejected_count:   rejectedMsgs.length,
+      rejected_msgs:    rejectedMsgs,
       _source:      "vivo",
       _sample_url:  `report_json/12 en vivo (${start}→${endExcl})`,
       _sample_resp: { raw: `${allRows.length} filas totales → ${items.length} de nuestras sedes` },
