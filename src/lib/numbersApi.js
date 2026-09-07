@@ -897,6 +897,16 @@ export async function fetchCuentasBancarias() {
 export const esCuentaMercadoPago = (cuenta) =>
   /mercado\s*pago/i.test(cuenta?.banco || cuenta?.nombre || "");
 
+// Stripe, como Mercado Pago, es una cuenta de VENTA DIRECTA (recauda ventas, no cobra facturas B2B):
+// todo crédito es un ingreso rápido, no una cobranza-contra-factura. Predicado espejo de MP.
+export const esCuentaStripe = (cuenta) =>
+  /stripe/i.test(cuenta?.banco || cuenta?.nombre || "");
+
+// ¿Es una cuenta de venta directa (MP o Stripe)? Sus créditos caen como ingreso rápido (elegí
+// cuenta+centro), nunca como cobro-contra-factura.
+export const esCuentaVentaDirecta = (cuenta) =>
+  esCuentaMercadoPago(cuenta) || esCuentaStripe(cuenta);
+
 // Saldo EN VIVO de Mercado Pago (read-only) vía el serverless /api/mercadopago. Devuelve
 // { acreditado, a_acreditarse, acreditado_mes_anterior, moneda, proximos, count } o lanza si el endpoint
 // falla (sin token → error). Fetch directo (no pasa por el proxy get()). Espejo de fetchHorasDesdeEye.
@@ -1395,7 +1405,11 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
       moneda, monto: Number(l.monto) || 0, documento_id: "",
       iva_rate: Number(l.iva_rate) || 0, iva_monto: Number(l.iva_monto) || 0,
       concepto: l.descripcion || "",
-      contraparte_id: "", contraparte_nombre: l.ley1 || l.contraparte || "",   // razón social del banco (Leyenda 1)
+      // Contraparte: razón social del banco (Leyenda 1) o la del archivo; si no hay, la `nota` del
+      // depurado (ej. el EMAIL del cliente en una venta Stripe sin sede) → queda visible en la fila
+      // para buscarlo en el CRM y asignarle el centro/sede a mano.
+      contraparte_id: "", contraparte_nombre: l.ley1 || l.contraparte || l.nota || "",
+      nota: l.nota || "",   // se conserva el dato crudo del depurado (email, referencia, etc.)
       extracto_saldo: ref,   // ← clave de dedup en columna propia (inmune a que se reescriba `referencia`)
       referencia: `cod=${l.codigoConcepto || ""};tipo=${p.tipo || ""};regla=${p.regla_id || ""};prov=${p.proveedor_id || ""};cli=${p.cliente_id || ""};idest=${p.cuenta_destino || ""};fr=${p.franquicia_id || ""};frops=${(p.franquicia_opciones || []).join("|")};plan=${p.plan_id || ""};pcuota=${p.cuota_row_id || ""};op=${l.nro_operacion || ""};cuit=${l.ley2 || l.cuit || ""};saldo=${l.saldo || ""}`,
       origen: "extracto",

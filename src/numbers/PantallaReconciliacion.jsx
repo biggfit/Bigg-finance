@@ -12,7 +12,7 @@ import {
   fetchFinanciaciones, imputarCuota, pagarTarjeta, esCuentaCredito, fetchMovTesoreria,
   fetchIntercoData, pendientesInterco, reconocerVentaInterco, reconocerInterusoGestion, revertirInterusoGestion, normCuit,
   pendientesIntercoRecibir, declararIntercoRecibida, declararIntercoEnviada, intercoMatchCandidato,
-  esCuentaMercadoPago, ultimaCargaExtractoPorCuenta,
+  esCuentaStripe, esCuentaVentaDirecta, ultimaCargaExtractoPorCuenta,
 } from "../lib/numbersApi";
 import { BancoReglaModal } from "./PantallaMaestros";
 import MundoTarjeta from "./reconciliacion/MundoTarjeta";
@@ -539,18 +539,29 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   // misclasifica (ej. "IIBB / Ingresos Brutos" es un impuesto, no un ingreso) → ocultaba la cuenta
   // que la regla ya había imputado. El usuario elige; la regla pre-llena.
   const cuentasTodas = useMemo(() => [...planCuentas].sort(byName), [planCuentas]);
+  // Opciones de cuenta contable agrupadas por naturaleza (Ingresos primero, luego Egresos) — así la
+  // cuenta de venta no se pierde entre decenas de gastos en la lista plana. `tipo` viene del maestro.
+  const cuentaOptionsEls = useMemo(() => {
+    const esIng = (c) => { const t = (c.tipo ?? "").toLowerCase(); return t === "venta" || t === "ventas" || t === "ingreso" || t === "ingresos"; };
+    const ing = cuentasTodas.filter(esIng), egr = cuentasTodas.filter(c => !esIng(c));
+    const opt = (c) => <option key={c.id} value={c.id}>{c.nombre}</option>;
+    return <>
+      {ing.length > 0 && <optgroup label="Ingresos">{ing.map(opt)}</optgroup>}
+      {egr.length > 0 && <optgroup label="Egresos">{egr.map(opt)}</optgroup>}
+    </>;
+  }, [cuentasTodas]);
   // Sets de ids para validar O(1) (verde/aceptable solo si el valor existe en el master).
   const cuentasId = useMemo(() => new Set(cuentasTodas.map(c => String(c.id))), [cuentasTodas]);
   const centrosId = useMemo(() => new Set(centros.map(c => String(c.id))), [centros]);
   const cuentaValida = (id) => !!id && cuentasId.has(String(id));
   const ccValido     = (id) => !!id && centrosId.has(String(id));
-  // ¿La cuenta bancaria de la fila es de Mercado Pago? En MP el crédito típico es una venta
-  // directa (ingreso rápido), no un cobro B2B → arranca pidiendo cuenta+centro, no factura.
-  // Set memoizado (se consulta por fila en cada render) en vez de un .find sobre todas las cuentas.
-  const mpCuentaIds = useMemo(
-    () => new Set(cuentasAll.filter(esCuentaMercadoPago).map(c => String(c.id))),
+  // ¿La cuenta bancaria de la fila es de venta directa (Mercado Pago o Stripe)? En esas cuentas el
+  // crédito típico es una venta directa (ingreso rápido), no un cobro B2B → arranca pidiendo
+  // cuenta+centro, no factura. Set memoizado (se consulta por fila en cada render).
+  const vdCuentaIds = useMemo(
+    () => new Set(cuentasAll.filter(esCuentaVentaDirecta).map(c => String(c.id))),
     [cuentasAll]);
-  const esCuentaMP = (cuentaId) => mpCuentaIds.has(String(cuentaId));
+  const esCuentaVD = (cuentaId) => vdCuentaIds.has(String(cuentaId));
 
   // Resolución nombre→id para el importador de Mercado Pago (el archivo depurado trae nombres
   // legibles; el módulo matchea cuenta por id-nombre y centro por id).
@@ -832,7 +843,21 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         // No hay reglas de banco: la propuesta sale del propio archivo, resolviendo nombre→id
         // contra los maestros vivos. Transferencias → modo transferencia interna (manual).
         const data = await parseMercadoPago(file);
-        const esStripe = /stripe/i.test(banco);
+        // Stripe SOLO hace payout a un único banco (no es billetera de pago) → las líneas `transferencia`
+        // (los payouts) pre-cargan como destino el banco (tipo "banco") de la misma sociedad y moneda, si
+        // hay uno solo (ej. wellness-stripe → Caixa). Si hay 0 o >1 candidatos, queda vacío (elegir a mano).
+        // Solo Stripe: MP puede pagar con su saldo, así que sus transferencias no tienen un destino único.
+        const destinoStripe = esCuentaStripe(cta)
+          ? (() => {
+              const cands = cuentasAll.filter(c =>
+                String(c.sociedad) === String(cta?.sociedad) &&
+                String(c.moneda) === String(moneda) &&
+                (c.tipo ?? "").toLowerCase() === "banco" &&
+                String(c.id) !== String(cuentaTab) &&
+                !esCuentaVentaDirecta(c));
+              return cands.length === 1 ? String(cands[0].id) : "";
+            })()
+          : "";
         lineas = data.lineas.map((l) => {
           const esTransfer = l.tipo === "transferencia";
           // Clave de dedup estable y única por fila. Incluye tipo+cuenta+centro+operación+monto:
@@ -840,21 +865,14 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
           // se pisarían entre sí. Sin índice → idempotente: re-subir el mismo archivo solo completa
           // lo que falta (no duplica).
           const dedupKey = `${l.tipo}|${l.cuentaNombre}|${l.centroNombre}|${l.nro_operacion || ""}|${l.monto}`;
-          // Stripe depurado: el archivo trae tipo (ventas/devolucion/comisiones) y la SEDE en la glosa
-          // ("Ventas Stripe · Chamberí · 07/2026"), pero no cuenta/centro. Los resolvemos como una regla:
-          // ventas y devolución → Ing.Stripe (la devolución es una venta con signo contrario → netea en el
-          // P&L); comisiones → Aranceles y Otros Financieros. El centro sale de la sede de la glosa. Con
-          // cuenta+centro resueltos, la venta cae sola como ingreso rápido (no cobro-contra-factura). MP ya
-          // trae cuenta/centro por columna, así que esto solo aplica a Stripe.
-          let cuentaNom = l.cuentaNombre, centroNom = l.centroNombre;
-          if (esStripe && !esTransfer) {
-            if (!cuentaNom) cuentaNom = /comision/.test(String(l.tipo)) ? "Aranceles y Otros Financieros" : "Ing.Stripe";
-            if (!centroNom) centroNom = sedeStripe(String(l.descripcion || "").split("·")[1]?.trim() || "");   // sede (HQ→Wellness)
-          }
+          // Archivo depurado (MP/Stripe): cuenta y centro vienen POR COLUMNA en el Excel → se leen tal
+          // cual y se resuelven a id contra los maestros vivos. La fuente de verdad es el Excel; sin capa
+          // de mapeo (el centro que quede sin resolver —ej. ventas sin sede— se asigna a mano en el ERP).
           return { ...l, saldo: dedupKey, propuesta: {
             tipo:            esTransfer ? "transferencia_interna" : l.tipo,
-            cuenta_contable: esTransfer ? "" : cuentaIdPorNombre(cuentaNom),
-            centro_costo:    esTransfer ? "" : centroIdPorNombre(centroNom),
+            cuenta_contable: esTransfer ? "" : cuentaIdPorNombre(l.cuentaNombre),
+            centro_costo:    esTransfer ? "" : centroIdPorNombre(l.centroNombre),
+            cuenta_destino:  esTransfer ? destinoStripe : "",
           } };
         });
       } else {
@@ -1005,8 +1023,9 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     if (grupoGlosa(mov)) return false;   // FX/AFIP/Tarjeta por glosa → no es cobro de venta
     if (ed.modoCobro !== undefined) return ed.modoCobro;   // toggle explícito del ⋯ (forzar cobro / volver a normal)
     if (parseMeta(mov.referencia).tipo === "cobro_cliente") return true;   // regla de cliente → cobro contra su factura
-    // Mercado Pago: el crédito es venta directa → ingreso rápido (elegí cuenta+centro), no cobro.
-    if (esCuentaMP(mov.cuenta_bancaria)) return false;
+    // Venta directa (Mercado Pago / Stripe): el crédito es una venta → ingreso rápido (elegí
+    // cuenta+centro), no cobro-contra-factura, aunque todavía no tenga centro asignado.
+    if (esCuentaVD(mov.cuenta_bancaria)) return false;
     // Otros bancos: si YA viene con propuesta (cuenta+centro) es ingreso rápido; sin propuesta,
     // un crédito arranca como cobro-contra-factura (cobranza B2B).
     const cuentaProp = mov.cuenta_contable ?? "";
@@ -1993,7 +2012,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           <select value={cuentaOk ? cuentaSel : ""} onChange={e => setEdit(m.id, "cuenta_contable", e.target.value)}
                             style={fld(cuentaOk)}>
                             <option value="">— cuenta —</option>
-                            {cuentasTodas.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                            {cuentaOptionsEls}
                           </select>
                           <select value={ccOk ? ccSel : ""} onChange={e => setEdit(m.id, "centro_costo", e.target.value)} style={fld(ccOk)}>
                             <option value="">— centro —</option>
