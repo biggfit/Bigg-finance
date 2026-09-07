@@ -408,6 +408,24 @@ function composicionValor(contribs = []) {
   return " (" + [...porGrupo.values()].map(g => `${g.sede} ${fmtNum(g.cant)}hs x ${fmt(g.tarifa)}`).join(" + ") + ")";
 }
 
+// Misma idea que composicionValor pero para conteos simples (CDP Coach / CDP Front Desk):
+// la tarifa de CDP no varía por sede (una sola categoría en su_categorias para todo el país),
+// así que alcanza con mostrar cuántas clases aportó cada sede → " (03 - Belgrano 4 + 05 - Barrio
+// Norte 6)". Antes esto se resolvía con `extra()`, que solo nombraba la sede no-principal SIN
+// cantidad — daba la impresión de que todas las clases eran de una sola sede cuando en realidad
+// estaban repartidas entre varias (caso real: Nicolás Gago, CDP en dos sedes).
+function composicionCantidad(contribs = []) {
+  const porSede = new Map();
+  for (const c of contribs) {
+    if (!(Number(c.cant) > 0)) continue;
+    const prev = porSede.get(c.sede);
+    if (prev) prev.cant += c.cant;
+    else porSede.set(c.sede, { sede: c.sede, cant: c.cant });
+  }
+  if (porSede.size <= 1) return "";
+  return " (" + [...porSede.values()].map(g => `${g.sede} ${fmtNum(g.cant)}`).join(" + ") + ")";
+}
+
 // Desglose Sedes: suma sobre las filas por sede, recalcula importes con tarifas.
 function buildResumenSedes(emp, categorias, novList = []) {
   const acc = {
@@ -428,6 +446,10 @@ function buildResumenSedes(emp, categorias, novList = []) {
   // sedes), cada una con su tarifa → el Importe suma todas pero la col. "Valor u." muestra una sola.
   // Guardamos las contribuciones (cant × tarifa) para explicar el importe entre paréntesis.
   const desgloseHoras = [];
+  // Mismo criterio para CDP Coach / CDP Front Desk: cuántas clases aportó cada sede
+  // (ver composicionCantidad — reemplaza el "(sede)" sin cantidad que traía extra()).
+  const desgloseCdpCoach = [];
+  const desgloseCdpFront = [];
   const cs = { horas: new Set(), feriado: new Set(), domingo: new Set(),
                cdpCoach: new Set(), cdpFront: new Set(), oneShot: new Set() };
   // Sedes reales del empleado (todas sus filas). Una novedad cuya sede no es ninguna de
@@ -455,6 +477,8 @@ function buildResumenSedes(emp, categorias, novList = []) {
     const sn = row.sede_nombre || "—";
     if (d.horasCant > 0) desgloseHoras.push({ sede: sn, cant: d.horasCant, tarifa: d.tarifaHora });
     if (d.yogaCant  > 0) desgloseHoras.push({ sede: sn, cant: d.yogaCant,  tarifa: d.tarifaYoga });
+    if (d.cdpCoachCant > 0) desgloseCdpCoach.push({ sede: sn, cant: d.cdpCoachCant });
+    if (d.cdpFrontCant > 0) desgloseCdpFront.push({ sede: sn, cant: d.cdpFrontCant });
     porSede[sn] = (porSede[sn] || 0) + (Number(d.totalLiquidar) || 0);
     if ((d.horasCant || 0) + (d.yogaCant || 0) > 0) cs.horas.add(sn);
     if (d.feriadosCant > 0) cs.feriado.add(sn);
@@ -503,7 +527,8 @@ function buildResumenSedes(emp, categorias, novList = []) {
   const conceptoSedes = Object.fromEntries(Object.entries(cs).map(([k, set]) => [k, [...set]]));
   const totalNov = novedades.reduce((s, n) => s + n.monto, 0);
   const totalLiquidar = acc.fijo + acc.horasMonto + acc.sueldoVariable + totalNov;
-  return { ...acc, ...tarifas, sedes, novedades, totalNov, principalSede, conceptoSedes, desgloseHoras, totalLiquidar, desyncItems };
+  return { ...acc, ...tarifas, sedes, novedades, totalNov, principalSede, conceptoSedes,
+    desgloseHoras, desgloseCdpCoach, desgloseCdpFront, totalLiquidar, desyncItems };
 }
 
 // Desglose HQ: sueldo base + novedades por cuenta.
@@ -670,6 +695,10 @@ function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpd
   // mostrado es el promedio ponderado (Importe / Cant), no la tarifa de una sede al azar; si es una
   // sola tarifa, se cae al annotate de sedes (extra) porque Cant × Valor ya cuadra.
   const compHoras = composicionValor(resumen.desgloseHoras) || extra("horas");
+  // CDP Coach/Front Desk: mismo criterio — si hay clases en más de una sede, mostrar cuántas
+  // aportó cada una en vez de solo nombrar la sede no-principal (que no aclaraba el reparto).
+  const compCdpFront = composicionCantidad(resumen.desgloseCdpFront) || extra("cdpFront");
+  const compCdpCoach = composicionCantidad(resumen.desgloseCdpCoach) || extra("cdpCoach");
   const horasCantTotal = resumen.horasCant + resumen.yogaCant;
   const horasMontoTotal = resumen.horasMonto + resumen.yogaMonto;
   const valorHoras = horasCantTotal > 0 ? horasMontoTotal / horasCantTotal : 0;
@@ -681,7 +710,17 @@ function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpd
   return (
     <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={periodo} onImprimirTodo={onImprimirTodo} onUpdateNota={onUpdateNota} agrupar={agrupar} onToggleAgrupar={onToggleAgrupar}>
       <Section>
-        <table style={tbl}>
+        {/* table-layout fixed + colgroup: un concepto largo (ej. "Horas Base" con el desglose
+            de varias sedes/tarifas entre paréntesis) debe ENVOLVER dentro de su columna, no
+            ensanchar la tabla más allá de la ficha — que tiene overflow:hidden y lo recortaría
+            (caso real: coaches multi-sede como Lautaro Pablovich, Nicolás Gago, Valentino Rossi). */}
+        <table style={{ ...tbl, tableLayout: "fixed" }}>
+          <colgroup>
+            <col />
+            <col style={{ width: 64 }} />
+            <col style={{ width: 84 }} />
+            <col style={{ width: 96 }} />
+          </colgroup>
           <thead><tr><Th>Concepto</Th><Th right>Cant.</Th><Th right>Valor u.</Th><Th right>Importe</Th></tr></thead>
           <tbody>
             {/* Sueldo Fijo: base + horas (base/feriado/domingo) + asignaciones */}
@@ -697,8 +736,8 @@ function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpd
             {/* Sueldo Variable: asignaciones + one shot + CDP (front + coach) + comisión grupal */}
             <Linea label="Asignaciones"  importe={resumen.asignaciones} />
             <Linea label={`One Shot${extra("oneShot")}`}        cant={resumen.oneShotCant}  valor={resumen.tarifaOS}      importe={resumen.oneShotMonto} />
-            <Linea label={`CDP Front Desk${extra("cdpFront")}`} cant={resumen.cdpFrontCant} valor={resumen.tCdpFront}     importe={resumen.cdpFrontCant * resumen.tCdpFront} />
-            <Linea label={`CDP Coach${extra("cdpCoach")}`}      cant={resumen.cdpCoachCant} valor={resumen.tCdpCoach}     importe={resumen.cdpCoachCant * resumen.tCdpCoach} />
+            <Linea label={`CDP Front Desk${compCdpFront}`} cant={resumen.cdpFrontCant} valor={resumen.tCdpFront}     importe={resumen.cdpFrontCant * resumen.tCdpFront} />
+            <Linea label={`CDP Coach${compCdpCoach}`}      cant={resumen.cdpCoachCant} valor={resumen.tCdpCoach}     importe={resumen.cdpCoachCant * resumen.tCdpCoach} />
             <Linea label="Running" cant={resumen.runningCant} valor={resumen.tarifaRunning} importe={resumen.runningMonto} />
             <Linea label="Programaciones" importe={resumen.programaciones} />
             <Linea label={`Comisión Grupal${objGrupalTxt}`}  importe={resumen.objGrupalMonto} />
@@ -726,7 +765,11 @@ function FichaHQ({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpdate
   return (
     <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={periodo} onImprimirTodo={onImprimirTodo} onUpdateNota={onUpdateNota} agrupar={agrupar} onToggleAgrupar={onToggleAgrupar}>
       <Section>
-        <table style={tbl}>
+        <table style={{ ...tbl, tableLayout: "fixed" }}>
+          <colgroup>
+            <col />
+            <col style={{ width: 96 }} />
+          </colgroup>
           <thead><tr><Th>Concepto</Th><Th right>Importe</Th></tr></thead>
           <tbody>
             <tr style={{ borderTop: `1px solid ${T.border}` }}>
@@ -894,13 +937,18 @@ function Section({ titulo, accesorio, children }) {
     </div>
   );
 }
+// whiteSpace explícito: styles.js inyecta una regla global `td,th{white-space:nowrap}` para
+// las tablas oscuras de Tesorería/Contabilidad, y al no estar scopeada también alcanza estas
+// tablas → sin este override un concepto largo (ej. "Horas Base" con el desglose de varias
+// sedes) no envuelve y se superpone con Cant./Valor u./Importe (caso real: coaches multi-sede
+// como Lautaro Pablovich, Nicolás Gago, Valentino Rossi).
 function Th({ children, right }) {
   return <th style={{ textAlign: right ? "right" : "left", fontSize: 13, fontWeight: 700,
-    color: T.muted, padding: "6px 4px", borderBottom: `2px solid ${T.dim}` }}>{children}</th>;
+    color: T.muted, padding: "6px 4px", borderBottom: `2px solid ${T.dim}`, whiteSpace: "normal" }}>{children}</th>;
 }
 function Td({ children, right, dim }) {
   return <td style={{ textAlign: right ? "right" : "left", fontSize: 14, padding: "4px 4px",
-    color: dim ? T.dim : T.text, fontVariantNumeric: "tabular-nums" }}>{children}</td>;
+    color: dim ? T.dim : T.text, fontVariantNumeric: "tabular-nums", whiteSpace: "normal" }}>{children}</td>;
 }
 function Linea({ label, cant, valor, importe }) {
   const hay = Number(importe) > 0 || Number(cant) > 0;
