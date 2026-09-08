@@ -1246,7 +1246,7 @@ function RowMenu({ onEditar, onVerDetalle, onEliminar, onIgnorar }) {
 }
 
 // ─── Tab: Movimientos ─────────────────────────────────────────────────────────
-export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, onLimpiarFiltro, onEliminar, onEditar, onEditarDoc, onEditarInterco, onEditarCambio, onEditarPar, onIgnorar, onNuevoMov, centrosCosto = [] }) {
+export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, onLimpiarFiltro, onEliminar, onEditar, onEditarDoc, onEditarInterco, onEditarCambio, onEditarPar, onIgnorar, onNuevoMov, centrosCosto = [], resetSignal = 0 }) {
   const cuentaMap = useMemo(() => {
     const m = {};
     for (const c of cuentas) m[c.id] = c.nombre;
@@ -1353,6 +1353,13 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
     if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
     else { setSortKey(key); setSortDir(key === "fecha" ? "desc" : "asc"); }
   };
+  // "Borrar filtros" del toolbar (padre) → limpia búsqueda + filtro de importe + vuelve al orden por defecto.
+  // resetSignal arranca en 0 (no dispara en el primer render); el padre lo incrementa al clickear.
+  useEffect(() => {
+    if (!resetSignal) return;
+    setBusqueda(""); setSigno("todos"); setMontoMin(""); setMontoMax(""); setImporteMenu(false);
+    setSortKey("fecha"); setSortDir("desc");
+  }, [resetSignal]);
 
   // Paginado: la tabla puede tener cientos/miles de filas y sin límite el scroll se vuelve interminable.
   const [pageSize, setPageSize] = useState(50);
@@ -1613,6 +1620,9 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
   const [filtroMoneda,     setFiltroMoneda]     = useState("ALL");
   const [fechaCorte,       setFechaCorte]       = useState("");   // "Hasta" del rango / "Al día" en Saldos (recorta ledger y saldo al día)
   const [fechaDesde,       setFechaDesde]       = useState("");   // "Desde" del rango — solo afecta el ledger de Movimientos (no el saldo al día)
+  const [resetFiltros,     setResetFiltros]     = useState(0);    // señal → TabMovimientos limpia sus filtros internos (búsqueda/importe/orden)
+  // "Borrar filtros": limpia los del padre (moneda + período) y avisa al hijo que limpie los suyos.
+  const limpiarTodosFiltros = () => { setFiltroMoneda("ALL"); setFechaDesde(""); setFechaCorte(""); setResetFiltros(n => n + 1); };
   const [drillDownItem,    setDrillDownItem]    = useState(null);
   const [showMovModal,     setShowMovModal]     = useState(false);
   const [showNuevoMov,     setShowNuevoMov]     = useState(false);
@@ -2091,6 +2101,12 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
             )}
           </div>
         )}
+
+        {/* Borrar filtros: limpia todo (moneda, período y, en Movimientos, búsqueda/importe/orden de la tabla) */}
+        <button type="button" onClick={limpiarTodosFiltros} title="Quitar todos los filtros"
+          style={{ marginLeft: "auto", border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "6px 14px",
+            fontSize: 12, fontWeight: 700, fontFamily: T.font, background: "#f3f4f6", color: T.muted,
+            cursor: "pointer", whiteSpace: "nowrap" }}>✕ Borrar filtros</button>
       </div>
 
       {loading && (
@@ -2159,6 +2175,7 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
               onIgnorar={handleIgnorarMov}
               onNuevoMov={() => setShowNuevoMov(true)}
             centrosCosto={centrosCosto}
+            resetSignal={resetFiltros}
             />
           )}
         </>
