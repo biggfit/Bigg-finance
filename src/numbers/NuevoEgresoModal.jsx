@@ -46,9 +46,10 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
   const [moneda, setMoneda] = useState(initialData?.moneda ?? monedaDeSociedad(sociedad));
   const [fecha, setFecha] = useState(initialData?.fecha ?? todayISO());
   // Fecha fiscal = fecha que rige el período de IVA (distinta del devengo del P&L). Default = fecha; sigue a
-  // la fecha de emisión hasta que el usuario la edite a mano (fechaFiscalTouched).
-  const [fechaFiscal, setFechaFiscal] = useState(initialData?.fechaFiscal ?? initialData?.fecha_fiscal ?? initialData?.fecha ?? todayISO());
-  const [fechaFiscalTouched, setFechaFiscalTouched] = useState(false);
+  // la fecha de emisión hasta que el usuario la edite a mano (fechaFiscalTouched). Al EDITAR, si la fiscal
+  // guardada difiere de la emisión, arranca "tocada" para no re-sincronizarla al cambiar la fecha.
+  const [fechaFiscal, setFechaFiscal] = useState(initialData?.fechaFiscal || initialData?.fecha || todayISO());
+  const [fechaFiscalTouched, setFechaFiscalTouched] = useState(!!(initialData?.fechaFiscal && initialData.fechaFiscal !== initialData.fecha));
   const [vto, setVto] = useState(initialData?.vto ?? addDays(todayISO(), 30));
   const [nroComp, setNroComp] = useState(initialData?.nroComp ?? "");
   const nroMask = useNroCompMask(nroComp, setNroComp);

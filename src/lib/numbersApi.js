@@ -2157,6 +2157,7 @@ function _agruparPorComp(rows, subtipo) {
         id:       row.id_comp,
         sociedad: row.sociedad,
         fecha:    row.fecha,
+        fechaFiscal: row.fecha_fiscal || row.fecha,   // ISO (la hoja normaliza); fallback a fecha si vacía
         vto:      row.vto,
         moneda:   row.moneda,
         nroComp:  row.nro_comp,
