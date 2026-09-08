@@ -887,19 +887,29 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         if (isCerrada(r.estado)) map[ek].cerrada = true;
       }
 
-      // Efectivo CONGELADO de una fila CERRADA = escalar `monto_efectivo` (líneas de pago en
-      // efectivo, ya con redondeo) + sus novedades en efectivo (abajo). Es la fuente estable del
-      // pendiente de una liq cerrada; usarlo evita recalcular el efectivo del roster EN VIVO
-      // (horas × tarifas actuales), que deriva y muestra parciales fantasma en coaches ya pagados.
-      if (isCerrada(r.estado)) map[ek]._efCong = (map[ek]._efCong || 0) + (Number(r.monto_efectivo) || 0);
+      // CONGELADO de una fila CERRADA, por forma de pago = escalar `monto_X` (líneas de pago del
+      // sueldo, ya con redondeo) + sus novedades en esa misma forma (abajo — el escalar NO las
+      // trae, ver bloque de novedades). Es la fuente estable del pendiente de una liq cerrada;
+      // usarlo evita recalcular en vivo (horas × tarifas actuales), que deriva y muestra parciales
+      // fantasma en coaches ya pagados. Antes esto solo existía para efectivo (_efCong): una
+      // novedad cerrada pagada en Haberes/Depósito/Monotributo quedaba sumada al Total pero
+      // desaparecía de las tres columnas de forma de pago y volvía negativo el Pendiente en cuanto
+      // se registraba el pago real (caso real: Juan Jose Fornaroli, sueldo 100% Running pagado
+      // como Monotributo).
+      if (isCerrada(r.estado)) {
+        map[ek]._efCong       = (map[ek]._efCong       || 0) + (Number(r.monto_efectivo)      || 0);
+        map[ek]._habCong      = (map[ek]._habCong      || 0) + (Number(r.monto_haberes)       || 0);
+        map[ek]._depCong      = (map[ek]._depCong      || 0) + (Number(r.monto_deposito)      || 0);
+        map[ek]._transferCong = (map[ek]._transferCong || 0) + (Number(r.monto_transferencia) || 0);
+      }
 
       // Novedades de esta fila (extra que suma). Van al total/pendiente del empleado y al
       // bucket de su forma de pago (para que aparezcan como pagables en Paso 5). El split del
-      // sueldo (total_sueldo) NO las incluye: se congelan como líneas tipo "novedad" aparte.
-      // Una vez CERRADA la fila, el bucket ya no se toca acá: r.monto_haberes/deposito/
-      // transferencia salen de las líneas "pago" ya escritas al cerrar, que a esta altura YA
-      // incluyen lo que corresponde a la novedad (ver handleConfirmarFormaPago) — sumarla de
-      // nuevo la duplicaba (ej. Fornaroli: $360k de pago + $360k de novedad = $720k).
+      // sueldo (total_sueldo) NO las incluye: se congelan como líneas tipo "novedad" aparte, que
+      // NO alimentan el escalar `monto_X` de la fila (a diferencia de las líneas "pago" del
+      // sueldo) — por eso, si la fila ya está CERRADA, hay que sumarlas a mano al acumulador
+      // "congelado" de su forma (_efCong/_habCong/_depCong/_transferCong); en borrador se suman
+      // directo al bucket en vivo (salvo efectivo, que ahí es remanente del total).
       const novsR = novsByRowKey[rowKeyDe(r.legajo_id, r.sede_id)];
       if (novsR?.length) {
         for (const n of novsR) {
@@ -907,22 +917,28 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
           map[ek].total     += monto;
           map[ek].total_nov += monto;
           const b = NOV_FP_BUCKET[n.forma_pago] || "efectivo";
-          if (b !== "efectivo" && !isCerrada(r.estado)) map[ek][`monto_${b}`] += monto;
-          // Novedad en efectivo de una fila cerrada → suma al efectivo congelado (no está en el escalar).
-          if (b === "efectivo" && isCerrada(r.estado)) map[ek]._efCong = (map[ek]._efCong || 0) + monto;
+          if (isCerrada(r.estado)) {
+            const congKey = b === "efectivo" ? "_efCong" : b === "haberes" ? "_habCong" : b === "deposito" ? "_depCong" : "_transferCong";
+            map[ek][congKey] = (map[ek][congKey] || 0) + monto;
+          } else if (b !== "efectivo") {
+            map[ek][`monto_${b}`] += monto;
+          }
         }
         map[ek].novedades.push(...novsR);
       }
     });
     const arr = Object.values(map)
       .map(e => {
-        // Cerrada → haberes CONGELADO (línea "pago" ya escrita al cerrar). Borrador → haberes en
-        // VIVO = blanco pactado del legajo (mismo criterio que ya usaba Efectivo para no mostrar
-        // todo en "—" hasta cerrar; ver Paso 4, donde el blanco por defecto sale de ahí también).
-        // Solo si el LEGAJO es de Sedes: un HQ que dio clases sueltas en una sede tiene rol de fila
-        // (tarifa) de Sedes (ej. HUERGO_B) pero su legajo sigue siendo HQ y ya cobra su blanco allá,
-        // no acá — por eso se mira legajo_rol (rol real del legajo), no el rol de la fila/tarifa.
-        const habVivo = e.cerrada ? e.monto_haberes : (ROLES_SEDES_ALL.includes(e.legajo_rol) ? e.blanco_neto : 0);
+        // Cerrada → CONGELADO (línea "pago" del sueldo ya escrita al cerrar + novedades de esa
+        // misma forma, ver _XCong más arriba). Borrador → haberes en VIVO = blanco pactado del
+        // legajo (mismo criterio que ya usaba Efectivo para no mostrar todo en "—" hasta cerrar;
+        // ver Paso 4, donde el blanco por defecto sale de ahí también). Solo si el LEGAJO es de
+        // Sedes: un HQ que dio clases sueltas en una sede tiene rol de fila (tarifa) de Sedes (ej.
+        // HUERGO_B) pero su legajo sigue siendo HQ y ya cobra su blanco allá, no acá — por eso se
+        // mira legajo_rol (rol real del legajo), no el rol de la fila/tarifa.
+        const habVivo      = e.cerrada ? (Number(e._habCong)      || 0) : (ROLES_SEDES_ALL.includes(e.legajo_rol) ? e.blanco_neto : 0);
+        const depositoCong = e.cerrada ? (Number(e._depCong)      || 0) : e.monto_deposito;
+        const transferCong = e.cerrada ? (Number(e._transferCong) || 0) : e.monto_transferencia;
         // Cerrada → efectivo CONGELADO (lo que se liquidó y hay que pagar en cash). Borrador →
         // efectivo en vivo = remanente del total. Evita el parcial fantasma por recálculo del roster.
         const efectivo = e.cerrada
@@ -932,9 +948,9 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         // (baldes de banco + efectivo congelado), no el total del roster en vivo, que deriva y
         // muestra pendientes fantasma en coaches ya pagados. Borrador → total en vivo.
         const totalPend = e.cerrada
-          ? (e.monto_haberes + e.monto_deposito + e.monto_transferencia + efectivo)
+          ? (habVivo + depositoCong + transferCong + efectivo)
           : e.total;
-        return { ...e, monto_haberes: habVivo, monto_efectivo: efectivo, pendiente: totalPend - e.total_pagado };
+        return { ...e, monto_haberes: habVivo, monto_deposito: depositoCong, monto_transferencia: transferCong, monto_efectivo: efectivo, pendiente: totalPend - e.total_pagado };
       });
     return sortByRol(arr);
   }, [rows, legajos, pagos, calcTotal, novsByRowKey]);
