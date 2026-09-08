@@ -189,9 +189,12 @@ const MODAL_INP = { width: "100%", background: "#eceff3", border: `1px solid ${T
 const MODAL_LBL = { fontSize: 12, color: T.muted, fontWeight: 600, display: "block", marginBottom: 5 };
 // El carril Banco concilia extractos → solo cuentas tipo "Banco" (cajas/inversión/tarjeta no tienen extracto).
 const esCuentaBanco = c => String(c?.tipo || "").toLowerCase() === "banco";
-// Cuenta cerrada (activo:false, ej. ya saldada y sin uso) → no aparece como pestaña de Conciliación.
-// Sigue existiendo en Tesorería/Maestros; esto solo la saca del carril de reconciliación bancaria.
-const esCuentaBancoActiva = c => esCuentaBanco(c) && c.activo !== false;
+// Cuenta cerrada para conciliación (ej. ya saldada, no se le van a subir más extractos) → no aparece
+// como pestaña acá. Deliberadamente NO usa `activo` (ese flag también oculta la cuenta en Tesorería
+// cuando el saldo da $0 — pisarlo la hacía desaparecer de los dos lados a la vez). Marca en `nota` con
+// el tag "[sin-conciliar]" para no tocar el schema de la hoja; la cuenta sigue activa en todo lo demás.
+const esCuentaSinConciliar = c => /\[sin-conciliar\]/i.test(c?.nota || "");
+const esCuentaBancoActiva = c => esCuentaBanco(c) && !esCuentaSinConciliar(c);
 // Semáforo de "última carga" de extracto: verde ≤7 días, ámbar >7 días de atraso, rojo si nunca se cargó.
 const ATRASO_DIAS = 7;
 function estadoUltimaCarga(fechaISO) {
