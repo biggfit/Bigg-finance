@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { T } from "./theme";
 import { todayISO, addDays, fmtNum } from "../data/numbersData";
-import { MONEDA_OPTS, monedaDeSociedad, ivaOptsDeSociedad, ivaDefaultDeSociedad } from "../data/tesoreriaData";
+import { MONEDA_OPTS, monedaDeSociedad, paisDeSociedad, ivaOptsDeSociedad, ivaDefaultDeSociedad } from "../data/tesoreriaData";
 import {
   inputStyle, dateStyle, lookupId, makeCCResolver,
   calcLineasTotals, SoftField, FacturaFormFocusRing, FACTURA_FORM_CLASS,
@@ -53,6 +53,8 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
   const [vto, setVto] = useState(initialData?.vto ?? addDays(todayISO(), 30));
   const [nroComp, setNroComp] = useState(initialData?.nroComp ?? "");
   const nroMask = useNroCompMask(nroComp, setNroComp);
+  // España (país ES): la nomenclatura de factura no tiene estructura fija → campo libre, sin la máscara AR.
+  const nroLibre = paisDeSociedad(sociedad) === "ES";
   const [nota, setNota] = useState(initialData?.nota ?? "");
   const { lineas, setLineas, updLinea, addLinea, delLinea } = useLineas(initLineas, ivaDefault);
 
@@ -175,10 +177,14 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
           </div>
         </SoftField>
         <SoftField label="N° comprobante">
-          <input ref={nroMask.ref} value={nroComp}
-            onChange={nroMask.onChange}
-            placeholder="FC-A 0001-00001234"
-            style={{ ...inputStyle, ...(dupError ? { borderColor: "#dc2626", background: "#fef2f2" } : {}) }} />
+          {nroLibre
+            ? <input value={nroComp} onChange={e => setNroComp(e.target.value)}
+                placeholder="N° de factura del proveedor"
+                style={{ ...inputStyle, ...(dupError ? { borderColor: "#dc2626", background: "#fef2f2" } : {}) }} />
+            : <input ref={nroMask.ref} value={nroComp}
+                onChange={nroMask.onChange}
+                placeholder="FC-A 0001-00001234"
+                style={{ ...inputStyle, ...(dupError ? { borderColor: "#dc2626", background: "#fef2f2" } : {}) }} />}
           {dupError && (
             <div style={{ marginTop: 5, fontSize: 11, color: "#dc2626", fontWeight: 700,
               background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 6,

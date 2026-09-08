@@ -88,6 +88,7 @@ export const MONEDA_SYM = {
 // (EUR) habia que corregir el dropdown en cada carga. Lee de SOCIEDADES, que espeja nb_sociedades;
 // si el id no esta en la lista cae en ARS, que es el comportamiento que habia antes.
 export const monedaDeSociedad = (id) => SOCIEDADES.find(s => s.id === id)?.moneda ?? "ARS";
+export const paisDeSociedad   = (id) => SOCIEDADES.find(s => s.id === id)?.pais   ?? "AR";
 
 // Alicuotas de IVA por pais de la sociedad. El circuito de factura estaba cableado a Argentina
 // (opciones 0/10.5/21/27 y default 21), asi que en Tigre Loco no se podia cargar el IVA colombiano
