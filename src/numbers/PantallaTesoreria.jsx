@@ -1289,14 +1289,58 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
 
   const cuentaNombre = filtroCuenta ? (cuentaMap[filtroCuenta] ?? filtroCuenta) : null;
 
+  // Búsqueda por Concepto o Cuenta contable (no toca `sorted`: ese sigue en orden cronológico real,
+  // que es lo que necesita saldoByRow — la búsqueda/orden de abajo son solo de visualización).
+  const [busqueda, setBusqueda] = useState("");
+  const buscado = useMemo(() => {
+    const q = busqueda.trim().toLowerCase();
+    if (!q) return sorted;
+    return sorted.filter(m =>
+      (m.concepto ?? "").toLowerCase().includes(q) ||
+      String(m.cuenta_contable || m.cuenta || "").replace(/^CUENTA_/, "").toLowerCase().includes(q));
+  }, [sorted, busqueda]);
+
+  // Orden de columnas: clickeás un header para ordenar por esa columna (asc/desc). Por defecto,
+  // fecha descendente (igual que antes). Accede al valor comparable de cada columna por fila.
+  const [sortKey, setSortKey] = useState("fecha");
+  const [sortDir, setSortDir] = useState("desc");
+  const sortValue = (m, key) => {
+    switch (key) {
+      case "tipo":     return (TIPO_CFG[m.tipo]?.label ?? m.tipo ?? "");
+      case "fecha":    return m.fecha ?? "";
+      case "cuenta":   return cuentaMap[m.cuenta_bancaria] ?? m.cuenta_bancaria ?? "";
+      case "concepto": return m.concepto ?? "";
+      case "ctaCont":  return String(m.cuenta_contable || m.cuenta || "").replace(/^CUENTA_/, "");
+      case "centro":   return m.centro_costo ? (ccMap[m.centro_costo] ?? m.centro_costo) : "";
+      case "moneda":   return m.moneda ?? "";
+      case "importe":  return Number(m.monto) || 0;
+      case "saldo":    return saldoByRow.get(m) ?? 0;
+      case "registro": return m.registrado_por ?? "";
+      default:         return "";
+    }
+  };
+  const ordenado = useMemo(() => {
+    const dir = sortDir === "asc" ? 1 : -1;
+    return [...buscado].sort((a, b) => {
+      const va = sortValue(a, sortKey), vb = sortValue(b, sortKey);
+      if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
+      return String(va).localeCompare(String(vb)) * dir;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buscado, sortKey, sortDir]);
+  const toggleSort = (key) => {
+    if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortKey(key); setSortDir(key === "fecha" ? "desc" : "asc"); }
+  };
+
   // Paginado: la tabla puede tener cientos/miles de filas y sin límite el scroll se vuelve interminable.
   const [pageSize, setPageSize] = useState(50);
   const [page, setPage] = useState(0);
-  useEffect(() => { setPage(0); }, [filtroCuenta, filtroRef, pageSize]);
-  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
+  useEffect(() => { setPage(0); }, [filtroCuenta, filtroRef, pageSize, busqueda, sortKey, sortDir]);
+  const totalPages = Math.max(1, Math.ceil(ordenado.length / pageSize));
   const pageClamped = Math.min(page, totalPages - 1);
   const desde = pageClamped * pageSize;
-  const visible = sorted.slice(desde, desde + pageSize);
+  const visible = ordenado.slice(desde, desde + pageSize);
 
   if (rows.length === 0) {
     return (
@@ -1341,7 +1385,17 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
               padding:"2px 10px", cursor:"pointer", fontFamily:T.font }}>✕ Ver todas</button>
           </>}
         </div>
-        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          <input value={busqueda} onChange={e => setBusqueda(e.target.value)}
+            placeholder="Buscar por concepto o cuenta contable…" style={{
+              fontSize:12, color:T.text, background:T.card, border:`1px solid ${T.cardBorder}`,
+              borderRadius:6, padding:"5px 10px", fontFamily:T.font, width:240 }} />
+          {busqueda && (
+            <button onClick={() => setBusqueda("")} style={{
+              fontSize:11, color:T.muted, background:"#f3f4f6",
+              border:`1px solid ${T.cardBorder}`, borderRadius:6,
+              padding:"2px 10px", cursor:"pointer", fontFamily:T.font }}>✕</button>
+          )}
           <span style={{ fontSize:11, color:T.muted }}>Filas por página</span>
           <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))} style={{
             fontSize:12, color:T.text, background:T.card, border:`1px solid ${T.cardBorder}`,
@@ -1358,14 +1412,25 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
           <thead>
             <tr style={{ background:T.tableHead }}>
               <th style={{ width:36 }} />
-              {["Tipo","Fecha","Cuenta","Concepto","Cta. Contable","C. Costo","Moneda","Importe","Saldo","Registró"].map(h => (
-                <th key={h} style={{ padding:"10px 14px", fontSize:11, fontWeight:700,
-                  letterSpacing:".08em", textTransform:"uppercase", color:T.tableHeadText,
-                  textAlign: (h === "Importe" || h === "Saldo") ? "right" : "left" }}>{h}</th>
+              {[
+                ["Tipo", "tipo"], ["Fecha", "fecha"], ["Cuenta", "cuenta"], ["Concepto", "concepto"],
+                ["Cta. Contable", "ctaCont"], ["C. Costo", "centro"], ["Moneda", "moneda"],
+                ["Importe", "importe"], ["Saldo", "saldo"], ["Registró", "registro"],
+              ].map(([h, key]) => (
+                <th key={h} onClick={() => toggleSort(key)} title="Ordenar" style={{ padding:"10px 14px", fontSize:11, fontWeight:700,
+                  letterSpacing:".08em", textTransform:"uppercase", color:T.tableHeadText, cursor:"pointer", userSelect:"none",
+                  whiteSpace:"nowrap", textAlign: (h === "Importe" || h === "Saldo") ? "right" : "left" }}>
+                  {h}{sortKey === key && (sortDir === "asc" ? " ▲" : " ▼")}
+                </th>
               ))}
             </tr>
           </thead>
           <tbody>
+            {ordenado.length === 0 && (
+              <tr><td colSpan={11} style={{ padding:"32px 14px", textAlign:"center", color:T.dim, fontSize:13 }}>
+                Sin resultados para "{busqueda}"
+              </td></tr>
+            )}
             {visible.map((m, i) => {
               const base   = TIPO_CFG[m.tipo] ?? { bg:"#f3f4f6", color:"#374151", label:m.tipo };
               const cfg    = esSinConciliar(m) ? { ...base, ...TIPO_SIN_CONCILIAR } : base;
@@ -1447,7 +1512,7 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between",
             padding:"10px 14px", borderTop:`1px solid ${T.cardBorder}` }}>
             <span style={{ fontSize:12, color:T.muted }}>
-              Mostrando {desde + 1}–{Math.min(desde + pageSize, sorted.length)} de {sorted.length}
+              Mostrando {desde + 1}–{Math.min(desde + pageSize, ordenado.length)} de {ordenado.length}
             </span>
             <div style={{ display:"flex", alignItems:"center", gap:8 }}>
               <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={pageClamped === 0}
