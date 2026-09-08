@@ -7,6 +7,7 @@ import {
 } from "../lib/numbersApi";
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 import { makeResolveCC, makeResolveCB } from "./formUtils.jsx";
+import { useConfirm } from "./useConfirm";
 import FiltroFecha, { useFiltroFecha } from "./FiltroFecha";
 
 // ─── Formulario: Nuevo / Editar Ingreso Directo ──────────────────────────────
@@ -298,6 +299,7 @@ function FormNuevoIngreso({ sociedad, cuentasBancarias, cuentas, centrosCosto, p
 
 // ─── Pantalla: Lista de Ingresos Directos ─────────────────────────────────────
 export default function PantallaIngresosDirectos({ sociedad = "nako", subView = null, onSubViewChange, navPulse = 0 }) {
+  const [confirm, confirmUI] = useConfirm();
   const [ingresos, setIngresos]                 = useState([]);
   const [loading, setLoading]                   = useState(true);
   const [error, setError]                       = useState(null);
@@ -349,7 +351,7 @@ export default function PantallaIngresosDirectos({ sociedad = "nako", subView = 
   }, [ingresos, busqueda, resolveCC, resolveCB, filtroFecha.inRange]);
 
   const handleEliminar = async (ing) => {
-    if (!confirm("¿Eliminar este ingreso?")) return;
+    if (!(await confirm("¿Eliminar este ingreso?"))) return;
     try {
       await deleteIngresoDirecto(ing._movId);
       setIngresos(prev => prev.filter(g => g.id !== ing.id));
@@ -391,6 +393,7 @@ export default function PantallaIngresosDirectos({ sociedad = "nako", subView = 
 
   return (
     <div style={{ padding:"28px 32px" }} className="fade">
+      {confirmUI}
       <PageHeader
         title="Ingresos Directos"
         subtitle="Cobrados en el momento (sin factura) · afectan P&L y Tesorería"

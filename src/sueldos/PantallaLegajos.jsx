@@ -5,6 +5,7 @@ import {
   fetchSociedadesNumbers, fetchCentrosCostoNumbers,
 } from "../lib/sueldosApi";
 import { useRowChecks } from "../lib/useRowChecks";
+import { useConfirm } from "../numbers/useConfirm";
 
 const T = {
   bg:     "#f8fafc",
@@ -77,6 +78,7 @@ function tipoChip(tipo) {
 }
 
 export default function PantallaLegajos({ pais = "" }) {
+  const [confirm, confirmUI] = useConfirm();
   const [legajos,    setLegajos]    = useState([]);
   const [sociedades, setSociedades] = useState([]);
   const [centrosCosto, setCentrosCosto] = useState([]);
@@ -175,7 +177,7 @@ export default function PantallaLegajos({ pais = "" }) {
   function handleEditar(l) { setEditing(l); setShowForm(true); }
 
   async function handleEliminar(l) {
-    if (!confirm(`¿Eliminar legajo de ${l.nombre}?`)) return;
+    if (!(await confirm(`¿Eliminar legajo de ${l.nombre}?`))) return;
     await deleteLegajo(l.id);
     await load();
   }
@@ -194,6 +196,7 @@ export default function PantallaLegajos({ pais = "" }) {
 
   return (
     <div style={{ padding: 24, fontFamily: T.font, color: T.text, maxWidth: 1100, margin: "0 auto" }}>
+      {confirmUI}
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
         <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Legajos</h2>

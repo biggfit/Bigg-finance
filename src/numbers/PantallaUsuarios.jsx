@@ -2,10 +2,12 @@ import { useState, useEffect } from "react";
 import { T, Btn, PageHeader } from "./theme";
 import { fetchUsuarios, appendUsuario, updateUsuario, deleteUsuario } from "../lib/numbersApi";
 import { hashPassword, inicial } from "../lib/auth";
+import { useConfirm } from "./useConfirm";
 
 // Módulo group-level (fuera de Maestros): gestión de usuarios del sistema + sesión actual.
 // Permisos NO se enforzan (todos pueden todo); solo se guarda `rol` como estructura.
 export default function PantallaUsuarios({ sesion, onCerrarSesion }) {
+  const [confirm, confirmUI] = useConfirm();
   const [usuarios, setUsuarios] = useState([]);
   const [loading, setLoading]   = useState(true);
   const [modal, setModal]       = useState(null);   // null | "nuevo" | usuario
@@ -18,7 +20,7 @@ export default function PantallaUsuarios({ sesion, onCerrarSesion }) {
   useEffect(() => { recargar(); }, []);
 
   const handleEliminar = async (u) => {
-    if (!window.confirm(`¿Eliminar al usuario "${u.nombre}"?`)) return;
+    if (!(await confirm(`¿Eliminar al usuario "${u.nombre}"?`))) return;
     await deleteUsuario(u.id);
     await recargar();
   };
@@ -29,6 +31,7 @@ export default function PantallaUsuarios({ sesion, onCerrarSesion }) {
 
   return (
     <div className="fade" style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", padding:"24px 32px 0" }}>
+      {confirmUI}
       <PageHeader
         title="Usuarios del sistema"
         subtitle="Login y sello de autoría. Hoy todos pueden todo — el rol es informativo."

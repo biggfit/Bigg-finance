@@ -3,6 +3,7 @@ import { useStore } from "../lib/context";
 import { makeType, MONTHS, AVAILABLE_YEARS, fmt, compCurrency, compEmpresa, computeSaldo, CUENTAS, CUENTA_LABEL, COMPANIES, cmpDate } from "../lib/helpers";
 import { inPeriod, dateMonth, dateYear, todayDmy } from "../data/franchisor";
 import { sendMailFr } from "../lib/sheetsApi";
+import { useConfirm } from "../numbers/useConfirm";
 
 // Mes absoluto de un comprobante (año*12+mes) para comparar meses de años distintos sin casos borde.
 const idxMes = c => c.year * 12 + c.month;
@@ -29,6 +30,7 @@ function periodoPauta(c) {
 // ── Pendientes panel ────────────────────────────────────────────────────────
 export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, onFetchAfipNumero, month, year }) {
   const { franchises, comps, saldoInicial, editComp, moveComp, deleteComp, activeCompany, recordatorios, addRecordatorioEntry } = useStore();
+  const [confirm, confirmUI] = useConfirm();
   const [showAfip,       setShowAfip]       = useState(false);
   const [showSinNumero,  setShowSinNumero]  = useState(false);
   const [showSinAsignar, setShowSinAsignar] = useState(false);
@@ -672,6 +674,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
+      {confirmUI}
 
       {/* ── Modal: referencias NC ── */}
       {ncRefModal && (
@@ -823,8 +826,8 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                   <button
                     className="ghost"
                     style={{ fontSize: 11, padding: "4px 12px", color: "var(--muted)", border: "1px solid var(--border2)", whiteSpace: "nowrap" }}
-                    onClick={() => {
-                      if (!window.confirm(`¿Borrar ${ceroRows.length} comprobante${ceroRows.length !== 1 ? "s" : ""} en $0? Esta acción no se puede deshacer.`)) return;
+                    onClick={async () => {
+                      if (!(await confirm(`¿Borrar ${ceroRows.length} comprobante${ceroRows.length !== 1 ? "s" : ""} en $0? Esta acción no se puede deshacer.`))) return;
                       ceroRows.forEach(({ fr, comp }) => deleteComp(fr.id, comp.id));
                     }}
                   >

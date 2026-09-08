@@ -14,6 +14,7 @@ import {
 } from "../lib/numbersApi";
 import { CUENTAS as CUENTAS_STATIC, CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 import TabTiposCambio from "./TabTiposCambio";
+import { useConfirm } from "./useConfirm";
 
 // ─── Chip de tipo ─────────────────────────────────────────────────────────────
 function TipoChip({ tipo }) {
@@ -333,6 +334,7 @@ export function ClienteModal({ initial, onClose, onSave, cuentas = [], centrosCo
 
 // ─── TAB: Proveedores ─────────────────────────────────────────────────────────
 function TabProveedores() {
+  const [confirm, confirmUI] = useConfirm();
   const [proveedores, setProveedores] = useState([]);
   const [loading,     setLoading]     = useState(true);
   const [busqueda,    setBusqueda]    = useState("");
@@ -385,11 +387,11 @@ function TabProveedores() {
     try {
       const usos = await contarUsosMaestro({ contraparteId: prov.id });
       if (usos > 0) {
-        if (!confirm(`"${prov.nombre}" tiene ${usos} comprobante(s)/movimiento(s) asociado(s), así que no se puede borrar sin dejar esos registros colgados.\n\n¿Desactivarlo (activo: No)? Deja de aparecer en los selectores pero conserva su historial.`)) return;
+        if (!(await confirm(`"${prov.nombre}" tiene ${usos} comprobante(s)/movimiento(s) asociado(s), así que no se puede borrar sin dejar esos registros colgados.\n\n¿Desactivarlo (activo: No)? Deja de aparecer en los selectores pero conserva su historial.`))) return;
         await updateProveedor(prov.id, { activo: false });
         setProveedores(prev => prev.map(p => p.id === prov.id ? { ...p, activo: false } : p));
       } else {
-        if (!confirm(`¿Eliminar "${prov.nombre}"? No tiene movimientos asociados.`)) return;
+        if (!(await confirm(`¿Eliminar "${prov.nombre}"? No tiene movimientos asociados.`))) return;
         await deleteProveedor(prov.id);
         setProveedores(prev => prev.filter(p => p.id !== prov.id));
       }
@@ -409,6 +411,7 @@ function TabProveedores() {
 
   return (
     <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", minHeight:0 }}>
+      {confirmUI}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
         marginBottom:12, gap:12, flexShrink:0, paddingBottom:4 }}>
         <input value={busqueda} onChange={e=>setBusqueda(e.target.value)}
@@ -501,6 +504,7 @@ function TabProveedores() {
 
 // ─── TAB: Clientes ────────────────────────────────────────────────────────────
 function TabClientes() {
+  const [confirm, confirmUI] = useConfirm();
   const [clientes, setClientes] = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [busqueda, setBusqueda] = useState("");
@@ -553,11 +557,11 @@ function TabClientes() {
     try {
       const usos = await contarUsosMaestro({ contraparteId: cli.id });
       if (usos > 0) {
-        if (!confirm(`"${cli.nombre}" tiene ${usos} comprobante(s)/movimiento(s) asociado(s), así que no se puede borrar sin dejar esos registros colgados.\n\n¿Desactivarlo (activo: No)? Deja de aparecer en los selectores pero conserva su historial.`)) return;
+        if (!(await confirm(`"${cli.nombre}" tiene ${usos} comprobante(s)/movimiento(s) asociado(s), así que no se puede borrar sin dejar esos registros colgados.\n\n¿Desactivarlo (activo: No)? Deja de aparecer en los selectores pero conserva su historial.`))) return;
         await updateCliente(cli.id, { activo: false });
         setClientes(prev => prev.map(c => c.id === cli.id ? { ...c, activo: false } : c));
       } else {
-        if (!confirm(`¿Eliminar "${cli.nombre}"? No tiene movimientos asociados.`)) return;
+        if (!(await confirm(`¿Eliminar "${cli.nombre}"? No tiene movimientos asociados.`))) return;
         await deleteCliente(cli.id);
         setClientes(prev => prev.filter(c => c.id !== cli.id));
       }
@@ -575,6 +579,7 @@ function TabClientes() {
 
   return (
     <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", minHeight:0 }}>
+      {confirmUI}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
         marginBottom:12, gap:12, flexShrink:0, paddingBottom:4 }}>
         <input value={busqueda} onChange={e=>setBusqueda(e.target.value)}
@@ -749,6 +754,7 @@ export function CuentaModal({ initial, onClose, onSave }) {
 
 // ─── TAB: Plan de cuentas ─────────────────────────────────────────────────────
 function TabCuentas() {
+  const [confirm, confirmUI] = useConfirm();
   const [cuentas,    setCuentas]    = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [fromSeed,   setFromSeed]   = useState(false);
@@ -788,7 +794,7 @@ function TabCuentas() {
   };
 
   const handleEliminar = async (cuenta) => {
-    if (!confirm(`¿Eliminar "${cuenta.nombre}"?`)) return;
+    if (!(await confirm(`¿Eliminar "${cuenta.nombre}"?`))) return;
     try {
       await deleteCuenta(cuenta.id);
       setCuentas(prev => prev.filter(c => c.id !== cuenta.id));
@@ -810,6 +816,7 @@ function TabCuentas() {
 
   return (
     <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", minHeight:0 }}>
+      {confirmUI}
       {fromSeed && !loading && (
         <div style={{ background:"#fef9c3", border:"1px solid #fde68a", borderRadius:8,
           padding:"10px 16px", marginBottom:14, display:"flex", alignItems:"center", gap:10, fontSize:13, flexShrink:0 }}>
@@ -977,6 +984,7 @@ function CuentaBancariaModal({ initial, onClose, onSave, sociedades = [] }) {
 
 // ─── TAB: Cajas y Bancos ──────────────────────────────────────────────────────
 function TabCajas() {
+  const [confirm, confirmUI] = useConfirm();
   const [cuentas,    setCuentas]    = useState([]);
   const [loading,        setLoading]        = useState(true);
   const [seeding,        setSeeding]        = useState(false);
@@ -1005,7 +1013,7 @@ function TabCajas() {
   };
 
   const handleSeedCajas = async () => {
-    if (!confirm("¿Cargar todas las cajas en el sheet? Esto creará una fila por cada caja en nb_cuentas_bancarias.")) return;
+    if (!(await confirm("¿Cargar todas las cajas en el sheet? Esto creará una fila por cada caja en nb_cuentas_bancarias."))) return;
     setSeeding(true);
     try {
       const cajas = CUENTAS_BANCARIAS.filter(c => c.tipo === "caja");
@@ -1075,7 +1083,7 @@ function TabCajas() {
   };
 
   const handleEliminar = async (c) => {
-    if (!confirm(`¿Eliminar "${c.nombre}"?`)) return;
+    if (!(await confirm(`¿Eliminar "${c.nombre}"?`))) return;
     try {
       await deleteCuentaBancaria(c.id);
       setCuentas(prev => prev.filter(x => x.id !== c.id));
@@ -1115,6 +1123,7 @@ function TabCajas() {
 
   return (
     <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", minHeight:0 }}>
+      {confirmUI}
       {/* Toolbar */}
       <div style={{ display:"flex", gap:10, alignItems:"center", marginBottom:16, flexWrap:"wrap", flexShrink:0 }}>
         <select value={filtroSoc} onChange={e=>setFiltroSoc(e.target.value)}
@@ -1321,6 +1330,7 @@ function CCModal({ initial, onClose, onSave }) {
 
 // ─── Tab: Centros de Costo ────────────────────────────────────────────────────
 function TabCC() {
+  const [confirm, confirmUI] = useConfirm();
   const [ccs,      setCcs]      = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [busqueda, setBusqueda] = useState("");
@@ -1358,11 +1368,11 @@ function TabCC() {
     try {
       const usos = await contarUsosMaestro({ centroId: cc.id });
       if (usos > 0) {
-        if (!confirm(`"${cc.nombre}" tiene ${usos} comprobante(s)/movimiento(s) imputado(s), así que no se puede borrar sin dejar esos registros colgados.\n\n¿Desactivarlo (activo: No)? Deja de aparecer en los selectores pero conserva su historial.`)) return;
+        if (!(await confirm(`"${cc.nombre}" tiene ${usos} comprobante(s)/movimiento(s) imputado(s), así que no se puede borrar sin dejar esos registros colgados.\n\n¿Desactivarlo (activo: No)? Deja de aparecer en los selectores pero conserva su historial.`))) return;
         await updateCentroCosto(cc.id, { activo: false });
         setCcs(prev => prev.map(c => c.id === cc.id ? { ...c, activo: false } : c));
       } else {
-        if (!confirm(`¿Eliminar "${cc.nombre}"? No tiene movimientos asociados.`)) return;
+        if (!(await confirm(`¿Eliminar "${cc.nombre}"? No tiene movimientos asociados.`))) return;
         await deleteCentroCosto(cc.id);
         setCcs(prev => prev.filter(c => c.id !== cc.id));
       }
@@ -1380,6 +1390,7 @@ function TabCC() {
 
   return (
     <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", minHeight:0 }}>
+      {confirmUI}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
         marginBottom:16, gap:12, flexShrink:0 }}>
         <input value={busqueda} onChange={e=>setBusqueda(e.target.value)}
@@ -1531,6 +1542,7 @@ function SociedadModal({ initial, onClose, onSave }) {
 }
 
 function TabSociedades() {
+  const [confirm, confirmUI] = useConfirm();
   const [socs,    setSocs]    = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal,   setModal]   = useState(null);
@@ -1560,10 +1572,10 @@ function TabSociedades() {
     try {
       const usos = await contarUsosMaestro({ sociedadId: s.id });
       if (usos > 0) {
-        if (!confirm(`"${s.nombre}" tiene ${usos} comprobante(s)/movimiento(s) asociado(s), así que no se puede borrar sin dejar esos registros colgados.\n\n¿Desactivarla (activo: No)? Deja de aparecer en los selectores pero conserva su historial. (No elimina las cuentas asociadas.)`)) return;
+        if (!(await confirm(`"${s.nombre}" tiene ${usos} comprobante(s)/movimiento(s) asociado(s), así que no se puede borrar sin dejar esos registros colgados.\n\n¿Desactivarla (activo: No)? Deja de aparecer en los selectores pero conserva su historial. (No elimina las cuentas asociadas.)`))) return;
         await updateSociedad(s.id, { activo: false });
       } else {
-        if (!confirm(`¿Eliminar "${s.nombre}"? No tiene movimientos asociados. Esto no elimina las cuentas asociadas.`)) return;
+        if (!(await confirm(`¿Eliminar "${s.nombre}"? No tiene movimientos asociados. Esto no elimina las cuentas asociadas.`))) return;
         await deleteSociedad(s.id);
       }
       await recargar();
@@ -1572,6 +1584,7 @@ function TabSociedades() {
 
   return (
     <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", minHeight:0 }}>
+      {confirmUI}
       <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:16, flexShrink:0 }}>
         <Btn variant="primary" onClick={()=>setModal("nuevo")}>+ Nueva Sociedad</Btn>
       </div>
@@ -1720,6 +1733,7 @@ export function BancoReglaModal({ initial, prefill, onClose, onSave, cuentas, ce
 
 // ─── Tab: Reglas de banco ─────────────────────────────────────────────────────
 function TabBancoReglas() {
+  const [confirm, confirmUI] = useConfirm();
   const [reglas,   setReglas]   = useState([]);
   const [aux,      setAux]      = useState({ cuentas:[], centros:[], cb:[], prov:[] });
   const [loading,  setLoading]  = useState(true);
@@ -1749,7 +1763,7 @@ function TabBancoReglas() {
     } catch (e) { alert("Error al guardar: " + e.message); }
   };
   const handleEliminar = async (rg) => {
-    if (!confirm(`¿Eliminar regla ${rg.id}?`)) return;
+    if (!(await confirm(`¿Eliminar regla ${rg.id}?`))) return;
     try { await deleteBancoRegla(rg.id); setReglas(prev => prev.filter(r => r.id !== rg.id)); }
     catch (e) { alert("Error al eliminar: " + e.message); }
   };
@@ -1762,6 +1776,7 @@ function TabBancoReglas() {
 
   return (
     <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", minHeight:0 }}>
+      {confirmUI}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, gap:12, flexShrink:0 }}>
         <input value={busqueda} onChange={e=>setBusqueda(e.target.value)} placeholder="Buscar regla (código, tipo, banco…)"
           style={{ flex:1, maxWidth:340, background:"#eceff3", border:`1px solid ${T.cardBorder}`,

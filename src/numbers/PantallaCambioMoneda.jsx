@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { T, Btn, Input, Select, PageHeader, fmtDate, fmtMoney } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
 import { fetchCambios, appendCambio, updateCambio, deleteCambio, fetchCuentasBancarias } from "../lib/numbersApi";
+import { useConfirm } from "./useConfirm";
 
 const HOY = new Date().toISOString().slice(0, 10);
 
@@ -16,6 +17,7 @@ const FORM_VACÍO = {
 
 
 export default function PantallaCambioMoneda({ sociedad, openNew, onOpenNewConsumed, openEditDoc, onEditConsumed }) {
+  const [confirm, confirmUI] = useConfirm();
   const [todosCambios, setTodosCambios] = useState([]);
   const [loading,      setLoading]      = useState(true);
   const [showForm,     setShowForm]     = useState(false);
@@ -128,7 +130,7 @@ export default function PantallaCambioMoneda({ sociedad, openNew, onOpenNewConsu
   }
 
   async function handleEliminar(cambio) {
-    if (!window.confirm(`¿Eliminar esta operación de cambio?`)) return;
+    if (!(await confirm(`¿Eliminar esta operación de cambio?`))) return;
     setDeleting(cambio.id);
     try {
       await deleteCambio(cambio._ids);
@@ -152,6 +154,7 @@ export default function PantallaCambioMoneda({ sociedad, openNew, onOpenNewConsu
 
   return (
     <div className="fade" style={{ padding:"28px 32px", display:"flex", flexDirection:"column", minHeight:"calc(100vh - 60px)" }}>
+      {confirmUI}
       <PageHeader
         title="Cambio de moneda"
         action={
