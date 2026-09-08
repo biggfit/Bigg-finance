@@ -189,6 +189,12 @@ const MODAL_INP = { width: "100%", background: "#eceff3", border: `1px solid ${T
 const MODAL_LBL = { fontSize: 12, color: T.muted, fontWeight: 600, display: "block", marginBottom: 5 };
 // El carril Banco concilia extractos → solo cuentas tipo "Banco" (cajas/inversión/tarjeta no tienen extracto).
 const esCuentaBanco = c => String(c?.tipo || "").toLowerCase() === "banco";
+// Cuenta cerrada para conciliación (ej. ya saldada, no se le van a subir más extractos) → no aparece
+// como pestaña acá. Deliberadamente NO usa `activo` (ese flag también oculta la cuenta en Tesorería
+// cuando el saldo da $0 — pisarlo la hacía desaparecer de los dos lados a la vez). Marca en `nota` con
+// el tag "[sin-conciliar]" para no tocar el schema de la hoja; la cuenta sigue activa en todo lo demás.
+const esCuentaSinConciliar = c => /\[sin-conciliar\]/i.test(c?.nota || "");
+const esCuentaBancoActiva = c => esCuentaBanco(c) && !esCuentaSinConciliar(c);
 // Semáforo de "última carga" de extracto: verde ≤7 días, ámbar >7 días de atraso, rojo si nunca se cargó.
 const ATRASO_DIAS = 7;
 function estadoUltimaCarga(fechaISO) {
@@ -486,8 +492,8 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       setCuentasAll(all || []);
       const soc = (all || []).filter(c => c.sociedad === sociedad);
       setCuentas(soc);
-      // Pestaña inicial = primera cuenta real (las tarjeta se concilian en el mundo Tarjeta).
-      setCuentaTab((soc.find(esCuentaBanco) || soc[0])?.id || "");
+      // Pestaña inicial = primera cuenta real activa (las tarjeta se concilian en el mundo Tarjeta).
+      setCuentaTab((soc.find(esCuentaBancoActiva) || soc.find(esCuentaBanco) || soc[0])?.id || "");
     }).catch(console.error);
     fetchCuentas().then(c => setPlanCuentas(dedupById(c))).catch(console.error);
     fetchCentrosCosto().then(c => setCentros(dedupById(c))).catch(console.error);
@@ -1669,7 +1675,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
 
       {/* Pestañas por cuenta bancaria (las cuentas-tarjeta viven en el mundo Tarjeta, no acá) */}
       <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
-        {cuentas.filter(esCuentaBanco).map(c => {
+        {cuentas.filter(esCuentaBancoActiva).map(c => {
           const active = c.id === cuentaTab;
           const n = countByCuenta[c.id] || 0;
           const est = estadoUltimaCarga(ultimaCarga[c.id]);
