@@ -14,7 +14,9 @@ import PantallaSocios from "./PantallaSocios";
 
 const MESES    = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
 const CUR_YEAR = new Date().getFullYear();
-const YEARS    = [CUR_YEAR - 2, CUR_YEAR - 1, CUR_YEAR];
+// Desde 2022: España (Wellness) tiene histórico cargado desde Abr 2022 en nb_pnl_historico.
+const PNL_HIST_ANIO_MIN = 2022;
+const YEARS    = Array.from({ length: Math.max(3, CUR_YEAR - PNL_HIST_ANIO_MIN + 1) }, (_, i) => PNL_HIST_ANIO_MIN + i);
 
 function normCat(raw) {
   const s = (raw ?? "").trim().toLowerCase().replace(/\s+/g, "_");
@@ -367,11 +369,11 @@ function ResultadoRow({ label, values, activeMonths, strong, noBottom = false })
 // (verde/rojo) se reserva para las líneas de resultado. Las bandas de sección aportan la estructura.
 const SEDE_HDR = "#475569";   // slate — encabezados de subgrupo y montos de cuenta
 const SEDE_GRUPOS = [
-  { key: "vta_cf",    label: "Ventas consumidor final",  color: SEDE_HDR, cuentas: ["Ventas Mercado Pago", "Ing.Stripe", "Ing. Datafono", "Depositos", "Ventas en Efectivo", "Otros Ingresos"] },
-  { key: "int_bigg",  label: "Interusos red BIGG",       color: SEDE_HDR, cuentas: ["Interusos"] },
-  { key: "int_corp",  label: "Interusos corporativos",   color: SEDE_HDR, cuentas: ["Coorporativos"] },
-  { key: "cvar",      label: "Costos Variables",         color: SEDE_HDR, cuentas: ["Fee Facturación", "Aranceles y Otros Financieros", "IIBB", "Imp. Cred. y Deb."] },
-  { key: "gp_pers",   label: "Personal",                 color: SEDE_HDR, cuentas: ["Sueldos", "Incentivos", "Comisiones", "Aguinaldos", "Costos Salariales"] },
+  { key: "vta_cf",    label: "Ventas consumidor final",  color: SEDE_HDR, cuentas: ["Ventas Mercado Pago", "Ing.Stripe", "Ing. Datafono", "Ing. via Banco", "Ing. Efectivo", "Depositos", "Ventas en Efectivo", "Otros Ingresos"] },
+  { key: "int_bigg",  label: "Interusos red BIGG",       color: SEDE_HDR, cuentas: ["Interusos", "Interusos Genericos"] },
+  { key: "int_corp",  label: "Interusos corporativos",   color: SEDE_HDR, cuentas: ["Coorporativos", "Interusos Gympass"] },
+  { key: "cvar",      label: "Costos Variables",         color: SEDE_HDR, cuentas: ["Fee Facturación", "Fee Facturacion", "Fees Stripe", "Aranceles y Otros Financieros", "IIBB", "Imp. Cred. y Deb."] },
+  { key: "gp_pers",   label: "Personal",                 color: SEDE_HDR, cuentas: ["Sueldos", "Incentivos", "Comisiones", "Cargas Sociales", "Otros Gastos Salariales", "Aguinaldos", "Costos Salariales"] },
   { key: "gp_ocup",   label: "Ocupación",                color: SEDE_HDR, cuentas: ["Alquiler", "Expensas", "ABL", "Servicios"] },
   { key: "gp_mkt",    label: "Mkt y Pauta",              color: SEDE_HDR, cuentas: ["Acciones de Mkt", "Pauta"] },
   { key: "gp_otros",  label: "Otros Gastos de la Sede",  color: SEDE_HDR, cuentas: ["Honorarios Profesionales", "Equipamiento y Mantenimiento", "Limpieza", "Otros Gastos del Centro", "Gastos Menores de Caja"] },
@@ -381,12 +383,20 @@ const SEDE_GRUPOS = [
 const _nkSede = s => (s ?? "").trim().toLowerCase();
 // Cuentas que se OCULTAN si están vacías (todo el año en cero). Ing.Stripe / Ing. Datafono son naturales de
 // España → en el resto de las sedes vienen en 0 y ensucian; en España, donde sí hay dato, se muestran solas.
-const SEDE_OCULTAR_SI_VACIA = new Set([_nkSede("Ing.Stripe"), _nkSede("Ing. Datafono")]);
+const SEDE_OCULTAR_SI_VACIA = new Set([_nkSede("Ing.Stripe"), _nkSede("Ing. Datafono"),
+  _nkSede("Ventas Mercado Pago"), _nkSede("Depositos"), _nkSede("Ventas en Efectivo")]);
 const SEDE_CUENTA_A_GRUPO = (() => {
   const m = new Map();
   for (const g of SEDE_GRUPOS) for (const c of g.cuentas) m.set(_nkSede(c), g.key);
   return m;
 })();
+// Cuentas que SON de ingreso por definición (ventas + interusos), aunque el maestro no las tenga
+// categorizadas. El histórico las rutea al lado ingreso → mantienen su SIGNO NATURAL (los interusos ya
+// vienen neteados; sin esto caían como egreso y el motor les invertía el signo, ej. "Interusos Genericos").
+const SEDE_ING_ACCTS = new Set(
+  SEDE_GRUPOS.filter(g => ["vta_cf", "int_bigg", "int_corp"].includes(g.key))
+    .flatMap(g => g.cuentas.map(_nkSede))
+);
 const grupoSede = (key) => SEDE_GRUPOS.find(g => g.key === key);
 // Alias de cuenta → línea del P&L Sede: cuentas que deben plegarse a una línea existente (mismo grupo y misma
 // fila). Ej.: "Mantenimiento" se contabiliza dentro de "Equipamiento y Mantenimiento".
@@ -443,7 +453,7 @@ function computeImpuestos(sinClasificar, matchers, resFinal) {
 //   · Administrada (anillo 3, familia "gerenciamiento"): Rosedal → "Free Cash Flow" (base del reparto con Segui).
 // (Huergo NO entra acá: es anillo 1, sin cola de impuestos.)
 const FONDEADAS = {
-  op_espana:   { empresa: "wellness",   moneda: "EUR", label: "España",   familia: "propios" },
+  op_espana:   { empresa: "wellness",   moneda: "EUR", label: "España",   familia: "propios", estructuraCC: "cc-2026-88271" },
   op_colombia: { empresa: "tigre-loco", moneda: "COP", label: "Colombia", familia: "propios" },
   op_puertos:  { empresa: "puertos",    moneda: "USD", label: "Puertos",  familia: "propios" },
   op_rosedal:  { empresa: "segui-fit",  moneda: "ARS", label: "Rosedal",  familia: "gerenciamiento", netoLabel: "Free Cash Flow" },
@@ -566,6 +576,12 @@ function buildPnLSede(inRows, egRows, ccFilter, year, moneda, sinIva = false) {
 }
 
 const sumGrupoSede = (g) => MESES.map((_, m) => Object.values(g).reduce((s, arr) => s + (arr[m] || 0), 0));
+// "Ventas" de la sede para el prorrateo de estructura (decisión: SOLO ventas — Stripe/Datafono/vía Banco/
+// Efectivo — sin interusos ni Otros Ingresos). Suma el grupo vta_cf excluyendo "Otros Ingresos".
+const VENTAS_EXCL_PRORR = new Set([_nkSede("Otros Ingresos")]);
+const sumVentasSede = (pnl) => MESES.map((_, m) =>
+  Object.entries(pnl.grupos.vta_cf).reduce((s, [n, arr]) =>
+    VENTAS_EXCL_PRORR.has(_nkSede(n)) ? s : s + (Number(arr[m]) || 0), 0));
 
 function computeSubtotalsSede(pnl) {
   const { grupos, sinClasificar } = pnl;
@@ -796,6 +812,8 @@ const actMenuItem = {
 };
 
 const ZERO12 = new Array(12).fill(0);
+// ¿La serie de 12 meses está toda en cero? (para ocultar bandas vacías, ej. Comisión/Inversiones en España).
+const esVacio12 = (arr) => !(arr || []).some(v => Math.abs(Number(v) || 0) > 0.005);
 const sumTo = (arr, m) => { let s = 0; for (let i = 0; i <= m && i < 12; i++) s += Number(arr?.[i]) || 0; return s; };
 const primaryVal = (vista, arr, mes) =>
   vista === "ytd" ? sumTo(arr, mes)
@@ -895,7 +913,8 @@ export function buildPnLSedeFilas(props, isCol) {
   const { pnl, sub, pnlPrev, subPrev, year, vista = "evolucion", mes = 0, cesion = null, impuestos = null,
           financieros = null, distribucion = null, retirosVivos = null, feeIvaVivo = null,
           netoLabel = "Resultado Neto", nombreCuenta = (x) => x, hayHistorico = false, mesMax = null,
-          cesionResFinal = null, cesionRetiros = null, comBaseResOp = null } = props;
+          cesionResFinal = null, cesionRetiros = null, comBaseResOp = null,
+          estructuraCuota = null, estructuraEnOpex = false, estructuraLabel = "Estructura Wellness" } = props;
   const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths: _amRaw } = sub;
   const activeMonths = mesesVisibles(_amRaw, year, hayHistorico, mesMax);
 
@@ -909,7 +928,18 @@ export function buildPnLSedeFilas(props, isCol) {
   const provMes = Array.isArray(comBaseResOp)
     ? MESES.map((_, m) => COM_ENC_RATE * (Number(comBaseResOp[m]) || 0) - (Number(comLiq[m]) || 0))
     : null;
-  const resFinalEff = provMes ? resFinal.map((v, m) => (Number(v) || 0) - provMes[m]) : resFinal;
+  // Estructura (Wellness) = OPEX de la estructura, COSTO OPERATIVO debajo de Total Gastos Operativos.
+  //  · estructuraEnOpex (scope "Todas", Wellness adentro): su OPEX YA está en totGastosOp → se SEPARA de la
+  //    línea "Total Gastos Operativos" para mostrarlo aparte; el Resultado Operativo no cambia.
+  //  · si NO (una sede sola, prorrateado): NO está en totGastosOp → se RESTA del Resultado Operativo.
+  const estruc = estructuraCuota || null;
+  const sedeOpexView = (estruc && estructuraEnOpex)
+    ? totGastosOp.map((v, m) => (Number(v) || 0) - (Number(estruc[m]) || 0)) : totGastosOp;
+  const resOpEff = (estruc && !estructuraEnOpex)
+    ? resOp.map((v, m) => (Number(v) || 0) - (Number(estruc[m]) || 0)) : resOp;
+  const resFinalBase = (estruc && !estructuraEnOpex)
+    ? resFinal.map((v, m) => (Number(v) || 0) - (Number(estruc[m]) || 0)) : resFinal;
+  const resFinalEff = provMes ? resFinalBase.map((v, m) => (Number(v) || 0) - provMes[m]) : resFinalBase;
 
   // Cesión de utilidades (cola de apropiación, solo cuando el scope es la sede con cesión, ej. Barrio Norte).
   // Los retiros son la cuenta "Inversores" de sinClasificar → se saca de ahí para no mostrarla dos veces.
@@ -981,8 +1011,10 @@ export function buildPnLSedeFilas(props, isCol) {
     filas.push({ kind: "result", label: "Margen de Contribución", cur: margenContrib, prev: subPrev.margenContrib, pol: 1 });
     filas.push({ kind: "banda", key: "sec_gop", label: "Gastos Operativos" });
     if (!isCol("sec_gop")) { pushGrupo("gp_pers", -1); pushGrupo("gp_ocup", -1); pushGrupo("gp_mkt", -1); pushGrupo("gp_otros", -1); }
-    filas.push({ kind: "subtotal", label: "Total Gastos Operativos", cur: totGastosOp, prev: subPrev.totGastosOp, pol: -1 });
-    filas.push({ kind: "result", label: "Resultado Operativo", cur: resOp, prev: subPrev.resOp, pol: 1 });
+    filas.push({ kind: "subtotal", label: "Total Gastos Operativos", cur: sedeOpexView, prev: subPrev.totGastosOp, pol: -1 });
+    // Estructura (Wellness): costo debajo de Total Gastos Operativos (como en el Excel). OPEX positivo → (x).
+    if (estruc) filas.push({ kind: "cuenta", label: estructuraLabel, cur: estruc, prev: ZERO12, pol: -1 });
+    filas.push({ kind: "result", label: "Resultado Operativo", cur: resOpEff, prev: subPrev.resOp, pol: 1 });
 
     let fcfArr = resFinalEff;   // FCF (o Resultado Final sin cola) → base de la ganancia viva de la distribución
     if (impData || finData) {
@@ -996,16 +1028,21 @@ export function buildPnLSedeFilas(props, isCol) {
         filas.push({ kind: "banda", label: "Impuestos" });
         for (const a of impData.byAcc) filas.push({ kind: "cuenta", label: a.name, cur: a.cur, prev: ZERO12, pol: -1 });
       }
-      const resFin = resOp.map((v, m) => (Number(v) || 0) + (finData?.total[m] || 0) - (impData?.total[m] || 0));
+      const resFin = resOpEff.map((v, m) => (Number(v) || 0) + (finData?.total[m] || 0) - (impData?.total[m] || 0));
       filas.push({ kind: "result", label: "Resultado Final", cur: resFin, prev: ZERO12, pol: 1 });
-      pushComRes();
-      pushGrupo("inv_no_op", -1);
+      // Comisión/Inversiones solo si tienen dato (España no las usa → no ensuciar). Si ambas vacías y no hay
+      // distribución (Rosedal), el Resultado Final YA es el final → no repetir una línea "Neto" idéntica.
+      const comConDato = !!provMes || !esVacio12(sub.st.com_res);
+      const invConDato = !esVacio12(sub.st.inv_no_op);
+      if (comConDato) pushComRes();
+      if (invConDato) pushGrupo("inv_no_op", -1);
       fcfArr = resFin.map((v, m) => v - (sub.st.com_res?.[m] || 0) - (sub.st.inv_no_op?.[m] || 0) - (provMes ? provMes[m] : 0));
-      filas.push({ kind: "result", label: netoLabel, cur: fcfArr, prev: ZERO12, pol: 1 });
+      if (comConDato || invConDato || distribucion)
+        filas.push({ kind: "result", label: netoLabel, cur: fcfArr, prev: ZERO12, pol: 1 });
     } else {
-      // Vista estándar (P&L Sedes): Comisión/Inversiones → Resultado Final (sin cola).
-      pushComRes();
-      pushGrupo("inv_no_op", -1);
+      // Vista estándar (P&L Sedes): Comisión/Inversiones → Resultado Final (sin cola). Bandas vacías se ocultan.
+      if (provMes || !esVacio12(sub.st.com_res)) pushComRes();
+      if (!esVacio12(sub.st.inv_no_op)) pushGrupo("inv_no_op", -1);
       filas.push({ kind: "result", label: "Resultado Final", cur: resFinalEff, prev: subPrev.resFinal, pol: 1 });
     }
 
@@ -3173,20 +3210,32 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
 
   const ccMap = useMemo(() => new Map(ccs.map(c => [ccKey(c.id), c])), [ccs]);
 
+  // El centro de ESTRUCTURA (Wellness = HQ de España) NO es una sede seleccionable: es la estructura general
+  // (lo que sería HQ en Argentina). Se saca del SELECTOR (no aparece como una sede más), pero SÍ entra en el
+  // agregado "Todas las Sedes" (sus ventas/cvar/IVA son parte del consolidado). Su OPEX se separa como línea
+  // "Estructura Wellness" (abajo de Total Gastos Operativos), y en una sede sola se prorratea por ventas.
+  const estructuraCCId = fondCfg?.estructuraCC || null;
+  const sedeCCsSel = useMemo(   // sedes SELECCIONABLES (sin el centro de estructura)
+    () => estructuraCCId ? sedeCCs.filter(c => ccKey(c.id) !== ccKey(estructuraCCId)) : sedeCCs,
+    [sedeCCs, estructuraCCId]
+  );
+
   // Sedes agrupadas por `operacion` (lo carga el usuario en nb_centros_costo). La operación es el
   // agrupador (categoría) y la sede la subcategoría → un solo filtro jerárquico. Sin `operacion` → grupo aparte.
   const OP_SIN = "__sin__";
   const gruposSede = useMemo(() => {
     const map = new Map();
-    for (const c of sedeCCs) {
+    for (const c of sedeCCsSel) {
       const key = (c.operacion ?? "").trim() || OP_SIN;
       if (!map.has(key)) map.set(key, { id: key, label: key === OP_SIN ? "Sin operación" : key, sedes: [] });
       map.get(key).sedes.push(c);
     }
     return [...map.values()];
-  }, [sedeCCs]);
+  }, [sedeCCsSel]);
 
-  // null = todas · [] = ninguna · [ids] = subconjunto. resolvedCCSede: null → todas las sedes.
+  // null = todas · [] = ninguna · [ids] = subconjunto. "Todas" (null) → todas las sedes + el centro de
+  // estructura (Wellness), para que el consolidado incluya sus ventas/cvar/IVA. Un subconjunto (elegido en
+  // el selector) NO incluye Wellness (no es seleccionable) → ahí la estructura entra prorrateada por ventas.
   const resolvedCCSede = useMemo(
     () => (selectedSedeCCs === null ? sedeCCs.map(c => c.id) : selectedSedeCCs),
     [selectedSedeCCs, sedeCCs]
@@ -3204,7 +3253,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const toggleGrupoSede = (opId) => {
     const ids = (gruposSede.find(g => g.id === opId)?.sedes ?? []).map(c => c.id);
     setSelectedSedeCCs(prev => {
-      const allIds = sedeCCs.map(c => c.id);
+      const allIds = sedeCCsSel.map(c => c.id);
       const sel = new Set(prev === null ? allIds : prev);
       const allIn = ids.every(id => sel.has(id));
       ids.forEach(id => allIn ? sel.delete(id) : sel.add(id));
@@ -3244,7 +3293,10 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       // Solo VENTAS/otros ingresos van por el lado ingreso (rutean a vta/int/ger/wre/hq). Financieros (incl.
       // Intereses Ganados), impuestos, costos y opex van por egRows → caen en su branch del motor por cuenta.
       // "Pauta" es ingreso HQ (netea con su compra vía ING_CONTRA_HQ) aunque no esté categorizada en el maestro.
-      const esIngreso = catSede === "ventas" || catSede === "otros ingresos" || catPnl === "ventas" || cuenta.toLowerCase() === "pauta";
+      // SEDE_ING_ACCTS: cuentas de ventas/interusos por definición (aunque el maestro no las tenga) → mantienen
+      // su signo natural (los interusos del histórico ya vienen neteados; sin esto el motor se los invertía).
+      const esIngreso = catSede === "ventas" || catSede === "otros ingresos" || catPnl === "ventas"
+        || cuenta.toLowerCase() === "pauta" || SEDE_ING_ACCTS.has(_nkSede(cuenta));
       const total = Number(r.total) || 0, neto = Number(r.neto) || 0;
       const row = {
         fecha: String(r.fecha || "").slice(0, 10), centro_costo: r.centro_costo || "",
@@ -3381,6 +3433,35 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     if (ccs.length === resolvedCCSede.length) return subSedeNet?.resOp || null;
     return computeSubtotalsSede(buildPnLSede(inFx, egFx, ccs, year, monedaPL, true)).resOp;
   }, [inFx, egFx, resolvedCCSede, year, monedaPL, subSedeNet]);
+  // ── Estructura Wellness (HQ España): el OPEX del centro de estructura se muestra como línea propia ──
+  // La "Estructura Wellness" es SOLO el OPEX del centro (Sueldos/Alquiler/etc. de la estructura); sus ventas
+  // y costos variables (Otros Ingresos, Fees) quedan en el consolidado. En "Todas las Sedes" el centro está
+  // en el scope → su OPEX ya viaja dentro de Total Gastos Operativos y solo se SEPARA visualmente. En una
+  // sede sola (Wellness fuera del scope), esa estructura se PRORRATEA por ventas y se suma como costo.
+  const estructuraOpexFull = useMemo(() => {   // OPEX del centro de estructura (positivo), mes a mes
+    if (!estructuraCCId) return null;
+    return computeSubtotalsSede(buildPnLSede(inFx, egFx, [estructuraCCId], year, monedaPL, sinIva)).totGastosOp;
+  }, [estructuraCCId, inFx, egFx, year, monedaPL, sinIva]);
+  const wellnessEnScope = !!estructuraCCId && resolvedCCSede.some(id => ccKey(id) === ccKey(estructuraCCId));
+  // Ventas de TODAS las sedes reales (denominador del prorrateo) — sin el centro de estructura.
+  const ventasTotalesSedes = useMemo(() => {
+    if (!estructuraCCId) return null;
+    return sumVentasSede(buildPnLSede(inFx, egFx, sedeCCsSel.map(c => c.id), year, monedaPL, sinIva));
+  }, [estructuraCCId, inFx, egFx, sedeCCsSel, year, monedaPL, sinIva]);
+  // Monto de estructura que le corresponde al SCOPE actual. Con Wellness en el scope ("Todas") = su OPEX
+  // completo (ya está adentro → la tabla lo separa). Con una sede sola = OPEX × (ventas del scope / ventas
+  // de todas las sedes); sede sin ventas → 0.
+  const estructuraCuota = useMemo(() => {
+    if (!estructuraOpexFull) return null;
+    if (wellnessEnScope) return estructuraOpexFull;
+    if (!ventasTotalesSedes) return null;
+    const ventasScope = sumVentasSede(pnlSede);
+    return MESES.map((_, m) => {
+      const den = Number(ventasTotalesSedes[m]) || 0;
+      return den ? estructuraOpexFull[m] * (Number(ventasScope[m]) || 0) / den : 0;
+    });
+  }, [estructuraOpexFull, wellnessEnScope, ventasTotalesSedes, pnlSede]);
+
   // Retiros de la cesión (cuenta "Inversores") SIEMPRE con IVA (total), independiente del toggle: el retiro es
   // el efectivo real pagado al inversor. Tomo la versión Con IVA del pnl de sede.
   const cesionRetirosCI = useMemo(() => {
@@ -3503,7 +3584,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
 
   const toggleSedeCC = (id) => {
     setSelectedSedeCCs(prev => {
-      const allIds = sedeCCs.map(c => c.id);
+      const allIds = sedeCCsSel.map(c => c.id);
       const cur = prev === null ? allIds : prev;
       const next = cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id];
       return next.length === allIds.length ? null : next;   // completo → null (todas); [] queda como "ninguna"
@@ -3555,7 +3636,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
 
   const showMonedaPL = isPnlTiempo || activeTab === "pl_bigg" || isVentasHQ;
   const showMonedaCF = activeTab === "cf";
-  const showSedes    = isSedeLike && sedeCCs.length > 0;
+  const showSedes    = isSedeLike && sedeCCsSel.length > 0;
 
   // Menú-landing: sin reporte elegido → tarjetas agrupadas por lente (Operaciones = 1 tarjeta x operación).
   if (!activeTab) return (
@@ -3603,7 +3684,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     const baseSede = {
       pnl: pnlSede, sub: subSede, pnlPrev: pnlSedePrev, subPrev: subSedePrev, year,
       nombreCuenta, cesion: cesionSede, cesionResFinal: subSedeNet?.resFinal, cesionRetiros: cesionRetirosCI,
-      comBaseResOp,
+      comBaseResOp, estructuraCuota, estructuraEnOpex: wellnessEnScope,
       impuestos: isFond ? IMPUESTOS_FOND : null, financieros: isFond ? FINANCIEROS_FOND : null,
       distribucion: activeTab === "op_rosedal" ? distribRosedalFx : null,
       retirosVivos: activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null,
@@ -3936,7 +4017,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
         <PnLTableSede pnl={pnlSede} sub={subSede} pnlPrev={pnlSedePrev} subPrev={subSedePrev}
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} nombreCuenta={nombreCuenta}
           cesion={cesionSede} cesionResFinal={subSedeNet?.resFinal} cesionRetiros={cesionRetirosCI}
-          comBaseResOp={comBaseResOp}
+          comBaseResOp={comBaseResOp} estructuraCuota={estructuraCuota} estructuraEnOpex={wellnessEnScope}
           impuestos={isFond ? IMPUESTOS_FOND : null} financieros={isFond ? FINANCIEROS_FOND : null}
           distribucion={activeTab === "op_rosedal" ? distribRosedalFx : null}
           retirosVivos={activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null}
