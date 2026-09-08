@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import { T, ESTADO_EGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn } from "./theme";
+import ConfirmModal from "./ConfirmModal";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
 import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, updateMovTesoreria, borrarPagoImputado, shortId, appendProveedor, appendCuenta, aplicarRetencionPracticada, RETDEP_TAG } from "../lib/numbersApi";
 
@@ -811,6 +812,8 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
   const [showDetalle, setShowDetalle]       = useState(null);
   const [showEditar, setShowEditar]         = useState(null);
   const [editingPago, setEditingPago]       = useState(null);
+  const [confirmDelDoc, setConfirmDelDoc]   = useState(null); // { id_comp, msg } — confirmación inline de eliminar egreso
+  const [borrando, setBorrando]             = useState(false);
   const [showCtaCte, setShowCtaCte]         = useState(null); // { proveedor, docs }
   const [showMigrar, setShowMigrar]         = useState(null); // egreso a migrar de sociedad
   const [sociedades, setSociedades]         = useState([]);
@@ -952,24 +955,31 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
     }
   };
 
-  const handleEliminar = async (id_comp) => {
+  const handleEliminar = (id_comp) => {
     const egreso = egresos.find(e => e.id === id_comp);
     // Los pagos que vinieron del motor (origen="extracto") NO se borran: se desimputan y vuelven a la
     // conciliación (no se pierde el movimiento del banco). Los manuales sí se borran. borrarPagoImputado decide.
     const delMotor = (egreso?.pagosVinculados ?? []).filter(p => p.origen === "extracto").length;
     const msg = delMotor
-      ? `¿Eliminar este egreso? Tiene ${delMotor} pago(s) conciliado(s) del banco: NO se borran, vuelven a la conciliación. El resto de pagos manuales se eliminan.`
-      : "¿Eliminar este egreso? Se eliminarán también los pagos asociados.";
-    if (!confirm(msg)) return;
+      ? `Tiene ${delMotor} pago(s) conciliado(s) del banco: NO se borran, vuelven a la conciliación. El resto de pagos manuales se eliminan.`
+      : "Se eliminarán también los pagos asociados.";
+    setConfirmDelDoc({ id_comp, msg });   // confirmación inline (ver ConfirmModal) — no window.confirm
+  };
+  const doEliminar = async () => {
+    const id_comp = confirmDelDoc?.id_comp;
+    if (!id_comp) return;
+    const egreso = egresos.find(e => e.id === id_comp);
+    setBorrando(true);
     try {
       if (egreso?.pagosVinculados?.length > 0) {
         await Promise.all(egreso.pagosVinculados.map(p => borrarPagoImputado(p)));
       }
       await deleteEgreso(id_comp);
       setEgresos(prev => prev.filter(e => e.id !== id_comp));
+      setConfirmDelDoc(null);
     } catch (e) {
       alert("Error al eliminar: " + e.message);
-    }
+    } finally { setBorrando(false); }
   };
 
   const handleMigrar = async (nuevaSociedad) => {
@@ -1059,6 +1069,8 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
         {showPago    && <AgregarPagoModal egreso={showPago} saldoPendiente={showPago.saldoPendiente ?? showPago.importe} cuentas={cuentasSoc} onClose={() => setShowPago(null)} onSave={handlePago} />}
         {showRetencion && <RegistrarRetencionPracticadaModal egreso={showRetencion} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentas={cuentas} proveedores={proveedores} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
         {editingPago && <EditarPagoModal  pago={editingPago} sociedad={sociedad} cuentasSoc={cuentasSoc} onClose={() => setEditingPago(null)} onSaved={() => { setEditingPago(null); cargarEgresos(); }} />}
+        <ConfirmModal open={!!confirmDelDoc} title="¿Eliminar este egreso?" message={confirmDelDoc?.msg}
+          confirmLabel="Sí, eliminar" busy={borrando} onConfirm={doEliminar} onCancel={() => setConfirmDelDoc(null)} />
       </>
     );
   }
@@ -1230,6 +1242,8 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
       {editingPago && <EditarPagoModal   pago={editingPago} sociedad={sociedad} cuentasSoc={cuentasSoc} onClose={() => setEditingPago(null)} onSaved={() => { setEditingPago(null); cargarEgresos(); }} />}
       {showCtaCte  && <CtaCteModal       proveedor={showCtaCte.proveedor} documentos={showCtaCte.docs} onClose={() => setShowCtaCte(null)} />}
       {showMigrar  && <MigrarSociedadModal egreso={showMigrar} sociedades={sociedades} actual={sociedad} onClose={() => setShowMigrar(null)} onConfirm={handleMigrar} />}
+      <ConfirmModal open={!!confirmDelDoc} title="¿Eliminar este egreso?" message={confirmDelDoc?.msg}
+        confirmLabel="Sí, eliminar" busy={borrando} onConfirm={doEliminar} onCancel={() => setConfirmDelDoc(null)} />
     </div>
   );
 }

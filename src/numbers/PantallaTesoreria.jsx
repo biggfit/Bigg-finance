@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, Btn, Input, Select, PageHeader, fmtDate, fmtMoney } from "./theme";
+import ConfirmModal from "./ConfirmModal";
 import {
   TIPO_CUENTA, MONEDA_SYM,
 } from "../data/tesoreriaData";
@@ -1485,6 +1486,8 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
   const [editTransfer,     setEditTransfer]     = useState(null);  // { salidaId, entradaId, initial }
   const [editTarjeta,      setEditTarjeta]      = useState(null);  // { realId, tarjetaId, initial }
   const [editingMov,       setEditingMov]       = useState(null);
+  const [confirmAcc,       setConfirmAcc]       = useState(null);  // { title, message, confirmLabel, danger, run } — confirmación inline
+  const [confirmBusy,      setConfirmBusy]      = useState(false);
   const [filtroCuenta,     setFiltroCuenta]     = useState(null);
   const [filtroRef,        setFiltroRef]        = useState(null);   // "ir al movimiento" desde el extracto interco
   const [cuentasBancarias, setCuentasBancarias] = useState([]);
@@ -1710,17 +1713,21 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
   };
 
   // ── Eliminar un movimiento ────────────────────────────────────────────────
-  const handleEliminarMov = async (mov) => {
+  // Confirmación inline (ConfirmModal) en vez de window.confirm, que Chrome puede bloquear en silencio
+  // (deja el borrado sin efecto). Se arma un { title, message, confirmLabel, danger, run } y se ejecuta
+  // desde el modal (doConfirmAcc). Igual criterio que en Egresos/Ingresos.
+  const handleEliminarMov = (mov) => {
     // Un PAGO/COBRO que vino del motor de conciliación (origen="extracto") ES la línea del banco: no se
     // borra (destruiría el movimiento real y su nro. de operación) → se desimputa y vuelve a la
-    // conciliación, dejando la factura "a pagar/cobrar". Mismo criterio que en Egresos/Ingresos.
+    // conciliación, dejando la factura "a pagar/cobrar".
     if ((mov.tipo === "PAGO" || mov.tipo === "COBRO") && mov.origen === "extracto") {
       const kind = mov.tipo === "COBRO" ? "cobro" : "pago";
-      if (!confirm(`Este ${kind} vino del extracto bancario. No se borra el movimiento del banco: se despega de la factura y vuelve a la conciliación. ¿Continuar?`)) return;
-      try {
-        await borrarPagoImputado(mov);
-        await cargarMovimientos();
-      } catch (e) { alert("Error al eliminar: " + e.message); }
+      setConfirmAcc({
+        title: `¿Quitar este ${kind} de la factura?`,
+        message: `Este ${kind} vino del extracto bancario. No se borra el movimiento del banco: se despega de la factura y vuelve a la conciliación.`,
+        confirmLabel: "Sí, quitar",
+        run: async () => { await borrarPagoImputado(mov); await cargarMovimientos(); },
+      });
       return;
     }
     // Transferencia/interco/cambio = PAR de patas con el mismo documento_id. Hay que borrar AMBAS,
@@ -1731,27 +1738,41 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
       ? patasDelPar(mov, movimientos)   // por documento_id O stem del id (tolera par roto)
       : [mov];
     const extra = patas.length > 1 ? ` y su contrapartida (${patas.length} movimientos)` : "";
-    if (!confirm(`¿Eliminar movimiento "${mov.concepto ?? mov.id}"${extra}?`)) return;
-    try {
-      await Promise.all(patas.map(m => deleteMovTesoreria(m.id)));
-      const ids = new Set(patas.map(m => m.id));
-      setMovimientos(prev => prev.filter(m => !ids.has(m.id)));
-    } catch (e) {
-      alert("Error al eliminar: " + e.message);
-    }
+    setConfirmAcc({
+      title: "¿Eliminar movimiento?",
+      message: `"${mov.concepto ?? mov.id}"${extra}.`,
+      confirmLabel: "Sí, eliminar",
+      run: async () => {
+        await Promise.all(patas.map(m => deleteMovTesoreria(m.id)));
+        const ids = new Set(patas.map(m => m.id));
+        setMovimientos(prev => prev.filter(m => !ids.has(m.id)));
+      },
+    });
   };
 
   // ── Ignorar una línea de extracto (no contabilizar) ───────────────────────
   // Solo para líneas crudas del banco todavía sin conciliar: NO se borran (se recrean al re-subir)
   // → soft-mark documento_id="IGN-", sale del ledger pero sobrevive el dedup. Reversible en Conciliación.
-  const handleIgnorarMov = async (mov) => {
-    if (!confirm(`¿Ignorar "${mov.concepto ?? mov.id}" (${fmtSaldo(Number(mov.monto) || 0, mov.moneda)})?\nSale del listado pero no se borra; podés restaurarla desde Conciliación.`)) return;
-    try {
-      await ignorarMovimiento(mov);
-      setMovimientos(prev => prev.map(m => m.id === mov.id ? { ...m, documento_id: "IGN-" + mov.id } : m));
-    } catch (e) {
-      alert("Error al ignorar: " + (e?.message || e));
-    }
+  const handleIgnorarMov = (mov) => {
+    setConfirmAcc({
+      title: "¿Ignorar esta línea?",
+      message: `"${mov.concepto ?? mov.id}" (${fmtSaldo(Number(mov.monto) || 0, mov.moneda)}).\nSale del listado pero no se borra; podés restaurarla desde Conciliación.`,
+      confirmLabel: "Sí, ignorar",
+      danger: false,
+      run: async () => {
+        await ignorarMovimiento(mov);
+        setMovimientos(prev => prev.map(m => m.id === mov.id ? { ...m, documento_id: "IGN-" + mov.id } : m));
+      },
+    });
+  };
+
+  // Ejecuta la acción del ConfirmModal (eliminar / desimputar / ignorar). Un solo lugar con busy + error.
+  const doConfirmAcc = async () => {
+    if (!confirmAcc?.run) return;
+    setConfirmBusy(true);
+    try { await confirmAcc.run(); setConfirmAcc(null); }
+    catch (e) { alert("Error: " + (e?.message || e)); }
+    finally { setConfirmBusy(false); }
   };
 
   // ── Al clickear una cuenta en Saldos → ir a Movimientos filtrado ──────────
@@ -2036,6 +2057,9 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
           onSave={handleEditarMovManual}
         />
       )}
+      <ConfirmModal open={!!confirmAcc} title={confirmAcc?.title} message={confirmAcc?.message}
+        confirmLabel={confirmAcc?.confirmLabel ?? "Sí"} danger={confirmAcc?.danger ?? true}
+        busy={confirmBusy} onConfirm={doConfirmAcc} onCancel={() => setConfirmAcc(null)} />
     </div>
   );
 }
