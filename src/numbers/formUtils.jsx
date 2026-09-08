@@ -572,6 +572,7 @@ export function InvoiceLineasTable({
   updLinea,
   delLinea,
   addLinea,
+  headerLeft,   // nodo opcional a la IZQUIERDA de "Subtotal" (ej. selector de Moneda). null → label "Centro de costo".
 }) {
   const cur = moneySym(moneda);
   return (
@@ -588,7 +589,15 @@ export function InvoiceLineasTable({
             fontSize: 11, fontWeight: 700, color: T.tableHeadText,
             letterSpacing: ".04em",
             textAlign: i >= 1 && i <= 3 ? "right" : "left",
-          }}>{h}</div>
+            ...(i === 0 && headerLeft ? { display: "flex", gap: 6, alignItems: "center" } : {}),
+          }}>
+            {i === 0 && headerLeft ? (
+              <>
+                <span style={{ flex: 1, minWidth: 0 }}>{h}</span>
+                <span style={{ width: 96, textAlign: "center" }}>Moneda</span>
+              </>
+            ) : h}
+          </div>
         ))}
       </div>
 
@@ -604,13 +613,17 @@ export function InvoiceLineasTable({
             background: idx % 2 === 0 ? "#fff" : "#fafbfc",
             transition: "background .12s ease",
           }}>
-            <select value={l.cc} onChange={e => updLinea(l.id, "cc", e.target.value)}
-              title={sub > 0 && !l.cc ? "Falta el centro de costo (obligatorio)" : ""}
-              style={{ ...inputStyle, padding: "6px 8px", fontSize: 12,
-                ...(sub > 0 && !l.cc ? { border: "1px solid #fb923c", background: "#fff7ed" } : {}) }}>
-              <option value="">— Centro de Costo —</option>
-              <CCSelectOptions ccGroups={ccGroups} />
-            </select>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", minWidth: 0 }}>
+              <select value={l.cc} onChange={e => updLinea(l.id, "cc", e.target.value)}
+                title={sub > 0 && !l.cc ? "Falta el centro de costo (obligatorio)" : ""}
+                style={{ ...inputStyle, flex: 1, minWidth: 0, padding: "6px 8px", fontSize: 12,
+                  ...(sub > 0 && !l.cc ? { border: "1px solid #fb923c", background: "#fff7ed" } : {}) }}>
+                <option value="">— Centro de Costo —</option>
+                <CCSelectOptions ccGroups={ccGroups} />
+              </select>
+              {/* Moneda de la factura: inline a la derecha del Centro de costo, solo en la 1ª línea. */}
+              {idx === 0 && headerLeft}
+            </div>
             <input type="number" value={l.subtotal}
               onChange={e => updLinea(l.id, "subtotal", e.target.value)}
               placeholder="0,00"
@@ -672,6 +685,7 @@ export function InvoiceLineasTable({
           + Agregar línea
         </button>
       </div>
+
     </div>
   );
 }

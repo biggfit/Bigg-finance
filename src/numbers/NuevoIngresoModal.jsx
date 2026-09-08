@@ -43,6 +43,10 @@ export default function NuevoIngresoModal({ onClose, onSave, sociedad, clientes 
   const [cuentaId, setCuentaId] = useState(initCuentaId);
   const [moneda, setMoneda] = useState(initialData?.moneda ?? monedaDeSociedad(sociedad));
   const [fecha, setFecha] = useState(initialData?.fecha ?? todayISO());
+  // Fecha fiscal = fecha que rige el período de IVA (distinta del devengo del P&L). Default = fecha; sigue a
+  // la fecha de emisión hasta que el usuario la edite a mano (fechaFiscalTouched).
+  const [fechaFiscal, setFechaFiscal] = useState(initialData?.fechaFiscal ?? initialData?.fecha_fiscal ?? initialData?.fecha ?? todayISO());
+  const [fechaFiscalTouched, setFechaFiscalTouched] = useState(false);
   const [vto, setVto] = useState(initialData?.vto ?? addDays(todayISO(), 30));
   const [nroComp, setNroComp] = useState(initialData?.nroComp ?? "");
   const nroMask = useNroCompMask(nroComp, setNroComp);
@@ -91,6 +95,7 @@ export default function NuevoIngresoModal({ onClose, onSave, sociedad, clientes 
       moneda,
       importe: totalFinal,
       fecha: fecha.split("-").reverse().join("/"),
+      fechaFiscal: (fechaFiscal || fecha).split("-").reverse().join("/"),
       vto: vto.split("-").reverse().join("/"),
       nroComp,
       nota,
@@ -134,7 +139,9 @@ export default function NuevoIngresoModal({ onClose, onSave, sociedad, clientes 
           onCrearCuenta={onCrearCuenta ? () => setCrearCuentaOpen(true) : undefined}
         />
         <SoftField label="Fecha de emisión" required>
-          <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={dateStyle} />
+          <input type="date" value={fecha}
+            onChange={e => { const v = e.target.value; setFecha(v); if (!fechaFiscalTouched) setFechaFiscal(v); }}
+            style={dateStyle} />
         </SoftField>
         <SoftField label="Vencimiento de cobro">
           <input type="date" value={vto} onChange={e => setVto(e.target.value)} style={dateStyle} />
@@ -144,15 +151,12 @@ export default function NuevoIngresoModal({ onClose, onSave, sociedad, clientes 
             </div>
           )}
         </SoftField>
-        <SoftField label="Moneda">
-          <select value={moneda} onChange={e => setMoneda(e.target.value)} style={inputStyle}>
-            {MONEDA_OPTS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-          </select>
-          {moneda !== monedaSoc && (
-            <div style={{ fontSize: 11, color: "#b45309", marginTop: 4, lineHeight: 1.35 }}>
-              ⚠ La sociedad opera en {monedaSoc}. En {moneda} esta factura no entra en su P&amp;L.
-            </div>
-          )}
+        <SoftField label="Fecha fiscal">
+          <input type="date" value={fechaFiscal}
+            onChange={e => { setFechaFiscal(e.target.value); setFechaFiscalTouched(true); }} style={dateStyle} />
+          <div style={{ fontSize: 11, color: T.blue, marginTop: 4, lineHeight: 1.35 }}>
+            Período de IVA · default = fecha de emisión
+          </div>
         </SoftField>
         <SoftField label="N° comprobante">
           <input ref={nroMask.ref} value={nroComp} onChange={nroMask.onChange}
@@ -178,7 +182,18 @@ export default function NuevoIngresoModal({ onClose, onSave, sociedad, clientes 
         updLinea={updLinea}
         delLinea={delLinea}
         addLinea={addLinea}
+        headerLeft={
+          <select value={moneda} onChange={e => setMoneda(e.target.value)} title="Moneda de la factura"
+            style={{ ...inputStyle, width: 96, padding: "6px 8px", fontSize: 12 }}>
+            {MONEDA_OPTS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+          </select>
+        }
       />
+      {moneda !== monedaSoc && (
+        <div style={{ fontSize: 11, color: "#b45309", marginTop: -10, marginBottom: 14, lineHeight: 1.35 }}>
+          ⚠ La sociedad opera en {monedaSoc}. En {moneda} esta factura no entra en su P&amp;L.
+        </div>
+      )}
 
       <InvoiceNotaYTotales
         nota={nota}

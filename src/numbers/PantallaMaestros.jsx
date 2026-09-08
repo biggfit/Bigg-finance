@@ -126,9 +126,9 @@ export function ProveedorModal({ initial, onClose, onSave, cuentas = [], centros
                 placeholder="ACME SRL" style={MODAL_INP} />
             </ModalField>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-              <ModalField label="CUIT / DNI">
+              <ModalField label="CUIT / DNI / NIF">
                 <input value={form.cuit ?? ""} onChange={e=>set("cuit",e.target.value)}
-                  placeholder="30-00000000-0" style={MODAL_INP} />
+                  placeholder="30-00000000-0 · B12345678" style={MODAL_INP} />
               </ModalField>
               <ModalField label="Condición IVA">
                 <select value={form.condIVA ?? ""} onChange={e=>set("condIVA",e.target.value)} style={MODAL_INP}>
@@ -251,9 +251,9 @@ export function ClienteModal({ initial, onClose, onSave, cuentas = [], centrosCo
                 placeholder="Empresa SA" style={MODAL_INP} />
             </ModalField>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-              <ModalField label="CUIT / DNI">
+              <ModalField label="CUIT / DNI / NIF">
                 <input value={form.cuit ?? ""} onChange={e=>set("cuit",e.target.value)}
-                  placeholder="30-00000000-0" style={MODAL_INP} />
+                  placeholder="30-00000000-0 · B12345678" style={MODAL_INP} />
               </ModalField>
               <ModalField label="Condición IVA">
                 <select value={form.condIVA ?? ""} onChange={e=>set("condIVA",e.target.value)} style={MODAL_INP}>
