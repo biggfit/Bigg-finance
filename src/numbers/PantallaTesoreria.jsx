@@ -1289,16 +1289,35 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
 
   const cuentaNombre = filtroCuenta ? (cuentaMap[filtroCuenta] ?? filtroCuenta) : null;
 
-  // Búsqueda por Concepto o Cuenta contable (no toca `sorted`: ese sigue en orden cronológico real,
-  // que es lo que necesita saldoByRow — la búsqueda/orden de abajo son solo de visualización).
+  // Filtros de visualización (búsqueda, rango de fechas, signo, rango de importe). NO tocan `sorted`:
+  // ese sigue en orden cronológico real, que es lo que necesita saldoByRow — filtro/orden son solo visual.
   const [busqueda, setBusqueda] = useState("");
+  const [fDesde,   setFDesde]   = useState("");   // fecha desde (YYYY-MM-DD, comparación lexicográfica ISO)
+  const [fHasta,   setFHasta]   = useState("");   // fecha hasta
+  const [signo,    setSigno]    = useState("todos");   // "todos" | "pos" (ingresos) | "neg" (egresos)
+  const [montoMin, setMontoMin] = useState("");   // filtra por |importe| ≥ min
+  const [montoMax, setMontoMax] = useState("");   // filtra por |importe| ≤ max
+  const hayFiltros = busqueda || fDesde || fHasta || signo !== "todos" || montoMin || montoMax;
+  const limpiarFiltros = () => { setBusqueda(""); setFDesde(""); setFHasta(""); setSigno("todos"); setMontoMin(""); setMontoMax(""); };
   const buscado = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
-    if (!q) return sorted;
-    return sorted.filter(m =>
-      (m.concepto ?? "").toLowerCase().includes(q) ||
-      String(m.cuenta_contable || m.cuenta || "").replace(/^CUENTA_/, "").toLowerCase().includes(q));
-  }, [sorted, busqueda]);
+    const min = montoMin !== "" ? Number(montoMin) : null;
+    const max = montoMax !== "" ? Number(montoMax) : null;
+    return sorted.filter(m => {
+      if (q && !((m.concepto ?? "").toLowerCase().includes(q) ||
+          String(m.cuenta_contable || m.cuenta || "").replace(/^CUENTA_/, "").toLowerCase().includes(q))) return false;
+      const f = m.fecha ?? "";
+      if (fDesde && f < fDesde) return false;
+      if (fHasta && f > fHasta) return false;
+      const monto = Number(m.monto) || 0;
+      if (signo === "pos" && monto < 0) return false;
+      if (signo === "neg" && monto >= 0) return false;
+      const abs = Math.abs(monto);
+      if (min != null && abs < min) return false;
+      if (max != null && abs > max) return false;
+      return true;
+    });
+  }, [sorted, busqueda, fDesde, fHasta, signo, montoMin, montoMax]);
 
   // Orden de columnas: clickeás un header para ordenar por esa columna (asc/desc). Por defecto,
   // fecha descendente (igual que antes). Accede al valor comparable de cada columna por fila.
@@ -1336,7 +1355,7 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
   // Paginado: la tabla puede tener cientos/miles de filas y sin límite el scroll se vuelve interminable.
   const [pageSize, setPageSize] = useState(50);
   const [page, setPage] = useState(0);
-  useEffect(() => { setPage(0); }, [filtroCuenta, filtroRef, pageSize, busqueda, sortKey, sortDir]);
+  useEffect(() => { setPage(0); }, [filtroCuenta, filtroRef, pageSize, busqueda, fDesde, fHasta, signo, montoMin, montoMax, sortKey, sortDir]);
   const totalPages = Math.max(1, Math.ceil(ordenado.length / pageSize));
   const pageClamped = Math.min(page, totalPages - 1);
   const desde = pageClamped * pageSize;
@@ -1405,6 +1424,43 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
         </div>
       </div>
 
+      {/* Fila de filtros: rango de fechas + signo/importe (visual, no afecta el saldo corriente) */}
+      <div style={{ display:"flex", alignItems:"center", gap:14, flexWrap:"wrap", marginBottom:12 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+          <span style={{ fontSize:11, color:T.muted, fontWeight:700, textTransform:"uppercase", letterSpacing:".06em" }}>Fecha</span>
+          <input type="date" value={fDesde} onChange={e => setFDesde(e.target.value)} style={{
+            fontSize:12, color:T.text, background:T.card, border:`1px solid ${T.cardBorder}`,
+            borderRadius:6, padding:"4px 8px", fontFamily:T.font }} />
+          <span style={{ fontSize:11, color:T.muted }}>a</span>
+          <input type="date" value={fHasta} onChange={e => setFHasta(e.target.value)} style={{
+            fontSize:12, color:T.text, background:T.card, border:`1px solid ${T.cardBorder}`,
+            borderRadius:6, padding:"4px 8px", fontFamily:T.font }} />
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+          <span style={{ fontSize:11, color:T.muted, fontWeight:700, textTransform:"uppercase", letterSpacing:".06em" }}>Importe</span>
+          <select value={signo} onChange={e => setSigno(e.target.value)} style={{
+            fontSize:12, color:T.text, background:T.card, border:`1px solid ${T.cardBorder}`,
+            borderRadius:6, padding:"4px 8px", cursor:"pointer", fontFamily:T.font }}>
+            <option value="todos">Todos</option>
+            <option value="pos">Ingresos (+)</option>
+            <option value="neg">Egresos (−)</option>
+          </select>
+          <input type="number" value={montoMin} onChange={e => setMontoMin(e.target.value)} placeholder="mín" style={{
+            fontSize:12, color:T.text, background:T.card, border:`1px solid ${T.cardBorder}`,
+            borderRadius:6, padding:"4px 8px", fontFamily:T.font, width:90 }} />
+          <span style={{ fontSize:11, color:T.muted }}>a</span>
+          <input type="number" value={montoMax} onChange={e => setMontoMax(e.target.value)} placeholder="máx" style={{
+            fontSize:12, color:T.text, background:T.card, border:`1px solid ${T.cardBorder}`,
+            borderRadius:6, padding:"4px 8px", fontFamily:T.font, width:90 }} />
+        </div>
+        {hayFiltros && (
+          <button onClick={limpiarFiltros} style={{
+            fontSize:11, color:T.muted, background:"#f3f4f6", border:`1px solid ${T.cardBorder}`,
+            borderRadius:6, padding:"4px 12px", cursor:"pointer", fontFamily:T.font, fontWeight:700 }}>✕ Limpiar filtros</button>
+        )}
+        <span style={{ fontSize:11, color:T.muted, marginLeft:"auto" }}>{ordenado.length} de {sorted.length}</span>
+      </div>
+
       <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`,
         borderRadius:T.radius, boxShadow:T.shadow, overflow:"hidden" }}>
         <div style={{ overflowX:"auto" }}>
@@ -1428,7 +1484,7 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
           <tbody>
             {ordenado.length === 0 && (
               <tr><td colSpan={11} style={{ padding:"32px 14px", textAlign:"center", color:T.dim, fontSize:13 }}>
-                Sin resultados para "{busqueda}"
+                Sin resultados con los filtros aplicados
               </td></tr>
             )}
             {visible.map((m, i) => {
