@@ -1289,16 +1289,21 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
 
   const cuentaNombre = filtroCuenta ? (cuentaMap[filtroCuenta] ?? filtroCuenta) : null;
 
-  // Filtros de visualización (búsqueda, rango de fechas, signo, rango de importe). NO tocan `sorted`:
-  // ese sigue en orden cronológico real, que es lo que necesita saldoByRow — filtro/orden son solo visual.
+  // Filtros de visualización. NO tocan `sorted` (ese sigue en orden cronológico real, que es lo que
+  // necesita saldoByRow). El rango de FECHAS lo aplica el padre (movsHastaFecha → prop `movimientos`);
+  // acá quedan la búsqueda y el filtro de la columna Importe (signo + rango), estilo Excel.
   const [busqueda, setBusqueda] = useState("");
-  const [fDesde,   setFDesde]   = useState("");   // fecha desde (YYYY-MM-DD, comparación lexicográfica ISO)
-  const [fHasta,   setFHasta]   = useState("");   // fecha hasta
   const [signo,    setSigno]    = useState("todos");   // "todos" | "pos" (ingresos) | "neg" (egresos)
   const [montoMin, setMontoMin] = useState("");   // filtra por |importe| ≥ min
   const [montoMax, setMontoMax] = useState("");   // filtra por |importe| ≤ max
-  const hayFiltros = busqueda || fDesde || fHasta || signo !== "todos" || montoMin || montoMax;
-  const limpiarFiltros = () => { setBusqueda(""); setFDesde(""); setFHasta(""); setSigno("todos"); setMontoMin(""); setMontoMax(""); };
+  const [importeMenu, setImporteMenu] = useState(false);   // popover de la columna Importe (orden + filtro)
+  const importeFiltrado = signo !== "todos" || montoMin !== "" || montoMax !== "";
+  const limpiarImporte = () => { setSigno("todos"); setMontoMin(""); setMontoMax(""); };
+  const inpStyle = { fontSize:12, color:T.text, background:T.card, border:`1px solid ${T.cardBorder}`,
+    borderRadius:6, padding:"5px 8px", fontFamily:T.font, boxSizing:"border-box" };
+  const ordBtnStyle = (on) => ({ flex:1, fontSize:11, fontWeight:700, cursor:"pointer", fontFamily:T.font,
+    borderRadius:6, padding:"6px 8px", border:`1px solid ${on ? T.accentDark : T.cardBorder}`,
+    background: on ? T.accentDark : "#eceff3", color: on ? T.accent : T.muted });
   const buscado = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
     const min = montoMin !== "" ? Number(montoMin) : null;
@@ -1306,9 +1311,6 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
     return sorted.filter(m => {
       if (q && !((m.concepto ?? "").toLowerCase().includes(q) ||
           String(m.cuenta_contable || m.cuenta || "").replace(/^CUENTA_/, "").toLowerCase().includes(q))) return false;
-      const f = m.fecha ?? "";
-      if (fDesde && f < fDesde) return false;
-      if (fHasta && f > fHasta) return false;
       const monto = Number(m.monto) || 0;
       if (signo === "pos" && monto < 0) return false;
       if (signo === "neg" && monto >= 0) return false;
@@ -1317,7 +1319,7 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
       if (max != null && abs > max) return false;
       return true;
     });
-  }, [sorted, busqueda, fDesde, fHasta, signo, montoMin, montoMax]);
+  }, [sorted, busqueda, signo, montoMin, montoMax]);
 
   // Orden de columnas: clickeás un header para ordenar por esa columna (asc/desc). Por defecto,
   // fecha descendente (igual que antes). Accede al valor comparable de cada columna por fila.
@@ -1355,7 +1357,7 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
   // Paginado: la tabla puede tener cientos/miles de filas y sin límite el scroll se vuelve interminable.
   const [pageSize, setPageSize] = useState(50);
   const [page, setPage] = useState(0);
-  useEffect(() => { setPage(0); }, [filtroCuenta, filtroRef, pageSize, busqueda, fDesde, fHasta, signo, montoMin, montoMax, sortKey, sortDir]);
+  useEffect(() => { setPage(0); }, [filtroCuenta, filtroRef, pageSize, busqueda, signo, montoMin, montoMax, sortKey, sortDir]);
   const totalPages = Math.max(1, Math.ceil(ordenado.length / pageSize));
   const pageClamped = Math.min(page, totalPages - 1);
   const desde = pageClamped * pageSize;
@@ -1424,43 +1426,6 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
         </div>
       </div>
 
-      {/* Fila de filtros: rango de fechas + signo/importe (visual, no afecta el saldo corriente) */}
-      <div style={{ display:"flex", alignItems:"center", gap:14, flexWrap:"wrap", marginBottom:12 }}>
-        <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-          <span style={{ fontSize:11, color:T.muted, fontWeight:700, textTransform:"uppercase", letterSpacing:".06em" }}>Fecha</span>
-          <input type="date" value={fDesde} onChange={e => setFDesde(e.target.value)} style={{
-            fontSize:12, color:T.text, background:T.card, border:`1px solid ${T.cardBorder}`,
-            borderRadius:6, padding:"4px 8px", fontFamily:T.font }} />
-          <span style={{ fontSize:11, color:T.muted }}>a</span>
-          <input type="date" value={fHasta} onChange={e => setFHasta(e.target.value)} style={{
-            fontSize:12, color:T.text, background:T.card, border:`1px solid ${T.cardBorder}`,
-            borderRadius:6, padding:"4px 8px", fontFamily:T.font }} />
-        </div>
-        <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-          <span style={{ fontSize:11, color:T.muted, fontWeight:700, textTransform:"uppercase", letterSpacing:".06em" }}>Importe</span>
-          <select value={signo} onChange={e => setSigno(e.target.value)} style={{
-            fontSize:12, color:T.text, background:T.card, border:`1px solid ${T.cardBorder}`,
-            borderRadius:6, padding:"4px 8px", cursor:"pointer", fontFamily:T.font }}>
-            <option value="todos">Todos</option>
-            <option value="pos">Ingresos (+)</option>
-            <option value="neg">Egresos (−)</option>
-          </select>
-          <input type="number" value={montoMin} onChange={e => setMontoMin(e.target.value)} placeholder="mín" style={{
-            fontSize:12, color:T.text, background:T.card, border:`1px solid ${T.cardBorder}`,
-            borderRadius:6, padding:"4px 8px", fontFamily:T.font, width:90 }} />
-          <span style={{ fontSize:11, color:T.muted }}>a</span>
-          <input type="number" value={montoMax} onChange={e => setMontoMax(e.target.value)} placeholder="máx" style={{
-            fontSize:12, color:T.text, background:T.card, border:`1px solid ${T.cardBorder}`,
-            borderRadius:6, padding:"4px 8px", fontFamily:T.font, width:90 }} />
-        </div>
-        {hayFiltros && (
-          <button onClick={limpiarFiltros} style={{
-            fontSize:11, color:T.muted, background:"#f3f4f6", border:`1px solid ${T.cardBorder}`,
-            borderRadius:6, padding:"4px 12px", cursor:"pointer", fontFamily:T.font, fontWeight:700 }}>✕ Limpiar filtros</button>
-        )}
-        <span style={{ fontSize:11, color:T.muted, marginLeft:"auto" }}>{ordenado.length} de {sorted.length}</span>
-      </div>
-
       <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`,
         borderRadius:T.radius, boxShadow:T.shadow, overflow:"hidden" }}>
         <div style={{ overflowX:"auto" }}>
@@ -1472,7 +1437,54 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
                 ["Tipo", "tipo"], ["Fecha", "fecha"], ["Cuenta", "cuenta"], ["Concepto", "concepto"],
                 ["Cta. Contable", "ctaCont"], ["C. Costo", "centro"], ["Moneda", "moneda"],
                 ["Importe", "importe"], ["Saldo", "saldo"], ["Registró", "registro"],
-              ].map(([h, key]) => (
+              ].map(([h, key]) => key === "importe" ? (
+                // Columna Importe: header estilo Excel — click abre un menú con orden (▲▼) y filtro (signo + rango).
+                <th key={h} style={{ position:"relative", padding:"10px 14px", fontSize:11, fontWeight:700,
+                  letterSpacing:".08em", textTransform:"uppercase", color:T.tableHeadText, whiteSpace:"nowrap", textAlign:"right" }}>
+                  <button onClick={() => setImporteMenu(o => !o)} title="Ordenar y filtrar" style={{
+                    background:"transparent", border:"none", cursor:"pointer", color:"inherit", fontFamily:T.font,
+                    fontSize:11, fontWeight:700, letterSpacing:".08em", textTransform:"uppercase",
+                    display:"inline-flex", alignItems:"center", gap:4 }}>
+                    {h}
+                    {sortKey === "importe" && (sortDir === "asc" ? " ▲" : " ▼")}
+                    <span style={{ color: importeFiltrado ? T.accentDark : T.tableHeadText, fontWeight:900,
+                      opacity: importeFiltrado ? 1 : .55 }}>▾</span>
+                  </button>
+                  {importeMenu && (
+                    <>
+                      <div onClick={() => setImporteMenu(false)} style={{ position:"fixed", inset:0, zIndex:60 }} />
+                      <div style={{ position:"absolute", right:8, top:"100%", marginTop:4, zIndex:61, background:T.card,
+                        border:`1px solid ${T.cardBorder}`, borderRadius:8, boxShadow:"0 10px 30px rgba(0,0,0,.18)",
+                        padding:12, width:236, textAlign:"left", textTransform:"none", letterSpacing:"normal", cursor:"default" }}>
+                        <div style={{ fontSize:10, fontWeight:800, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:6 }}>Ordenar</div>
+                        <div style={{ display:"flex", gap:6, marginBottom:12 }}>
+                          <button onClick={() => { setSortKey("importe"); setSortDir("asc"); }} style={ordBtnStyle(sortKey==="importe" && sortDir==="asc")}>▲ Menor</button>
+                          <button onClick={() => { setSortKey("importe"); setSortDir("desc"); }} style={ordBtnStyle(sortKey==="importe" && sortDir==="desc")}>▼ Mayor</button>
+                        </div>
+                        <div style={{ fontSize:10, fontWeight:800, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:6 }}>Mostrar</div>
+                        <select value={signo} onChange={e => setSigno(e.target.value)} style={{ ...inpStyle, width:"100%", cursor:"pointer", marginBottom:12 }}>
+                          <option value="todos">Todos</option>
+                          <option value="pos">Ingresos (+)</option>
+                          <option value="neg">Egresos (−)</option>
+                        </select>
+                        <div style={{ fontSize:10, fontWeight:800, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:6 }}>Importe (valor absoluto)</div>
+                        <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:12 }}>
+                          <input type="number" value={montoMin} onChange={e => setMontoMin(e.target.value)} placeholder="mín" style={{ ...inpStyle, width:"50%" }} />
+                          <span style={{ fontSize:11, color:T.muted }}>a</span>
+                          <input type="number" value={montoMax} onChange={e => setMontoMax(e.target.value)} placeholder="máx" style={{ ...inpStyle, width:"50%" }} />
+                        </div>
+                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                          <button onClick={limpiarImporte} disabled={!importeFiltrado} style={{ fontSize:11, fontWeight:700,
+                            cursor: importeFiltrado ? "pointer" : "default", fontFamily:T.font, borderRadius:6, padding:"5px 12px",
+                            border:`1px solid ${T.cardBorder}`, background:"#f3f4f6", color: importeFiltrado ? T.muted : T.dim }}>Limpiar</button>
+                          <button onClick={() => setImporteMenu(false)} style={{ fontSize:11, fontWeight:700, cursor:"pointer",
+                            fontFamily:T.font, borderRadius:6, padding:"5px 14px", border:"none", background:T.accentDark, color:T.accent }}>Listo</button>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </th>
+              ) : (
                 <th key={h} onClick={() => toggleSort(key)} title="Ordenar" style={{ padding:"10px 14px", fontSize:11, fontWeight:700,
                   letterSpacing:".08em", textTransform:"uppercase", color:T.tableHeadText, cursor:"pointer", userSelect:"none",
                   whiteSpace:"nowrap", textAlign: (h === "Importe" || h === "Saldo") ? "right" : "left" }}>
@@ -1599,7 +1611,8 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
   const [error,         setError]         = useState(null);
   const [activeTab,        setActiveTab]        = useState("saldos");
   const [filtroMoneda,     setFiltroMoneda]     = useState("ALL");
-  const [fechaCorte,       setFechaCorte]       = useState("");
+  const [fechaCorte,       setFechaCorte]       = useState("");   // "Hasta" del rango / "Al día" en Saldos (recorta ledger y saldo al día)
+  const [fechaDesde,       setFechaDesde]       = useState("");   // "Desde" del rango — solo afecta el ledger de Movimientos (no el saldo al día)
   const [drillDownItem,    setDrillDownItem]    = useState(null);
   const [showMovModal,     setShowMovModal]     = useState(false);
   const [showNuevoMov,     setShowNuevoMov]     = useState(false);
@@ -1725,11 +1738,19 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
       intercoData, sociedadesMap]
   );
 
-  // El filtro "Al día" (fechaCorte) recorta también el ledger de Movimientos, no solo los Saldos.
-  // Mismo criterio que derivarSaldos: (m.fecha ?? "") <= corte.
+  // El rango de fechas recorta el ledger de Movimientos. La cota superior (fechaCorte) es además el
+  // "Al día" que usa derivarSaldos para el saldo al día (mismo criterio: (m.fecha ?? "") <= corte).
+  // La cota inferior (fechaDesde) es solo para el ledger de Movimientos → NO afecta el saldo al día.
   const movsHastaFecha = useMemo(
-    () => fechaCorte ? movimientos.filter(m => (m.fecha ?? "") <= fechaCorte) : movimientos,
-    [movimientos, fechaCorte]
+    () => (fechaCorte || fechaDesde)
+      ? movimientos.filter(m => {
+          const f = m.fecha ?? "";
+          if (fechaDesde && f < fechaDesde) return false;
+          if (fechaCorte && f > fechaCorte) return false;
+          return true;
+        })
+      : movimientos,
+    [movimientos, fechaCorte, fechaDesde]
   );
 
   const monedas = useMemo(() => [...new Set(cuentas.map(c => c.moneda))], [cuentas]);
@@ -2024,31 +2045,52 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
 
         <div style={{ width: 1, height: 24, background: T.cardBorder, flexShrink: 0 }} />
 
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase",
-            letterSpacing: ".08em" }}>Al día</span>
-          <button type="button" onClick={() => { datePickerRef.current?.showPicker?.(); datePickerRef.current?.click(); }}
-            style={{
-              border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "6px 12px",
-              fontSize: 12, fontFamily: T.font, background: "#eceff3",
-              color: fechaCorte ? T.text : T.dim, cursor: "pointer", whiteSpace: "nowrap",
-              display: "inline-flex", alignItems: "center", gap: 6,
-              minWidth: 124, justifyContent: "center", fontWeight: 600,
-            }}>
-            <span style={{ opacity: 0.75 }} aria-hidden>📅</span>
-            {fechaCorte ? fmtDate(fechaCorte) : "Elegir fecha"}
-          </button>
-          <input ref={datePickerRef} type="date" value={fechaCorte}
-            onChange={e => setFechaCorte(e.target.value)}
-            style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 0, height: 0 }} />
-          {fechaCorte && (
-            <button type="button" onClick={() => setFechaCorte("")} title="Quitar fecha"
+        {activeTab === "movimientos" ? (
+          // En Movimientos: rango Desde/Hasta (Hasta = fechaCorte, comparte el "al día"; Desde solo recorta el ledger).
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase",
+              letterSpacing: ".08em" }}>Período</span>
+            <input type="date" value={fechaDesde} max={fechaCorte || undefined} onChange={e => setFechaDesde(e.target.value)}
+              style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "5px 10px",
+                fontSize: 12, fontFamily: T.font, background: "#eceff3", color: T.text }} />
+            <span style={{ fontSize: 11, color: T.muted }}>a</span>
+            <input type="date" value={fechaCorte} min={fechaDesde || undefined} onChange={e => setFechaCorte(e.target.value)}
+              style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "5px 10px",
+                fontSize: 12, fontFamily: T.font, background: "#eceff3", color: T.text }} />
+            {(fechaDesde || fechaCorte) && (
+              <button type="button" onClick={() => { setFechaDesde(""); setFechaCorte(""); }} title="Quitar rango"
+                style={{ background: "transparent", border: "none", color: T.muted,
+                  fontSize: 16, cursor: "pointer", lineHeight: 1, padding: 4 }}>✕</button>
+            )}
+          </div>
+        ) : (
+          // En Saldos: fecha única "Al día" (saldo a esa fecha) — sin cambios.
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase",
+              letterSpacing: ".08em" }}>Al día</span>
+            <button type="button" onClick={() => { datePickerRef.current?.showPicker?.(); datePickerRef.current?.click(); }}
               style={{
-                background: "transparent", border: "none", color: T.muted,
-                fontSize: 16, cursor: "pointer", lineHeight: 1, padding: 4,
-              }}>✕</button>
-          )}
-        </div>
+                border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "6px 12px",
+                fontSize: 12, fontFamily: T.font, background: "#eceff3",
+                color: fechaCorte ? T.text : T.dim, cursor: "pointer", whiteSpace: "nowrap",
+                display: "inline-flex", alignItems: "center", gap: 6,
+                minWidth: 124, justifyContent: "center", fontWeight: 600,
+              }}>
+              <span style={{ opacity: 0.75 }} aria-hidden>📅</span>
+              {fechaCorte ? fmtDate(fechaCorte) : "Elegir fecha"}
+            </button>
+            <input ref={datePickerRef} type="date" value={fechaCorte}
+              onChange={e => setFechaCorte(e.target.value)}
+              style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 0, height: 0 }} />
+            {fechaCorte && (
+              <button type="button" onClick={() => setFechaCorte("")} title="Quitar fecha"
+                style={{
+                  background: "transparent", border: "none", color: T.muted,
+                  fontSize: 16, cursor: "pointer", lineHeight: 1, padding: 4,
+                }}>✕</button>
+            )}
+          </div>
+        )}
       </div>
 
       {loading && (
