@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import { T, ESTADO_INGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn } from "./theme";
+import ConfirmModal from "./ConfirmModal";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
 import { fetchIngresos, appendIngreso, deleteIngreso, updateIngreso, appendCobro, fetchPagosCobros, calcSaldoPendiente, calcEstadoIngreso, fetchClientes, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, updateMovTesoreria, borrarPagoImputado, shortId, agruparAnticipos, cobrarContraAnticipo, appendRetenciones, appendCliente, appendCuenta } from "../lib/numbersApi";
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
@@ -755,6 +756,8 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
   const [showDetalle, setShowDetalle]           = useState(null);
   const [showEditar, setShowEditar]             = useState(null);
   const [editingCobro, setEditingCobro]         = useState(null);
+  const [confirmDelDoc, setConfirmDelDoc]       = useState(null); // { id_comp, msg } — confirmación inline de eliminar ingreso
+  const [borrando, setBorrando]                 = useState(false);
   const [showCtaCte, setShowCtaCte]             = useState(null);
   const [clientes, setClientes]                 = useState([]);
   const [centrosCosto, setCentrosCosto]         = useState(CENTROS_COSTO_STATIC);
@@ -848,24 +851,31 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
     }
   };
 
-  const handleEliminar = async (id_comp) => {
+  const handleEliminar = (id_comp) => {
     const ingreso = ingresos.find(e => e.id === id_comp);
     // Los cobros que vinieron del motor (origen="extracto") NO se borran: se desimputan y vuelven a la
     // conciliación (no se pierde el movimiento del banco). Retenciones y cobros manuales sí se borran.
     const delMotor = (ingreso?.pagosVinculados ?? []).filter(c => c.origen === "extracto").length;
     const msg = delMotor
-      ? `¿Eliminar este ingreso? Tiene ${delMotor} cobro(s) conciliado(s) del banco: NO se borran, vuelven a la conciliación. El resto (retenciones/cobros manuales) se elimina.`
-      : "¿Eliminar este ingreso? Se eliminarán también los cobros asociados.";
-    if (!confirm(msg)) return;
+      ? `Tiene ${delMotor} cobro(s) conciliado(s) del banco: NO se borran, vuelven a la conciliación. El resto (retenciones/cobros manuales) se elimina.`
+      : "Se eliminarán también los cobros asociados.";
+    setConfirmDelDoc({ id_comp, msg });   // confirmación inline (ver ConfirmModal) — no window.confirm
+  };
+  const doEliminar = async () => {
+    const id_comp = confirmDelDoc?.id_comp;
+    if (!id_comp) return;
+    const ingreso = ingresos.find(e => e.id === id_comp);
+    setBorrando(true);
     try {
       if (ingreso?.pagosVinculados?.length > 0) {
         await Promise.all(ingreso.pagosVinculados.map(c => borrarPagoImputado(c)));
       }
       await deleteIngreso(id_comp);
       setIngresos(prev => prev.filter(e => e.id !== id_comp));
+      setConfirmDelDoc(null);
     } catch (e) {
       alert("Error al eliminar: " + e.message);
-    }
+    } finally { setBorrando(false); }
   };
 
   const handleCobro = async (data) => {
@@ -982,6 +992,8 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
         {showCobro    && <RegistrarCobroModal ingreso={showCobro} saldoPendiente={showCobro.saldoPendiente ?? showCobro.importe} cuentas={cuentasSoc} anticipos={anticipos.filter(a => String(a.cliente_id) === String(showCobro.clienteId))} onClose={() => setShowCobro(null)} onSave={handleCobro} />}
         {showRetencion && <RegistrarRetencionModal ingreso={showRetencion} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentasContables={cuentas} centros={centrosCosto} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
         {editingCobro && <EditarCobroModal    cobro={editingCobro} sociedad={sociedad} cuentasSoc={cuentasSoc} cuentasContables={cuentas} centros={centrosCosto} onClose={() => setEditingCobro(null)} onSaved={() => { setEditingCobro(null); cargarIngresos(); }} />}
+        <ConfirmModal open={!!confirmDelDoc} title="¿Eliminar este ingreso?" message={confirmDelDoc?.msg}
+          confirmLabel="Sí, eliminar" busy={borrando} onConfirm={doEliminar} onCancel={() => setConfirmDelDoc(null)} />
       </>
     );
   }
@@ -1144,6 +1156,8 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
       {showRetencion && <RegistrarRetencionModal ingreso={showRetencion} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentasContables={cuentas} centros={centrosCosto} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
       {editingCobro && <EditarCobroModal  cobro={editingCobro} sociedad={sociedad} cuentasSoc={cuentasSoc} cuentasContables={cuentas} centros={centrosCosto} onClose={() => setEditingCobro(null)} onSaved={() => { setEditingCobro(null); cargarIngresos(); }} />}
       {showCtaCte  && <CtaCteModal         cliente={showCtaCte.cliente} documentos={showCtaCte.docs} onClose={() => setShowCtaCte(null)} />}
+      <ConfirmModal open={!!confirmDelDoc} title="¿Eliminar este ingreso?" message={confirmDelDoc?.msg}
+        confirmLabel="Sí, eliminar" busy={borrando} onConfirm={doEliminar} onCancel={() => setConfirmDelDoc(null)} />
     </div>
   );
 }

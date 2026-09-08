@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, Btn, Input, Select, PageHeader, fmtDate, fmtMoney } from "./theme";
+import ConfirmModal from "./ConfirmModal";
 import {
   TIPO_CUENTA, MONEDA_SYM,
 } from "../data/tesoreriaData";
@@ -1288,14 +1289,79 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
 
   const cuentaNombre = filtroCuenta ? (cuentaMap[filtroCuenta] ?? filtroCuenta) : null;
 
+  // Filtros de visualización. NO tocan `sorted` (ese sigue en orden cronológico real, que es lo que
+  // necesita saldoByRow). El rango de FECHAS lo aplica el padre (movsHastaFecha → prop `movimientos`);
+  // acá quedan la búsqueda y el filtro de la columna Importe (signo + rango), estilo Excel.
+  const [busqueda, setBusqueda] = useState("");
+  const [signo,    setSigno]    = useState("todos");   // "todos" | "pos" (ingresos) | "neg" (egresos)
+  const [montoMin, setMontoMin] = useState("");   // filtra por |importe| ≥ min
+  const [montoMax, setMontoMax] = useState("");   // filtra por |importe| ≤ max
+  const [importeMenu, setImporteMenu] = useState(false);   // popover de la columna Importe (orden + filtro)
+  const importeFiltrado = signo !== "todos" || montoMin !== "" || montoMax !== "";
+  const limpiarImporte = () => { setSigno("todos"); setMontoMin(""); setMontoMax(""); };
+  const inpStyle = { fontSize:12, color:T.text, background:T.card, border:`1px solid ${T.cardBorder}`,
+    borderRadius:6, padding:"5px 8px", fontFamily:T.font, boxSizing:"border-box" };
+  const ordBtnStyle = (on) => ({ flex:1, fontSize:11, fontWeight:700, cursor:"pointer", fontFamily:T.font,
+    borderRadius:6, padding:"6px 8px", border:`1px solid ${on ? T.accentDark : T.cardBorder}`,
+    background: on ? T.accentDark : "#eceff3", color: on ? T.accent : T.muted });
+  const buscado = useMemo(() => {
+    const q = busqueda.trim().toLowerCase();
+    const min = montoMin !== "" ? Number(montoMin) : null;
+    const max = montoMax !== "" ? Number(montoMax) : null;
+    return sorted.filter(m => {
+      if (q && !((m.concepto ?? "").toLowerCase().includes(q) ||
+          String(m.cuenta_contable || m.cuenta || "").replace(/^CUENTA_/, "").toLowerCase().includes(q))) return false;
+      const monto = Number(m.monto) || 0;
+      if (signo === "pos" && monto < 0) return false;
+      if (signo === "neg" && monto >= 0) return false;
+      const abs = Math.abs(monto);
+      if (min != null && abs < min) return false;
+      if (max != null && abs > max) return false;
+      return true;
+    });
+  }, [sorted, busqueda, signo, montoMin, montoMax]);
+
+  // Orden de columnas: clickeás un header para ordenar por esa columna (asc/desc). Por defecto,
+  // fecha descendente (igual que antes). Accede al valor comparable de cada columna por fila.
+  const [sortKey, setSortKey] = useState("fecha");
+  const [sortDir, setSortDir] = useState("desc");
+  const sortValue = (m, key) => {
+    switch (key) {
+      case "tipo":     return (TIPO_CFG[m.tipo]?.label ?? m.tipo ?? "");
+      case "fecha":    return m.fecha ?? "";
+      case "cuenta":   return cuentaMap[m.cuenta_bancaria] ?? m.cuenta_bancaria ?? "";
+      case "concepto": return m.concepto ?? "";
+      case "ctaCont":  return String(m.cuenta_contable || m.cuenta || "").replace(/^CUENTA_/, "");
+      case "centro":   return m.centro_costo ? (ccMap[m.centro_costo] ?? m.centro_costo) : "";
+      case "moneda":   return m.moneda ?? "";
+      case "importe":  return Number(m.monto) || 0;
+      case "saldo":    return saldoByRow.get(m) ?? 0;
+      case "registro": return m.registrado_por ?? "";
+      default:         return "";
+    }
+  };
+  const ordenado = useMemo(() => {
+    const dir = sortDir === "asc" ? 1 : -1;
+    return [...buscado].sort((a, b) => {
+      const va = sortValue(a, sortKey), vb = sortValue(b, sortKey);
+      if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
+      return String(va).localeCompare(String(vb)) * dir;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buscado, sortKey, sortDir]);
+  const toggleSort = (key) => {
+    if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortKey(key); setSortDir(key === "fecha" ? "desc" : "asc"); }
+  };
+
   // Paginado: la tabla puede tener cientos/miles de filas y sin límite el scroll se vuelve interminable.
   const [pageSize, setPageSize] = useState(50);
   const [page, setPage] = useState(0);
-  useEffect(() => { setPage(0); }, [filtroCuenta, filtroRef, pageSize]);
-  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
+  useEffect(() => { setPage(0); }, [filtroCuenta, filtroRef, pageSize, busqueda, signo, montoMin, montoMax, sortKey, sortDir]);
+  const totalPages = Math.max(1, Math.ceil(ordenado.length / pageSize));
   const pageClamped = Math.min(page, totalPages - 1);
   const desde = pageClamped * pageSize;
-  const visible = sorted.slice(desde, desde + pageSize);
+  const visible = ordenado.slice(desde, desde + pageSize);
 
   if (rows.length === 0) {
     return (
@@ -1340,12 +1406,22 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
               padding:"2px 10px", cursor:"pointer", fontFamily:T.font }}>✕ Ver todas</button>
           </>}
         </div>
-        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          <input value={busqueda} onChange={e => setBusqueda(e.target.value)}
+            placeholder="Buscar por concepto o cuenta contable…" style={{
+              fontSize:12, color:T.text, background:T.card, border:`1px solid ${T.cardBorder}`,
+              borderRadius:6, padding:"5px 10px", fontFamily:T.font, width:240 }} />
+          {busqueda && (
+            <button onClick={() => setBusqueda("")} style={{
+              fontSize:11, color:T.muted, background:"#f3f4f6",
+              border:`1px solid ${T.cardBorder}`, borderRadius:6,
+              padding:"2px 10px", cursor:"pointer", fontFamily:T.font }}>✕</button>
+          )}
           <span style={{ fontSize:11, color:T.muted }}>Filas por página</span>
           <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))} style={{
             fontSize:12, color:T.text, background:T.card, border:`1px solid ${T.cardBorder}`,
             borderRadius:6, padding:"3px 8px", cursor:"pointer", fontFamily:T.font }}>
-            {[25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+            {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
           </select>
         </div>
       </div>
@@ -1357,14 +1433,72 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
           <thead>
             <tr style={{ background:T.tableHead }}>
               <th style={{ width:36 }} />
-              {["Tipo","Fecha","Cuenta","Concepto","Cta. Contable","C. Costo","Moneda","Importe","Saldo","Registró"].map(h => (
-                <th key={h} style={{ padding:"10px 14px", fontSize:11, fontWeight:700,
-                  letterSpacing:".08em", textTransform:"uppercase", color:T.tableHeadText,
-                  textAlign: (h === "Importe" || h === "Saldo") ? "right" : "left" }}>{h}</th>
+              {[
+                ["Tipo", "tipo"], ["Fecha", "fecha"], ["Cuenta", "cuenta"], ["Concepto", "concepto"],
+                ["Cta. Contable", "ctaCont"], ["C. Costo", "centro"], ["Moneda", "moneda"],
+                ["Importe", "importe"], ["Saldo", "saldo"], ["Registró", "registro"],
+              ].map(([h, key]) => key === "importe" ? (
+                // Columna Importe: header estilo Excel — click abre un menú con orden (▲▼) y filtro (signo + rango).
+                <th key={h} style={{ position:"relative", padding:"10px 14px", fontSize:11, fontWeight:700,
+                  letterSpacing:".08em", textTransform:"uppercase", color:T.tableHeadText, whiteSpace:"nowrap", textAlign:"right" }}>
+                  <button onClick={() => setImporteMenu(o => !o)} title="Ordenar y filtrar" style={{
+                    background:"transparent", border:"none", cursor:"pointer", color:"inherit", fontFamily:T.font,
+                    fontSize:11, fontWeight:700, letterSpacing:".08em", textTransform:"uppercase",
+                    display:"inline-flex", alignItems:"center", gap:4 }}>
+                    {h}
+                    {sortKey === "importe" && (sortDir === "asc" ? " ▲" : " ▼")}
+                    <span style={{ color: importeFiltrado ? T.accentDark : T.tableHeadText, fontWeight:900,
+                      opacity: importeFiltrado ? 1 : .55 }}>▾</span>
+                  </button>
+                  {importeMenu && (
+                    <>
+                      <div onClick={() => setImporteMenu(false)} style={{ position:"fixed", inset:0, zIndex:60 }} />
+                      <div style={{ position:"absolute", right:8, top:"100%", marginTop:4, zIndex:61, background:T.card,
+                        border:`1px solid ${T.cardBorder}`, borderRadius:8, boxShadow:"0 10px 30px rgba(0,0,0,.18)",
+                        padding:12, width:236, textAlign:"left", textTransform:"none", letterSpacing:"normal", cursor:"default" }}>
+                        <div style={{ fontSize:10, fontWeight:800, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:6 }}>Ordenar</div>
+                        <div style={{ display:"flex", gap:6, marginBottom:12 }}>
+                          <button onClick={() => { setSortKey("importe"); setSortDir("asc"); }} style={ordBtnStyle(sortKey==="importe" && sortDir==="asc")}>▲ Menor</button>
+                          <button onClick={() => { setSortKey("importe"); setSortDir("desc"); }} style={ordBtnStyle(sortKey==="importe" && sortDir==="desc")}>▼ Mayor</button>
+                        </div>
+                        <div style={{ fontSize:10, fontWeight:800, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:6 }}>Mostrar</div>
+                        <select value={signo} onChange={e => setSigno(e.target.value)} style={{ ...inpStyle, width:"100%", cursor:"pointer", marginBottom:12 }}>
+                          <option value="todos">Todos</option>
+                          <option value="pos">Ingresos (+)</option>
+                          <option value="neg">Egresos (−)</option>
+                        </select>
+                        <div style={{ fontSize:10, fontWeight:800, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:6 }}>Importe (valor absoluto)</div>
+                        <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:12 }}>
+                          <input type="number" value={montoMin} onChange={e => setMontoMin(e.target.value)} placeholder="mín" style={{ ...inpStyle, width:"50%" }} />
+                          <span style={{ fontSize:11, color:T.muted }}>a</span>
+                          <input type="number" value={montoMax} onChange={e => setMontoMax(e.target.value)} placeholder="máx" style={{ ...inpStyle, width:"50%" }} />
+                        </div>
+                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                          <button onClick={limpiarImporte} disabled={!importeFiltrado} style={{ fontSize:11, fontWeight:700,
+                            cursor: importeFiltrado ? "pointer" : "default", fontFamily:T.font, borderRadius:6, padding:"5px 12px",
+                            border:`1px solid ${T.cardBorder}`, background:"#f3f4f6", color: importeFiltrado ? T.muted : T.dim }}>Limpiar</button>
+                          <button onClick={() => setImporteMenu(false)} style={{ fontSize:11, fontWeight:700, cursor:"pointer",
+                            fontFamily:T.font, borderRadius:6, padding:"5px 14px", border:"none", background:T.accentDark, color:T.accent }}>Listo</button>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </th>
+              ) : (
+                <th key={h} onClick={() => toggleSort(key)} title="Ordenar" style={{ padding:"10px 14px", fontSize:11, fontWeight:700,
+                  letterSpacing:".08em", textTransform:"uppercase", color:T.tableHeadText, cursor:"pointer", userSelect:"none",
+                  whiteSpace:"nowrap", textAlign: (h === "Importe" || h === "Saldo") ? "right" : "left" }}>
+                  {h}{sortKey === key && (sortDir === "asc" ? " ▲" : " ▼")}
+                </th>
               ))}
             </tr>
           </thead>
           <tbody>
+            {ordenado.length === 0 && (
+              <tr><td colSpan={11} style={{ padding:"32px 14px", textAlign:"center", color:T.dim, fontSize:13 }}>
+                Sin resultados con los filtros aplicados
+              </td></tr>
+            )}
             {visible.map((m, i) => {
               const base   = TIPO_CFG[m.tipo] ?? { bg:"#f3f4f6", color:"#374151", label:m.tipo };
               const cfg    = esSinConciliar(m) ? { ...base, ...TIPO_SIN_CONCILIAR } : base;
@@ -1446,7 +1580,7 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between",
             padding:"10px 14px", borderTop:`1px solid ${T.cardBorder}` }}>
             <span style={{ fontSize:12, color:T.muted }}>
-              Mostrando {desde + 1}–{Math.min(desde + pageSize, sorted.length)} de {sorted.length}
+              Mostrando {desde + 1}–{Math.min(desde + pageSize, ordenado.length)} de {ordenado.length}
             </span>
             <div style={{ display:"flex", alignItems:"center", gap:8 }}>
               <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={pageClamped === 0}
@@ -1477,7 +1611,8 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
   const [error,         setError]         = useState(null);
   const [activeTab,        setActiveTab]        = useState("saldos");
   const [filtroMoneda,     setFiltroMoneda]     = useState("ALL");
-  const [fechaCorte,       setFechaCorte]       = useState("");
+  const [fechaCorte,       setFechaCorte]       = useState("");   // "Hasta" del rango / "Al día" en Saldos (recorta ledger y saldo al día)
+  const [fechaDesde,       setFechaDesde]       = useState("");   // "Desde" del rango — solo afecta el ledger de Movimientos (no el saldo al día)
   const [drillDownItem,    setDrillDownItem]    = useState(null);
   const [showMovModal,     setShowMovModal]     = useState(false);
   const [showNuevoMov,     setShowNuevoMov]     = useState(false);
@@ -1485,6 +1620,8 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
   const [editTransfer,     setEditTransfer]     = useState(null);  // { salidaId, entradaId, initial }
   const [editTarjeta,      setEditTarjeta]      = useState(null);  // { realId, tarjetaId, initial }
   const [editingMov,       setEditingMov]       = useState(null);
+  const [confirmAcc,       setConfirmAcc]       = useState(null);  // { title, message, confirmLabel, danger, run } — confirmación inline
+  const [confirmBusy,      setConfirmBusy]      = useState(false);
   const [filtroCuenta,     setFiltroCuenta]     = useState(null);
   const [filtroRef,        setFiltroRef]        = useState(null);   // "ir al movimiento" desde el extracto interco
   const [cuentasBancarias, setCuentasBancarias] = useState([]);
@@ -1601,11 +1738,19 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
       intercoData, sociedadesMap]
   );
 
-  // El filtro "Al día" (fechaCorte) recorta también el ledger de Movimientos, no solo los Saldos.
-  // Mismo criterio que derivarSaldos: (m.fecha ?? "") <= corte.
+  // El rango de fechas recorta el ledger de Movimientos. La cota superior (fechaCorte) es además el
+  // "Al día" que usa derivarSaldos para el saldo al día (mismo criterio: (m.fecha ?? "") <= corte).
+  // La cota inferior (fechaDesde) es solo para el ledger de Movimientos → NO afecta el saldo al día.
   const movsHastaFecha = useMemo(
-    () => fechaCorte ? movimientos.filter(m => (m.fecha ?? "") <= fechaCorte) : movimientos,
-    [movimientos, fechaCorte]
+    () => (fechaCorte || fechaDesde)
+      ? movimientos.filter(m => {
+          const f = m.fecha ?? "";
+          if (fechaDesde && f < fechaDesde) return false;
+          if (fechaCorte && f > fechaCorte) return false;
+          return true;
+        })
+      : movimientos,
+    [movimientos, fechaCorte, fechaDesde]
   );
 
   const monedas = useMemo(() => [...new Set(cuentas.map(c => c.moneda))], [cuentas]);
@@ -1710,17 +1855,21 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
   };
 
   // ── Eliminar un movimiento ────────────────────────────────────────────────
-  const handleEliminarMov = async (mov) => {
+  // Confirmación inline (ConfirmModal) en vez de window.confirm, que Chrome puede bloquear en silencio
+  // (deja el borrado sin efecto). Se arma un { title, message, confirmLabel, danger, run } y se ejecuta
+  // desde el modal (doConfirmAcc). Igual criterio que en Egresos/Ingresos.
+  const handleEliminarMov = (mov) => {
     // Un PAGO/COBRO que vino del motor de conciliación (origen="extracto") ES la línea del banco: no se
     // borra (destruiría el movimiento real y su nro. de operación) → se desimputa y vuelve a la
-    // conciliación, dejando la factura "a pagar/cobrar". Mismo criterio que en Egresos/Ingresos.
+    // conciliación, dejando la factura "a pagar/cobrar".
     if ((mov.tipo === "PAGO" || mov.tipo === "COBRO") && mov.origen === "extracto") {
       const kind = mov.tipo === "COBRO" ? "cobro" : "pago";
-      if (!confirm(`Este ${kind} vino del extracto bancario. No se borra el movimiento del banco: se despega de la factura y vuelve a la conciliación. ¿Continuar?`)) return;
-      try {
-        await borrarPagoImputado(mov);
-        await cargarMovimientos();
-      } catch (e) { alert("Error al eliminar: " + e.message); }
+      setConfirmAcc({
+        title: `¿Quitar este ${kind} de la factura?`,
+        message: `Este ${kind} vino del extracto bancario. No se borra el movimiento del banco: se despega de la factura y vuelve a la conciliación.`,
+        confirmLabel: "Sí, quitar",
+        run: async () => { await borrarPagoImputado(mov); await cargarMovimientos(); },
+      });
       return;
     }
     // Transferencia/interco/cambio = PAR de patas con el mismo documento_id. Hay que borrar AMBAS,
@@ -1731,27 +1880,41 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
       ? patasDelPar(mov, movimientos)   // por documento_id O stem del id (tolera par roto)
       : [mov];
     const extra = patas.length > 1 ? ` y su contrapartida (${patas.length} movimientos)` : "";
-    if (!confirm(`¿Eliminar movimiento "${mov.concepto ?? mov.id}"${extra}?`)) return;
-    try {
-      await Promise.all(patas.map(m => deleteMovTesoreria(m.id)));
-      const ids = new Set(patas.map(m => m.id));
-      setMovimientos(prev => prev.filter(m => !ids.has(m.id)));
-    } catch (e) {
-      alert("Error al eliminar: " + e.message);
-    }
+    setConfirmAcc({
+      title: "¿Eliminar movimiento?",
+      message: `"${mov.concepto ?? mov.id}"${extra}.`,
+      confirmLabel: "Sí, eliminar",
+      run: async () => {
+        await Promise.all(patas.map(m => deleteMovTesoreria(m.id)));
+        const ids = new Set(patas.map(m => m.id));
+        setMovimientos(prev => prev.filter(m => !ids.has(m.id)));
+      },
+    });
   };
 
   // ── Ignorar una línea de extracto (no contabilizar) ───────────────────────
   // Solo para líneas crudas del banco todavía sin conciliar: NO se borran (se recrean al re-subir)
   // → soft-mark documento_id="IGN-", sale del ledger pero sobrevive el dedup. Reversible en Conciliación.
-  const handleIgnorarMov = async (mov) => {
-    if (!confirm(`¿Ignorar "${mov.concepto ?? mov.id}" (${fmtSaldo(Number(mov.monto) || 0, mov.moneda)})?\nSale del listado pero no se borra; podés restaurarla desde Conciliación.`)) return;
-    try {
-      await ignorarMovimiento(mov);
-      setMovimientos(prev => prev.map(m => m.id === mov.id ? { ...m, documento_id: "IGN-" + mov.id } : m));
-    } catch (e) {
-      alert("Error al ignorar: " + (e?.message || e));
-    }
+  const handleIgnorarMov = (mov) => {
+    setConfirmAcc({
+      title: "¿Ignorar esta línea?",
+      message: `"${mov.concepto ?? mov.id}" (${fmtSaldo(Number(mov.monto) || 0, mov.moneda)}).\nSale del listado pero no se borra; podés restaurarla desde Conciliación.`,
+      confirmLabel: "Sí, ignorar",
+      danger: false,
+      run: async () => {
+        await ignorarMovimiento(mov);
+        setMovimientos(prev => prev.map(m => m.id === mov.id ? { ...m, documento_id: "IGN-" + mov.id } : m));
+      },
+    });
+  };
+
+  // Ejecuta la acción del ConfirmModal (eliminar / desimputar / ignorar). Un solo lugar con busy + error.
+  const doConfirmAcc = async () => {
+    if (!confirmAcc?.run) return;
+    setConfirmBusy(true);
+    try { await confirmAcc.run(); setConfirmAcc(null); }
+    catch (e) { alert("Error: " + (e?.message || e)); }
+    finally { setConfirmBusy(false); }
   };
 
   // ── Al clickear una cuenta en Saldos → ir a Movimientos filtrado ──────────
@@ -1882,31 +2045,52 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
 
         <div style={{ width: 1, height: 24, background: T.cardBorder, flexShrink: 0 }} />
 
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase",
-            letterSpacing: ".08em" }}>Al día</span>
-          <button type="button" onClick={() => { datePickerRef.current?.showPicker?.(); datePickerRef.current?.click(); }}
-            style={{
-              border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "6px 12px",
-              fontSize: 12, fontFamily: T.font, background: "#eceff3",
-              color: fechaCorte ? T.text : T.dim, cursor: "pointer", whiteSpace: "nowrap",
-              display: "inline-flex", alignItems: "center", gap: 6,
-              minWidth: 124, justifyContent: "center", fontWeight: 600,
-            }}>
-            <span style={{ opacity: 0.75 }} aria-hidden>📅</span>
-            {fechaCorte ? fmtDate(fechaCorte) : "Elegir fecha"}
-          </button>
-          <input ref={datePickerRef} type="date" value={fechaCorte}
-            onChange={e => setFechaCorte(e.target.value)}
-            style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 0, height: 0 }} />
-          {fechaCorte && (
-            <button type="button" onClick={() => setFechaCorte("")} title="Quitar fecha"
+        {activeTab === "movimientos" ? (
+          // En Movimientos: rango Desde/Hasta (Hasta = fechaCorte, comparte el "al día"; Desde solo recorta el ledger).
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase",
+              letterSpacing: ".08em" }}>Período</span>
+            <input type="date" value={fechaDesde} max={fechaCorte || undefined} onChange={e => setFechaDesde(e.target.value)}
+              style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "5px 10px",
+                fontSize: 12, fontFamily: T.font, background: "#eceff3", color: T.text }} />
+            <span style={{ fontSize: 11, color: T.muted }}>a</span>
+            <input type="date" value={fechaCorte} min={fechaDesde || undefined} onChange={e => setFechaCorte(e.target.value)}
+              style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "5px 10px",
+                fontSize: 12, fontFamily: T.font, background: "#eceff3", color: T.text }} />
+            {(fechaDesde || fechaCorte) && (
+              <button type="button" onClick={() => { setFechaDesde(""); setFechaCorte(""); }} title="Quitar rango"
+                style={{ background: "transparent", border: "none", color: T.muted,
+                  fontSize: 16, cursor: "pointer", lineHeight: 1, padding: 4 }}>✕</button>
+            )}
+          </div>
+        ) : (
+          // En Saldos: fecha única "Al día" (saldo a esa fecha) — sin cambios.
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase",
+              letterSpacing: ".08em" }}>Al día</span>
+            <button type="button" onClick={() => { datePickerRef.current?.showPicker?.(); datePickerRef.current?.click(); }}
               style={{
-                background: "transparent", border: "none", color: T.muted,
-                fontSize: 16, cursor: "pointer", lineHeight: 1, padding: 4,
-              }}>✕</button>
-          )}
-        </div>
+                border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "6px 12px",
+                fontSize: 12, fontFamily: T.font, background: "#eceff3",
+                color: fechaCorte ? T.text : T.dim, cursor: "pointer", whiteSpace: "nowrap",
+                display: "inline-flex", alignItems: "center", gap: 6,
+                minWidth: 124, justifyContent: "center", fontWeight: 600,
+              }}>
+              <span style={{ opacity: 0.75 }} aria-hidden>📅</span>
+              {fechaCorte ? fmtDate(fechaCorte) : "Elegir fecha"}
+            </button>
+            <input ref={datePickerRef} type="date" value={fechaCorte}
+              onChange={e => setFechaCorte(e.target.value)}
+              style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 0, height: 0 }} />
+            {fechaCorte && (
+              <button type="button" onClick={() => setFechaCorte("")} title="Quitar fecha"
+                style={{
+                  background: "transparent", border: "none", color: T.muted,
+                  fontSize: 16, cursor: "pointer", lineHeight: 1, padding: 4,
+                }}>✕</button>
+            )}
+          </div>
+        )}
       </div>
 
       {loading && (
@@ -2036,6 +2220,9 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
           onSave={handleEditarMovManual}
         />
       )}
+      <ConfirmModal open={!!confirmAcc} title={confirmAcc?.title} message={confirmAcc?.message}
+        confirmLabel={confirmAcc?.confirmLabel ?? "Sí"} danger={confirmAcc?.danger ?? true}
+        busy={confirmBusy} onConfirm={doConfirmAcc} onCancel={() => setConfirmAcc(null)} />
     </div>
   );
 }
