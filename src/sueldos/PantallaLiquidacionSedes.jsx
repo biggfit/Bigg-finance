@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "react";
 import * as XLSX from "xlsx";
+import { useConfirm } from "../numbers/useConfirm";
 import {
   fetchLegajos, fetchCategorias, fetchObjetivos,
   fetchLiquidacionesSedes, deleteLiquidacionSede,
@@ -315,6 +316,7 @@ function applyObjetivosToRows(rowsArr, objetivosArr) {
 // ── Componente principal ───────────────────────────────────────────────────────
 
 export default function PantallaLiquidacionSedes({ pais = "", initialMes, initialAnio, initialPaso }) {
+  const [confirm, confirmUI] = useConfirm();
   const [mes,  setMes]  = useState(initialMes  ?? MES_DEF);
   const [anio, setAnio] = useState(initialAnio ?? ANO_DEF);
   const [paso, setPaso] = useState(initialPaso ?? 1);
@@ -472,7 +474,8 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
 
   const handleReabrirTodas = async () => {
     if (!idsLiqCerrados.length) return;
-    if (!window.confirm(`¿Reabrir las ${idsLiqCerrados.length} liquidaciones cerradas de ${MESES[mes - 1]} ${anio}? Vuelven todas a borrador: vas a poder editar incentivos/novedades de cualquier empleado y después hay que volver a cerrarlas (Paso 4) para congelar los montos actualizados.`)) return;
+    if (!(await confirm({ title: "¿Reabrir todas?", danger: false, confirmLabel: "Sí, reabrir",
+      message: `Reabrir las ${idsLiqCerrados.length} liquidaciones cerradas de ${MESES[mes - 1]} ${anio}. Vuelven todas a borrador: vas a poder editar incentivos/novedades de cualquier empleado y después hay que volver a cerrarlas (Paso 4) para congelar los montos actualizados.` }))) return;
     setReabriendo(true);
     try {
       await reabrirLiquidaciones(idsLiqCerrados);
@@ -1220,6 +1223,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       borderTop: marcado ? "10px solid #334155" : "10px solid transparent",
       transition: "background .15s, border-color .15s",
     }}>
+      {confirmUI}
       {marcado && (
         <div style={{
           position: "sticky", top: 0, zIndex: 20, margin: "-24px -24px 20px", padding: "10px 24px",

@@ -10,6 +10,7 @@ import {
 } from "../../lib/numbersApi";
 import NuevoEgresoModal from "../NuevoEgresoModal";
 import { formatNroComp } from "../formUtils";
+import { useConfirm } from "../useConfirm";
 
 const arr = x => Array.isArray(x) ? x : [];
 const metaRef   = nota => (String(nota || "").match(/mail_ref=([^\s;]+)/) || [])[1] || "";
@@ -17,6 +18,7 @@ const metaFecha = nota => (String(nota || "").match(/fecha_correo=([^\s;]+)/) ||
 const gmailUrl  = ref => ref ? `https://mail.google.com/mail/u/0/#all/${ref}` : null;
 
 export default function TabCorreo({ onPend } = {}) {
+  const [confirm, confirmUI] = useConfirm();
   const [borradores, setBorradores] = useState([]);
   const [sociedades, setSociedades] = useState([]);
   const [cuentas,    setCuentas]    = useState([]);
@@ -99,7 +101,7 @@ export default function TabCorreo({ onPend } = {}) {
 
   const ignorar = async (row) => {
     setMenuOpen(null);
-    if (!confirm(`¿Ignorar la factura de ${row.proveedor} ($${Math.round(row.total)})? No se contabiliza.`)) return;
+    if (!(await confirm(`¿Ignorar la factura de ${row.proveedor} ($${Math.round(row.total)})? No se contabiliza.`))) return;
     setBusy(row.id);
     try { await ignorarBorrador(row.id, "correo"); await cargar(); }
     catch (err) { alert("Error: " + (err?.message || err)); }
@@ -149,6 +151,7 @@ export default function TabCorreo({ onPend } = {}) {
 
   return (
     <div className="fade" style={{ padding:"28px 32px" }}>
+      {confirmUI}
       <PageHeader
         title="Correo — facturas"
         subtitle="Facturas leídas del mail (pagos@bigg.fit), parkeadas sin contabilizar. Revisá y Contabilizá (crea la factura/CxP en su sociedad) o Ignorá. Consolidado: todas las sociedades. El mail no se toca." />

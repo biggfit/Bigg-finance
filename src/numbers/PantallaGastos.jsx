@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, fmtMoney, fmtDate, PageHeader, Btn } from "./theme";
+import { useConfirm } from "./useConfirm";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
 import {
   fetchGastos, deleteGasto, appendGastoDirecto, appendGastosDirectos, updateGastoDirecto,
@@ -298,6 +299,7 @@ function FormNuevoGasto({ sociedad, cuentasBancarias, cuentas, centrosCosto, pro
 
 // ─── Pantalla: Lista de Gastos ────────────────────────────────────────────────
 export default function PantallaGastos({ sociedad = "nako", subView = null, onSubViewChange, navPulse = 0 }) {
+  const [confirm, confirmUI] = useConfirm();
   const [gastos, setGastos]                     = useState([]);
   const [loading, setLoading]                   = useState(true);
   const [error, setError]                       = useState(null);
@@ -350,7 +352,7 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
   }, [gastos, busqueda, resolveCC, resolveCB, filtroFecha.inRange]);
 
   const handleEliminar = async (gasto) => {
-    if (!confirm("¿Eliminar este gasto?")) return;
+    if (!(await confirm("¿Eliminar este gasto?"))) return;
     try {
       await deleteGasto(gasto._movId);
       setGastos(prev => prev.filter(g => g.id !== gasto.id));
@@ -392,6 +394,7 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
 
   return (
     <div style={{ padding:"28px 32px" }} className="fade">
+      {confirmUI}
       <PageHeader
         title="Gastos Directos"
         subtitle="Pagados en el momento · afectan P&L y Tesorería"

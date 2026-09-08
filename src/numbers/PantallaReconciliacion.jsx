@@ -16,6 +16,7 @@ import {
 } from "../lib/numbersApi";
 import { BancoReglaModal } from "./PantallaMaestros";
 import MundoTarjeta from "./reconciliacion/MundoTarjeta";
+import { useConfirm } from "./useConfirm";
 import { fetchAll, removeComp } from "../lib/sheetsApi";
 import { franquiciasPendientesInterco } from "../lib/franquiciasAdapter";
 import { groupCentrosCosto, makeCrearMaestro } from "./formUtils";
@@ -338,6 +339,7 @@ function DeclararRecibidaModal({ pend, sociedad, cuentas = [], planCuentas = [],
 const CENTRO_DEFAULT_SOCIEDAD = { "segui-fit": "cc-2026-rosedal" };
 
 export default function PantallaReconciliacion({ sociedad, onPendientes, mundo = "banco" }) {
+  const [confirm, confirmUI] = useConfirm();
   const [cuentas,    setCuentas]    = useState([]);
   const [cuentasAll, setCuentasAll] = useState([]); // todas las cuentas bancarias (todas las sociedades) para destino de transferencia
   const [cuentaTab,  setCuentaTab]  = useState("");
@@ -1169,10 +1171,12 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
 
   const aceptar = async (mov) => {
     if (!puedeAceptarMov(mov)) { setMsg("Completá la imputación antes de aceptar."); return; }
-    if (dupTransfer(mov) && !window.confirm(
-      `⚠ Posible duplicado.\n\nYa hay un movimiento contabilizado en esta cuenta con la misma fecha (${fmtDate(mov.fecha)}) y el mismo importe. ` +
-      `Si esto ya está cargado, aceptarlo lo duplica.\n\n¿Cargarlo igual?`
-    )) return;
+    if (dupTransfer(mov) && !(await confirm({
+      title: "⚠ Posible duplicado",
+      message: `Ya hay un movimiento contabilizado en esta cuenta con la misma fecha (${fmtDate(mov.fecha)}) y el mismo importe. ` +
+        `Si esto ya está cargado, aceptarlo lo duplica.\n\n¿Cargarlo igual?`,
+      confirmLabel: "Cargarlo igual",
+    }))) return;
     try { await doAceptar(mov); } catch (e) { setMsg("Error al aceptar: " + e.message); }
   };
 
@@ -1415,6 +1419,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: "20px 28px", boxSizing: "border-box" }}>
+      {confirmUI}
       {mundo !== "tarjeta" && (<div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
         <h2 style={{ fontSize: 20, fontWeight: 900, color: T.text, margin: 0 }}>
           Conciliaciones <span style={{ fontSize: 13, fontWeight: 700, color: T.muted }}>· {mundo === "interco" ? "Intercompañía" : "Banco"}</span>
@@ -1733,7 +1738,10 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         </div>
       )}
 
-      <div className="nb-hscroll" style={{ flex: 1, overflow: "auto", background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10 }}>
+      {/* overflowX:"scroll" (no "auto"): en Chrome/Windows con "overlay scrollbars" la barra con "auto"
+          solo se dibuja mientras se scrollea/hoverea (aunque el scroll ya funciona) — "scroll" reserva
+          el track siempre, así el estilo de .nb-hscroll (barra gruesa y con contraste) queda visible. */}
+      <div className="nb-hscroll" style={{ flex: 1, overflowX: "scroll", overflowY: "auto", background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10 }}>
         {loading ? (
           <div style={{ padding: 50, textAlign: "center", color: T.muted }}>Cargando…</div>
         ) : filtered.length === 0 ? (

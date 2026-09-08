@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import html2canvas from "html2canvas";
 import { fetchLiquidaciones, fetchCategorias, fetchPagos, fetchLegajos, fetchNovedades, desglosarLiquidacion, isCerrada, idLiqDe, reabrirLiquidaciones, ROLES_SEDES, ROLES_HQ, updatePagoNota } from "../lib/sueldosApi";
+import { useConfirm } from "../numbers/useConfirm";
 
 const T = {
   bg:     "#f8fafc",
@@ -61,6 +62,7 @@ const fmtFecha = (s) => {
 };
 
 export default function PantallaResumen({ pais = "AR" }) {
+  const [confirm, confirmUI] = useConfirm();
   const [vista, setVista] = useState("sedes");   // "sedes" | "hq"
   const [mes,  setMes]  = useState(MES_DEF);
   const [anio, setAnio] = useState(ANO_DEF);
@@ -182,7 +184,8 @@ export default function PantallaResumen({ pais = "AR" }) {
   const [reabriendo, setReabriendo] = useState(false);
   const handleReabrir = async () => {
     if (!sel) return;
-    if (!window.confirm(`¿Reabrir la liquidación de ${sel.nombre}? Vuelve a borrador: vas a poder editarla en Liquidación ${vista === "hq" ? "HQ" : "Sedes"} y tenés que volver a cerrarla para que los cambios (por ej. novedades nuevas) se congelen en el recibo.`)) return;
+    if (!(await confirm({ title: "¿Reabrir liquidación?", danger: false, confirmLabel: "Sí, reabrir",
+      message: `Liquidación de ${sel.nombre}. Vuelve a borrador: vas a poder editarla en Liquidación ${vista === "hq" ? "HQ" : "Sedes"} y tenés que volver a cerrarla para que los cambios (por ej. novedades nuevas) se congelen en el recibo.` }))) return;
     setReabriendo(true);
     try {
       const sedeIds = [...new Set(sel.rows.map(r => r.sede_id ?? ""))];
@@ -199,6 +202,7 @@ export default function PantallaResumen({ pais = "AR" }) {
   return (
     <div className={idsPrint ? "print-todos" : "print-solo"}
       style={{ padding: 24, fontFamily: T.font, color: T.text, maxWidth: 860, margin: "0 auto" }}>
+      {confirmUI}
       <style>{`
         #ficha-todos { display: none; }
         @media print {

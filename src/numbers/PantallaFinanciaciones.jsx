@@ -7,6 +7,7 @@ import {
   fetchAnticipos, appendAnticipo, deleteAnticipo, fetchClientes, fetchIngresos, shortId,
 } from "../lib/numbersApi";
 import { parsePlanPdf } from "./parsers/planPdf";
+import { useConfirm } from "./useConfirm";
 
 // ─── Config por tipo (planes AFIP vs créditos comparten todo, cambian labels/default) ──
 const TIPOS = {
@@ -392,15 +393,17 @@ function AltaAnticipo({ sociedad, bancos, clientes, onCancel, onSaved }) {
 }
 
 function DetalleAnticipo({ anticipo: a, ingById = new Map(), onBack, onChanged }) {
+  const [confirm, confirmUI] = useConfirm();
   const [busy, setBusy] = useState(false);
   async function doEliminar() {
-    if (!confirm("¿Eliminar el anticipo? Si tenía cobros aplicados, esas facturas vuelven a quedar pendientes de cobro.")) return;
+    if (!(await confirm("¿Eliminar el anticipo? Si tenía cobros aplicados, esas facturas vuelven a quedar pendientes de cobro."))) return;
     setBusy(true);
     try { await deleteAnticipo(a.id); onChanged(); }
     catch (e) { alert("Error: " + (e?.message || e)); setBusy(false); }
   }
   return (
     <div className="fade">
+      {confirmUI}
       <button onClick={onBack} style={{ background: "none", border: "none", color: T.muted, fontSize: 13, cursor: "pointer", marginBottom: 12, fontFamily: T.font }}>‹ Volver</button>
       <PageHeader title={`Anticipo · ${a.cliente_nombre || "—"}`} subtitle={`${fmtDate(a.fecha)}${a.es_apertura ? " · apertura" : ""}`}
         action={<Btn variant="danger" onClick={doEliminar} disabled={busy}>Eliminar</Btn>} />
@@ -705,6 +708,7 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
 // DETALLE — cronograma + acciones
 // ════════════════════════════════════════════════════════════════════════════
 function DetalleFinanciacion({ plan, bancos, onBack, onChanged }) {
+  const [confirm, confirmUI] = useConfirm();
   const [busy, setBusy] = useState(false);
   const [pagoCuota, setPagoCuota] = useState(null);   // cuota a pagar manualmente
 
@@ -714,13 +718,13 @@ function DetalleFinanciacion({ plan, bancos, onBack, onChanged }) {
     catch (e) { alert("Error: " + (e?.message || e)); setBusy(false); }
   }
   async function doCancelar() {
-    if (!confirm("¿Cancelar las cuotas pendientes de este plan? El pasivo baja a 0.")) return;
+    if (!(await confirm("¿Cancelar las cuotas pendientes de este plan? El pasivo baja a 0."))) return;
     setBusy(true);
     try { await cancelarFinanciacion(plan.plan_id); onChanged(); }
     catch (e) { alert("Error: " + (e?.message || e)); setBusy(false); }
   }
   async function doEliminar() {
-    if (!confirm("¿Eliminar el plan completo (todas sus cuotas)? No se puede deshacer.")) return;
+    if (!(await confirm("¿Eliminar el plan completo (todas sus cuotas)? No se puede deshacer."))) return;
     setBusy(true);
     try { await deleteFinanciacion(plan.plan_id); onChanged(); }
     catch (e) { alert("Error: " + (e?.message || e)); setBusy(false); }
@@ -730,6 +734,7 @@ function DetalleFinanciacion({ plan, bancos, onBack, onChanged }) {
 
   return (
     <div className="fade" style={{ padding: "28px 32px" }}>
+      {confirmUI}
       <button onClick={onBack} style={{ background: "none", border: "none", color: T.muted, fontSize: 13, cursor: "pointer", marginBottom: 12, fontFamily: T.font }}>‹ Volver</button>
       <PageHeader title={plan.acreedor_nombre || "Financiación"}
         subtitle={`${TIPOS[plan.tipo]?.label || ""} · Nº ${plan.nro_plan || "—"} · consolidado ${fmtDate(plan.fecha_consolidacion)}${plan.es_apertura ? " · apertura" : ""}${cuentaCapital ? ` · Capital → ${cuentaCapital}` : ""}`}
