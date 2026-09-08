@@ -1421,7 +1421,7 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
           <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))} style={{
             fontSize:12, color:T.text, background:T.card, border:`1px solid ${T.cardBorder}`,
             borderRadius:6, padding:"3px 8px", cursor:"pointer", fontFamily:T.font }}>
-            {[25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+            {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
           </select>
         </div>
       </div>
