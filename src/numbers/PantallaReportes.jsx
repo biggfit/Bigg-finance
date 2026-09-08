@@ -403,6 +403,11 @@ const aliasCuentaSede = (nombre) => SEDE_CUENTA_ALIAS[_nkSede(nombre)] || nombre
 const CESION = { matchNombre: "Barrio Norte", pct: 0.49, contraparte: "", apertura: 7_840_230, aperturaYear: 2026 };
 const CESION_CUENTA = "Inversores";   // cuenta contable donde se imputan los retiros
 
+// Comisión de encargados (2,5% s/ Resultado Operativo): SOLO estas sedes core AR. Botánico, Rosedal,
+// España y Colombia NO cobran. Ids de centro (case-insensitive) — la base calculada se arma sólo con estos.
+const COM_ENC_RATE = 0.025;
+const SEDES_COMISION_CC = new Set(["cc-2026-88265", "cc-2026-88266", "cc-2026-88267", "cc-2026-88268", "cc-2026-88269"]);
+
 // Helper puro: dado el resFinal[12] de la sede y los retiros[12] (cuenta "Inversores"), arma la cola.
 function computeCesion(resFinal = [], retiros = [], { pct, apertura = 0, aperturaYear }, year) {
   const acreditado = Array.from({ length: 12 }, (_, m) => (Number(resFinal[m]) || 0) * pct);
@@ -890,18 +895,30 @@ export function buildPnLSedeFilas(props, isCol) {
   const { pnl, sub, pnlPrev, subPrev, year, vista = "evolucion", mes = 0, cesion = null, impuestos = null,
           financieros = null, distribucion = null, retirosVivos = null, feeIvaVivo = null,
           netoLabel = "Resultado Neto", nombreCuenta = (x) => x, hayHistorico = false, mesMax = null,
-          cesionResFinal = null, cesionRetiros = null } = props;
+          cesionResFinal = null, cesionRetiros = null, comBaseResOp = null } = props;
   const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths: _amRaw } = sub;
   const activeMonths = mesesVisibles(_amRaw, year, hayHistorico, mesMax);
+
+  // ── Provisión de comisión de encargados (AFECTA el Resultado Final; solo sedes elegibles) ────────
+  // La comisión se DEVENGA sobre el Resultado Operativo (2,5%), se pague o no. Provisión del MES =
+  // 2,5% × resOp del mes − comisión liquidada del mes → resta del Resultado Final. Modelo acumulado
+  // SIN piso: en pérdida da negativa (reversa) y el encargado absorbe la pérdida vía el acumulado, sin
+  // clawback de caja. Es FLUJO (no stock) → la vista YTD lo acumula sola. Base = resOp de SOLO las sedes
+  // que cobran el 2,5% (∩ scope, en `comBaseResOp`); null → no elegibles → sin provisión ni ajuste.
+  const comLiq  = sub.st?.com_res || ZERO12;
+  const provMes = Array.isArray(comBaseResOp)
+    ? MESES.map((_, m) => COM_ENC_RATE * (Number(comBaseResOp[m]) || 0) - (Number(comLiq[m]) || 0))
+    : null;
+  const resFinalEff = provMes ? resFinal.map((v, m) => (Number(v) || 0) - provMes[m]) : resFinal;
 
   // Cesión de utilidades (cola de apropiación, solo cuando el scope es la sede con cesión, ej. Barrio Norte).
   // Los retiros son la cuenta "Inversores" de sinClasificar → se saca de ahí para no mostrarla dos veces.
   const cesKey = cesion && Object.keys(pnl.sinClasificar).find(k => _nkSede(k) === _nkSede(CESION_CUENTA));
-  const cesData = cesion ? computeCesion(cesionResFinal || resFinal, cesionRetiros || (cesKey ? pnl.sinClasificar[cesKey] : []), cesion, year) : null;
+  const cesData = cesion ? computeCesion(cesionResFinal || resFinalEff, cesionRetiros || (cesKey ? pnl.sinClasificar[cesKey] : []), cesion, year) : null;
 
   // Impuestos (Fondeadas/Rosedal): cola debajo del Resultado Operativo/Final. Las cuentas se sacan de
   // "Sin clasificar" (no duplicar) → ver computeImpuestos.
-  const impData = impuestos ? computeImpuestos(pnl.sinClasificar, impuestos, resFinal) : null;
+  const impData = impuestos ? computeImpuestos(pnl.sinClasificar, impuestos, resFinalEff) : null;
   // Fee IVA VIVO (Rosedal): el IVA del fee a Ñako (21%) se suma a la línea "IVA Compra" como crédito fiscal
   // (costo del mes; se recupera el mes siguiente). Es un derivado, no una cuenta → se inyecta acá.
   if (impData && feeIvaVivo && feeIvaVivo.some(v => Math.abs(v) > 0.5)) {
@@ -911,7 +928,7 @@ export function buildPnLSedeFilas(props, isCol) {
     impData.total = impData.total.map((v, m) => v + (feeIvaVivo[m] || 0));
   }
   // Resultado financiero (Fondeadas/Rosedal): intereses ganados − pérdidas, debajo de impuestos.
-  const finData = financieros ? computeImpuestos(pnl.sinClasificar, financieros, resFinal) : null;
+  const finData = financieros ? computeImpuestos(pnl.sinClasificar, financieros, resFinalEff) : null;
 
   // "Inversores" es la cuenta de retiros de cesión/distribución (reparto del resultado, NO gasto del P&L): se
   // muestra en su cola cuando el scope la tiene (Barrio Norte / Rosedal). En cualquier otro scope (ej. las 5
@@ -928,6 +945,7 @@ export function buildPnLSedeFilas(props, isCol) {
   const lastM = activeMonths[activeMonths.length - 1];
   const Pg = pnlPrev?.grupos || {};
   const stP = k => (subPrev?.st?.[k]) || ZERO12;
+
   const filas = [];
   {
     const pushGrupo = (gk, pol) => {
@@ -936,6 +954,24 @@ export function buildPnLSedeFilas(props, isCol) {
         const cur = pnl.grupos[gk][name];
         if (SEDE_OCULTAR_SI_VACIA.has(_nkSede(name)) && !(cur || []).some(v => Number(v))) continue;
         filas.push({ kind: "cuenta", label: name, cur, prev: (Pg[gk]?.[name] || ZERO12), pol });
+      }
+    };
+    // Comisión por resultados (sedes elegibles) = modelo de PROVISIÓN. El gasto del P&L (header) es el
+    // DEVENGADO del mes (2,5% × resOp), NO el pago → el resultado devenga en tiempo real (para el reporte
+    // del medio). El detalle es la CC del pasivo con el encargado: Devengado − Pagado (liquidado) = Saldo a
+    // pagar (rola, stock). El pago liquidado NO es gasto del P&L: solo baja el saldo. Sin sede elegible
+    // (provMes null) → grupo normal (la cuenta liquidada, como cualquier P&L).
+    const pushComRes = () => {
+      if (!provMes) { pushGrupo("com_res", -1); return; }
+      const devengado = MESES.map((_, m) => COM_ENC_RATE * (Number(comBaseResOp[m]) || 0));
+      const pagado    = sub.st.com_res || ZERO12;
+      let acc = 0;
+      const saldo = MESES.map((_, m) => { acc += (Number(devengado[m]) || 0) - (Number(pagado[m]) || 0); return acc; });
+      filas.push({ kind: "grupo", key: "com_res", label: grupoSede("com_res").label, cur: devengado, prev: stP("com_res"), pol: -1 });
+      if (!isCol("com_res")) {
+        filas.push({ kind: "cuenta", label: "Devengado del mes (2,5%)",    cur: devengado, prev: ZERO12, pol: -1 });
+        filas.push({ kind: "cuenta", label: "Pagado (liquidado)",          cur: pagado,    prev: ZERO12, pol: -1 });
+        filas.push({ kind: "cuenta", label: "Saldo de provisión a pagar",  cur: saldo,     prev: ZERO12, pol: 1, stock: true });
       }
     };
     filas.push({ kind: "banda", key: "sec_ing", label: "Ingresos" });
@@ -948,7 +984,7 @@ export function buildPnLSedeFilas(props, isCol) {
     filas.push({ kind: "subtotal", label: "Total Gastos Operativos", cur: totGastosOp, prev: subPrev.totGastosOp, pol: -1 });
     filas.push({ kind: "result", label: "Resultado Operativo", cur: resOp, prev: subPrev.resOp, pol: 1 });
 
-    let fcfArr = resFinal;   // FCF (o Resultado Final sin cola) → base de la ganancia viva de la distribución
+    let fcfArr = resFinalEff;   // FCF (o Resultado Final sin cola) → base de la ganancia viva de la distribución
     if (impData || finData) {
       // Vista con cola (Fondeadas/Rosedal): Op → Financiero → Impuestos → Resultado Final → Comisión/Inversiones
       // → Free Cash Flow. El FCF es el mismo valor de siempre; solo cambia dónde caen las líneas.
@@ -962,15 +998,15 @@ export function buildPnLSedeFilas(props, isCol) {
       }
       const resFin = resOp.map((v, m) => (Number(v) || 0) + (finData?.total[m] || 0) - (impData?.total[m] || 0));
       filas.push({ kind: "result", label: "Resultado Final", cur: resFin, prev: ZERO12, pol: 1 });
-      pushGrupo("com_res", -1);
+      pushComRes();
       pushGrupo("inv_no_op", -1);
-      fcfArr = resFin.map((v, m) => v - (sub.st.com_res?.[m] || 0) - (sub.st.inv_no_op?.[m] || 0));
+      fcfArr = resFin.map((v, m) => v - (sub.st.com_res?.[m] || 0) - (sub.st.inv_no_op?.[m] || 0) - (provMes ? provMes[m] : 0));
       filas.push({ kind: "result", label: netoLabel, cur: fcfArr, prev: ZERO12, pol: 1 });
     } else {
       // Vista estándar (P&L Sedes): Comisión/Inversiones → Resultado Final (sin cola).
-      pushGrupo("com_res", -1);
+      pushComRes();
       pushGrupo("inv_no_op", -1);
-      filas.push({ kind: "result", label: "Resultado Final", cur: resFinal, prev: subPrev.resFinal, pol: 1 });
+      filas.push({ kind: "result", label: "Resultado Final", cur: resFinalEff, prev: subPrev.resFinal, pol: 1 });
     }
 
     // Distribución del FCF (Rosedal): cuenta corriente por parte (Socios / Ñako-BIGG). Apropiación del resultado
@@ -1119,7 +1155,7 @@ function PnLTableSede(props) {
                   onMouseLeave={e => { e.currentTarget.style.background = T.card; e.currentTarget.firstChild.style.background = T.card; }}>
                   <td style={{ padding: "6px 14px 6px 32px", fontSize: 13, color: f.color || T.text, whiteSpace: "nowrap",
                     borderBottom: `1px solid ${T.cardBorder}`, ...stickyCol, background: T.card }}>{f.label}</td>
-                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "6px 12px", fs: 13, fw: 400, color: f.color || SEDE_HDR })}
+                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "6px 12px", fs: 13, fw: 400, color: f.color || SEDE_HDR, stock: f.stock, lastM })}
                 </tr>
               );
               if (f.kind === "cesion") {
@@ -3336,6 +3372,15 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     () => sinIva ? subSede : computeSubtotalsSede(buildPnLSede(inFx, egFx, resolvedCCSede, year, monedaPL, true)),
     [inFx, egFx, resolvedCCSede, year, monedaPL, sinIva, subSede]
   );
+  // Base de la comisión de encargados (2,5%): resOp SIN IVA de SOLO las sedes elegibles ∩ scope. Si el scope
+  // no toca ninguna elegible (Botánico solo, Rosedal/España/Colombia) → null → la línea calculada no aparece.
+  // Si todo el scope ya es elegible, reuso subSedeNet (evita un build extra).
+  const comBaseResOp = useMemo(() => {
+    const ccs = resolvedCCSede.filter(id => SEDES_COMISION_CC.has(String(id).toLowerCase()));
+    if (ccs.length === 0) return null;
+    if (ccs.length === resolvedCCSede.length) return subSedeNet?.resOp || null;
+    return computeSubtotalsSede(buildPnLSede(inFx, egFx, ccs, year, monedaPL, true)).resOp;
+  }, [inFx, egFx, resolvedCCSede, year, monedaPL, subSedeNet]);
   // Retiros de la cesión (cuenta "Inversores") SIEMPRE con IVA (total), independiente del toggle: el retiro es
   // el efectivo real pagado al inversor. Tomo la versión Con IVA del pnl de sede.
   const cesionRetirosCI = useMemo(() => {
@@ -3558,6 +3603,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     const baseSede = {
       pnl: pnlSede, sub: subSede, pnlPrev: pnlSedePrev, subPrev: subSedePrev, year,
       nombreCuenta, cesion: cesionSede, cesionResFinal: subSedeNet?.resFinal, cesionRetiros: cesionRetirosCI,
+      comBaseResOp,
       impuestos: isFond ? IMPUESTOS_FOND : null, financieros: isFond ? FINANCIEROS_FOND : null,
       distribucion: activeTab === "op_rosedal" ? distribRosedalFx : null,
       retirosVivos: activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null,
@@ -3890,6 +3936,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
         <PnLTableSede pnl={pnlSede} sub={subSede} pnlPrev={pnlSedePrev} subPrev={subSedePrev}
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} nombreCuenta={nombreCuenta}
           cesion={cesionSede} cesionResFinal={subSedeNet?.resFinal} cesionRetiros={cesionRetirosCI}
+          comBaseResOp={comBaseResOp}
           impuestos={isFond ? IMPUESTOS_FOND : null} financieros={isFond ? FINANCIEROS_FOND : null}
           distribucion={activeTab === "op_rosedal" ? distribRosedalFx : null}
           retirosVivos={activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null}
