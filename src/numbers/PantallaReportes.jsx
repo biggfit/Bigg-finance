@@ -369,14 +369,14 @@ function ResultadoRow({ label, values, activeMonths, strong, noBottom = false })
 // (verde/rojo) se reserva para las líneas de resultado. Las bandas de sección aportan la estructura.
 const SEDE_HDR = "#475569";   // slate — encabezados de subgrupo y montos de cuenta
 const SEDE_GRUPOS = [
-  { key: "vta_cf",    label: "Ventas consumidor final",  color: SEDE_HDR, cuentas: ["Ventas Mercado Pago", "Ing.Stripe", "Ing. Datafono", "Ing. via Banco", "Ing. Efectivo", "Depositos", "Ventas en Efectivo", "Otros Ingresos"] },
+  { key: "vta_cf",    label: "Ventas consumidor final",  color: SEDE_HDR, cuentas: ["Ventas Mercado Pago", "Ing.Stripe", "Ing. Datafono", "Ing. via Banco", "Ing. Efectivo", "Depositos", "Ventas en Efectivo", "Otros Ingresos", "Ventas", "Efectivo", "Devolucion"] },
   { key: "int_bigg",  label: "Interusos red BIGG",       color: SEDE_HDR, cuentas: ["Interusos", "Interusos Genericos"] },
   { key: "int_corp",  label: "Interusos corporativos",   color: SEDE_HDR, cuentas: ["Coorporativos", "Interusos Gympass"] },
-  { key: "cvar",      label: "Costos Variables",         color: SEDE_HDR, cuentas: ["Fee Facturación", "Fee Facturacion", "Fees Stripe", "Aranceles y Otros Financieros", "IIBB", "Imp. Cred. y Deb."] },
-  { key: "gp_pers",   label: "Personal",                 color: SEDE_HDR, cuentas: ["Sueldos", "Incentivos", "Comisiones", "Cargas Sociales", "Otros Gastos Salariales", "Aguinaldos", "Costos Salariales"] },
+  { key: "cvar",      label: "Costos Variables",         color: SEDE_HDR, cuentas: ["Fee Facturación", "Fee Facturacion", "Fees Stripe", "Aranceles y Otros Financieros", "IIBB", "Imp. Cred. y Deb.", "Aranceles / Pasarela de Pagos", "Gastos Financieros"] },
+  { key: "gp_pers",   label: "Personal",                 color: SEDE_HDR, cuentas: ["Sueldos", "Incentivos", "Comisiones", "Cargas Sociales", "Otros Gastos Salariales", "Aguinaldos", "Costos Salariales", "Otros gastos Salariales"] },
   { key: "gp_ocup",   label: "Ocupación",                color: SEDE_HDR, cuentas: ["Alquiler", "Expensas", "ABL", "Servicios"] },
   { key: "gp_mkt",    label: "Mkt y Pauta",              color: SEDE_HDR, cuentas: ["Acciones de Mkt", "Pauta"] },
-  { key: "gp_otros",  label: "Otros Gastos de la Sede",  color: SEDE_HDR, cuentas: ["Honorarios Profesionales", "Equipamiento y Mantenimiento", "Limpieza", "Otros Gastos del Centro", "Gastos Menores de Caja"] },
+  { key: "gp_otros",  label: "Otros Gastos de la Sede",  color: SEDE_HDR, cuentas: ["Honorarios Profesionales", "Equipamiento y Mantenimiento", "Limpieza", "Otros Gastos del Centro", "Gastos Menores de Caja", "Gastos sin Asignar"] },
   { key: "com_res",   label: "Comisión por resultados",  color: SEDE_HDR, cuentas: ["Comision S/Resultado"] },
   { key: "inv_no_op", label: "Inversiones no operativas", color: SEDE_HDR, cuentas: ["Inversiones / Gastos no Operativos"] },
 ];
@@ -454,7 +454,7 @@ function computeImpuestos(sinClasificar, matchers, resFinal) {
 // (Huergo NO entra acá: es anillo 1, sin cola de impuestos.)
 const FONDEADAS = {
   op_espana:   { empresa: "wellness",   moneda: "EUR", label: "España",   familia: "propios", estructuraCC: "cc-2026-88271" },
-  op_colombia: { empresa: "tigre-loco", moneda: "COP", label: "Colombia", familia: "propios" },
+  op_colombia: { empresa: "tigre-loco", moneda: "USD", label: "Colombia", familia: "propios", estructuraCuenta: "Estructura Tigre Loco" },   // USD consolidado; estructura = cuenta, no centro
   op_puertos:  { empresa: "puertos",    moneda: "USD", label: "Puertos",  familia: "propios" },
   op_rosedal:  { empresa: "segui-fit",  moneda: "ARS", label: "Rosedal",  familia: "gerenciamiento", netoLabel: "Free Cash Flow" },
 };
@@ -463,7 +463,7 @@ const FONDEADAS = {
 // que pertenece a esta cola. Sin esto quedaban en "Sin clasificar", fuera de todo total.
 // TODO: esta lista curada por nombre debería salir de categoria_pnl="impuestos" en maestros —
 // hoy cada cuenta de impuesto nueva hay que acordarse de agregarla acá o desaparece del resultado.
-const IMPUESTOS_FOND = ["IVA", "Ganancias", "Retenciones"];
+const IMPUESTOS_FOND = ["IVA", "Ganancias", "Retenciones", "RTEFTE", "RTEICA"];   // RTEFTE/RTEICA = retenciones Colombia
 // Cola de resultado financiero (Fondeadas/Rosedal): cuentas de "Sin clasificar" que son financieras
 // (intereses ganados suma, pérdidas financieras resta) → línea debajo de impuestos, antes del neto/FCF.
 const FINANCIEROS_FOND = ["Intereses Ganados", "Perdidas Financieras"];
@@ -965,7 +965,9 @@ export function buildPnLSedeFilas(props, isCol) {
   // sedes juntas) NO es una cuenta "sin clasificar" real → se oculta SIEMPRE del diagnóstico. Es un match por
   // nombre exacto a esa única cuenta: cualquier otra cuenta genuinamente sin clasificar sigue con su alerta.
   const invKey = Object.keys(pnl.sinClasificar).find(k => _nkSede(k) === _nkSede(CESION_CUENTA));
-  const hidden = new Set([cesKey, invKey, ...(impData?.keys || []), ...(finData?.keys || [])].filter(Boolean));
+  // Cuenta de estructura (Colombia: "Estructura Tigre Loco") → se muestra como su propia línea, no en Sin clasificar.
+  const estrKey = estructuraCuota ? Object.keys(pnl.sinClasificar).find(k => _nkSede(k) === _nkSede(estructuraLabel)) : null;
+  const hidden = new Set([cesKey, invKey, estrKey, ...(impData?.keys || []), ...(finData?.keys || [])].filter(Boolean));
   const sinClasView = hidden.size
     ? Object.fromEntries(Object.entries(pnl.sinClasificar).filter(([k]) => !hidden.has(k)))
     : pnl.sinClasificar;
@@ -3215,6 +3217,9 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   // agregado "Todas las Sedes" (sus ventas/cvar/IVA son parte del consolidado). Su OPEX se separa como línea
   // "Estructura Wellness" (abajo de Total Gastos Operativos), y en una sede sola se prorratea por ventas.
   const estructuraCCId = fondCfg?.estructuraCC || null;
+  // Colombia: la estructura es una CUENTA ("Estructura Tigre Loco") dentro del único centro consolidado
+  // (no un centro aparte como Wellness). Se saca de "Sin clasificar" y se muestra como línea propia.
+  const estructuraCuentaName = fondCfg?.estructuraCuenta || null;
   const sedeCCsSel = useMemo(   // sedes SELECCIONABLES (sin el centro de estructura)
     () => estructuraCCId ? sedeCCs.filter(c => ccKey(c.id) !== ccKey(estructuraCCId)) : sedeCCs,
     [sedeCCs, estructuraCCId]
@@ -3461,6 +3466,17 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       return den ? estructuraOpexFull[m] * (Number(ventasScope[m]) || 0) / den : 0;
     });
   }, [estructuraOpexFull, wellnessEnScope, ventasTotalesSedes, pnlSede]);
+  // Colombia: valores de la cuenta "Estructura Tigre Loco" (viven en Sin clasificar del centro consolidado).
+  const estructuraCuentaVals = useMemo(() => {
+    if (!estructuraCuentaName) return null;
+    const k = Object.keys(pnlSede.sinClasificar).find(x => _nkSede(x) === _nkSede(estructuraCuentaName));
+    return k ? pnlSede.sinClasificar[k] : ZERO12;
+  }, [estructuraCuentaName, pnlSede]);
+  // Estructura efectiva a pasar a la tabla: centro (España, ya está dentro de Gastos Op → estructuraEnOpex)
+  // o cuenta (Colombia, fuera de Gastos Op → resta al Resultado Operativo). Label según la lente.
+  const estructuraCuotaEff  = estructuraCuota ?? estructuraCuentaVals;
+  const estructuraEnOpexEff = estructuraCuota ? wellnessEnScope : false;
+  const estructuraLabelEff  = estructuraCuentaName || "Estructura Wellness";
 
   // Retiros de la cesión (cuenta "Inversores") SIEMPRE con IVA (total), independiente del toggle: el retiro es
   // el efectivo real pagado al inversor. Tomo la versión Con IVA del pnl de sede.
@@ -3684,7 +3700,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     const baseSede = {
       pnl: pnlSede, sub: subSede, pnlPrev: pnlSedePrev, subPrev: subSedePrev, year,
       nombreCuenta, cesion: cesionSede, cesionResFinal: subSedeNet?.resFinal, cesionRetiros: cesionRetirosCI,
-      comBaseResOp, estructuraCuota, estructuraEnOpex: wellnessEnScope,
+      comBaseResOp, estructuraCuota: estructuraCuotaEff, estructuraEnOpex: estructuraEnOpexEff, estructuraLabel: estructuraLabelEff,
       impuestos: isFond ? IMPUESTOS_FOND : null, financieros: isFond ? FINANCIEROS_FOND : null,
       distribucion: activeTab === "op_rosedal" ? distribRosedalFx : null,
       retirosVivos: activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null,
@@ -4017,7 +4033,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
         <PnLTableSede pnl={pnlSede} sub={subSede} pnlPrev={pnlSedePrev} subPrev={subSedePrev}
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} nombreCuenta={nombreCuenta}
           cesion={cesionSede} cesionResFinal={subSedeNet?.resFinal} cesionRetiros={cesionRetirosCI}
-          comBaseResOp={comBaseResOp} estructuraCuota={estructuraCuota} estructuraEnOpex={wellnessEnScope}
+          comBaseResOp={comBaseResOp} estructuraCuota={estructuraCuotaEff} estructuraEnOpex={estructuraEnOpexEff} estructuraLabel={estructuraLabelEff}
           impuestos={isFond ? IMPUESTOS_FOND : null} financieros={isFond ? FINANCIEROS_FOND : null}
           distribucion={activeTab === "op_rosedal" ? distribRosedalFx : null}
           retirosVivos={activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null}
