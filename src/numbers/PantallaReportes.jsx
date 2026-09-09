@@ -674,7 +674,7 @@ const GRAF_CATS = [
   { key: "oper",    label: "Rosedal + Huergo", color: "#eb6834" },
   { key: "reg",     label: "Regalías",         color: "#1baf7a" },
   { key: "corp",    label: "Coorporativos",    color: "#eda100" },
-  { key: "lic",     label: "Licencia de Marca",color: "#e87ba4" },
+  { key: "lic",     label: "Access Fees",      color: "#e87ba4" },
   { key: "app",     label: "Gympass",          color: "#008300" },
   { key: "spon",    label: "Sponsor",          color: "#4a3aa7" },
   { key: "otros",   label: "Otros HQ",         color: "#e34948" },
@@ -685,7 +685,7 @@ function GraficoComposicion({ sub, year, caption, hayHistorico, mesMax, onClose 
   const serie = {
     sar: sub.sar || ZERO12,
     oper: MESES.map((_, m) => (Number(sub.fg?.[m]) || 0) + (Number(sub.wre?.[m]) || 0)),
-    reg: g("Regalias s/Ventas"), corp: g("Coorporativos"), lic: g("Licencia Uso de Marca"),
+    reg: g("Regalias s/Ventas"), corp: g("Coorporativos"), lic: g("Access Fees"),
     app: g("APP (Gympass)"), spon: g("Sponsor"),
     otros: MESES.map((_, m) => (Number(g("Pauta")[m]) || 0) + (Number(g("Otros Ingresos")[m]) || 0)),
   };
@@ -1368,7 +1368,7 @@ const BIGG_GRUPOS = [
 // Orden de las cuentas dentro de cada subgrupo (display; las que no figuran van al final, alfabéticas).
 // Hardcodeado a propósito: es presentación, bajo riesgo (un nombre que no matchea solo se ordena último).
 const BIGG_ORDEN = [
-  "Regalias s/Ventas", "Licencia Uso de Marca", "Equipamientos", "Coorporativos (Gympass)",
+  "Access Fees", "Regalias s/Ventas", "Equipamientos", "Coorporativos (Gympass)",
   "Coorporativos", "APP (Gympass)", "Sponsor", "Pauta", "Otros Ingresos",
 ];
 
