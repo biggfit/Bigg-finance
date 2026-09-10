@@ -364,6 +364,10 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const [filtroTipo, setFiltroTipo] = useState("");   // filtro por grupo de Propuesta (para aprobar por grupos)
   const [busqueda,   setBusqueda]   = useState("");   // texto libre: filtra por descripción/proveedor (ej. juntar todo un proveedor)
   const [verIgnorados,setVerIgnorados]= useState(false);
+  const [verConciliados, setVerConciliados] = useState(false); // colapsable, al lado de "Ignorados": no cambia la vista por defecto
+  const [concDesde,  setConcDesde]  = useState("");   // filtro de fecha del histórico "Conciliados"
+  const [concHasta,  setConcHasta]  = useState("");
+  const [saldoRealInput, setSaldoRealInput] = useState({}); // cuentaTab → texto tipeado a mano para comparar contra el saldo real del homebanking
   const [reglaModal, setReglaModal] = useState(null);  // {prefill} para crear regla desde una línea
   const [loading,    setLoading]    = useState(true);
   const [uploading,  setUploading]  = useState(false);
@@ -1358,6 +1362,65 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   // Memoizado: puedeAceptarMov es caro (frState/cuotaState/haberesMatch por fila) y esto corre por render.
   const listosCount = useMemo(() => filtered.filter(puedeAceptarMov).length, [filtered, edits, cuotasPendientes]);
 
+  // ── Conciliados: todo lo que ya salió de "pendientes" en esta cuenta (matcheado solo contra un
+  // pago/cobro ya cargado, imputado a factura, transferencia, gasto/ingreso directo, o ignorado).
+  // Sirve para auditar cuando el banco "no da": hoy esto queda desperdigado en Egresos/Ingresos/
+  // Tesorería (o invisible del todo, si matcheó solo) sin un lugar que junte todo por cuenta+fecha.
+  const ctaNombre = (id) => cuentasAll.find(c => String(c.id) === String(id))?.nombre || (id || "—");
+  const egresoPorId  = useMemo(() => new Map(egresos.map(e => [String(e.id), e])),  [egresos]);
+  const ingresoPorId = useMemo(() => new Map(ingresos.map(e => [String(e.id), e])), [ingresos]);
+  const estadoConciliado = (m) => {
+    if (m._ignorado) return { label: "Ignorado", color: "#dc2626" };
+    const doc = String(m.documento_id || "");
+    if (m.origen === "extracto") {
+      if (doc.startsWith("CONTAB-")) return { label: "Directo", color: "#2563eb" };
+      if (doc.startsWith("TRF-") || doc.startsWith("INTERCOMPANY-")) return { label: "Transferencia", color: "#7c3aed" };
+      if (doc) return { label: "Imputado a FC", color: "#16a34a" };
+    }
+    if ((m.origen === "pago" || m.origen === "cobro") && m.extracto_saldo) return { label: "Auto-match", color: "#0891b2" };
+    return { label: m.tipo || "—", color: T.muted };
+  };
+  const detalleConciliado = (m) => {
+    if (m._ignorado) {
+      const ig = parseMeta(m.referencia).ign || "";
+      return ig ? `Motivo: ${ig}` : "—";
+    }
+    if (m.tipo === "PAGO" || m.tipo === "COBRO") {
+      const fc = (m.tipo === "PAGO" ? egresoPorId : ingresoPorId).get(String(m.documento_id));
+      if (fc) return `${(m.tipo === "PAGO" ? fc.proveedor : fc.cliente) || "—"} · FC ${fc.nroComp || fc.id}`;
+    }
+    const doc = String(m.documento_id || "");
+    if (doc.startsWith("TRF-") || doc.startsWith("INTERCOMPANY-")) return `→ ${ctaNombre(m.cuenta_destino)}`;
+    return m.cuenta_contable || "—";
+  };
+  const conciliadosCuenta = useMemo(() => {
+    const resueltos = movsCuenta.filter(m => String(m.cuenta_bancaria) === String(cuentaTab) &&
+      ((m.origen === "extracto" && m.documento_id) ||
+       ((m.origen === "pago" || m.origen === "cobro") && m.extracto_saldo)));
+    const ign = ignorados.filter(m => String(m.cuenta_bancaria) === String(cuentaTab)).map(m => ({ ...m, _ignorado: true }));
+    let list = [...resueltos, ...ign];
+    if (concDesde) list = list.filter(m => (m.fecha || "") >= concDesde);
+    if (concHasta) list = list.filter(m => (m.fecha || "") <= concHasta);
+    return list.sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
+  }, [movsCuenta, ignorados, cuentaTab, concDesde, concHasta]);
+  const totalConciliado = useMemo(() => conciliadosCuenta.reduce((s, m) => s + (Number(m.monto) || 0), 0), [conciliadosCuenta]);
+
+  // ── Chequeo de saldo: compara el ÚLTIMO saldo que el banco informó (columna "saldo" del extracto,
+  // clavada en extracto_saldo — no algo que calculemos nosotros) contra lo que el usuario ve HOY en
+  // su homebanking. Se fija en pendientes + conciliados + ignorados: una línea ignorada sigue siendo
+  // plata real que el banco ya contó, así que también cuenta para saber "hasta dónde es válido este saldo".
+  // Algunos parsers (InterAudi) no traen saldo corriente y usan un id sintético como clave de dedup
+  // ("IA-3") → Number() de eso da NaN y se descarta correctamente.
+  const cuentaCandidatosSaldo = useMemo(
+    () => [...movsCuenta, ...ignorados].filter(m => String(m.cuenta_bancaria) === String(cuentaTab)),
+    [movsCuenta, ignorados, cuentaTab]);
+  const ultimoSaldoBanco = useMemo(() => {
+    const validos = cuentaCandidatosSaldo.filter(m =>
+      String(m.extracto_saldo ?? "").trim() !== "" && Number.isFinite(Number(m.extracto_saldo)));
+    return validos.reduce((best, m) => (!best || (m.fecha || "") > (best.fecha || "")) ? m : best, null);
+  }, [cuentaCandidatosSaldo]);
+  const saldoNoDisponible = cuentaCandidatosSaldo.length > 0 && !ultimoSaldoBanco;
+
   // Re-evaluar las reglas actuales sobre los pendientes de la cuenta (sin re-subir ni escribir):
   // reconstruye la línea desde el movimiento, la clasifica y pre-carga la propuesta en `edits`.
   // El usuario revisa y acepta (las reglas escala/auto caen como propuesta, no se contabilizan solas).
@@ -2201,17 +2264,29 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         )}
       </div>
 
-      {/* Ignorados de la cuenta activa: descartados sin contabilizar, restaurables. */}
+      {/* Ignorados y Conciliados de la cuenta activa: ambos colapsados por defecto — no cambian la
+          pantalla de todos los días, están ahí para cuando hace falta auditar. */}
       {(() => {
         const ign = ignorados.filter(m => String(m.cuenta_bancaria) === String(cuentaTab));
-        if (!ign.length) return null;
+        if (!ign.length && !conciliadosCuenta.length) return null;
         return (
           <div style={{ marginTop: 10 }}>
-            <button onClick={() => setVerIgnorados(v => !v)}
-              style={{ background: "transparent", border: "none", color: T.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: T.font, padding: 0 }}>
-              {verIgnorados ? "▾" : "▸"} Ignorados ({ign.length})
-            </button>
-            {verIgnorados && (
+            <div style={{ display: "flex", gap: 16 }}>
+              {ign.length > 0 && (
+                <button onClick={() => setVerIgnorados(v => !v)}
+                  style={{ background: "transparent", border: "none", color: T.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: T.font, padding: 0 }}>
+                  {verIgnorados ? "▾" : "▸"} Ignorados ({ign.length})
+                </button>
+              )}
+              {conciliadosCuenta.length > 0 && (
+                <button onClick={() => setVerConciliados(v => !v)}
+                  style={{ background: "transparent", border: "none", color: T.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: T.font, padding: 0 }}>
+                  {verConciliados ? "▾" : "▸"} Conciliados ({conciliadosCuenta.length})
+                </button>
+              )}
+            </div>
+
+            {verIgnorados && ign.length > 0 && (
               <div style={{ marginTop: 6, background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 8, maxHeight: 360, overflowY: "auto" }}>
                 {ign.map(m => {
                   const ig = parseMeta(m.referencia).ign || "";
@@ -2228,6 +2303,98 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                     </div>
                   );
                 })}
+              </div>
+            )}
+
+            {verConciliados && conciliadosCuenta.length > 0 && (
+              <div style={{ marginTop: 6 }}>
+                {/* Chequeo de saldo: el saldo que el banco informó en la última línea cargada (propio
+                    o conciliado, no un cálculo nuestro) vs. lo que el usuario ve hoy en su homebanking. */}
+                {(ultimoSaldoBanco || saldoNoDisponible) && (
+                  <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    {saldoNoDisponible ? (
+                      <span>Este banco no informa saldo corriente en el extracto — no se puede chequear automáticamente.</span>
+                    ) : (() => {
+                      const real = saldoRealInput[cuentaTab] ?? "";
+                      const realNum = real.trim() === "" ? null : Number(real.replace(",", "."));
+                      const diff = (realNum !== null && Number.isFinite(realNum)) ? realNum - Number(ultimoSaldoBanco.extracto_saldo) : null;
+                      const ok = diff !== null && Math.abs(diff) < 0.01;
+                      return (
+                        <>
+                          <span>Saldo informado por el banco al <b>{fmtDate(ultimoSaldoBanco.fecha)}</b>: <b>{fmt(Number(ultimoSaldoBanco.extracto_saldo))}</b></span>
+                          <span style={{ color: T.dim }}>·</span>
+                          <label style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                            Saldo real hoy (opcional)
+                            <input value={real} onChange={e => setSaldoRealInput(prev => ({ ...prev, [cuentaTab]: e.target.value }))}
+                              placeholder="0.00" inputMode="decimal"
+                              style={{ width: 100, fontSize: 12, padding: "3px 7px", borderRadius: 6, border: `1px solid ${T.cardBorder}`, background: "#fff", color: T.text, fontFamily: T.font }} />
+                          </label>
+                          {diff !== null && Number.isFinite(diff) && (
+                            ok
+                              ? <span style={{ fontWeight: 700, color: "#16a34a" }}>Coincide ✓</span>
+                              : <span style={{ fontWeight: 700, color: "#dc2626" }}>Diferencia: {fmt(diff)}</span>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+                  <label style={{ fontSize: 11.5, color: T.muted, display: "flex", alignItems: "center", gap: 5 }}>
+                    Desde
+                    <input type="date" value={concDesde} onChange={e => setConcDesde(e.target.value)}
+                      style={{ fontSize: 12, padding: "4px 7px", borderRadius: 6, border: `1px solid ${T.cardBorder}`, background: "#fff", color: T.text, fontFamily: T.font }} />
+                  </label>
+                  <label style={{ fontSize: 11.5, color: T.muted, display: "flex", alignItems: "center", gap: 5 }}>
+                    Hasta
+                    <input type="date" value={concHasta} onChange={e => setConcHasta(e.target.value)}
+                      style={{ fontSize: 12, padding: "4px 7px", borderRadius: 6, border: `1px solid ${T.cardBorder}`, background: "#fff", color: T.text, fontFamily: T.font }} />
+                  </label>
+                  {(concDesde || concHasta) && (
+                    <button onClick={() => { setConcDesde(""); setConcHasta(""); }}
+                      style={{ background: "transparent", border: "none", color: T.muted, fontSize: 11.5, cursor: "pointer", fontFamily: T.font, textDecoration: "underline" }}>
+                      limpiar rango
+                    </button>
+                  )}
+                  <span style={{ marginLeft: "auto", fontSize: 12, fontWeight: 700, color: T.muted }}>
+                    Neto del período: <b style={{ color: totalConciliado < 0 ? "#dc2626" : "#16a34a" }}>{fmt(totalConciliado)}</b>
+                  </span>
+                </div>
+                <div className="nb-hscroll" style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 8, maxHeight: 420, overflow: "auto" }}>
+                  {conciliadosCuenta.length === 0 ? (
+                    <div style={{ padding: 30, textAlign: "center", color: T.muted, fontSize: 13 }}>
+                      Nada en ese rango de fechas.
+                    </div>
+                  ) : (
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ background: T.tableHead, position: "sticky", top: 0, zIndex: 1 }}>
+                          {[["Fecha","left"],["Descripción","left"],["Monto","right"],["Estado","left"],["Detalle","left"]].map(([h, al]) => (
+                            <th key={h} style={{ padding: "8px 12px", textAlign: al, fontSize: 10, fontWeight: 700,
+                              color: T.tableHeadText, letterSpacing: ".06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {conciliadosCuenta.map((m, i) => {
+                          const est = estadoConciliado(m);
+                          const neg = Number(m.monto) < 0;
+                          return (
+                            <tr key={m.id} style={{ background: i % 2 ? "#eef2f7" : "#ffffff", borderBottom: "1px solid #f1f5f9" }}>
+                              <td style={{ padding: "7px 12px", color: T.muted, whiteSpace: "nowrap" }}>{fmtDate(m.fecha)}</td>
+                              <td style={{ padding: "7px 12px", color: T.text, maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.concepto || "—"}</td>
+                              <td style={{ padding: "7px 12px", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap", color: neg ? "#dc2626" : "#16a34a" }}>{fmt(Math.abs(Number(m.monto) || 0))}</td>
+                              <td style={{ padding: "7px 12px", whiteSpace: "nowrap" }}>
+                                <span style={{ fontSize: 10, fontWeight: 800, color: est.color, background: `${est.color}18`, borderRadius: 6, padding: "2px 8px" }}>{est.label}</span>
+                              </td>
+                              <td style={{ padding: "7px 12px", color: T.muted, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{detalleConciliado(m)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
               </div>
             )}
           </div>
