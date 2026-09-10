@@ -1162,11 +1162,12 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       // para que quede como contraparte (y no la glosa del banco).
       const provId  = ed.proveedor_id || meta.prov || "";
       const provNom = provId ? (proveedores.find(p => String(p.id) === String(provId))?.nombre || "") : "";
+      // El P&L de un gasto/ingreso rápido de caja SIEMPRE se contabiliza en el mes de la fecha del banco
+      // (no se permite mandarlo a un mes anterior) → no se envía periodo_contable.
       await aceptarMovimiento(mov, {
         tipo, cuenta_contable: ed.cuenta_contable || mov.cuenta_contable || "",
         centro_costo: ed.centro_costo || mov.centro_costo || "",
         proveedor_id: provId, proveedor_nombre: provNom,
-        periodo_contable: ed.periodo_contable || "",
       });
     }
     setPendientes(prev => prev.filter(m => m.id !== mov.id));
@@ -2182,10 +2183,6 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                             <option value="">— centro —</option>
                             {centroOptionsEls}
                           </select>
-                          <input type="month" value={edits[m.id]?.periodo_contable || ""}
-                            onChange={e => setEdit(m.id, "periodo_contable", e.target.value)}
-                            title="Período P&L, si es distinto al mes de esta fecha (ej. nómina devengada el mes anterior al pago). Vacío = usa la fecha del banco."
-                            style={{ ...sel, width: 112 }} />
                         </div>
                       )}
                     </td>
