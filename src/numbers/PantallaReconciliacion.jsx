@@ -1400,9 +1400,14 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     return m.cuenta_contable || "—";
   };
   const conciliadosCuenta = useMemo(() => {
+    // "Todo lo que no está esperando en Pendientes" — no una lista de tipos conocidos. La versión
+    // anterior solo incluía extracto-imputado/transferencia/directo y pago/cobro auto-matcheado:
+    // dejaba afuera (invisibles, ni en Pendientes ni acá) cosas como pago de tarjeta, gestión/interco,
+    // sueldos, retenciones, o un pago manual nunca matcheado — que sí suman al saldo de la cuenta.
+    // Confirmado con un descuadre real (Ñako/Galicia ARS): la marca "sin extracto" nunca aparecía
+    // porque el movimiento candidato ni siquiera estaba en esta lista.
     const resueltos = movsCuenta.filter(m => String(m.cuenta_bancaria) === String(cuentaTab) &&
-      ((m.origen === "extracto" && m.documento_id) ||
-       ((m.origen === "pago" || m.origen === "cobro") && m.extracto_saldo)));
+      !(m.origen === "extracto" && !m.documento_id));
     const ign = ignorados.filter(m => String(m.cuenta_bancaria) === String(cuentaTab)).map(m => ({ ...m, _ignorado: true }));
     let list = [...resueltos, ...ign];
     if (concDesde) list = list.filter(m => (m.fecha || "") >= concDesde);
