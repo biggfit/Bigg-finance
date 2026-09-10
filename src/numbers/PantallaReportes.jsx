@@ -3042,6 +3042,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const [socios,    setSocios]    = useState([]);        // maestro de socios (group-level)
   const [sociosCC,  setSociosCC]  = useState([]);        // cuenta corriente de socios no-cash (dividendos + apertura)
   const [rawFranq,  setRawFranq]  = useState({});        // comprobantes de Franquicias (read-only)
+  const [cargaFallida, setCargaFallida] = useState([]);  // fuentes secundarias lentas que NO cargaron (tras reintentos) → aviso
   const [intercoData,  setIntercoData]  = useState({ movs: [], comps: [], centros: [] });  // fuentes interco (read-only, todas las sociedades)
   const [sociedades,   setSociedades]   = useState([]);  // maestro sociedades (id→nombre/anillo)
   const [loading,   setLoading]   = useState(true);
@@ -3073,11 +3074,12 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
-      setLoading(true); setError(null);
+      setLoading(true); setError(null); setCargaFallida([]);
       try {
         // Sueldos (liquidaciones + pagos) vive en otro backend → se dispara en paralelo al batch de Numbers.
-        const liqsP  = fetchLiquidacionesCerradas().catch(() => []);
-        const pagosP = fetchPagosAnio().catch(() => []);
+        // Envuelto para saber si cargó (tras reintentos): si falla, el P&L queda sin sueldos → avisamos.
+        const liqsP  = fetchLiquidacionesCerradas().then(v => ({ ok: true, v })).catch(() => ({ ok: false, v: [] }));
+        const pagosP = fetchPagosAnio().then(v => ({ ok: true, v })).catch(() => ({ ok: false, v: [] }));
         // Batch: 8 hojas group-wide de Numbers en UNA llamada → los fetch de abajo salen de caché.
         await primeCache([
           { resource: "nb_comprobantes" },
@@ -3101,8 +3103,10 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
           fetchSocios().catch(() => []),
           fetchSociosCC().catch(() => []),
         ]);
-        const [liqsC, pagosS] = [await liqsP, await pagosP];
+        const [liqsR, pagosR] = [await liqsP, await pagosP];
+        const liqsC = liqsR.v, pagosS = pagosR.v;
         if (cancelled) return;
+        if (!liqsR.ok || !pagosR.ok) setCargaFallida(f => f.includes("Sueldos") ? f : [...f, "Sueldos"]);
         setRawEg(eg);
         setRawIn(ing);
         setRawMovs(Array.isArray(movs) ? movs : []);
@@ -3115,7 +3119,8 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
         setSocios(Array.isArray(socs) ? socs : []);
         setSociosCC(Array.isArray(socsCC) ? socsCC : []);
         // Franquicias (read-only) — fuera del Promise.all para NO bloquear Reportes si ese backend tarda.
-        fetchComps().then(c => { if (!cancelled && c && typeof c === "object") setRawFranq(c); }).catch(() => {});
+        fetchComps().then(c => { if (!cancelled && c && typeof c === "object") setRawFranq(c); })
+          .catch(() => { if (!cancelled) setCargaFallida(f => f.includes("Franquicias") ? f : [...f, "Franquicias"]); });
         // Intercompañía (read-only) — todas las fuentes (fondeo + transfers) + maestro sociedades (anillo).
         // `fetchIntercoData` ya trae `sociedades`, así que no hace falta un fetch aparte.
         fetchIntercoData().then(d => {
@@ -3750,6 +3755,22 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     // --border (dark, del theme global del shell) → cardBorder claro: las tablas de reportes viven en
     // cards blancas; así la regla global `td/th{border:var(--border)}` no pinta líneas oscuras sobre blanco.
     <div style={{ padding: "28px 32px", maxWidth: 1400, "--border": T.cardBorder }} className="fade">
+
+      {/* Aviso: alguna fuente secundaria lenta (Franquicias/Sueldos) no cargó tras reintentos → el P&L
+           puede estar incompleto. Mejor avisar que mostrar el número a medias en silencio. */}
+      {cargaFallida.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+          background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 10, padding: "10px 16px", marginBottom: 16 }}>
+          <div style={{ fontSize: 13, color: "#92400e", fontWeight: 600, lineHeight: 1.4 }}>
+            ⚠ No cargó <strong>{cargaFallida.join(" y ")}</strong> (backend lento). El P&amp;L puede estar incompleto — recargá.
+          </div>
+          <button onClick={() => setLoadKey(k => k + 1)} style={{
+            flexShrink: 0, background: "#92400e", color: "#fff", border: "none", borderRadius: 999,
+            padding: "6px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: T.font }}>
+            Recargar
+          </button>
+        </div>
+      )}
 
       {/* ── Header del reporte: "← Reportes" al lado del título; a la derecha vista + menú ⋮ ──
            CxP/CxC arman su propio header (Volver reemplaza a Reportes en el drill), así que acá se omite. */}

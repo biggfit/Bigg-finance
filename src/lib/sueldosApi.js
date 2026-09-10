@@ -27,7 +27,7 @@ function cacheGet(key) {
 
 // ── Helpers HTTP ──────────────────────────────────────────────────────────────
 
-async function get(sheet, params = {}, base = BASE, { retries = 2, retryDelayMs = 1200 } = {}) {
+async function get(sheet, params = {}, base = BASE, { retries = 3, retryDelayMs = 1200 } = {}) {
   // `_cb` (solo en la ventana de refresco) saltea la caché de borde del CDN — ver cacheBust.js.
   const cb = bustToken();
   const qs = new URLSearchParams({ resource: sheet, token: TOKEN, ...params, ...(cb ? { _cb: cb } : {}) }).toString();
