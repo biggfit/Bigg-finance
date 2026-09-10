@@ -1479,6 +1479,18 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const saldoCuentaTab = useMemo(
     () => movsCuentaTab.reduce((s, m) => s + (Number(m.monto) || 0), 0),
     [movsCuentaTab]);
+  // Tercera explicación posible (además de duplicado y "sin extracto"): un ignorado saca esa plata
+  // del cálculo de Numbers, pero el banco SÍ la tuvo. Si el ignorado es un duplicado de una liquidación
+  // de sueldos ya cargada por otro lado (tag "haberes:" en el motivo), esa plata ya está contada en
+  // OTRA fila y no hay gap real. Si no tiene esa marca, es plata que el banco movió y Numbers descartó
+  // sin reemplazo — candidata a explicar por qué el saldo no cierra.
+  const ignoradosSinExplicar = useMemo(
+    () => ignorados.filter(m => String(m.cuenta_bancaria) === String(cuentaTab) &&
+      !parseMeta(m.referencia).ign?.startsWith("haberes:")),
+    [ignorados, cuentaTab]);
+  const totalIgnoradoSinExplicar = useMemo(
+    () => ignoradosSinExplicar.reduce((s, m) => s + (Number(m.monto) || 0), 0),
+    [ignoradosSinExplicar]);
   const diasUltimaCarga = ultimaCarga[cuentaTab]
     ? Math.floor((Date.now() - new Date(ultimaCarga[cuentaTab] + "T00:00:00").getTime()) / 86400000) : null;
   const chequeoSaldoHabilitado = diasUltimaCarga !== null && diasUltimaCarga <= 1;
@@ -2441,7 +2453,14 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                               ⚠ Posible duplicado: <b>{fmt(c.monto)}</b> el <b>{fmtDate(c.a.fecha)}</b> ({c.a.concepto || c.a.origen}) y el <b>{fmtDate(c.b.fecha)}</b> ({c.b.concepto || c.b.origen}) — mismo importe, fechas cercanas.
                             </div>
                           )) : (
-                            <div style={{ color: T.dim }}>No encontré un movimiento puntual que explique la diferencia — puede ser una combinación de varios, o algo fuera de esta cuenta.</div>
+                            <>
+                              <div style={{ color: T.dim }}>No encontré un movimiento puntual que explique la diferencia.</div>
+                              {ignoradosSinExplicar.length > 0 && (
+                                <div style={{ padding: "5px 0", color: "#b45309" }}>
+                                  ⚠ Hay <b>{fmt(Math.abs(totalIgnoradoSinExplicar))}</b> ignorado en esta cuenta ({ignoradosSinExplicar.length} línea{ignoradosSinExplicar.length !== 1 ? "s" : ""}) sin relación a una liquidación de sueldos — el banco sí tuvo ese movimiento, Numbers lo descartó. Revisá "Ignorados" a ver si alguno explica la diferencia.
+                                </div>
+                              )}
+                            </>
                           )}
                         </div>
                       )}
