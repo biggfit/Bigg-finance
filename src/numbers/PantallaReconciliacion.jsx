@@ -1411,14 +1411,54 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   // Algunos parsers (InterAudi) no traen saldo corriente y usan un id sintético como clave de dedup
   // ("IA-3") → Number() de eso da NaN y se descarta correctamente.
   const cuentaCandidatosSaldo = useMemo(
-    () => [...movsCuenta, ...ignorados].filter(m => String(m.cuenta_bancaria) === String(cuentaTab)),
+    () => [...movsCuenta, ...ignorados].filter(m => String(m.cuenta_bancaria) === String(cuentaTab) &&
+      String(m.extracto_saldo ?? "").trim() !== "" && Number.isFinite(Number(m.extracto_saldo))),
     [movsCuenta, ignorados, cuentaTab]);
+  // No alcanza con "la fila de fecha más reciente": un día con varias transacciones (típico —
+  // transferencias, pago de tarjeta, débitos) tiene varias filas con esa misma fecha, cada una con su
+  // propio saldo corriente, y el orden en que la API las devuelve NO es confiable como orden real del
+  // día. Confirmado con captura real del homebanking de Galicia (Hektor, 10/09/2026): con la fila
+  // "más reciente" a secas mostraba $972.055,28 en vez del cierre real de $594.254,03.
+  // Se reconstruye la secuencia real encadenando, día por día, saldo_anterior + monto ≈ saldo_actual
+  // (única relación de la que sí podemos estar seguros, viene del propio banco) arrancando del cierre
+  // del día anterior. Si algo no encadena (dato suelto/redondeo), se usa la última fila de ese día
+  // como está devuelta, igual que antes — solo como último recurso.
   const ultimoSaldoBanco = useMemo(() => {
-    const validos = cuentaCandidatosSaldo.filter(m =>
-      String(m.extracto_saldo ?? "").trim() !== "" && Number.isFinite(Number(m.extracto_saldo)));
-    return validos.reduce((best, m) => (!best || (m.fecha || "") > (best.fecha || "")) ? m : best, null);
+    if (!cuentaCandidatosSaldo.length) return null;
+    const porFecha = new Map();
+    for (const m of cuentaCandidatosSaldo) {
+      const f = m.fecha || "";
+      if (!porFecha.has(f)) porFecha.set(f, []);
+      porFecha.get(f).push(m);
+    }
+    const fechas = [...porFecha.keys()].sort();
+    let saldoPrevio = null, ultimaFecha = null, ultimoSaldo = null;
+    for (const f of fechas) {
+      const filasDia = porFecha.get(f);
+      const pendientes = [...filasDia];
+      let saldoActual = saldoPrevio;
+      let avanzo = true;
+      while (avanzo && pendientes.length) {
+        avanzo = false;
+        for (let i = 0; i < pendientes.length; i++) {
+          const m = pendientes[i];
+          const previo = Number(m.extracto_saldo) - (Number(m.monto) || 0);
+          if (saldoActual === null || Math.abs(previo - saldoActual) < 0.02) {
+            saldoActual = Number(m.extracto_saldo);
+            pendientes.splice(i, 1);
+            avanzo = true;
+            break;
+          }
+        }
+      }
+      // Nada encadenó (primer día sin ancla previa, o dato suelto): último recurso, la última fila tal cual vino.
+      if (saldoActual === saldoPrevio) saldoActual = Number(filasDia[filasDia.length - 1].extracto_saldo);
+      saldoPrevio = saldoActual; ultimaFecha = f; ultimoSaldo = saldoActual;
+    }
+    return ultimaFecha ? { fecha: ultimaFecha, saldo: ultimoSaldo } : null;
   }, [cuentaCandidatosSaldo]);
-  const saldoNoDisponible = cuentaCandidatosSaldo.length > 0 && !ultimoSaldoBanco;
+  const saldoNoDisponible = String(cuentaTab || "") !== "" &&
+    [...movsCuenta, ...ignorados].some(m => String(m.cuenta_bancaria) === String(cuentaTab)) && !ultimoSaldoBanco;
 
   // Re-evaluar las reglas actuales sobre los pendientes de la cuenta (sin re-subir ni escribir):
   // reconstruye la línea desde el movimiento, la clasifica y pre-carga la propuesta en `edits`.
@@ -2316,11 +2356,11 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                     ) : (() => {
                       const real = saldoRealInput[cuentaTab] ?? "";
                       const realNum = real.trim() === "" ? null : Number(real.replace(",", "."));
-                      const diff = (realNum !== null && Number.isFinite(realNum)) ? realNum - Number(ultimoSaldoBanco.extracto_saldo) : null;
+                      const diff = (realNum !== null && Number.isFinite(realNum)) ? realNum - ultimoSaldoBanco.saldo : null;
                       const ok = diff !== null && Math.abs(diff) < 0.01;
                       return (
                         <>
-                          <span>Saldo informado por el banco al <b>{fmtDate(ultimoSaldoBanco.fecha)}</b>: <b>{fmt(Number(ultimoSaldoBanco.extracto_saldo))}</b></span>
+                          <span>Saldo informado por el banco al <b>{fmtDate(ultimoSaldoBanco.fecha)}</b>: <b>{fmt(ultimoSaldoBanco.saldo)}</b></span>
                           <span style={{ color: T.dim }}>·</span>
                           <label style={{ display: "flex", alignItems: "center", gap: 5 }}>
                             Saldo real hoy (opcional)
