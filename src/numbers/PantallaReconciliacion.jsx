@@ -366,6 +366,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const [panelBanco, setPanelBanco] = useState(null); // null | "ignorados" | "conciliados": acordeón — abrir uno cierra el otro
   const [concDesde,  setConcDesde]  = useState("");   // filtro de fecha del histórico "Conciliados"
   const [concHasta,  setConcHasta]  = useState("");
+  const [saldoRealInput, setSaldoRealInput] = useState({}); // cuentaTab → saldo real tipeado a mano, solo para el chequeo post-carga del día
   const [reglaModal, setReglaModal] = useState(null);  // {prefill} para crear regla desde una línea
   const [loading,    setLoading]    = useState(true);
   const [uploading,  setUploading]  = useState(false);
@@ -1459,6 +1460,49 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const saldoNoDisponible = String(cuentaTab || "") !== "" &&
     [...movsCuenta, ...ignorados].some(m => String(m.cuenta_bancaria) === String(cuentaTab)) && !ultimoSaldoBanco;
 
+  // ── Chequeo contra el saldo REAL de hoy (distinto del anterior): éste sí puede quedar mal si hay un
+  // duplicado, porque suma TODO lo no ignorado (pendiente + conciliado) igual que Tesorería — no solo
+  // lo que el banco confirmó con su propio saldo corriente. `ultimoSaldoBanco` de arriba es inmune a un
+  // pago manual duplicado (nunca tuvo extracto_saldo); éste no. Solo tiene sentido compararlo cuando el
+  // extracto está cargado a HOY/AYER — cualquier otro día, la diferencia sería "actividad sin subir
+  // todavía", no un error.
+  const movsCuentaTab = useMemo(
+    () => movsCuenta.filter(m => String(m.cuenta_bancaria) === String(cuentaTab)),
+    [movsCuenta, cuentaTab]);
+  const saldoCuentaTab = useMemo(
+    () => movsCuentaTab.reduce((s, m) => s + (Number(m.monto) || 0), 0),
+    [movsCuentaTab]);
+  const diasUltimaCarga = ultimaCarga[cuentaTab]
+    ? Math.floor((Date.now() - new Date(ultimaCarga[cuentaTab] + "T00:00:00").getTime()) / 86400000) : null;
+  const chequeoSaldoHabilitado = diasUltimaCarga !== null && diasUltimaCarga <= 1;
+
+  // Busca, entre TODOS los movimientos de la cuenta, un par con el mismo importe (con signo) y fechas
+  // dentro de 10 días — la firma de "esto se cargó dos veces" — priorizando el par cuyo importe explica
+  // exactamente la diferencia observada. Si no hay un par así, no inventa nada: mejor no sugerir que
+  // sugerir mal.
+  function candidatosDiferencia(movs, diff) {
+    const target = Math.abs(diff);
+    if (!Number.isFinite(target) || target < 1) return [];
+    const tol = Math.max(1, target * 0.01);
+    const porMonto = new Map();
+    for (const m of movs) {
+      const key = Math.round((Number(m.monto) || 0) * 100);
+      if (!porMonto.has(key)) porMonto.set(key, []);
+      porMonto.get(key).push(m);
+    }
+    const pares = [];
+    for (const grupo of porMonto.values()) {
+      if (grupo.length < 2) continue;
+      for (let i = 0; i < grupo.length; i++) {
+        for (let j = i + 1; j < grupo.length; j++) {
+          const dDias = Math.abs((+new Date(grupo[i].fecha) - +new Date(grupo[j].fecha)) / 86400000);
+          if (dDias <= 10) pares.push({ a: grupo[i], b: grupo[j], monto: Math.abs(Number(grupo[i].monto) || 0) });
+        }
+      }
+    }
+    return pares.filter(p => Math.abs(p.monto - target) <= tol);
+  }
+
   // Re-evaluar las reglas actuales sobre los pendientes de la cuenta (sin re-subir ni escribir):
   // reconstruye la línea desde el movimiento, la clasifica y pre-carga la propuesta en `edits`.
   // El usuario revisa y acepta (las reglas escala/auto caen como propuesta, no se contabilizan solas).
@@ -2355,6 +2399,49 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                       : <span>Saldo informado por el banco al <b>{fmtDate(ultimoSaldoBanco.fecha)}</b>: <b>{fmt(ultimoSaldoBanco.saldo)}</b></span>}
                   </div>
                 )}
+
+                {/* Chequeo puntual: solo tiene sentido el mismo día (o al siguiente) de cargar el
+                    extracto — cualquier otro momento, una diferencia sería "todavía no subí lo último",
+                    no un error. Si no coincide, busca un posible pago duplicado entre TODOS los
+                    movimientos de la cuenta (pendientes + conciliados). */}
+                {chequeoSaldoHabilitado && (() => {
+                  const real = saldoRealInput[cuentaTab] ?? "";
+                  const realNum = real.trim() === "" ? null : Number(real.replace(",", "."));
+                  const diff = (realNum !== null && Number.isFinite(realNum)) ? realNum - saldoCuentaTab : null;
+                  const ok = diff !== null && Math.abs(diff) < 0.5;
+                  const candidatos = (diff !== null && !ok) ? candidatosDiferencia(movsCuentaTab, diff) : [];
+                  return (
+                    <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span>Recién cargaste el extracto — <b>saldo según Numbers hoy: {fmt(saldoCuentaTab)}</b></span>
+                        <span style={{ color: T.dim }}>·</span>
+                        <label style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                          ¿Cuánto te muestra el banco ahora?
+                          <input value={real} onChange={e => setSaldoRealInput(prev => ({ ...prev, [cuentaTab]: e.target.value }))}
+                            placeholder="0.00" inputMode="decimal"
+                            style={{ width: 100, fontSize: 12, padding: "3px 7px", borderRadius: 6, border: `1px solid ${T.cardBorder}`, background: "#fff", color: T.text, fontFamily: T.font }} />
+                        </label>
+                        {diff !== null && (
+                          ok
+                            ? <span style={{ fontWeight: 700, color: "#16a34a" }}>Coincide ✓</span>
+                            : <span style={{ fontWeight: 700, color: "#dc2626" }}>Diferencia: {fmt(diff)}</span>
+                        )}
+                      </div>
+                      {diff !== null && !ok && (
+                        <div style={{ marginTop: 6 }}>
+                          {candidatos.length > 0 ? candidatos.map((c, i) => (
+                            <div key={i} style={{ padding: "5px 0", color: "#b45309" }}>
+                              ⚠ Posible duplicado: <b>{fmt(c.monto)}</b> el <b>{fmtDate(c.a.fecha)}</b> ({c.a.concepto || c.a.origen}) y el <b>{fmtDate(c.b.fecha)}</b> ({c.b.concepto || c.b.origen}) — mismo importe, fechas cercanas.
+                            </div>
+                          )) : (
+                            <div style={{ color: T.dim }}>No encontré un movimiento puntual que explique la diferencia — puede ser una combinación de varios, o algo fuera de esta cuenta.</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
                   <label style={{ fontSize: 11.5, color: T.muted, display: "flex", alignItems: "center", gap: 5 }}>
                     Desde
