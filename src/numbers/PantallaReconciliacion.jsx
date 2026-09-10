@@ -366,7 +366,6 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const [panelBanco, setPanelBanco] = useState(null); // null | "ignorados" | "conciliados": acordeón — abrir uno cierra el otro
   const [concDesde,  setConcDesde]  = useState("");   // filtro de fecha del histórico "Conciliados"
   const [concHasta,  setConcHasta]  = useState("");
-  const [saldoRealInput, setSaldoRealInput] = useState({}); // cuentaTab → texto tipeado a mano para comparar contra el saldo real del homebanking
   const [reglaModal, setReglaModal] = useState(null);  // {prefill} para crear regla desde una línea
   const [loading,    setLoading]    = useState(true);
   const [uploading,  setUploading]  = useState(false);
@@ -1324,6 +1323,15 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const pendCuenta = useMemo(
     () => pendientes.filter(m => !cuentaTab || String(m.cuenta_bancaria) === String(cuentaTab)),
     [pendientes, cuentaTab]);
+  // Saldo de la cuenta activa (misma cuenta que ve Tesorería: suma de TODO lo no ignorado, clasificado
+  // o no) y cuánto de ese saldo corresponde a movimientos todavía sin conciliar — en plata, no en
+  // cantidad de filas, para poder priorizar por magnitud ("8 movimientos" puede ser $500 o $2.000.000).
+  const saldoCuentaTab = useMemo(
+    () => movsCuenta.filter(m => String(m.cuenta_bancaria) === String(cuentaTab)).reduce((s, m) => s + (Number(m.monto) || 0), 0),
+    [movsCuenta, cuentaTab]);
+  const montoSinConciliar = useMemo(
+    () => pendCuenta.reduce((s, m) => s + (Number(m.monto) || 0), 0),
+    [pendCuenta]);
   // Centro por defecto de la sociedad (ej. Segui Fit → Rosedal): precarga ese centro en los
   // pendientes que no traen uno. Toca `edits`, así lo toman tanto el select como el "Aceptar".
   const centroDefaultSoc = CENTRO_DEFAULT_SOCIEDAD[sociedad] || "";
@@ -1808,12 +1816,19 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       {cuentaTab && (() => {
         const f = ultimaCarga[cuentaTab];
         const est = estadoUltimaCarga(f);
+        const pct = Math.abs(saldoCuentaTab) > 1 ? Math.abs(montoSinConciliar / saldoCuentaTab) * 100 : null;
         return (
-          <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 10, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             <span style={{ width: 7, height: 7, borderRadius: 999, background: est.color, flexShrink: 0 }} />
             {f
               ? <span>Última carga de extracto: <b style={{ color: est.color }}>{fmtDate(f)}</b></span>
               : <span style={{ color: est.color, fontWeight: 700 }}>Este banco no tiene extractos cargados todavía.</span>}
+            {pendCuenta.length > 0 && (
+              <>
+                <span style={{ color: T.dim }}>·</span>
+                <span>Saldo: <b style={{ color: T.text }}>{fmt(saldoCuentaTab)}</b> — de eso, <b style={{ color: "#d97706" }}>{fmt(Math.abs(montoSinConciliar))}</b> sin conciliar todavía{pct !== null ? ` (${pct.toFixed(0)}%)` : ""}</span>
+              </>
+            )}
           </div>
         );
       })()}
@@ -2347,35 +2362,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
 
             {panelBanco === "conciliados" && conciliadosCuenta.length > 0 && (
               <div style={{ marginTop: 6 }}>
-                {/* Chequeo de saldo: el saldo que el banco informó en la última línea cargada (propio
-                    o conciliado, no un cálculo nuestro) vs. lo que el usuario ve hoy en su homebanking. */}
+                {/* Dato informativo: el saldo que el banco informó en la última línea cargada (propio
+                    o conciliado, reconstruido — no una comparación contra nada externo). */}
                 {(ultimoSaldoBanco || saldoNoDisponible) && (
-                  <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                    {saldoNoDisponible ? (
-                      <span>Este banco no informa saldo corriente en el extracto — no se puede chequear automáticamente.</span>
-                    ) : (() => {
-                      const real = saldoRealInput[cuentaTab] ?? "";
-                      const realNum = real.trim() === "" ? null : Number(real.replace(",", "."));
-                      const diff = (realNum !== null && Number.isFinite(realNum)) ? realNum - ultimoSaldoBanco.saldo : null;
-                      const ok = diff !== null && Math.abs(diff) < 0.01;
-                      return (
-                        <>
-                          <span>Saldo informado por el banco al <b>{fmtDate(ultimoSaldoBanco.fecha)}</b>: <b>{fmt(ultimoSaldoBanco.saldo)}</b></span>
-                          <span style={{ color: T.dim }}>·</span>
-                          <label style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                            Saldo real hoy (opcional)
-                            <input value={real} onChange={e => setSaldoRealInput(prev => ({ ...prev, [cuentaTab]: e.target.value }))}
-                              placeholder="0.00" inputMode="decimal"
-                              style={{ width: 100, fontSize: 12, padding: "3px 7px", borderRadius: 6, border: `1px solid ${T.cardBorder}`, background: "#fff", color: T.text, fontFamily: T.font }} />
-                          </label>
-                          {diff !== null && Number.isFinite(diff) && (
-                            ok
-                              ? <span style={{ fontWeight: 700, color: "#16a34a" }}>Coincide ✓</span>
-                              : <span style={{ fontWeight: 700, color: "#dc2626" }}>Diferencia: {fmt(diff)}</span>
-                          )}
-                        </>
-                      );
-                    })()}
+                  <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 8 }}>
+                    {saldoNoDisponible
+                      ? <span>Este banco no informa saldo corriente en el extracto.</span>
+                      : <span>Saldo informado por el banco al <b>{fmtDate(ultimoSaldoBanco.fecha)}</b>: <b>{fmt(ultimoSaldoBanco.saldo)}</b></span>}
                   </div>
                 )}
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
