@@ -1,4 +1,6 @@
 // ─── BIGG Numbers — Design tokens compartidos ─────────────────────────────
+import { useRef, useLayoutEffect } from "react";
+
 export const T = {
   sidebar:       "#16181a",
   sidebarBorder: "rgba(173,255,25,.35)",
@@ -114,13 +116,86 @@ export function Btn({ children, onClick, variant = "primary", disabled }) {
   );
 }
 
+// ─── Formato pesos ($ 22.400.000,50) ──────────────────────────────────────
+// El "valor" que viaja por props/estado sigue siendo el número plano de siempre
+// (punto decimal, sin miles — lo que ya esperan Number()/parseFloat() y el backend).
+// Sólo la representación que ve el usuario en el input se muestra con puntos de
+// miles y coma decimal, a la manera argentina.
+export function formatPesosDisplay(canonical) {
+  if (canonical == null) return "";
+  const str = String(canonical);
+  if (str === "" || str === "-") return str;
+  const neg = str.startsWith("-");
+  const body = neg ? str.slice(1) : str;
+  const [intRaw, decRaw] = body.split(".");
+  const intDisplay = (intRaw || "").replace(/\D/g, "").replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  const out = decRaw !== undefined ? `${intDisplay},${decRaw}` : intDisplay;
+  return neg ? `-${out}` : out;
+}
+
+// Hook que traduce entre el valor plano (canonical) y lo que se muestra en el input,
+// reformateando en cada tecla sin perder la posición del cursor (mismo enfoque que
+// useNroCompMask: cuenta dígitos/coma antes del cursor y los reubica tras reformatear).
+export function useMoneyMask(value, onChange) {
+  const ref = useRef(null);
+  const pendingCaret = useRef(null);
+  const str = value == null ? "" : String(value);
+
+  const handleChange = (e) => {
+    const el = e.target;
+    const raw = el.value;
+    const pos = el.selectionStart ?? raw.length;
+    pendingCaret.current = (raw.slice(0, pos).match(/[0-9,]/g) || []).length;
+
+    let s = raw.replace(/\./g, "");           // los puntos son sólo separador de miles (auto)
+    const neg = s.trim().startsWith("-");
+    s = s.replace(/-/g, "");
+    const firstComma = s.indexOf(",");
+    const canonicalBody = firstComma === -1
+      ? s.replace(/\D/g, "")
+      : `${s.slice(0, firstComma).replace(/\D/g, "")}.${s.slice(firstComma + 1).replace(/\D/g, "")}`;
+
+    onChange(neg ? `-${canonicalBody}` : canonicalBody);
+  };
+
+  useLayoutEffect(() => {
+    if (pendingCaret.current == null || !ref.current) return;
+    const target = pendingCaret.current;
+    pendingCaret.current = null;
+    const disp = formatPesosDisplay(str);
+    let pos = 0, seen = 0;
+    while (pos < disp.length && seen < target) {
+      if (/[0-9,]/.test(disp[pos])) seen++;
+      pos++;
+    }
+    try { ref.current.setSelectionRange(pos, pos); } catch { /* input sin selección */ }
+  }, [str]);
+
+  return { ref, display: formatPesosDisplay(str), onChange: handleChange };
+}
+
+/** Reemplazo directo de <input type="number"> para montos: mismo contrato de
+ *  onChange basado en evento (e.target.value), pero muestra "$ 22.400.000,50". */
+export function MoneyField({ value, onChange, ...rest }) {
+  const mask = useMoneyMask(value, (canonical) => onChange({ target: { value: canonical } }));
+  return (
+    <input ref={mask.ref} type="text" inputMode="decimal"
+      value={mask.display} onChange={mask.onChange} {...rest} />
+  );
+}
+
 export function Input({ label, value, onChange, placeholder, type="text", required }) {
+  const isMoney = type === "number";
+  const mask = useMoneyMask(isMoney ? value : "", isMoney ? onChange : () => {});
   return (
     <div>
       <label style={{ fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:5 }}>
         {label}{required && <span style={{ color:T.red }}> *</span>}
       </label>
-      <input type={type} value={value} onChange={e=>onChange(e.target.value)}
+      <input type={isMoney ? "text" : type} inputMode={isMoney ? "decimal" : undefined}
+        ref={isMoney ? mask.ref : undefined}
+        value={isMoney ? mask.display : value}
+        onChange={isMoney ? mask.onChange : e=>onChange(e.target.value)}
         placeholder={placeholder}
         style={{ width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`,
           borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text,

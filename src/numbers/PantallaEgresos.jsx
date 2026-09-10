@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
-import { T, ESTADO_EGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn } from "./theme";
+import { T, ESTADO_EGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn, MoneyField } from "./theme";
 import ConfirmModal from "./ConfirmModal";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
 import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, updateMovTesoreria, borrarPagoImputado, shortId, appendProveedor, appendCuenta, aplicarRetencionPracticada, RETDEP_TAG } from "../lib/numbersApi";
@@ -80,7 +80,7 @@ function RegistrarRetencionPracticadaModal({ egreso, saldoPendiente, cuentas = [
                     <option value="">— cuenta (Ganancias, IVA, IIBB…) —</option>
                     {cuentasOrd.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                   </select>
-                  <input type="number" value={l.monto} onChange={e => upd(i, "monto", e.target.value)} placeholder="monto"
+                  <MoneyField value={l.monto} onChange={e => upd(i, "monto", e.target.value)} placeholder="monto"
                     style={{ ...inp, width:120, textAlign:"right" }} />
                   {lineas.length > 1 && <button onClick={() => setLineas(ls => ls.filter((_, idx) => idx !== i))} title="Quitar"
                     style={{ border:"none", background:"transparent", color:T.muted, cursor:"pointer", fontSize:14 }}>✕</button>}
@@ -221,7 +221,7 @@ function EditarPagoModal({ pago, sociedad, cuentasSoc, onClose, onSaved }) {
             <div>
               <label style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase",
                 letterSpacing:".07em", display:"block", marginBottom:4 }}>Monto</label>
-              <input type="number" value={form.monto} onChange={e => set("monto", e.target.value)}
+              <MoneyField value={form.monto} onChange={e => set("monto", e.target.value)}
                 style={{ width:"100%", padding:"8px 10px", fontSize:13, borderRadius:8, boxSizing:"border-box",
                   border:`1px solid ${T.cardBorder}`, background:"#eceff3", color:T.text, fontFamily:"inherit" }} />
             </div>

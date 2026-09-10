@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, Fragment } from "react";
-import { T, fmtDate } from "./theme";
+import { T, fmtDate, MoneyField } from "./theme";
 import {
   fetchCuentasBancarias, fetchMovimientosPendientes, ingestarExtracto, aceptarMovimiento,
   aceptarCobroFranquicia, fetchBancoReglas, fetchProveedores, fetchCuentas, fetchCentrosCosto, fetchSociedades,
@@ -2076,7 +2076,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                             <option value="">— origen —</option>
                             {socInterco.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
                           </select>
-                          <input type="number" placeholder="costo fin. (opc)" value={edits[m.id]?.recv_costo ?? ""}
+                          <MoneyField placeholder="costo fin. (opc)" value={edits[m.id]?.recv_costo ?? ""}
                             onChange={e => setModo(m.id, { recv_costo: e.target.value })} style={fld(false, 110)}
                             title="Costo de transferencia/clearing → Perdidas Financieras (P&L)" />
                         </div>
@@ -2147,7 +2147,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                                     <option value="">— retención —</option>
                                     {cuentasTodas.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                                   </select>
-                                  <input type="number" value={r.monto} onChange={e => updRet(m.id, idx, "monto", e.target.value)}
+                                  <MoneyField value={r.monto} onChange={e => updRet(m.id, idx, "monto", e.target.value)}
                                     style={{ width: 90, textAlign: "right", ...sel }} />
                                   <button onClick={() => rmRet(m.id, idx)} title="Quitar" style={{ border: "none", background: "transparent", color: T.muted, cursor: "pointer", fontSize: 12 }}>✕</button>
                                 </div>
@@ -2302,7 +2302,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                         <tr key={`${m.id}-sp-${idx}`} style={{ background: bg, borderLeft: `3px solid ${T.accent}` }}>
                           <td /><td />
                           <td style={{ padding: "4px 12px", textAlign: "right" }}>
-                            <input type="number" value={p.monto} onChange={e => updSplit(m.id, idx, "monto", e.target.value)}
+                            <MoneyField value={p.monto} onChange={e => updSplit(m.id, idx, "monto", e.target.value)}
                               style={{ width: 110, textAlign: "right", ...sel }} />
                           </td>
                           <td />

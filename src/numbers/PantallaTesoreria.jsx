@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
-import { T, Btn, Input, Select, PageHeader, fmtDate, fmtMoney } from "./theme";
+import { T, Btn, Input, Select, PageHeader, fmtDate, fmtMoney, MoneyField } from "./theme";
 import ConfirmModal from "./ConfirmModal";
 import {
   TIPO_CUENTA, MONEDA_SYM,
@@ -380,7 +380,7 @@ function GastoDirectoModal({ sociedad, cuentasBancarias, cuentasContables = [], 
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
             <div>
               {lbl("Subtotal", true)}
-              <input type="number" value={form.subtotal}
+              <MoneyField value={form.subtotal}
                 onChange={e => set("subtotal", e.target.value)}
                 placeholder="0,00"
                 style={{ ...fi, textAlign:"right", fontFamily:"var(--mono)" }} />
@@ -1476,9 +1476,9 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
                         </select>
                         <div style={{ fontSize:10, fontWeight:800, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:6 }}>Importe (valor absoluto)</div>
                         <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:12 }}>
-                          <input type="number" value={montoMin} onChange={e => setMontoMin(e.target.value)} placeholder="mín" style={{ ...inpStyle, width:"50%" }} />
+                          <MoneyField value={montoMin} onChange={e => setMontoMin(e.target.value)} placeholder="mín" style={{ ...inpStyle, width:"50%" }} />
                           <span style={{ fontSize:11, color:T.muted }}>a</span>
-                          <input type="number" value={montoMax} onChange={e => setMontoMax(e.target.value)} placeholder="máx" style={{ ...inpStyle, width:"50%" }} />
+                          <MoneyField value={montoMax} onChange={e => setMontoMax(e.target.value)} placeholder="máx" style={{ ...inpStyle, width:"50%" }} />
                         </div>
                         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
                           <button onClick={limpiarImporte} disabled={!importeFiltrado} style={{ fontSize:11, fontWeight:700,

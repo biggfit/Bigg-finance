@@ -3,7 +3,7 @@
 // onSave recibe { fecha, monto, medioCobro, ingresoId }; el guardado real (appendCobro) lo hace el llamador.
 // `sociedadNombre` (opcional): si viene, el label "Acreditar en" nombra la sociedad del comprobante.
 import { useState } from "react";
-import { T, fmtMoney } from "../theme";
+import { T, fmtMoney, MoneyField } from "../theme";
 import { TIPO_CUENTA } from "../../data/tesoreriaData";
 
 export default function RegistrarCobroModal({ ingreso, saldoPendiente, cuentas, anticipos = [], sociedadNombre = "", onVerComprobante, onClose, onSave }) {
@@ -61,8 +61,7 @@ export default function RegistrarCobroModal({ ingreso, saldoPendiente, cuentas, 
             </div>
             <div>
               <label style={{ fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:5 }}>Importe $</label>
-              <input type="number" value={form.monto}
-                min={0} max={saldoPendiente ?? ingreso.importe ?? undefined}
+              <MoneyField value={form.monto}
                 onChange={e => set("monto", e.target.value)}
                 style={{ width:"100%", background:"#eceff3",
                   border:`1.5px solid ${excede ? "#dc2626" : T.cardBorder}`,

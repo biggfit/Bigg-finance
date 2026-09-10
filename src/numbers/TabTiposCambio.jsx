@@ -6,7 +6,7 @@
 //
 // Convención de valor: unidades de moneda local por 1 USD (arsUSD 1560 = 1560 ARS/U$D).
 import { useState, useEffect, useMemo, useRef } from "react";
-import { T, Btn } from "./theme";
+import { T, Btn, MoneyField } from "./theme";
 import { fetchTiposCambio, saveTipoCambio, TC_FIELDS } from "../lib/numbersApi";
 
 const MESES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
@@ -322,7 +322,7 @@ export default function TabTiposCambio() {
           {CAMPOS.map(({ key, label, placeholder, step }) => (
             <div key={key} style={{ display:"flex", flexDirection:"column", gap:4 }}>
               <label style={{ fontSize:11, color:T.muted, fontWeight:700, letterSpacing:".04em" }}>{label}</label>
-              <input type="number" placeholder={placeholder} step={step}
+              <MoneyField placeholder={placeholder}
                 value={buf[key] ?? ""}
                 onChange={e => setCampo(selYm, key, e.target.value)}
                 style={{ width:"100%", fontSize:13, padding:"8px 12px", textAlign:"right", boxSizing:"border-box",

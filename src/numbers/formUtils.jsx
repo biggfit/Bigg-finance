@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useCallback, useState } from "react";
-import { T } from "./theme";
+import { T, MoneyField } from "./theme";
 import { newLinea } from "./useLineas";
 
 // ─── Normalizador ─────────────────────────────────────────────────────────────
@@ -624,7 +624,7 @@ export function InvoiceLineasTable({
               {/* Moneda de la factura: inline a la derecha del Centro de costo, solo en la 1ª línea. */}
               {idx === 0 && headerLeft}
             </div>
-            <input type="number" value={l.subtotal}
+            <MoneyField value={l.subtotal}
               onChange={e => updLinea(l.id, "subtotal", e.target.value)}
               placeholder="0,00"
               style={{ ...inputStyle, padding: "6px 8px", fontSize: 13,

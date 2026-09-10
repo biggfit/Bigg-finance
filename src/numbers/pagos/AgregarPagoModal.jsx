@@ -2,7 +2,7 @@
 // también desde el reporte CxP por proveedor (click en un comprobante → abre este mismo modal).
 // onSave recibe { fecha, monto, medioPago, nota, egresoId }; el guardado real (appendPago) lo hace el llamador.
 import { useState } from "react";
-import { T, fmtMoney } from "../theme";
+import { T, fmtMoney, MoneyField } from "../theme";
 import { TIPO_CUENTA } from "../../data/tesoreriaData";
 
 export default function AgregarPagoModal({ egreso, saldoPendiente, cuentas, sociedadNombre = "", onVerComprobante, onClose, onSave }) {
@@ -62,8 +62,7 @@ export default function AgregarPagoModal({ egreso, saldoPendiente, cuentas, soci
               <label style={{ fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:5 }}>
                 Importe $
               </label>
-              <input type="number" value={form.monto}
-                min={0} max={saldoPendiente ?? egreso.importe ?? undefined}
+              <MoneyField value={form.monto}
                 onChange={e => set("monto", e.target.value)}
                 style={{ width:"100%", background:"#eceff3",
                   border:`1.5px solid ${excede ? "#dc2626" : T.cardBorder}`,
