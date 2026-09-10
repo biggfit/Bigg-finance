@@ -21,7 +21,7 @@ const _inflight = new Map();  // key → Promise
 const SHEETS_TTL = 90_000;
 
 /** GET a la Apps Script Web App (via proxy) */
-async function get(resource) {
+async function get(resource, { retries = 3, retryDelayMs = 1000 } = {}) {
   if (!CONFIGURED) throw new Error("VITE_SHEETS_API_URL no configurada");
   // `_cb` (solo en la ventana de refresco) saltea la caché de borde del CDN — ver cacheBust.js.
   const cb  = bustToken();
@@ -32,13 +32,25 @@ async function get(resource) {
   if (cached && Date.now() - cached.ts < SHEETS_TTL) return cached.data;
   if (_inflight.has(key)) return _inflight.get(key);
 
+  // El backend (GAS) + el proxy devuelven 404/500/HTML de forma INTERMITENTE (rate-limit/lock/timeout;
+  // este fetch de Franquicias pesa ~560KB y tarda ~6s). Sin reintento, un solo fallo deja el dataset
+  // VACÍO en silencio (fetchComps es fire-and-forget en Reportes) → el P&L aparece sin franquicias.
   const req = (async () => {
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    _cache.set(key, { data, ts: Date.now() });
-    return data;
+    let lastErr;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      if (attempt) await new Promise(r => setTimeout(r, retryDelayMs * attempt));
+      try {
+        const res  = await fetch(url, { cache: "no-store" });
+        const text = await res.text();
+        let data;
+        try { data = JSON.parse(text); }
+        catch { throw new Error(`HTTP ${res.status}: ${String(text).slice(0, 120)}`); }
+        if (data && data.error) throw new Error(data.error);
+        _cache.set(key, { data, ts: Date.now() });
+        return data;
+      } catch (e) { lastErr = e; }
+    }
+    throw lastErr;
   })();
   _inflight.set(key, req);
   req.finally(() => _inflight.delete(key));
