@@ -1323,15 +1323,6 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const pendCuenta = useMemo(
     () => pendientes.filter(m => !cuentaTab || String(m.cuenta_bancaria) === String(cuentaTab)),
     [pendientes, cuentaTab]);
-  // Saldo de la cuenta activa (misma cuenta que ve Tesorería: suma de TODO lo no ignorado, clasificado
-  // o no) y cuánto de ese saldo corresponde a movimientos todavía sin conciliar — en plata, no en
-  // cantidad de filas, para poder priorizar por magnitud ("8 movimientos" puede ser $500 o $2.000.000).
-  const saldoCuentaTab = useMemo(
-    () => movsCuenta.filter(m => String(m.cuenta_bancaria) === String(cuentaTab)).reduce((s, m) => s + (Number(m.monto) || 0), 0),
-    [movsCuenta, cuentaTab]);
-  const montoSinConciliar = useMemo(
-    () => pendCuenta.reduce((s, m) => s + (Number(m.monto) || 0), 0),
-    [pendCuenta]);
   // Centro por defecto de la sociedad (ej. Segui Fit → Rosedal): precarga ese centro en los
   // pendientes que no traen uno. Toca `edits`, así lo toman tanto el select como el "Aceptar".
   const centroDefaultSoc = CENTRO_DEFAULT_SOCIEDAD[sociedad] || "";
@@ -1816,19 +1807,12 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       {cuentaTab && (() => {
         const f = ultimaCarga[cuentaTab];
         const est = estadoUltimaCarga(f);
-        const pct = Math.abs(saldoCuentaTab) > 1 ? Math.abs(montoSinConciliar / saldoCuentaTab) * 100 : null;
         return (
-          <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 10, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{ width: 7, height: 7, borderRadius: 999, background: est.color, flexShrink: 0 }} />
             {f
               ? <span>Última carga de extracto: <b style={{ color: est.color }}>{fmtDate(f)}</b></span>
               : <span style={{ color: est.color, fontWeight: 700 }}>Este banco no tiene extractos cargados todavía.</span>}
-            {pendCuenta.length > 0 && (
-              <>
-                <span style={{ color: T.dim }}>·</span>
-                <span>Saldo: <b style={{ color: T.text }}>{fmt(saldoCuentaTab)}</b> — de eso, <b style={{ color: "#d97706" }}>{fmt(Math.abs(montoSinConciliar))}</b> sin conciliar todavía{pct !== null ? ` (${pct.toFixed(0)}%)` : ""}</span>
-              </>
-            )}
           </div>
         );
       })()}
