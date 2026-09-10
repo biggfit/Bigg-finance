@@ -363,8 +363,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const [progreso,   setProgreso]   = useState(null); // { done, total } mientras sube el extracto
   const [filtroTipo, setFiltroTipo] = useState("");   // filtro por grupo de Propuesta (para aprobar por grupos)
   const [busqueda,   setBusqueda]   = useState("");   // texto libre: filtra por descripción/proveedor (ej. juntar todo un proveedor)
-  const [verIgnorados,setVerIgnorados]= useState(false);
-  const [verConciliados, setVerConciliados] = useState(false); // colapsable, al lado de "Ignorados": no cambia la vista por defecto
+  const [panelBanco, setPanelBanco] = useState(null); // null | "ignorados" | "conciliados": acordeón — abrir uno cierra el otro
   const [concDesde,  setConcDesde]  = useState("");   // filtro de fecha del histórico "Conciliados"
   const [concHasta,  setConcHasta]  = useState("");
   const [saldoRealInput, setSaldoRealInput] = useState({}); // cuentaTab → texto tipeado a mano para comparar contra el saldo real del homebanking
@@ -2273,20 +2272,20 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
           <div style={{ marginTop: 10 }}>
             <div style={{ display: "flex", gap: 16 }}>
               {ign.length > 0 && (
-                <button onClick={() => setVerIgnorados(v => !v)}
-                  style={{ background: "transparent", border: "none", color: T.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: T.font, padding: 0 }}>
-                  {verIgnorados ? "▾" : "▸"} Ignorados ({ign.length})
+                <button onClick={() => setPanelBanco(p => p === "ignorados" ? null : "ignorados")}
+                  style={{ background: "transparent", border: "none", color: panelBanco === "ignorados" ? T.text : T.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: T.font, padding: 0 }}>
+                  {panelBanco === "ignorados" ? "▾" : "▸"} Ignorados ({ign.length})
                 </button>
               )}
               {conciliadosCuenta.length > 0 && (
-                <button onClick={() => setVerConciliados(v => !v)}
-                  style={{ background: "transparent", border: "none", color: T.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: T.font, padding: 0 }}>
-                  {verConciliados ? "▾" : "▸"} Conciliados ({conciliadosCuenta.length})
+                <button onClick={() => setPanelBanco(p => p === "conciliados" ? null : "conciliados")}
+                  style={{ background: "transparent", border: "none", color: panelBanco === "conciliados" ? T.text : T.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: T.font, padding: 0 }}>
+                  {panelBanco === "conciliados" ? "▾" : "▸"} Conciliados ({conciliadosCuenta.length})
                 </button>
               )}
             </div>
 
-            {verIgnorados && ign.length > 0 && (
+            {panelBanco === "ignorados" && ign.length > 0 && (
               <div style={{ marginTop: 6, background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 8, maxHeight: 360, overflowY: "auto" }}>
                 {ign.map(m => {
                   const ig = parseMeta(m.referencia).ign || "";
@@ -2306,7 +2305,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
               </div>
             )}
 
-            {verConciliados && conciliadosCuenta.length > 0 && (
+            {panelBanco === "conciliados" && conciliadosCuenta.length > 0 && (
               <div style={{ marginTop: 6 }}>
                 {/* Chequeo de saldo: el saldo que el banco informó en la última línea cargada (propio
                     o conciliado, no un cálculo nuestro) vs. lo que el usuario ve hoy en su homebanking. */}
