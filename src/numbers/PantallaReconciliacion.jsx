@@ -1368,6 +1368,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const ctaNombre = (id) => cuentasAll.find(c => String(c.id) === String(id))?.nombre || (id || "—");
   const egresoPorId  = useMemo(() => new Map(egresos.map(e => [String(e.id), e])),  [egresos]);
   const ingresoPorId = useMemo(() => new Map(ingresos.map(e => [String(e.id), e])), [ingresos]);
+  // Sin respaldo de extracto = nunca vino de (ni matcheó contra) una línea real del banco: gestión,
+  // interco, un pago manual sin matchear, etc. No es necesariamente un error — una transferencia
+  // interna, por ejemplo, crea una pata sintética en la cuenta destino que recién junta su propio
+  // extracto_saldo cuando llega el extracto de ESA cuenta — pero es el primer lugar donde mirar
+  // cuando el saldo total de la cuenta no coincide con lo que el banco realmente tiene.
+  const tieneRespaldoExtracto = (m) =>
+    String(m.extracto_saldo ?? "").trim() !== "" && Number.isFinite(Number(m.extracto_saldo));
   const estadoConciliado = (m) => {
     if (m._ignorado) return { label: "Ignorado", color: "#dc2626" };
     const doc = String(m.documento_id || "");
@@ -2489,6 +2496,12 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                               <td style={{ padding: "7px 12px", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap", color: neg ? "#dc2626" : "#16a34a" }}>{fmt(Math.abs(Number(m.monto) || 0))}</td>
                               <td style={{ padding: "7px 12px", whiteSpace: "nowrap" }}>
                                 <span style={{ fontSize: 10, fontWeight: 800, color: est.color, background: `${est.color}18`, borderRadius: 6, padding: "2px 8px" }}>{est.label}</span>
+                                {!m._ignorado && !tieneRespaldoExtracto(m) && (
+                                  <span title="Nunca vino de ni matcheó contra una línea real del banco"
+                                    style={{ marginLeft: 5, fontSize: 10, fontWeight: 800, color: "#78716c", background: "#78716c18", borderRadius: 6, padding: "2px 8px" }}>
+                                    sin extracto
+                                  </span>
+                                )}
                               </td>
                               <td style={{ padding: "7px 12px", color: T.muted, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{detalleConciliado(m)}</td>
                             </tr>
