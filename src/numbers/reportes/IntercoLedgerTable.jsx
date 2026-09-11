@@ -22,6 +22,7 @@ export const TIPO_CHIP = {
 export const chipDe = e => TIPO_CHIP[e.tipo] || (String(e.concepto || "").startsWith("Pago ") ? TIPO_CHIP["Pago"] : { label: "—", bg: "#f3f4f6", fg: T.muted });
 
 const fmtF = f => { const s = String(f || ""); if (/^\d{4}-\d{2}-\d{2}/.test(s)) { const [y, m, d] = s.slice(0, 10).split("-"); return `${d}/${m}/${y}`; } return s; };
+export const fmtUSD = n => { const v = Math.round(Number(n) || 0); return (v < 0 ? "-" : "") + "U$D " + Math.abs(v).toLocaleString("es-AR"); };
 
 /** Tabla del ledger interco. `entries` en orden cronológico (se muestran del más reciente arriba).
  *  `opening` = saldo de apertura (tfoot); `onGoToMov(e)` opcional (menú ⋯ "Ir al movimiento"). */
@@ -37,9 +38,7 @@ export default function IntercoLedgerTable({ entries = [], moneda = "ARS", heade
     document.addEventListener("click", h);
     return () => document.removeEventListener("click", h);
   }, [menuFor]);
-  const fmtUSD = n => { const v = Math.round(Number(n) || 0); return (v < 0 ? "-" : "") + "U$D " + Math.abs(v).toLocaleString("es-AR"); };
   const signed = (v, m = mon) => (v >= 0 ? "+ " : "− ") + fmtSaldo(Math.abs(v), m);
-  const nCols = 6 + (usdCol ? 1 : 0);
   const thS = { padding: "10px 16px", fontSize: 11, fontWeight: 800, color: "rgba(255,255,255,.85)", textAlign: "right", letterSpacing: ".04em", textTransform: "uppercase", whiteSpace: "nowrap" };
   const tdS = { padding: "9px 16px", fontSize: 13, textAlign: "right", fontFamily: "var(--mono)", color: T.text, whiteSpace: "nowrap" };
   return (
@@ -58,7 +57,7 @@ export default function IntercoLedgerTable({ entries = [], moneda = "ARS", heade
         </thead>
         <tbody>
           {rows.length === 0 && (
-            <tr><td colSpan={nCols} style={{ padding: "16px", fontSize: 13, color: T.muted, textAlign: "center" }}>Sin movimientos.</td></tr>
+            <tr><td colSpan={6} style={{ padding: "16px", fontSize: 13, color: T.muted, textAlign: "center" }}>Sin movimientos.</td></tr>
           )}
           {rows.map((e, i) => (
             <tr key={i} style={{ borderBottom: `1px solid ${T.cardBorder}`, background: i % 2 === 0 ? T.card : "#fafbfc" }}>

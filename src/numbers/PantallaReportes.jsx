@@ -9,6 +9,7 @@ import { exportarPackReportes } from "./exportReportes";
 import { copiarReporteComoImagen, clonarParaFoto, medirContenido } from "./fotoReporte";
 import TabTesoreriaConsolidada from "./reportes/TabTesoreriaConsolidada";
 import TabIntercoConsolidado from "./reportes/TabIntercoConsolidado";
+import TabSaldosInterco from "./reportes/TabSaldosInterco";
 import TabCxPProveedores from "./reportes/TabCxPProveedores";
 import TabCxCClientes from "./reportes/TabCxCClientes";
 import PantallaSocios from "./PantallaSocios";
@@ -2531,8 +2532,8 @@ const TABS = [
   { id: "pl_sede", label: "P&L Sedes Propias Argentina",  icon: "🏬", desc: "Resultado operativo por sede: ventas, costos variables y márgenes." },
   { id: "pl_bigg", label: "P&L BIGG",   icon: "🏢", desc: "Resultado corporativo por centro de HQ (R&D, Sales & Mkt, G&A)." },
   { id: "cf",      label: "Cash Flow",  icon: "💵", desc: "Flujo de caja mensual: entradas y salidas por cuenta." },
-  { id: "interco", label: "Intercompañía",   icon: "🔗", desc: "Posiciones entre sociedades, agrupadas por anillo." },
-  { id: "interco_matriz", label: "Intercompañía por negocio", icon: "🧮", desc: "Fondeo interco del grupo, consolidado en USD · meses × negocio/tipo. Click en una celda = los movimientos que la componen. Ata al Fondeo del P&L." },
+  { id: "interco", label: "Saldos entre sociedades",   icon: "🔗", desc: "Préstamos y saldos interco entre TODAS las sociedades: posición neta por moneda (quién le debe a quién). Filtrá por sociedad y hacé click en una fila para ver el detalle de movimientos." },
+  { id: "interco_matriz", label: "Fondeo por negocio", icon: "🧮", desc: "Fondeo del grupo a cada negocio (CAPEX), consolidado en USD · meses × negocio/tipo. Click en una celda = los movimientos que la componen. Ata al Fondeo del P&L." },
   { id: "consolidado", label: "Tesorería consolidada", icon: "🏦", desc: "Saldos y movimientos de todas las sociedades del grupo." },
   { id: "cxp_prov", label: "CxP por proveedor", icon: "📋", desc: "Cuentas por pagar consolidadas por proveedor (todas las sociedades), con antigüedad." },
   { id: "cxc_cli", label: "CxC por cliente", icon: "📥", desc: "Cuentas por cobrar consolidadas por cliente (todas las sociedades), con antigüedad." },
@@ -2569,49 +2570,6 @@ const LENTES = [
   { id: "interno",  label: "Interno · fiscal / contable",  tabs: ["er_soc", "interco", "interco_matriz"] },
 ];
 
-// ─── Tab Intercompañía (resumen de posiciones por anillo — LECTURA) ─────────────
-function TabInterco({ data, sociedades }) {
-  const socMap  = useMemo(() => new Map((sociedades || []).map(s => [String(s.id), s])), [sociedades]);
-  const nombre  = id => socMap.get(String(id))?.nombre || id;
-  const anilloDe = id => socMap.get(String(id))?.anillo || "Sin anillo";
-  // Cada relación una sola vez: neto>0 → `sociedad` es ACREEDOR (le deben) de `contraparte`.
-  const pos = useMemo(() => lecturaInterco(data).filter(p => p.neto > 0.01), [data]);
-  const grupos = {};
-  for (const p of pos) (grupos[anilloDe(p.contraparte)] ??= []).push(p);
-  const anillos = Object.keys(grupos).sort();
-  const money = (n, mon) => `${MONEDA_SYM[mon] ?? mon} ${fmtN(n)}`;
-
-  return (
-    <div className="fade" style={{ padding: "8px 0" }}>
-      <PageHeader title="Posiciones Intercompañía" subtitle="Quién le debe a quién, por anillo (lectura). El que manda la plata queda como acreedor." />
-      {pos.length === 0 ? (
-        <div style={{ color: T.muted, fontSize: 13, padding: "24px 4px" }}>No hay posiciones intercompañía registradas todavía.</div>
-      ) : anillos.map(a => (
-        <div key={a} style={{ marginBottom: 20, background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, overflow: "hidden", boxShadow: T.shadow }}>
-          <div style={{ background: T.tableHead, color: T.tableHeadText, padding: "8px 14px", fontSize: 12, fontWeight: 800, letterSpacing: ".05em", textTransform: "uppercase" }}>{a}</div>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ fontSize: 11, color: T.muted, textTransform: "uppercase", letterSpacing: ".04em" }}>
-                <th style={{ textAlign: "left", padding: "8px 14px" }}>Acreedor (le deben)</th>
-                <th style={{ textAlign: "left", padding: "8px 14px" }}>Deudor (debe)</th>
-                <th style={{ textAlign: "right", padding: "8px 14px" }}>Saldo</th>
-              </tr>
-            </thead>
-            <tbody>
-              {grupos[a].sort((x, y) => y.neto - x.neto).map((p, i) => (
-                <tr key={i} style={{ borderTop: `1px solid ${T.cardBorder}` }}>
-                  <td style={{ padding: "9px 14px", fontSize: 13, fontWeight: 600, color: T.text }}>{nombre(p.sociedad)}</td>
-                  <td style={{ padding: "9px 14px", fontSize: 13, color: T.text }}>{nombre(p.contraparte)}</td>
-                  <td style={{ padding: "9px 14px", fontSize: 13, fontWeight: 700, textAlign: "right", fontFamily: T.mono, color: T.green }}>{money(p.neto, p.moneda)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 // ─── Menú-landing de Reportes: tarjetas agrupadas por lente ─────────────────────
 function ReportCard({ icon, title, wip, onClick }) {
@@ -3019,8 +2977,9 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const actMenuRef = useRef(null);   // menú ⋮ (outside-click)
   const reportRef  = useRef(null);   // contenedor de la tabla del reporte (fuente de la "foto")
   const [year,           setYear]           = useState(CUR_YEAR);
-  const [intercoNegocio, setIntercoNegocio] = useState("");   // filtro de negocio del reporte Intercompañía por negocio
-  const [intercoDrilling, setIntercoDrilling] = useState(false);  // en el drill del reporte se oculta header + filtros
+  const [intercoNegocio, setIntercoNegocio] = useState("");   // filtro de negocio del reporte Fondeo por negocio
+  const [saldoSoc,       setSaldoSoc]       = useState("");   // filtro de sociedad del reporte Saldos entre sociedades
+  const [intercoDrilling, setIntercoDrilling] = useState(false);  // en el drill de cualquier reporte interco se oculta header + filtros
   const [selectedSedeCCs, setSelectedSedeCCs] = useState(null);   // null = todas · [] = ninguna · [ids] = subconjunto
   const [sedeOpen,        setSedeOpen]        = useState(false);
   useEffect(() => { try { localStorage.setItem("pnlSinIva", sinIva ? "1" : "0"); } catch {} }, [sinIva]);
@@ -3351,6 +3310,12 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   // Matriz del reporte "Intercompañía por negocio" (siempre en USD, independiente del modo FX del P&L). Se
   // computa acá (una vez) para poder dibujar el selector de Negocio junto al de Año y pasarla ya lista al tab.
   const intercoFx = useCallback((m, mon, a, me) => montoAUSD(m, mon, tcDelMes(tiposCambio, a, me)), [tiposCambio]);
+  // Para saldos (balance, no ligado a un mes): traduce a USD con el ÚLTIMO TC cargado.
+  const fxSaldo = useMemo(() => {
+    const ym = Object.keys(tiposCambio || {}).filter(k => tiposCambio[k]).sort().pop();
+    const tc = ym ? tiposCambio[ym] : null;
+    return (m, mon) => montoAUSD(m, mon, tc);
+  }, [tiposCambio]);
   const intercoMatriz = useMemo(
     () => activeTab === "interco_matriz" ? intercoConsolidadoMensual(intercoData, { year, desde: PNL_INICIO, fx: intercoFx }) : null,
     [activeTab, intercoData, year, intercoFx]);
@@ -3788,10 +3753,10 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
 
       {/* ── Header del reporte: "← Reportes" al lado del título; a la derecha vista + menú ⋮ ──
            CxP/CxC arman su propio header (Volver reemplaza a Reportes en el drill), así que acá se omite. */}
-      {activeTab !== "cxp_prov" && activeTab !== "cxc_cli" && !(activeTab === "interco_matriz" && intercoDrilling) && (
+      {activeTab !== "cxp_prov" && activeTab !== "cxc_cli" && !((activeTab === "interco_matriz" || activeTab === "interco") && intercoDrilling) && (
       <PageHeader
         title={curTab?.label ?? "Reporte"}
-        subtitle={(isPnlTiempo || isBigg || isVentasHQ || activeTab === "cxp_prov" || activeTab === "cxc_cli") ? undefined : activeTab === "interco_matriz" ? curTab?.desc : curLente?.label}
+        subtitle={(isPnlTiempo || isBigg || isVentasHQ || activeTab === "cxp_prov" || activeTab === "cxc_cli") ? undefined : (activeTab === "interco_matriz" || activeTab === "interco") ? curTab?.desc : curLente?.label}
         back={
           <button onClick={() => setActiveTab(null)} style={{
             display: "inline-flex", alignItems: "center", gap: 6,
@@ -3857,7 +3822,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       )}
 
       {/* ── Toolbar / Filters (Consolidado y los detalles traen su propia barra; los WIP no llevan) ── */}
-      {activeTab !== "consolidado" && activeTab !== "cxp_prov" && activeTab !== "cxc_cli" && !curTab?.wip && activeTab !== "inf_egresos" && activeTab !== "inf_ingresos" && !(activeTab === "interco_matriz" && intercoDrilling) && (
+      {activeTab !== "consolidado" && activeTab !== "cxp_prov" && activeTab !== "cxc_cli" && !curTab?.wip && activeTab !== "inf_egresos" && activeTab !== "inf_ingresos" && !((activeTab === "interco_matriz" || activeTab === "interco") && intercoDrilling) && (
       <div style={{
         display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap", alignItems: "flex-end",
         background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
@@ -3880,6 +3845,18 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
             <select value={intercoNegocio} onChange={e => setIntercoNegocio(e.target.value)} style={selStyle}>
               <option value="">Todos</option>
               {(intercoMatriz?.negocios || []).map(n => <option key={n.negocioId} value={n.negocioId}>{n.negocioNombre}</option>)}
+            </select>
+          </div>
+        )}
+
+        {/* Sociedad — reporte "Saldos entre sociedades" */}
+        {activeTab === "interco" && (
+          <div>
+            <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
+              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Sociedad</label>
+            <select value={saldoSoc} onChange={e => setSaldoSoc(e.target.value)} style={selStyle}>
+              <option value="">Todas</option>
+              {[...sociedades].sort((a, b) => String(a.nombre || a.id).localeCompare(String(b.nombre || b.id))).map(s => <option key={s.id} value={s.id}>{s.nombre || s.id}</option>)}
             </select>
           </div>
         )}
@@ -4144,7 +4121,8 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       )}
 
       {activeTab === "interco" && (
-        <TabInterco data={intercoData} sociedades={sociedades} />
+        <TabSaldosInterco data={intercoData} sociedades={sociedades} saldoSoc={saldoSoc} fx={fxSaldo}
+          onDrillActive={setIntercoDrilling} onVerComprobante={onVerComprobante} />
       )}
 
       {activeTab === "interco_matriz" && intercoMatriz && (

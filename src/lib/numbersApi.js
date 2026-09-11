@@ -2728,7 +2728,8 @@ export function intercoConsolidadoMensual({ movs = [], comps = [], centros = [],
   const nucleo     = new Set((sociedades || []).filter(s => /n[úu]cleo/i.test(String(s.anillo || ""))).map(s => String(s.id)));
   const socIds     = new Set((sociedades || []).map(s => String(s.id)));   // solo negocios = sociedad real
   const nombreSoc  = new Map((sociedades || []).map(s => [String(s.id), s.nombre || s.id]));
-  const anilloDe   = id => (sociedades || []).find(s => String(s.id) === String(id))?.anillo || "Sin anillo";
+  const anilloSoc  = new Map((sociedades || []).map(s => [String(s.id), s.anillo || "Sin anillo"]));
+  const anilloDe   = id => anilloSoc.get(String(id)) || "Sin anillo";
   const acc = {}, ladoNucleo = {};   // acc[negocioId][tipo] = number[12]
   const rec = (A, B, fecha, mon, delta, tipo) => {
     A = String(A || ""); B = String(B || "");

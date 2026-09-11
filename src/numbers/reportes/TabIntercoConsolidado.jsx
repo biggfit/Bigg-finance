@@ -5,14 +5,13 @@
 import { Fragment, useEffect, useState } from "react";
 import { T } from "../theme";
 import { intercoLedger } from "../../lib/numbersApi";
-import IntercoLedgerTable, { chipDe } from "./IntercoLedgerTable";
+import IntercoLedgerTable, { chipDe, fmtUSD } from "./IntercoLedgerTable";
 
 const MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
 const PNL_INICIO_ANIO = 2026;
 const PNL_INICIO_MES  = 6;   // julio (0-based)
 const MONS_DRILL = ["ARS", "USD", "EUR", "COP", "UYU", "PYG", "CLP", "PEN"];
 const mesDe = f => parseInt(String(f || "").slice(5, 7), 10) - 1;
-const fmtUSD = n => { const v = Math.round(Number(n) || 0); return (v < 0 ? "-" : "") + "U$D " + Math.abs(v).toLocaleString("es-AR"); };
 
 // `matriz` (intercoConsolidadoMensual) y `negocioFiltro` los provee el wrapper (PantallaReportes), que también
 // dibuja el selector de negocio junto al de Año. Acá solo se filtra y se renderiza.
@@ -29,8 +28,7 @@ export default function TabIntercoConsolidado({ data, sociedades = [], year, mat
   matriz.totalMes.forEach((v, i) => { if (Math.abs(v) >= 0.01 && i > mesHasta) mesHasta = i; });
   const meses = [];
   for (let m = mesDesde; m <= mesHasta; m++) meses.push(m);
-  const totalMesShown = new Array(12).fill(0);
-  for (const n of negocios) n.totalMes.forEach((v, i) => { totalMesShown[i] += v; });
+  const totalMesShown = negocioFiltro ? (negocios[0]?.totalMes ?? new Array(12).fill(0)) : matriz.totalMes;
 
   // ── Drill: movimientos de una celda (negocio × tipo × mes) ────────────────────
   if (drill) {
@@ -61,7 +59,7 @@ export default function TabIntercoConsolidado({ data, sociedades = [], year, mat
             <div style={{ fontSize: 20, fontFamily: "var(--mono)", fontWeight: 900, color: T.text }}>{fmtUSD(drill.valor)}</div>
           </div>
         </div>
-        <IntercoLedgerTable entries={entries} usdCol onGoToMov={onVerComprobante ? e => onVerComprobante(e) : undefined} />
+        <IntercoLedgerTable entries={entries} usdCol onGoToMov={onVerComprobante} />
       </div>
     );
   }
@@ -103,10 +101,11 @@ export default function TabIntercoConsolidado({ data, sociedades = [], year, mat
                     {abierto && matriz.tipos.filter(t => neg.tipos[t]?.some(v => Math.abs(v) >= 0.01)).map(t => {
                       const arr = neg.tipos[t];
                       const totT = meses.reduce((s, m) => s + arr[m], 0);
+                      const c = chipDe({ tipo: t });
                       return (
                         <tr key={t} style={{ borderTop: `1px solid ${T.cardBorder}` }}>
                           <td style={{ padding: "6px 14px 6px 30px", fontSize: 12.5, color: T.muted, position: "sticky", left: 0, background: T.card }}>
-                            <span style={{ display: "inline-block", padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: chipDe({ tipo: t }).bg, color: chipDe({ tipo: t }).fg }}>{chipDe({ tipo: t }).label}</span>
+                            <span style={{ display: "inline-block", padding: "1px 7px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, background: c.bg, color: c.fg }}>{c.label}</span>
                           </td>
                           {meses.map(m => (
                             <td key={m} style={tdMes(arr[m], true)}
