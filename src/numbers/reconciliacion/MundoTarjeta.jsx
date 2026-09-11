@@ -299,11 +299,22 @@ export default function MundoTarjeta({ sociedad }) {
     const listas = pendFiltrados.filter(completa);
     if (!listas.length) return;
     setBusy(true); setProg({ done: 0, total: listas.length });
-    try {
-      let done = 0;
-      for (const m of listas) { await aceptarMovimiento(m, { cuenta_contable: cuentaDe(m), centro_costo: centroDe(m), periodo_contable: periodoDe(m) }); setProg({ done: ++done, total: listas.length }); }
-      await recargarPend();
-    } catch (e) { alert("Error al autorizar en lote: " + (e?.message || e)); }
+    // Cada fila son 1-2 llamadas a un GAS de ~3-4s, así que un lote grande tarda minutos y alguna
+    // se cae por el camino. Antes el primer error abortaba el lote entero y no se sabía cuántas
+    // habían entrado; ahora se sigue con las demás y se informa el resultado. Autorizar es
+    // idempotente desde afuera: las que ya entraron salen de la bandeja y un segundo click
+    // retoma solo las que faltan.
+    let done = 0;
+    const fallaron = [];
+    for (const m of listas) {
+      try { await aceptarMovimiento(m, { cuenta_contable: cuentaDe(m), centro_costo: centroDe(m), periodo_contable: periodoDe(m) }); done++; }
+      catch (e) { fallaron.push(`${comercioDe(m)} (${e?.message || e})`); }
+      setProg({ done: done + fallaron.length, total: listas.length });
+    }
+    try { await recargarPend(); } catch { /* la bandeja se recarga al volver a entrar */ }
+    setPdfMsg(fallaron.length
+      ? `⚠️ Se autorizaron ${done} de ${listas.length}. Fallaron ${fallaron.length}: ${fallaron.slice(0, 3).join(" · ")}${fallaron.length > 3 ? "…" : ""}. Volvé a darle "Autorizar todas" para reintentar solo esas.`
+      : `✓ ${done} consumo(s) autorizados.`);
     setProg(null); setBusy(false);
   }
 
