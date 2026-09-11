@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useCallback, useState } from "react";
-import { T, MoneyField } from "./theme";
+import { useEffect, useMemo, useRef, useCallback, useState } from "react";
+import { T, MoneyField, useCaretMask } from "./theme";
 import { newLinea } from "./useLineas";
 
 // ─── Normalizador ─────────────────────────────────────────────────────────────
@@ -65,8 +65,9 @@ export function formatNroComp(raw) {
 // antes del cursor y, tras reformatear, lo reubica en el mismo punto lógico.
 // Uso: const nro = useNroCompMask(value, setValue); <input ref={nro.ref} value={value} onChange={nro.onChange} />
 export function useNroCompMask(value, setValue) {
-  const ref   = useRef(null);
-  const caret = useRef(null);
+  // Mismo mecanismo de caret que el input de montos (ver useCaretMask): value ya viene
+  // formateado, así que el display ES value y la clase significativa es alfanumérica.
+  const { ref, capture } = useCaretMask(value, "A-Za-z0-9");
   // Rechaza el cambio: revierte el DOM al valor anterior y deja el cursor donde estaba.
   const revert = (el) => {
     const back = Math.max(0, (el.selectionStart ?? value.length) - 1);
@@ -86,20 +87,9 @@ export function useNroCompMask(value, setValue) {
     // La corrección es borrar y reescribir (una tecla nueva nunca reduce lo cargado).
     const alnum = (s) => (String(s).match(/[A-Za-z0-9]/g) || []).length;
     if (alnum(raw) >= alnum(value) && alnum(formatted) < alnum(value)) { revert(el); return; }
-    const pos = el.selectionStart ?? raw.length;
-    caret.current = raw.slice(0, pos).replace(/[^A-Za-z0-9]/g, "").length;
+    capture(raw, el.selectionStart);
     setValue(formatted);
   };
-  useLayoutEffect(() => {
-    if (caret.current == null || !ref.current) return;
-    const target = caret.current; caret.current = null;
-    let pos = 0, seen = 0;
-    while (pos < value.length && seen < target) {
-      if (/[A-Za-z0-9]/.test(value[pos])) seen++;
-      pos++;
-    }
-    ref.current.setSelectionRange(pos, pos);
-  }, [value]);
   return { ref, onChange };
 }
 

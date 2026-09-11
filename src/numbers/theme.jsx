@@ -133,19 +133,44 @@ export function formatPesosDisplay(canonical) {
   return neg ? `-${out}` : out;
 }
 
-// Hook que traduce entre el valor plano (canonical) y lo que se muestra en el input,
-// reformateando en cada tecla sin perder la posición del cursor (mismo enfoque que
-// useNroCompMask: cuenta dígitos/coma antes del cursor y los reubica tras reformatear).
-export function useMoneyMask(value, onChange) {
+// Preserva la posición lógica del cursor cuando un input se reformatea en vivo: cuenta
+// cuántos caracteres "significativos" (los de `clase`, p.ej. "0-9," o "A-Za-z0-9") hay
+// antes del cursor y, tras reformatear a `display`, reubica el cursor en ese mismo punto
+// lógico. Lo comparten useMoneyMask (acá) y useNroCompMask (formUtils).
+// Uso: const { ref, capture } = useCaretMask(display, clase);
+//      onChange = e => { capture(e.target.value, e.target.selectionStart); setValue(...) }
+export function useCaretMask(display, clase) {
   const ref = useRef(null);
-  const pendingCaret = useRef(null);
+  const caret = useRef(null);
+  const capture = (raw, pos) => {
+    caret.current = (raw.slice(0, pos ?? raw.length).match(new RegExp(`[${clase}]`, "g")) || []).length;
+  };
+  useLayoutEffect(() => {
+    if (caret.current == null || !ref.current) return;
+    const target = caret.current;
+    caret.current = null;
+    const re = new RegExp(`[${clase}]`);
+    let pos = 0, seen = 0;
+    while (pos < display.length && seen < target) {
+      if (re.test(display[pos])) seen++;
+      pos++;
+    }
+    try { ref.current.setSelectionRange(pos, pos); } catch { /* input sin selección */ }
+  }, [display]);
+  return { ref, capture };
+}
+
+// Hook que traduce entre el valor plano (canonical) y lo que se muestra en el input,
+// reformateando en cada tecla sin perder la posición del cursor (ver useCaretMask).
+export function useMoneyMask(value, onChange) {
   const str = value == null ? "" : String(value);
+  const display = formatPesosDisplay(str);
+  const { ref, capture } = useCaretMask(display, "0-9,");
 
   const handleChange = (e) => {
     const el = e.target;
     const raw = el.value;
-    const pos = el.selectionStart ?? raw.length;
-    pendingCaret.current = (raw.slice(0, pos).match(/[0-9,]/g) || []).length;
+    capture(raw, el.selectionStart);
 
     let s = raw.replace(/\./g, "");           // los puntos son sólo separador de miles (auto)
     const neg = s.trim().startsWith("-");
@@ -158,20 +183,7 @@ export function useMoneyMask(value, onChange) {
     onChange(neg ? `-${canonicalBody}` : canonicalBody);
   };
 
-  useLayoutEffect(() => {
-    if (pendingCaret.current == null || !ref.current) return;
-    const target = pendingCaret.current;
-    pendingCaret.current = null;
-    const disp = formatPesosDisplay(str);
-    let pos = 0, seen = 0;
-    while (pos < disp.length && seen < target) {
-      if (/[0-9,]/.test(disp[pos])) seen++;
-      pos++;
-    }
-    try { ref.current.setSelectionRange(pos, pos); } catch { /* input sin selección */ }
-  }, [str]);
-
-  return { ref, display: formatPesosDisplay(str), onChange: handleChange };
+  return { ref, display, onChange: handleChange };
 }
 
 /** Reemplazo directo de <input type="number"> para montos: mismo contrato de
