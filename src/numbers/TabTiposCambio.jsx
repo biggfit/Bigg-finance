@@ -14,13 +14,13 @@ const MESES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov"
 // Grilla de carga. El orden de acá es el que ve el usuario; el de la hoja no importa
 // (todo se lee/escribe por nombre de header).
 const CAMPOS = [
-  { key:"arsUSD", label:"ARS / U$D", placeholder:"ej. 1560",  step:"1"      },
-  { key:"eurUSD", label:"€ / U$D",   placeholder:"ej. 1.15",  step:"0.0001" },
-  { key:"copUSD", label:"COP / U$D", placeholder:"ej. 3450",  step:"1"      },
-  { key:"uyuUSD", label:"UYU / U$D", placeholder:"ej. 40",    step:"0.01"   },
-  { key:"pygUSD", label:"PYG / U$D", placeholder:"ej. 5950",  step:"1"      },
-  { key:"clpUSD", label:"CLP / U$D", placeholder:"ej. 925",   step:"1"      },
-  { key:"penUSD", label:"PEN / U$D", placeholder:"ej. 3.39",  step:"0.0001" },
+  { key:"arsUSD", label:"ARS / U$D", placeholder:"ej. 1560" },
+  { key:"eurUSD", label:"€ / U$D",   placeholder:"ej. 1.15" },
+  { key:"copUSD", label:"COP / U$D", placeholder:"ej. 3450" },
+  { key:"uyuUSD", label:"UYU / U$D", placeholder:"ej. 40"   },
+  { key:"pygUSD", label:"PYG / U$D", placeholder:"ej. 5950" },
+  { key:"clpUSD", label:"CLP / U$D", placeholder:"ej. 925"  },
+  { key:"penUSD", label:"PEN / U$D", placeholder:"ej. 3.39" },
 ];
 
 const ymDe    = (year, monthIdx) => `${year}-${String(monthIdx + 1).padStart(2, "0")}`;
@@ -319,7 +319,7 @@ export default function TabTiposCambio() {
         </div>
 
         <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12, marginBottom:16 }}>
-          {CAMPOS.map(({ key, label, placeholder, step }) => (
+          {CAMPOS.map(({ key, label, placeholder }) => (
             <div key={key} style={{ display:"flex", flexDirection:"column", gap:4 }}>
               <label style={{ fontSize:11, color:T.muted, fontWeight:700, letterSpacing:".04em" }}>{label}</label>
               <MoneyField placeholder={placeholder}

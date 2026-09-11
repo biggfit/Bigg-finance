@@ -133,14 +133,39 @@ export function formatPesosDisplay(canonical) {
   return neg ? `-${out}` : out;
 }
 
-// Hook que traduce entre el valor plano (canonical) y lo que se muestra en el input,
-// reformateando en cada tecla sin perder la posición del cursor (mismo enfoque que
-// useNroCompMask: cuenta dígitos/coma antes del cursor y los reubica tras reformatear).
-export function useMoneyMask(value, onChange) {
+// Preserva la posición lógica del cursor cuando un input se reformatea en vivo: cuenta
+// cuántos caracteres "significativos" (los de `clase`, p.ej. "0-9," o "A-Za-z0-9") hay
+// antes del cursor y, tras reformatear a `display`, reubica el cursor en ese mismo punto
+// lógico. Lo comparten useMoneyMask (acá) y useNroCompMask (formUtils).
+// Uso: const { ref, capture } = useCaretMask(display, clase);
+//      onChange = e => { capture(e.target.value, e.target.selectionStart); setValue(...) }
+export function useCaretMask(display, clase) {
   const ref = useRef(null);
-  const pendingCaret = useRef(null);
+  const caret = useRef(null);
+  const capture = (raw, pos) => {
+    caret.current = (raw.slice(0, pos ?? raw.length).match(new RegExp(`[${clase}]`, "g")) || []).length;
+  };
+  useLayoutEffect(() => {
+    if (caret.current == null || !ref.current) return;
+    const target = caret.current;
+    caret.current = null;
+    const re = new RegExp(`[${clase}]`);
+    let pos = 0, seen = 0;
+    while (pos < display.length && seen < target) {
+      if (re.test(display[pos])) seen++;
+      pos++;
+    }
+    try { ref.current.setSelectionRange(pos, pos); } catch { /* input sin selección */ }
+  }, [display]);
+  return { ref, capture };
+}
+
+// Hook que traduce entre el valor plano (canonical) y lo que se muestra en el input,
+// reformateando en cada tecla sin perder la posición del cursor (ver useCaretMask).
+export function useMoneyMask(value, onChange) {
   const str = value == null ? "" : String(value);
   const display = formatPesosDisplay(str);
+  const { ref, capture } = useCaretMask(display, "0-9,");
 
   const handleChange = (e) => {
     const el = e.target;
@@ -155,7 +180,7 @@ export function useMoneyMask(value, onChange) {
       if (withoutInserted === display) raw = raw.slice(0, pos - 1) + "," + raw.slice(pos);
     }
 
-    pendingCaret.current = (raw.slice(0, pos).match(/[0-9,]/g) || []).length;
+    capture(raw, pos);
 
     let s = raw.replace(/\./g, "");           // los puntos restantes son sólo separador de miles (auto)
     const neg = s.trim().startsWith("-");
@@ -167,18 +192,6 @@ export function useMoneyMask(value, onChange) {
 
     onChange(neg ? `-${canonicalBody}` : canonicalBody);
   };
-
-  useLayoutEffect(() => {
-    if (pendingCaret.current == null || !ref.current) return;
-    const target = pendingCaret.current;
-    pendingCaret.current = null;
-    let pos = 0, seen = 0;
-    while (pos < display.length && seen < target) {
-      if (/[0-9,]/.test(display[pos])) seen++;
-      pos++;
-    }
-    try { ref.current.setSelectionRange(pos, pos); } catch { /* input sin selección */ }
-  }, [display]);
 
   return { ref, display, onChange: handleChange };
 }
@@ -194,21 +207,20 @@ export function MoneyField({ value, onChange, ...rest }) {
 }
 
 export function Input({ label, value, onChange, placeholder, type="text", required }) {
-  const isMoney = type === "number";
-  const mask = useMoneyMask(isMoney ? value : "", isMoney ? onChange : () => {});
+  // type="number" (montos) delega en MoneyField (máscara + caret); el resto es input plano.
+  const inputStyle = { width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`,
+    borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text,
+    fontFamily:T.font, outline:"none", boxSizing:"border-box" };
   return (
     <div>
       <label style={{ fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:5 }}>
         {label}{required && <span style={{ color:T.red }}> *</span>}
       </label>
-      <input type={isMoney ? "text" : type} inputMode={isMoney ? "decimal" : undefined}
-        ref={isMoney ? mask.ref : undefined}
-        value={isMoney ? mask.display : value}
-        onChange={isMoney ? mask.onChange : e=>onChange(e.target.value)}
-        placeholder={placeholder}
-        style={{ width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`,
-          borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text,
-          fontFamily:T.font, outline:"none", boxSizing:"border-box" }} />
+      {type === "number"
+        ? <MoneyField value={value} onChange={e => onChange(e.target.value)}
+            placeholder={placeholder} style={inputStyle} />
+        : <input type={type} value={value} onChange={e => onChange(e.target.value)}
+            placeholder={placeholder} style={inputStyle} />}
     </div>
   );
 }

@@ -6,7 +6,7 @@ import {
   aceptarMovimiento, ignorarMovimiento, fetchBancoReglas, fetchMovTesoreria, metaVal,
 } from "../../lib/numbersApi";
 import { fetchLegajos } from "../../lib/sueldosApi";
-import { parseTarjetaPdf } from "../parsers/tarjetaPdf";
+import { parseResumenes } from "../parsers/resumenTarjeta";
 
 // ── Helpers de prefill (mismo criterio que la pantalla Resumen TC) ──────────────
 const num = v => Number(v) || 0;
@@ -138,13 +138,18 @@ export default function MundoTarjeta({ sociedad }) {
         || tarjetas.find(c => c.moneda === moneda) || null;
   };
 
-  async function onPdf(file) {
-    if (!file) return;
+  async function onPdf(files) {
+    const lista = [...(files || [])];
+    if (!lista.length) return;
     if (!tarjetaId) { setPdfMsg("Elegí primero la tarjeta."); return; }
-    setPdfMsg("Leyendo PDF…"); setBusy(true);
+    setPdfMsg(lista.length > 1 ? `Leyendo ${lista.length} PDFs…` : "Leyendo PDF…"); setBusy(true);
     try {
-      const r = await parseTarjetaPdf(file);
+      const parseo = await parseResumenes(lista);
+      const r = parseo.resultado;
       if (!r.lineas.length) { setPdfMsg("No pude leer líneas del PDF — cargalas a mano o probá otro."); setBusy(false); return; }
+      // Amex emite un resumen por titular: si los archivos son de ciclos distintos, la ingesta
+      // mezclaría dos períodos en una sola bandeja (y el cuadre no significaría nada).
+      if (r.ciclosDistintos) { setPdfMsg("Error: los resúmenes son de ciclos de facturación distintos. Subí los del mismo período."); setBusy(false); return; }
       const hd = r.header || {};
       const periodo = hd.periodo || "";
       const fecha   = hd.fechaCierre || new Date().toISOString().slice(0, 10);
@@ -213,25 +218,52 @@ export default function MundoTarjeta({ sociedad }) {
         ? `⚠️ diferencia de ${money(Math.abs(a.dif), a.mon)} sin cuenta-tarjeta ${a.mon} para ajustarla`
         : `+ ajuste de ${money(Math.abs(a.dif), a.mon)} (${a.dif > 0 ? "crédito" : "cargo"}) contra el Total a Pagar`
       ).join(" · ");
+      // Saldo anterior impago (Amex): NO se ingesta — es deuda de ciclos previos, que o ya vive en
+      // la cuenta-tarjeta o hay que darla de alta como saldo inicial. Se avisa para que el pago no
+      // sorprenda: lo que se va a pagar es saldo anterior + estos consumos.
+      const sa = r.saldoAnterior;
+      const saTxt = sa && (Math.abs(sa.ars) > 1 || Math.abs(sa.usd) > 0.5)
+        ? ` · ⚠️ el resumen arrastra saldo anterior impago de ${[sa.ars ? money(sa.ars, "ARS") : "", sa.usd ? money(sa.usd, "USD") : ""].filter(Boolean).join(" + ")} (NO se carga acá)`
+        : "";
       setPdfMsg(`✓ ${res.creados} consumo(s) cargados a la bandeja`
-        + (res.borradas ? ` · reemplazó ${res.borradas} de una carga anterior` : "")
+        + (parseo.archivos > 1 ? ` de ${parseo.archivos} resúmenes` : "")
+        + (res.sinCambio ? ` · ${res.sinCambio} ya estaban (sin cambios)` : "")
+        + (res.borradas ? ` · ${res.borradas} que ya no están en el resumen se borraron` : "")
+        + (res.sobrantes ? ` · ⚠️ ${res.sobrantes} viejos no se pudieron borrar — borralos a mano` : "")
         + (res.yaAutorizadas ? ` · ${res.yaAutorizadas} ya autorizados (no se recargan)` : "")
         + (reconocidas ? ` · ${reconocidas} ya eran pago de FC con la tarjeta` : "")
         + (sinCuenta ? ` · ⚠️ ${sinCuenta} sin cuenta-tarjeta de esa moneda (creala en Maestros)` : "")
         + (ajusteTxt ? ` · ${ajusteTxt}` : "")
+        + saTxt
         + ". Revisá cuenta/centro y autorizá.");
     } catch (e) { setPdfMsg("Error al leer el PDF: " + (e?.message || e)); }
     setBusy(false);
   }
 
   const setEdit = (id, k, v) => setEdits(e => ({ ...e, [id]: { ...e[id], [k]: v } }));
-  const cuentaDe = m => edits[m.id]?.cuenta_contable ?? m.cuenta_contable ?? "";
-  const centroDe = m => edits[m.id]?.centro_costo ?? m.centro_costo ?? "";
-  // Período P&L: a diferencia de Banco (que arranca vacío = usa la fecha del movimiento), en Tarjeta
-  // arranca con el período DEL RESUMEN (viene en referencia, per=YYYY-MM — el mismo con el que se
-  // ingirió esta línea) — un resumen es un solo ciclo de facturación y todos sus consumos deben caer
-  // en el mismo P&L salvo que alguien decida lo contrario a mano. Siempre editable.
-  const periodoDe = m => edits[m.id]?.periodo_contable ?? (metaVal(m.referencia, "per") || "");
+  // Imputación de una fila de la bandeja: lo editado a mano → lo que quedó guardado en la ingesta →
+  // y si sigue vacío, la regla por comercio AHORA. Ese último tramo importa porque el prellenado se
+  // calcula al ingerir: una regla creada después (lo normal la primera vez que se carga una tarjeta
+  // nueva) no llegaba a las filas ya cargadas, y re-subir el resumen tampoco las tocaba — la
+  // sincronización las ve iguales y no las reescribe. Al autorizar se congela lo que se ve acá.
+  const comercioDe = m => m.concepto || metaVal(m.referencia, "com") || "";
+  const cuentaDe = m => {
+    const v = edits[m.id]?.cuenta_contable ?? m.cuenta_contable ?? "";
+    if (v) return v;
+    const reg = matchRegla(comercioDe(m));
+    return reg?.cuentaId ? cuentaNombreDe(reg.cuentaId) : "";
+  };
+  const centroDe = m => {
+    const v = edits[m.id]?.centro_costo ?? m.centro_costo ?? "";
+    if (v) return v;
+    return matchRegla(comercioDe(m))?.centroId || centroDeLegajo(metaVal(m.referencia, "tit")) || "";
+  };
+  // Período P&L: arranca en el MES DEL CONSUMO, no en el del resumen. El ciclo de facturación no
+  // respeta el mes calendario (el de septiembre trae compras del 4 de agosto en adelante), así que
+  // mandar todo al período del resumen corría a septiembre gastos que se incurrieron en agosto.
+  // Cae de nuevo al período del resumen solo si la línea no trajo fecha. Siempre editable.
+  const periodoDe = m => edits[m.id]?.periodo_contable
+    ?? (String(m.fecha || "").slice(0, 7) || metaVal(m.referencia, "per") || "");
   // Solo cuentas de EGRESO: un consumo de tarjeta nunca se imputa contra una cuenta de Venta/Ingreso
   // (ej. "Pauta" existe dos veces en el plan — una de Venta para lo que se le cobra a franquicias,
   // otra de Gasto para lo que se gasta en publicidad — acá solo tiene sentido la segunda).
@@ -267,11 +299,22 @@ export default function MundoTarjeta({ sociedad }) {
     const listas = pendFiltrados.filter(completa);
     if (!listas.length) return;
     setBusy(true); setProg({ done: 0, total: listas.length });
-    try {
-      let done = 0;
-      for (const m of listas) { await aceptarMovimiento(m, { cuenta_contable: cuentaDe(m), centro_costo: centroDe(m), periodo_contable: periodoDe(m) }); setProg({ done: ++done, total: listas.length }); }
-      await recargarPend();
-    } catch (e) { alert("Error al autorizar en lote: " + (e?.message || e)); }
+    // Cada fila son 1-2 llamadas a un GAS de ~3-4s, así que un lote grande tarda minutos y alguna
+    // se cae por el camino. Antes el primer error abortaba el lote entero y no se sabía cuántas
+    // habían entrado; ahora se sigue con las demás y se informa el resultado. Autorizar es
+    // idempotente desde afuera: las que ya entraron salen de la bandeja y un segundo click
+    // retoma solo las que faltan.
+    let done = 0;
+    const fallaron = [];
+    for (const m of listas) {
+      try { await aceptarMovimiento(m, { cuenta_contable: cuentaDe(m), centro_costo: centroDe(m), periodo_contable: periodoDe(m) }); done++; }
+      catch (e) { fallaron.push(`${comercioDe(m)} (${e?.message || e})`); }
+      setProg({ done: done + fallaron.length, total: listas.length });
+    }
+    try { await recargarPend(); } catch { /* la bandeja se recarga al volver a entrar */ }
+    setPdfMsg(fallaron.length
+      ? `⚠️ Se autorizaron ${done} de ${listas.length}. Fallaron ${fallaron.length}: ${fallaron.slice(0, 3).join(" · ")}${fallaron.length > 3 ? "…" : ""}. Volvé a darle "Autorizar todas" para reintentar solo esas.`
+      : `✓ ${done} consumo(s) autorizados.`);
     setProg(null); setBusy(false);
   }
 
@@ -321,7 +364,8 @@ export default function MundoTarjeta({ sociedad }) {
           </select>
           <label style={{ background: tarjetaId && !busy ? T.accentDark : "#cbd5e1", color: tarjetaId && !busy ? T.accent : "#fff", borderRadius: 999, padding: "8px 16px", fontSize: 12.5, fontWeight: 700, cursor: tarjetaId && !busy ? "pointer" : "default", fontFamily: T.font, whiteSpace: "nowrap" }}>
             {busy ? "Procesando…" : "⬆ Subir resumen"}
-            <input type="file" accept=".pdf" disabled={!tarjetaId || busy} style={{ display: "none" }} onChange={e => { onPdf(e.target.files[0]); e.target.value = ""; }} />
+            {/* multiple: Amex emite un PDF por titular → los del ciclo se suben juntos y se mergean. */}
+            <input type="file" accept=".pdf" multiple disabled={!tarjetaId || busy} style={{ display: "none" }} onChange={e => { onPdf(e.target.files); e.target.value = ""; }} />
           </label>
         </div>
       </div>
@@ -395,7 +439,7 @@ export default function MundoTarjeta({ sociedad }) {
                       <tr key={m.id} style={{ borderTop: `1px solid ${T.cardBorder}`, ...(esAjuste ? { background: "#fefce8" } : {}) }}>
                         <td style={{ padding: "4px 8px" }}>
                           <input type="month" value={periodoDe(m)} onChange={e => setEdit(m.id, "periodo_contable", e.target.value)}
-                            title="Período P&L de este consumo — arranca en el período del resumen, editable línea por línea."
+                            title="Período P&L de este consumo — arranca en el mes del consumo, editable línea por línea."
                             style={fld(!!periodoDe(m), 112)} />
                         </td>
                         <td style={{ padding: "5px 10px", minWidth: 200, fontStyle: esAjuste ? "italic" : "normal" }}>

@@ -5,6 +5,7 @@
 
 import { stamp } from "./auth";
 import { bustToken, forzarRefresco } from "./cacheBust";
+import { fetchJsonWithRetry } from "./http";
 
 const BASE    = "/api/sueldos";
 const TOKEN   = import.meta.env.VITE_SHEETS_TOKEN ?? "";
@@ -39,21 +40,12 @@ async function get(sheet, params = {}, base = BASE, { retries = 3, retryDelayMs 
   // GAS devuelve 500 con HTML de forma intermitente (rate-limit / lock). Sin reintento,
   // un solo fallo tumba el Promise.all del que carga la pantalla → "no hay datos" engañoso.
   const run = async () => {
-    let lastErr;
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      if (attempt) await new Promise(r => setTimeout(r, retryDelayMs * attempt));
-      try {
-        const res  = await fetch(`${base}?${qs}`);
-        const text = await res.text();
-        let data;
-        try { data = JSON.parse(text); }
-        catch { throw new Error(`Error del servidor (${res.status}): ${text.slice(0, 120)}`); }
-        if (data?.error) throw new Error(data.error);
-        _cache.set(key, { data, ts: Date.now() });
-        return data;
-      } catch (e) { lastErr = e; }
-    }
-    throw lastErr;
+    const data = await fetchJsonWithRetry(key, {
+      retries, retryDelayMs,
+      parseErr: (status, text) => `Error del servidor (${status}): ${text.slice(0, 120)}`,
+    });
+    _cache.set(key, { data, ts: Date.now() });
+    return data;
   };
 
   const p = run().finally(() => _inflight.delete(key));
@@ -907,7 +899,9 @@ export async function appendPago({
     fecha,
     tipo:            "SUELDO",
     cuenta_bancaria: cuenta_bancaria_id,
-    cuenta_contable: cuenta_contable_id,
+    // Convención del resto de la app: cuenta_contable guarda el NOMBRE (el P&L y los reportes agrupan
+    // por nombre). Antes copiaba el id crudo (CUENTA_Sueldos) → se veía en el ledger interco.
+    cuenta_contable: cuenta_contable_nombre || String(cuenta_contable_id || "").replace(/^CUENTA_/, ""),
     moneda:          "ARS",
     monto:           -Math.abs(monto),
     documento_id,
@@ -931,7 +925,7 @@ export async function appendPagos(items = []) {
     const {
       mes, anio, legajo_id, legajo_nombre, sociedad_id,
       tipo_componente, monto, fecha, cuenta_bancaria_id,
-      cuenta_contable_id = "", forma_pago_id = "", lote_pago = "",
+      cuenta_contable_id = "", cuenta_contable_nombre = "", forma_pago_id = "", lote_pago = "",
       centro_costo = "", concepto = "", nota = "", ambito = "",
     } = p;
     const nb_concepto = concepto || `Sueldo ${legajo_nombre} ${mes}/${anio} · ${tipo_componente}`;
@@ -942,7 +936,7 @@ export async function appendPagos(items = []) {
       fecha,
       tipo:            "SUELDO",
       cuenta_bancaria: cuenta_bancaria_id,
-      cuenta_contable: cuenta_contable_id,
+      cuenta_contable: cuenta_contable_nombre || String(cuenta_contable_id || "").replace(/^CUENTA_/, ""),
       moneda:          "ARS",
       monto:           -Math.abs(monto),
       documento_id,

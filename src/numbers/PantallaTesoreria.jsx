@@ -15,6 +15,7 @@ import {
 import { fetchLiquidacionesCerradas } from "../lib/sueldosApi";
 import { fetchAll } from "../lib/sheetsApi";        // Franquicias (read-only)
 import { derivarSaldos, sociedadNombreMap } from "./tesoreriaDerive";  // saldos + activo/pasivo (compartido con Reportes)
+import IntercoLedgerTable from "./reportes/IntercoLedgerTable";  // tabla del ledger interco (compartida con Reportes)
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 // Tesorería muestra montos SIN decimales (pesos enteros). Local: no toca fmtSaldo global (pdf.js).
@@ -743,18 +744,7 @@ export function PaginaIntercoLedger({ item, ledger, onBack, onGoToMov }) {
   const mon = item.moneda ?? "ARS";
   const nosDeben = (ledger.final ?? 0) >= 0;   // + = nos deben (activo) / − = les debemos
   const headerColor = nosDeben ? "#16a34a" : "#dc2626";
-  const rows = [...(ledger.entries ?? [])].reverse();   // más reciente arriba
-  const [menuFor, setMenuFor] = useState(null);   // índice de fila con el ⋯ abierto
-  useEffect(() => {
-    if (menuFor == null) return;
-    const h = () => setMenuFor(null);
-    document.addEventListener("click", h);
-    return () => document.removeEventListener("click", h);
-  }, [menuFor]);
-  const fmtF = f => { const s = String(f || ""); if (/^\d{4}-\d{2}-\d{2}/.test(s)) { const [y, m, d] = s.slice(0, 10).split("-"); return `${d}/${m}/${y}`; } return s; };
-  const signed = v => (v >= 0 ? "+ " : "− ") + fmtSaldo(Math.abs(v), mon);
-  const thS = { padding: "10px 16px", fontSize: 11, fontWeight: 800, color: "rgba(255,255,255,.85)", textAlign: "right", letterSpacing: ".04em", textTransform: "uppercase", whiteSpace: "nowrap" };
-  const tdS = { padding: "9px 16px", fontSize: 13, textAlign: "right", fontFamily: "var(--mono)", color: T.text, whiteSpace: "nowrap" };
+  const nMovs = (ledger.entries ?? []).length;
   return (
     <div style={{ padding: "28px 32px" }} className="fade">
       <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 24 }}>
@@ -762,71 +752,17 @@ export function PaginaIntercoLedger({ item, ledger, onBack, onGoToMov }) {
         <div style={{ width: 4, height: 28, borderRadius: 2, background: headerColor }} />
         <div>
           <h1 style={{ fontSize: 20, fontWeight: 900, color: T.text, margin: 0, letterSpacing: "-.02em" }}>{item.label}</h1>
-          <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>Cuenta corriente intercompañía · {rows.length} movimiento{rows.length !== 1 ? "s" : ""}</div>
+          <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>Cuenta corriente intercompañía · {nMovs} movimiento{nMovs !== 1 ? "s" : ""}</div>
         </div>
         <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-          <span style={{ fontSize: 11, color: T.muted, textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 }}>Saldo actual</span>
-          <span style={{ fontSize: 22, fontFamily: "var(--mono)", fontWeight: 900, color: headerColor, whiteSpace: "nowrap" }}>{fmtSaldo(ledger.final ?? 0, mon)}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 13, color: T.muted, textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 }}>Saldo actual</span>
+            <span style={{ fontSize: 22, fontFamily: "var(--mono)", fontWeight: 900, color: headerColor, whiteSpace: "nowrap" }}>{fmtSaldo(ledger.final ?? 0, mon)}</span>
+          </div>
           <span style={{ fontSize: 10, color: T.muted }}>{nosDeben ? "nos deben" : "les debemos"}</span>
         </div>
       </div>
-      <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, boxShadow: T.shadow, overflow: "visible" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ background: headerColor }}>
-              <th style={{ ...thS, textAlign: "left" }}>Fecha</th>
-              <th style={{ ...thS, textAlign: "left" }}>Concepto</th>
-              <th style={thS}>Monto</th>
-              <th style={{ ...thS, color: "#fff" }}>Saldo</th>
-              <th style={{ ...thS, width: 44 }} />
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 && (
-              <tr><td colSpan={5} style={{ padding: "16px", fontSize: 13, color: T.muted, textAlign: "center" }}>Sin movimientos (solo saldo de apertura).</td></tr>
-            )}
-            {rows.map((e, i) => (
-              <tr key={i} style={{ borderBottom: `1px solid ${T.cardBorder}`, background: i % 2 === 0 ? T.card : "#fafbfc" }}>
-                <td style={{ padding: "9px 16px", fontSize: 12.5, color: T.muted, whiteSpace: "nowrap", verticalAlign: "top" }}>{fmtF(e.fecha)}</td>
-                <td style={{ padding: "9px 16px", fontSize: 13, color: T.text }}>
-                  <div>{e.concepto}</div>
-                  {(e.prov || e.cuenta || e.centro || e.ref) && (
-                    <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>
-                      {[e.prov, e.cuenta, e.centro].filter(Boolean).join(" · ")}
-                      {e.ref ? <span style={{ color: T.dim, marginLeft: 6, fontFamily: "var(--mono)" }}>#{e.ref}</span> : null}
-                    </div>
-                  )}
-                </td>
-                <td style={{ ...tdS, color: e.delta >= 0 ? "#16a34a" : "#dc2626", fontWeight: 700 }}>{signed(e.delta)}</td>
-                <td style={{ ...tdS, fontWeight: 800 }}>{fmtSaldo(e.saldo, mon)}</td>
-                <td style={{ padding: "9px 10px", textAlign: "center", position: "relative" }}>
-                  <button onClick={ev => { ev.stopPropagation(); setMenuFor(menuFor === i ? null : i); }}
-                    title="Más acciones"
-                    style={{ background: "transparent", border: "none", fontSize: 18, fontWeight: 800, color: T.muted, cursor: "pointer", lineHeight: 1, padding: "0 4px" }}>⋯</button>
-                  {menuFor === i && (
-                    <div onClick={ev => ev.stopPropagation()} style={{ position: "absolute", right: 12, top: "100%", zIndex: 20, background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 8, boxShadow: T.shadowMd, minWidth: 180, overflow: "hidden" }}>
-                      <button onClick={() => { setMenuFor(null); onGoToMov?.(e); }}
-                        style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", padding: "9px 14px", fontSize: 12.5, fontWeight: 600, color: T.text, cursor: "pointer", fontFamily: T.font, whiteSpace: "nowrap" }}
-                        onMouseEnter={ev => ev.currentTarget.style.background = "#eceff3"}
-                        onMouseLeave={ev => ev.currentTarget.style.background = "transparent"}>
-                        Ir al movimiento →
-                      </button>
-                    </div>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr style={{ background: "#f3f4f6", borderTop: `2px solid ${T.cardBorder}` }}>
-              <td style={{ padding: "9px 16px", fontSize: 12.5, fontWeight: 800, color: T.muted }} colSpan={2}>Saldo de apertura</td>
-              <td style={tdS} />
-              <td style={{ ...tdS, fontWeight: 900 }}>{fmtSaldo(ledger.opening ?? 0, mon)}</td>
-              <td />
-            </tr>
-          </tfoot>
-        </table>
-      </div>
+      <IntercoLedgerTable entries={ledger.entries} moneda={mon} headerColor={headerColor} opening={ledger.opening ?? 0} onGoToMov={onGoToMov} />
     </div>
   );
 }

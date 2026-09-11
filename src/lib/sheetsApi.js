@@ -1,6 +1,7 @@
 // ─── Google Sheets API layer (via Apps Script Web App) ────────────────────────
 import { getFranchiseCurrencies } from "../data/franchisor";
 import { bustToken, forzarRefresco } from "./cacheBust";
+import { fetchJsonWithRetry } from "./http";
 // Todas las operaciones de lectura/escritura pasan por acá.
 // Configurar en .env.local:
 //   VITE_SHEETS_API_URL=https://script.google.com/macros/s/.../exec
@@ -36,21 +37,9 @@ async function get(resource, { retries = 3, retryDelayMs = 1000 } = {}) {
   // este fetch de Franquicias pesa ~560KB y tarda ~6s). Sin reintento, un solo fallo deja el dataset
   // VACÍO en silencio (fetchComps es fire-and-forget en Reportes) → el P&L aparece sin franquicias.
   const req = (async () => {
-    let lastErr;
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      if (attempt) await new Promise(r => setTimeout(r, retryDelayMs * attempt));
-      try {
-        const res  = await fetch(url, { cache: "no-store" });
-        const text = await res.text();
-        let data;
-        try { data = JSON.parse(text); }
-        catch { throw new Error(`HTTP ${res.status}: ${String(text).slice(0, 120)}`); }
-        if (data && data.error) throw new Error(data.error);
-        _cache.set(key, { data, ts: Date.now() });
-        return data;
-      } catch (e) { lastErr = e; }
-    }
-    throw lastErr;
+    const data = await fetchJsonWithRetry(url, { retries, retryDelayMs, init: { cache: "no-store" } });
+    _cache.set(key, { data, ts: Date.now() });
+    return data;
   })();
   _inflight.set(key, req);
   req.finally(() => _inflight.delete(key));
