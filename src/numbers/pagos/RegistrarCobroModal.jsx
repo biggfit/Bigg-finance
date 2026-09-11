@@ -13,9 +13,21 @@ export default function RegistrarCobroModal({ ingreso, saldoPendiente, cuentas, 
     medioCobro: "",
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const saldoDoc = saldoPendiente ?? ingreso.importe ?? 0;
+  // Anticipo seleccionado (si el medio es "ant:<id>") → su saldo topea el cobro además del saldo del doc.
+  const antSel   = String(form.medioCobro).startsWith("ant:")
+    ? anticipos.find(a => `ant:${a.id}` === form.medioCobro) : null;
+  const tope     = antSel ? Math.min(saldoDoc, Number(antSel.saldo) || 0) : saldoDoc;
   const montoNum = Number(form.monto) || 0;
-  const excede   = montoNum > (saldoPendiente ?? ingreso.importe ?? 0);
+  const excede   = montoNum > tope + 0.005;
   const canSave  = form.fecha && form.monto && form.medioCobro && !excede;
+  // Al elegir el medio, si es un anticipo con menos saldo que el monto actual, clampeo al saldo del anticipo.
+  const pickMedio = (id) => setForm(f => {
+    const a = String(id).startsWith("ant:") ? anticipos.find(x => `ant:${x.id}` === id) : null;
+    const cap = a ? Math.min(saldoDoc, Number(a.saldo) || 0) : saldoDoc;
+    const m = Number(f.monto) || 0;
+    return { ...f, medioCobro: id, monto: m > cap ? String(cap) : f.monto };
+  });
 
   const mediosCobro = [
     ...cuentas
@@ -68,7 +80,7 @@ export default function RegistrarCobroModal({ ingreso, saldoPendiente, cuentas, 
                   borderRadius:8, padding:"8px 12px", fontSize:13, color: excede ? "#dc2626" : T.text,
                   fontFamily:T.font, outline:"none", boxSizing:"border-box" }} />
               {excede && <div style={{ fontSize:11, color:"#dc2626", marginTop:3, fontWeight:600 }}>
-                Supera el saldo pendiente
+                {antSel ? `Supera el saldo del anticipo (${fmtMoney(antSel.saldo, ingreso.moneda)})` : "Supera el saldo pendiente"}
               </div>}
             </div>
           </div>
@@ -85,7 +97,7 @@ export default function RegistrarCobroModal({ ingreso, saldoPendiente, cuentas, 
                 </div>
               )}
               {mediosCobro.map(m => (
-                <button key={m.id} onClick={() => set("medioCobro", m.id)} style={{
+                <button key={m.id} onClick={() => pickMedio(m.id)} style={{
                   background: form.medioCobro === m.id ? "#eff6ff" : "#eceff3",
                   border:`1.5px solid ${form.medioCobro === m.id ? "#2563eb" : T.cardBorder}`,
                   borderRadius:8, padding:"9px 14px", cursor:"pointer",
