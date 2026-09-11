@@ -899,7 +899,9 @@ export async function appendPago({
     fecha,
     tipo:            "SUELDO",
     cuenta_bancaria: cuenta_bancaria_id,
-    cuenta_contable: cuenta_contable_id,
+    // Convención del resto de la app: cuenta_contable guarda el NOMBRE (el P&L y los reportes agrupan
+    // por nombre). Antes copiaba el id crudo (CUENTA_Sueldos) → se veía en el ledger interco.
+    cuenta_contable: cuenta_contable_nombre || String(cuenta_contable_id || "").replace(/^CUENTA_/, ""),
     moneda:          "ARS",
     monto:           -Math.abs(monto),
     documento_id,
@@ -923,7 +925,7 @@ export async function appendPagos(items = []) {
     const {
       mes, anio, legajo_id, legajo_nombre, sociedad_id,
       tipo_componente, monto, fecha, cuenta_bancaria_id,
-      cuenta_contable_id = "", forma_pago_id = "", lote_pago = "",
+      cuenta_contable_id = "", cuenta_contable_nombre = "", forma_pago_id = "", lote_pago = "",
       centro_costo = "", concepto = "", nota = "", ambito = "",
     } = p;
     const nb_concepto = concepto || `Sueldo ${legajo_nombre} ${mes}/${anio} · ${tipo_componente}`;
@@ -934,7 +936,7 @@ export async function appendPagos(items = []) {
       fecha,
       tipo:            "SUELDO",
       cuenta_bancaria: cuenta_bancaria_id,
-      cuenta_contable: cuenta_contable_id,
+      cuenta_contable: cuenta_contable_nombre || String(cuenta_contable_id || "").replace(/^CUENTA_/, ""),
       moneda:          "ARS",
       monto:           -Math.abs(monto),
       documento_id,

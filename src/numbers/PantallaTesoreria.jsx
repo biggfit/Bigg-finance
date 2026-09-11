@@ -753,6 +753,15 @@ export function PaginaIntercoLedger({ item, ledger, onBack, onGoToMov }) {
   }, [menuFor]);
   const fmtF = f => { const s = String(f || ""); if (/^\d{4}-\d{2}-\d{2}/.test(s)) { const [y, m, d] = s.slice(0, 10).split("-"); return `${d}/${m}/${y}`; } return s; };
   const signed = v => (v >= 0 ? "+ " : "− ") + fmtSaldo(Math.abs(v), mon);
+  // Chip de Tipo: traduce la etiqueta interna de intercoLedger a un label corto + color suave.
+  const TIPO_CHIP = {
+    "Pago":             { label: "Pago",     bg: "#eff6ff", fg: "#1d4ed8" },
+    "Interco parkeada": { label: "Interco",  bg: "#f5f3ff", fg: "#7c3aed" },
+    "Transferencia":    { label: "Transfer", bg: "#ecfeff", fg: "#0e7490" },
+    "Interuso gestión": { label: "Interuso", bg: "#fffbeb", fg: "#b45309" },
+    "Sueldo":           { label: "Sueldo",   bg: "#f0fdf4", fg: "#15803d" },
+  };
+  const chipDe = e => TIPO_CHIP[e.tipo] || (String(e.concepto || "").startsWith("Pago ") ? TIPO_CHIP["Pago"] : { label: "—", bg: "#f3f4f6", fg: T.muted });
   const thS = { padding: "10px 16px", fontSize: 11, fontWeight: 800, color: "rgba(255,255,255,.85)", textAlign: "right", letterSpacing: ".04em", textTransform: "uppercase", whiteSpace: "nowrap" };
   const tdS = { padding: "9px 16px", fontSize: 13, textAlign: "right", fontFamily: "var(--mono)", color: T.text, whiteSpace: "nowrap" };
   return (
@@ -765,8 +774,10 @@ export function PaginaIntercoLedger({ item, ledger, onBack, onGoToMov }) {
           <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>Cuenta corriente intercompañía · {rows.length} movimiento{rows.length !== 1 ? "s" : ""}</div>
         </div>
         <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-          <span style={{ fontSize: 11, color: T.muted, textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 }}>Saldo actual</span>
-          <span style={{ fontSize: 22, fontFamily: "var(--mono)", fontWeight: 900, color: headerColor, whiteSpace: "nowrap" }}>{fmtSaldo(ledger.final ?? 0, mon)}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 13, color: T.muted, textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 }}>Saldo actual</span>
+            <span style={{ fontSize: 22, fontFamily: "var(--mono)", fontWeight: 900, color: headerColor, whiteSpace: "nowrap" }}>{fmtSaldo(ledger.final ?? 0, mon)}</span>
+          </div>
           <span style={{ fontSize: 10, color: T.muted }}>{nosDeben ? "nos deben" : "les debemos"}</span>
         </div>
       </div>
@@ -775,7 +786,8 @@ export function PaginaIntercoLedger({ item, ledger, onBack, onGoToMov }) {
           <thead>
             <tr style={{ background: headerColor }}>
               <th style={{ ...thS, textAlign: "left" }}>Fecha</th>
-              <th style={{ ...thS, textAlign: "left" }}>Concepto</th>
+              <th style={{ ...thS, textAlign: "left" }}>Tipo</th>
+              <th style={{ ...thS, textAlign: "left" }}>Detalle</th>
               <th style={thS}>Monto</th>
               <th style={{ ...thS, color: "#fff" }}>Saldo</th>
               <th style={{ ...thS, width: 44 }} />
@@ -783,19 +795,19 @@ export function PaginaIntercoLedger({ item, ledger, onBack, onGoToMov }) {
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td colSpan={5} style={{ padding: "16px", fontSize: 13, color: T.muted, textAlign: "center" }}>Sin movimientos (solo saldo de apertura).</td></tr>
+              <tr><td colSpan={6} style={{ padding: "16px", fontSize: 13, color: T.muted, textAlign: "center" }}>Sin movimientos (solo saldo de apertura).</td></tr>
             )}
             {rows.map((e, i) => (
               <tr key={i} style={{ borderBottom: `1px solid ${T.cardBorder}`, background: i % 2 === 0 ? T.card : "#fafbfc" }}>
                 <td style={{ padding: "9px 16px", fontSize: 12.5, color: T.muted, whiteSpace: "nowrap", verticalAlign: "top" }}>{fmtF(e.fecha)}</td>
-                <td style={{ padding: "9px 16px", fontSize: 13, color: T.text }}>
-                  <div>{e.concepto}</div>
-                  {(e.prov || e.cuenta || e.centro || e.ref) && (
-                    <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>
-                      {[e.prov, e.cuenta, e.centro].filter(Boolean).join(" · ")}
-                      {e.ref ? <span style={{ color: T.dim, marginLeft: 6, fontFamily: "var(--mono)" }}>#{e.ref}</span> : null}
-                    </div>
-                  )}
+                <td style={{ padding: "9px 16px", whiteSpace: "nowrap", verticalAlign: "top" }}>
+                  {(() => { const c = chipDe(e); return (
+                    <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: c.bg, color: c.fg }}>{c.label}</span>
+                  ); })()}
+                </td>
+                <td style={{ padding: "9px 16px", fontSize: 13, color: T.text }} title={e.ref ? "#" + e.ref : undefined}>
+                  {[e.prov, e.cuenta].filter(Boolean).join(" · ")
+                    || (e.cuentaDest ? "→ " + e.cuentaDest : String(e.concepto || "").replace(/^Interco\s*→\s*/i, ""))}
                 </td>
                 <td style={{ ...tdS, color: e.delta >= 0 ? "#16a34a" : "#dc2626", fontWeight: 700 }}>{signed(e.delta)}</td>
                 <td style={{ ...tdS, fontWeight: 800 }}>{fmtSaldo(e.saldo, mon)}</td>
@@ -819,7 +831,7 @@ export function PaginaIntercoLedger({ item, ledger, onBack, onGoToMov }) {
           </tbody>
           <tfoot>
             <tr style={{ background: "#f3f4f6", borderTop: `2px solid ${T.cardBorder}` }}>
-              <td style={{ padding: "9px 16px", fontSize: 12.5, fontWeight: 800, color: T.muted }} colSpan={2}>Saldo de apertura</td>
+              <td style={{ padding: "9px 16px", fontSize: 12.5, fontWeight: 800, color: T.muted }} colSpan={3}>Saldo de apertura</td>
               <td style={tdS} />
               <td style={{ ...tdS, fontWeight: 900 }}>{fmtSaldo(ledger.opening ?? 0, mon)}</td>
               <td />

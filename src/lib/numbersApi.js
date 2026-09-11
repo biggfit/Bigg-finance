@@ -2380,12 +2380,14 @@ export const deleteIntercompania = _deleteMovRows;
 // ── LECTURA intercompañía (el corazón del módulo — LECTURA, no escribe) ──────────
 // Trae TODO lo necesario para leer lo intercompany (todas las sociedades).
 export async function fetchIntercoData() {
-  const [movs, comps, centros, clientes, sociedades, legajos] = await Promise.all([
+  const [movs, comps, centros, clientes, sociedades, cuentasBancarias, cuentas, legajos] = await Promise.all([
     get("nb_movimientos", {}).catch(() => []),
     get("nb_comprobantes", {}).catch(() => []),
     get("nb_centros_costo", {}).catch(() => []),
     get("nb_clientes", {}).catch(() => []),
     get("nb_sociedades", {}).catch(() => []),
+    get("nb_cuentas_bancarias", {}).catch(() => []),   // para resolver cuenta_destino → nombre en el ledger interco
+    get("nb_cuentas", {}).catch(() => []),             // para resolver cuenta_contable (id CUENTA_/CTA-) → nombre
     fetchLegajos().catch(() => []),   // para derivar la interco de sueldos (legajo → sociedad empleadora)
   ]);
   // Mapa legajo → sociedad empleadora: cuando la caja que paga un sueldo (mov.sociedad) ≠ la sociedad
@@ -2400,6 +2402,8 @@ export async function fetchIntercoData() {
     centros:    Array.isArray(centros) ? centros : [],
     clientes:   Array.isArray(clientes) ? clientes : [],
     sociedades: Array.isArray(sociedades) ? sociedades : [],
+    cuentasBancarias: Array.isArray(cuentasBancarias) ? cuentasBancarias : [],
+    cuentas:    Array.isArray(cuentas) ? cuentas : [],
     legajoSoc,
   };
 }
@@ -2711,7 +2715,7 @@ export function fondeoFondeadasMensual({ movs = [], comps = [], centros = [], so
 // movimiento por fecha con su +/− y saldo corriente, más el saldo de apertura. Mismas reglas y
 // convención de signo que lecturaInterco (quien pone la plata = acreedor) → el saldo final coincide
 // con el `neto` de esa posición. Read-only, no toca datos.
-export function intercoLedger({ movs = [], comps = [], centros = [], sociedades = [], legajoSoc = {} } = {}, { sociedad, contraparte, moneda = "ARS" } = {}) {
+export function intercoLedger({ movs = [], comps = [], centros = [], sociedades = [], cuentasBancarias = [], cuentas = [], legajoSoc = {} } = {}, { sociedad, contraparte, moneda = "ARS" } = {}) {
   const S = String(sociedad || "").toLowerCase();
   const C = String(contraparte || "").toLowerCase();
   const empresaDe = new Map((centros || []).map(c => [String(c.id), c.empresa]));
@@ -2721,6 +2725,17 @@ export function intercoLedger({ movs = [], comps = [], centros = [], sociedades 
   const mine = (s, c, mon) => String(s || "").toLowerCase() === S && String(c || "").toLowerCase() === C && (mon || "ARS") === moneda;
   const cc = id => nombreCentro.get(String(id || "")) || "";
   const soc = id => nombreSoc.get(String(id || "")) || String(id || "");
+  const cbInfo = new Map((cuentasBancarias || []).map(c => [String(c.id), c]));
+  const cb = id => {   // cuenta bancaria/caja destino → "Nombre (Moneda)"
+    const c = cbInfo.get(String(id || "")); if (!c) return "";
+    const nom = c.nombre || c.id;
+    return c.moneda ? `${nom} (${c.moneda})` : nom;
+  };
+  // Cuenta contable: normaliza id (legacy `CUENTA_<nombre>` o nuevo `CTA-…`) → nombre legible.
+  // Algunos writers (sueldos históricos) guardaron el id crudo en cuenta_contable; esto lo resuelve al leer.
+  const nombreCuenta = new Map();
+  for (const c of (cuentas || [])) { if (c?.id) nombreCuenta.set(String(c.id), c.nombre || c.id); if (c?.nombre) nombreCuenta.set(String(c.nombre), c.nombre); }
+  const nc = x => nombreCuenta.get(String(x || "")) || String(x || "").replace(/^CUENTA_/, "");
   const entries = [];
   let opening = 0;
   // meta = { prov/tipo, cuenta, centro (nombre), ref (id para ubicarlo en la base) } — todo opcional.
@@ -2738,7 +2753,7 @@ export function intercoLedger({ movs = [], comps = [], centros = [], sociedades 
     const A = r.sociedad, m = Math.abs(toNum(r.total)); if (m < 0.01 || String(A) === String(B)) continue;
     if (nucleo.size && nucleo.has(String(A)) && nucleo.has(String(B))) continue;   // núcleo↔núcleo = gasto en el CECO, no interco
     const flujo = `Pago ${soc(A)} x ${soc(B)}`;   // A (pagador) pagó por B (dueño del centro)
-    const meta = { prov: r.proveedor || r.contraparte_nombre || r.contraparte || "", cuenta: r.cuenta_contable || "", centro: cc(r.centro_costo), ref: r.id_comp || r.id || "", docSoc: String(A), refKind: "comp" };
+    const meta = { tipo: "Pago", prov: r.proveedor || r.contraparte_nombre || r.contraparte || "", cuenta: nc(r.cuenta_contable), centro: cc(r.centro_costo), ref: r.id_comp || r.id || "", docSoc: String(A), refKind: "comp" };
     pair(A, B, r.moneda, r.fecha, flujo, m, meta);
   }
   // 1b. Fondeo vía gastos directos / conciliación contabilizada (nb_movimientos).
@@ -2750,15 +2765,16 @@ export function intercoLedger({ movs = [], comps = [], centros = [], sociedades 
     const A = m.sociedad, val = Math.abs(toNum(m.monto)); if (val < 0.01 || String(A) === String(B)) continue;
     if (nucleo.size && nucleo.has(String(A)) && nucleo.has(String(B))) continue;   // núcleo↔núcleo = gasto en el CECO, no interco
     const flujo = `Pago ${soc(A)} x ${soc(B)}`;   // A (pagador) pagó por B (dueño del centro)
-    const meta = { prov: m.contraparte_nombre || "", cuenta: m.cuenta_contable || "", centro: cc(m.centro_costo), ref: m.documento_id || m.id || "", docSoc: String(A), refKind: "mov" };
+    const meta = { tipo: "Pago", prov: m.contraparte_nombre || "", cuenta: nc(m.cuenta_contable), centro: cc(m.centro_costo), ref: m.documento_id || m.id || "", docSoc: String(A), refKind: "mov" };
     pair(A, B, m.moneda, m.fecha, flujo, val, meta);
   }
   // 2. Préstamos / transferencias del núcleo (pares INTERCOMPANIA).
   for (const { salida, entrada } of _pairMovs(movs, "INTERCOMPANIA")) {
     if (!salida || !entrada) continue;
     const ref = salida.documento_id || salida.id || "";
-    if (mine(salida.sociedad, entrada.sociedad, salida.moneda)) push(salida.fecha, salida.concepto || "Transferencia enviada", +Math.abs(toNum(salida.monto)), { tipo: "Transferencia", ref });
-    if (mine(entrada.sociedad, salida.sociedad, entrada.moneda)) push(entrada.fecha, entrada.concepto || "Transferencia recibida", -Math.abs(toNum(entrada.monto)), { tipo: "Transferencia", ref });
+    const dest = cb(salida.cuenta_destino) || cb(entrada.cuenta_bancaria);   // a qué cuenta llegó la plata
+    if (mine(salida.sociedad, entrada.sociedad, salida.moneda)) push(salida.fecha, salida.concepto || "Transferencia enviada", +Math.abs(toNum(salida.monto)), { tipo: "Transferencia", cuentaDest: dest, ref });
+    if (mine(entrada.sociedad, salida.sociedad, entrada.moneda)) push(entrada.fecha, entrada.concepto || "Transferencia recibida", -Math.abs(toNum(entrada.monto)), { tipo: "Transferencia", cuentaDest: dest, ref });
   }
   // 3. Saldos de APERTURA → saldo inicial (no es un movimiento del extracto).
   for (const m of movs) {
@@ -2771,7 +2787,7 @@ export function intercoLedger({ movs = [], comps = [], centros = [], sociedades 
   for (const m of movs) {
     if (m.origen !== "interco_park" || esIgnorado(m)) continue;
     const A = m.sociedad, B = m.contraparte_id, contrib = -toNum(m.monto); if (Math.abs(contrib) < 0.01) continue;
-    const meta = { tipo: "Interco parkeada", cuenta: m.cuenta_contable || "", centro: cc(m.centro_costo), ref: m.documento_id || m.id || "" };
+    const meta = { tipo: "Interco parkeada", cuenta: nc(m.cuenta_contable), cuentaDest: cb(m.cuenta_destino), centro: cc(m.centro_costo), ref: m.documento_id || m.id || "" };
     pair(A, B, m.moneda, m.fecha, m.concepto || "Interco parkeada", contrib, meta);
   }
   // 5. Interusos de gestión cross-society (no núcleo↔núcleo).
@@ -2780,7 +2796,7 @@ export function intercoLedger({ movs = [], comps = [], centros = [], sociedades 
     const A = String(m.sociedad || ""), B = String(m.contraparte_id || ""), mm = toNum(m.monto);
     if (!A || !B || A === B || Math.abs(mm) < 0.01) continue;
     if (!nucleo.size || (nucleo.has(A) && nucleo.has(B))) continue;
-    const meta = { tipo: "Interuso gestión", cuenta: m.cuenta_contable || "", centro: cc(m.centro_costo), ref: m.documento_id || m.id || "" };
+    const meta = { tipo: "Interuso gestión", cuenta: nc(m.cuenta_contable), centro: cc(m.centro_costo), ref: m.documento_id || m.id || "" };
     pair(A, B, m.moneda, m.fecha, m.concepto || "Interuso gestión", mm, meta);
   }
   // 6. SUELDOS pagados por cuenta de otra sociedad (por pagado). Espeja la fuente 6 de lecturaInterco.
@@ -2789,7 +2805,7 @@ export function intercoLedger({ movs = [], comps = [], centros = [], sociedades 
     const A = String(m.sociedad || ""), B = String(legajoSoc[String(m.legajo_id || "")] || "");
     if (!A || !B || A === B || (nucleo.has(A) && nucleo.has(B))) continue;
     const monto = Math.abs(toNum(m.monto)); if (monto < 0.01) continue;
-    const meta = { tipo: "Sueldo", prov: m.legajo_nombre || "", cuenta: m.cuenta_contable || "Sueldos", centro: cc(m.centro_costo), ref: m.documento_id || m.id || "" };
+    const meta = { tipo: "Sueldo", prov: m.legajo_nombre || "", cuenta: nc(m.cuenta_contable) || "Sueldos", centro: cc(m.centro_costo), ref: m.documento_id || m.id || "" };
     pair(A, B, m.moneda, m.fecha, m.concepto || `Sueldo ${m.legajo_nombre || ""}`.trim(), monto, meta);
   }
   const key = f => { const s = String(f || ""); if (/^\d{4}-/.test(s)) return s.slice(0, 10); const [d, mm, y] = s.split("/"); return y ? `${y}-${String(mm).padStart(2, "0")}-${String(d).padStart(2, "0")}` : s; };
