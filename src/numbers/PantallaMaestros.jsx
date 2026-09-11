@@ -1077,7 +1077,10 @@ function TabCajas() {
       tipo:              (c.tipo ?? "").toLowerCase(),
       moneda:            (c.moneda ?? "").toUpperCase(),
       _saldoInicialRow:  siRow,
-      saldoInicial:      siRow ? String(Math.abs(Number(siRow.monto) || 0)) : "",
+      // CON signo: handleSave escribe el valor tal cual se ve. Cargarlo en valor absoluto hacía que
+      // abrir una cuenta de saldo negativo (tarjetas, Galicia ARS) y guardar —aunque no se tocara el
+      // campo— lo diera vuelta a positivo, convirtiendo una deuda en disponible sin avisar.
+      saldoInicial:      siRow ? String(Number(siRow.monto) || 0) : "",
       fechaSaldoInicial: siRow?.fecha ?? new Date().toISOString().slice(0, 10),
     });
   };
@@ -1660,6 +1663,10 @@ const REGLA_MATCH_TIPOS = [
   { value:"glosa",           label:"Glosa / descripción (texto)" },
   { value:"cuit",            label:"CUIT de contraparte" },
   { value:"alias",           label:"Alias en el banco (texto)" },
+  // Comercio del resumen de TARJETA (no del extracto): lo consume Mundo Tarjeta para prellenar
+  // cuenta y centro de cada consumo. Matchea por igualdad, prefijo o "contiene", ganando la regla
+  // más larga → "PERCEPCION IVA R.G. 3337" le gana a "PERCEPCION".
+  { value:"comercio",        label:"Comercio del resumen de tarjeta (texto)" },
 ];
 const REGLA_TIPOS = [
   { value:"impuesto", label:"Impuesto" }, { value:"comision", label:"Comisión" },
