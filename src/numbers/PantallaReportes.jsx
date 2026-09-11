@@ -3106,7 +3106,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
         const [liqsR, pagosR] = [await liqsP, await pagosP];
         const liqsC = liqsR.v, pagosS = pagosR.v;
         if (cancelled) return;
-        if (!liqsR.ok || !pagosR.ok) setCargaFallida(f => f.includes("Sueldos") ? f : [...f, "Sueldos"]);
+        if (!liqsR.ok || !pagosR.ok) setCargaFallida(f => [...f, "Sueldos"]);
         setRawEg(eg);
         setRawIn(ing);
         setRawMovs(Array.isArray(movs) ? movs : []);
@@ -3120,7 +3120,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
         setSociosCC(Array.isArray(socsCC) ? socsCC : []);
         // Franquicias (read-only) — fuera del Promise.all para NO bloquear Reportes si ese backend tarda.
         fetchComps().then(c => { if (!cancelled && c && typeof c === "object") setRawFranq(c); })
-          .catch(() => { if (!cancelled) setCargaFallida(f => f.includes("Franquicias") ? f : [...f, "Franquicias"]); });
+          .catch(() => { if (!cancelled) setCargaFallida(f => [...f, "Franquicias"]); });
         // Intercompañía (read-only) — todas las fuentes (fondeo + transfers) + maestro sociedades (anillo).
         // `fetchIntercoData` ya trae `sociedades`, así que no hace falta un fetch aparte.
         fetchIntercoData().then(d => {
