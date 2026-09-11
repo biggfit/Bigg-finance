@@ -227,7 +227,9 @@ export default function MundoTarjeta({ sociedad }) {
         : "";
       setPdfMsg(`✓ ${res.creados} consumo(s) cargados a la bandeja`
         + (parseo.archivos > 1 ? ` de ${parseo.archivos} resúmenes` : "")
-        + (res.borradas ? ` · reemplazó ${res.borradas} de una carga anterior` : "")
+        + (res.sinCambio ? ` · ${res.sinCambio} ya estaban (sin cambios)` : "")
+        + (res.borradas ? ` · ${res.borradas} que ya no están en el resumen se borraron` : "")
+        + (res.sobrantes ? ` · ⚠️ ${res.sobrantes} viejos no se pudieron borrar — borralos a mano` : "")
         + (res.yaAutorizadas ? ` · ${res.yaAutorizadas} ya autorizados (no se recargan)` : "")
         + (reconocidas ? ` · ${reconocidas} ya eran pago de FC con la tarjeta` : "")
         + (sinCuenta ? ` · ⚠️ ${sinCuenta} sin cuenta-tarjeta de esa moneda (creala en Maestros)` : "")

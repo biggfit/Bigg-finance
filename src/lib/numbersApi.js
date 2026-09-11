@@ -1498,29 +1498,40 @@ export async function ingestarResumenTarjeta({ sociedad, tarjeta = "", periodo =
     && (!periodo || metaVal(m.referencia, "per") === String(periodo))
     && titulares.has(String(metaVal(m.referencia, "tit") || "").trim());
 
-  // 1) Borrar los PENDIENTES de este resumen (reemplazo). Los autorizados se conservan.
-  let borradas = 0;
-  for (const m of todos.filter(m => delMismoResumen(m) && !m.documento_id)) {
-    try { await post({ action: "del", sheet: "nb_movimientos", id: m.id }); borradas++; }
-    catch (e) {
-      // "fila no encontrada" = la fila ya no está, que es justo el estado buscado. Pasa cuando se
-      // reintenta un del cuya respuesta se perdió (el GAS es lento) o tras una carga a medias.
-      // Abortar acá dejaba el resumen medio reemplazado; se sigue y se cuenta aparte.
-      if (!/no encontrada|not found/i.test(e?.message || "")) throw e;
-    }
-  }
-  // 2) No re-crear consumos ya AUTORIZADOS de este período (pool por comercio|monto|moneda).
+  // 1) No re-crear consumos ya AUTORIZADOS de este período (pool por comercio|monto|moneda).
   const pool = todos.filter(m => delMismoResumen(m) && m.documento_id)
     .map(m => ({ k: `${metaVal(m.referencia, "com")}|${Math.abs(Number(m.monto) || 0)}|${m.moneda}`, used: false }));
 
+  // 2) SINCRONIZAR, no reemplazar. Antes esto borraba TODOS los pendientes del resumen y los volvía
+  // a crear. Pero el `del` del Apps Script borra de a UNA fila y lee la hoja entera en cada llamada
+  // (~3-4s con nb_movimientos), así que reemplazar 30 consumos eran 30 viajes secuenciales: algo
+  // cortaba a mitad, el add_batch nunca corría, y cada reintento se comía otro puñado de filas sin
+  // reponer ninguna. Ahora se compara lo que hay contra lo que tiene que haber y se toca SOLO la
+  // diferencia: re-subir el mismo resumen no escribe nada, y una carga que quedó a medias se
+  // completa sola. Se cuenta por clave para no confundir dos consumos idénticos del mismo día.
+  // La fecha se recorta a YYYY-MM-DD: el GAS puede devolverla como fecha serializada con hora, y un
+  // "2026-08-04T03:00:00.000Z" contra un "2026-08-04" haría fallar todas las comparaciones.
+  const claveDe = (fecha, com, monto, moneda) =>
+    `${String(fecha || "").slice(0, 10)}|${com}|${Math.abs(monto).toFixed(2)}|${moneda || "ARS"}`;
+  const existentes = new Map();   // clave → filas pendientes que ya están en la hoja
+  for (const m of todos.filter(m => delMismoResumen(m) && !m.documento_id)) {
+    const k = claveDe(m.fecha, _normCom(m.concepto), Number(m.monto) || 0, m.moneda);
+    if (!existentes.has(k)) existentes.set(k, []);
+    existentes.get(k).push(m);
+  }
+
   const nuevas = [];
-  let yaAutorizadas = 0;
+  const sobran = [];
+  let yaAutorizadas = 0, sinCambio = 0;
   for (const l of lineas) {
     const monto = Math.abs(Number(l.monto) || 0);
     if (!monto || !l.cuenta_bancaria) continue;
     const mon = l.moneda || "ARS";
     const hit = pool.find(p => !p.used && p.k === `${_normCom(l.comercio)}|${monto}|${mon}`);
     if (hit) { hit.used = true; yaAutorizadas++; continue; }
+    // ¿Ya está pendiente en la hoja, idéntico? → no tocar (ni borrar ni re-crear).
+    const ya = existentes.get(claveDe(l.fecha || fecha, _normCom(l.comercio), monto, mon));
+    if (ya?.length) { ya.shift(); sinCambio++; continue; }
     nuevas.push({
       id: newId("TAR"), sociedad, fecha: l.fecha || fecha,
       tipo: "EGRESO", cuenta_bancaria: l.cuenta_bancaria, cuenta_destino: "",
@@ -1537,13 +1548,29 @@ export async function ingestarResumenTarjeta({ sociedad, tarjeta = "", periodo =
       origen: "tarjeta", created_at: new Date().toISOString(),
     });
   }
+  // 3) Lo que quedó sin consumir en `existentes` ya no está en el resumen (resumen corregido, o una
+  // línea que el parser leía mal y ahora lee bien) → se borra. En el caso normal son cero, así que
+  // el reemplazo caro deja de ocurrir. Se ADJUNTA primero lo nuevo: si el borrado se corta, lo peor
+  // que pasa es que sobre una fila de más (visible y borrable a mano), nunca que falte plata.
+  for (const filas of existentes.values()) sobran.push(...filas);
+
   let creados = 0;
   const CHUNK = 100;
   for (let i = 0; i < nuevas.length; i += CHUNK) {
     await post({ action: "add_batch", sheet: "nb_movimientos", rows: nuevas.slice(i, i + CHUNK) });
     creados += Math.min(CHUNK, nuevas.length - i);
   }
-  return { creados, borradas, yaAutorizadas };
+
+  let borradas = 0;
+  for (const m of sobran) {
+    try { await post({ action: "del", sheet: "nb_movimientos", id: m.id }); borradas++; }
+    catch (e) {
+      // "fila no encontrada" = ya no está, que es el estado buscado. Cualquier otro error (timeout
+      // del GAS) tampoco debe abortar: lo nuevo ya entró y abortar acá no lo desharía.
+      if (!/no encontrada|not found/i.test(e?.message || "")) break;
+    }
+  }
+  return { creados, borradas, yaAutorizadas, sinCambio, sobrantes: sobran.length - borradas };
 }
 
 // Consumos del resumen que faltan autorizar (bandeja del mundo Tarjeta).
