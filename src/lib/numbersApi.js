@@ -1489,13 +1489,25 @@ export async function ingestarResumenTarjeta({ sociedad, tarjeta = "", periodo =
   // pool de ya-autorizados. Leer stale = no borrar/no reconocer nada = resumen duplicado.
   const todos = await _fetchRowsRaw("nb_movimientos", { sociedad });
   const cardIds = new Set(lineas.map(l => String(l.cuenta_bancaria)).filter(Boolean));
+  // Titulares de ESTA tanda. El reemplazo se limita a ellos porque Amex emite UN RESUMEN POR
+  // TITULAR: subir el segundo archivo no puede borrar los consumos que dejó el primero. Galicia
+  // trae todos los titulares en un solo PDF → su set los cubre a todos y no cambia en nada.
+  // El "" entra a propósito: impuestos y líneas de ajuste se guardan sin titular.
+  const titulares = new Set(lineas.map(l => String(l.titular || "").trim()));
   const delMismoResumen = m => m.origen === "tarjeta" && cardIds.has(String(m.cuenta_bancaria))
-    && (!periodo || metaVal(m.referencia, "per") === String(periodo));
+    && (!periodo || metaVal(m.referencia, "per") === String(periodo))
+    && titulares.has(String(metaVal(m.referencia, "tit") || "").trim());
 
   // 1) Borrar los PENDIENTES de este resumen (reemplazo). Los autorizados se conservan.
   let borradas = 0;
   for (const m of todos.filter(m => delMismoResumen(m) && !m.documento_id)) {
-    await post({ action: "del", sheet: "nb_movimientos", id: m.id }); borradas++;
+    try { await post({ action: "del", sheet: "nb_movimientos", id: m.id }); borradas++; }
+    catch (e) {
+      // "fila no encontrada" = la fila ya no está, que es justo el estado buscado. Pasa cuando se
+      // reintenta un del cuya respuesta se perdió (el GAS es lento) o tras una carga a medias.
+      // Abortar acá dejaba el resumen medio reemplazado; se sigue y se cuenta aparte.
+      if (!/no encontrada|not found/i.test(e?.message || "")) throw e;
+    }
   }
   // 2) No re-crear consumos ya AUTORIZADOS de este período (pool por comercio|monto|moneda).
   const pool = todos.filter(m => delMismoResumen(m) && m.documento_id)
