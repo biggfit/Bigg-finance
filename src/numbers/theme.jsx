@@ -140,14 +140,24 @@ export function useMoneyMask(value, onChange) {
   const ref = useRef(null);
   const pendingCaret = useRef(null);
   const str = value == null ? "" : String(value);
+  const display = formatPesosDisplay(str);
 
   const handleChange = (e) => {
     const el = e.target;
-    const raw = el.value;
+    let raw = el.value;
     const pos = el.selectionStart ?? raw.length;
+
+    // Tolerar "." como separador decimal (hábito del numpad): si la única tecla nueva
+    // es un punto y todavía no hay coma cargada, se lo trata igual que si fuera ",".
+    // Los demás puntos (los de miles, auto-insertados) se siguen ignorando como antes.
+    if (!str.includes(".") && raw.length === display.length + 1 && raw[pos - 1] === ".") {
+      const withoutInserted = raw.slice(0, pos - 1) + raw.slice(pos);
+      if (withoutInserted === display) raw = raw.slice(0, pos - 1) + "," + raw.slice(pos);
+    }
+
     pendingCaret.current = (raw.slice(0, pos).match(/[0-9,]/g) || []).length;
 
-    let s = raw.replace(/\./g, "");           // los puntos son sólo separador de miles (auto)
+    let s = raw.replace(/\./g, "");           // los puntos restantes son sólo separador de miles (auto)
     const neg = s.trim().startsWith("-");
     s = s.replace(/-/g, "");
     const firstComma = s.indexOf(",");
@@ -162,16 +172,15 @@ export function useMoneyMask(value, onChange) {
     if (pendingCaret.current == null || !ref.current) return;
     const target = pendingCaret.current;
     pendingCaret.current = null;
-    const disp = formatPesosDisplay(str);
     let pos = 0, seen = 0;
-    while (pos < disp.length && seen < target) {
-      if (/[0-9,]/.test(disp[pos])) seen++;
+    while (pos < display.length && seen < target) {
+      if (/[0-9,]/.test(display[pos])) seen++;
       pos++;
     }
     try { ref.current.setSelectionRange(pos, pos); } catch { /* input sin selección */ }
-  }, [str]);
+  }, [display]);
 
-  return { ref, display: formatPesosDisplay(str), onChange: handleChange };
+  return { ref, display, onChange: handleChange };
 }
 
 /** Reemplazo directo de <input type="number"> para montos: mismo contrato de
