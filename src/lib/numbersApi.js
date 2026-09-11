@@ -2662,7 +2662,9 @@ export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades
 // núcleo→fondeada (excluye Segui = externa/anillo 3, y núcleo↔núcleo). Devuelve { [fondeadaId]: number[12] }
 // (positivo = invertido ese mes; negativo = te devolvieron). Σ meses = el `neto` de lecturaInterco para esa
 // posición. Read-only. Nota: por-moneda (sin FX); consolidación a una moneda = a futuro.
-export function fondeoFondeadasMensual({ movs = [], comps = [], centros = [], sociedades = [] } = {}, { year = null, moneda = "ARS", desde = null } = {}) {
+// `fx(monto,moneda,anio,mes)->USD` opcional: con fx CONVIERTE todas las monedas a USD (consolidado); sin fx
+// filtra por `moneda` (modo nativo, comportamiento previo). Sin fx, el fondeo en monedas ≠ moneda se descartaba.
+export function fondeoFondeadasMensual({ movs = [], comps = [], centros = [], sociedades = [] } = {}, { year = null, moneda = "ARS", desde = null, fx = null } = {}) {
   const empresaDe = new Map((centros || []).map(c => [String(c.id), String(c.empresa || "")]));
   const nucleo   = new Set((sociedades || []).filter(s => /n[úu]cleo/i.test(String(s.anillo || ""))).map(s => String(s.id)));
   const fondeada = new Set((sociedades || []).filter(s => /fondead/i.test(String(s.anillo || ""))).map(s => String(s.id)));
@@ -2671,15 +2673,17 @@ export function fondeoFondeadasMensual({ movs = [], comps = [], centros = [], so
   const rec = (A, B, fecha, mon, delta) => {
     A = String(A || ""); B = String(B || "");
     if (!nucleo.has(A) || !fondeada.has(B) || A === B) return;
-    if ((mon || "ARS") !== moneda) return;
+    if (!fx && (mon || "ARS") !== moneda) return;   // filtro por moneda solo en modo nativo; con fx se convierte
     const f = String(fecha || "");
     if (year && f.slice(0, 4) !== String(year)) return;
     // Es el FLUJO del mes (lo que puse ese mes), no el acumulado: la apertura (30/6, pre-go-live) es la
     // posición inicial, no un movimiento → se excluye lo anterior a `desde`.
     if (desde && f < desde) return;
     const m = parseInt(f.slice(5, 7), 10) - 1;
-    if (m < 0 || m > 11 || Math.abs(delta) < 0.01) return;
-    (out[B] ??= new Array(12).fill(0))[m] += delta;
+    if (m < 0 || m > 11) return;
+    const d = fx ? fx(delta, mon || "ARS", parseInt(f.slice(0, 4), 10), m + 1) : delta;   // consolida a USD si hay fx
+    if (Math.abs(d) < 0.01) return;
+    (out[B] ??= new Array(12).fill(0))[m] += d;
   };
   // 1a/1b. Fondeo vía gasto (A paga un gasto imputado a un CECO de B): comprobantes + gastos directos/CONTAB.
   for (const r of comps) {
@@ -2709,6 +2713,72 @@ export function fondeoFondeadasMensual({ movs = [], comps = [], centros = [], so
     else if (m.origen === "interuso_gestion") rec(m.sociedad, m.contraparte_id, m.fecha, m.moneda, toNum(m.monto));
   }
   return out;
+}
+
+// Interco del grupo consolidado, MENSUAL y por TIPO, "desde la vista del negocio" (Reportes, NO Tesorería).
+// Misma orientación anti-doble-conteo que fondeoFondeadasMensual (registra solo A∈núcleo → B∉núcleo, negocio=B,
+// + = el grupo puso plata en el negocio), pero: (a) generaliza B a CUALQUIER contraparte no-núcleo (fondeadas
+// España/Colombia + externas tipo Segui), (b) particiona por `tipo` (Pago/Transferencia/Interco parkeada/
+// Interuso gestión/Sueldo) como el ledger, (c) suma la fuente de SUELDOS (que fondeoFondeadasMensual no trae).
+// Ata al P&L: para una fondeada, Σ tipos (sin Sueldo) = fondeoFondeadasMensual de esa sociedad. USD: pasar `fx`.
+// Devuelve { negocios:[{ negocioId, negocioNombre, anillo, ladoNucleo, tipos:{[tipo]:number[12]}, totalMes }], tipos, totalMes }.
+export const INTERCO_TIPOS = ["Pago", "Transferencia", "Interco parkeada", "Interuso gestión", "Sueldo"];
+export function intercoConsolidadoMensual({ movs = [], comps = [], centros = [], sociedades = [], legajoSoc = {} } = {}, { year = null, desde = null, fx = null } = {}) {
+  const empresaDe  = new Map((centros || []).map(c => [String(c.id), String(c.empresa || "")]));
+  const nucleo     = new Set((sociedades || []).filter(s => /n[úu]cleo/i.test(String(s.anillo || ""))).map(s => String(s.id)));
+  const socIds     = new Set((sociedades || []).map(s => String(s.id)));   // solo negocios = sociedad real
+  const nombreSoc  = new Map((sociedades || []).map(s => [String(s.id), s.nombre || s.id]));
+  const anilloDe   = id => (sociedades || []).find(s => String(s.id) === String(id))?.anillo || "Sin anillo";
+  const acc = {}, ladoNucleo = {};   // acc[negocioId][tipo] = number[12]
+  const rec = (A, B, fecha, mon, delta, tipo) => {
+    A = String(A || ""); B = String(B || "");
+    // solo núcleo → NO-núcleo, y B tiene que ser una sociedad real (descarta centros sin empresa mapeada, B vacío).
+    if (!nucleo.has(A) || nucleo.has(B) || !socIds.has(B) || A === B) return;
+    const f = String(fecha || "");
+    if (year && f.slice(0, 4) !== String(year)) return;
+    if (desde && f < desde) return;                            // apertura pre-go-live excluida
+    const m = parseInt(f.slice(5, 7), 10) - 1;
+    if (m < 0 || m > 11) return;
+    const d = fx ? fx(delta, mon || "ARS", parseInt(f.slice(0, 4), 10), m + 1) : delta;
+    if (Math.abs(d) < 0.01) return;
+    ((acc[B] ??= {})[tipo] ??= new Array(12).fill(0))[m] += d;
+    if (!ladoNucleo[B]) ladoNucleo[B] = A;                     // un lado núcleo, para el drill
+  };
+  // Fuentes = mismas que fondeoFondeadasMensual + sueldos, cada una con su tipo.
+  for (const r of comps) {
+    const sub = String(r.subtipo || "").toUpperCase();
+    if (sub !== "EGRESO" && sub !== "GASTO" && sub !== "EGRESO_FC") continue;
+    rec(r.sociedad, empresaDe.get(String(r.centro_costo || "")), r.fecha, r.moneda, Math.abs(toNum(r.total)), "Pago");
+  }
+  for (const m of movs) {
+    if (esIgnorado(m)) continue;
+    const tp = String(m.tipo || "").toUpperCase();
+    if (tp === "INGRESO" || tp === "COBRO") continue;
+    const esGasto = m.origen === "gasto_directo" || String(m.documento_id || "").startsWith("CONTAB-");
+    if (!esGasto) continue;
+    rec(m.sociedad, empresaDe.get(String(m.centro_costo || "")), m.fecha, m.moneda, Math.abs(toNum(m.monto)), "Pago");
+  }
+  for (const { salida, entrada } of _pairMovs(movs, "INTERCOMPANIA")) {
+    if (!salida || !entrada) continue;
+    rec(salida.sociedad,  entrada.sociedad, salida.fecha,  salida.moneda,  +Math.abs(toNum(salida.monto)),  "Transferencia");
+    rec(entrada.sociedad, salida.sociedad,  entrada.fecha, entrada.moneda, -Math.abs(toNum(entrada.monto)), "Transferencia");
+  }
+  for (const m of movs) {
+    if (esIgnorado(m)) continue;
+    if (m.origen === "interco_park")          rec(m.sociedad, m.contraparte_id, m.fecha, m.moneda, -toNum(m.monto), "Interco parkeada");
+    else if (m.origen === "interuso_gestion") rec(m.sociedad, m.contraparte_id, m.fecha, m.moneda, toNum(m.monto),  "Interuso gestión");
+    else if (m.origen === "sueldos")          rec(m.sociedad, legajoSoc[String(m.legajo_id || "")], m.fecha, m.moneda, Math.abs(toNum(m.monto)), "Sueldo");
+  }
+  const totalMes = new Array(12).fill(0);
+  const negocios = Object.entries(acc).map(([id, tipos]) => {
+    const tot = new Array(12).fill(0);
+    for (const arr of Object.values(tipos)) arr.forEach((v, i) => { tot[i] += v; });
+    tot.forEach((v, i) => { totalMes[i] += v; });
+    return { negocioId: id, negocioNombre: nombreSoc.get(id) || id, anillo: anilloDe(id), ladoNucleo: ladoNucleo[id], tipos, totalMes: tot };
+  }).filter(n => n.totalMes.some(v => Math.abs(v) >= 0.01));
+  const abssum = a => a.reduce((s, v) => s + Math.abs(v), 0);
+  negocios.sort((a, b) => abssum(b.totalMes) - abssum(a.totalMes));
+  return { negocios, tipos: INTERCO_TIPOS, totalMes };
 }
 
 // Extracto (ledger) de la posición interco de UNA sociedad contra UNA contraparte+moneda: cada
