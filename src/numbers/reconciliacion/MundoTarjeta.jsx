@@ -241,11 +241,12 @@ export default function MundoTarjeta({ sociedad }) {
   const setEdit = (id, k, v) => setEdits(e => ({ ...e, [id]: { ...e[id], [k]: v } }));
   const cuentaDe = m => edits[m.id]?.cuenta_contable ?? m.cuenta_contable ?? "";
   const centroDe = m => edits[m.id]?.centro_costo ?? m.centro_costo ?? "";
-  // Período P&L: a diferencia de Banco (que arranca vacío = usa la fecha del movimiento), en Tarjeta
-  // arranca con el período DEL RESUMEN (viene en referencia, per=YYYY-MM — el mismo con el que se
-  // ingirió esta línea) — un resumen es un solo ciclo de facturación y todos sus consumos deben caer
-  // en el mismo P&L salvo que alguien decida lo contrario a mano. Siempre editable.
-  const periodoDe = m => edits[m.id]?.periodo_contable ?? (metaVal(m.referencia, "per") || "");
+  // Período P&L: arranca en el MES DEL CONSUMO, no en el del resumen. El ciclo de facturación no
+  // respeta el mes calendario (el de septiembre trae compras del 4 de agosto en adelante), así que
+  // mandar todo al período del resumen corría a septiembre gastos que se incurrieron en agosto.
+  // Cae de nuevo al período del resumen solo si la línea no trajo fecha. Siempre editable.
+  const periodoDe = m => edits[m.id]?.periodo_contable
+    ?? (String(m.fecha || "").slice(0, 7) || metaVal(m.referencia, "per") || "");
   // Solo cuentas de EGRESO: un consumo de tarjeta nunca se imputa contra una cuenta de Venta/Ingreso
   // (ej. "Pauta" existe dos veces en el plan — una de Venta para lo que se le cobra a franquicias,
   // otra de Gasto para lo que se gasta en publicidad — acá solo tiene sentido la segunda).
@@ -410,7 +411,7 @@ export default function MundoTarjeta({ sociedad }) {
                       <tr key={m.id} style={{ borderTop: `1px solid ${T.cardBorder}`, ...(esAjuste ? { background: "#fefce8" } : {}) }}>
                         <td style={{ padding: "4px 8px" }}>
                           <input type="month" value={periodoDe(m)} onChange={e => setEdit(m.id, "periodo_contable", e.target.value)}
-                            title="Período P&L de este consumo — arranca en el período del resumen, editable línea por línea."
+                            title="Período P&L de este consumo — arranca en el mes del consumo, editable línea por línea."
                             style={fld(!!periodoDe(m), 112)} />
                         </td>
                         <td style={{ padding: "5px 10px", minWidth: 200, fontStyle: esAjuste ? "italic" : "normal" }}>
