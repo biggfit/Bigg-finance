@@ -197,21 +197,20 @@ export function MoneyField({ value, onChange, ...rest }) {
 }
 
 export function Input({ label, value, onChange, placeholder, type="text", required }) {
-  const isMoney = type === "number";
-  const mask = useMoneyMask(isMoney ? value : "", isMoney ? onChange : () => {});
+  // type="number" (montos) delega en MoneyField (máscara + caret); el resto es input plano.
+  const inputStyle = { width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`,
+    borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text,
+    fontFamily:T.font, outline:"none", boxSizing:"border-box" };
   return (
     <div>
       <label style={{ fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:5 }}>
         {label}{required && <span style={{ color:T.red }}> *</span>}
       </label>
-      <input type={isMoney ? "text" : type} inputMode={isMoney ? "decimal" : undefined}
-        ref={isMoney ? mask.ref : undefined}
-        value={isMoney ? mask.display : value}
-        onChange={isMoney ? mask.onChange : e=>onChange(e.target.value)}
-        placeholder={placeholder}
-        style={{ width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`,
-          borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text,
-          fontFamily:T.font, outline:"none", boxSizing:"border-box" }} />
+      {type === "number"
+        ? <MoneyField value={value} onChange={e => onChange(e.target.value)}
+            placeholder={placeholder} style={inputStyle} />
+        : <input type={type} value={value} onChange={e => onChange(e.target.value)}
+            placeholder={placeholder} style={inputStyle} />}
     </div>
   );
 }

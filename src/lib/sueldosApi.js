@@ -5,6 +5,7 @@
 
 import { stamp } from "./auth";
 import { bustToken, forzarRefresco } from "./cacheBust";
+import { fetchJsonWithRetry } from "./http";
 
 const BASE    = "/api/sueldos";
 const TOKEN   = import.meta.env.VITE_SHEETS_TOKEN ?? "";
@@ -39,21 +40,12 @@ async function get(sheet, params = {}, base = BASE, { retries = 3, retryDelayMs 
   // GAS devuelve 500 con HTML de forma intermitente (rate-limit / lock). Sin reintento,
   // un solo fallo tumba el Promise.all del que carga la pantalla → "no hay datos" engañoso.
   const run = async () => {
-    let lastErr;
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      if (attempt) await new Promise(r => setTimeout(r, retryDelayMs * attempt));
-      try {
-        const res  = await fetch(`${base}?${qs}`);
-        const text = await res.text();
-        let data;
-        try { data = JSON.parse(text); }
-        catch { throw new Error(`Error del servidor (${res.status}): ${text.slice(0, 120)}`); }
-        if (data?.error) throw new Error(data.error);
-        _cache.set(key, { data, ts: Date.now() });
-        return data;
-      } catch (e) { lastErr = e; }
-    }
-    throw lastErr;
+    const data = await fetchJsonWithRetry(key, {
+      retries, retryDelayMs,
+      parseErr: (status, text) => `Error del servidor (${status}): ${text.slice(0, 120)}`,
+    });
+    _cache.set(key, { data, ts: Date.now() });
+    return data;
   };
 
   const p = run().finally(() => _inflight.delete(key));
