@@ -241,8 +241,23 @@ export default function MundoTarjeta({ sociedad }) {
   }
 
   const setEdit = (id, k, v) => setEdits(e => ({ ...e, [id]: { ...e[id], [k]: v } }));
-  const cuentaDe = m => edits[m.id]?.cuenta_contable ?? m.cuenta_contable ?? "";
-  const centroDe = m => edits[m.id]?.centro_costo ?? m.centro_costo ?? "";
+  // Imputación de una fila de la bandeja: lo editado a mano → lo que quedó guardado en la ingesta →
+  // y si sigue vacío, la regla por comercio AHORA. Ese último tramo importa porque el prellenado se
+  // calcula al ingerir: una regla creada después (lo normal la primera vez que se carga una tarjeta
+  // nueva) no llegaba a las filas ya cargadas, y re-subir el resumen tampoco las tocaba — la
+  // sincronización las ve iguales y no las reescribe. Al autorizar se congela lo que se ve acá.
+  const comercioDe = m => m.concepto || metaVal(m.referencia, "com") || "";
+  const cuentaDe = m => {
+    const v = edits[m.id]?.cuenta_contable ?? m.cuenta_contable ?? "";
+    if (v) return v;
+    const reg = matchRegla(comercioDe(m));
+    return reg?.cuentaId ? cuentaNombreDe(reg.cuentaId) : "";
+  };
+  const centroDe = m => {
+    const v = edits[m.id]?.centro_costo ?? m.centro_costo ?? "";
+    if (v) return v;
+    return matchRegla(comercioDe(m))?.centroId || centroDeLegajo(metaVal(m.referencia, "tit")) || "";
+  };
   // Período P&L: arranca en el MES DEL CONSUMO, no en el del resumen. El ciclo de facturación no
   // respeta el mes calendario (el de septiembre trae compras del 4 de agosto en adelante), así que
   // mandar todo al período del resumen corría a septiembre gastos que se incurrieron en agosto.
