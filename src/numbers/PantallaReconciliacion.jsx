@@ -1184,10 +1184,15 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     try { await doAceptar(mov); } catch (e) { setMsg("Error al aceptar: " + e.message); }
   };
 
+  // Cuentas-tarjeta candidatas para pagar esta fila: las de crédito en la misma moneda.
+  const cuentasTarjetaDe = (mov) => cuentas.filter(c => esCuentaCredito(c) && c.moneda === (mov.moneda || "ARS"));
+
   // 💳 El débito es el pago de la tarjeta: la fila del extracto es el lado real (caja baja) y se crea
   // el lado tarjeta (+) que reduce su deuda. No es transferencia. Requiere una cuenta-tarjeta de esa moneda.
-  const pagarTarjetaDesdeExtracto = async (mov) => {
-    const card = cuentas.find(c => esCuentaCredito(c) && c.moneda === (mov.moneda || "ARS"));
+  // `card` lo elige el menú: con más de una tarjeta en la misma moneda (ej. Galicia Visa + Amex),
+  // agarrar la primera le bajaba la deuda a la tarjeta equivocada sin decir nada.
+  const pagarTarjetaDesdeExtracto = async (mov, card = null) => {
+    if (!card) card = cuentasTarjetaDe(mov)[0];
     if (!card) { setMsg(`No hay una cuenta-tarjeta en ${mov.moneda || "ARS"} para esta sociedad. Creala en Maestros.`); return; }
     try {
       await pagarTarjeta({
@@ -2253,9 +2258,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           {neg && !fr.es && !modoTransfer && !modoInterco && !modoFC && !modoCobro && !modoCuota && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCuota: true, noCuota: false, modoFranquicia: false, modoTransfer: false, modoFC: false, modoCobro: false, noFranquicia: true }); setMenuFor(null); }}>💳 Imputar a cuota de financiación</button>
                           )}
-                          {neg && !fr.es && !modoTransfer && !modoInterco && !modoFC && !modoCuota && !modoCobro && cuentas.some(c => esCuentaCredito(c) && c.moneda === (m.moneda || "ARS")) && (
-                            <button style={MENU_ITEM} onClick={() => { setMenuFor(null); pagarTarjetaDesdeExtracto(m); }}>💳 Pago de tarjeta</button>
-                          )}
+                          {/* Una entrada por cuenta-tarjeta de esa moneda — con varias (Galicia Visa, Amex…) hay que elegir cuál. */}
+                          {neg && !fr.es && !modoTransfer && !modoInterco && !modoFC && !modoCuota && !modoCobro &&
+                            cuentasTarjetaDe(m).map((c, _i, arr) => (
+                              <button key={c.id} style={MENU_ITEM} onClick={() => { setMenuFor(null); pagarTarjetaDesdeExtracto(m, c); }}>
+                                💳 Pago de tarjeta{arr.length > 1 ? ` · ${c.nombre}` : ""}
+                              </button>
+                            ))}
                           {/* Toggles contextuales: volver a normal / dividir (solo con el modo activo) */}
                           {modoInterco && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoInterco: false, interco_soc: undefined, noFranquicia: false, noTransfer: false }); setMenuFor(null); }}>↩ Volver a normal (no es interco)</button>

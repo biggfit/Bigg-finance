@@ -6,7 +6,7 @@ import {
   aceptarMovimiento, ignorarMovimiento, fetchBancoReglas, fetchMovTesoreria, metaVal,
 } from "../../lib/numbersApi";
 import { fetchLegajos } from "../../lib/sueldosApi";
-import { parseTarjetaPdf } from "../parsers/tarjetaPdf";
+import { parseResumenes } from "../parsers/resumenTarjeta";
 
 // ── Helpers de prefill (mismo criterio que la pantalla Resumen TC) ──────────────
 const num = v => Number(v) || 0;
@@ -138,13 +138,18 @@ export default function MundoTarjeta({ sociedad }) {
         || tarjetas.find(c => c.moneda === moneda) || null;
   };
 
-  async function onPdf(file) {
-    if (!file) return;
+  async function onPdf(files) {
+    const lista = [...(files || [])];
+    if (!lista.length) return;
     if (!tarjetaId) { setPdfMsg("Elegí primero la tarjeta."); return; }
-    setPdfMsg("Leyendo PDF…"); setBusy(true);
+    setPdfMsg(lista.length > 1 ? `Leyendo ${lista.length} PDFs…` : "Leyendo PDF…"); setBusy(true);
     try {
-      const r = await parseTarjetaPdf(file);
+      const parseo = await parseResumenes(lista);
+      const r = parseo.resultado;
       if (!r.lineas.length) { setPdfMsg("No pude leer líneas del PDF — cargalas a mano o probá otro."); setBusy(false); return; }
+      // Amex emite un resumen por titular: si los archivos son de ciclos distintos, la ingesta
+      // mezclaría dos períodos en una sola bandeja (y el cuadre no significaría nada).
+      if (r.ciclosDistintos) { setPdfMsg("Error: los resúmenes son de ciclos de facturación distintos. Subí los del mismo período."); setBusy(false); return; }
       const hd = r.header || {};
       const periodo = hd.periodo || "";
       const fecha   = hd.fechaCierre || new Date().toISOString().slice(0, 10);
@@ -213,12 +218,21 @@ export default function MundoTarjeta({ sociedad }) {
         ? `⚠️ diferencia de ${money(Math.abs(a.dif), a.mon)} sin cuenta-tarjeta ${a.mon} para ajustarla`
         : `+ ajuste de ${money(Math.abs(a.dif), a.mon)} (${a.dif > 0 ? "crédito" : "cargo"}) contra el Total a Pagar`
       ).join(" · ");
+      // Saldo anterior impago (Amex): NO se ingesta — es deuda de ciclos previos, que o ya vive en
+      // la cuenta-tarjeta o hay que darla de alta como saldo inicial. Se avisa para que el pago no
+      // sorprenda: lo que se va a pagar es saldo anterior + estos consumos.
+      const sa = r.saldoAnterior;
+      const saTxt = sa && (Math.abs(sa.ars) > 1 || Math.abs(sa.usd) > 0.5)
+        ? ` · ⚠️ el resumen arrastra saldo anterior impago de ${[sa.ars ? money(sa.ars, "ARS") : "", sa.usd ? money(sa.usd, "USD") : ""].filter(Boolean).join(" + ")} (NO se carga acá)`
+        : "";
       setPdfMsg(`✓ ${res.creados} consumo(s) cargados a la bandeja`
+        + (parseo.archivos > 1 ? ` de ${parseo.archivos} resúmenes` : "")
         + (res.borradas ? ` · reemplazó ${res.borradas} de una carga anterior` : "")
         + (res.yaAutorizadas ? ` · ${res.yaAutorizadas} ya autorizados (no se recargan)` : "")
         + (reconocidas ? ` · ${reconocidas} ya eran pago de FC con la tarjeta` : "")
         + (sinCuenta ? ` · ⚠️ ${sinCuenta} sin cuenta-tarjeta de esa moneda (creala en Maestros)` : "")
         + (ajusteTxt ? ` · ${ajusteTxt}` : "")
+        + saTxt
         + ". Revisá cuenta/centro y autorizá.");
     } catch (e) { setPdfMsg("Error al leer el PDF: " + (e?.message || e)); }
     setBusy(false);
@@ -321,7 +335,8 @@ export default function MundoTarjeta({ sociedad }) {
           </select>
           <label style={{ background: tarjetaId && !busy ? T.accentDark : "#cbd5e1", color: tarjetaId && !busy ? T.accent : "#fff", borderRadius: 999, padding: "8px 16px", fontSize: 12.5, fontWeight: 700, cursor: tarjetaId && !busy ? "pointer" : "default", fontFamily: T.font, whiteSpace: "nowrap" }}>
             {busy ? "Procesando…" : "⬆ Subir resumen"}
-            <input type="file" accept=".pdf" disabled={!tarjetaId || busy} style={{ display: "none" }} onChange={e => { onPdf(e.target.files[0]); e.target.value = ""; }} />
+            {/* multiple: Amex emite un PDF por titular → los del ciclo se suben juntos y se mergean. */}
+            <input type="file" accept=".pdf" multiple disabled={!tarjetaId || busy} style={{ display: "none" }} onChange={e => { onPdf(e.target.files); e.target.value = ""; }} />
           </label>
         </div>
       </div>
