@@ -2575,7 +2575,13 @@ export async function revertirInterusoGestion(movId) {
 //      directos / conciliación contabilizada en nb_movimientos)
 //   2. Préstamos/transferencias del núcleo (pares INTERCOMPANIA).
 // Si `sociedad` viene → solo las posiciones de esa sociedad (mirada propia).
-export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades = [], legajoSoc = {} } = {}, { sociedad = null } = {}) {
+export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades = [], legajoSoc = {} } = {}, { sociedad = null, corte = null } = {}) {
+  // As-of opcional: la posición interco a una fecha = solo los movimientos/comprobantes hasta el corte
+  // (aperturas incluidas, fechadas al go-live). Sin corte → todo (idéntico a hoy). Habilita Balance/EEPN.
+  if (corte) {
+    movs  = movs.filter(m => (m.fecha ?? "") <= corte);
+    comps = comps.filter(r => (r.fecha ?? "") <= corte);
+  }
   const empresaDe = new Map((centros || []).map(c => [String(c.id), c.empresa]));
   // Sociedades del núcleo (por anillo) → para decidir si un interuso de gestión cross-society deja
   // posición: núcleo↔núcleo NO (Hektor); hacia una fondeada/externa SÍ (Wellness).

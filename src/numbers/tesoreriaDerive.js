@@ -38,14 +38,14 @@ function cxLedger(entries = []) {
 
 // Vista CONSOLIDADA del interco sobre un set de sociedades: las posiciones núcleo↔núcleo internas
 // al set se ELIMINAN (intra-grupo); las demás (fondeadas/externas) se muestran. Devuelve {activo,pasivo}.
-export function intercoConsolidado(intercoData, selectedIds, sociedades = []) {
+export function intercoConsolidado(intercoData, selectedIds, sociedades = [], corte = null) {
   const anilloDe = new Map(sociedades.map(s => [String(s.id), String(s.anillo || "")]));
   const nombreDe = sociedadNombreMap(sociedades);
   const esNucleo = id => /^n[úu]cleo/i.test(anilloDe.get(String(id)) || "");
   const nom      = id => nombreDe.get(String(id)) || String(id);
   const sel      = new Set((selectedIds || []).map(String));
   const activo = [], pasivo = [];
-  for (const p of lecturaInterco(intercoData)) {   // cada par aparece una vez con neto>0 (acreedor)
+  for (const p of lecturaInterco(intercoData, { corte })) {   // cada par aparece una vez con neto>0 (acreedor)
     if (p.neto <= 0.01) continue;
     const s = String(p.sociedad), c = String(p.contraparte);
     const sIn = sel.has(s), cIn = sel.has(c);
@@ -81,12 +81,15 @@ export function derivarSaldos({
 }) {
   const _soc  = (sociedad ?? "").toLowerCase();
   const corte = fechaCorte || null;
+  // Movimientos hasta la fecha de corte (para saldos as-of de socios/sueldos/anticipos). Sin corte → todos
+  // (idéntico a hoy). Habilita el Balance/EEPN a una fecha reusando este mismo motor.
+  const movHasta = corte ? movimientos.filter(m => (m.fecha ?? "") <= corte) : movimientos;
 
   // ── Posición intercompañía de ESTA sociedad (neto>0 nos deben / neto<0 les debemos) ──
   const intercoAct = [], intercoPas = [];
   if (intercoData) {
     const nom = id => sociedadesMap?.get?.(String(id)) || String(id);
-    for (const p of lecturaInterco(intercoData, { sociedad })) {
+    for (const p of lecturaInterco(intercoData, { sociedad, corte })) {
       if (Math.abs(p.neto) < 0.01) continue;
       (p.neto > 0 ? intercoAct : intercoPas).push(intercoItem(p.neto, p.moneda, nom(p.contraparte), { sociedadId: p.sociedad, contraparteId: p.contraparte }));
     }
@@ -159,23 +162,31 @@ export function derivarSaldos({
 
   // ── Franquiciados (Bigg Franquicias, read-only): activo/pasivo por empresa+moneda ──
   const now    = new Date();
+  // As-of por fin de mes: sin corte → mes actual (hoy); con corte → el mes del corte. computeSaldoReal
+  // resuelve el saldo al cierre de ese (año, mes) y corta también los cobros de nb_movimientos por rango
+  // de mes → así la franquicia evoluciona en el Balance/EEPN en vez de quedar plana en el saldo de hoy.
+  const franqY = corte ? Number(corte.slice(0, 4)) : now.getFullYear();
+  const franqM = corte ? Number(corte.slice(5, 7)) - 1 : now.getMonth();
   // La CxC de franquiciados netea por franquiciado × empresa × moneda, sin importar en qué caja
   // (sociedad) entró el cobro. Por eso usa los cobros GROUP-WIDE (movsFranq), no los de esta sociedad.
-  const franqCC = franquiciasSaldosCxC(franqData, sociedad, now.getFullYear(), now.getMonth(), movsFranq ?? movimientos);
+  const franqCC = franquiciasSaldosCxC(franqData, sociedad, franqY, franqM, movsFranq ?? movimientos);
 
-  // ── Socios (dividendos + préstamos): slice de esta sociedad, balance puro ──
-  const sociosCCsld = sociosSaldos(socios, sociosCC, movimientos, { sociedad });
+  // ── Socios (dividendos + préstamos): slice de esta sociedad, balance puro (as-of por corte) ──
+  const sociosCCsld = sociosSaldos(socios, corte ? sociosCC.filter(r => (r.fecha ?? "") <= corte) : sociosCC, movHasta, { sociedad });
 
   // ── Sueldos: neto devengado−pagado por legajo/mes. Positivo → PASIVO (deuda); negativo →
   //    ACTIVO (adelanto: pago sin liquidación cerrada aún). Se compensa al cerrar la liquidación. ──
   // Solo pagos de sueldo REALES (tipo SUELDO). El pago del F931 (cargas sociales) es origen "sueldos"
   // pero tipo PAGO y sin legajo → excluirlo evita un "Adelanto a empleados" fantasma en el Activo.
-  const pagosSueldos = movimientos.filter(m => m.origen === "sueldos" && m.tipo === "SUELDO").map(parsePagoFromMov);
+  const pagosSueldos = movHasta.filter(m => m.origen === "sueldos" && m.tipo === "SUELDO").map(parsePagoFromMov);
+  const corteYM = corte ? corte.slice(0, 7) : null;
   const sueldosSide = (porLegajo) => {
     const soc = normSoc(sociedad);
     const docs = []; let total = 0;
     for (const leg of porLegajo) for (const it of leg.items) {
       if (normSoc(it.sociedad) !== soc) continue;
+      // As-of: el sueldo se devenga a fin de su mes → cuenta como deuda solo si su período ≤ el corte.
+      if (corteYM && `${it.anio}-${String(it.mes).padStart(2, "0")}` > corteYM) continue;
       total += it.monto;
       // Vencimiento real del sueldo: se paga entre el 1 y 5 del mes SIGUIENTE (mes vencido) → vto = 05 del mes M+1 (ISO).
       const _m2 = Number(it.mes) === 12 ? 1 : Number(it.mes) + 1;
@@ -228,7 +239,21 @@ export function derivarSaldos({
 
   // ── Pasivo de financiaciones (planes AFIP + créditos) ──
   const finPasivo = (() => {
-    const b = financiacionPasivoBuckets(financiaciones, sociedad);
+    // As-of: excluye planes consolidados después del corte y recalcula el `saldo` del plan al corte desde
+    // sus cuotas — una cuota pagada DESPUÉS del corte todavía debía su capital a esa fecha (se "reabre").
+    // (`financiaciones` ya viene agrupado por plan con .cuotas; el saldo del plano es lo que lee el bucket.)
+    // Sin corte → las filas originales (idéntico a hoy).
+    const finAsOf = corte
+      ? financiaciones
+          .filter(f => (f.fecha_consolidacion ?? "") <= corte)
+          .map(f => ({ ...f, saldo: (f.cuotas ?? []).reduce((s, c) => {
+            if ((c.fecha_pago ?? "") > corte) return s + (Number(c.capital) || 0);        // pagada tras el corte → debía el capital
+            if (c.estado === "pagada" || c.estado === "cancelada") return s;               // saldada al corte
+            return s + (Number(c.total) > 0 ? c.capital * (c.saldoCuota / c.total)          // pendiente/parcial → capital remanente
+                        : (c.saldoCuota > 0.5 ? c.capital : 0));
+          }, 0) }))
+      : financiaciones;
+    const b = financiacionPasivoBuckets(finAsOf, sociedad);
     const items = [];
     const armar = (bucket, label, tipo) => {
       for (const mon of ["ARS", "USD", "EUR"]) {
@@ -247,7 +272,7 @@ export function derivarSaldos({
 
   // ── Pasivo de anticipos de clientes (ingresos diferidos) ──
   const anticiposPasivo = (() => {
-    const { tot, docs } = anticipoPasivo(agruparAnticipos(movimientos), sociedad);
+    const { tot, docs } = anticipoPasivo(agruparAnticipos(movHasta), sociedad);
     const items = [];
     for (const mon of ["ARS", "USD", "EUR"]) {
       if (tot[mon] <= 0) continue;
