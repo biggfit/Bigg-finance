@@ -2986,8 +2986,17 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const [monedaSel,      setMonedaSel]      = useState("ARS");   // valor crudo del selector (incl. modos FX consolidados)
   const [tiposCambio,    setTiposCambio]    = useState({});      // nb_tipos_cambio: mapa YYYY-MM → tasas USD
   useEffect(() => { fetchTiposCambio().then(setTiposCambio).catch(() => {}); }, []);
+  // Fuentes secundarias que cargan FUERA del batch principal (fire-and-forget, para no colgar el reporte si su
+  // backend tarda): histórico, franquicias (Ingresos HQ) y fondeo/interco (Capex). `loading` se apaga con el
+  // batch → estas siguen llegando después. Marcamos cada una "settled" (ok o falla) para un aviso suave: mientras
+  // falte alguna, el P&L puede mostrar líneas incompletas y avisamos, sin bloquear.
+  const [secReady, setSecReady] = useState({ hist: false, franq: false, interco: false });
   const [rawHist,        setRawHist]        = useState([]);      // nb_pnl_historico: leaf rows pre go-live (USD, sin IVA)
-  useEffect(() => { if (!HISTORICO_HABILITADO) return; fetchPnLHistorico().then(r => setRawHist(Array.isArray(r) ? r : [])).catch(() => {}); }, []);
+  useEffect(() => {
+    if (!HISTORICO_HABILITADO) { setSecReady(s => ({ ...s, hist: true })); return; }
+    fetchPnLHistorico().then(r => setRawHist(Array.isArray(r) ? r : [])).catch(() => {})
+      .finally(() => setSecReady(s => ({ ...s, hist: true })));
+  }, []);
   // Modo de consolidación FX derivado del selector. "native" = filtra por moneda (como siempre);
   // "real" = traduce TODO a USD al TC de cierre de CADA mes (mezcla operación + efecto cambiario);
   // "const" = traduce TODO a USD al TC de UN mes ancla (el del selector Mes) → comparable, aísla el FX
@@ -3041,6 +3050,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     let cancelled = false;
     const run = async () => {
       setLoading(true); setError(null); setCargaFallida([]);
+      setSecReady(s => ({ ...s, franq: false, interco: false }));   // se re-piden en esta carga (hist no)
       try {
         // Sueldos (liquidaciones + pagos) vive en otro backend → se dispara en paralelo al batch de Numbers.
         // Envuelto para saber si cargó (tras reintentos): si falla, el P&L queda sin sueldos → avisamos.
@@ -3086,14 +3096,16 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
         setSociosCC(Array.isArray(socsCC) ? socsCC : []);
         // Franquicias (read-only) — fuera del Promise.all para NO bloquear Reportes si ese backend tarda.
         fetchComps().then(c => { if (!cancelled && c && typeof c === "object") setRawFranq(c); })
-          .catch(() => { if (!cancelled) setCargaFallida(f => [...f, "Franquicias"]); });
+          .catch(() => { if (!cancelled) setCargaFallida(f => [...f, "Franquicias"]); })
+          .finally(() => { if (!cancelled) setSecReady(s => ({ ...s, franq: true })); });
         // Intercompañía (read-only) — todas las fuentes (fondeo + transfers) + maestro sociedades (anillo).
         // `fetchIntercoData` ya trae `sociedades`, así que no hace falta un fetch aparte.
         fetchIntercoData().then(d => {
           if (cancelled || !d) return;
           setIntercoData(d);
           if (Array.isArray(d.sociedades)) setSociedades(d.sociedades);
-        }).catch(() => {});
+        }).catch(() => {})
+          .finally(() => { if (!cancelled) setSecReady(s => ({ ...s, interco: true })); });
       } catch (e) {
         if (!cancelled) setError(e.message);
       } finally {
@@ -3108,6 +3120,15 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
 
   const curTab   = TABS.find(t => t.id === activeTab);
   const curLente = LENTES.find(l => l.tabs.includes(activeTab));
+
+  // Fuentes secundarias todavía en vuelo (tras apagarse `loading`): mientras falte alguna, las líneas que
+  // alimentan (histórico = meses pre go-live; franquicias = Ingresos HQ; fondeo = Capex/interco) pueden estar
+  // incompletas → banner suave, no bloqueante.
+  const secPend = [
+    !secReady.hist && "histórico",
+    !secReady.franq && "franquicias",
+    !secReady.interco && "fondeo",
+  ].filter(Boolean);
 
   // Fondeada activa (España/Colombia/Puertos ya construida). Usa el MISMO reporte de sede (mismos filtros
   // moneda + sede), pero escopea el universo de sedes a las de ESA sociedad y agrega la cola de impuestos.
@@ -3734,6 +3755,18 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     // --border (dark, del theme global del shell) → cardBorder claro: las tablas de reportes viven en
     // cards blancas; así la regla global `td/th{border:var(--border)}` no pinta líneas oscuras sobre blanco.
     <div style={{ padding: "28px 32px", maxWidth: 1400, "--border": T.cardBorder }} className="fade">
+
+      {/* Aviso SUAVE: fuentes secundarias todavía llegando (el batch principal ya está, pero histórico /
+           franquicias / fondeo cargan aparte). No bloquea: avisa que algunas líneas pueden moverse. */}
+      {secPend.length > 0 && cargaFallida.length === 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10,
+          background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 10, padding: "9px 16px", marginBottom: 16 }}>
+          <Spinner size={15} />
+          <div style={{ fontSize: 13, color: "#1e40af", fontWeight: 600, lineHeight: 1.4 }}>
+            Cargando datos complementarios (<strong>{secPend.join(" · ")}</strong>)… algunas líneas pueden completarse en unos segundos.
+          </div>
+        </div>
+      )}
 
       {/* Aviso: alguna fuente secundaria lenta (Franquicias/Sueldos) no cargó tras reintentos → el P&L
            puede estar incompleto. Mejor avisar que mostrar el número a medias en silencio. */}
