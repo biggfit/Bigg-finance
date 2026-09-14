@@ -196,7 +196,7 @@ function computeSubtotals(pnl) {
            activeMonths: [...months].sort((a,b) => a-b) };
 }
 
-const rowSum = arr => arr.reduce((s, v) => s + v, 0);
+const rowSum = arr => (arr || []).reduce((s, v) => s + v, 0);
 const fmtN   = n => !n ? "—" : Math.round(Math.abs(n)).toLocaleString("es-AR");
 const fmtSigned = n => !n ? "—" : (n < 0 ? "−" : "") + fmtN(n);   // conserva el signo (fmtN es absoluto)
 // Convención contable. neg=false (ingresos/resultados): positivo normal, negativo (pérdida) entre
@@ -2241,87 +2241,69 @@ const CF_START_MES = 6;   // Julio (0-indexed): el Cash Flow arranca acá SOLO e
 const CF_ANILLO_ORDEN = ["cleo", "fond", "extern"];
 const anilloRank = (a) => { const x = String(a || "").toLowerCase(); const i = CF_ANILLO_ORDEN.findIndex(k => x.includes(k)); return i === -1 ? 99 : i; };
 
-function TabCashFlow({ rawMovs, rawIn = [], rawEg = [], ccMap, nucleoEmpresas, selSoc = new Set(), year, moneda, tarjetaIds, cuentasBancarias = [] }) {
+// Motor de caja (método directo), PURO y reusable: lo consumen la vista directa (TabCashFlow) y el puente
+// indirecto (TabPuenteCaja, que lee `flujoNeto` como destino + las líneas de financiación/internos). Misma
+// moneda de vista y traductor `fx` que usa el CF. Devuelve los agregados mensuales.
+function computeCashFlow({ rawMovs = [], rawIn = [], rawEg = [], ccMap, nucleoEmpresas, selSoc = new Set(), year, moneda, fx = null, tarjetaIds, cuentasBancarias = [] }) {
+  // Índice factura → centro (los cobros/pagos no traen centro; lo sacamos de la factura linkeada). El pago
+  // referencia el id_comp (ej. EG-123); las líneas de comprobante traen sufijo (EG-123-L00001) → clavear por
+  // ambos. 1ª línea con centro gana.
+  const docCentro = new Map();
+  for (const r of [...rawIn, ...rawEg]) {
+    const centro = String(r.centro_costo ?? ""); if (!centro) continue;
+    const full = String(r.id ?? ""); const comp = full.replace(/-L\d+$/i, "");
+    if (full && !docCentro.has(full)) docCentro.set(full, centro);
+    if (comp && !docCentro.has(comp)) docCentro.set(comp, centro);
+  }
+  const ctx = { ccMap, nucleoEmpresas, docCentro };
+  // Moneda AUTORITATIVA = la de la cuenta bancaria; el campo `moneda` del movimiento es fallback.
+  const cuentaMoneda = new Map();
+  for (const c of (cuentasBancarias || [])) cuentaMoneda.set(String(c.id), String(c.moneda || "ARS"));
+  const monedaDe = (m) => cuentaMoneda.get(String(m.cuenta_bancaria)) || (m.moneda ?? "ARS");
+  // Monto en la moneda de vista: nativo, o traducido con `fx`. Sin TC → 0 (convención del P&L consolidado).
+  const montoDe = (m) => {
+    const v = Number(m.monto) || 0;
+    if (!fx) return v;
+    const anio = parseInt(m.fecha.slice(0, 4), 10), mes = parseInt(m.fecha.slice(5, 7), 10);
+    return fx(v, monedaDe(m), anio, mes) ?? 0;
+  };
+  // Predicado de caja: sociedad elegida, banco real, no ignorada, no tarjeta. Nativo → en LA moneda; con `fx`
+  // → todas las monedas (cada una se traduce).
+  const esCash = (m) => !!m.fecha && !esIgnorado(m) && !!m.cuenta_bancaria
+    && !(tarjetaIds?.has(m.cuenta_bancaria)) && (fx ? true : monedaDe(m) === moneda)
+    && (selSoc.size === 0 || selSoc.has(String(m.sociedad ?? "").trim()));
+  // Arranque del período: el año de go-live empieza en julio; los posteriores en enero. Lo previo → saldo inicial.
+  const cfStartMes = year === CF_GO_LIVE_YEAR ? CF_START_MES : 0;
+  const cutoff = `${year}-${String(cfStartMes + 1).padStart(2, "0")}-01`;
+  const movsFilt = rawMovs.filter(m => esCash(m) && m.fecha.slice(0, 4) === String(year) && m.fecha >= cutoff);
+  const openingCash = rawMovs.reduce((s, m) => (esCash(m) && m.fecha < cutoff) ? s + montoDe(m) : s, 0);
+  const porAct = { operativo: {}, inversion: {}, financiacion: {}, internos: {} };
+  for (const m of movsFilt) {
+    const mes = parseInt(m.fecha.slice(5, 7), 10) - 1; if (mes < 0 || mes > 11) continue;
+    const { act, concepto } = clasificarFlujo(m, ctx);
+    (porAct[act][concepto] ??= new Array(12).fill(0))[mes] += montoDe(m);
+  }
+  const actTot = {};
+  for (const k of Object.keys(porAct)) actTot[k] = MESES.map((_, m) => Object.values(porAct[k]).reduce((s, a) => s + a[m], 0));
+  const flujoNeto = MESES.map((_, m) => CF_ACT.reduce((s, a) => s + actTot[a.key][m], 0));
+  let cum = openingCash;
+  const saldoFinal = flujoNeto.map(v => { cum += v; return cum; });
+  const saldoInicioMes = MESES.map((_, m) => saldoFinal[m] - flujoNeto[m]);
+  const months = new Set();
+  movsFilt.forEach(m => { const i = parseInt(m.fecha.slice(5, 7), 10) - 1; if (i >= cfStartMes && i <= 11) months.add(i); });
+  const finYear = new Date().getFullYear() === year ? new Date().getMonth() : 11;
+  for (let i = cfStartMes; i <= Math.max(finYear, cfStartMes); i++) months.add(i);
+  const activeMonths = [...months].sort((a, b) => a - b);
+  return { porAct, actTot, flujoNeto, openingCash, saldoFinal, saldoInicioMes, activeMonths, cfStartMes };
+}
+
+function TabCashFlow({ rawMovs, rawIn = [], rawEg = [], ccMap, nucleoEmpresas, selSoc = new Set(), year, moneda, fx = null, tarjetaIds, cuentasBancarias = [] }) {
   const [open, setOpen] = useState({ operativo: true, inversion: true, financiacion: true, internos: false });
   const toggle = (k) => setOpen(o => ({ ...o, [k]: !o[k] }));
 
-  // Índice factura → centro (los cobros/pagos no traen centro; lo sacamos de la factura linkeada).
-  // El pago referencia el id_comp (ej. EG-123); las filas de comprobante traen sufijo de línea
-  // (EG-123-L00001) → clavear por id_comp (sin -L) además del id completo. 1ª línea con centro gana.
-  const docCentro = useMemo(() => {
-    const m = new Map();
-    for (const r of [...rawIn, ...rawEg]) {
-      const centro = String(r.centro_costo ?? "");
-      if (!centro) continue;
-      const full = String(r.id ?? "");
-      const comp = full.replace(/-L\d+$/i, "");
-      if (full && !m.has(full)) m.set(full, centro);
-      if (comp && !m.has(comp)) m.set(comp, centro);
-    }
-    return m;
-  }, [rawIn, rawEg]);
-  const ctx = useMemo(() => ({ ccMap, nucleoEmpresas, docCentro }), [ccMap, nucleoEmpresas, docCentro]);
-
-  // Moneda AUTORITATIVA = la de la cuenta bancaria (una cuenta USD solo tiene USD). El campo `moneda` del
-  // movimiento es fallback (por si una cuenta no está en el maestro). Evita que un movimiento mal cargado
-  // (moneda en blanco → antes caía a ARS) se cuele en la moneda equivocada.
-  const cuentaMoneda = useMemo(() => {
-    const mm = new Map();
-    for (const c of (cuentasBancarias || [])) mm.set(String(c.id), String(c.moneda || "ARS"));
-    return mm;
-  }, [cuentasBancarias]);
-  const monedaDe = (m) => cuentaMoneda.get(String(m.cuenta_bancaria)) || (m.moneda ?? "ARS");
-
-  // Predicado de caja: sociedad ELEGIDA (filtro en el box), con banco real, no ignorada, no tarjeta, en la moneda.
-  const esCash = (m) => !!m.fecha && !esIgnorado(m) && !!m.cuenta_bancaria
-    && !(tarjetaIds?.has(m.cuenta_bancaria)) && monedaDe(m) === moneda
-    && (selSoc.size === 0 || selSoc.has(String(m.sociedad ?? "").trim()));
-
-  // Arranque del período: SOLO el año de go-live empieza en julio (1/7/2026); los años posteriores en enero.
-  // Todo lo previo al cutoff (incl. las aperturas al 30/6/2026) va al saldo inicial.
-  const cfStartMes = year === CF_GO_LIVE_YEAR ? CF_START_MES : 0;
-  const cutoff = `${year}-${String(cfStartMes + 1).padStart(2, "0")}-01`;
-
-  const movsFilt = useMemo(() => rawMovs.filter(m => esCash(m) && m.fecha.slice(0, 4) === String(year) && m.fecha >= cutoff),
-    [rawMovs, year, moneda, tarjetaIds, selSoc, cuentaMoneda]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Saldo de caja al inicio del período (todo lo movido ANTES del cutoff, en esta moneda).
-  const openingCash = useMemo(() => rawMovs.reduce((s, m) =>
-    (esCash(m) && m.fecha < cutoff) ? s + (Number(m.monto) || 0) : s, 0),
-    [rawMovs, year, moneda, tarjetaIds, selSoc, cuentaMoneda]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // porAct[actividad][concepto] = 12 meses (neto firmado); actTot[actividad] = subtotal mensual.
-  const { porAct, actTot } = useMemo(() => {
-    const porAct = { operativo: {}, inversion: {}, financiacion: {}, internos: {} };
-    for (const m of movsFilt) {
-      const mes = parseInt(m.fecha.slice(5, 7), 10) - 1;
-      if (mes < 0 || mes > 11) continue;
-      const { act, concepto } = clasificarFlujo(m, ctx);
-      (porAct[act][concepto] ??= new Array(12).fill(0))[mes] += Number(m.monto) || 0;
-    }
-    const actTot = {};
-    for (const k of Object.keys(porAct))
-      actTot[k] = MESES.map((_, m) => Object.values(porAct[k]).reduce((s, a) => s + a[m], 0));
-    return { porAct, actTot };
-  }, [movsFilt]);
-
-  const flujoNeto = useMemo(() =>
-    MESES.map((_, m) => CF_ACT.reduce((s, a) => s + actTot[a.key][m], 0)), [actTot]);
-
-  // Saldo de caja acumulado (arranca en openingCash) y saldo al inicio de cada mes.
-  const saldoFinal = useMemo(() => {
-    let cum = openingCash;
-    return flujoNeto.map(v => { cum += v; return cum; });
-  }, [flujoNeto, openingCash]);
-  const saldoInicioMes = useMemo(() => MESES.map((_, m) => saldoFinal[m] - flujoNeto[m]), [saldoFinal, flujoNeto]);
-
-  const activeMonths = useMemo(() => {
-    const s = new Set();
-    movsFilt.forEach(m => { const i = parseInt(m.fecha.slice(5, 7), 10) - 1; if (i >= cfStartMes && i <= 11) s.add(i); });
-    const finYear = new Date().getFullYear() === year ? new Date().getMonth() : 11;
-    for (let i = cfStartMes; i <= Math.max(finYear, cfStartMes); i++) s.add(i);
-    return [...s].sort((a, b) => a - b);
-  }, [movsFilt, year]);
+  const cf = useMemo(() => computeCashFlow({ rawMovs, rawIn, rawEg, ccMap, nucleoEmpresas, selSoc, year, moneda, fx, tarjetaIds, cuentasBancarias }),
+    [rawMovs, rawIn, rawEg, ccMap, nucleoEmpresas, selSoc, year, moneda, fx, tarjetaIds, cuentasBancarias]);
+  const { porAct, actTot, flujoNeto, openingCash, saldoFinal, saldoInicioMes, activeMonths } = cf;
 
   if (activeMonths.length === 0) return (
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
@@ -2333,11 +2315,33 @@ function TabCashFlow({ rawMovs, rawIn = [], rawEg = [], ccMap, nucleoEmpresas, s
     </div>
   );
 
+  // Totales del período (columna TOTAL) por actividad, para la banda-resumen.
+  const totPer = (arr) => activeMonths.reduce((s, m) => s + (arr[m] || 0), 0);
+  const chips = [
+    { label: "Operativo", v: totPer(actTot.operativo) },
+    { label: "Inversión", v: totPer(actTot.inversion) },
+    { label: "Financiación", v: totPer(actTot.financiacion) },
+    { label: "Δ Caja del período", v: totPer(flujoNeto), strong: true },
+  ];
+
   return (
     <>
-    <div style={{ fontSize: 12, color: T.muted, margin: "2px 0 10px", maxWidth: 820, lineHeight: 1.5 }}>
-      Consolidado desde <b>julio</b> (go-live). El interco entre las sociedades <b>elegidas</b> se netea;
-      el fondeo hacia una sociedad no elegida queda como <b>Inversión</b> (caja que sale del perímetro).
+    <div style={{ fontSize: 12, color: T.muted, margin: "2px 0 10px", maxWidth: 860, lineHeight: 1.5 }}>
+      Consolidado desde <b>julio</b> (go-live). El interco entre las sociedades <b>elegidas</b> se netea; el fondeo
+      hacia una sociedad no elegida queda como <b>Inversión</b>. <b>Financiación</b> (préstamos, anticipos, aportes)
+      = plata que entra a caja pero <b>no es resultado</b>: sostiene el pozo. Para ver cómo el resultado se vuelve
+      caja, usá la vista <b>Resultado → Caja</b>.
+    </div>
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
+      {chips.map(c => (
+        <div key={c.label} style={{ flex: "1 1 150px", minWidth: 150, background: T.card,
+          border: `1px solid ${c.strong ? (c.v >= 0 ? T.green : T.red) : T.cardBorder}`, borderRadius: 10,
+          padding: "10px 14px", boxShadow: T.shadow }}>
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: ".06em" }}>{c.label}</div>
+          <div style={{ fontSize: 18, fontWeight: 900, fontFamily: "var(--mono)",
+            color: c.strong ? (c.v >= 0 ? T.green : T.red) : T.text, marginTop: 3 }}>{fmtSigned(c.v)}</div>
+        </div>
+      ))}
     </div>
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
       boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
@@ -2379,6 +2383,66 @@ function TabCashFlow({ rawMovs, rawIn = [], rawEg = [], ccMap, nucleoEmpresas, s
             totalOverride={saldoFinal[activeMonths[activeMonths.length - 1]] ?? 0} />
         </tbody>
       </table>
+    </div>
+    </>
+  );
+}
+
+// ─── Puente Resultado → Caja (cash flow indirecto) ─────────────────────────────
+// Presentacional: recibe los arrays [12] ya computados en el padre (`puenteData`) y arma el waterfall que
+// arranca en el Resultado del Grupo (P&L) y termina en el Δ Caja (= Flujo neto del CF directo). Reusa las
+// mismas filas que el CF. El renglón "Otros / perímetro y timing" es el residuo que hace cerrar el puente.
+function TabPuenteCaja({ data, moneda }) {
+  // Data completa = todas las series [12] presentes. Si falta alguna (recomputando / cargando), estado vacío.
+  const CAMPOS = ["resGrupo", "capex", "resFinal", "financiacion", "internos", "capTrabajo", "flujoNeto", "saldoFinal"];
+  const ready = !!data && Array.isArray(data.activeMonths) && CAMPOS.every(k => Array.isArray(data[k]));
+  const am = ready ? data.activeMonths : [];
+  if (am.length === 0) return (
+    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
+      padding: "60px 24px", textAlign: "center", boxShadow: T.shadow }}>
+      <div style={{ fontSize: 14, color: T.muted }}>Sin datos para el puente en {moneda}.</div>
+    </div>
+  );
+  const span = am.length + 2;
+  const colDe = (vals) => rowSum(vals) >= 0 ? T.green : T.red;
+  return (
+    <>
+    <div style={{ fontSize: 12, color: T.muted, margin: "2px 0 10px", maxWidth: 880, lineHeight: 1.5 }}>
+      Cómo el <b>resultado económico</b> (devengado) se convierte en <b>caja</b>: arranca en el Resultado del Grupo
+      del P&L y ajusta lo que no es caja del período — inversión/fondeo, capital de trabajo (cobros/pagos/anticipos)
+      y financiación. La última fila coincide con el <b>Flujo neto</b> del Cash Flow directo.
+    </div>
+    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
+      boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
+      <table style={{ width: "100%", minWidth: 280 + am.length * 110, borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={{ ...thStyle, textAlign: "left", minWidth: 280, ...stickyCol, background: T.tableHead, zIndex: 4 }}>Concepto</th>
+            {am.map(m => <th key={m} style={thStyle}>{MESES[m]}</th>)}
+            <th style={{ ...thStyle, borderLeft: "1px solid rgba(255,255,255,.12)" }}>TOTAL</th>
+          </tr>
+        </thead>
+        <tbody>
+          <SubtotalRow label="Resultado del Grupo (económico)" values={data.resGrupo} activeMonths={am} color={T.muted} noBottom />
+          <DataRow label="− Inversiones / Capex (fondeo a España/Colombia/etc.)" values={data.capex} activeMonths={am} neg color={T.red} />
+          <SubtotalRow label="Resultado Final del Grupo" values={data.resFinal} activeMonths={am} />
+
+          <SectionRow label="De resultado a caja (movimientos que no son resultado)" span={span} activeMonths={am} />
+          <DataRow label="Financiación (préstamos, anticipos de clientes, aportes)" values={data.financiacion} activeMonths={am} color={colDe(data.financiacion)} />
+          <DataRow label="Transferencias internas / cambio de moneda" values={data.internos} activeMonths={am} color={colDe(data.internos)} />
+          <DataRow label="Capital de trabajo y timing (cobros/pagos pendientes)" values={data.capTrabajo} activeMonths={am} color={colDe(data.capTrabajo)} />
+
+          <ResultadoRow label="Δ Caja del período" values={data.flujoNeto} activeMonths={am} strong />
+          <SubtotalRow label="Saldo final de caja" values={data.saldoFinal} activeMonths={am} color={T.text} strong
+            totalOverride={data.saldoFinal[am[am.length - 1]] ?? 0} />
+        </tbody>
+      </table>
+    </div>
+    <div style={{ fontSize: 11, color: T.muted, marginTop: 8, maxWidth: 880, lineHeight: 1.5 }}>
+      <b>Capital de trabajo y timing</b> = la brecha entre lo devengado y lo cobrado/pagado: ventas facturadas que
+      todavía no cobraste (suben CxC, restan caja), gastos devengados aún sin pagar (suman caja), más el timing de
+      sueldos/impuestos, retenciones y diferencias de perímetro (el P&L consolida el núcleo; el CF, las cajas). Es
+      el renglón que explica por qué el resultado todavía no es caja.
     </div>
     </>
   );
@@ -3005,6 +3069,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const monedaPL = fxMode === "native" ? monedaSel : "USD";
   const setMonedaPL = setMonedaSel;   // los efectos que forzaban moneda (fondeadas/Huergo) siguen andando
   const [monedaCF,       setMonedaCF]       = useState("ARS");
+  const [cfVista,        setCfVista]        = useState("directo");   // "directo" (por actividad) | "puente" (Resultado → Caja)
   const [rawEg,     setRawEg]     = useState([]);
   const [rawIn,     setRawIn]     = useState([]);
   const [rawMovs,   setRawMovs]   = useState([]);
@@ -3328,6 +3393,20 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     if (fxMode === "const") return (monto, moneda) => montoAUSD(monto, moneda, fxConstTC);
     return null;
   }, [fxMode, tiposCambio, fxConstTC]);
+
+  // FX del Cash Flow — independiente del selector del P&L (el CF tiene su propio `monedaCF`). Mismos dos modos
+  // consolidados: "real" = cada movimiento al TC de su mes; "const" = todo al TC del mes ancla (comparable, sin
+  // efecto cambiario). Ancla = último mes completo del año (como la Evolución del P&L; el CF no tiene selector de mes).
+  const fxModeCF   = monedaCF === "USD_REAL" ? "real" : monedaCF === "USD_CONST" ? "const" : "native";
+  const monedaCFView = fxModeCF === "native" ? monedaCF : "USD";
+  const anchorMesCF  = year >= CUR_YEAR ? Math.max(0, new Date().getMonth() - 1) : 11;
+  const fxConstTCCF  = useMemo(() => fxModeCF === "const" ? tcDelMes(tiposCambio, year, anchorMesCF + 1) : null, [fxModeCF, tiposCambio, year, anchorMesCF]);
+  const fxConstFaltaCF = fxModeCF === "const" && !fxConstTCCF;
+  const fxConvCF = useMemo(() => {
+    if (fxModeCF === "real")  return (monto, moneda, anio, mes) => montoAUSD(monto, moneda, tcDelMes(tiposCambio, anio, mes));
+    if (fxModeCF === "const") return (monto, moneda) => montoAUSD(monto, moneda, fxConstTCCF);
+    return null;
+  }, [fxModeCF, tiposCambio, fxConstTCCF]);
   // Matriz del reporte "Intercompañía por negocio" (siempre en USD, independiente del modo FX del P&L). Se
   // computa acá (una vez) para poder dibujar el selector de Negocio junto al de Año y pasarla ya lista al tab.
   const intercoFx = useCallback((m, mon, a, me) => montoAUSD(m, mon, tcDelMes(tiposCambio, a, me)), [tiposCambio]);
@@ -3518,12 +3597,15 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
 
   // Holding (P&L BIGG) para un año dado → { pnl (grupos+capex con fondeo), sub (subtotales) }. Se calcula para
   // `year` y `year-1` (comparativas Mensual/YTD). Usa las filas pre-traducidas inBigg/egBigg (USD en consolidado).
-  const holdingDe = (yr) => {
+  // `holdingDe(yr, opts)` — computa el P&L holding. Los defaults reproducen el comportamiento del P&L BIGG
+  // (filas pre-traducidas del selector del P&L, monedaPL, sinIva). El puente de caja lo llama con las filas
+  // traducidas a la moneda del CF (`inR/egR`, `fx`, `moneda`) para que ambos motores hablen la misma moneda.
+  const holdingDe = (yr, { inR = inBigg, egR = egBigg, fx = fxConv, moneda = monedaPL, sinIvaArg = sinIva } = {}) => {
     // Sedes Propias AR neto del 49% de Barrio Norte. La cesión es una apropiación del resultado NETO (no lleva
     // IVA): se resta 0,49 × resultado neto de BN al `res` y NO se toca el tracking de IVA. Así coincide con los
     // DIVIDENDOS BN y no se infla en la vista Con IVA (antes cedía 0,49 × resultado bruto → sobrestimaba ~1,7M/mes).
-    const sAR = computeSubtotalsSede(buildPnLSede(inBigg, egBigg, arNucleoCCs, yr, monedaPL, sinIva));
-    const sBNnet = bnCcId ? computeSubtotalsSede(buildPnLSede(inBigg, egBigg, [bnCcId], yr, monedaPL, true)) : null;
+    const sAR = computeSubtotalsSede(buildPnLSede(inR, egR, arNucleoCCs, yr, moneda, sinIvaArg));
+    const sBNnet = bnCcId ? computeSubtotalsSede(buildPnLSede(inR, egR, [bnCcId], yr, moneda, true)) : null;
     // IVA de aranceles de sedes AR (total − neto): el histórico no trae iva_monto, así que la sede computa aranceles
     // BRUTO. Ese IVA es un costo que NO va a la sede (los socios se liquidan neto → sus saldos ya cierran): se
     // DEVUELVE al resultado de sede (queda neto) y se reconoce como costo en HQ (abajo). No toca el dato de sede.
@@ -3531,7 +3613,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     const sumaArIVA = (r) => {
       if (!/aranceles/i.test(String(r.cuenta_contable || ""))) return;
       if (!r.fecha || (r.fecha < PNL_INICIO && !r._historico) || r.fecha.slice(0, 4) !== String(yr)) return;
-      if ((r.moneda ?? "ARS") !== monedaPL) return;
+      if ((r.moneda ?? "ARS") !== moneda) return;
       if (!ccEnFiltro(arNucleoCCs, r.centro_costo)) return;
       const m = parseInt(r.fecha.slice(5, 7), 10) - 1;
       const t = Number(r.total) || 0, n = Number(r.neto);
@@ -3539,32 +3621,32 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       const iva = Number(r.iva_monto) || (Number.isFinite(n) && n ? t - n : t * 0.21 / 1.21);
       if (m >= 0 && m < 12 && Number.isFinite(iva)) arIVASedes[m] += iva;
     };
-    for (const r of inBigg) sumaArIVA(r);
-    for (const r of egBigg) sumaArIVA(r);
+    for (const r of inR) sumaArIVA(r);
+    for (const r of egR) sumaArIVA(r);
     const resSedesAR = {
       res:    sAR.resFinal.map((v, m) => v - CESION.pct * (Number(sBNnet?.resFinal?.[m]) || 0) + arIVASedes[m]),
       ivaDeb: sAR.ivaDeb, ivaCred: sAR.ivaCred,
     };
     // Gerenciamiento (Rosedal) = fee Ñako→Segui (cuenta "Fee de Gestion y Adm" exacta, núcleo; venta → IVA débito).
     const fRes = new Array(12).fill(0), fDeb = new Array(12).fill(0);
-    for (const r of inBigg) {
+    for (const r of inR) {
       if (_nkSede(r.cuenta_contable) !== _nkSede("Fee de Gestion y Adm")) continue;
       if (!nucleoEmpresas.has((r.sociedad ?? "").trim())) continue;
       if (!r.fecha || (r.fecha < PNL_INICIO && !r._historico) || r.fecha.slice(0, 4) !== String(yr)) continue;
-      if ((r.moneda ?? "ARS") !== monedaPL) continue;
+      if ((r.moneda ?? "ARS") !== moneda) continue;
       const m = parseInt(r.fecha.slice(5, 7), 10) - 1;
-      if (m >= 0 && m < 12) { fRes[m] += montoPnL(r, sinIva); if (sinIva) fDeb[m] += Number(r.iva_monto) || 0; }
+      if (m >= 0 && m < 12) { fRes[m] += montoPnL(r, sinIvaArg); if (sinIvaArg) fDeb[m] += Number(r.iva_monto) || 0; }
     }
     const feeGer = { res: fRes, ivaDeb: fDeb, ivaCred: new Array(12).fill(0) };
     // Wellness Real Estate = margen de Huergo (+ Puertos a futuro).
-    const sH = computeSubtotalsHuergo(buildPnLHuergo(inBigg, egBigg, huergoCCs, yr, monedaPL, sinIva));
+    const sH = computeSubtotalsHuergo(buildPnLHuergo(inR, egR, huergoCCs, yr, moneda, sinIvaArg));
     const resWRE = { res: sH.margen, ivaDeb: sH.ivaDeb, ivaCred: sH.ivaCred };
     // HQ + fondeo de las fondeadas (anillo 2) dentro de Inversiones/Capex. En modo consolidado se traduce a USD
-    // con fxConv (antes filtraba por moneda y descartaba el fondeo en ARS/EUR → subcontaba la línea Fondeo).
-    const pnl = buildPnLBigg(inBigg, egBigg, ccMap, cuentaMap, nucleoEmpresas, yr, monedaPL, sinIva);
+    // con fx (antes filtraba por moneda y descartaba el fondeo en ARS/EUR → subcontaba la línea Fondeo).
+    const pnl = buildPnLBigg(inR, egR, ccMap, cuentaMap, nucleoEmpresas, yr, moneda, sinIvaArg);
     // Nota: el IVA de aranceles de sedes (arIVASedes) YA se devolvió al resultado de sede arriba (queda neta). NO
     // se reconoce como gasto en HQ: es crédito fiscal recuperable, no un costo del P&L → sale del resultado.
-    const fondeo = fondeoFondeadasMensual(intercoData, { year: yr, moneda: monedaPL, desde: PNL_INICIO, fx: fxConv });
+    const fondeo = fondeoFondeadasMensual(intercoData, { year: yr, moneda, desde: PNL_INICIO, fx });
     const nomSoc = new Map((intercoData?.sociedades || []).map(s => [String(s.id), s.nombre || s.id]));
     for (const [fid, arr] of Object.entries(fondeo)) {
       if (!arr.some(v => Math.abs(v) > 0.01)) continue;
@@ -3584,6 +3666,33 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const subBigg     = biggCur?.sub  || null;
   const pnlBiggPrev = biggPrev?.pnl || null;
   const subBiggPrev = biggPrev?.sub || null;
+
+  // ── Puente Resultado → Caja (cash flow indirecto). Solo se computa en el CF, vista "puente". Ata por
+  // construcción al Flujo neto del CF directo: cada renglón explica la diferencia contra el Resultado del Grupo,
+  // y el residuo "Otros" cierra la ecuación. Holding y caja en la MISMA moneda (la del CF). ──
+  const puenteActivo = activeTab === "cf" && cfVista === "puente";
+  const inFxCF = useMemo(() => puenteActivo ? traducirFilasUSD(inConFranq, fxConvCF).rows : null, [puenteActivo, inConFranq, fxConvCF]);
+  const egFxCF = useMemo(() => puenteActivo ? traducirFilasUSD(egConSueldos, fxConvCF).rows : null, [puenteActivo, egConSueldos, fxConvCF]);
+  const puenteData = useMemo(() => {
+    if (!puenteActivo || !inFxCF || !egFxCF) return null;
+    // Estados transitorios de carga (intercoData/filas aún llegando) pueden dejar entradas a medio computar →
+    // devolvemos null (el tab muestra el estado vacío) en vez de tirar. Cuando la data está completa, renderiza.
+    try {
+      // Resultado del Grupo es invariante Con/Sin IVA → sinIvaArg no cambia el arranque; usamos true.
+      const hold = holdingDe(year, { inR: inFxCF, egR: egFxCF, fx: fxConvCF, moneda: monedaCFView, sinIvaArg: true });
+      const resGrupo = hold.sub.resGrupo, capex = hold.sub.capex, resFinal = hold.sub.resFinal;
+      const cf = computeCashFlow({ rawMovs, rawIn, rawEg, ccMap, nucleoEmpresas, selSoc: cfSel, year, moneda: monedaCFView, fx: fxConvCF, tarjetaIds, cuentasBancarias });
+      // Financiación (préstamos + anticipos + aportes) e internos salen del CF directo (caja no-resultado). El
+      // resto de la brecha devengado↔caja (capital de trabajo: cobros/pagos/inventario pendientes; timing de
+      // sueldos/impuestos; retenciones; diferencias de perímetro) va a UNA línea residual que cierra la ecuación.
+      // v1 deliberado: en vez de un split CxC/CxP/anticipos ruidoso (aperturas + FX sobre stocks), una sola línea
+      // legible = "por qué el resultado todavía no es caja". El split fino queda para una iteración.
+      const financiacion = cf.actTot.financiacion.slice();
+      const internos = cf.actTot.internos.slice();
+      const capTrabajo = MESES.map((_, m) => cf.flujoNeto[m] - (resFinal[m] + financiacion[m] + internos[m]));
+      return { activeMonths: cf.activeMonths, resGrupo, capex, resFinal, financiacion, internos, capTrabajo, flujoNeto: cf.flujoNeto, saldoFinal: cf.saldoFinal };
+    } catch { return null; }
+  }, [puenteActivo, year, inFxCF, egFxCF, fxConvCF, monedaCFView, rawMovs, rawIn, rawEg, ccMap, nucleoEmpresas, cfSel, tarjetaIds, cuentasBancarias]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Apertura por sede (reporte "Composición de Ingresos"): resultado final de cada sede del núcleo AR, para
   // abrir la línea "Sedes Propias Argentina". La fila de reconciliación (en el builder) cierra contra `sar`.
@@ -3789,7 +3898,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       {activeTab !== "cxp_prov" && activeTab !== "cxc_cli" && !((activeTab === "interco_matriz" || activeTab === "interco") && intercoDrilling) && (
       <PageHeader
         title={curTab?.label ?? "Reporte"}
-        subtitle={(isPnlTiempo || isBigg || isVentasHQ || activeTab === "cxp_prov" || activeTab === "cxc_cli") ? undefined : (activeTab === "interco_matriz" || activeTab === "interco") ? curTab?.desc : curLente?.label}
+        subtitle={(isPnlTiempo || isBigg || isVentasHQ || activeTab === "cxp_prov" || activeTab === "cxc_cli" || activeTab === "consolidado") ? undefined : (activeTab === "interco_matriz" || activeTab === "interco") ? curTab?.desc : curLente?.label}
         back={
           <button onClick={() => setActiveTab(null)} style={{
             display: "inline-flex", alignItems: "center", gap: 6,
@@ -3958,16 +4067,57 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
           </div>
         )}
 
-        {/* Moneda — CF */}
+        {/* Moneda — CF (mismos modos consolidados que el P&L: U$D · TC Real / U$D · Constante) */}
+        {showMonedaCF && (
+          <div>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 700, color: T.muted,
+              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>
+              Moneda
+              {fxModeCF === "const" && (
+                <span className="nb-tip" style={{ fontSize: 12, lineHeight: 1 }}>
+                  {fxConstFaltaCF ? "⚠️" : "🔒"}
+                  <span className="nb-tip-box">
+                    {fxConstFaltaCF
+                      ? `Falta el tipo de cambio de ${MESES[anchorMesCF]} ${year} (mes ancla del modo constante). Cargalo en Maestros (nb_tipos_cambio).`
+                      : `U$D constante — todo valuado al TC de ${MESES[anchorMesCF]} ${year} (comparable, sin efecto cambiario).`}
+                  </span>
+                </span>
+              )}
+            </label>
+            <select value={monedaCF} onChange={e => setMonedaCF(e.target.value)} style={selStyle}>
+              <optgroup label="Monedas">
+                {Object.entries(MONEDA_SYM).map(([k, v]) => (
+                  <option key={k} value={k}>{v} {k}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Consolidado">
+                <option value="USD_REAL">U$D · TC Real</option>
+                <option value="USD_CONST">U$D · Constante</option>
+              </optgroup>
+            </select>
+          </div>
+        )}
+
+        {/* Vista — CF: directo (por actividad de caja) | indirecto (puente Resultado → Caja) */}
         {showMonedaCF && (
           <div>
             <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
-              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Moneda</label>
-            <select value={monedaCF} onChange={e => setMonedaCF(e.target.value)} style={selStyle}>
-              {Object.entries(MONEDA_SYM).map(([k, v]) => (
-                <option key={k} value={k}>{v} {k}</option>
-              ))}
-            </select>
+              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Vista</label>
+            <div style={{ display: "inline-flex", gap: 2, background: "#f3f4f6", borderRadius: 9, padding: 3 }}>
+              {[{ id: "directo", label: "Directo" }, { id: "puente", label: "Resultado → Caja" }].map(o => {
+                const active = cfVista === o.id;
+                return (
+                  <button key={o.id} onClick={() => setCfVista(o.id)} style={{
+                    background: active ? T.accentDark : "transparent", border: "none", borderRadius: 7,
+                    color: active ? T.accent : T.muted, fontFamily: T.font, fontSize: 12.5,
+                    fontWeight: active ? 800 : 600, padding: "6px 14px", cursor: "pointer", transition: "all .15s ease" }}
+                    onMouseEnter={e => { if (!active) e.currentTarget.style.background = "#e5e7eb"; }}
+                    onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}>
+                    {o.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -4122,9 +4272,12 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       )}
 
       {/* ── Cash Flow ── */}
-      {activeTab === "cf" && (
+      {activeTab === "cf" && cfVista === "directo" && (
         <TabCashFlow rawMovs={rawMovs} rawIn={rawIn} rawEg={rawEg} ccMap={ccMap} nucleoEmpresas={nucleoEmpresas}
-          selSoc={cfSel} year={year} moneda={monedaCF} tarjetaIds={tarjetaIds} cuentasBancarias={cuentasBancarias} />
+          selSoc={cfSel} year={year} moneda={monedaCFView} fx={fxConvCF} tarjetaIds={tarjetaIds} cuentasBancarias={cuentasBancarias} />
+      )}
+      {activeTab === "cf" && cfVista === "puente" && (
+        <TabPuenteCaja data={puenteData} moneda={monedaCFView} />
       )}
 
       {activeTab === "balance" && (
