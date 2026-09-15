@@ -14,7 +14,7 @@ const MESES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov"
 // Grilla de carga. El orden de acá es el que ve el usuario; el de la hoja no importa
 // (todo se lee/escribe por nombre de header).
 const CAMPOS = [
-  { key:"arsUSD", label:"ARS / U$D", placeholder:"ej. 1560" },
+  { key:"arsUSD", label:"ARS / U$D (MEP)", placeholder:"ej. 1560" },
   { key:"eurUSD", label:"€ / U$D",   placeholder:"ej. 1.15" },
   { key:"copUSD", label:"COP / U$D", placeholder:"ej. 3450" },
   { key:"uyuUSD", label:"UYU / U$D", placeholder:"ej. 40"   },
@@ -118,9 +118,9 @@ export default function TabTiposCambio() {
         ? hoy.toISOString().slice(0, 10)
         : new Date(year, month + 1, 0).toISOString().slice(0, 10);
 
-      const [blueRes, eurRes, clpRes, dolarapiRes, curApiRes] = await Promise.allSettled([
-        // ARS blue — historial completo, se filtra por mes
-        fetch("https://api.argentinadatos.com/v1/cotizaciones/dolares/blue").then(r => r.json()),
+      const [mepRes, eurRes, clpRes, dolarapiRes, curApiRes] = await Promise.allSettled([
+        // ARS MEP (dólar bolsa) — historial completo, se filtra por mes
+        fetch("https://api.argentinadatos.com/v1/cotizaciones/dolares/bolsa").then(r => r.json()),
         // EUR/USD — histórico diario (BCE vía frankfurter)
         esFuturo ? Promise.resolve(null)
                  : fetch(`https://api.frankfurter.dev/v1/${startDate}..${endDate}?from=USD&to=EUR`).then(r => r.json()),
@@ -143,15 +143,15 @@ export default function TabTiposCambio() {
         recs.filter(r => r[dateKey]?.startsWith(ym))
             .sort((a, b) => b[dateKey].localeCompare(a[dateKey]))[0] ?? null;
 
-      // ARS blue
+      // ARS MEP (dólar bolsa)
       let arsUSD, arsLabel = "cotización de hoy";
-      if (blueRes.status === "fulfilled" && Array.isArray(blueRes.value)) {
-        const rec = ultimoDelMes(blueRes.value.filter(r => r.venta > 0));
-        if (rec) { arsUSD = Math.round(rec.venta); arsLabel = `ult. día hábil (${rec.fecha.slice(0, 10)})`; }
+      if (mepRes.status === "fulfilled" && Array.isArray(mepRes.value)) {
+        const rec = ultimoDelMes(mepRes.value.filter(r => r.venta > 0));
+        if (rec) { arsUSD = Math.round(rec.venta); arsLabel = `MEP ult. día hábil (${rec.fecha.slice(0, 10)})`; }
       }
       if (!arsUSD) {
-        const b = await fetch("https://dolarapi.com/v1/dolares/blue").then(r => r.json()).catch(() => null);
-        arsUSD = b?.venta;
+        const b = await fetch("https://dolarapi.com/v1/dolares/bolsa").then(r => r.json()).catch(() => null);
+        if (b?.venta) { arsUSD = Math.round(b.venta); arsLabel = "MEP cotización de hoy"; }
       }
 
       // EUR/USD (frankfurter da EUR por USD → invertir)
@@ -306,7 +306,7 @@ export default function TabTiposCambio() {
             )}
           </div>
           <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-            <span style={{ fontSize:10, color:T.dim }}>último día hábil del mes · todas las monedas</span>
+            <span style={{ fontSize:10, color:T.dim }}>último día hábil del mes · ARS = dólar MEP · todas las monedas</span>
             <button onClick={traerTasas} disabled={fetching || guardando} style={{
               fontSize:12, padding:"6px 14px", borderRadius:999, fontFamily:T.font, fontWeight:700,
               cursor: fetching || guardando ? "default" : "pointer",
