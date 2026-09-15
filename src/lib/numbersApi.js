@@ -3069,7 +3069,7 @@ function _finRowToCuota(r) {
 /** Agrupa las filas planas (una por cuota) en planes con su cronograma + derivados.
  *  `pagadoPorCuota` (opcional) = { "<plan_id>#<nro>": montoPagado } derivado de los movimientos
  *  (origen "cuota") → habilita PAGO PARCIAL: saldo por cuota = total − pagado, estado "parcial". */
-export function agruparPlanes(rows = [], pagadoPorCuota = {}) {
+export function agruparPlanes(rows = [], pagadoPorCuota = {}, pagosPorCuota = {}) {
   const map = new Map();
   for (const r of rows) {
     const key = r.plan_id;
@@ -3104,7 +3104,10 @@ export function agruparPlanes(rows = [], pagadoPorCuota = {}) {
     // "cancelada" (aunque no haya movimiento con ref) para no regresionar cierres viejos; sobre las
     // "pendiente" se aplica el pago parcial derivado de los movimientos.
     for (const c of p.cuotas) {
-      const pagado = pagadoPorCuota[`${p.plan_id}#${c.nro_cuota}`] || 0;
+      const cuotaKey = `${p.plan_id}#${c.nro_cuota}`;
+      const pagado = pagadoPorCuota[cuotaKey] || 0;
+      // Pagos individuales con fecha (para el saldo as-of por corte, ver finAsOf en tesoreriaDerive).
+      c.pagos = pagosPorCuota[cuotaKey] || [];
       c.pagado = pagado;
       if (c.estado === "pagada" || c.estado === "cancelada") { c.saldoCuota = 0; continue; }
       c.saldoCuota = Math.max(0, (Number(c.total) || 0) - pagado);
@@ -3138,7 +3141,10 @@ export async function fetchFinanciaciones(sociedad) {
     get("nb_financiaciones", sociedad ? { sociedad } : {}),
     get("nb_movimientos", sociedad ? { sociedad } : {}).catch(() => []),
   ]);
-  const pagadoPorCuota = {};
+  // Pagos por cuota CON FECHA (no solo el total): el saldo a una fecha pasada (as-of, ver finAsOf)
+  // necesita saber cuánto estaba pagado a ESE corte. Un pago parcial no setea fecha_pago en la cuota,
+  // así que sin esto su reducción "se filtraba" a meses anteriores al pago (deuda subvaluada al 31/mes).
+  const pagosPorCuota = {};
   for (const m of (Array.isArray(movs) ? movs : [])) {
     if (String(m.origen || "") !== "cuota") continue;
     const ref = String(m.origen_id || m.documento_id || "");
@@ -3146,9 +3152,14 @@ export async function fetchFinanciaciones(sociedad) {
     // La clave es `<plan_id>#<nro>` y plan_id ya trae "FIN-". Movimientos viejos quedaron con
     // el prefijo duplicado ("FIN-FIN-…"); lo colapsamos para que ambos formatos matcheen.
     const key = ref.startsWith("FIN-FIN-") ? ref.slice(4) : ref;
-    pagadoPorCuota[key] = (pagadoPorCuota[key] || 0) + Math.abs(Number(m.monto) || 0);
+    (pagosPorCuota[key] ||= []).push({ fecha: String(m.fecha || ""), monto: Math.abs(Number(m.monto) || 0) });
   }
-  return agruparPlanes(rows, pagadoPorCuota);
+  // Total pagado por cuota (estado corriente); la lista fechada va aparte para el saldo as-of.
+  const pagadoPorCuota = {};
+  for (const key of Object.keys(pagosPorCuota)) {
+    pagadoPorCuota[key] = pagosPorCuota[key].reduce((s, p) => s + p.monto, 0);
+  }
+  return agruparPlanes(rows, pagadoPorCuota, pagosPorCuota);
 }
 
 // Ledger (extracto) del PASIVO de financiaciones de un bucket (plan_afip / prestamo) en una moneda:

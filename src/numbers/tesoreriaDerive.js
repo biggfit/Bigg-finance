@@ -247,10 +247,23 @@ export function derivarSaldos({
       ? financiaciones
           .filter(f => (f.fecha_consolidacion ?? "") <= corte)
           .map(f => ({ ...f, saldo: (f.cuotas ?? []).reduce((s, c) => {
-            if ((c.fecha_pago ?? "") > corte) return s + (Number(c.capital) || 0);        // pagada tras el corte → debía el capital
-            if (c.estado === "pagada" || c.estado === "cancelada") return s;               // saldada al corte
-            return s + (Number(c.total) > 0 ? c.capital * (c.saldoCuota / c.total)          // pendiente/parcial → capital remanente
-                        : (c.saldoCuota > 0.5 ? c.capital : 0));
+            const capital = Number(c.capital) || 0;
+            const total   = Number(c.total) > 0 ? Number(c.total) : capital;
+            // Pagado HASTA el corte, por FECHA de cada pago parcial. Un parcial no setea `fecha_pago` en la
+            // cuota → antes su reducción se aplicaba en todos los cortes (deuda subvaluada al 31 de meses
+            // ANTERIORES al pago). Con `c.pagos` fechado (ver agruparPlanes/fetchFinanciaciones) el remanente
+            // al corte es exacto: préstamos a empleados que se pagan de a poco quedan bien mes a mes.
+            let pagadoAsOf;
+            if (Array.isArray(c.pagos) && c.pagos.length) {
+              pagadoAsOf = c.pagos.reduce((a, p) => (String(p.fecha ?? "") <= corte ? a + (Number(p.monto) || 0) : a), 0);
+            } else if (c.estado === "pagada" || c.estado === "cancelada") {
+              // Cierre manual sin movimiento de pago (legacy): usar fecha_pago; sin fecha → saldada al corte.
+              pagadoAsOf = (!c.fecha_pago || String(c.fecha_pago) <= corte) ? total : 0;
+            } else {
+              pagadoAsOf = 0;   // sin pagos → capital entero adeudado
+            }
+            const remanenteTotal = Math.max(0, total - pagadoAsOf);
+            return s + (total > 0 ? capital * (remanenteTotal / total) : (remanenteTotal > 0.5 ? capital : 0));
           }, 0) }))
       : financiaciones;
     const b = financiacionPasivoBuckets(finAsOf, sociedad);
