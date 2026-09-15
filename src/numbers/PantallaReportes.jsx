@@ -3471,9 +3471,15 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     () => ccs.find(c => (c.grupo ?? "").toLowerCase() === "hq" && normCat(c.categoria_pnl) === "ventas")?.id ?? "",
     [ccs]
   );
+  // Solo las franquicias contabilizadas con una sociedad DEL NÚCLEO entran al P&L BIGG. Las emitidas por
+  // una fondeada (ej. la Pauta / interusos genéricos contabilizados con `wellness` = Gestión Deportiva y
+  // Wellness / España) son resultado de ESA sociedad, no del núcleo → van a su propio P&L, no acá. Se rutean
+  // todas al mismo centro "HQ Ventas", así que el filtro correcto es por la SOCIEDAD del emisor, no por centro.
   const franqRows = useMemo(
-    () => franquiciasIngresoPnLRows(rawFranq, "", ventasCcId).map(r => ({ ...r, _tipo: "Franquicia" })),
-    [rawFranq, ventasCcId]
+    () => franquiciasIngresoPnLRows(rawFranq, "", ventasCcId)
+      .filter(r => nucleoEmpresas.has(r.sociedad))
+      .map(r => ({ ...r, _tipo: "Franquicia" })),
+    [rawFranq, ventasCcId, nucleoEmpresas]
   );
   const inConFranq = useMemo(() => [...rawIn, ...franqRows, ...histIn], [rawIn, franqRows, histIn]);
 
