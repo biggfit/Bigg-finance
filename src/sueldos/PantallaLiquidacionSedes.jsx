@@ -1586,9 +1586,7 @@ function PasoFijos({ rowsFijos, legajos, sedes, originalRows, novsByRowKey, upda
               <HeaderFilter label="Centro de costo" minWidth={110} options={sedesDisp} selected={fSede}
                 onToggle={toggleEnSet(setFSede)} onSetAll={arr => setFSede(new Set(arr))}
                 onSort={() => toggleSort("sede_nombre")} sortDir={sortKey === "sede_nombre" ? sortDir : undefined} />
-              <th style={TH({ width: 100, textAlign: "right" })}>Sueldo M-1</th>
               {thSort("sueldo_base",  "Sueldo actual", { width: 110, textAlign: "right" })}
-              <th style={TH({ width: 60, textAlign: "right" })} title="Variación M-1 vs sueldo actual">↑ %</th>
               <th style={TH({ width: 90, textAlign: "right", borderLeft: `1px solid ${T.border}` })}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4 }}>
                   <span title="Aumento en %">↑ %</span>
@@ -1608,7 +1606,7 @@ function PasoFijos({ rowsFijos, legajos, sedes, originalRows, novsByRowKey, upda
           <tbody>
             {sortedFijos.length === 0 ? (
               <tr>
-                <td colSpan={10} style={{ padding: "24px 10px", textAlign: "center", color: T.dim, fontSize: 12 }}>
+                <td colSpan={8} style={{ padding: "24px 10px", textAlign: "center", color: T.dim, fontSize: 12 }}>
                   Sin empleados de sueldo fijo. Agregá filas abajo.
                 </td>
               </tr>
@@ -1619,19 +1617,13 @@ function PasoFijos({ rowsFijos, legajos, sedes, originalRows, novsByRowKey, upda
               const subio   = nuevo > base;
               const pctDer  = base ? Math.round((nuevo / base - 1) * 100 * 10) / 10 : 0;
               const pct     = pctRaw[row._id] ?? (pctDer ? String(pctDer) : "");
-              const sueldoM1 = 0;   // placeholder hasta leer la liquidación cerrada de M-1
-              const pctM1    = sueldoM1 ? (base - sueldoM1) / sueldoM1 * 100 : null;
               return (
                 <tr key={row._id} style={{ background: bucketBg(row, i % 2 === 0 ? T.card : T.bg), borderBottom: `1px solid ${T.border}`, borderTop: sedeCambia(sortedFijos, i) ? "2px solid #94a3b8" : undefined }}>
                   <td style={{ padding: "5px 8px", fontWeight: 800 }}>{row.legajo_nombre}<NovChip novs={novsByRowKey[rowKeyDe(row.legajo_id, row.sede_id)]} /></td>
                   <td style={{ padding: "5px 8px", color: T.muted, fontSize: 11 }}>{row.rol}</td>
                   <td style={{ padding: "5px 8px", color: T.muted }}>{row.sede_nombre || "—"}</td>
-                  <td style={{ padding: "5px 8px", textAlign: "right", color: T.dim }}>{fmtMoney(sueldoM1)}</td>
                   <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700, color: T.blue }}>
                     {fmtMoney(base)}
-                  </td>
-                  <td style={{ padding: "5px 8px", textAlign: "right", fontSize: 11, color: pctM1 == null ? T.dim : pctM1 > 0 ? T.green : pctM1 < 0 ? T.red : T.dim }}>
-                    {pctM1 == null ? "—" : `${pctM1 > 0 ? "↑" : pctM1 < 0 ? "↓" : ""} ${Math.abs(pctM1).toFixed(1)}%`}
                   </td>
                   <td style={{ padding: "4px 6px", borderLeft: `1px solid ${T.border}` }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 3, justifyContent: "flex-end" }}>
