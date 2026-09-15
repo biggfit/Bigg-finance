@@ -200,6 +200,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
   const [novedades,     setNovedades]     = useState([]);
   const [sociedades,    setSociedades]    = useState([]);
   const [loading,       setLoading]       = useState(true);
+  const [pagosListos,   setPagosListos]   = useState(false);  // los pagos llegan en 2ª ola (background) → hasta que estén, los tildes/"parcial" del Paso 3 pueden verse incompletos
   const [loadError,     setLoadError]     = useState(false);  // el fetch esencial (legajos) falló → no confundir con "no hay empleados"
   const [saving,        setSaving]        = useState(false);
   const [progreso,      setProgreso]      = useState("");     // "Guardando 4/10…" durante los updates masivos de legajo
@@ -232,6 +233,18 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
 
   async function load() {
     setLoading(true);
+    setPagosListos(false);   // nuevo mes/año: los pagos se re-piden en la 2ª ola; avisar hasta que lleguen
+
+    // ── OLA 2 arrancada YA, en paralelo con el roster (no después). `fetchPagos` lee la hoja entera
+    // nb_movimientos (~3k filas / 2,4 MB) y es lo más lento; si esperáramos a que termine la OLA 1
+    // para recién pedirla, se serializa y el Paso 3 tarda el doble. Disparándola acá se solapa con
+    // los legajos/liquidaciones → los pagos llegan lo antes posible. No bloquea: se consume abajo.
+    const ola2 = Promise.allSettled([
+      fetchPagos(mes, anio),
+      fetchNovedades(mes, anio),
+      fetchSociedadesNumbers(),
+    ]);
+
     try {
       // ── OLA 1: lo esencial para mostrar el roster (legajos + liquidaciones). allSettled: si una
       // falla transitoriamente bajo carga del GAS, NO blanquea toda la pantalla (bug "vino vacío").
@@ -256,17 +269,17 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
       setLiquidaciones(liqs.filter(l => ROLES_HQ.includes(l.rol)));
     } finally { setLoading(false); }   // el roster ya puede mostrarse; lo demás llega en segundo plano.
 
-    // ── OLA 2: secundario (pagos/novedades/sociedades) en background, sin bloquear la pantalla.
-    Promise.allSettled([
-      fetchPagos(mes, anio),
-      fetchNovedades(mes, anio),
-      fetchSociedadesNumbers(),
-    ]).then(w2 => {
+    // ── OLA 2: consumir lo que ya venía cargando en paralelo (pagos/novedades/sociedades).
+    ola2.then(w2 => {
       const [pags, novs, socs] = w2.map(r => (r.status === "fulfilled" ? r.value : []));
       // Excluir pagos de Sedes (un legajo con liquidación en ambos: el pago de Sedes no es de HQ).
       setPagos(pags.filter(p => p.ambito !== "sedes"));
       setNovedades(novs.filter(n => n.tipo === "extra" && !n.sede_id));
       setSociedades(socs);
+      // Solo apagar el aviso si los pagos entraron DE VERDAD. Si fetchPagos falló (allSettled
+      // no rechaza, devuelve []), dejar el banner puesto — mostrar todo como impago/definitivo
+      // sería engañoso. El usuario recarga y reintenta.
+      if (w2[0].status === "fulfilled") setPagosListos(true);
     });
   }
 
@@ -678,6 +691,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
           {paso === 3 && (
             <PasoPagos
               mes={mes} anio={anio}
+              cargandoPagos={!pagosListos}
               liqStaff={liqStaff} liqOwners={liqOwners} liqExternos={liqExternos}
               onAtras={() => setPaso(2)}
               onRegistrarPago={setShowPago}
@@ -807,26 +821,20 @@ function NovedadesDetalle({ novedades }) {
   if (!novedades?.length)
     return (
       <tr style={{ background: fila, borderBottom: `2px solid ${T.border}` }}>
-        <td colSpan={9} style={TD({ paddingLeft: 34, fontSize: 12, color: T.dim })}>Sin novedades este mes.</td>
+        <td colSpan={7} style={TD({ paddingLeft: 34, fontSize: 12, color: T.dim })}>Sin novedades este mes.</td>
       </tr>
     );
   return (
     <>
       {novedades.map((n, idx) => {
         const montoActual = Number(n.monto) || 0;
-        const montoM1     = 0;   // TODO: leer novedades del mes anterior
-        const variacion   = montoM1 ? (montoActual - montoM1) / montoM1 * 100 : null;
         const ultima      = idx === novedades.length - 1;
         return (
           <tr key={n.id} style={{ background: fila, borderBottom: ultima ? `2px solid ${T.border}` : undefined }}>
             <td style={TD({ paddingLeft: 48, fontSize: 12, color: T.text })}>{n.cuenta_contable_nombre || "—"}</td>
             <td style={TD()} />
             <td style={TD({ fontSize: 12, color: FP_TIPO_COLOR[n.forma_pago] || T.text })}>{FP_TIPO_LABEL[n.forma_pago] || n.forma_pago}</td>
-            <td style={TD({ textAlign: "right", color: T.dim })}>{fmtMoney(montoM1)}</td>
             <td style={TD({ textAlign: "right", fontWeight: 700, color: T.blue })}>{fmtMoney(montoActual)}</td>
-            <td style={TD({ textAlign: "right", fontSize: 12, color: variacion == null ? T.dim : variacion > 0 ? T.green : variacion < 0 ? T.red : T.dim })}>
-              {variacion == null ? "—" : `${variacion > 0 ? "↑" : variacion < 0 ? "↓" : ""} ${Math.abs(variacion).toFixed(1)}%`}
-            </td>
             <td style={TD({ fontSize: 12, color: n.descripcion ? T.muted : T.dim })} colSpan={3}>
               {n.descripcion || "Notas:"}
             </td>
@@ -904,9 +912,7 @@ function PasoSueldos({ liqStaff, liqOwners, liqExternos, sueldosDraft, onChangeD
             <SortTH col="nombre" sortCol={sortCol} sortDir={sortDir} onSort={toggle}>Nombre</SortTH>
             <SortTH col="rol" sortCol={sortCol} sortDir={sortDir} onSort={toggle}>Rol</SortTH>
             <SortTH col="centro" sortCol={sortCol} sortDir={sortDir} onSort={toggle}>Centro de costo</SortTH>
-            <th style={TH({ textAlign: "right" })}>Sueldo M-1</th>
             <SortTH col="actual" sortCol={sortCol} sortDir={sortDir} onSort={toggle} style={{ textAlign: "right" }}>Sueldo actual</SortTH>
-            <th style={TH({ textAlign: "right" })} title="Variación M-1 vs sueldo actual">↑ %</th>
             <th style={TH({ textAlign: "right", borderLeft: `1px solid ${T.border}` })}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 5 }}>
                 <span title="Aumento en %">↑ %</span>
@@ -930,8 +936,6 @@ function PasoSueldos({ liqStaff, liqOwners, liqExternos, sueldosDraft, onChangeD
             const nuevoTotal = d?.total ?? liq.sueldo_total_legajo;
             const subio      = nuevoTotal > liq.sueldo_total_legajo;
             const aumento    = nuevoTotal - liq.sueldo_total_legajo;
-            const sueldoM1   = 0; // TODO: leer liquidación cerrada del mes anterior
-            const pctM1      = sueldoM1 ? (liq.sueldo_total_legajo - sueldoM1) / sueldoM1 * 100 : null;
             const novs       = liq.novedades || [];
             const open       = expandido === liq.legajo_id;
             return (
@@ -964,11 +968,7 @@ function PasoSueldos({ liqStaff, liqOwners, liqExternos, sueldosDraft, onChangeD
                 </td>
                 <td style={TD({ color: T.muted, fontSize: 12 })}>{liq.rol}</td>
                 <td style={TD({ color: T.muted, fontSize: 12 })}>{liq.sede_nombre || liq.sede_id || "—"}</td>
-                <td style={TD({ textAlign: "right", color: T.dim })}>{fmtMoney(sueldoM1)}</td>
                 <td style={TD({ textAlign: "right", fontWeight: 700, color: T.blue })}>{fmtMoney(liq.sueldo_total_legajo)}</td>
-                <td style={TD({ textAlign: "right", fontSize: 12, color: pctM1 == null ? T.dim : pctM1 > 0 ? T.green : pctM1 < 0 ? T.red : T.dim })}>
-                  {pctM1 == null ? "—" : `${pctM1 > 0 ? "↑" : pctM1 < 0 ? "↓" : ""} ${Math.abs(pctM1).toFixed(1)}%`}
-                </td>
                 <td style={TD({ textAlign: "right", borderLeft: `1px solid ${T.border}` })}>
                   <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
                     <input
@@ -1686,7 +1686,7 @@ function describirDestino(l, nombreEmpleado = "") {
   return detalle ? `${base} — ${detalle}` : base;
 }
 
-function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onRegistrarPago, onBatchPaid, onReabrir }) {
+function PasoPagos({ mes, anio, cargandoPagos = false, liqStaff, liqOwners, liqExternos, onAtras, onRegistrarPago, onBatchPaid, onReabrir }) {
   const [anularModal, setAnularModal] = useState(null); // pago object
   const [expandido,   setExpandido]   = useState(null); // legajo_id desplegado
   const [batchModal,  setBatchModal]  = useState(null); // { tipo }
@@ -1773,6 +1773,20 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onReg
         Desplegá una fila para pagar cada destino por separado, eligiendo el origen del dinero al pagar. Nada queda cerrado hasta que pagás.
       </p>
 
+      {cargandoPagos && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, marginBottom: 14,
+          background: "#fffbeb", border: `1px solid ${T.yellow}`, borderRadius: 8,
+          padding: "8px 12px", fontSize: 12, color: "#92400e",
+        }}>
+          <span>⏳</span>
+          <span>
+            Cargando pagos… hasta que terminen de llegar, los tildes, los importes de <strong>Pagado/Pendiente</strong>
+            {" "}y las marcas de “parcial” pueden verse incompletos. Esperá unos segundos o recargá.
+          </span>
+        </div>
+      )}
+
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
@@ -1786,7 +1800,9 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onReg
                   <th key={c.id} style={TH({ textAlign: "right" })}>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
                       {c.label}
-                      {hayAlgo && (todoPagado
+                      {hayAlgo && (cargandoPagos
+                        ? <span title="Cargando pagos…" style={{ fontSize: 11, color: T.dim }}>·</span>
+                        : todoPagado
                         ? <span title="Todos pagados" style={{ fontSize: 11, color: T.green, fontWeight: 700 }}>✓</span>
                         : <button onClick={() => setBatchModal({ tipo: c.id })} title={`Imputar ${c.label} en masa`}
                             style={{ background: T.green, color: "#fff", border: "none", borderRadius: 4, padding: "1px 6px", fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: T.font }}>✓</button>
@@ -1832,7 +1848,7 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onReg
                           🔒
                         </button>
                       ) : <EstadoBadge estado={liq.estado} />}
-                      {hayParcial && <span title="Tiene un pago parcial pendiente"
+                      {!cargandoPagos && hayParcial && <span title="Tiene un pago parcial pendiente"
                         style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: T.yellow, background: "#fefce8", border: `1px solid ${T.yellow}`, borderRadius: 4, padding: "1px 5px" }}>◐ parcial</span>}
                     </td>
                     <td style={TD({ textAlign: "right", fontWeight: 700, color: T.blue })}>{fmtMoney(liq.total_liquidacion)}</td>
@@ -1842,10 +1858,14 @@ function PasoPagos({ mes, anio, liqStaff, liqOwners, liqExternos, onAtras, onReg
                       if (!monto) return <td key={c.id} style={TD({ textAlign: "right", color: T.dim })}>—</td>;
                       const color = st === "full" ? T.green : st === "partial" ? T.yellow : FP_TIPO_COLOR[c.id] || T.text;
                       return (
-                        <td key={c.id} style={TD({ textAlign: "right", color })}>
+                        <td key={c.id} style={TD({ textAlign: "right", color: cargandoPagos ? FP_TIPO_COLOR[c.id] || T.text : color })}>
                           {fmtMoney(monto)}
-                          {st === "full"    && <span style={{ marginLeft: 4, fontWeight: 700 }}>✓</span>}
-                          {st === "partial" && <span style={{ marginLeft: 4, fontSize: 10, fontWeight: 700 }}>parc.</span>}
+                          {cargandoPagos
+                            ? <span title="Cargando pagos…" style={{ marginLeft: 4, fontSize: 10, color: T.dim }}>·</span>
+                            : <>
+                                {st === "full"    && <span style={{ marginLeft: 4, fontWeight: 700 }}>✓</span>}
+                                {st === "partial" && <span style={{ marginLeft: 4, fontSize: 10, fontWeight: 700 }}>parc.</span>}
+                              </>}
                         </td>
                       );
                     })}
