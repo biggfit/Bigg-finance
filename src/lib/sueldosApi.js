@@ -866,14 +866,19 @@ function _pagosDeMovs(rows, { mes, anio } = {}) {
     .map(parsePagoFromMov);
 }
 
+// `origen: "sueldos"` = filtro SERVER-SIDE: el GAS devuelve solo las ~400 filas de sueldo en vez de la
+// hoja nb_movimientos entera (~3k filas / 2,4 MB, engordada por las líneas de extracto de conciliación).
+// Una sola clave de caché (sin mes/anio) sirve a todos los meses; el corte por mes/anio queda en cliente.
+const PAGOS_SUELDO_Q = { origen: "sueldos" };
+
 export async function fetchPagos(mes, anio) {
-  const rows = await get("nb_movimientos", {}, BASE_NB);
+  const rows = await get("nb_movimientos", PAGOS_SUELDO_Q, BASE_NB);
   return _pagosDeMovs(rows, { mes, anio });
 }
 
 // Pagos de sueldo (para la cuenta por pagar de sueldos en el Balance). Sin `anio` → todos.
 export async function fetchPagosAnio(anio) {
-  const rows = await get("nb_movimientos", {}, BASE_NB);
+  const rows = await get("nb_movimientos", PAGOS_SUELDO_Q, BASE_NB);
   return _pagosDeMovs(rows, anio != null ? { anio } : {});
 }
 
