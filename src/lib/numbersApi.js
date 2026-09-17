@@ -700,12 +700,18 @@ async function _imputarVariasDesdeExtracto(mov, partes, appendFn) {
 export const pagarFacturasDesdeExtracto  = (mov, partes) => _imputarVariasDesdeExtracto(mov, partes, appendPago);
 export const cobrarFacturasDesdeExtracto = (mov, partes) => _imputarVariasDesdeExtracto(mov, partes, appendCobro);
 
-/** Saldo pendiente de un documento. Usa Math.abs porque PAGOs tienen monto negativo. */
-export function calcSaldoPendiente(totalDoc, pagos = []) {
+/** Saldo NETO de un documento, SIN piso: > 0 pendiente · < 0 pagado/cobrado DE MÁS (crédito a favor contra la
+ *  contraparte: doble vínculo, línea del banco mayor a la factura). Usa Math.abs porque PAGOs tienen monto negativo.
+ *  Redondeo a centavos: evita que un residuo de milésimas (total ×1,21 con float) deje la factura colgada en
+ *  "A Pagar $0,00" y nunca cierre. */
+export function calcSaldoNeto(totalDoc, pagos = []) {
   const totalPagado = pagos.reduce((s, p) => s + Math.abs(Number(p.monto) || 0), 0);
-  // Redondeo a centavos: evita que un residuo de milésimas (total ×1,21 con float) deje la
-  // factura colgada en "A Pagar $0,00" y nunca cierre.
-  return Math.max(0, round2(round2(totalDoc) - round2(totalPagado)));
+  return round2(round2(totalDoc) - round2(totalPagado));
+}
+/** Saldo pendiente de un documento (piso 0). Para ver un sobrepago usar calcSaldoNeto (18/9/2026: el piso escondía
+ *  en Compras/CxP/PN lo pagado de más → Tesorería lo lleva ahora al activo "Pagos a cuenta a proveedores"). */
+export function calcSaldoPendiente(totalDoc, pagos = []) {
+  return Math.max(0, calcSaldoNeto(totalDoc, pagos));
 }
 
 function _hoy() {
@@ -3368,9 +3374,21 @@ export function generarCuotas({ capital_original, n_cuotas, tasaMensual = 0, iva
  * (+capital) vía appendMovTesoreria — entra a Cash Flow/saldo pero NO al P&L (documento_id
  * = plan_id, no "CONTAB-"). Plan AFIP no tiene alta de caja (el capital es el impuesto).
  */
+export const FIN_APERTURA_FECHA = "2026-06-30";
 export async function appendFinanciacion({ tipo = "plan_afip", nro_plan = "", acreedor_id = "", acreedor_nombre = "", acreedor_cuit = "", sociedad, moneda = "ARS", fecha_consolidacion, es_apertura = false, comprobante_origen = "", cuenta_capital = "", centro_capital = "", cuenta_interes = "", centro_interes = "", cuenta_iva = "", centro_iva = "", cuenta_impuestos = "", centro_impuestos = "", cuenta_bancaria = "", nota = "", cuotas = [] }) {
   const plan_id    = newId("FIN");
   const created_at = new Date().toISOString();
+
+  // APERTURA (regla Martín 18/9/2026): un plan/préstamo "vivo al go-live" es pasivo de la APERTURA → el balance
+  // lo toma al 30/6 aunque AFIP lo haya consolidado después (deuda pre go-live, ej. IVA 04/05-2026 consolidado
+  // en jul/ago). Fechado en su consolidación real entraba al pasivo ese mes sin contrapartida y rompía el
+  // cierre P&L↔ΔPN. `fecha_consolidacion` es la fecha de alta del pasivo para derivarSaldos; la de AFIP queda
+  // en la nota. Las cuotas conservan sus vencimientos (el interés se devenga igual).
+  const fechaReal = String(fecha_consolidacion || "").slice(0, 10);
+  if (es_apertura && fechaReal > FIN_APERTURA_FECHA) {
+    nota = [nota, `consolidación real ${fechaReal}`].filter(Boolean).join(" · ");
+    fecha_consolidacion = FIN_APERTURA_FECHA;
+  }
 
   if (tipo === "prestamo" && !es_apertura && cuenta_bancaria) {
     const capital_total = cuotas.reduce((s, c) => s + (Number(c.capital) || 0), 0);

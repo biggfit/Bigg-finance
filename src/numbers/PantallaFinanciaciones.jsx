@@ -583,8 +583,13 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
         <div style={{ gridColumn: "1 / -1" }}>
           <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: T.text, cursor: "pointer" }}>
             <input type="checkbox" checked={h.es_apertura} onChange={e => set("es_apertura", e.target.checked)} />
-            Apertura (plan vivo al go-live): el capital ya está contabilizado afuera → no impacta el P&L; solo carga el pasivo remanente + cuotas vigentes
+            Apertura (deuda anterior al go-live): el capital ya está contabilizado afuera → no impacta el P&L; solo carga el pasivo remanente + cuotas vigentes
           </label>
+          {h.es_apertura && h.fecha_consolidacion > "2026-06-30" && (
+            <div style={{ marginTop: 6, fontSize: 11, color: T.muted, lineHeight: 1.5 }}>
+              El pasivo se fecha al <b>30/06/2026</b> (apertura), no al {h.fecha_consolidacion}: la fecha de consolidación real queda anotada en la nota y las cuotas conservan sus vencimientos.
+            </div>
+          )}
         </div>
         <div style={{ gridColumn: "1 / -1" }}>
           <Field label="Nota"><input value={h.nota} onChange={e => set("nota", e.target.value)} style={inputStyle} /></Field>

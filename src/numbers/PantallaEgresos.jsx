@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import { T, ESTADO_EGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn, MoneyField } from "./theme";
 import ConfirmModal from "./ConfirmModal";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
-import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, updateMovTesoreria, borrarPagoImputado, shortId, appendProveedor, appendCuenta, aplicarRetencionPracticada, RETDEP_TAG } from "../lib/numbersApi";
+import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcSaldoNeto, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, updateMovTesoreria, borrarPagoImputado, shortId, appendProveedor, appendCuenta, aplicarRetencionPracticada, RETDEP_TAG } from "../lib/numbersApi";
 
 // Una factura admite UNA sola retención practicada: se detecta por sus líneas de neteo
 // (tipo=PAGO origen="retencion_practicada" / tag RETDEP) ya vinculadas al comprobante.
@@ -660,8 +660,8 @@ function CtaCteModal({ proveedor, documentos, onClose }) {
                       <td style={{ padding:"9px 14px", fontSize:13, fontFamily:"var(--mono)",
                         fontWeight:700, color:T.green, textAlign:"right" }}>{fmtMoney(pagado, d.moneda)}</td>
                       <td style={{ padding:"9px 14px", fontSize:13, fontFamily:"var(--mono)",
-                        fontWeight:700, color: pendiente>0 ? T.orange : T.green, textAlign:"right" }}>
-                        {fmtMoney(pendiente, d.moneda)}
+                        fontWeight:700, color: pendiente>0 ? T.orange : (d.saldoNeto??0) < -0.005 ? T.blue : T.green, textAlign:"right" }}>
+                        {(d.saldoNeto??0) < -0.005 ? `-${fmtMoney(d.saldoNeto, d.moneda)}` : fmtMoney(pendiente, d.moneda)}
                       </td>
                       <td style={{ padding:"9px 14px" }}>
                         <Badge estado={d.estado} cfg={ESTADO_EGRESO} />
@@ -849,7 +849,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
       const enriched  = docs.map(doc => {
         const docPagos = pagosDocs.filter(p => p.documento_id === doc.id);
         const saldo    = calcSaldoPendiente(doc.total, docPagos);
-        return { ...doc, importe: Number(doc.total) || 0, saldoPendiente: saldo,
+        return { ...doc, importe: Number(doc.total) || 0, saldoPendiente: saldo, saldoNeto: calcSaldoNeto(doc.total, docPagos),
                  pagosVinculados: docPagos, estado: calcEstadoEgreso(saldo, doc.total, doc.vto) };
       });
       setEgresos(enriched);
@@ -1214,8 +1214,9 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
                     {fmtMoney(e.pagosVinculados?.reduce((s,p)=>s+Math.abs(Number(p.monto)||0),0)??0, e.moneda)}
                   </td>
                   <td style={{ padding:"10px 14px", fontSize:13, fontFamily:"var(--mono)",
-                    fontWeight:700, color: (e.saldoPendiente??0)>0 ? T.orange : T.green, textAlign:"right", whiteSpace:"nowrap" }}>
-                    {fmtMoney(e.saldoPendiente??0, e.moneda)}
+                    fontWeight:700, color: (e.saldoPendiente??0)>0 ? T.orange : (e.saldoNeto??0) < -0.005 ? T.blue : T.green, textAlign:"right", whiteSpace:"nowrap" }}
+                    title={(e.saldoNeto??0) < -0.005 ? "Se pagó más que el comprobante: crédito a favor contra la contraparte (revisá los pagos vinculados)" : undefined}>
+                    {(e.saldoNeto??0) < -0.005 ? `-${fmtMoney(e.saldoNeto, e.moneda)}` : fmtMoney(e.saldoPendiente??0, e.moneda)}
                   </td>
                   <td style={{ padding:"10px 14px" }}>
                     {[...new Set((e.pagosVinculados??[]).map(p=>p.cuenta_bancaria).filter(Boolean))].map(id => (

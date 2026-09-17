@@ -1057,12 +1057,22 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       if (fr.split) { const sum = fr.split.reduce((s, p) => s + (Number(p.monto) || 0), 0); return fr.split.every(p => p.franquicia_id) && Math.abs(sum - total) <= 0.01; }
       return !!fr.franquiciaSel && !!fr.frTipoSel;
     }
-    if (modoFCde(mov)) return !!fcIdDe(mov);
+    if (modoFCde(mov)) {
+      const fcId = fcIdDe(mov); if (!fcId) return false;
+      // La línea del banco NO puede superar el saldo de la factura (18/9/2026): el exceso salía de caja sin CxP ni
+      // P&L y desaparecía del PN. Misma regla que AgregarPagoModal. Salidas: "Imputar a varias facturas…" (repartir)
+      // o "Cargar factura nueva…" (falta el comprobante).
+      const fc = facturasPendientes.find(f => String(f.id) === String(fcId));
+      return !fc || total <= (Number(fc.saldo) || 0) + 0.01;
+    }
     if (modoCobroDe(mov)) {
-      if (!cobIdDe(mov)) return false;
+      const cobId = cobIdDe(mov); if (!cobId) return false;
       const rets = edits[mov.id]?.rets || [];
       if (rets.some(r => (Number(r.monto) || 0) > 0 && !r.cuenta)) return false;   // falta cuenta en una retención
-      return true;
+      // depósito + retenciones no pueden superar el saldo de la factura de venta (simétrico al pago).
+      const v = ventasPendientes.find(x => String(x.id) === String(cobId));
+      const retSum = rets.reduce((s, r) => s + (Number(r.monto) || 0), 0);
+      return !v || total + retSum <= (Number(v.saldo) || 0) + 0.01;
     }
     const cs = cuotaState(mov);
     if (cs.es) return !!cs.cuotaSel;
@@ -2025,18 +2035,26 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                         <div>
                           <span style={{ fontSize: 11, fontWeight: 700, color: "#0ea5e9" }}>Pago de factura</span>
                           {fcSelObj
-                            ? <div style={{ fontSize: 10, color: total + 0.01 < fcSelObj.saldo ? "#b45309" : T.muted }}>
-                                {fcSelObj.proveedor} · {total + 0.01 < fcSelObj.saldo ? `parcial: $${fmt(total)} de $${fmt(fcSelObj.saldo)} (queda $${fmt(fcSelObj.saldo - total)})` : `saldo $${fmt(fcSelObj.saldo)}`}
-                              </div>
+                            ? (total > fcSelObj.saldo + 0.01
+                              ? <div style={{ fontSize: 10, color: "#dc2626", fontWeight: 700 }}>
+                                  {fcSelObj.proveedor} · {`supera el saldo de la factura: $${fmt(total)} contra $${fmt(fcSelObj.saldo)} (+$${fmt(total - fcSelObj.saldo)})`} — repartila con "Imputar a varias facturas…" o cargá la factura que falta (⋯)
+                                </div>
+                              : <div style={{ fontSize: 10, color: total + 0.01 < fcSelObj.saldo ? "#b45309" : T.muted }}>
+                                  {fcSelObj.proveedor} · {total + 0.01 < fcSelObj.saldo ? `parcial: $${fmt(total)} de $${fmt(fcSelObj.saldo)} (queda $${fmt(fcSelObj.saldo - total)})` : `saldo $${fmt(fcSelObj.saldo)}`}
+                                </div>)
                             : <div style={{ fontSize: 10, color: "#b45309" }}>{!fcProvSel ? "elegí proveedor" : fcDelProv.length ? "elegí factura" : "sin factura cargada — cargala o gasto directo (⋯)"}</div>}
                         </div>
                       ) : modoCobro ? (
                         <div>
                           <span style={{ fontSize: 11, fontWeight: 700, color: "#0ea5e9" }}>Cobro de venta</span>
                           {cobSelObj
-                            ? <div style={{ fontSize: 10, color: cobDiff > 0.01 ? "#b45309" : T.muted }}>
-                                {cobSelObj.cliente} · {cobDiff > 0.01 ? `dep $${fmt(total)}${cobRetSum > 0 ? ` + ret $${fmt(cobRetSum)}` : ""} de $${fmt(cobSelObj.saldo)}` : `saldo $${fmt(cobSelObj.saldo)}`}
-                              </div>
+                            ? (total + cobRetSum > cobSelObj.saldo + 0.01
+                              ? <div style={{ fontSize: 10, color: "#dc2626", fontWeight: 700 }}>
+                                  {cobSelObj.cliente} · {`supera el saldo de la factura: $${fmt(total + cobRetSum)} contra $${fmt(cobSelObj.saldo)} (+$${fmt(total + cobRetSum - cobSelObj.saldo)})`} — repartilo con "Imputar a varias facturas…" o cargá la factura que falta (⋯)
+                                </div>
+                              : <div style={{ fontSize: 10, color: cobDiff > 0.01 ? "#b45309" : T.muted }}>
+                                  {cobSelObj.cliente} · {cobDiff > 0.01 ? `dep $${fmt(total)}${cobRetSum > 0 ? ` + ret $${fmt(cobRetSum)}` : ""} de $${fmt(cobSelObj.saldo)}` : `saldo $${fmt(cobSelObj.saldo)}`}
+                                </div>)
                             : <div style={{ fontSize: 10, color: "#b45309" }}>{!cobCliSel ? "elegí cliente" : venDelCli.length ? "elegí factura" : "sin factura de venta — cargala o volvé a normal (⋯)"}</div>}
                         </div>
                       ) : modoCuota ? (

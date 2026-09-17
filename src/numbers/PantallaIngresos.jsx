@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import { T, ESTADO_INGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn, MoneyField } from "./theme";
 import ConfirmModal from "./ConfirmModal";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
-import { fetchIngresos, appendIngreso, deleteIngreso, updateIngreso, appendCobro, fetchPagosCobros, calcSaldoPendiente, calcEstadoIngreso, fetchClientes, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, updateMovTesoreria, borrarPagoImputado, shortId, agruparAnticipos, cobrarContraAnticipo, appendRetenciones, appendCliente, appendCuenta } from "../lib/numbersApi";
+import { fetchIngresos, appendIngreso, deleteIngreso, updateIngreso, appendCobro, fetchPagosCobros, calcSaldoPendiente, calcSaldoNeto, calcEstadoIngreso, fetchClientes, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, updateMovTesoreria, borrarPagoImputado, shortId, agruparAnticipos, cobrarContraAnticipo, appendRetenciones, appendCliente, appendCuenta } from "../lib/numbersApi";
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 import { makeResolveCC, makeResolveCB, byNombre, makeCrearMaestro, stripForDuplicate } from "./formUtils";
 import NuevoIngresoModal from "./NuevoIngresoModal";
@@ -638,8 +638,8 @@ function CtaCteModal({ cliente, documentos, onClose }) {
                       <td style={{ padding:"9px 14px", fontSize:13, fontFamily:"var(--mono)",
                         fontWeight:700, color:T.green, textAlign:"right" }}>{fmtMoney(cobrado, d.moneda)}</td>
                       <td style={{ padding:"9px 14px", fontSize:13, fontFamily:"var(--mono)",
-                        fontWeight:700, color: pendiente>0 ? T.orange : T.green, textAlign:"right" }}>
-                        {fmtMoney(pendiente, d.moneda)}
+                        fontWeight:700, color: pendiente>0 ? T.orange : (d.saldoNeto??0) < -0.005 ? T.blue : T.green, textAlign:"right" }}>
+                        {(d.saldoNeto??0) < -0.005 ? `-${fmtMoney(d.saldoNeto, d.moneda)}` : fmtMoney(pendiente, d.moneda)}
                       </td>
                       <td style={{ padding:"9px 14px" }}>
                         <Badge estado={d.estado} cfg={ESTADO_INGRESO} />
@@ -784,7 +784,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
       const enriched = docs.map(doc => {
         const docCobros = cobros.filter(c => c.documento_id === doc.id);
         const saldo     = calcSaldoPendiente(doc.total, docCobros);
-        return { ...doc, importe: Number(doc.total) || 0, saldoPendiente: saldo,
+        return { ...doc, importe: Number(doc.total) || 0, saldoPendiente: saldo, saldoNeto: calcSaldoNeto(doc.total, docCobros),
                  pagosVinculados: docCobros, estado: calcEstadoIngreso(saldo, doc.total, doc.vto) };
       });
       setIngresos(enriched);
@@ -1130,8 +1130,9 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
                     {fmtMoney(e.pagosVinculados?.reduce((s,p)=>s+(Number(p.monto)||0),0)??0, e.moneda)}
                   </td>
                   <td style={{ padding:"10px 14px", fontSize:13, fontFamily:"var(--mono)",
-                    fontWeight:700, color: (e.saldoPendiente??0)>0 ? T.orange : T.green, textAlign:"right", whiteSpace:"nowrap" }}>
-                    {fmtMoney(e.saldoPendiente??0, e.moneda)}
+                    fontWeight:700, color: (e.saldoPendiente??0)>0 ? T.orange : (e.saldoNeto??0) < -0.005 ? T.blue : T.green, textAlign:"right", whiteSpace:"nowrap" }}
+                    title={(e.saldoNeto??0) < -0.005 ? "Se pagó más que el comprobante: crédito a favor contra la contraparte (revisá los pagos vinculados)" : undefined}>
+                    {(e.saldoNeto??0) < -0.005 ? `-${fmtMoney(e.saldoNeto, e.moneda)}` : fmtMoney(e.saldoPendiente??0, e.moneda)}
                   </td>
                   <td style={{ padding:"10px 14px" }}>
                     {[...new Set((e.pagosVinculados??[]).map(p=>p.cuenta_bancaria).filter(Boolean))].map(id => (
