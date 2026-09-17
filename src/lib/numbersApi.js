@@ -5,7 +5,7 @@
 
 import { stamp, firma } from "./auth";
 import { bustToken, forzarRefresco } from "./cacheBust";
-import { fetchLegajos } from "./sueldosApi";   // solo lectura (mapa legajo→sociedad para interco de sueldos)
+import { fetchLegajos, fetchLiquidacionesCerradas, devengadoPorFormaYSociedad, sociedadDeFormaPago } from "./sueldosApi";   // solo lectura (interco de sueldos por devengado)
 
 const CONFIGURED = !!import.meta.env.VITE_NUMBERS_API_URL;
 const TOKEN      = import.meta.env.VITE_SHEETS_TOKEN;   // mismo token
@@ -2417,7 +2417,7 @@ export const deleteIntercompania = _deleteMovRows;
 // ── LECTURA intercompañía (el corazón del módulo — LECTURA, no escribe) ──────────
 // Trae TODO lo necesario para leer lo intercompany (todas las sociedades).
 export async function fetchIntercoData() {
-  const [movs, comps, centros, clientes, sociedades, cuentasBancarias, cuentas, legajos] = await Promise.all([
+  const [movs, comps, centros, clientes, sociedades, cuentasBancarias, cuentas, legajos, liqs] = await Promise.all([
     get("nb_movimientos", {}).catch(() => []),
     get("nb_comprobantes", {}).catch(() => []),
     get("nb_centros_costo", {}).catch(() => []),
@@ -2426,6 +2426,7 @@ export async function fetchIntercoData() {
     get("nb_cuentas_bancarias", {}).catch(() => []),   // para resolver cuenta_destino → nombre en el ledger interco
     get("nb_cuentas", {}).catch(() => []),             // para resolver cuenta_contable (id CUENTA_/CTA-) → nombre
     fetchLegajos().catch(() => []),   // para derivar la interco de sueldos (legajo → sociedad empleadora)
+    fetchLiquidacionesCerradas().catch(() => []),   // devengado de sueldos → interco por DEVENGADO (fuente 6)
   ]);
   // Mapa legajo → sociedad empleadora: cuando la caja que paga un sueldo (mov.sociedad) ≠ la sociedad
   // del legajo, hubo fondeo cross-society (ej. Beta paga el efectivo de un coach de Segui). lecturaInterco lo lee.
@@ -2442,6 +2443,7 @@ export async function fetchIntercoData() {
     cuentasBancarias: Array.isArray(cuentasBancarias) ? cuentasBancarias : [],
     cuentas:    Array.isArray(cuentas) ? cuentas : [],
     legajoSoc,
+    liqsSueldos: Array.isArray(liqs) ? liqs : [],   // liquidaciones CERRADAS (todas las sociedades)
   };
 }
 
@@ -2573,7 +2575,63 @@ export async function revertirInterusoGestion(movId) {
 //      directos / conciliación contabilizada en nb_movimientos)
 //   2. Préstamos/transferencias del núcleo (pares INTERCOMPANIA).
 // Si `sociedad` viene → solo las posiciones de esa sociedad (mirada propia).
-export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades = [], legajoSoc = {} } = {}, { sociedad = null, corte = null } = {}) {
+// ── Interco de SUELDOS por DEVENGADO (decisión de Martín 17/9/2026): el costo pertenece al CENTRO (empresa del
+// centro); el legajo solo dice en qué sociedad está dado de alta el empleado. Dos hechos dejan posición (quien
+// asume/pone la plata = acreedor), mismo criterio que la fuente 1a (comprobantes por fecha de devengado):
+//   (a) DEVENGADO: liquidación CERRADA con una forma cuya sociedad es A (efectivo/depósito → Beta; haberes → la del
+//       legajo; monotributo → la elegida) imputada a un centro cuya empresa es B ≠ A → A acreedor de B, fechado el
+//       último día del mes liquidado (la misma fecha con la que entra al P&L). Antes iba POR PAGADO y por sociedad
+//       del LEGAJO: dejaba un mes de timing entre P&L y ΔPN (el gasto en julio, la deuda en agosto) y perdía a los
+//       coaches de OTRA sociedad del núcleo con horas en una sede externa (Beta pagaba → núcleo↔núcleo → nada).
+//   (b) PAGO POR CUENTA AJENA: un mov de sueldo (origen sueldos, tipo SUELDO) pagado desde la caja de P para un
+//       componente cuyo devengado pertenece a D ≠ P → P acreedor de D (P canceló la deuda de D con el coach). Si D
+//       es la misma caja que paga (lo normal: Beta paga el efectivo que devengó Beta) no hay posición.
+//   núcleo↔núcleo nunca deja posición (Beta = pool del núcleo). Sin datos de anillo no se arriesgan posiciones.
+// Devuelve [{ A, B, fecha, moneda, monto(>0), tipo, concepto, prov, cuenta, centro, ref, refKind }].
+function _sueldosIntercoEventos({ liqsSueldos = [], movs = [], centros = [], sociedades = [], legajoSoc = {} } = {}) {
+  const nucleo = new Set((sociedades || []).filter(s => /n[úu]cleo/i.test(String(s.anillo || ""))).map(s => String(s.id).toLowerCase()));
+  if (!nucleo.size) return [];
+  const lc = x => String(x || "").trim().toLowerCase();
+  const empresaDe    = new Map((centros || []).map(c => [lc(c.id), lc(c.empresa)]));
+  const nombreCentro = new Map((centros || []).map(c => [lc(c.id), c.nombre || c.id]));
+  const norm = x => { const v = lc(x); return v === "b" ? "beta" : v; };   // alias beta↔b (ver sueldosApi.normSoc)
+  const out = [];
+  const push = (A, B, fecha, moneda, monto, meta) => {
+    A = norm(A); B = norm(B);
+    if (!A || !B || A === B || !(monto >= 0.01)) return;
+    if (nucleo.has(A) && nucleo.has(B)) return;
+    out.push({ A, B, fecha: String(fecha || ""), moneda: moneda || "ARS", monto, ...meta });
+  };
+  // (a) devengado por liquidación cerrada, imputado al centro (sede) de la liquidación
+  const monoSocDe = new Map();   // `${legajo}|${anio}-${mes}` → sociedad_monotributo (para resolver D en (b))
+  for (const liq of (liqsSueldos || [])) {
+    const mes = Number(liq.mes) || 0, anio = Number(liq.anio) || 0;
+    if (!mes || !anio) continue;
+    const ultimo = new Date(anio, mes, 0).getDate();
+    const fecha = `${anio}-${String(mes).padStart(2, "0")}-${String(ultimo).padStart(2, "0")}`;
+    if (liq.sociedad_monotributo) monoSocDe.set(`${liq.legajo_id}|${anio}-${mes}`, liq.sociedad_monotributo);
+    const B = empresaDe.get(lc(liq.sede_id)); if (!B) continue;   // sede sin empresa → no hay a quién cobrarle
+    const nombre = liq.legajo_nombre || liq.legajo_id || "";
+    for (const d of devengadoPorFormaYSociedad(liq))
+      push(d.sociedad, B, fecha, "ARS", Number(d.total) || 0, {
+        tipo: "Sueldo", concepto: `Sueldo devengado ${nombre} ${String(mes).padStart(2, "0")}/${anio}`.replace(/\s+/g, " ").trim(),
+        prov: nombre, cuenta: d.cuenta_contable || "Sueldos", centro: nombreCentro.get(lc(liq.sede_id)) || "", ref: liq.id || "", refKind: "liq",
+      });
+  }
+  // (b) pago desde la caja de una sociedad distinta a la del devengado de ese componente
+  for (const m of (movs || [])) {
+    if (m.origen !== "sueldos" || String(m.tipo || "").toUpperCase() !== "SUELDO" || esIgnorado(m)) continue;
+    const legSoc = legajoSoc[String(m.legajo_id || "")] || "";
+    const mono   = monoSocDe.get(`${m.legajo_id}|${Number(m.anio) || 0}-${Number(m.mes) || 0}`) || "";
+    const D = sociedadDeFormaPago(m.tipo_componente || "haberes", mono, legSoc);
+    push(m.sociedad, D, m.fecha, m.moneda, Math.abs(toNum(m.monto)), {
+      tipo: "Sueldo", concepto: `Sueldo ${m.legajo_nombre || ""} pagado por cuenta ajena`.replace(/\s+/g, " ").trim(),
+      prov: m.legajo_nombre || "", cuenta: "Sueldos", centro: nombreCentro.get(lc(m.centro_costo)) || "", ref: m.documento_id || m.id || "", refKind: "mov",
+    });
+  }
+  return out;
+}
+export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades = [], legajoSoc = {}, liqsSueldos = [] } = {}, { sociedad = null, corte = null } = {}) {
   // As-of opcional: la posición interco a una fecha = solo los movimientos/comprobantes hasta el corte
   // (aperturas incluidas, fechadas al go-live). Sin corte → todo (idéntico a hoy). Habilita Balance/EEPN.
   if (corte) {
@@ -2669,21 +2727,13 @@ export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades
     add(A, B, m.moneda || "ARS", +mm);
     add(B, A, m.moneda || "ARS", -mm);
   }
-  // 6. SUELDOS pagados por cuenta de otra sociedad (fondeo POR PAGADO, no devengado). La caja que
-  //    pagó (m.sociedad) frenteó el sueldo de un legajo cuya sociedad empleadora es otra → fondeo.
-  //    Ej.: Beta paga el efectivo de un coach de Segui → Beta acreedor / Segui deudor. Los haberes
-  //    tienen m.sociedad = la del legajo → A===B → sin posición (Segui pagó su propio blanco).
-  //    núcleo↔núcleo se saltea (efectivo de un coach del núcleo pagado con Beta = caja negra, no interco).
-  //    Sin datos de anillo no arriesgo posiciones espurias (mismo criterio que la fuente 5).
-  if (nucleo.size) for (const m of movs) {
-    if (m.origen !== "sueldos" || esIgnorado(m)) continue;
-    const A = String(m.sociedad || ""), B = String(legajoSoc[String(m.legajo_id || "")] || "");
-    if (!A || !B || A === B) continue;
-    if (nucleo.has(A) && nucleo.has(B)) continue;   // ambas del núcleo → sin posición
-    const monto = Math.abs(toNum(m.monto));
-    if (monto < 0.01) continue;
-    add(A, B, m.moneda || "ARS", +monto);   // A (la caja que pagó) acreedor
-    add(B, A, m.moneda || "ARS", -monto);   // B (la sociedad empleadora) deudor
+  // 6. SUELDOS por DEVENGADO (liquidación cerrada imputada al centro de otra empresa) + pagos por cuenta
+  //    ajena. Ver _sueldosIntercoEventos. Ej.: el efectivo de un coach en Rosedal devenga en Beta → Beta
+  //    acreedor / Segui deudor el último día del mes (misma fecha que el P&L). As-of: eventos hasta el corte.
+  for (const e of _sueldosIntercoEventos({ liqsSueldos, movs, centros, sociedades, legajoSoc })) {
+    if (corte && e.fecha > corte) continue;
+    add(e.A, e.B, e.moneda, +e.monto);   // A (quien asumió/pagó) acreedor
+    add(e.B, e.A, e.moneda, -e.monto);   // B (dueña del centro / del devengado) deudor
   }
   const soc = sociedad ? String(sociedad).toLowerCase() : null;
   const out = [];
@@ -2766,7 +2816,7 @@ export function fondeoFondeadasMensual({ movs = [], comps = [], centros = [], so
 // Ata al P&L: para una fondeada, Σ tipos (sin Sueldo) = fondeoFondeadasMensual de esa sociedad. USD: pasar `fx`.
 // Devuelve { negocios:[{ negocioId, negocioNombre, anillo, ladoNucleo, tipos:{[tipo]:number[12]}, totalMes }], tipos, totalMes }.
 export const INTERCO_TIPOS = ["Pago", "Transferencia", "Interco parkeada", "Interuso gestión", "Sueldo"];
-export function intercoConsolidadoMensual({ movs = [], comps = [], centros = [], sociedades = [], legajoSoc = {} } = {}, { year = null, desde = null, fx = null } = {}) {
+export function intercoConsolidadoMensual({ movs = [], comps = [], centros = [], sociedades = [], legajoSoc = {}, liqsSueldos = [] } = {}, { year = null, desde = null, fx = null } = {}) {
   const empresaDe  = new Map((centros || []).map(c => [String(c.id), String(c.empresa || "")]));
   const nucleo     = new Set((sociedades || []).filter(s => /n[úu]cleo/i.test(String(s.anillo || ""))).map(s => String(s.id)));
   const socIds     = new Set((sociedades || []).map(s => String(s.id)));   // solo negocios = sociedad real
@@ -2811,8 +2861,9 @@ export function intercoConsolidadoMensual({ movs = [], comps = [], centros = [],
     if (esIgnorado(m)) continue;
     if (m.origen === "interco_park")          rec(m.sociedad, m.contraparte_id, m.fecha, m.moneda, -toNum(m.monto), "Interco parkeada");
     else if (m.origen === "interuso_gestion") rec(m.sociedad, m.contraparte_id, m.fecha, m.moneda, toNum(m.monto),  "Interuso gestión");
-    else if (m.origen === "sueldos")          rec(m.sociedad, legajoSoc[String(m.legajo_id || "")], m.fecha, m.moneda, Math.abs(toNum(m.monto)), "Sueldo");
   }
+  // Sueldos por DEVENGADO + pagos por cuenta ajena (misma fuente 6 que lecturaInterco/intercoLedger).
+  for (const e of _sueldosIntercoEventos({ liqsSueldos, movs, centros, sociedades, legajoSoc })) rec(e.A, e.B, e.fecha, e.moneda, e.monto, "Sueldo");
   const totalMes = new Array(12).fill(0);
   const negocios = Object.entries(acc).map(([id, tipos]) => {
     const tot = new Array(12).fill(0);
@@ -2829,7 +2880,7 @@ export function intercoConsolidadoMensual({ movs = [], comps = [], centros = [],
 // movimiento por fecha con su +/− y saldo corriente, más el saldo de apertura. Mismas reglas y
 // convención de signo que lecturaInterco (quien pone la plata = acreedor) → el saldo final coincide
 // con el `neto` de esa posición. Read-only, no toca datos.
-export function intercoLedger({ movs = [], comps = [], centros = [], sociedades = [], cuentasBancarias = [], cuentas = [], legajoSoc = {} } = {}, { sociedad, contraparte, moneda = "ARS" } = {}) {
+export function intercoLedger({ movs = [], comps = [], centros = [], sociedades = [], cuentasBancarias = [], cuentas = [], legajoSoc = {}, liqsSueldos = [] } = {}, { sociedad, contraparte, moneda = "ARS" } = {}) {
   const S = String(sociedad || "").toLowerCase();
   const C = String(contraparte || "").toLowerCase();
   const empresaDe = new Map((centros || []).map(c => [String(c.id), c.empresa]));
@@ -2913,14 +2964,10 @@ export function intercoLedger({ movs = [], comps = [], centros = [], sociedades 
     const meta = { tipo: "Interuso gestión", cuenta: nc(m.cuenta_contable), centro: cc(m.centro_costo), ref: m.documento_id || m.id || "" };
     pair(A, B, m.moneda, m.fecha, m.concepto || "Interuso gestión", mm, meta);
   }
-  // 6. SUELDOS pagados por cuenta de otra sociedad (por pagado). Espeja la fuente 6 de lecturaInterco.
-  if (nucleo.size) for (const m of movs) {
-    if (m.origen !== "sueldos" || esIgnorado(m)) continue;
-    const A = String(m.sociedad || ""), B = String(legajoSoc[String(m.legajo_id || "")] || "");
-    if (!A || !B || A === B || (nucleo.has(A) && nucleo.has(B))) continue;
-    const monto = Math.abs(toNum(m.monto)); if (monto < 0.01) continue;
-    const meta = { tipo: "Sueldo", prov: m.legajo_nombre || "", cuenta: nc(m.cuenta_contable) || "Sueldos", centro: cc(m.centro_costo), ref: m.documento_id || m.id || "" };
-    pair(A, B, m.moneda, m.fecha, m.concepto || `Sueldo ${m.legajo_nombre || ""}`.trim(), monto, meta);
+  // 6. SUELDOS por DEVENGADO + pagos por cuenta ajena. Espeja la fuente 6 de lecturaInterco (_sueldosIntercoEventos).
+  for (const e of _sueldosIntercoEventos({ liqsSueldos, movs, centros, sociedades, legajoSoc })) {
+    const meta = { tipo: "Sueldo", prov: e.prov, cuenta: nc(e.cuenta) || "Sueldos", centro: e.centro, ref: e.ref, refKind: e.refKind };
+    pair(e.A, e.B, e.moneda, e.fecha, e.concepto, e.monto, meta);
   }
   const key = f => { const s = String(f || ""); if (/^\d{4}-/.test(s)) return s.slice(0, 10); const [d, mm, y] = s.split("/"); return y ? `${y}-${String(mm).padStart(2, "0")}-${String(d).padStart(2, "0")}` : s; };
   entries.sort((a, b) => key(a.fecha).localeCompare(key(b.fecha)));
