@@ -149,8 +149,10 @@ function ModalImputarVarias({ mov, tipo, facturas, onClose, onConfirm }) {
                         <input type="checkbox" checked={on} onChange={() => toggle(f)} />
                       </td>
                       <td style={td}>
-                        <div style={{ fontWeight: 600 }}>{f.nroComp || f.id}</div>
-                        {f.vto && <div style={{ fontSize: 10.5, color: T.muted }}>vto {fmtDate(f.vto)}</div>}
+                        <div style={{ fontWeight: 600 }}>{f.proveedor || f.cliente || f.nroComp || f.id}</div>
+                        <div style={{ fontSize: 10.5, color: T.muted }}>
+                          {[f.cuenta, f.nroComp && `Nº ${f.nroComp}`, f.vto && `vto ${fmtDate(f.vto)}`].filter(Boolean).join(" · ")}
+                        </div>
                       </td>
                       <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmt(f.saldo)}</td>
                       <td style={{ ...td, textAlign: "right" }}>
@@ -1357,7 +1359,9 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     const q = busqueda.trim().toLowerCase();
     if (q) list = list.filter(m =>
       (m.concepto ?? "").toLowerCase().includes(q) || (m.contraparte_nombre ?? "").toLowerCase().includes(q));
-    return list;
+    // Ordenado por fecha, más recientes arriba (descendente) — la ingesta del extracto no garantiza
+    // orden. Se compara en ISO (fechaComprobanteISO tolera DD/MM/YYYY e ISO); copia nueva para no mutar.
+    return [...list].sort((a, b) => fechaComprobanteISO(b.fecha).localeCompare(fechaComprobanteISO(a.fecha)));
   }, [pendCuenta, filtroTipo, busqueda, franquicias, pagosSueldos, cuotasPendientes, edits]);
   const countByCuenta = useMemo(() => {
     const o = {}; pendientes.forEach(m => { o[m.cuenta_bancaria] = (o[m.cuenta_bancaria] || 0) + 1; }); return o;
@@ -2616,20 +2620,24 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                 alert("No se pudo crear la factura: " + (e?.message || e));
                 throw e;   // nada se creó → el modal queda abierto para reintentar
               }
-              try {
-                await imputarPagoFC(mov, {
-                  documento_id: payload.id,
-                  cuenta_contable: payload.cuentaId || payload.cuenta || "",
-                  centro_costo: String(payload.cc || "").split(",")[0].trim(),
-                  proveedor_id: payload.proveedorId || "",
-                  proveedor_nombre: payload.proveedor || "",
-                });
-                setPendientes(prev => prev.filter(x => x.id !== mov.id));   // sale de la bandeja
-              } catch (e) {
-                alert(`La factura ${payload.id} se creó, pero no se pudo vincular el pago automáticamente. Usá "Imputar a factura" en esta misma fila para completarlo. Detalle: ${e?.message || e}`);
-              }
-              fetchEgresos(sociedad).then(e => setEgresos(e || [])).catch(() => {});   // refresca Compras
-              setCargarFacturaFor(null);
+              // Paso 2 OPTIMISTA + EN SEGUNDO PLANO: imputar el pago es 1 write del GAS (~3-4s) que antes
+              // bloqueaba el modal → parecía "congelado" y "no enganchaba". Ahora la línea sale de la
+              // bandeja YA (optimista) y el write corre solo; si falla, se devuelve la línea y se avisa
+              // (la factura ya se creó → "Imputar a factura" a mano). El modal cierra apenas se crea la FC.
+              setPendientes(prev => prev.filter(x => x.id !== mov.id));   // optimista: sale de la bandeja al instante
+              imputarPagoFC(mov, {
+                documento_id: payload.id,
+                cuenta_contable: payload.cuentaId || payload.cuenta || "",
+                centro_costo: String(payload.cc || "").split(",")[0].trim(),
+                proveedor_id: payload.proveedorId || "",
+                proveedor_nombre: payload.proveedor || "",
+              })
+                .catch(e => {
+                  setPendientes(prev => prev.some(x => x.id === mov.id) ? prev : [mov, ...prev]);   // falló → vuelve a la bandeja
+                  alert(`La factura ${payload.id} se creó, pero no se pudo vincular el pago automáticamente. Usá "Imputar a factura" en esta misma fila para completarlo. Detalle: ${e?.message || e}`);
+                })
+                .finally(() => fetchEgresos(sociedad).then(e => setEgresos(e || [])).catch(() => {}));   // refresca Compras
+              // onSave resuelve acá → runSaveThenMaybeClose cierra el modal sin esperar el pago.
             }}
           />
         );
@@ -2675,20 +2683,23 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                 alert("No se pudo crear la factura de venta: " + (e?.message || e));
                 throw e;   // nada se creó → el modal queda abierto para reintentar
               }
-              try {
-                await imputarCobroIngreso(mov, {
-                  documento_id: payload.id,
-                  cuenta_contable: payload.cuentaId || payload.cuenta || "",
-                  centro_costo: String(payload.cc || "").split(",")[0].trim(),
-                  cliente_id: payload.clienteId || "", cliente_nombre: payload.cliente || "",
-                  retenciones: [], retencion_centro: centroRetencion,
-                });
-                setPendientes(prev => prev.filter(x => x.id !== mov.id));   // sale de la bandeja
-              } catch (e) {
-                alert(`La factura ${payload.id} se creó, pero no se pudo vincular el cobro automáticamente. Usá "Imputar a factura" en esta misma fila para completarlo. Detalle: ${e?.message || e}`);
-              }
-              fetchIngresos(sociedad).then(i => setIngresos(i || [])).catch(() => {});   // refresca Ventas
-              setCargarIngresoFor(null);
+              // Paso 2 OPTIMISTA + EN SEGUNDO PLANO (espejo de Compras): la línea sale de la bandeja ya y
+              // el cobro se vincula solo; si falla, se devuelve la línea y se avisa. El modal cierra apenas
+              // se crea la factura.
+              setPendientes(prev => prev.filter(x => x.id !== mov.id));   // optimista: sale de la bandeja al instante
+              imputarCobroIngreso(mov, {
+                documento_id: payload.id,
+                cuenta_contable: payload.cuentaId || payload.cuenta || "",
+                centro_costo: String(payload.cc || "").split(",")[0].trim(),
+                cliente_id: payload.clienteId || "", cliente_nombre: payload.cliente || "",
+                retenciones: [], retencion_centro: centroRetencion,
+              })
+                .catch(e => {
+                  setPendientes(prev => prev.some(x => x.id === mov.id) ? prev : [mov, ...prev]);   // falló → vuelve a la bandeja
+                  alert(`La factura ${payload.id} se creó, pero no se pudo vincular el cobro automáticamente. Usá "Imputar a factura" en esta misma fila para completarlo. Detalle: ${e?.message || e}`);
+                })
+                .finally(() => fetchIngresos(sociedad).then(i => setIngresos(i || [])).catch(() => {}));   // refresca Ventas
+              // onSave resuelve acá → runSaveThenMaybeClose cierra el modal sin esperar el cobro.
             }}
           />
         );

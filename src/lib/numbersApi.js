@@ -284,37 +284,35 @@ export async function appendEgreso(egreso) {
   const id_comp    = header.id || newId("EG");
   const created_at = new Date().toISOString();
 
-  for (let i = 0; i < lineas.length; i++) {
-    const l   = lineas[i];
+  // Todas las líneas en UN solo add_batch (ver appendIngreso): antes 1 write del GAS por línea →
+  // el modal se colgaba "creando la FC". El reintento de post deduplica por id → sin duplicados.
+  const rows = lineas.map((l, i) => {
     const sub = round2(Number(l.subtotal) || 0);
     const iva = round2(sub * ((Number(l.ivaRate) || 0) / 100));
-    await post({
-      action: "add",
-      sheet:  "nb_comprobantes",
-      row: {
-        id:                  `${id_comp}-L${pad(i + 1)}`,
-        id_comp,
-        sociedad:            header.sociedad,
-        fecha:               header.fecha,
-        fecha_fiscal:        header.fechaFiscal ?? header.fecha,
-        vto:                 header.vto ?? "",
-        subtipo:             "EGRESO",
-        contraparte_id:      header.proveedorId ?? "",
-        contraparte_nombre:  header.proveedor   ?? "",
-        cuenta_contable:     header.cuenta      ?? "",
-        cuenta_contable_id:  header.cuentaId    ?? "",
-        moneda:              header.moneda ?? "ARS",
-        centro_costo:        l.cc ?? "",
-        subtotal:            sub,
-        iva_rate:            Number(l.ivaRate) || 0,
-        iva_monto:           iva,
-        total:               round2(sub + iva),
-        nro_comp:            header.nroComp ?? "",
-        nota:                header.nota    ?? "",
-        created_at,
-      },
-    });
-  }
+    return {
+      id:                  `${id_comp}-L${pad(i + 1)}`,
+      id_comp,
+      sociedad:            header.sociedad,
+      fecha:               header.fecha,
+      fecha_fiscal:        header.fechaFiscal ?? header.fecha,
+      vto:                 header.vto ?? "",
+      subtipo:             "EGRESO",
+      contraparte_id:      header.proveedorId ?? "",
+      contraparte_nombre:  header.proveedor   ?? "",
+      cuenta_contable:     header.cuenta      ?? "",
+      cuenta_contable_id:  header.cuentaId    ?? "",
+      moneda:              header.moneda ?? "ARS",
+      centro_costo:        l.cc ?? "",
+      subtotal:            sub,
+      iva_rate:            Number(l.ivaRate) || 0,
+      iva_monto:           iva,
+      total:               round2(sub + iva),
+      nro_comp:            header.nroComp ?? "",
+      nota:                header.nota    ?? "",
+      created_at,
+    };
+  });
+  if (rows.length) await post({ action: "add_batch", sheet: "nb_comprobantes", rows });
   return { ok: true, id_comp };
 }
 
@@ -554,37 +552,37 @@ export async function appendIngreso(ingreso) {
   const id_comp    = header.id || newId("IN");
   const created_at = new Date().toISOString();
 
-  for (let i = 0; i < lineas.length; i++) {
-    const l   = lineas[i];
+  // Todas las líneas en UN solo add_batch. Antes era 1 write del GAS POR línea (for + await) → una
+  // FC de 4 líneas eran 4 writes secuenciales (~15s) y el modal se colgaba "creando la FC" (a veces
+  // la escritura ya había entrado en el backend). El reintento de post deduplica por id → un
+  // add_batch reintentado tras una respuesta perdida no duplica.
+  const rows = lineas.map((l, i) => {
     const sub = round2(Number(l.subtotal) || 0);
     const iva = round2(sub * ((Number(l.ivaRate) || 0) / 100));
-    await post({
-      action: "add",
-      sheet:  "nb_comprobantes",
-      row: {
-        id:                  `${id_comp}-L${pad(i + 1)}`,
-        id_comp,
-        sociedad:            header.sociedad,
-        fecha:               header.fecha,
-        fecha_fiscal:        header.fechaFiscal ?? header.fecha,
-        vto:                 header.vto ?? "",
-        subtipo:             "INGRESO",
-        contraparte_id:      header.clienteId ?? "",
-        contraparte_nombre:  header.cliente   ?? "",
-        cuenta_contable:     header.cuenta    ?? "",
-        cuenta_contable_id:  header.cuentaId  ?? "",
-        moneda:              header.moneda ?? "ARS",
-        centro_costo:        l.cc ?? "",
-        subtotal:            sub,
-        iva_rate:            Number(l.ivaRate) || 0,
-        iva_monto:           iva,
-        total:               round2(sub + iva),
-        nro_comp:            header.nroComp ?? "",
-        nota:                header.nota    ?? "",
-        created_at,
-      },
-    });
-  }
+    return {
+      id:                  `${id_comp}-L${pad(i + 1)}`,
+      id_comp,
+      sociedad:            header.sociedad,
+      fecha:               header.fecha,
+      fecha_fiscal:        header.fechaFiscal ?? header.fecha,
+      vto:                 header.vto ?? "",
+      subtipo:             "INGRESO",
+      contraparte_id:      header.clienteId ?? "",
+      contraparte_nombre:  header.cliente   ?? "",
+      cuenta_contable:     header.cuenta    ?? "",
+      cuenta_contable_id:  header.cuentaId  ?? "",
+      moneda:              header.moneda ?? "ARS",
+      centro_costo:        l.cc ?? "",
+      subtotal:            sub,
+      iva_rate:            Number(l.ivaRate) || 0,
+      iva_monto:           iva,
+      total:               round2(sub + iva),
+      nro_comp:            header.nroComp ?? "",
+      nota:                header.nota    ?? "",
+      created_at,
+    };
+  });
+  if (rows.length) await post({ action: "add_batch", sheet: "nb_comprobantes", rows });
   return { ok: true, id_comp };
 }
 
