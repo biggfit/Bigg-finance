@@ -78,9 +78,23 @@ export function derivarSaldos({
   franqData = { comps: {}, saldos: {}, franchises: [] },
   movsFranq = null,   // cobros de franquicia GROUP-WIDE (independientes de la sociedad de la caja); si null → usa `movimientos`
   intercoData = null, sociedadesMap = null,   // si vienen → agrega la posición interco de ESTA sociedad
+  centroSel = null,   // Set de ids de centro (minúsculas) para acotar CxC/CxP por centro; null/vacío = sin filtro
 }) {
   const _soc  = (sociedad ?? "").toLowerCase();
   const corte = fechaCorte || null;
+  // Filtro por centro de costo, SOLO sobre los subledgers que tienen centro (CxC/CxP de comprobantes):
+  // prorratea el saldo por la fracción del comprobante imputada a los centros elegidos (vía sus `lineas`).
+  // Caja/bancos/financiaciones/interco/franquicias/socios/sueldos NO tienen centro → no se tocan.
+  const _ccSet = centroSel && centroSel.size ? centroSel : null;
+  const _ck = s => String(s ?? "").trim().toLowerCase();
+  const fracCentro = (comp) => {
+    if (!_ccSet) return 1;
+    const ls = comp.lineas || [];
+    const tot = ls.reduce((s, l) => s + Math.abs(Number(l.total_linea) || 0), 0);
+    if (!tot) return _ccSet.has(_ck(comp.cc)) ? 1 : 0;   // sin detalle de líneas → cae al alias de centro
+    const sel = ls.reduce((s, l) => s + (_ccSet.has(_ck(l.cc)) ? Math.abs(Number(l.total_linea) || 0) : 0), 0);
+    return sel / tot;
+  };
   // Movimientos hasta la fecha de corte (para saldos as-of de socios/sueldos/anticipos). Sin corte → todos
   // (idéntico a hoy). Habilita el Balance/EEPN a una fecha reusando este mismo motor.
   const movHasta = corte ? movimientos.filter(m => (m.fecha ?? "") <= corte) : movimientos;
@@ -137,7 +151,9 @@ export function derivarSaldos({
     if ((ing.sociedad ?? "").toLowerCase() !== _soc) continue;
     if (corte && (ing.fecha ?? "") > corte) continue;
     const pagosDoc = cobros.filter(c => c.documento_id === ing.id);
-    const saldo    = calcSaldoPendiente(ing.importe, pagosDoc);
+    const fCentro  = fracCentro(ing);
+    if (fCentro === 0) continue;                                   // comprobante fuera de los centros elegidos
+    const saldo    = calcSaldoPendiente(ing.importe, pagosDoc) * fCentro;
     // Contraparte = otra sociedad → CC comercial (no va al bucket por cuenta; se netea aparte).
     if (esContraparteSociedad(ing.clienteId)) {
       if (saldo > 0) accCC(ing.clienteId, ing.moneda ?? "ARS", "cobrar", saldo,
@@ -212,7 +228,9 @@ export function derivarSaldos({
     if ((eg.sociedad ?? "").toLowerCase() !== _soc) continue;
     if (corte && (eg.fecha ?? "") > corte) continue;
     const pagosDoc = pagos.filter(p => p.documento_id === eg.id);
-    const saldo    = calcSaldoPendiente(eg.importe, pagosDoc);
+    const fCentro  = fracCentro(eg);
+    if (fCentro === 0) continue;                                   // comprobante fuera de los centros elegidos
+    const saldo    = calcSaldoPendiente(eg.importe, pagosDoc) * fCentro;
     // Contraparte = otra sociedad → CC comercial (no va al bucket por cuenta; se netea aparte).
     if (esContraparteSociedad(eg.proveedorId)) {
       if (saldo > 0) accCC(eg.proveedorId, eg.moneda ?? "ARS", "pagar", saldo,

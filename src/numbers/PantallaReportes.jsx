@@ -8,19 +8,20 @@ import { franquiciasIngresoPnLRows } from "../lib/franquiciasAdapter";
 import { exportarPackReportes } from "./exportReportes";
 import { copiarReporteComoImagen, clonarParaFoto, medirContenido } from "./fotoReporte";
 import TabTesoreriaConsolidada from "./reportes/TabTesoreriaConsolidada";
+import TabDevengado from "./reportes/TabDevengado";
 import TabIntercoConsolidado from "./reportes/TabIntercoConsolidado";
 import TabSaldosInterco from "./reportes/TabSaldosInterco";
 import TabCxPProveedores from "./reportes/TabCxPProveedores";
 import TabCxCClientes from "./reportes/TabCxCClientes";
 import PantallaSocios from "./PantallaSocios";
 
-const MESES    = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+export const MESES    = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
 const CUR_YEAR = new Date().getFullYear();
 // Desde 2022: España (Wellness) tiene histórico cargado desde Abr 2022 en nb_pnl_historico.
 const PNL_HIST_ANIO_MIN = 2022;
 const YEARS    = Array.from({ length: Math.max(3, CUR_YEAR - PNL_HIST_ANIO_MIN + 1) }, (_, i) => PNL_HIST_ANIO_MIN + i);
 
-function normCat(raw) {
+export function normCat(raw) {
   const s = (raw ?? "").trim().toLowerCase().replace(/\s+/g, "_");
   if (s === "ventas")                                          return "ventas";
   if (s === "costo_venta"  || s.includes("costo")
@@ -40,7 +41,7 @@ function normCat(raw) {
 // Match de id de centro de costo CASE-INSENSITIVE. El maestro tiene ids con caja inconsistente
 // (ej. "CC-2026-88265" vs "cc-2026-88265") y el lookup sensible a mayúsculas hacía que un CECO no
 // resolviera → la fila caía en la línea/bucket equivocado. Normalizar a minúsculas lo evita.
-const ccKey = s => String(s ?? "").trim().toLowerCase();
+export const ccKey = s => String(s ?? "").trim().toLowerCase();
 const ccEnFiltro = (ccFilter, cc) => {
   const k = ccKey(cc);
   return Array.isArray(ccFilter) ? ccFilter.some(f => ccKey(f) === k) : ccKey(ccFilter) === k;
@@ -197,8 +198,8 @@ function computeSubtotals(pnl) {
 }
 
 const rowSum = arr => (arr || []).reduce((s, v) => s + v, 0);
-const fmtN   = n => !n ? "—" : Math.round(Math.abs(n)).toLocaleString("es-AR");
-const fmtSigned = n => !n ? "—" : (n < 0 ? "−" : "") + fmtN(n);   // conserva el signo (fmtN es absoluto)
+export const fmtN   = n => !n ? "—" : Math.round(Math.abs(n)).toLocaleString("es-AR");
+export const fmtSigned = n => !n ? "—" : (n < 0 ? "−" : "") + fmtN(n);   // conserva el signo (fmtN es absoluto)
 // Convención contable. neg=false (ingresos/resultados): positivo normal, negativo (pérdida) entre
 // paréntesis. neg=true (líneas de gasto/que restan): positivo = egreso entre paréntesis, negativo = crédito
 // (ej. Intereses Ganados dentro de Financieros) normal. Siempre se muestra la magnitud.
@@ -207,7 +208,7 @@ const fmtPar = (n, neg = false) => !n ? "—" : (neg ? n > 0 : n < 0) ? `(${fmtN
 // ─── Estilos base ─────────────────────────────────────────────────────────────
 const CTRL_H = 36;
 
-const selStyle = {
+export const selStyle = {
   background: "#eceff3", border: `1px solid ${T.cardBorder}`,
   borderRadius: 8, padding: "0 12px", fontSize: 13, color: T.text,
   fontFamily: T.font, outline: "none", cursor: "pointer", height: CTRL_H,
@@ -2620,6 +2621,8 @@ const TABS = [
   { id: "an_ventas",    label: "Composición de Ingresos", icon: "📈", desc: "Igual que el P&L BIGG hasta Total Ingresos: cada negocio (Sedes AR con apertura por sede / Rosedal / Huergo) y las líneas de HQ." },
   { id: "an_margenes",  label: "Márgenes por negocio", icon: "🧩", wip: true, desc: "Cuánto aporta cada negocio al Margen Bruto del grupo." },
   { id: "an_gastos_cc", label: "Gastos por centro de costo", icon: "🧾", wip: true, desc: "Apertura del gasto por centro de costo y, dentro, por cuenta contable." },
+
+  { id: "devengado",    label: "Devengado (cuenta × mes)", icon: "🧪", desc: "Diagnóstico: devengado crudo por cuenta y mes, filtrable por sociedad/anillo · centro · moneda. Sin fondeo ni traducción de moneda → el Resultado ata contra la variación del PN del balance." },
 ];
 
 // ─── Menú por STORYTELLING (agrupado por la pregunta que uno se hace, no por taxonomía contable) ──
@@ -2631,7 +2634,7 @@ const LENTES = [
   { id: "negocios", label: "Cómo le va a cada negocio",    tabs: ["pl_sede", "op_espana", "op_colombia", "op_rosedal", "op_huergo", "op_puertos"] },
   { id: "flujo",    label: "De dónde sale y a dónde va",   tabs: ["an_gastos_cc"] },
   { id: "detalle",  label: "Buscar el detalle",            tabs: ["inf_egresos", "inf_ingresos"] },
-  { id: "interno",  label: "Interno · fiscal / contable",  tabs: ["er_soc", "interco", "interco_matriz"] },
+  { id: "interno",  label: "Interno · fiscal / contable",  tabs: ["er_soc", "interco", "interco_matriz", "devengado"] },
 ];
 
 
@@ -2677,7 +2680,7 @@ function ReportesMenu({ onPick }) {
 
 // ─── Multi-select con checkboxes (opciones planas o agrupadas · búsqueda opcional) ──
 // selected = Set de values (vacío ⇒ "todos", sin filtro). groups = [{key,label,items:[{value,label}]}].
-function MultiSelect({ label, options = null, groups = null, selected, onChange, searchable = false, allLabel = "Todos", width = 200 }) {
+export function MultiSelect({ label, options = null, groups = null, selected, onChange, searchable = false, allLabel = "Todos", width = 200 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const ref = useRef(null);
@@ -3970,7 +3973,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       )}
 
       {/* ── Toolbar / Filters (Consolidado y los detalles traen su propia barra; los WIP no llevan) ── */}
-      {activeTab !== "consolidado" && activeTab !== "cxp_prov" && activeTab !== "cxc_cli" && !curTab?.wip && activeTab !== "inf_egresos" && activeTab !== "inf_ingresos" && !((activeTab === "interco_matriz" || activeTab === "interco") && intercoDrilling) && (
+      {activeTab !== "consolidado" && activeTab !== "cxp_prov" && activeTab !== "cxc_cli" && !curTab?.wip && activeTab !== "inf_egresos" && activeTab !== "inf_ingresos" && activeTab !== "devengado" && !((activeTab === "interco_matriz" || activeTab === "interco") && intercoDrilling) && (
       <div style={{
         display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap", alignItems: "flex-end",
         background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
@@ -4333,6 +4336,15 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
 
       {activeTab === "consolidado" && (
         <TabTesoreriaConsolidada />
+      )}
+
+      {activeTab === "devengado" && (
+        <TabDevengado
+          inRows={inConFranq} egRows={egConSueldos}
+          cuentaMap={cuentaMap} ccMap={ccMap} ccs={ccs}
+          socGroups={cfSocGroups} nucleoEmpresas={nucleoEmpresas}
+          year={year} setYear={setYear} years={YEARS}
+        />
       )}
 
       {activeTab === "cxp_prov" && (

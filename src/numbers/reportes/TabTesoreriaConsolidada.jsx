@@ -12,8 +12,9 @@ import {
 } from "../../lib/numbersApi";
 import { fetchLiquidacionesCerradas } from "../../lib/sueldosApi";
 import { fetchAll } from "../../lib/sheetsApi";        // Franquicias (read-only)
-import { derivarSaldos, franqFirst, intercoConsolidado } from "../tesoreriaDerive";
+import { derivarSaldos, franqFirst, intercoConsolidado, sociedadNombreMap } from "../tesoreriaDerive";
 import { TabSaldos, TabMovimientos, PaginaAging, PaginaIntercoLedger } from "../PantallaTesoreria";
+import { MultiSelect } from "../PantallaReportes";   // filtro de centro (reusado; solo acota CxC/CxP)
 
 // Fusiona los items de Activo/Pasivo de varias sociedades por label+moneda (suma saldo, une docs).
 function mergeItems(arrays) {
@@ -39,6 +40,7 @@ export default function TabTesoreriaConsolidada() {
   const [socOpen,    setSocOpen]    = useState(false);
   const [activeTab,  setActiveTab]  = useState("saldos");
   const [filtroMoneda, setFiltroMoneda] = useState("ALL");
+  const [centroSel,  setCentroSel]  = useState(new Set());   // ids de centro (minúsc.); vacío = todos. Solo acota CxC/CxP.
   const [fechaCorte,   setFechaCorte]   = useState("");
   const [filtroCuenta, setFiltroCuenta] = useState(null);
   const [filtroRef,    setFiltroRef]    = useState(null);   // "ir al movimiento" desde el extracto interco
@@ -129,10 +131,36 @@ export default function TabTesoreriaConsolidada() {
     [sociedades, socSel]
   );
 
+  // Mapa id→nombre de TODAS las sociedades → `derivarSaldos` reconoce cuando el contraparte de un
+  // comprobante es otra sociedad (no un cliente) y lo separa como CC comercial entre sociedades
+  // (esContraparteSociedad), fuera de los buckets de cliente. Igual que la Tesorería por sociedad.
+  const sociedadesMap = useMemo(() => sociedadNombreMap(sociedades), [sociedades]);
+
+  // Opciones de centro para el filtro (agrupadas por sociedad/empresa, igual que el reporte de Devengado
+  // para poder comparar con los mismos filtros). El valor es el id en minúsculas (lo que espera derivarSaldos).
+  const ccGroups = useMemo(() => {
+    const socName = new Map(sociedades.map(s => [String(s.id), s.nombre || String(s.id)]));
+    // Cascada: solo los CECOs de las sociedades filtradas (por `empresa` del centro). Los HQ/transversales
+    // (sin empresa) siempre entran. Si no hay filtro de sociedad, muestra todos.
+    const selIds = new Set(socsIncluidas.map(s => String(s.id)));
+    const byEmp = new Map();
+    for (const c of (data.centrosCosto || [])) {
+      const emp = (c.empresa ?? "").trim();
+      if (emp && !selIds.has(emp)) continue;
+      if (!byEmp.has(emp)) byEmp.set(emp, []);
+      byEmp.get(emp).push({ value: String(c.id ?? "").trim().toLowerCase(), label: c.nombre || c.id });
+    }
+    return [...byEmp.entries()]
+      .map(([emp, items]) => ({ key: emp || "_", label: socName.get(emp) || emp || "Transversal / HQ",
+        items: items.sort((a, b) => a.label.localeCompare(b.label)) }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [data.centrosCosto, sociedades, socsIncluidas]);
+  const _ccSel = centroSel.size ? centroSel : null;
+
   // ── Derivar por sociedad y consolidar ──
   const { cuentas, aCobrar, aPagar, interco, intercoAct, intercoPas, movimientos } = useMemo(() => {
     const idsSel = new Set(socsIncluidas.map(s => (s.id ?? "").toLowerCase()));
-    const perSoc = socsIncluidas.map(s => derivarSaldos({ ...data, sociedad: s.id, fechaCorte }));
+    const perSoc = socsIncluidas.map(s => derivarSaldos({ ...data, sociedad: s.id, fechaCorte, sociedadesMap, centroSel: _ccSel }));
     // Interco NETEADO a nivel consolidado (núcleo↔núcleo interno se elimina; el resto se muestra).
     const ic = intercoData
       ? intercoConsolidado(intercoData, socsIncluidas.map(s => s.id), sociedades, fechaCorte)
@@ -148,7 +176,7 @@ export default function TabTesoreriaConsolidada() {
       intercoAct: ic.activo, intercoPas: ic.pasivo,   // separados → para el Balance (Activo/Pasivo)
       movimientos: data.movimientos.filter(m => idsSel.has((m.sociedad ?? "").toLowerCase())),
     };
-  }, [data, socsIncluidas, fechaCorte, intercoData, sociedades]);
+  }, [data, socsIncluidas, fechaCorte, intercoData, sociedades, sociedadesMap, _ccSel]);
 
   const monedas = useMemo(() => [...new Set(cuentas.map(c => c.moneda))], [cuentas]);
 
@@ -158,7 +186,7 @@ export default function TabTesoreriaConsolidada() {
     if (activeTab !== "evpn") return null;
     const idsSel = socsIncluidas.map(s => s.id);   // set de sociedades (no depende de la fecha)
     const deriveAsOf = (fecha) => {
-      const perSoc = socsIncluidas.map(s => derivarSaldos({ ...data, sociedad: s.id, fechaCorte: fecha }));
+      const perSoc = socsIncluidas.map(s => derivarSaldos({ ...data, sociedad: s.id, fechaCorte: fecha, sociedadesMap, centroSel: _ccSel }));
       // interco consolidado AS-OF (corta movimientos/comprobantes por la fecha) → evoluciona mes a mes.
       const ic = intercoData ? intercoConsolidado(intercoData, idsSel, sociedades, fecha) : { activo: [], pasivo: [] };
       return {
@@ -191,7 +219,7 @@ export default function TabTesoreriaConsolidada() {
     const corrLabels = uniq(b => b.aPagar, it => esCorriente(it.label));
     const otrosLabels = uniq(b => b.aPagar, it => !esCorriente(it.label));
     return { year, GO, upto, balMes, cambioAcum, cxcLabels, corrLabels, otrosLabels };
-  }, [activeTab, data, socsIncluidas, intercoData, sociedades]);
+  }, [activeTab, data, socsIncluidas, intercoData, sociedades, sociedadesMap, _ccSel]);
 
   const toggleSoc = id => setSocSel(prev => {
     const full = prev.length === 0 ? sociedades.map(s => s.id) : prev;
@@ -324,6 +352,19 @@ export default function TabTesoreriaConsolidada() {
               </button>
             );
           })}
+        </div>
+
+        <div style={{ width: 1, height: 24, background: T.cardBorder, flexShrink: 0 }} />
+
+        {/* Centro de costo — SOLO acota CxC/CxP (caja/bancos/interco/fin no tienen centro). Para comparar
+            el balance con el reporte de Devengado usando el mismo perímetro de centros. */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: ".08em" }}>Centro</span>
+          <MultiSelect groups={ccGroups} selected={centroSel} onChange={setCentroSel} searchable allLabel="Todos" width={200} />
+          {centroSel.size > 0 && (
+            <span title="El filtro de centro solo afecta CxC/CxP; caja/bancos/interco/financiaciones no tienen centro."
+              style={{ fontSize: 15, color: T.muted, cursor: "help" }} aria-hidden>ⓘ</span>
+          )}
         </div>
 
         {/* Fecha corte — solo Saldos/Balance (el EEPN es mensual, no usa corte) */}
@@ -570,19 +611,17 @@ function EEPNView({ eepn, filtroMoneda }) {
   // ── Ajustes NO económicos que se separan de la variación del PN (cada uno: efecto acumulado en `mon`;
   //    la tabla muestra su Δ mensual y lo resta). Convención: `acum(m)` tal que restar su Δ limpia el PN.
   //    · Cambio de moneda: plata movida entre cajas (USD↔ARS) → acum = neto de cambios a fin de mes.
-  //    · Anticipos de clientes: ingreso diferido; el pasivo baja el PN al recibirse y lo sube al consumirse
-  //      (sin caja) → acum = −saldo del pasivo (restar su Δ neutraliza recepción/consumo del anticipo). ─
-  const antBal = m => sumSaldo(bd(m).aPagar, mon, it => it.label === "Anticipos de clientes");
+  //    (Anticipos: con carga correcta —apertura al go-live + consumo matcheado a la factura— cada leg del
+  //     anticipo es PN-neutro, así que NO distorsiona la variación → no se ajusta.)
   const ajustes = [
-    { label: "Cambio de moneda",       acum: m => (cambioAcum?.[m]?.[mon] || 0) },
-    { label: "Anticipos de clientes",  acum: m => -antBal(m) },
+    { label: "Cambio de moneda", acum: m => (cambioAcum?.[m]?.[mon] || 0) },
   ];
 
   return (
     <div className="fade">
       <BalanceTable cols={meses} colLabel={m => _MESES[m]} minBase={320} colW={92}
         getters={{ caja, bancos, cxcTot, activo, corrTot, otrosTot, pasivo, pn }} details={details}
-        showVariacion ajustes={ajustes} ajusteLabel="= Variación sin cambio ni anticipos" />
+        showVariacion ajustes={ajustes} ajusteLabel="= Variación sin cambio de moneda" />
     </div>
   );
 }
