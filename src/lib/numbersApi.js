@@ -814,11 +814,31 @@ export async function updateTransferencia({ salidaId, entradaId, fecha, moneda, 
  * tipo "PAGO_TARJETA" (no TRANSFERENCIA: el Cash Flow no lo filtra; el lado tarjeta se excluye por ser cuenta tipo tarjeta).
  * Si `mov_existente` viene (caso conciliación: la fila del extracto ya es el lado real), se edita esa fila
  * como lado real y solo se crea el lado tarjeta.
+ * EXCESO (decisión de Martín 17/9/2026): la tarjeta en USD se paga por ventanilla y nunca dan vuelto → se paga de
+ * más y el banco lo devuelve pesificado en OTRO resumen. Si lo pagado supera la deuda de la tarjeta a esa fecha,
+ * el exceso se manda a GASTO ("Diferencias tarjeta") el mismo día, como línea de ajuste sobre la cuenta-tarjeta,
+ * y la tarjeta queda en CERO (no arrastra un saldo a favor que después nadie limpia; la devolución, cuando llega
+ * en el resumen, se imputa a la misma cuenta como ingreso). Guardas: solo si la tarjeta TIENE deuda cargada
+ * (si el resumen no se importó todavía, deuda=0 y NO se toca nada) y solo si el exceso es chico (≤ 1% del
+ * pago): un exceso grande es un resumen incompleto, no un redondeo → queda como saldo a favor visible.
  */
+export const CUENTA_DIF_TARJETA = "Diferencias tarjeta";
 export async function pagarTarjeta({ sociedad, fecha, monto, moneda, cuenta_real, tarjeta_id, nota = "", mov_existente = null }) {
   const m    = Math.abs(Number(monto) || 0);
   const pair = newId("PTJ");
   const concepto = nota || "Pago de tarjeta";
+  // Deuda de la tarjeta a la fecha del pago (mismo criterio que Tesorería: Σ movimientos de la cuenta-tarjeta,
+  // sin ignorados) + centro más usado por sus consumos contabilizados (para la línea de ajuste). Lectura cacheada.
+  let deuda = 0, centroAjuste = "";
+  try {
+    const rows = await get("nb_movimientos", { sociedad });
+    const cardMovs = (Array.isArray(rows) ? rows : []).filter(r => String(r.cuenta_bancaria) === String(tarjeta_id)
+      && !esIgnorado(r) && String(r.fecha || "").slice(0, 10) <= String(fecha || "").slice(0, 10) && (!mov_existente || r.id !== mov_existente.id));
+    deuda = Math.max(0, -cardMovs.reduce((s, r) => s + toNum(r.monto), 0));
+    const porCentro = {};
+    for (const r of cardMovs) if (String(r.documento_id || "").startsWith("CONTAB-") && r.centro_costo) porCentro[r.centro_costo] = (porCentro[r.centro_costo] || 0) + 1;
+    centroAjuste = Object.entries(porCentro).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+  } catch { deuda = 0; }
   if (mov_existente) {
     await updateMovTesoreria(mov_existente.id, {
       tipo: "PAGO_TARJETA", origen: "pago_tarjeta", documento_id: pair, concepto,
@@ -827,7 +847,24 @@ export async function pagarTarjeta({ sociedad, fecha, monto, moneda, cuenta_real
     await appendMovTesoreria({ sociedad, fecha, tipo: "PAGO_TARJETA", cuenta_bancaria: cuenta_real, moneda, monto: -m, concepto, origen: "pago_tarjeta", origen_id: pair });
   }
   await appendMovTesoreria({ sociedad, fecha, tipo: "PAGO_TARJETA", cuenta_bancaria: tarjeta_id, moneda, monto: m, concepto, origen: "pago_tarjeta", origen_id: pair });
-  return { ok: true, pair };
+  // Exceso pagado sobre la deuda → gasto el mismo día sobre la cuenta-tarjeta (la deja en cero).
+  const exceso = round2(m - deuda);
+  let ajuste = null;
+  if (deuda > 0 && exceso > 0.005 && exceso <= m * 0.01) {
+    const idAj = newId("TAR");
+    await post({ action: "add", sheet: "nb_movimientos", row: {
+      id: idAj, sociedad, fecha, tipo: "EGRESO_GASTO",
+      cuenta_bancaria: tarjeta_id, cuenta_destino: "",
+      cuenta_contable: CUENTA_DIF_TARJETA, centro_costo: centroAjuste,
+      moneda, monto: -exceso, documento_id: "CONTAB-" + idAj,
+      iva_rate: 0, iva_monto: 0,
+      concepto: `Pago de tarjeta en exceso (redondeo/ventanilla) · ${concepto}`,
+      contraparte_id: "", contraparte_nombre: "",
+      referencia: `ajuste=1;pago=${pair}`, origen: "tarjeta", created_at: new Date().toISOString(),
+    }});
+    ajuste = { id: idAj, exceso, cuenta: CUENTA_DIF_TARJETA, centro: centroAjuste };
+  }
+  return { ok: true, pair, deuda, exceso: ajuste ? exceso : 0, ajuste };
 }
 
 export async function updateMovTesoreria(id, patch) {
@@ -1486,6 +1523,25 @@ export async function ingestarResumenTarjeta({ sociedad, tarjeta = "", periodo =
   // Sin caché, por lo mismo que ingestarExtracto: de esta lista salen el borrado de pendientes y el
   // pool de ya-autorizados. Leer stale = no borrar/no reconocer nada = resumen duplicado.
   const todos = await _fetchRowsRaw("nb_movimientos", { sociedad });
+  // FECHA EFECTIVA de cada consumo (decisión de Martín 17/9/2026): el consumo pega en su fecha (P&L y deuda de la
+  // tarjeta juntos), pero nunca más de UN MES para atrás del período del resumen ni antes del go-live. Las cuotas
+  // vienen con la fecha de la COMPRA original (meses atrás, incluso pre go-live): fechadas así desaparecen del P&L
+  // (corte go-live) y ensucian el saldo de apertura de la tarjeta. Se fechan el 1° del período del resumen, que
+  // es cuando la tarjeta las cobra. Reemplaza al "período contable" manual (que separaba P&L de deuda).
+  const GO_LIVE = "2026-07-01";
+  const pisoDe = (per) => {
+    const m = String(per || "").match(/^(\d{4})-(\d{2})$/); if (!m) return GO_LIVE;
+    const y = Number(m[1]), mo = Number(m[2]) - 1;   // mes anterior al período
+    const prev = mo === 0 ? `${y - 1}-12-01` : `${y}-${String(mo).padStart(2, "0")}-01`;
+    return prev > GO_LIVE ? prev : GO_LIVE;
+  };
+  const piso = pisoDe(periodo);
+  const fechaEfectiva = (f) => {
+    const d = String(f || fecha || "").slice(0, 10);
+    if (!d) return d;
+    if (d >= piso) return d;                                        // dentro del ciclo → fecha real del consumo
+    return periodo ? `${periodo}-01` : (String(fecha || "").slice(0, 10) || d);   // cuota / consumo viejo → 1° del período
+  };
   const cardIds = new Set(lineas.map(l => String(l.cuenta_bancaria)).filter(Boolean));
   // Titulares de ESTA tanda. El reemplazo se limita a ellos porque Amex emite UN RESUMEN POR
   // TITULAR: subir el segundo archivo no puede borrar los consumos que dejó el primero. Galicia
@@ -1528,10 +1584,10 @@ export async function ingestarResumenTarjeta({ sociedad, tarjeta = "", periodo =
     const hit = pool.find(p => !p.used && p.k === `${_normCom(l.comercio)}|${monto}|${mon}`);
     if (hit) { hit.used = true; yaAutorizadas++; continue; }
     // ¿Ya está pendiente en la hoja, idéntico? → no tocar (ni borrar ni re-crear).
-    const ya = existentes.get(claveDe(l.fecha || fecha, _normCom(l.comercio), monto, mon));
+    const ya = existentes.get(claveDe(fechaEfectiva(l.fecha), _normCom(l.comercio), monto, mon));
     if (ya?.length) { ya.shift(); sinCambio++; continue; }
     nuevas.push({
-      id: newId("TAR"), sociedad, fecha: l.fecha || fecha,
+      id: newId("TAR"), sociedad, fecha: fechaEfectiva(l.fecha),
       tipo: "EGRESO", cuenta_bancaria: l.cuenta_bancaria, cuenta_destino: "",
       cuenta_contable: String(l.cuenta_contable || "").replace(/^CUENTA_/, ""),
       centro_costo: l.centro_costo || "",
@@ -1675,10 +1731,9 @@ export async function aceptarMovimiento(mov, prop = {}) {
     contraparte_id:     prop.proveedor_id || "",
     contraparte_nombre: prop.proveedor_nombre || mov.contraparte_nombre || "",
     documento_id:       "CONTAB-" + mov.id,
-    // Período P&L ≠ fecha de caja (ej. nómina devengada el mes anterior al pago) → se empaca en
-    // `referencia` (sin columna nueva; movimientoToPnLRows en Reportes lo lee de ahí). Sin override,
-    // `referencia` queda como estaba (no se pisa la metadata de la regla que clasificó la línea).
-    ...(prop.periodo_contable ? { referencia: `${mov.referencia || ""};periodo=${prop.periodo_contable}` } : {}),
+    // El P&L contabiliza SIEMPRE en la fecha del movimiento (misma fecha que la caja/deuda): sin override de
+    // período. Antes existía `periodo_contable` (empacado en referencia) y separaba P&L de balance → rompía el
+    // cierre del PN (decisión 17/9/2026). El importador de resúmenes ya fecha las cuotas viejas en su período.
     ...firma(),
   }});
 }

@@ -325,6 +325,22 @@ export function derivarSaldos({
       return { label: c.nombre, moneda: c.moneda, saldo: -(Number(c.saldo) || 0), docs, headerColor: "#dc2626" };
     });
 
+  // ── Saldo A FAVOR de tarjetas (saldo positivo: se pagó de más / crédito del banco) → ACTIVO ──
+  // La tarjeta no es banco (queda fuera de caja/bancos) y solo su saldo NEGATIVO va al pasivo; un saldo positivo
+  // desaparecía del PN. Va como crédito a favor, con el detalle de sus movimientos. (pagarTarjeta ya manda a
+  // gasto el exceso chico al pagar; esto cubre cualquier otro caso y mantiene el PN honesto.)
+  const tarjetasActivo = cuentas.filter(c => esCuentaCredito(c) && (Number(c.saldo) || 0) > 0.005)
+    .map(c => {
+      const movsCard = movimientos.filter(m => m.cuenta_bancaria === c.id && !esIgnorado(m)
+        && (!corte || (m.fecha ?? "") <= corte));
+      const docs = movsCard.map(m => ({
+        contraparte: m.concepto || (Number(m.monto) < 0 ? "Consumo" : "Pago"),
+        vto: m.fecha, saldo: (Number(m.monto) || 0), moneda: c.moneda,
+      }));
+      return { label: `Saldo a favor · ${c.nombre}`, moneda: c.moneda, saldo: (Number(c.saldo) || 0), docs, headerColor: "#16a34a" };
+    });
+  if (tarjetasActivo.length) { aCobrar.push(...tarjetasActivo); aCobrar.sort(franqFirst); }
+
   // ── Pasivo combinado ──
   const aPagar = (() => {
     const out = aPagarComp.map(it => ({ ...it }));

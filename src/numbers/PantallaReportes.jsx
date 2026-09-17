@@ -87,14 +87,10 @@ function buildPnL(inRows, egRows, cuentaMap, ccFilter, year, moneda) {
 //     crédito (+) resta (reintegro, ej. Intereses Ganados en "Financieros" → mejora el resultado).
 //   · Retención sufrida: siempre costo (se guarda con monto +) → valor absoluto.
 // Requiere cuentaMap (nombre→cuenta) para leer la categoría de la cuenta.
-// Período contable (P&L) vs fecha de caja: un gasto pagado en un mes puede "pertenecer" a otro
-// (ej. nómina de julio pagada el 3/8) → override opcional embebido en `referencia` (sin columna
-// nueva en la sheet, mismo patrón que el resto de la metadata empacada ahí: cod=/tipo=/regla=…).
-// Cash Flow/Tesorería siguen usando `m.fecha` (la plata se movió ese día); sólo el P&L respeta esto.
-const periodoPnLDe = (m) => {
-  const hit = String(m.referencia ?? "").match(/(?:^|;)periodo=([^;]*)/);
-  return hit && hit[1] ? `${hit[1]}-01` : m.fecha;
-};
+// Período P&L = FECHA del movimiento, siempre (la misma con la que la caja/deuda lo ve). Hasta el 17/9/2026 se
+// respetaba un override `periodo=YYYY-MM` empacado en `referencia` (consumos de tarjeta movidos de mes a mano):
+// separaba el P&L del balance y rompía el cierre del PN. Los tags viejos que quedaron en la hoja se IGNORAN.
+const periodoPnLDe = (m) => m.fecha;
 function movimientoToPnLRows(movs, sociedad, cuentaMap) {
   const soc = (sociedad ?? "").toLowerCase();
   const out = [];
