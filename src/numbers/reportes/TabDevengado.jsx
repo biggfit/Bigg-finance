@@ -49,7 +49,7 @@ function grupoDe(catCuenta, catCentro) {
 // writer desde la óptica de la sede). Los ingresos de `inConFranq` siempre suman (una NC llega negativa → resta).
 const EG_QUE_SUMA = new Set(["Ingreso", "Interuso gestión"]);
 // Aporte al resultado (= a la variación del PN) de una fila. `sinIva` neta el IVA como el P&L (total − iva).
-function pnAmount(row, ladoIngreso, sinIva) {
+export function pnAmount(row, ladoIngreso, sinIva) {
   const v = (Number(row.total) || 0) - (sinIva ? (Number(row.iva_monto) || 0) : 0);
   if (ladoIngreso) return v;                    // ingreso puro: suma (NC = negativo → resta)
   if (EG_QUE_SUMA.has(row._tipo)) return v;     // movimiento-ingreso / interuso de gestión: suma
@@ -76,7 +76,7 @@ function resolveCuenta(row, ladoIngreso, byId, byNombre) {
   return cands.find(c => (ladoIngreso ? esVta(c) : !esVta(c))) || cands[0];
 }
 
-function buildDevengado(inRows, egRows, { cuentaMap, ccMap, year, moneda, socSet, ccSet, sinIva }) {
+export function buildDevengado(inRows, egRows, { cuentaMap, ccMap, year, moneda, socSet, ccSet, sinIva }) {
   // grupo → Map(idCuenta → { id, nombre, meses:number[12] })
   const grupos = Object.fromEntries(GRUPOS.map(g => [g.key, new Map()]));
   const diag = { sinCuenta: 0, sinCentro: 0, sinCuentaMonto: 0, sinCentroMonto: 0 };
@@ -169,6 +169,8 @@ export default function TabDevengado({
 
   // Sociedades: default = núcleo (como el resto de los reportes del grupo).
   const socSel = selSoc ?? new Set(nucleoEmpresas);
+  // DEV-ONLY (diagnóstico puente P&L→ΔPN, descartable — sacar antes de commitear)
+  if (import.meta.env.DEV) window.__pnl = { inRows, egRows, cuentaMap, ccMap, nucleoEmpresas };
 
   // Centros de costo para el filtro, agrupados por sociedad (empresa) para leerlos.
   const ccGroups = useMemo(() => {

@@ -15,6 +15,7 @@ import { fetchAll } from "../../lib/sheetsApi";        // Franquicias (read-only
 import { derivarSaldos, franqFirst, intercoConsolidado, sociedadNombreMap } from "../tesoreriaDerive";
 import { TabSaldos, TabMovimientos, PaginaAging, PaginaIntercoLedger } from "../PantallaTesoreria";
 import { MultiSelect } from "../PantallaReportes";   // filtro de centro (reusado; solo acota CxC/CxP)
+import { buildPuente, printPuente } from "./puenteDerive";   // DEV-ONLY diagnóstico (descartable)
 
 // Fusiona los items de Activo/Pasivo de varias sociedades por label+moneda (suma saldo, une docs).
 function mergeItems(arrays) {
@@ -179,6 +180,8 @@ export default function TabTesoreriaConsolidada() {
   }, [data, socsIncluidas, fechaCorte, intercoData, sociedades, sociedadesMap, _ccSel]);
 
   const monedas = useMemo(() => [...new Set(cuentas.map(c => c.moneda))], [cuentas]);
+  // DEV-ONLY (diagnóstico puente P&L→ΔPN, descartable — sacar antes de commitear)
+  if (import.meta.env.DEV) { window.__consol = { data, intercoData, sociedades }; window.__buildPuente = buildPuente; window.__printPuente = printPuente; }
 
   // ── EEPN = el Balance con MESES en columnas: el balance derivado a fin de cada mes, misma estructura de
   //    líneas (caja/bancos/CxC · corriente/otros/PN), para ver cómo se mueve cada cuenta hasta el PN. ──
