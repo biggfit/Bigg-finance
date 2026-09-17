@@ -28,6 +28,15 @@ function matchRegla(r, linea) {
       const target = normNum(val);
       return [linea.ley2, linea.ley3, linea.ley4].some(t => normNum(t) === target && target);
     }
+    case "num_glosa": {
+      // El número (nº de cuenta/datáfono/terminal) viene dentro de la glosa con
+      // formatos variables (dotted "357.87930-3", "ON 357879303", "9055-56-0016326-56")
+      // y en Caixa cae en ley1/descripcion. Se matchea por DÍGITOS normalizados
+      // buscando la secuencia como subcadena (los nº son largos → sin colisiones).
+      const target = normNum(val);
+      if (!target) return false;
+      return normNum(linea.ley1).includes(target) || normNum(linea.descripcion).includes(target);
+    }
     case "cuit":
       return normNum(val) === normNum(linea.ley2 || linea.cuit);
     case "glosa":
@@ -131,15 +140,21 @@ export function clasificarLinea(linea, reglas, proveedores = [], ctx = {}) {
       // es un cobro contra la factura de ese cliente. Siempre escala (el humano elige la/s FC,
       // los montos varían mes a mes). Espeja a `proveedor_id` (que reconoce proveedor → pago).
       const cliente_id = r.cliente_id || "";
+      const proveedor_id = r.proveedor_id || "";
+      // Una regla que solo reconoce el PROVEEDOR por la glosa (sin fijar cuenta contable) NO es un
+      // gasto directo: el débito está respaldado por una factura → escala a "elegí la FC de este
+      // proveedor" (la cuenta y el centro salen del comprobante, no de la regla). Solo auto-postea
+      // cuando la regla trae cuenta fija (comisiones/impuestos/gastos bancarios sin factura).
+      const escalaProveedor = proveedor_id && !r.cuenta_contable;
       return {
         regla_id: r.id,
-        tipo: r.tipo || (cliente_id ? "cobro_cliente" : ""),
+        tipo: r.tipo || (cliente_id ? "cobro_cliente" : (escalaProveedor ? "pago_proveedor" : "")),
         cuenta_contable: r.cuenta_contable || "",
         centro_costo: r.centro_costo || "",
         cuenta_destino: r.cuenta_destino || "",
-        proveedor_id: r.proveedor_id || "",
+        proveedor_id,
         cliente_id,
-        accion: cliente_id ? "escala" : (r.accion || "auto"),
+        accion: (cliente_id || escalaProveedor) ? "escala" : (r.accion || "auto"),
         motivo: `Regla ${r.id} (${r.match_tipo}: ${r.match_valor})`,
         confianza: "alta",
       };
