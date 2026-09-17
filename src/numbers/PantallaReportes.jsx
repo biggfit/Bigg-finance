@@ -145,7 +145,10 @@ function movimientoToPnLRows(movs, sociedad, cuentaMap) {
 //   · Capital del plan AFIP = el impuesto → 1 fila en el mes de consolidación (salvo apertura,
 //     que ya está en Contagram). El capital de un préstamo NO entra (es deuda, no gasto).
 //   · Interés financiero + IVA + sellos de cada cuota → en el mes de su VENCIMIENTO (devengo
-//     mes a mes, pagada o no). El resarcitorio solo si se pagó tardío (fecha_pago > vto).
+//     mes a mes, pagada o no). El resarcitorio (recargo por mora) se contabiliza por lo que la CAJA
+//     pagó de más sobre el importe normal de la cuota: AFIP cobra el importe normal o el "tardío", y el
+//     débito del banco dice cuál. (Antes: por fecha_pago > vto → 15 cuotas con vto domingo 16/8/2026
+//     debitadas el martes 18/8 por el importe justo devengaban 66.269 de recargo que nadie cobró.)
 function financiacionToPnLRows(planes, sociedad) {
   const soc = (sociedad ?? "").toLowerCase();
   const out = [];
@@ -162,8 +165,13 @@ function financiacionToPnLRows(planes, sociedad) {
       push(p.cuenta_interes,   p.centro_interes,   c.interes,   c.vto);
       push(p.cuenta_iva,       p.centro_iva,       c.iva,       c.vto);
       push(p.cuenta_impuestos, p.centro_impuestos, c.impuestos, c.vto);
-      if (c.estado === "pagada" && c.fecha_pago && c.fecha_pago > c.vto)
-        push(p.cuenta_interes, p.centro_interes, c.interes_resarc, c.fecha_pago);   // resarcitorio (pago tardío)
+      // Recargo real = pagado − importe normal de la cuota (si se pagó de más). Sin pago en caja no hay recargo.
+      const pagadoCuota = Number(c.pagado) || 0;
+      const recargo = pagadoCuota > 0 ? Math.round((pagadoCuota - (Number(c.total) || 0)) * 100) / 100 : 0;
+      if (recargo > 0.5) {
+        const fechaRec = (c.pagos ?? []).map(x => x.fecha).sort().pop() || c.fecha_pago || c.vto;
+        push(p.cuenta_interes, p.centro_interes, recargo, fechaRec);   // resarcitorio efectivamente cobrado
+      }
     }
   }
   return out;
