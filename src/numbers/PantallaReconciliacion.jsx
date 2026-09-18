@@ -9,7 +9,7 @@ import {
   appendEgreso, appendProveedor, appendCuenta,
   appendIngreso, fetchClientes, appendCliente,
   appendBancoRegla, fetchIngresos, imputarCobroIngreso,
-  fetchFinanciaciones, imputarCuota, pagarTarjeta, esCuentaCredito, fetchMovTesoreria,
+  fetchFinanciaciones, imputarCuota, pagarTarjeta, esCuentaCredito, fetchMovTesoreria, fetchMovFranquicias,
   fetchIntercoData, pendientesInterco, reconocerVentaInterco, reconocerInterusoGestion, revertirInterusoGestion, normCuit,
   pendientesIntercoRecibir, declararIntercoRecibida, declararIntercoEnviada, intercoMatchCandidato,
   esCuentaStripe, esCuentaVentaDirecta, ultimaCargaExtractoPorCuenta,
@@ -18,7 +18,7 @@ import { BancoReglaModal } from "./PantallaMaestros";
 import MundoTarjeta from "./reconciliacion/MundoTarjeta";
 import { useConfirm } from "./useConfirm";
 import { fetchAll, removeComp } from "../lib/sheetsApi";
-import { franquiciasPendientesInterco } from "../lib/franquiciasAdapter";
+import { franquiciasPendientesInterco, enriquecerCompsConMovs } from "../lib/franquiciasAdapter";
 import { groupCentrosCosto, makeCrearMaestro } from "./formUtils";
 import NuevoEgresoModal from "./NuevoEgresoModal";
 import NuevoIngresoModal from "./NuevoIngresoModal";
@@ -67,14 +67,24 @@ const grupoGlosa = (mov) => {
 };
 // Tipos "débiles": no clasificados por una regla explícita → elegibles para glosa/cobranza.
 const TIPOS_DEBILES = ["pago_proveedor", "servicio", "sin_clasificar", ""];
-// fr_tipo según monto vs deuda viva del franquiciado. Crédito que matchea la deuda → PAGO de CC;
-// si no hay deuda que lo respalde → PAGO_PAUTA (a cuenta). Débito → PAGO_ENVIADO.
-const sugerirFrTipo = (monto, deuda) => {
+// fr_tipo sugerido para un crédito de franquicia. Débito → PAGO_ENVIADO. Si no:
+//   1. El importe matchea la deuda viva de la CC (±2%) → PAGO de CC. Sirve para las sedes sin pauta.
+//   2. Hay pauta FACTURADA esperando cobro → PAGO de CC: la factura ya existe y este cobro la paga,
+//      así que la deuda tiene que bajar en el mes del cobro.
+//   3. Si no → PAGO_PAUTA: la plata llega antes de facturar, es un adelanto y Pendientes lo reclama.
+// La 2 es la regla del negocio: se factura a fin de mes; lo que entra ANTES (o el mismo día) es
+// adelanto, lo que entra DESPUÉS paga esa factura. Se mide con `pautaSinCobrar`, no con la fecha
+// suelta de la última factura: hay sedes que pagan primero y facturan después TODOS los meses
+// (Corrientes, Nordelta), y ahí un cobro posterior a una factura ya cobrada sigue siendo adelanto.
+const sugerirFrTipo = (monto, deuda, pautaSinCobrar = 0) => {
   if ((Number(monto) || 0) < 0) return "PAGO_ENVIADO";
-  const d = Number(deuda) || 0;   // positivo = debe; solo es Pago de CC si hay deuda que lo respalde
-  return d > 0 && Math.abs(Math.abs(monto) - d) <= Math.max(500, d * 0.02) ? "PAGO" : "PAGO_PAUTA";
+  const d = Number(deuda) || 0;   // positivo = debe
+  if (d > 0 && Math.abs(Math.abs(monto) - d) <= Math.max(500, d * 0.02)) return "PAGO";
+  return pautaSinCobrar > 0.01 ? "PAGO" : "PAGO_PAUTA";
 };
 const FR_TIPO_LABEL = { PAGO: "Pago de CC", PAGO_PAUTA: "Pago a cuenta", PAGO_ENVIADO: "Transf. enviada" };
+// DD/MM/YYYY → YYYY-MM-DD (para ordenar/comparar fechas de comprobantes de Franquicias).
+const dmyISO = (d) => { const [dd, mm, yyyy] = String(d || "").split("/"); return `${yyyy}-${mm}-${dd}`; };
 // Etiqueta legible del saldo de CC (positivo = debe, negativo = a favor).
 const deudaLabel = (d) => Math.abs(Number(d) || 0) < 1 ? "al día" : (Number(d) > 0 ? `debe ${fmt(d)}` : `a favor ${fmt(-d)}`);
 const fmt = n => (Number(n) || 0).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -351,6 +361,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const [franquicias,setFranquicias]= useState([]);
   const [sociedades, setSociedades] = useState([]); // nb_sociedades (con cuit) para detectar intercompany
   const [frComps,    setFrComps]    = useState({});
+  const [frMovs,     setFrMovs]     = useState([]);    // cobros/pagos de franquicia en nb_movimientos
   const [frSaldos,   setFrSaldos]   = useState({});
   const [pagosSueldos,setPagosSueldos]= useState([]); // movs origen=sueldos haberes (para matchear lotes)
   const [egresos,    setEgresos]    = useState([]);    // facturas de proveedor (para imputar pagos)
@@ -512,6 +523,9 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       setFrComps(comps || {});
       setFrSaldos(saldos || {});
     }).catch(console.error);
+    // Los cobros de franquicia desde el cutover viven en nb_movimientos, no en `comprobantes`:
+    // sin ellos la deuda viva y la pauta pendiente de cobro se leen de más (faltan los cobros).
+    fetchMovFranquicias().then(m => setFrMovs(m || [])).catch(console.error);
     fetchPagosSueldos(sociedad).then(p => setPagosSueldos(p || [])).catch(console.error);
     fetchMovimientosIgnorados(sociedad).then(i => setIgnorados(i || [])).catch(console.error);
     fetchEgresos(sociedad).then(e => setEgresos(e || [])).catch(console.error);
@@ -522,6 +536,23 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     recargar();
   }, [sociedad]);
 
+  // Cuenta corriente completa: cuaderno de Franquicias + cobros anotados en Numbers.
+  const frCompsCC = useMemo(() => enriquecerCompsConMovs(frComps, frMovs), [frComps, frMovs]);
+
+  // Pauta FACTURADA que todavía nadie cobró, a una fecha (ISO). Facturas de pauta menos sus NC
+  // menos los pagos a cuenta anteriores. > 0 ⇒ hay una factura esperando que la paguen.
+  const pautaSinCobrar = (frId, iso) => {
+    let saldo = 0;
+    for (const c of (frCompsCC[String(frId)] ?? [])) {
+      const cIso = dmyISO(c.date);
+      if (!cIso || cIso > iso) continue;
+      if      (c.type === "FACTURA|PAUTA") saldo += c.amount ?? 0;
+      else if (c.type === "NC|PAUTA")      saldo -= c.amount ?? 0;
+      else if (c.type === "PAGO_PAUTA")    saldo -= c.amount ?? 0;
+    }
+    return saldo;
+  };
+
   // Deuda viva del franquiciado (saldo de su CC al mes actual). Positivo = debe.
   // Memoizado con cache por franquicia: computeSaldoReal es pesado y se pide muchas veces por render.
   const deudaFr = useMemo(() => {
@@ -531,12 +562,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       if (cache.has(key)) return cache.get(key);
       const fr = franquicias.find(f => String(f.id) === key);
       let v = 0;
-      if (fr) { const now = new Date(); v = computeSaldoReal(fr.id, now.getFullYear(), now.getMonth(), frComps, frSaldos, fr.moneda || fr.currency || "ARS", null, null); }
+      if (fr) { const now = new Date(); v = computeSaldoReal(fr.id, now.getFullYear(), now.getMonth(), frCompsCC, frSaldos, fr.moneda || fr.currency || "ARS", null, null); }
       cache.set(key, v);
       return v;
     };
-  }, [franquicias, frComps, frSaldos]);
+  }, [franquicias, frCompsCC, frSaldos]);
   const frNombre = (frId) => franquicias.find(f => String(f.id) === String(frId))?.name || "";
+
 
   const byName = (a, b) => String(a.name ?? a.nombre ?? "").localeCompare(String(b.name ?? b.nombre ?? ""));
   const monedaCuenta = useMemo(() => cuentas.find(c => c.id === cuentaTab)?.moneda || "ARS", [cuentas, cuentaTab]);
@@ -944,7 +976,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     const opciones = franquiciasManual;                      // todas las activas (alfabético, con sufijo de moneda)
     const franquiciaSel = ed.franquicia_id ?? recomendada;
     const deuda = franquiciaSel ? deudaFr(franquiciaSel) : 0;
-    const frTipoSel = ed.fr_tipo ?? sugerirFrTipo(mov.monto, deuda);
+    const frTipoSel = ed.fr_tipo ?? sugerirFrTipo(mov.monto, deuda, franquiciaSel ? pautaSinCobrar(franquiciaSel, String(mov.fecha).slice(0, 10)) : 0);
     return { es: true, manual: !!ed.modoFranquicia, opciones, franquiciaSel, deuda, frTipoSel, split: ed.split || null };
   };
 
