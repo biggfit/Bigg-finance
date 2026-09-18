@@ -126,6 +126,10 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
       edits[comp.id] = {
         cuenta:   "PAUTA",
         concepto: `Pauta ${MONTHS[comp.month]} ${comp.year}`,
+        // Se factura la COBERTURA (lo transferido + el saldo a favor que la sede ya traía), no
+        // solo la transferencia: a una sede con saldo a favor se le facturaba de menos. Es un
+        // MÁXIMO —lo pautado no es un dato del sistema—, así que queda editable en la preview.
+        importe:  coberturaPorPago[comp.id]?.cobertura ?? comp.amount,
       };
     });
     setPagoPreviewEdits(edits);
@@ -449,9 +453,9 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
   // — un saldo a favor "de 1.000.000" en una sede que transfirió 700.000 son 300.000 propios.
   //   sin saldo a favor previo → cobertura = el pago              (caso 1)
   //   con saldo a favor previo → cobertura = pago + ese saldo     (caso 2 y 3)
-  // El tope es lo pautado, que todavía no existe como dato: hasta que exista, esto informa
-  // el máximo facturable, no el monto final. Hoy `handleEmitirPago` emite solo por el pago,
-  // así que sin este dato el caso 2 se factura de menos.
+  // El tope es lo pautado, que todavía no existe como dato: hasta que exista, esto es el máximo
+  // facturable, no el monto final. La preview de emisión arranca con este importe (editable) y lo
+  // manda como `_importe`; antes emitía solo por el pago y el caso 2 se facturaba de menos.
   const coberturaPorPago = useMemo(() => {
     const out = {};
     for (const { fr, comp } of pagosSinFactura) {
@@ -1313,11 +1317,12 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                 {/* Rows */}
                 {pagoPreviewQueue.map(({ fr, comp }, i) => {
                   const applyIVA = !!(COMPANIES[activeCompany]?.applyIVA);
-                  const total    = comp.amount;
+                  const edit     = pagoPreviewEdits[comp.id] ?? {};
+                  const total    = parseFloat(String(edit.importe ?? comp.amount).replace(",", ".")) || 0;
                   const neto     = applyIVA ? Math.round(total / 1.21 * 100) / 100 : total;
                   const iva      = applyIVA ? Math.round((total - neto) * 100) / 100 : 0;
                   const cur      = compCurrency(comp);
-                  const edit     = pagoPreviewEdits[comp.id] ?? {};
+                  const extra    = coberturaPorPago[comp.id]?.extra ?? 0;
                   const inpS     = { background: "var(--bg)", border: "1px solid var(--border2)", color: "var(--text)", borderRadius: 5, padding: "3px 7px", fontSize: 11, fontFamily: "var(--font)" };
                   return [
                     <span key={`n${i}`}  style={{ fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>{fr.name}</span>,
@@ -1328,7 +1333,11 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                     <input  key={`d${i}`} value={edit.concepto ?? ""} onChange={e => setPreviewEdit(comp.id, "concepto", e.target.value)} style={{ ...inpS, minWidth: 0, width: "100%" }} />,
                     <span key={`ne${i}`} className="mono" style={{ fontSize: 11, textAlign: "right", whiteSpace: "nowrap" }}>{fmt(neto, cur)}</span>,
                     <span key={`iv${i}`} className="mono" style={{ fontSize: 11, color: "var(--muted)", textAlign: "right", whiteSpace: "nowrap" }}>{applyIVA ? fmt(iva, cur) : "–"}</span>,
-                    <span key={`t${i}`}  className="mono" style={{ fontSize: 12, color: "var(--gold)", fontWeight: 700, textAlign: "right", whiteSpace: "nowrap" }}>{fmt(total, cur)}</span>,
+                    <input key={`t${i}`} value={edit.importe ?? comp.amount} onChange={e => setPreviewEdit(comp.id, "importe", e.target.value)}
+                      title={extra > 0.01
+                        ? `Transferido ${fmt(comp.amount, cur)} + ${fmt(extra, cur)} de saldo a favor que la sede ya traía. Bajalo si lo pautado fue menos.`
+                        : "Importe a facturar (total con IVA)."}
+                      style={{ ...inpS, width: 110, textAlign: "right", fontFamily: "var(--font-mono, monospace)", color: "var(--gold)", fontWeight: 700, borderColor: extra > 0.01 ? "var(--gold)" : "var(--border2)" }} />,
                   ];
                 })}
               </div>
@@ -1349,7 +1358,8 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                     const fechaOverride = pagoBatchDate ? toAR(pagoBatchDate) : null;
                     const augmented = pagoPreviewQueue.map(({ fr, comp }) => ({
                       fr,
-                      comp: { ...comp, _cuenta: pagoPreviewEdits[comp.id]?.cuenta ?? "PAUTA", _concepto: pagoPreviewEdits[comp.id]?.concepto, _fecha: fechaOverride },
+                      comp: { ...comp, _cuenta: pagoPreviewEdits[comp.id]?.cuenta ?? "PAUTA", _concepto: pagoPreviewEdits[comp.id]?.concepto, _fecha: fechaOverride,
+                              _importe: parseFloat(String(pagoPreviewEdits[comp.id]?.importe ?? comp.amount).replace(",", ".")) || comp.amount },
                     }));
                     handlePagoBatch(augmented);
                     setPagoPreviewQueue(null);
