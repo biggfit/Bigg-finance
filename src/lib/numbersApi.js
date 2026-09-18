@@ -209,6 +209,38 @@ export async function primeCache(specs = []) {
   }
 }
 
+// ─── Cuenta contable: id → NOMBRE ────────────────────────────────────────────
+// En `nb_movimientos`/`nb_comprobantes` la columna `cuenta_contable` guarda el NOMBRE, porque el P&L
+// busca la cuenta por nombre. Los callers traen indistintamente el id o el nombre, y durante años el
+// id→nombre se hizo con `String(x).replace(/^CUENTA_/, "")`: alcanzaba porque el id legacy ERA el
+// nombre con prefijo (`CUENTA_Sueldos` → `Sueldos`). Con los ids nuevos y opacos que genera newId()
+// (`CTA-48002-w6u8`) ese replace no hace nada y deja el id crudo en la celda — y una fila cuya cuenta
+// no resuelve por nombre cae en "Sin clasificar", que no suma a ningún subtotal: la plata desaparece
+// del resultado en silencio. Por eso el lookup va contra el catálogo real.
+//
+// `nb_cuentas` es maestro (cache de 10 min, y get() deduplica los requests en vuelo), así que llamar
+// a esto por fila es barato: solo la primera resuelve contra la red. Si la hoja no se puede leer o el
+// id no está en el catálogo, cae al replace de siempre → nunca es peor que el comportamiento previo.
+// Un valor que YA es un nombre ("Pauta") no matchea por id y se devuelve tal cual, que es lo correcto.
+async function resolverCuenta() {
+  let cuentas = [];
+  try { cuentas = await get("nb_cuentas"); } catch { /* sin catálogo → fallback */ }
+  const porId = new Map();
+  for (const c of cuentas || []) {
+    if (!c?.id) continue;
+    const nom = String(c.nombre ?? "").trim();
+    porId.set(String(c.id).trim(), nom || String(c.id).trim());
+  }
+  return (x) => {
+    const raw = String(x ?? "").trim();
+    if (!raw) return "";
+    return porId.get(raw) || raw.replace(/^CUENTA_/, "");
+  };
+}
+
+// Atajo de una sola cuenta. Dentro de un loop conviene `const nc = await resolverCuenta()` una vez.
+const nombreCuentaContable = async (x) => (await resolverCuenta())(x);
+
 // ─── Generador de IDs ────────────────────────────────────────────────────────
 
 const pad  = (n, l = 5) => String(n).padStart(l, "0");
@@ -329,7 +361,7 @@ export async function appendCargaSocial({ sociedad, proveedorId = "", proveedor 
   const nota = `${CS_TAG} ${concepto || `Cargas sociales ${mes}/${anio}`}`;
   const id_comp = newId("EG");
   const created_at = new Date().toISOString();
-  const cta = String(cuenta || "").replace(/^CUENTA_/, "");
+  const cta = await nombreCuentaContable(cuenta);
   // UNA sola escritura atómica (add_batch): todas las líneas de centro en un POST. Evita el
   // comprobante a medias que dejaba el loop secuencial de appendEgreso cuando el GAS se cuelga.
   const rows = lineas
@@ -1449,6 +1481,11 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
   };
 
   const nuevas = [], matches = []; let dups = 0;
+  // La propuesta del importador depurado (MP/Stripe) resuelve la cuenta a ID (cuentaIdPorNombre en
+  // PantallaReconciliacion), y acá se guardaba tal cual → la fila nacía con el id crudo en una
+  // columna que guarda nombres. Se canoniza en el alta, que es el único lugar por el que pasan
+  // TODAS las líneas del extracto.
+  const nc = await resolverCuenta();
   for (const l of lineas) {
     const ref = String(l.saldo);   // identidad estable = saldo (NO fecha: el banco re-fecha entre descargas)
     const key = _refKey(ref);      // ...pero se COMPARA normalizado a centavos (ver _refKey)
@@ -1461,7 +1498,7 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
       id: newId("EXT"), sociedad, fecha: l.fecha,
       tipo: (Number(l.monto) || 0) > 0 ? "INGRESO" : "EGRESO",
       cuenta_bancaria, cuenta_destino: p.cuenta_destino || "",
-      cuenta_contable: p.cuenta_contable || "", centro_costo: p.centro_costo || "",
+      cuenta_contable: nc(p.cuenta_contable), centro_costo: p.centro_costo || "",
       moneda, monto: Number(l.monto) || 0, documento_id: "",
       iva_rate: Number(l.iva_rate) || 0, iva_monto: Number(l.iva_monto) || 0,
       concepto: l.descripcion || "",
@@ -1599,6 +1636,7 @@ export async function ingestarResumenTarjeta({ sociedad, tarjeta = "", periodo =
   const nuevas = [];
   const sobran = [];
   let yaAutorizadas = 0, sinCambio = 0;
+  const nc = await resolverCuenta();   // catálogo una sola vez para todo el resumen
   for (const l of lineas) {
     const monto = Math.abs(Number(l.monto) || 0);
     if (!monto || !l.cuenta_bancaria) continue;
@@ -1611,7 +1649,7 @@ export async function ingestarResumenTarjeta({ sociedad, tarjeta = "", periodo =
     nuevas.push({
       id: newId("TAR"), sociedad, fecha: fechaEfectiva(l.fecha),
       tipo: "EGRESO", cuenta_bancaria: l.cuenta_bancaria, cuenta_destino: "",
-      cuenta_contable: String(l.cuenta_contable || "").replace(/^CUENTA_/, ""),
+      cuenta_contable: nc(l.cuenta_contable),
       centro_costo: l.centro_costo || "",
       // Signo: consumo normal = siempre cargo (egreso, -monto). Una línea de AJUSTE (l.credito, ver
       // MundoTarjeta → diferencia contra el TOTAL A PAGAR real del resumen) puede ir para el otro lado
@@ -1757,7 +1795,7 @@ export async function aceptarMovimiento(mov, prop = {}) {
   const esEgreso = (Number(mov.monto) || 0) < 0;
   return post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
     tipo:               esEgreso ? "EGRESO_GASTO" : "INGRESO",   // unifica con el gasto directo manual
-    cuenta_contable:    String(cuentaId).replace(/^CUENTA_/, ""),   // NOMBRE para el P&L
+    cuenta_contable:    await nombreCuentaContable(cuentaId),   // NOMBRE para el P&L
     centro_costo:       prop.centro_costo || mov.centro_costo || "",
     contraparte_id:     prop.proveedor_id || "",
     contraparte_nombre: prop.proveedor_nombre || mov.contraparte_nombre || "",
@@ -1933,7 +1971,7 @@ export async function appendMovFranquicia({ id, sociedad, fecha, fr_tipo, franqu
 export async function imputarPagoFC(mov, { documento_id, cuenta_contable = "", proveedor_id = "", proveedor_nombre = "" }) {
   return post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
     tipo:               "PAGO",
-    cuenta_contable:    String(cuenta_contable || "").replace(/^CUENTA_/, ""),
+    cuenta_contable:    await nombreCuentaContable(cuenta_contable),
     centro_costo:       "",   // el centro vive en la FC (que puede tener varios); el pago no lo copia. Cash Flow lo deriva del comprobante linkeado.
     contraparte_id:     proveedor_id,
     contraparte_nombre: proveedor_nombre || mov.contraparte_nombre || "",
@@ -1952,9 +1990,10 @@ export async function imputarPagoFC(mov, { documento_id, cuenta_contable = "", p
 // retencion_centro: centro de costo para las retenciones (normalmente "HQ - Impuestos" → van al
 // P&L BIGG bajo Impuestos, no a la sede). El cobro (caja) usa centro_costo de la factura.
 export async function imputarCobroIngreso(mov, { documento_id, cuenta_contable = "", centro_costo = "", cliente_id = "", cliente_nombre = "", retenciones = [], retencion_centro = "" }) {
+  const nc = await resolverCuenta();   // sirve para el cobro y para cada retención
   await post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
     tipo:               "COBRO",
-    cuenta_contable:    String(cuenta_contable || "").replace(/^CUENTA_/, ""),
+    cuenta_contable:    nc(cuenta_contable),
     centro_costo:       "",   // el cobro no lleva centro (la venta puede tener varios); Cash Flow lo deriva de la FC. `centro_costo` se conserva como param solo para el fallback del centro de retenciones (abajo).
     contraparte_id:     cliente_id,
     contraparte_nombre: cliente_nombre || mov.contraparte_nombre || "",
@@ -1968,7 +2007,7 @@ export async function imputarCobroIngreso(mov, { documento_id, cuenta_contable =
     await post({ action: "add", sheet: "nb_movimientos", row: {
       id: newId("RET"), sociedad: mov.sociedad, fecha: mov.fecha,
       tipo: "COBRO", cuenta_bancaria: "", cuenta_destino: "",
-      cuenta_contable: String(r.cuenta).replace(/^CUENTA_/, ""),
+      cuenta_contable: nc(r.cuenta),
       centro_costo: retencion_centro || centro_costo, moneda: mov.moneda || "ARS",
       monto: ret, documento_id,
       concepto: `Retención s/ ${documento_id}`,
@@ -2012,12 +2051,13 @@ export async function borrarPagoImputado(mov) {
 // origen="retencion" (tipo COBRO, sin cuenta_bancaria) que netea la CxC por documento_id y entra al
 // P&L como costo. Misma forma de fila que imputarCobroIngreso, pero standalone (sin mov de banco).
 export async function appendRetenciones({ sociedad, documento_id, fecha, moneda = "ARS", cliente_id = "", cliente_nombre = "", retenciones = [] }) {
+  const nc = await resolverCuenta();
   const rows = (retenciones || [])
     .filter(r => Math.abs(Number(r?.monto) || 0) > 0.01 && r?.cuenta)
     .map(r => ({
       id: newId("RET"), sociedad, fecha,
       tipo: "COBRO", cuenta_bancaria: "", cuenta_destino: "",
-      cuenta_contable: String(r.cuenta).replace(/^CUENTA_/, ""),
+      cuenta_contable: nc(r.cuenta),
       centro_costo: r.centro || "", moneda,
       monto: Math.abs(Number(r.monto) || 0), documento_id,
       concepto: `Retención s/ ${documento_id}`,
@@ -2597,7 +2637,7 @@ export async function reconocerVentaInterco({ sociedad, ventaIdComp, vendedorId 
     id: `${id_comp}-L1`, id_comp, sociedad, fecha,
     subtipo,
     contraparte_id: vendedorId, contraparte_nombre: vendedorNombre,
-    cuenta_contable: String(cuenta_contable || "").replace(/^CUENTA_/, ""),
+    cuenta_contable: await nombreCuentaContable(cuenta_contable),
     cuenta_contable_id: String(cuenta_contable_id || ""),
     centro_costo, subtotal: sub, iva_rate: ivaR, iva_monto: ivaM, total: t,
     moneda, nro_comp: nroComp, nota: `interco_ref=${ventaIdComp}`,
@@ -2630,7 +2670,7 @@ export async function reconocerInterusoGestion(pend, { cuenta, centro = "" } = {
     id, sociedad: pend.sedeSociedad || "", fecha: fechaIso,
     tipo: esIngreso ? "INGRESO" : "EGRESO",
     cuenta_bancaria: "",                                                  // ← sin caja
-    cuenta_contable: String(cuenta || "").replace(/^CUENTA_/, ""),
+    cuenta_contable: await nombreCuentaContable(cuenta),
     centro_costo: centro || pend.sedeCentro || "",
     moneda: pend.moneda || "ARS",
     monto: esIngreso ? t : -t,
