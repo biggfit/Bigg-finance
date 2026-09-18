@@ -3361,11 +3361,16 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       const catSede = String(meta?.categoria_pnl_sede || "").trim().toLowerCase();
       // Solo VENTAS/otros ingresos van por el lado ingreso (rutean a vta/int/ger/wre/hq). Financieros (incl.
       // Intereses Ganados), impuestos, costos y opex van por egRows → caen en su branch del motor por cuenta.
-      // "Pauta" es ingreso HQ (netea con su compra vía ING_CONTRA_HQ) aunque no esté categorizada en el maestro.
+      // "Pauta" depende del CENTRO: en un centro HQ es la VENTA de pauta (ingreso, netea con su compra vía
+      // ING_CONTRA_HQ, aunque el maestro no la categorice); en una SEDE es la COMPRA de pauta (costo, positivo como
+      // Sueldos/Alquiler). Hasta el 18/9/2026 iba siempre a ingreso → en España el P&L Sede la tomaba como contra
+      // y mostraba la pauta de cada sede como crédito (resOp inflado 2× en todo el histórico).
       // SEDE_ING_ACCTS: cuentas de ventas/interusos por definición (aunque el maestro no las tenga) → mantienen
       // su signo natural (los interusos del histórico ya vienen neteados; sin esto el motor se los invertía).
-      const esIngreso = catSede === "ventas" || catSede === "otros ingresos" || catPnl === "ventas"
-        || cuenta.toLowerCase() === "pauta" || SEDE_ING_ACCTS.has(_nkSede(cuenta));
+      const esPauta   = cuenta.toLowerCase() === "pauta";
+      const esIngreso = esPauta
+        ? familiaCentro(ccMap?.get(ccKey(r.centro_costo))) === "hq"
+        : (catSede === "ventas" || catSede === "otros ingresos" || catPnl === "ventas" || SEDE_ING_ACCTS.has(_nkSede(cuenta)));
       const total = Number(r.total) || 0, neto = Number(r.neto) || 0;
       const row = {
         fecha: String(r.fecha || "").slice(0, 10), centro_costo: r.centro_costo || "",
@@ -3377,7 +3382,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       (esIngreso ? ins : egs).push(row);
     }
     return { histIn: ins, histEg: egs };
-  }, [rawHist, cuentaMap]);
+  }, [rawHist, cuentaMap, ccMap]);
   const hayHistorico = rawHist.length > 0;   // hay overlay pre go-live → mostrar los meses previos al go-live
 
   // Los comprobantes de retención practicada (tag RETDEP) son el "por pagar a AFIP" que nace al retenerle
