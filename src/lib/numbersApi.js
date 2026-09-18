@@ -1359,6 +1359,21 @@ const _saldoDe = m => { const x = String(m.referencia || "").match(/saldo=([^;]*
 const _extractoRef = m => String(m.extracto_saldo || "") || String(_saldoDe(m) || "");
 const _r2 = n => Math.round((Number(n) || 0) * 100);   // monto a centavos, para comparar sin ruido de float
 
+// Clave de COMPARACIÓN del dedup (lo que se GUARDA en `extracto_saldo` sigue siendo el saldo crudo).
+// El mismo saldo puede volver escrito distinto: el export COMPLETO del BBVA arrastra el ruido de float
+// del saldo de apertura y trae `8526723.090000108` donde se guardó `8526723.09`. Comparando los strings
+// eso es "no está" → se recreaba el extracto entero (simulado sobre Tigre Loco: 294 de 294 líneas
+// duplicadas, cero dedup). Se compara en centavos, el mismo criterio que `_r2` usa para los montos.
+// Los parsers sin saldo corriente (InterAudi) usan un id sintético ("IA-3") y MP guarda una tupla
+// ("venta|…|111314982.92"): no son numéricos → caen al string crudo, igual que antes.
+// El prefijo "c" evita que un centavo colisione con un id sintético que sea todo dígitos.
+const _refKey = v => {
+  const s = String(v ?? "").trim();
+  if (!s) return "";
+  const n = Number(s);
+  return Number.isFinite(n) ? `c${Math.round(n * 100)}` : s;
+};
+
 // Ingesta del extracto = "matchear o crear" (ya NO "crear o ignorar"):
 //  1) DEDUP: si la línea del banco ya existe (mismo `saldo` en `extracto_saldo`) → se saltea.
 //  2) AUTO-MATCH: si hay un movimiento YA cargado por el tesorero/otro módulo (mismo monto + cuenta +
@@ -1373,7 +1388,7 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
   // invalidar la caché → el reintento 86s después leyó el snapshot previo y recreó las 28 líneas.
   const todos = await _fetchRowsRaw("nb_movimientos", { sociedad });
   const dela  = todos.filter(m => String(m.cuenta_bancaria) === String(cuenta_bancaria));
-  const seen  = new Set(dela.map(_extractoRef).filter(Boolean));   // dedup vs DB + dentro del archivo
+  const seen  = new Set(dela.map(m => _refKey(_extractoRef(m))).filter(Boolean));   // dedup vs DB + dentro del archivo
   // Candidatos a auto-match: cargados por un humano/otro módulo, sin atar a línea de banco, no ignorados.
   // Se excluye origen="extracto" (esas YA son líneas de banco; las rotas sin ref se sanean aparte, no acá).
   // Precomputo ts/centavos una vez por candidato (evita re-parsear fechas L×C veces en el loop).
@@ -1395,8 +1410,9 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
   const nuevas = [], matches = []; let dups = 0;
   for (const l of lineas) {
     const ref = String(l.saldo);   // identidad estable = saldo (NO fecha: el banco re-fecha entre descargas)
-    if (seen.has(ref)) { dups++; continue; }
-    seen.add(ref);
+    const key = _refKey(ref);      // ...pero se COMPARA normalizado a centavos (ver _refKey)
+    if (seen.has(key)) { dups++; continue; }
+    seen.add(key);
     const m = buscarMatch(l);
     if (m) { usados.add(m.id); matches.push({ mov: m, ref, linea: l }); continue; }
     const p = l.propuesta || {};
