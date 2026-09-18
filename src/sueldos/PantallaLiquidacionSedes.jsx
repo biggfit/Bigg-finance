@@ -9,7 +9,7 @@ import {
   fetchNovedades,
   ROLES_COACHES, ROLES_FRONT, ROLES_LIMP, ROL_CONCEPTO,
   FP_TIPO_LABEL, FP_TIPO_COLOR, esTransferencia,
-  idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionesLinesBatch, saveLiquidacionLines, isCerrada,
+  idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionesLinesBatch, isCerrada,
   estadoPago, remanentePago, PAGO_EPS, reabrirLiquidaciones,
 } from "../lib/sueldosApi";
 
@@ -193,6 +193,9 @@ const iStyle = {
   fontSize: 12, fontFamily: T.font, background: "#fff", color: T.text,
   width: "100%", boxSizing: "border-box", textAlign: "right",
 };
+// Candado visual de fila CERRADA (el guard real está en updateRow/updateDetalle/removeRow).
+const LOCKED = { background: T.bg, color: T.dim, cursor: "not-allowed" };
+const LOCK_TITLE = "Cerrada — reabrí este legajo (🔒 en Forma de pago) para editar";
 
 const TH = (extra = {}) => ({
   padding: "7px 8px", textAlign: "left", fontWeight: 600,
@@ -243,7 +246,7 @@ function ReabrirLock({ empl, onReabrir, reabriendo }) {
   return (
     <>
       <button onClick={(e) => { e.stopPropagation(); setConfirm(true); }}
-        title="Cerrada — click para reabrir (vuelve a borrador; no toca los pagos)"
+        title="Cerrada — click para reabrir (vuelve a vivo; no toca los pagos)"
         style={{ marginLeft: 8, fontSize: 12, color: T.green, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
         🔒
       </button>
@@ -252,8 +255,9 @@ function ReabrirLock({ empl, onReabrir, reabriendo }) {
           <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: 420, padding: 22, boxShadow: "0 12px 40px rgba(0,0,0,.25)" }}>
             <h3 style={{ margin: "0 0 8px", fontSize: 16, fontWeight: 700, color: T.text }}>🔓 Reabrir liquidación — {empl.legajo_nombre}</h3>
             <p style={{ margin: "0 0 16px", fontSize: 13, color: T.muted, lineHeight: 1.5 }}>
-              Vuelve a <strong>borrador</strong> para reeditarla y cerrarla de nuevo. Los pagos ya
-              registrados <strong>no se tocan</strong> (podés seguir pagando).
+              Se borra la liquidación cerrada de <strong>todas sus sedes</strong> de este mes y la fila vuelve
+              a <strong>vivo</strong> (se recalcula de BIGG Eye / legajo / novedades). Editá lo que falte y cerrá
+              de nuevo: solo se reescribe este legajo. Los pagos ya registrados <strong>no se tocan</strong>.
             </p>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
               <button onClick={() => setConfirm(false)} style={BTN_SECONDARY}>Cancelar</button>
@@ -316,7 +320,7 @@ function applyObjetivosToRows(rowsArr, objetivosArr) {
 // ── Componente principal ───────────────────────────────────────────────────────
 
 export default function PantallaLiquidacionSedes({ pais = "", initialMes, initialAnio, initialPaso }) {
-  const [confirm, confirmUI] = useConfirm();
+  const [, confirmUI] = useConfirm();
   const [mes,  setMes]  = useState(initialMes  ?? MES_DEF);
   const [anio, setAnio] = useState(initialAnio ?? ANO_DEF);
   const [paso, setPaso] = useState(initialPaso ?? 1);
@@ -458,27 +462,16 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
 
   useEffect(() => { load(mes, anio, pais); }, [mes, anio, pais, load]);
 
-  // Reabrir: vuelve a "borrador" TODAS las liquidaciones cerradas del legajo en el
-  // período (una por sede, coaches multi-sede incluidos) para poder editar/re-cerrar.
+  // Reabrir un legajo = BORRAR sus liquidaciones cerradas del período (una por sede, coaches multi-sede
+  // incluidos). La fila vuelve a derivarse en vivo (Eye / legajo / novedades); no hay "borrador"
+  // persistido. Al volver a cerrar, solo se escribe este legajo (ver handleConfirmarFormaPago).
+  // Los pagos (nb_movimientos) no se tocan: en Sedes matchean por legajo+mes+forma, no por id.
   const [reabriendo, setReabriendo] = useState(false);
   const handleReabrir = async (legajo_id, legajo_nombre) => {   // la confirmación la maneja ReabrirLock (modal)
     setReabriendo(true);
     try {
       const sedeIds = [...new Set(rows.filter(r => r.legajo_id === legajo_id).map(r => r.sede_id ?? ""))];
       await reabrirLiquidaciones(sedeIds.map(sid => idLiqDe(legajo_id, mes, anio, sid)));
-      await refreshLiqs();
-    } catch (e) {
-      alert("Error al reabrir: " + e.message);
-    } finally { setReabriendo(false); }
-  };
-
-  const handleReabrirTodas = async () => {
-    if (!idsLiqCerrados.length) return;
-    if (!(await confirm({ title: "¿Reabrir todas?", danger: false, confirmLabel: "Sí, reabrir",
-      message: `Reabrir las ${idsLiqCerrados.length} liquidaciones cerradas de ${MESES[mes - 1]} ${anio}. Vuelven todas a borrador: vas a poder editar incentivos/novedades de cualquier empleado y después hay que volver a cerrarlas (Paso 4) para congelar los montos actualizados.` }))) return;
-    setReabriendo(true);
-    try {
-      await reabrirLiquidaciones(idsLiqCerrados);
       await refreshLiqs();
     } catch (e) {
       alert("Error al reabrir: " + e.message);
@@ -764,16 +757,16 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     return [...rosterBase.map(overlay), ...manualRows.map(overlay)]
       .filter(r => !r._deleted);
   }, [rosterBase, manualRows, edits]);
+  // Ref con las filas vigentes para que los handlers memoizados (updateRow/updateDetalle) puedan
+  // chequear el candado de "cerrada" sin re-crearse en cada render.
+  const rowsRef = useRef([]);
+  useEffect(() => { rowsRef.current = rows; }, [rows]);
+  // Candado: una fila CERRADA no se edita en el wizard (el cierre es el hito). Para tocarla hay que
+  // reabrir ese legajo (🔒 → borra sus líneas → vuelve a vivo).
+  const filaCerrada = (_id) => isCerrada(rowsRef.current.find(r => r._id === _id)?.estado);
 
-  // Bulk: en Sedes el paso 4 (Forma de pago) cierra TODAS las filas de una — así que
-  // reabrirlas también es todo-o-nada. Recorre cada id_liq cerrado del período.
-  const idsLiqCerrados = useMemo(
-    () => [...new Set(rows.filter(r => isCerrada(r.estado)).map(r => idLiqDe(r.legajo_id, mes, anio, r.sede_id)))],
-    [rows, mes, anio]);
-
-  // id_liq que YA tienen líneas en el sheet (cerradas previas o reabiertas). Al cerrar solo hay que
-  // borrar-antes-de-escribir estas; una liquidación nueva (sin borrador persistido en el sheet) no
-  // tiene nada que borrar → su cierre es un único add_batch, sin el borrado fila-por-fila que hacía timeout.
+  // id_liq que YA tienen líneas en el sheet. En régimen son solo las CERRADAS (no hay borrador persistido)
+  // y el cierre las saltea; `replace` queda como red por si quedó alguna fila legacy en estado "borrador".
   const idLiqEnSheet = useMemo(() => new Set(liqsSaved.map(l => l.id)), [liqsSaved]);
 
   // Detalle base (sin ediciones) por fila, para el editor de líneas de clase.
@@ -782,6 +775,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     [rosterBase, manualRows]);
   // Edita una línea del detalle (regulares/feriado/domingo) y recalcula los 5 campos de pago del coach.
   const updateDetalle = useCallback((_id, idx, field, val) => {
+    if (filaCerrada(_id)) return;   // candado
     setEdits(prev => {
       const cur = prev[_id]?.horas_detalle ?? baseDetalle.get(_id) ?? [];
       const detalle = cur.map((l, i) => i === idx ? { ...l, [field]: Number(val) || 0 } : l);
@@ -791,6 +785,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   // Borra UNA línea de detalle (clase×asistió), ej. la de Ausentes, sin tocar al coach. Recalcula el pago.
   // Si era la última, deja una línea BIGG CLASS en 0 (para no romper el editor).
   const removeDetalle = useCallback((_id, idx) => {
+    if (filaCerrada(_id)) return;   // candado
     setEdits(prev => {
       const cur = prev[_id]?.horas_detalle ?? baseDetalle.get(_id) ?? [];
       const rest = cur.filter((_, i) => i !== idx);
@@ -984,8 +979,10 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     });
   }, [paso, empls]);
 
-  const updateRow = useCallback((_id, key, val) =>
-    setEdits(prev => ({ ...prev, [_id]: { ...(prev[_id] || {}), [key]: val } })), []);
+  const updateRow = useCallback((_id, key, val) => {
+    if (filaCerrada(_id)) return;   // candado: cerrada no se edita sin reabrir
+    setEdits(prev => ({ ...prev, [_id]: { ...(prev[_id] || {}), [key]: val } }));
+  }, []);
 
   // CDP/one-shot desde BIGG Eye → overlay en edits. Map<rowKey, { q_cdp, q_one_shot }>
   const applyEyeCdp = useCallback((cdpMap) => {
@@ -998,6 +995,10 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
 
   const removeRow = async (_id) => {
     const row = rows.find(r => r._id === _id);
+    if (isCerrada(row?.estado)) {   // candado: no se borra una liquidación cerrada desde el wizard
+      alert(`${row.legajo_nombre} tiene la liquidación cerrada. Reabrila (🔒) si querés sacarla.`);
+      return;
+    }
     if (row?.id) {
       await deleteLiquidacionSede(row.id);
       setLiqsSaved(prev => prev.filter(r => r.id !== row.id));
@@ -1050,43 +1051,17 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     setShowAddForm(false);
   };
 
-  // Guardar borrador: upsert SECUENCIAL (GAS no soporta escrituras paralelas) de las filas
-  // dirty — nuevas sin `id` o tocadas en `edits`. Luego recarga para refrescar `id`/estado.
-  const handleGuardarBorrador = async () => {
-    if (savingRef.current) return;
-    const dirty = rows.filter(r => !r.id || edits[r._id]);
-    if (!dirty.length) return;
-    savingRef.current = true;
-    setSaving(true);
-    try {
-      // Una sola escritura para todos los legajos (add_batch). `replace` solo en los ya guardados:
-      // el primer guardado del mes va todo nuevo → 0 borrados → un único request.
-      const entries = dirty.map(r => ({
-        id_liq:  idLiqDe(r.legajo_id, mes, anio, r.sede_id),
-        lineas:  lineasConceptoDeRow(r, "borrador").lineas,
-        replace: true,   // idempotente: borrar-y-reescribir siempre (r.id no es confiable si la carga falló → duplicaba)
-      }));
-      await saveLiquidacionesLinesBatch(entries);
-      await refreshLiqs();   // refresh liviano (no re-descarga todo ni bloquea la pantalla)
-    } catch (e) {
-      alert("Error al guardar borrador: " + e.message);
-    } finally {
-      setSaving(false);
-      savingRef.current = false;
-    }
-  };
-
   // ── Wizard handlers ──────────────────────────────────────────────────────────
 
-  // Los pasos de cálculo avanzan EN MEMORIA; la durabilidad la cubre el autosave local
-  // y el botón global "Guardar borrador". No se persiste por paso.
+  // Los pasos de cálculo avanzan EN MEMORIA (autosave local en este navegador). La hoja recibe
+  // filas únicamente al CERRAR (Paso 4): no existe "guardar borrador" — un solo hito.
   async function handleConfirmarFijos() {
     if (savingRef.current) return;
     if (actualizarLegs) {
       savingRef.current = true;
       setSaving(true);
       try {
-        // Secuencial: GAS pierde escrituras concurrentes (ver handleGuardarBorrador).
+        // Secuencial: GAS pierde escrituras concurrentes.
         for (const r of rowsFijos) {
           const baseOriginal = originalRows.current[r._id] ?? 0;
           if (!baseOriginal || r.sueldo_base <= baseOriginal) continue;
@@ -1113,6 +1088,26 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
 
   async function handleConfirmarFormaPago() {
     if (savingRef.current) return;
+    // Sin la lectura de cerradas no sabemos qué hay en la hoja → no cerrar (antes borraba a ciegas).
+    if (!liqsFetchOk) {
+      alert("No pude leer las liquidaciones ya cerradas de este mes. Recargá la pantalla y volvé a intentar; no cierro para no duplicar.");
+      return;
+    }
+    // CIERRE SELECTIVO: el cierre es el hito. Solo se escriben los legajos que NO tienen liquidación
+    // cerrada este mes (nuevos, o reabiertos = borrados). Las cerradas no se tocan (ni se borran ni se
+    // reescriben) → sus montos quedan congelados y el cierre es un único add_batch.
+    // Un legajo con ALGUNA sede cerrada se saltea ENTERO (el blanco se reparte entre todas sus filas y
+    // una fila nueva suelta lo desbalancearía): hay que reabrirlo para incluir la sede nueva.
+    const legajosCerrados = new Set(rows.filter(r => isCerrada(r.estado)).map(r => r.legajo_id));
+    const rowsAbiertas = rows.filter(r => !legajosCerrados.has(r.legajo_id));
+    const mixtos = [...new Set(rows.filter(r => legajosCerrados.has(r.legajo_id) && !isCerrada(r.estado)).map(r => r.legajo_nombre))];
+    if (mixtos.length)
+      alert(`No se cierran (tienen la liquidación cerrada en otra sede este mes — reabrilas 🔒 para incluir la sede nueva):\n• ${mixtos.join("\n• ")}`);
+    if (!rowsAbiertas.length) {
+      alert("Todas las liquidaciones de este mes ya están cerradas. Para modificar una, reabrí ese legajo (🔒).");
+      setPaso(5);
+      return;
+    }
     savingRef.current = true;
     setSaving(true);
     try {
@@ -1125,7 +1120,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       const sedeDeLegajo = new Map(legajos.map(l => [String(l.id), String(l.sede_id || "")]));
       const rowRes = {};        // rowKey → { lineas, total, header }
       const rowsByLegajo = {};  // legajo_id → [{ r, k, tot }]
-      for (const r of rows) {
+      for (const r of rowsAbiertas) {
         const k = rowKeyDe(r.legajo_id, r.sede_id);
         const res = lineasConceptoDeRow(r, "cerrado");
         rowRes[k] = res;
@@ -1151,7 +1146,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         if (rem > 0.005) habByKey[casa.k] = (habByKey[casa.k] || 0) + rem;   // sobrante (blanco > Σtotales, raro) → a la casa
       }
       const entries = [];
-      for (const r of rows) {
+      for (const r of rowsAbiertas) {
         const rowKey = rowKeyDe(r.legajo_id, r.sede_id);
         const { lineas, total: rowTotal, header } = rowRes[rowKey];
         const habRow   = Math.round(habByKey[rowKey] || 0);
@@ -1175,21 +1170,20 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
           forma_pago: n.forma_pago || "efectivo",
           sociedad_id: sociedadDeFormaPago(n.forma_pago || "efectivo", "", r.sociedad_id),
           monto: Number(n.monto) || 0,
+          nov_id: n.id,   // transitorio: arma el id semántico de la línea (…-N-<NOV id>), no se escribe
         }));
         // El redondeo del efectivo es un aumento de sueldo: se agrega como concepto (cuenta Sueldos)
         // para que Σconcepto = Σpago y el costo extra impacte en el resultado (P&L).
         const lineasFin = redondeo > 0
           ? [...lineas, lineaLiq(header, { tipo: "concepto", concepto: "Redondeo", cuenta_contable: "Sueldos", cantidad: 0, monto_unit: 0, monto: redondeo })]
           : lineas;
-        // replace SOLO si esa liquidación ya tiene líneas en el sheet (cerrada previa o reabierta): ahí sí
-        // hay que borrar-antes-de-reescribir para no duplicar. Un cierre nuevo (sin borrador persistido en
-        // el sheet — hoy "Guardar borrador" está deshabilitado) no borra nada → el cierre es un único
-        // add_batch, sin el borrado fila-por-fila que hacía timeout con muchos empleados. Si la lectura de
-        // liquidaciones falló (liqsFetchOk=false) no sabemos qué hay → borramos por las dudas (viejo, seguro).
+        // Las filas que llegan acá NO están cerradas, así que en régimen no hay nada en la hoja para ellas
+        // → `replace` es false y el cierre es un único add_batch. Queda `replace` como red para una fila
+        // legacy que haya quedado en la hoja en estado "borrador" (reaperturas del modelo viejo).
         const idLiqR = idLiqDe(r.legajo_id, mes, anio, r.sede_id);
-        entries.push({ id_liq: idLiqR, lineas: [...lineasFin, ...pagos, ...novLineas], replace: !liqsFetchOk || idLiqEnSheet.has(idLiqR) });
+        entries.push({ id_liq: idLiqR, lineas: [...lineasFin, ...pagos, ...novLineas], replace: idLiqEnSheet.has(idLiqR) });
       }
-      // Un solo add_batch para todas las liquidaciones (replace: reescribe el borrador como "cerrado").
+      // Un solo add_batch para todas las liquidaciones nuevas/reabiertas.
       await saveLiquidacionesLinesBatch(entries);
       await refreshLiqs();   // refresh liviano (no bloquea la pantalla)
       setPaso(5);
@@ -1279,23 +1273,6 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
               </button>
             </span>
           )}
-          {idsLiqCerrados.length > 0 && (
-            <button onClick={handleReabrirTodas} disabled={reabriendo}
-              title="Vuelve a borrador TODAS las liquidaciones cerradas de este período"
-              style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 7, padding: "7px 14px",
-                fontSize: 13, fontWeight: 600, color: T.blue, cursor: reabriendo ? "default" : "pointer",
-                fontFamily: T.font, opacity: reabriendo ? 0.5 : 1 }}>
-              {reabriendo ? "Reabriendo…" : `🔓 Reabrir ${idsLiqCerrados.length} cerradas`}
-            </button>
-          )}
-          {/* "Guardar borrador" deshabilitado por ahora: persistía el borrador en el sheet, y eso obligaba
-              al cierre a borrar-antes-de-escribir (fila por fila → timeout). El borrador vive en memoria +
-              autosave local; el sheet solo guarda liquidaciones CERRADAS. Reactivar = quitar disabled. */}
-          <button onClick={handleGuardarBorrador} disabled
-            title="Deshabilitado por ahora — el borrador se guarda solo en este navegador (autosave local); al sheet va únicamente al cerrar la liquidación."
-            style={{ ...BTN_PRIMARY(true), padding: "7px 14px" }}>
-            💾 Guardar borrador
-          </button>
         </div>
       </div>
 
@@ -1541,7 +1518,9 @@ function PasoFijos({ rowsFijos, legajos, sedes, originalRows, novsByRowKey, upda
   const handlePct = (r, rawPct) => {
     setPctRaw(p => ({ ...p, [r._id]: rawPct }));
     const base  = baseOf(r);
-    const nuevo = rawPct !== "" ? Math.round(base * (1 + parseFloat(rawPct) / 100)) : base;
+    const p     = parseFloat(rawPct);
+    // Aumento por % → HACIA ARRIBA a múltiplos de $1.000 (misma regla que HQ). Sin aumento → base exacta.
+    const nuevo = (rawPct !== "" && !Number.isNaN(p) && p !== 0) ? Math.ceil(base * (1 + p / 100) / 1000) * 1000 : base;
     updateRow(r._id, "sueldo_base", nuevo);
   };
   const handleNuevo = (r, rawVal) => {
@@ -1617,6 +1596,7 @@ function PasoFijos({ rowsFijos, legajos, sedes, originalRows, novsByRowKey, upda
               const subio   = nuevo > base;
               const pctDer  = base ? Math.round((nuevo / base - 1) * 100 * 10) / 10 : 0;
               const pct     = pctRaw[row._id] ?? (pctDer ? String(pctDer) : "");
+              const cerr    = isCerrada(row.estado);
               return (
                 <tr key={row._id} style={{ background: bucketBg(row, i % 2 === 0 ? T.card : T.bg), borderBottom: `1px solid ${T.border}`, borderTop: sedeCambia(sortedFijos, i) ? "2px solid #94a3b8" : undefined }}>
                   <td style={{ padding: "5px 8px", fontWeight: 800 }}>{row.legajo_nombre}<NovChip novs={novsByRowKey[rowKeyDe(row.legajo_id, row.sede_id)]} /></td>
@@ -1627,9 +1607,9 @@ function PasoFijos({ rowsFijos, legajos, sedes, originalRows, novsByRowKey, upda
                   </td>
                   <td style={{ padding: "4px 6px", borderLeft: `1px solid ${T.border}` }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 3, justifyContent: "flex-end" }}>
-                      <input type="number" value={pct} placeholder="0"
+                      <input type="number" value={pct} placeholder="0" disabled={cerr} title={cerr ? LOCK_TITLE : undefined}
                         onChange={e => handlePct(row, e.target.value)}
-                        style={{ ...iStyle, width: 52 }} />
+                        style={{ ...iStyle, width: 52, ...(cerr ? LOCKED : {}) }} />
                       <span style={{ color: T.muted, fontSize: 11 }}>%</span>
                     </div>
                   </td>
@@ -1638,17 +1618,19 @@ function PasoFijos({ rowsFijos, legajos, sedes, originalRows, novsByRowKey, upda
                   </td>
                   <td style={{ padding: "4px 6px" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
-                      <input type="text"
+                      <input type="text" disabled={cerr} title={cerr ? LOCK_TITLE : undefined}
                         value={nuevo ? Math.round(nuevo).toLocaleString("es-AR") : ""}
                         onChange={e => handleNuevo(row, e.target.value)}
-                        style={{ ...iStyle, width: 96, fontWeight: 700, color: subio ? T.green : T.text }}
+                        style={{ ...iStyle, width: 96, fontWeight: 700, color: subio ? T.green : T.text, ...(cerr ? LOCKED : {}) }}
                       />
                       {subio && <span style={{ color: T.green, fontSize: 12 }}>↑</span>}
                     </div>
                   </td>
                   <td style={{ padding: "4px", textAlign: "center" }}>
-                    <button onClick={() => removeRow(row._id)}
-                      style={{ background: "none", border: "none", cursor: "pointer", color: T.dim, fontSize: 12, padding: 2 }}>🗑</button>
+                    {cerr
+                      ? <span title={LOCK_TITLE} style={{ fontSize: 12, color: T.green }}>🔒</span>
+                      : <button onClick={() => removeRow(row._id)}
+                          style={{ background: "none", border: "none", cursor: "pointer", color: T.dim, fontSize: 12, padding: 2 }}>🗑</button>}
                   </td>
                 </tr>
               );
@@ -1847,8 +1829,10 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByR
                   const esBigg = !/YOGA|RUNNING/i.test(l.clase || "");   // feriado/domingo solo en BIGG CLASS
                   const first = di === 0, last = di === det.length - 1;
                   const tot   = (Number(l.regulares) || 0) + (Number(l.feriado) || 0) + (Number(l.domingo) || 0);
+                  const cerr  = isCerrada(row.estado);
                   const inp = (field, on) => on
-                    ? <input style={iStyle} value={l[field] || ""} placeholder="0"
+                    ? <input style={{ ...iStyle, ...(cerr ? LOCKED : {}) }} value={l[field] || ""} placeholder="0"
+                        disabled={cerr} title={cerr ? LOCK_TITLE : undefined}
                         onChange={e => updateDetalle(row._id, di, field, e.target.value)} />
                     : <span style={{ color: T.dim }}>—</span>;
                   return (
@@ -1857,8 +1841,9 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByR
                       <td style={{ padding: "4px 6px" }}>
                         {first && (
                           <select value={row.rol} onChange={e => updateRow(row._id, "rol", e.target.value)}
+                            disabled={cerr} title={cerr ? LOCK_TITLE : undefined}
                             style={{ fontSize: 11, fontFamily: T.font, border: `1px solid ${T.border}`,
-                              borderRadius: 4, padding: "2px 4px", background: T.card, color: T.text, width: "100%", cursor: "pointer" }}>
+                              borderRadius: 4, padding: "2px 4px", background: T.card, color: T.text, width: "100%", cursor: "pointer", ...(cerr ? LOCKED : {}) }}>
                             {ROLES_COACHES.map(r => <option key={r} value={r}>{ROL_CONCEPTO[r] ?? r}</option>)}
                           </select>
                         )}
@@ -1877,7 +1862,9 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByR
                         </span>
                       </td>
                       <td style={{ padding: "4px", textAlign: "center" }}>
-                        {first
+                        {cerr
+                          ? (first && <span title={LOCK_TITLE} style={{ fontSize: 12, color: T.green }}>🔒</span>)
+                          : first
                           ? <button onClick={() => removeRow(row._id)} title="Borrar el coach entero"
                               style={{ background: "none", border: "none", cursor: "pointer", color: T.dim, fontSize: 12, padding: 2 }}>🗑</button>
                           : <button onClick={() => removeDetalle(row._id, di)} title="Borrar esta línea (ej. Ausentes)"
@@ -1952,10 +1939,14 @@ function PasoIncentivos({ rows, legajos, sedes, mes, anio, pais, novsByRowKey, u
   );
 
   const dash = <span style={{ display: "block", textAlign: "right", color: T.dim }}>—</span>;
-  const inp  = (row, field) => (
-    <input style={iStyle} value={row[field] || ""} placeholder="0"
-      onChange={e => updateRow(row._id, field, e.target.value)} />
-  );
+  const inp  = (row, field) => {
+    const cerr = isCerrada(row.estado);
+    return (
+      <input style={{ ...iStyle, ...(cerr ? LOCKED : {}) }} value={row[field] || ""} placeholder="0"
+        disabled={cerr} title={cerr ? LOCK_TITLE : undefined}
+        onChange={e => updateRow(row._id, field, e.target.value)} />
+    );
+  };
 
   const handleCargarCdp = async () => {
     setCdpLoading(true);
@@ -2095,7 +2086,8 @@ function PasoIncentivos({ rows, legajos, sedes, mes, anio, pais, novsByRowKey, u
                         LIMPIEZA exenta → sin campo (baseGrupalDe devuelve 0 igual). */}
                     {!isLimp ? (
                       <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
-                        <input style={{ ...iStyle, width: 44 }} value={row.c_grupo_pct || ""} placeholder="0"
+                        <input style={{ ...iStyle, width: 44, ...(isCerrada(row.estado) ? LOCKED : {}) }} value={row.c_grupo_pct || ""} placeholder="0"
+                          disabled={isCerrada(row.estado)} title={isCerrada(row.estado) ? LOCK_TITLE : undefined}
                           onChange={e => updateRow(row._id, "c_grupo_pct", e.target.value)} />
                         <span style={{ fontSize: 10, color: T.muted }}>%</span>
                       </div>
@@ -2111,8 +2103,10 @@ function PasoIncentivos({ rows, legajos, sedes, mes, anio, pais, novsByRowKey, u
                     {!isLimp ? inp(row, "q_one_shot") : dash}
                   </td>
                   <td style={{ padding: "4px", textAlign: "center" }}>
-                    <button onClick={() => removeRow(row._id)}
-                      style={{ background: "none", border: "none", cursor: "pointer", color: T.dim, fontSize: 12, padding: 2 }}>🗑</button>
+                    {isCerrada(row.estado)
+                      ? <span title={LOCK_TITLE} style={{ fontSize: 12, color: T.green }}>🔒</span>
+                      : <button onClick={() => removeRow(row._id)}
+                          style={{ background: "none", border: "none", cursor: "pointer", color: T.dim, fontSize: 12, padding: 2 }}>🗑</button>}
                   </td>
                 </tr>
               );
@@ -2207,7 +2201,8 @@ function PasoFormaPago({ empls, pagoDraft, onChangePago, onAtras, onContinuar, o
                     {fmtMoney(empl.total)}
                   </td>
                   <td style={{ padding: "4px 8px", textAlign: "right" }}>
-                    <input style={MON()} value={d.monto_haberes ?? ""} placeholder="0"
+                    <input style={{ ...MON(), ...(empl.cerrada ? LOCKED : {}) }} value={d.monto_haberes ?? ""} placeholder="0"
+                      disabled={empl.cerrada} title={empl.cerrada ? "Cerrada — reabrí (🔒) para cambiar el blanco" : undefined}
                       onChange={e => onChangePago(empl.legajo_id, "monto_haberes", parseFloat(e.target.value) || 0)} />
                   </td>
                   <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700,
