@@ -3487,12 +3487,22 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   // una fondeada (ej. la Pauta / interusos genéricos contabilizados con `wellness` = Gestión Deportiva y
   // Wellness / España) son resultado de ESA sociedad, no del núcleo → van a su propio P&L, no acá. Se rutean
   // todas al mismo centro "HQ Ventas", así que el filtro correcto es por la SOCIEDAD del emisor, no por centro.
-  const franqRows = useMemo(
-    () => franquiciasIngresoPnLRows(rawFranq, "", ventasCcId)
-      .filter(r => nucleoEmpresas.has(r.sociedad))
-      .map(r => ({ ...r, _tipo: "Franquicia" })),
-    [rawFranq, ventasCcId, nucleoEmpresas]
-  );
+  // Centro de la facturación de franquicias según la SOCIEDAD emisora:
+  //   · núcleo (Ñako / Bigg Fit) → "HQ - Ventas", como siempre (Ingresos HQ del P&L BIGG).
+  //   · fondeada con centro de estructura (España = Gestión Deportiva y Wellness → "16 - Wellness") → ESE centro,
+  //     con subtipo INGRESO. Decisión Martín 18/9/2026: Wellness es PASAMANOS de la pauta — se la vende a los
+  //     franquiciados y se la compra a Untangle en la misma cuenta "Pauta" → en el P&L de sedes la venta resta en
+  //     la línea Pauta (contra) y con la FC de compra el efecto es cero. El Devengado/balance por sociedad la ven
+  //     como ingreso de Wellness (antes se descartaba y la CxC de franquiciados quedaba sin contrapartida).
+  //   · sociedad sin centro conocido → afuera (no hay dónde ponerla sin inflar a otro).
+  const franqRows = useMemo(() => {
+    const estructuraDe = Object.fromEntries(Object.values(FONDEADAS).filter(f => f.estructuraCC).map(f => [f.empresa, f.estructuraCC]));
+    return franquiciasIngresoPnLRows(rawFranq, "", ventasCcId).map(r => {
+      if (nucleoEmpresas.has(r.sociedad)) return { ...r, _tipo: "Franquicia" };
+      const cc = estructuraDe[r.sociedad];
+      return cc ? { ...r, centro_costo: cc, subtipo: "INGRESO", _tipo: "Franquicia" } : null;
+    }).filter(Boolean);
+  }, [rawFranq, ventasCcId, nucleoEmpresas]);
   const inConFranq = useMemo(() => [...rawIn, ...franqRows, ...histIn], [rawIn, franqRows, histIn]);
 
   // Detalle de Informes: las MISMAS fuentes que el P&L (comprobantes + gastos directos + sueldos +
