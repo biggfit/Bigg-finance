@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect, useRef, Fragment } from "react";
 import { T, PageHeader } from "./theme";
-import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco, fondeoFondeadasMensual, intercoConsolidadoMensual, calcSaldoPendiente, primeCache, fetchTiposCambio, tcDelMes, montoAUSD, fetchPnLHistorico, RETDEP_TAG } from "../lib/numbersApi";
+import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco, fondeoFondeadasMensual, intercoConsolidadoMensual, calcSaldoPendiente, primeCache, fetchTiposCambio, tcDelMes, montoAUSD, montoAMoneda, fetchPnLHistorico, RETDEP_TAG } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, pendienteSueldosPorLegajo, adelantoSueldosPorLegajo } from "../lib/sueldosApi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
 import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
@@ -387,6 +387,9 @@ const SEDE_GRUPOS = [
   { key: "com_res",   label: "Comisión por resultados",  color: SEDE_HDR, cuentas: ["Comision S/Resultado"] },
   { key: "inv_no_op", label: "Inversiones no operativas", color: SEDE_HDR, cuentas: ["Inversiones / Gastos no Operativos"] },
 ];
+// Los 4 grupos que forman "Total Gastos Operativos" de la sede. Una sola lista para el subtotal y para el
+// detalle por cuenta de la estructura → no pueden quedar desalineados.
+const SEDE_OPEX_GRUPOS = ["gp_pers", "gp_ocup", "gp_mkt", "gp_otros"];
 const _nkSede = s => (s ?? "").trim().toLowerCase();
 // Cuentas que se OCULTAN si están vacías (todo el año en cero). Ing.Stripe / Ing. Datafono son naturales de
 // España → en el resto de las sedes vienen en 0 y ensucian; en España, donde sí hay dato, se muestran solas.
@@ -514,14 +517,39 @@ const PNL_INICIO = "2026-07-01";
 // Mes en curso "YYYY-MM": corte para el aviso de TC faltante (mes pasado sin TC = hueco; en curso = esperado).
 const _mesActualYM = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; })();
 
-// Pre-traduce filas de P&L a USD (consolidado): convierte `total` + `iva_monto` al TC del mes de CADA fila
-// (mes por mes) y marca `moneda:"USD"`, para que los builders corran nativos en USD sin tocar su lógica.
+// Selector de moneda → [modo, destino]. "ARS"/"USD"/… = nativo (el reporte filtra por esa moneda, como
+// siempre). "<CUR>_REAL" / "<CUR>_CONST" = consolidado: traduce TODAS las monedas a <CUR>, al TC del mes de
+// cada fila (real) o al de un mes ancla (const). El destino sale del mismo valor, no de una variable aparte.
+// Monedas en las que se puede consolidar: U$D (grupo), € (España se analiza en euros) y COP (la moneda de
+// gestión de Colombia). El ARS no está: Rosedal/Huergo son negocios de una sola moneda y no lo necesitan.
+const FX_DESTINOS = ["USD", "EUR", "COP"];
+// Dónde se OFRECE cada destino. El U$D va en todos (moneda del grupo y pivote del TC); los demás son la moneda
+// de UNA operación y solo se ofrecen en su reporte — consolidar el grupo en euros o en pesos colombianos afuera
+// de España/Colombia no significa nada y ensucia el selector. NO se deriva de FONDEADAS: ahí Colombia figura con
+// moneda "USD" (así se la mira), el COP es su moneda de gestión, no la del reporte.
+const FX_DESTINO_SOLO_EN = { EUR: "op_espana", COP: "op_colombia" };
+const fxDestinosDe = (tab) => FX_DESTINOS.filter(d => !FX_DESTINO_SOLO_EN[d] || FX_DESTINO_SOLO_EN[d] === tab);
+// Si venías de España/Colombia con su consolidado elegido y saltás a otro reporte, ese valor ya no está en la
+// lista y el select quedaría mostrando un fantasma → se cae a U$D · TC Real, que se ofrece en todos.
+const monedaValidaEn = (sel, tab) => {
+  const [modo, dst] = parseMonedaSel(sel);
+  return modo === "native" || fxDestinosDe(tab).includes(dst);
+};
+function parseMonedaSel(sel) {
+  const m = /^([A-Z]{3})_(REAL|CONST)$/.exec(String(sel || ""));
+  if (!m || !FX_DESTINOS.includes(m[1])) return ["native", null];
+  return [m[2] === "REAL" ? "real" : "const", m[1]];
+}
+
+// Pre-traduce filas de P&L a la moneda del consolidado: convierte `total` + `iva_monto` al TC del mes de CADA
+// fila (mes por mes) y las marca con `destino`, para que los builders corran nativos ahí sin tocar su lógica.
 // `fx(monto, moneda, anio, mes)` traduce (o null si falta TC). Filas sin TC se dropean; los meses PASADOS
 // sin TC se listan en `mesesSinTC` (el mes en curso sin TC de cierre es esperado → no se lista).
-// Desde qué mes avisar por TC faltante. El histórico 2024-y-antes se cargó ya consolidado → no interesa
-// traducirlo ni avisar por él (esas filas igual se dropean sin TC, pero no ensucian el cartel).
-const TC_WARN_DESDE = "2025-01";
-function traducirFilasUSD(rows, fx) {
+// Desde qué mes avisar por TC faltante = el go-live. TODO lo anterior (histórico pre 1/7/2026) se cargó ya
+// consolidado en USD, así que esos tipos de cambio NO se van a cargar nunca (decisión de Martín, 18/9): pedirlos
+// es ruido permanente. Sin TC esas filas igual se dropean del consolidado, pero no ensucian el cartel.
+const TC_WARN_DESDE = PNL_INICIO.slice(0, 7);
+function traducirFilasFx(rows, fx, destino = "USD") {
   if (!fx) return { rows, mesesSinTC: [] };
   const out = [], sin = new Set();
   for (const r of (rows || [])) {
@@ -530,7 +558,7 @@ function traducirFilasUSD(rows, fx) {
     const t = fx(Number(r.total) || 0, r.moneda || "ARS", anio, mes);
     if (t == null) { const ym = r.fecha.slice(0, 7); if (ym < _mesActualYM && ym >= TC_WARN_DESDE) sin.add(ym); continue; }
     const iva = fx(Number(r.iva_monto) || 0, r.moneda || "ARS", anio, mes) ?? 0;
-    out.push({ ...r, total: t, iva_monto: iva, moneda: "USD" });
+    out.push({ ...r, total: t, iva_monto: iva, moneda: destino });
   }
   return { rows: out, mesesSinTC: [...sin].sort() };
 }
@@ -557,8 +585,8 @@ const montoPnL = (row, sinIva) => {
 // Grupos de INGRESO del P&L Sede (los que suman en totIngresos) → su IVA es débito (ventas); el resto, crédito.
 const SEDE_ING_KEYS = new Set(["vta_cf", "int_bigg", "int_corp"]);
 
-// La consolidación FX (USD) se resuelve pre-traduciendo las filas a USD ANTES de llamar acá
-// (ver traducirFilasUSD): este builder corre siempre en modo nativo (filtra por `moneda`).
+// La consolidación FX se resuelve pre-traduciendo las filas a la moneda destino ANTES de llamar acá
+// (ver traducirFilasFx): este builder corre siempre en modo nativo (filtra por `moneda`).
 function buildPnLSede(inRows, egRows, ccFilter, year, moneda, sinIva = false) {
   // Pre-poblar cada grupo con sus cuentas configuradas en 0 → se muestran aunque no tengan monto.
   const grupos = {};
@@ -607,7 +635,7 @@ function computeSubtotalsSede(pnl) {
   for (const g of SEDE_GRUPOS) st[g.key] = sumGrupoSede(grupos[g.key]);
   const totIngresos   = MESES.map((_, m) => st.vta_cf[m] + st.int_bigg[m] + st.int_corp[m]);
   const margenContrib = MESES.map((_, m) => totIngresos[m] - st.cvar[m]);
-  const totGastosOp   = MESES.map((_, m) => st.gp_pers[m] + st.gp_ocup[m] + st.gp_mkt[m] + st.gp_otros[m]);
+  const totGastosOp   = MESES.map((_, m) => SEDE_OPEX_GRUPOS.reduce((s, gk) => s + (st[gk][m] || 0), 0));
   const resOp         = MESES.map((_, m) => margenContrib[m] - totGastosOp[m]);
   const resFinal      = MESES.map((_, m) => resOp[m] - st.com_res[m] - st.inv_no_op[m]);
   const months = new Set();
@@ -932,7 +960,8 @@ export function buildPnLSedeFilas(props, isCol) {
           financieros = null, distribucion = null, retirosVivos = null, feeIvaVivo = null,
           netoLabel = "Resultado Neto", nombreCuenta = (x) => x, hayHistorico = false, mesMax = null,
           cesionResFinal = null, cesionRetiros = null, comBaseResOp = null,
-          estructuraCuota = null, estructuraEnOpex = false, estructuraLabel = "Estructura Wellness" } = props;
+          estructuraCuota = null, estructuraEnOpex = false, estructuraLabel = "Estructura Wellness",
+          estructuraDetalle = null } = props;
   const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths: _amRaw } = sub;
   const activeMonths = mesesVisibles(_amRaw, year, hayHistorico, mesMax);
 
@@ -1033,7 +1062,15 @@ export function buildPnLSedeFilas(props, isCol) {
     if (!isCol("sec_gop")) { pushGrupo("gp_pers", -1); pushGrupo("gp_ocup", -1); pushGrupo("gp_mkt", -1); pushGrupo("gp_otros", -1); }
     filas.push({ kind: "subtotal", label: "Total Gastos Operativos", cur: sedeOpexView, prev: subPrev.totGastosOp, pol: -1 });
     // Estructura (Wellness): costo debajo de Total Gastos Operativos (como en el Excel). OPEX positivo → (x).
-    if (estruc) filas.push({ kind: "cuenta", label: estructuraLabel, cur: estruc, prev: ZERO12, pol: -1 });
+    // Con detalle por cuenta (España: la estructura es un CENTRO) la línea se despliega como un grupo más, para
+    // poder auditar qué hay adentro. Colombia es una CUENTA única → sin detalle, la fila queda plana.
+    if (estruc) {
+      const detEstruc = estructuraDetalle?.length ? estructuraDetalle : null;
+      filas.push({ kind: "cuenta", label: estructuraLabel, cur: estruc, prev: ZERO12, pol: -1,
+                   ...(detEstruc ? { toggleKey: "estruc" } : {}) });
+      if (detEstruc && !isCol("estruc")) for (const d of detEstruc)
+        filas.push({ kind: "cuenta", label: d.label, cur: d.cur, prev: ZERO12, pol: -1, nested: true });
+    }
     filas.push({ kind: "result", label: "Resultado Operativo", cur: resOpEff, prev: subPrev.resOp, pol: 1 });
 
     let fcfArr = resFinalEff;   // FCF (o Resultado Final sin cola) → base de la ganancia viva de la distribución
@@ -1127,7 +1164,7 @@ export function buildPnLSedeFilas(props, isCol) {
 function PnLTableSede(props) {
   const { moneda, label, year, vista = "evolucion", mes = 0 } = props;
   // Colapso jerárquico: bandas de sección (Ingresos / Gastos Op) + cada sub-grupo + Distribución + toggle maestro.
-  const ALLKEYS = ["sec_ing", "sec_gop", "distrib", ...SEDE_GRUPOS.map(g => g.key)];
+  const ALLKEYS = ["sec_ing", "sec_gop", "distrib", "estruc", ...SEDE_GRUPOS.map(g => g.key)];
   const [collapsed, setCollapsed] = useState(() => Object.fromEntries(ALLKEYS.map(k => [k, true])));   // arranca compactado
   const isCol  = k => !!collapsed[k];
   const toggle = k => setCollapsed(c => ({ ...c, [k]: !c[k] }));
@@ -1206,15 +1243,23 @@ function PnLTableSede(props) {
                   {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "7px 12px", fs: 12, fw: 800, color: SEDE_HDR })}
                 </tr>
               );
-              if (f.kind === "cuenta") return (
-                <tr key={idx} style={{ borderBottom: `1px solid ${T.cardBorder}`, background: T.card }}
-                  onMouseEnter={e => { e.currentTarget.style.background = "#f0f9ff"; e.currentTarget.firstChild.style.background = "#f0f9ff"; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = T.card; e.currentTarget.firstChild.style.background = T.card; }}>
-                  <td style={{ padding: "6px 14px 6px 32px", fontSize: 13, color: f.color || T.text, whiteSpace: "nowrap",
-                    borderBottom: `1px solid ${T.cardBorder}`, ...stickyCol, background: T.card }}>{f.label}</td>
-                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "6px 12px", fs: 13, fw: 400, color: f.color || SEDE_HDR, stock: f.stock, lastM })}
-                </tr>
-              );
+              if (f.kind === "cuenta") {
+                // `toggleKey` → la cuenta se despliega (Estructura Wellness); `nested` → es una de esas hijas.
+                const clickable = !!f.toggleKey;
+                const cbg = f.nested ? "#eef1f5" : T.card;
+                const pad = f.nested ? "6px 14px 6px 48px" : "6px 14px 6px 32px";
+                return (
+                  <tr key={idx} onClick={clickable ? () => toggle(f.toggleKey) : undefined}
+                    style={{ borderBottom: `1px solid ${T.cardBorder}`, background: cbg, cursor: clickable ? "pointer" : "default" }}
+                    onMouseEnter={e => { e.currentTarget.style.background = "#f0f9ff"; e.currentTarget.firstChild.style.background = "#f0f9ff"; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = cbg; e.currentTarget.firstChild.style.background = cbg; }}>
+                    <td style={{ padding: pad, fontSize: 13, color: f.color || T.text, whiteSpace: "nowrap",
+                      borderBottom: `1px solid ${T.cardBorder}`, userSelect: clickable ? "none" : undefined, ...stickyCol, background: cbg }}>
+                      {clickable && <span style={{ display: "inline-block", width: 18, marginLeft: -18, fontSize: 9, opacity: .7 }}>{isCol(f.toggleKey) ? "▶" : "▼"}</span>}{f.label}</td>
+                    {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "6px 12px", fs: 13, fw: 400, color: f.color || SEDE_HDR, stock: f.stock, lastM })}
+                  </tr>
+                );
+              }
               if (f.kind === "cesion") {
                 const bg = "#faf5ff", top = f.top ? { borderTop: "2px solid #7c3aed" } : {};
                 return (
@@ -2895,11 +2940,11 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       .finally(() => setSecReady(s => ({ ...s, hist: true })));
   }, []);
   // Modo de consolidación FX derivado del selector. "native" = filtra por moneda (como siempre);
-  // "real" = traduce TODO a USD al TC de cierre de CADA mes (mezcla operación + efecto cambiario);
-  // "const" = traduce TODO a USD al TC de UN mes ancla (el del selector Mes) → comparable, aísla el FX
-  // (ARS vs USD y EUR vs USD quedan fijos, sin ruido de devaluación/caída del euro).
-  const fxMode   = monedaSel === "USD_REAL" ? "real" : monedaSel === "USD_CONST" ? "const" : "native";
-  const monedaPL = fxMode === "native" ? monedaSel : "USD";
+  // "real" = traduce TODO a la moneda destino al TC de cierre de CADA mes (mezcla operación + efecto
+  // cambiario); "const" = traduce TODO al TC de UN mes ancla (el del selector Mes) → comparable, aísla el FX
+  // (las paridades quedan fijas, sin ruido de devaluación/caída del euro). Destino = U$D o € (ver FX_DESTINOS).
+  const [fxMode, fxTarget] = parseMonedaSel(monedaSel);
+  const monedaPL = fxMode === "native" ? monedaSel : fxTarget;
   const setMonedaPL = setMonedaSel;   // los efectos que forzaban moneda (fondeadas/Huergo) siguen andando
   const [rawEg,     setRawEg]     = useState([]);
   const [rawIn,     setRawIn]     = useState([]);
@@ -3033,8 +3078,19 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const isSedeLike = activeTab === "pl_sede" || isFond;
   const isHuergo   = activeTab === "op_huergo" && !curTab?.wip;   // negocio de margen (WRE, anillo 1)
   const isPnlTiempo = isSedeLike || isHuergo;   // reportes con toggle de vista (Evolución/Mensual/YTD) + Año/Moneda
-  // Al entrar a un negocio, arrancar en su moneda (fondeada = la suya; Huergo = ARS). Igual se puede cambiar.
-  useEffect(() => { if (isFond) setMonedaPL(fondCfg.moneda); else if (isHuergo) setMonedaPL("ARS"); }, [activeTab]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // Al entrar a un negocio, arrancar en su moneda… pero en el modo CONSOLIDADO (TC Real), no en el nativo:
+  // el nativo FILTRA por moneda, así que se come todo lo que la fondeada paga en otra (España: sueldos en USD
+  // y gastos en ARS del centro de estructura, 4.935 € en jul+ago; Colombia: la operación entera está en COP y
+  // el P&L en U$D nativo mostraba ingresos CERO de julio en adelante). La moneda nativa sigue en el selector.
+  // Huergo = ARS nativo (negocio de una sola moneda; el ARS no es destino de consolidación).
+  const monedaDeEntrada = (mon) => FX_DESTINOS.includes(mon) ? `${mon}_REAL` : mon;
+  useEffect(() => {
+    if (isFond) setMonedaPL(monedaDeEntrada(fondCfg.moneda));
+    else if (isHuergo) setMonedaPL("ARS");
+    // Resto de los reportes: respetá lo elegido, salvo que ya no se ofrezca acá (venías de España en € o de
+    // Colombia en COP) → U$D · TC Real.
+    else setMonedaPL(m => monedaValidaEn(m, activeTab) ? m : "USD_REAL");
+  }, [activeTab]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Clave por NOMBRE (lo que guardan las filas) y TAMBIÉN por id: varios writers de numbersApi
   // convierten id→nombre con `.replace(/^CUENTA_/, "")`, que no toca los ids nuevos (`CTA-…`) y
@@ -3218,14 +3274,17 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     ? (mesCorte ?? (year >= CUR_YEAR ? Math.max(0, new Date().getMonth() - 1) : 11))
     : mesSel;
   const fxConstTC   = useMemo(() => fxMode === "const" ? tcDelMes(tiposCambio, year, anchorMes + 1) : null, [fxMode, tiposCambio, year, anchorMes]);
-  const fxConstFalta = fxMode === "const" && !fxConstTC;   // el mes ancla no tiene TC cargado
-  // Traductor FX del P&L (consolidación). null en modo nativo. "real" = a USD al TC de cierre del mes de cada
-  // fila (traducí mes por mes y sumá). "const" = a USD al TC del mes ancla, ignorando el mes de la fila.
+  // El mes ancla no tiene TC cargado… o lo tiene pero sin la tasa del destino (ej. el mes existe pero le falta
+  // eurUSD): en ese caso la traducción devolvería null para todo y el reporte quedaría vacío sin explicación.
+  const fxConstFalta = fxMode === "const" &&
+    (!fxConstTC || (fxTarget !== "USD" && montoAMoneda(1, "USD", fxConstTC, fxTarget) == null));
+  // Traductor FX del P&L (consolidación). null en modo nativo. "real" = al destino con el TC de cierre del mes
+  // de cada fila (traducí mes por mes y sumá). "const" = al destino con el TC del mes ancla, ignorando el mes.
   const fxConv = useMemo(() => {
-    if (fxMode === "real")  return (monto, moneda, anio, mes) => montoAUSD(monto, moneda, tcDelMes(tiposCambio, anio, mes));
-    if (fxMode === "const") return (monto, moneda) => montoAUSD(monto, moneda, fxConstTC);
+    if (fxMode === "real")  return (monto, moneda, anio, mes) => montoAMoneda(monto, moneda, tcDelMes(tiposCambio, anio, mes), fxTarget);
+    if (fxMode === "const") return (monto, moneda) => montoAMoneda(monto, moneda, fxConstTC, fxTarget);
     return null;
-  }, [fxMode, tiposCambio, fxConstTC]);
+  }, [fxMode, fxTarget, tiposCambio, fxConstTC]);
 
   // Matriz del reporte "Intercompañía por negocio" (siempre en USD, independiente del modo FX del P&L). Se
   // computa acá (una vez) para poder dibujar el selector de Negocio junto al de Año y pasarla ya lista al tab.
@@ -3319,11 +3378,11 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const egDetalle  = useMemo(() => egConSueldos.filter(r => !r._tipo || ["Gasto", "Sueldo", "Financiación"].includes(r._tipo)), [egConSueldos]);
   const ingDetalle = useMemo(() => [...inConFranq, ...gastoMovRows.filter(r => r._tipo === "Ingreso" || r._tipo === "Retención")], [inConFranq, gastoMovRows]);
 
-  // Filas pre-traducidas a USD para el consolidado (UNA vez, mes por mes). En modo nativo (fxConv null) son
-  // las mismas filas → todos los P&L (Sedes/Huergo/BIGG) corren nativos en USD sin tocar su lógica. Mecanismo
+  // Filas pre-traducidas a la moneda del consolidado (UNA vez, mes por mes). En modo nativo (fxConv null) son
+  // las mismas filas → todos los P&L (Sedes/Huergo/BIGG) corren nativos ahí sin tocar su lógica. Mecanismo
   // único de traducción del consolidado.
-  const inFxRows = useMemo(() => traducirFilasUSD(inConFranq, fxConv), [inConFranq, fxConv]);
-  const egFxRows = useMemo(() => traducirFilasUSD(egConSueldos, fxConv), [egConSueldos, fxConv]);
+  const inFxRows = useMemo(() => traducirFilasFx(inConFranq, fxConv, fxTarget), [inConFranq, fxConv, fxTarget]);
+  const egFxRows = useMemo(() => traducirFilasFx(egConSueldos, fxConv, fxTarget), [egConSueldos, fxConv, fxTarget]);
   const inFx = inFxRows.rows, egFx = egFxRows.rows;
   // Meses PASADOS sin TC (alimenta el aviso). El mes en curso sin TC de cierre es esperado → no entra.
   const mesesSinTC = useMemo(
@@ -3362,10 +3421,12 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   // y costos variables (Otros Ingresos, Fees) quedan en el consolidado. En "Todas las Sedes" el centro está
   // en el scope → su OPEX ya viaja dentro de Total Gastos Operativos y solo se SEPARA visualmente. En una
   // sede sola (Wellness fuera del scope), esa estructura se PRORRATEA por ventas y se suma como costo.
-  const estructuraOpexFull = useMemo(() => {   // OPEX del centro de estructura (positivo), mes a mes
-    if (!estructuraCCId) return null;
-    return computeSubtotalsSede(buildPnLSede(inFx, egFx, [estructuraCCId], year, monedaPL, sinIva)).totGastosOp;
-  }, [estructuraCCId, inFx, egFx, year, monedaPL, sinIva]);
+  const estructuraPnl = useMemo(() => (   // P&L del centro de estructura solo (para el total y su detalle)
+    estructuraCCId ? buildPnLSede(inFx, egFx, [estructuraCCId], year, monedaPL, sinIva) : null
+  ), [estructuraCCId, inFx, egFx, year, monedaPL, sinIva]);
+  const estructuraOpexFull = useMemo(() => (   // OPEX del centro de estructura (positivo), mes a mes
+    estructuraPnl ? computeSubtotalsSede(estructuraPnl).totGastosOp : null
+  ), [estructuraPnl]);
   const wellnessEnScope = !!estructuraCCId && resolvedCCSede.some(id => ccKey(id) === ccKey(estructuraCCId));
   // Ventas de TODAS las sedes reales (denominador del prorrateo) — sin el centro de estructura.
   const ventasTotalesSedes = useMemo(() => {
@@ -3391,6 +3452,23 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     const k = Object.keys(pnlSede.sinClasificar).find(x => _nkSede(x) === _nkSede(estructuraCuentaName));
     return k ? pnlSede.sinClasificar[k] : ZERO12;
   }, [estructuraCuentaName, pnlSede]);
+  // Detalle por cuenta de la estructura, para desplegar la línea. Son las mismas cuentas que forman
+  // `estructuraOpexFull` (los 4 grupos de Gastos Operativos del centro), escaladas por el MISMO factor que la
+  // cuota → con una sede sola (prorrateo por ventas) las cuentas siguen sumando exactamente la línea.
+  const estructuraDetalle = useMemo(() => {
+    if (!estructuraPnl || !estructuraOpexFull || !estructuraCuota) return null;
+    const factor = MESES.map((_, m) => {
+      const full = Number(estructuraOpexFull[m]) || 0;
+      return full ? (Number(estructuraCuota[m]) || 0) / full : 0;
+    });
+    const out = [];
+    for (const gk of SEDE_OPEX_GRUPOS)
+      for (const [name, arr] of Object.entries(estructuraPnl.grupos[gk])) {
+        const cur = MESES.map((_, m) => (Number(arr[m]) || 0) * factor[m]);
+        if (cur.some(v => Math.abs(v) >= 0.005)) out.push({ label: name, cur });   // cuentas en cero no ensucian
+      }
+    return out.length ? out : null;
+  }, [estructuraPnl, estructuraOpexFull, estructuraCuota]);
   // Estructura efectiva a pasar a la tabla: centro (España, ya está dentro de Gastos Op → estructuraEnOpex)
   // o cuenta (Colombia, fuera de Gastos Op → resta al Resultado Operativo). Label según la lente.
   const estructuraCuotaEff  = estructuraCuota ?? estructuraCuentaVals;
@@ -3623,6 +3701,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       pnl: pnlSede, sub: subSede, pnlPrev: pnlSedePrev, subPrev: subSedePrev, year,
       nombreCuenta, cesion: cesionSede, cesionResFinal: subSedeNet?.resFinal, cesionRetiros: cesionRetirosCI,
       comBaseResOp, estructuraCuota: estructuraCuotaEff, estructuraEnOpex: estructuraEnOpexEff, estructuraLabel: estructuraLabelEff,
+      estructuraDetalle,
       impuestos: isFond ? IMPUESTOS_FOND : null, financieros: isFond ? FINANCIEROS_FOND : null,
       distribucion: activeTab === "op_rosedal" ? distribRosedalFx : null,
       retirosVivos: activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null,
@@ -3650,7 +3729,9 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   // Encabezado de la "foto" (Ampliar / Copiar imagen): título + año + vista + moneda + IVA, para entender
   // qué se está viendo (igual criterio que la bajada a Excel).
   const monedaFotoLabel = { ARS: "$ ARS", USD: "U$D", EUR: "€ EUR", COP: "COP",
-    USD_REAL: "U$D · TC Real", USD_CONST: `U$D constante (${MESES[anchorMes]} ${year})` }[monedaSel] || monedaSel;
+    USD_REAL: "U$D · TC Real", USD_CONST: `U$D constante (${MESES[anchorMes]} ${year})`,
+    EUR_REAL: "€ · TC Real",   EUR_CONST: `€ constante (${MESES[anchorMes]} ${year})`,
+    COP_REAL: "COP · TC Real", COP_CONST: `COP constante (${MESES[anchorMes]} ${year})` }[monedaSel] || monedaSel;
   const vistaFotoLabel = vistaPnl === "evolucion" ? "Evolución mensual"
     : vistaPnl === "mensual" ? `Mensual · ${MESES[mesSel]}`
     : `YTD a ${MESES[mesSel]}`;
@@ -3823,8 +3904,8 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
                   {fxConstFalta ? "⚠️" : "🔒"}
                   <span className="nb-tip-box">
                     {fxConstFalta
-                      ? `Falta el tipo de cambio de ${MESES[anchorMes]} ${year} (mes ancla del modo constante). Cargalo en Maestros (nb_tipos_cambio) o elegí otro mes.`
-                      : `U$D constante — todo valuado al TC de ${MESES[anchorMes]} ${year} (comparable, sin efecto cambiario). El mes ancla lo fija el selector ${vistaPnl === "evolucion" ? "Hasta" : "Mes"}.`}
+                      ? `Falta el tipo de cambio de ${MESES[anchorMes]} ${year} a ${MONEDA_SYM[fxTarget] || fxTarget} (mes ancla del modo constante). Cargalo en Maestros (nb_tipos_cambio) o elegí otro mes.`
+                      : `${MONEDA_SYM[fxTarget] || fxTarget} constante — todo valuado al TC de ${MESES[anchorMes]} ${year} (comparable, sin efecto cambiario). El mes ancla lo fija el selector ${vistaPnl === "evolucion" ? "Hasta" : "Mes"}.`}
                   </span>
                 </span>
               )}
@@ -3836,8 +3917,10 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
                 ))}
               </optgroup>
               <optgroup label="Consolidado">
-                <option value="USD_REAL">U$D · TC Real</option>
-                <option value="USD_CONST">U$D · Constante</option>
+                {fxDestinosDe(activeTab).flatMap(d => [
+                  <option key={`${d}_REAL`}  value={`${d}_REAL`}>{MONEDA_SYM[d] || d} · TC Real</option>,
+                  <option key={`${d}_CONST`} value={`${d}_CONST`}>{MONEDA_SYM[d] || d} · Constante</option>,
+                ])}
               </optgroup>
             </select>
           </div>
@@ -3977,7 +4060,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       {fxMode === "real" && mesesSinTC.length > 0 && (
         <div style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 8, padding: "8px 14px",
           marginBottom: 16, fontSize: 12, color: "#92400e", fontWeight: 600 }}>
-          ⚠ Faltan tipos de cambio de: {mesesSinTC.join(", ")} → esos meses no se tradujeron a USD. Cargalos en Maestros (nb_tipos_cambio).
+          ⚠ Faltan tipos de cambio de: {mesesSinTC.join(", ")} → esos meses no se tradujeron a {MONEDA_SYM[fxTarget] || fxTarget}. Cargalos en Maestros (nb_tipos_cambio).
         </div>
       )}
 
@@ -3989,6 +4072,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} nombreCuenta={nombreCuenta}
           cesion={cesionSede} cesionResFinal={subSedeNet?.resFinal} cesionRetiros={cesionRetirosCI}
           comBaseResOp={comBaseResOp} estructuraCuota={estructuraCuotaEff} estructuraEnOpex={estructuraEnOpexEff} estructuraLabel={estructuraLabelEff}
+          estructuraDetalle={estructuraDetalle}
           impuestos={isFond ? IMPUESTOS_FOND : null} financieros={isFond ? FINANCIEROS_FOND : null}
           distribucion={activeTab === "op_rosedal" ? distribRosedalFx : null}
           retirosVivos={activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null}

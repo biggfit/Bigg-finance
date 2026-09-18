@@ -1111,6 +1111,22 @@ export function montoAUSD(monto, moneda, tcMes) {
   return rate > 0 ? n / rate : null;
 }
 
+// Igual que montoAUSD pero a una moneda destino cualquiera: el consolidado puede mirarse en U$D o en €
+// (España se analiza en euros). Usa el USD como pivote y después aplica la tasa del destino. Mismo criterio
+// ante dato faltante: null, nunca 0 silencioso. Si origen y destino coinciden no toca el número (ni pide TC:
+// una fila en euros no necesita traducción para un consolidado en euros).
+export function montoAMoneda(monto, moneda, tcMes, destino = "USD") {
+  const dst = String(destino || "USD").toUpperCase();
+  const cur = String(moneda || "").toUpperCase();
+  if (cur === dst) return Number(monto) || 0;
+  const usd = montoAUSD(monto, moneda, tcMes);
+  if (usd == null || dst === "USD") return usd;
+  if (!tcMes) return null;
+  if (dst === "EUR") return tcMes.eurUSD > 0 ? usd / tcMes.eurUSD : null;
+  const rate = tcMes[dst.toLowerCase() + "USD"];  // USD → ARS/COP/…: unidades por USD, se MULTIPLICA
+  return rate > 0 ? usd * rate : null;
+}
+
 // ─── SOCIEDADES ──────────────────────────────────────────────────────────────
 
 export async function fetchSociedades() {
