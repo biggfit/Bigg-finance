@@ -258,12 +258,8 @@ export default function MundoTarjeta({ sociedad }) {
     if (v) return v;
     return matchRegla(comercioDe(m))?.centroId || centroDeLegajo(metaVal(m.referencia, "tit")) || "";
   };
-  // Período P&L: arranca en el MES DEL CONSUMO, no en el del resumen. El ciclo de facturación no
-  // respeta el mes calendario (el de septiembre trae compras del 4 de agosto en adelante), así que
-  // mandar todo al período del resumen corría a septiembre gastos que se incurrieron en agosto.
-  // Cae de nuevo al período del resumen solo si la línea no trajo fecha. Siempre editable.
-  const periodoDe = m => edits[m.id]?.periodo_contable
-    ?? (String(m.fecha || "").slice(0, 7) || metaVal(m.referencia, "per") || "");
+  // Período P&L = fecha del consumo (la fija el importador: fecha real, o 1° del período del resumen si la línea
+  // es una cuota/consumo de más de un mes atrás). Ya NO es editable acá: separar P&L de deuda rompía el cierre del PN.
   // Solo cuentas de EGRESO: un consumo de tarjeta nunca se imputa contra una cuenta de Venta/Ingreso
   // (ej. "Pauta" existe dos veces en el plan — una de Venta para lo que se le cobra a franquicias,
   // otra de Gasto para lo que se gasta en publicidad — acá solo tiene sentido la segunda).
@@ -282,7 +278,7 @@ export default function MundoTarjeta({ sociedad }) {
     if (!completa(m)) return;
     setBusy(true);
     try {
-      await aceptarMovimiento(m, { cuenta_contable: cuentaDe(m), centro_costo: centroDe(m), periodo_contable: periodoDe(m) });
+      await aceptarMovimiento(m, { cuenta_contable: cuentaDe(m), centro_costo: centroDe(m) });
       await recargarPend();
     } catch (e) { alert("No se pudo autorizar: " + (e?.message || e)); }
     setBusy(false);
@@ -307,7 +303,7 @@ export default function MundoTarjeta({ sociedad }) {
     let done = 0;
     const fallaron = [];
     for (const m of listas) {
-      try { await aceptarMovimiento(m, { cuenta_contable: cuentaDe(m), centro_costo: centroDe(m), periodo_contable: periodoDe(m) }); done++; }
+      try { await aceptarMovimiento(m, { cuenta_contable: cuentaDe(m), centro_costo: centroDe(m) }); done++; }
       catch (e) { fallaron.push(`${comercioDe(m)} (${e?.message || e})`); }
       setProg({ done: done + fallaron.length, total: listas.length });
     }
@@ -421,7 +417,7 @@ export default function MundoTarjeta({ sociedad }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, color: T.text }}>
             <thead>
               <tr style={{ background: T.tableHead, color: T.tableHeadText, position: "sticky", top: 0, zIndex: 1 }}>
-                {["Período", "Comercio", "Titular", "Cuenta *", "Centro", "ARS", "USD", ""].map((c, i) => (
+                {["Fecha", "Comercio", "Titular", "Cuenta *", "Centro", "ARS", "USD", ""].map((c, i) => (
                   <th key={i} style={{ padding: "8px 10px", textAlign: (i === 5 || i === 6) ? "right" : "left", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{c}</th>
                 ))}
               </tr>
@@ -437,10 +433,9 @@ export default function MundoTarjeta({ sociedad }) {
                     const esCredito = esAjuste && Number(m.monto) > 0;
                     return (
                       <tr key={m.id} style={{ borderTop: `1px solid ${T.cardBorder}`, ...(esAjuste ? { background: "#fefce8" } : {}) }}>
-                        <td style={{ padding: "4px 8px" }}>
-                          <input type="month" value={periodoDe(m)} onChange={e => setEdit(m.id, "periodo_contable", e.target.value)}
-                            title="Período P&L de este consumo — arranca en el mes del consumo, editable línea por línea."
-                            style={fld(!!periodoDe(m), 112)} />
+                        <td style={{ padding: "5px 10px", color: T.muted, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}
+                          title="Fecha del consumo (P&L y deuda de la tarjeta). Las cuotas viejas van al 1° del período del resumen.">
+                          {String(m.fecha || "").slice(0, 10)}
                         </td>
                         <td style={{ padding: "5px 10px", minWidth: 200, fontStyle: esAjuste ? "italic" : "normal" }}>
                           {esAjuste && <span title={esCredito ? "Crédito: resta del total a pagar" : "Cargo: suma al total a pagar"} style={{ marginRight: 5 }}>{esCredito ? "➖" : "➕"}</span>}

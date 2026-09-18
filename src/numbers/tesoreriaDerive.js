@@ -4,7 +4,7 @@
 // La usan PantallaTesoreria (una sociedad, datos ya scopeados) y el tab consolidado
 // de Reportes (loop por sociedad sobre datasets de todas). Sin React, sin I/O.
 import {
-  calcSaldoPendiente, esCuentaCredito, esIgnorado,
+  calcSaldoNeto, esCuentaCredito, esIgnorado,
   financiacionPasivoBuckets, financiacionLedger, agruparAnticipos, anticipoPasivo, sociosSaldos, lecturaInterco,
 } from "../lib/numbersApi";
 import { parsePagoFromMov, normSoc, pendienteSueldosPorLegajo, adelantoSueldosPorLegajo } from "../lib/sueldosApi";
@@ -38,14 +38,14 @@ function cxLedger(entries = []) {
 
 // Vista CONSOLIDADA del interco sobre un set de sociedades: las posiciones núcleo↔núcleo internas
 // al set se ELIMINAN (intra-grupo); las demás (fondeadas/externas) se muestran. Devuelve {activo,pasivo}.
-export function intercoConsolidado(intercoData, selectedIds, sociedades = []) {
+export function intercoConsolidado(intercoData, selectedIds, sociedades = [], corte = null) {
   const anilloDe = new Map(sociedades.map(s => [String(s.id), String(s.anillo || "")]));
   const nombreDe = sociedadNombreMap(sociedades);
   const esNucleo = id => /^n[úu]cleo/i.test(anilloDe.get(String(id)) || "");
   const nom      = id => nombreDe.get(String(id)) || String(id);
   const sel      = new Set((selectedIds || []).map(String));
   const activo = [], pasivo = [];
-  for (const p of lecturaInterco(intercoData)) {   // cada par aparece una vez con neto>0 (acreedor)
+  for (const p of lecturaInterco(intercoData, { corte })) {   // cada par aparece una vez con neto>0 (acreedor)
     if (p.neto <= 0.01) continue;
     const s = String(p.sociedad), c = String(p.contraparte);
     const sIn = sel.has(s), cIn = sel.has(c);
@@ -78,15 +78,32 @@ export function derivarSaldos({
   franqData = { comps: {}, saldos: {}, franchises: [] },
   movsFranq = null,   // cobros de franquicia GROUP-WIDE (independientes de la sociedad de la caja); si null → usa `movimientos`
   intercoData = null, sociedadesMap = null,   // si vienen → agrega la posición interco de ESTA sociedad
+  centroSel = null,   // Set de ids de centro (minúsculas) para acotar CxC/CxP por centro; null/vacío = sin filtro
 }) {
   const _soc  = (sociedad ?? "").toLowerCase();
   const corte = fechaCorte || null;
+  // Filtro por centro de costo, SOLO sobre los subledgers que tienen centro (CxC/CxP de comprobantes):
+  // prorratea el saldo por la fracción del comprobante imputada a los centros elegidos (vía sus `lineas`).
+  // Caja/bancos/financiaciones/interco/franquicias/socios/sueldos NO tienen centro → no se tocan.
+  const _ccSet = centroSel && centroSel.size ? centroSel : null;
+  const _ck = s => String(s ?? "").trim().toLowerCase();
+  const fracCentro = (comp) => {
+    if (!_ccSet) return 1;
+    const ls = comp.lineas || [];
+    const tot = ls.reduce((s, l) => s + Math.abs(Number(l.total_linea) || 0), 0);
+    if (!tot) return _ccSet.has(_ck(comp.cc)) ? 1 : 0;   // sin detalle de líneas → cae al alias de centro
+    const sel = ls.reduce((s, l) => s + (_ccSet.has(_ck(l.cc)) ? Math.abs(Number(l.total_linea) || 0) : 0), 0);
+    return sel / tot;
+  };
+  // Movimientos hasta la fecha de corte (para saldos as-of de socios/sueldos/anticipos). Sin corte → todos
+  // (idéntico a hoy). Habilita el Balance/EEPN a una fecha reusando este mismo motor.
+  const movHasta = corte ? movimientos.filter(m => (m.fecha ?? "") <= corte) : movimientos;
 
   // ── Posición intercompañía de ESTA sociedad (neto>0 nos deben / neto<0 les debemos) ──
   const intercoAct = [], intercoPas = [];
   if (intercoData) {
     const nom = id => sociedadesMap?.get?.(String(id)) || String(id);
-    for (const p of lecturaInterco(intercoData, { sociedad })) {
+    for (const p of lecturaInterco(intercoData, { sociedad, corte })) {
       if (Math.abs(p.neto) < 0.01) continue;
       (p.neto > 0 ? intercoAct : intercoPas).push(intercoItem(p.neto, p.moneda, nom(p.contraparte), { sociedadId: p.sociedad, contraparteId: p.contraparte }));
     }
@@ -126,6 +143,24 @@ export function derivarSaldos({
     e.docs.push({ ...doc, _side: side, monto: saldo });
   };
 
+  // ── Pagos / cobros A CUENTA (18/9/2026) ──
+  // Lo pagado que ningún comprobante absorbe AL CORTE no desaparece del PN:
+  //   (a) comprobante pagado DE MÁS (saldo neto < 0: doble vínculo, línea del banco mayor a la FC), y
+  //   (b) pago/cobro fechado ≤ corte contra un comprobante fechado DESPUÉS del corte (ABL/Ganancias que se pagan
+  //       ~22 con la boleta cargada al mes siguiente).
+  // Antes: el pendiente se clampeaba en 0 y el comprobante posterior se salteaba → la caja bajaba sin CxP ni P&L
+  // (gap P&L↔ΔPN del puente; se revertía al mes siguiente). Ahora → ACTIVO "Pagos a cuenta a proveedores" /
+  // PASIVO "Cobros a cuenta de clientes"; si la contraparte es otra sociedad del grupo → su CC comercial.
+  const pagosACuenta = {}, cobrosACuenta = {};   // moneda → { saldo, docs }
+  const acumACuenta = (store, moneda, monto, contraparte, vto, cpId, ccSide, doc) => {
+    if (!(monto > 0.005)) return;
+    if (esContraparteSociedad(cpId)) { accCC(cpId, moneda, ccSide, monto, doc); return; }
+    const e = (store[moneda] ??= { saldo: 0, docs: [] });
+    e.saldo += monto;
+    e.docs.push({ contraparte, vto, saldo: monto, moneda });
+  };
+  const docCC = (c) => ({ fecha: c.fecha, cuenta: c.cuenta || "—", nroComp: c.nroComp || c.nro_comp || "", vto: c.vto, moneda: c.moneda ?? "ARS" });
+
   // ── A cobrar (comprobantes de ingreso pendientes) ──
   const cobros = pagosCobros.filter(p => p.tipo === "COBRO" && (!corte || (p.fecha ?? "") <= corte));
   const grpCob = {};
@@ -134,7 +169,12 @@ export function derivarSaldos({
     if ((ing.sociedad ?? "").toLowerCase() !== _soc) continue;
     if (corte && (ing.fecha ?? "") > corte) continue;
     const pagosDoc = cobros.filter(c => c.documento_id === ing.id);
-    const saldo    = calcSaldoPendiente(ing.importe, pagosDoc);
+    const fCentro  = fracCentro(ing);
+    if (fCentro === 0) continue;                                   // comprobante fuera de los centros elegidos
+    const neto     = calcSaldoNeto(ing.importe, pagosDoc);
+    const saldo    = Math.max(0, neto) * fCentro;
+    // Cobrado DE MÁS que la factura → crédito del cliente contra nosotros (pasivo "Cobros a cuenta").
+    if (neto < -0.005) acumACuenta(cobrosACuenta, ing.moneda ?? "ARS", -neto * fCentro, ing.cliente || ing.proveedor || "Sin nombre", ing.vto, ing.clienteId, "pagar", docCC(ing));
     // Contraparte = otra sociedad → CC comercial (no va al bucket por cuenta; se netea aparte).
     if (esContraparteSociedad(ing.clienteId)) {
       if (saldo > 0) accCC(ing.clienteId, ing.moneda ?? "ARS", "cobrar", saldo,
@@ -154,28 +194,43 @@ export function derivarSaldos({
     grpCob[key].saldo += saldo;
     grpCob[key].docs.push({ contraparte: ing.cliente || ing.proveedor || "Sin nombre", vto: ing.vto, saldo, moneda: ing.moneda ?? "ARS" });
   }
+  // (b) cobros ≤ corte de facturas de venta fechadas DESPUÉS del corte → cobros a cuenta (pasivo al corte).
+  if (corte) for (const ing of ingresos) {
+    if ((ing.sociedad ?? "").toLowerCase() !== _soc || (ing.fecha ?? "") <= corte) continue;
+    const fCentro = fracCentro(ing); if (fCentro === 0) continue;
+    const cobrado = cobros.filter(c => c.documento_id === ing.id).reduce((s, c) => s + Math.abs(Number(c.monto) || 0), 0);
+    acumACuenta(cobrosACuenta, ing.moneda ?? "ARS", cobrado * fCentro, ing.cliente || ing.proveedor || "Sin nombre", ing.vto, ing.clienteId, "pagar", docCC(ing));
+  }
   const aCobrarComp = Object.values(grpCob).sort((a, b) => b.saldo - a.saldo);
   for (const it of aCobrarComp) it.ledger = cxLedger(ledCob[`${it.label}||${it.moneda}`] || []);
 
   // ── Franquiciados (Bigg Franquicias, read-only): activo/pasivo por empresa+moneda ──
   const now    = new Date();
+  // As-of por fin de mes: sin corte → mes actual (hoy); con corte → el mes del corte. computeSaldoReal
+  // resuelve el saldo al cierre de ese (año, mes) y corta también los cobros de nb_movimientos por rango
+  // de mes → así la franquicia evoluciona en el Balance/EEPN en vez de quedar plana en el saldo de hoy.
+  const franqY = corte ? Number(corte.slice(0, 4)) : now.getFullYear();
+  const franqM = corte ? Number(corte.slice(5, 7)) - 1 : now.getMonth();
   // La CxC de franquiciados netea por franquiciado × empresa × moneda, sin importar en qué caja
   // (sociedad) entró el cobro. Por eso usa los cobros GROUP-WIDE (movsFranq), no los de esta sociedad.
-  const franqCC = franquiciasSaldosCxC(franqData, sociedad, now.getFullYear(), now.getMonth(), movsFranq ?? movimientos);
+  const franqCC = franquiciasSaldosCxC(franqData, sociedad, franqY, franqM, movsFranq ?? movimientos);
 
-  // ── Socios (dividendos + préstamos): slice de esta sociedad, balance puro ──
-  const sociosCCsld = sociosSaldos(socios, sociosCC, movimientos, { sociedad });
+  // ── Socios (dividendos + préstamos): slice de esta sociedad, balance puro (as-of por corte) ──
+  const sociosCCsld = sociosSaldos(socios, corte ? sociosCC.filter(r => (r.fecha ?? "") <= corte) : sociosCC, movHasta, { sociedad });
 
   // ── Sueldos: neto devengado−pagado por legajo/mes. Positivo → PASIVO (deuda); negativo →
   //    ACTIVO (adelanto: pago sin liquidación cerrada aún). Se compensa al cerrar la liquidación. ──
   // Solo pagos de sueldo REALES (tipo SUELDO). El pago del F931 (cargas sociales) es origen "sueldos"
   // pero tipo PAGO y sin legajo → excluirlo evita un "Adelanto a empleados" fantasma en el Activo.
-  const pagosSueldos = movimientos.filter(m => m.origen === "sueldos" && m.tipo === "SUELDO").map(parsePagoFromMov);
+  const pagosSueldos = movHasta.filter(m => m.origen === "sueldos" && m.tipo === "SUELDO").map(parsePagoFromMov);
+  const corteYM = corte ? corte.slice(0, 7) : null;
   const sueldosSide = (porLegajo) => {
     const soc = normSoc(sociedad);
     const docs = []; let total = 0;
     for (const leg of porLegajo) for (const it of leg.items) {
       if (normSoc(it.sociedad) !== soc) continue;
+      // As-of: el sueldo se devenga a fin de su mes → cuenta como deuda solo si su período ≤ el corte.
+      if (corteYM && `${it.anio}-${String(it.mes).padStart(2, "0")}` > corteYM) continue;
       total += it.monto;
       // Vencimiento real del sueldo: se paga entre el 1 y 5 del mes SIGUIENTE (mes vencido) → vto = 05 del mes M+1 (ISO).
       const _m2 = Number(it.mes) === 12 ? 1 : Number(it.mes) + 1;
@@ -201,7 +256,12 @@ export function derivarSaldos({
     if ((eg.sociedad ?? "").toLowerCase() !== _soc) continue;
     if (corte && (eg.fecha ?? "") > corte) continue;
     const pagosDoc = pagos.filter(p => p.documento_id === eg.id);
-    const saldo    = calcSaldoPendiente(eg.importe, pagosDoc);
+    const fCentro  = fracCentro(eg);
+    if (fCentro === 0) continue;                                   // comprobante fuera de los centros elegidos
+    const neto     = calcSaldoNeto(eg.importe, pagosDoc);
+    const saldo    = Math.max(0, neto) * fCentro;
+    // Pagado DE MÁS que la factura → crédito nuestro contra el proveedor (activo "Pagos a cuenta").
+    if (neto < -0.005) acumACuenta(pagosACuenta, eg.moneda ?? "ARS", -neto * fCentro, eg.proveedor || "Sin proveedor", eg.vto, eg.proveedorId, "cobrar", docCC(eg));
     // Contraparte = otra sociedad → CC comercial (no va al bucket por cuenta; se netea aparte).
     if (esContraparteSociedad(eg.proveedorId)) {
       if (saldo > 0) accCC(eg.proveedorId, eg.moneda ?? "ARS", "pagar", saldo,
@@ -223,12 +283,50 @@ export function derivarSaldos({
     grpPag[key].saldo += saldo;
     grpPag[key].docs.push({ contraparte: eg.proveedor || "Sin proveedor", vto: eg.vto, saldo, moneda: eg.moneda ?? "ARS" });
   }
+  // (b) pagos ≤ corte de facturas de compra fechadas DESPUÉS del corte → pagos a cuenta (activo al corte).
+  if (corte) for (const eg of egresos) {
+    if ((eg.sociedad ?? "").toLowerCase() !== _soc || (eg.fecha ?? "") <= corte) continue;
+    const fCentro = fracCentro(eg); if (fCentro === 0) continue;
+    const pagado = pagos.filter(p => p.documento_id === eg.id).reduce((s, p) => s + Math.abs(Number(p.monto) || 0), 0);
+    acumACuenta(pagosACuenta, eg.moneda ?? "ARS", pagado * fCentro, eg.proveedor || "Sin proveedor", eg.vto, eg.proveedorId, "cobrar", docCC(eg));
+  }
+  const itemsACuenta = (store, label, headerColor) => Object.entries(store).filter(([, e]) => e.saldo > 0.005)
+    .map(([moneda, e]) => ({ label, moneda, saldo: e.saldo, docs: e.docs.sort((a, b) => b.saldo - a.saldo), headerColor }));
+  const pagosACuentaAct  = itemsACuenta(pagosACuenta,  "Pagos a cuenta a proveedores", "#16a34a");
+  const cobrosACuentaPas = itemsACuenta(cobrosACuenta, "Cobros a cuenta de clientes",  "#dc2626");
   const aPagarComp = Object.values(grpPag).sort((a, b) => b.saldo - a.saldo);
   for (const it of aPagarComp) it.ledger = cxLedger(ledPag[`${it.label}||${it.moneda}`] || []);
 
   // ── Pasivo de financiaciones (planes AFIP + créditos) ──
   const finPasivo = (() => {
-    const b = financiacionPasivoBuckets(financiaciones, sociedad);
+    // As-of: excluye planes consolidados después del corte y recalcula el `saldo` del plan al corte desde
+    // sus cuotas — una cuota pagada DESPUÉS del corte todavía debía su capital a esa fecha (se "reabre").
+    // (`financiaciones` ya viene agrupado por plan con .cuotas; el saldo del plano es lo que lee el bucket.)
+    // Sin corte → las filas originales (idéntico a hoy).
+    const finAsOf = corte
+      ? financiaciones
+          .filter(f => (f.fecha_consolidacion ?? "") <= corte)
+          .map(f => ({ ...f, saldo: (f.cuotas ?? []).reduce((s, c) => {
+            const capital = Number(c.capital) || 0;
+            const total   = Number(c.total) > 0 ? Number(c.total) : capital;
+            // Pagado HASTA el corte, por FECHA de cada pago parcial. Un parcial no setea `fecha_pago` en la
+            // cuota → antes su reducción se aplicaba en todos los cortes (deuda subvaluada al 31 de meses
+            // ANTERIORES al pago). Con `c.pagos` fechado (ver agruparPlanes/fetchFinanciaciones) el remanente
+            // al corte es exacto: préstamos a empleados que se pagan de a poco quedan bien mes a mes.
+            let pagadoAsOf;
+            if (Array.isArray(c.pagos) && c.pagos.length) {
+              pagadoAsOf = c.pagos.reduce((a, p) => (String(p.fecha ?? "") <= corte ? a + (Number(p.monto) || 0) : a), 0);
+            } else if (c.estado === "pagada" || c.estado === "cancelada") {
+              // Cierre manual sin movimiento de pago (legacy): usar fecha_pago; sin fecha → saldada al corte.
+              pagadoAsOf = (!c.fecha_pago || String(c.fecha_pago) <= corte) ? total : 0;
+            } else {
+              pagadoAsOf = 0;   // sin pagos → capital entero adeudado
+            }
+            const remanenteTotal = Math.max(0, total - pagadoAsOf);
+            return s + (total > 0 ? capital * (remanenteTotal / total) : (remanenteTotal > 0.5 ? capital : 0));
+          }, 0) }))
+      : financiaciones;
+    const b = financiacionPasivoBuckets(finAsOf, sociedad);
     const items = [];
     const armar = (bucket, label, tipo) => {
       for (const mon of ["ARS", "USD", "EUR"]) {
@@ -247,7 +345,7 @@ export function derivarSaldos({
 
   // ── Pasivo de anticipos de clientes (ingresos diferidos) ──
   const anticiposPasivo = (() => {
-    const { tot, docs } = anticipoPasivo(agruparAnticipos(movimientos), sociedad);
+    const { tot, docs } = anticipoPasivo(agruparAnticipos(movHasta), sociedad);
     const items = [];
     for (const mon of ["ARS", "USD", "EUR"]) {
       if (tot[mon] <= 0) continue;
@@ -269,6 +367,23 @@ export function derivarSaldos({
       return { label: c.nombre, moneda: c.moneda, saldo: -(Number(c.saldo) || 0), docs, headerColor: "#dc2626" };
     });
 
+  // ── Saldo A FAVOR de tarjetas (saldo positivo: se pagó de más / crédito del banco) → ACTIVO ──
+  // La tarjeta no es banco (queda fuera de caja/bancos) y solo su saldo NEGATIVO va al pasivo; un saldo positivo
+  // desaparecía del PN. Va como crédito a favor, con el detalle de sus movimientos. (pagarTarjeta ya manda a
+  // gasto el exceso chico al pagar; esto cubre cualquier otro caso y mantiene el PN honesto.)
+  const tarjetasActivo = cuentas.filter(c => esCuentaCredito(c) && (Number(c.saldo) || 0) > 0.005)
+    .map(c => {
+      const movsCard = movimientos.filter(m => m.cuenta_bancaria === c.id && !esIgnorado(m)
+        && (!corte || (m.fecha ?? "") <= corte));
+      const docs = movsCard.map(m => ({
+        contraparte: m.concepto || (Number(m.monto) < 0 ? "Consumo" : "Pago"),
+        vto: m.fecha, saldo: (Number(m.monto) || 0), moneda: c.moneda,
+      }));
+      return { label: `Saldo a favor · ${c.nombre}`, moneda: c.moneda, saldo: (Number(c.saldo) || 0), docs, headerColor: "#16a34a" };
+    });
+  if (tarjetasActivo.length) { aCobrar.push(...tarjetasActivo); aCobrar.sort(franqFirst); }
+  if (pagosACuentaAct.length) { aCobrar.push(...pagosACuentaAct); aCobrar.sort(franqFirst); }
+
   // ── Pasivo combinado ──
   const aPagar = (() => {
     const out = aPagarComp.map(it => ({ ...it }));
@@ -281,7 +396,7 @@ export function derivarSaldos({
         out.push({ label: "Sueldos", moneda: "ARS", saldo: sueldosPasivo.total, docs: sueldosPasivo.docs, headerColor: "#dc2626" });
       }
     }
-    out.push(...finPasivo, ...anticiposPasivo, ...franqCC.pasivo, ...tarjetasPasivo, ...sociosCCsld.pasivo);
+    out.push(...finPasivo, ...anticiposPasivo, ...franqCC.pasivo, ...tarjetasPasivo, ...sociosCCsld.pasivo, ...cobrosACuentaPas);
     return out.sort(franqFirst);
   })();
 

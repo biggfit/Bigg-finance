@@ -169,10 +169,20 @@ export function useMoneyMask(value, onChange) {
 
   const handleChange = (e) => {
     const el = e.target;
-    const raw = el.value;
-    capture(raw, el.selectionStart);
+    let raw = el.value;
+    const pos = el.selectionStart ?? raw.length;
 
-    let s = raw.replace(/\./g, "");           // los puntos son sólo separador de miles (auto)
+    // Tolerar "." como separador decimal (hábito del numpad): si la única tecla nueva
+    // es un punto y todavía no hay coma cargada, se lo trata igual que si fuera ",".
+    // Los demás puntos (los de miles, auto-insertados) se siguen ignorando como antes.
+    if (!str.includes(".") && raw.length === display.length + 1 && raw[pos - 1] === ".") {
+      const withoutInserted = raw.slice(0, pos - 1) + raw.slice(pos);
+      if (withoutInserted === display) raw = raw.slice(0, pos - 1) + "," + raw.slice(pos);
+    }
+
+    capture(raw, pos);
+
+    let s = raw.replace(/\./g, "");           // los puntos restantes son sólo separador de miles (auto)
     const neg = s.trim().startsWith("-");
     s = s.replace(/-/g, "");
     const firstComma = s.indexOf(",");

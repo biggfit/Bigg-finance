@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import html2canvas from "html2canvas";
-import { fetchLiquidaciones, fetchCategorias, fetchPagos, fetchLegajos, fetchNovedades, desglosarLiquidacion, isCerrada, idLiqDe, reabrirLiquidaciones, ROLES_SEDES, ROLES_HQ, updatePagoNota } from "../lib/sueldosApi";
-import { useConfirm } from "../numbers/useConfirm";
+import { fetchLiquidaciones, fetchCategorias, fetchPagos, fetchLegajos, fetchNovedades, desglosarLiquidacion, isCerrada, ROLES_SEDES, ROLES_HQ, updatePagoNota } from "../lib/sueldosApi";
 
 const T = {
   bg:     "#f8fafc",
@@ -27,6 +26,7 @@ const ANO_DEF = hoy.getMonth() === 0 ? hoy.getFullYear() - 1 : hoy.getFullYear()
 const ROL_LABEL = {
   COACH_SENIOR: "Coach Senior", COACH: "Coach", BOTANICO: "Botánico", YOGA: "Yoga",
   ENCARGADO: "Encargado", VENTAS: "Ventas", LIMPIEZA: "Limpieza",
+  HUERGO_A: "Huergo A", HUERGO_B: "Huergo B",
   HQ: "HQ", HQ_OWNER: "HQ Owner", HQ_EXT: "HQ Externo",
 };
 
@@ -62,7 +62,6 @@ const fmtFecha = (s) => {
 };
 
 export default function PantallaResumen({ pais = "AR" }) {
-  const [confirm, confirmUI] = useConfirm();
   const [vista, setVista] = useState("sedes");   // "sedes" | "hq"
   const [mes,  setMes]  = useState(MES_DEF);
   const [anio, setAnio] = useState(ANO_DEF);
@@ -98,20 +97,36 @@ export default function PantallaResumen({ pais = "AR" }) {
 
   useEffect(() => { load(); }, [load]);
 
-  // Agrupar por empleado según la vista (los coaches de Sedes tienen una fila por sede).
-  const empleados = useMemo(() => {
-    const roles = vista === "hq" ? ROLES_HQ : ROLES_SEDES;
+  // Agrupar por LEGAJO todas las liquidaciones del mes, separando el lado HQ (rol HQ*) del lado Sedes
+  // (rol coach/front/limpieza; los coaches tienen una fila por sede). Un empleado puede tener los DOS
+  // (ej. Facundo Fernandez: sueldo HQ + horas en sedes) → es "mixto": su ficha es UNA sola, con ambas
+  // secciones y todos sus pagos, porque el empleado es uno aunque liquide por dos mundos. El dropdown de
+  // cada vista lista a los que tienen filas en esa vista; el mixto aparece en las dos y abre la misma ficha.
+  const empleadosTodos = useMemo(() => {
     const map = new Map();
     for (const l of liqs) {
-      if (!roles.includes(l.rol)) continue;
+      const enHQ = ROLES_HQ.includes(l.rol), enSedes = ROLES_SEDES.includes(l.rol);
+      if (!enHQ && !enSedes) continue;
       if (l.pais && l.pais !== pais) continue;
       const key = l.legajo_id || l.legajo_nombre;
       if (!key) continue;
-      if (!map.has(key)) map.set(key, { id: key, nombre: l.legajo_nombre, rol: l.rol, sociedad: l.sociedad_nombre, rows: [] });
-      map.get(key).rows.push(l);
+      if (!map.has(key)) map.set(key, { id: key, nombre: l.legajo_nombre, rows: [], rowsHQ: [], rowsSedes: [] });
+      const e = map.get(key);
+      e.rows.push(l);
+      (enHQ ? e.rowsHQ : e.rowsSedes).push(l);
+    }
+    for (const e of map.values()) {
+      e.mixto = e.rowsHQ.length > 0 && e.rowsSedes.length > 0;
+      const ref = e.rowsHQ[0] || e.rowsSedes[0];   // rol/sociedad de referencia (HQ manda si es mixto)
+      e.rol = ref.rol;
+      e.sociedad = ref.sociedad_nombre;
+      e.rolSedes = e.rowsSedes[0]?.rol || "";
     }
     return [...map.values()].sort((a, b) => (a.nombre || "").localeCompare(b.nombre || "", "es"));
-  }, [liqs, vista, pais]);
+  }, [liqs, pais]);
+  const empleados = useMemo(
+    () => empleadosTodos.filter(e => (vista === "hq" ? e.rowsHQ : e.rowsSedes).length > 0),
+    [empleadosTodos, vista]);
 
   // Empleado seleccionado (default: el primero).
   const sel = useMemo(() => {
@@ -145,14 +160,10 @@ export default function PantallaResumen({ pais = "AR" }) {
     }
   }, []);
 
-  // Desglose Sedes / HQ del empleado seleccionado (los builders son puros → se reusan en "imprimir todo").
-  const resumenSedes = useMemo(
-    () => (vista === "sedes" && sel) ? buildResumenSedes(sel, categorias, novedades) : null,
-    [vista, sel, categorias, novedades]);
-
-  const resumenHQ = useMemo(
-    () => (vista === "hq" && sel) ? buildResumenHQ(sel, novedades) : null,
-    [vista, sel, novedades]);
+  // Desglose del empleado seleccionado: lado HQ y/o lado Sedes (los builders son puros → se reusan en
+  // "imprimir todo"). No depende de la vista: un empleado de un solo mundo tiene una sola sección; el
+  // mixto tiene las dos y el total es la suma.
+  const resumen = useMemo(() => (sel ? buildResumen(sel, categorias, novedades) : null), [sel, categorias, novedades]);
 
   const prevMes = () => { if (mes === 1) { setMes(12); setAnio(a => a - 1); } else setMes(m => m - 1); };
   const nextMes = () => { if (mes === 12) { setMes(1); setAnio(a => a + 1); } else setMes(m => m + 1); };
@@ -174,35 +185,16 @@ export default function PantallaResumen({ pais = "AR" }) {
     return () => cancelAnimationFrame(raf);
   }, [idsPrint]);
 
-  const resumen = vista === "hq" ? resumenHQ : resumenSedes;
-
   const periodo = `${MESES[mes - 1]} ${anio}`;
 
-  // Liquidación cerrada del empleado seleccionado → se puede reabrir para que
-  // novedades cargadas/editadas después del cierre vuelvan a reflejarse en el recibo.
+  // Liquidación cerrada del empleado seleccionado → el semáforo avisa si hay novedades cargadas/editadas
+  // después del cierre. Reabrir se hace SOLO desde la pantalla de liquidación del mundo que corresponde
+  // (🔒 en Liquidación HQ / Sedes): acá el Resumen es de consulta y no toca la hoja.
   const cerrada = useMemo(() => !!sel && sel.rows.some(r => isCerrada(r.estado)), [sel]);
-  const [reabriendo, setReabriendo] = useState(false);
-  const handleReabrir = async () => {
-    if (!sel) return;
-    if (!(await confirm({ title: "¿Reabrir liquidación?", danger: false, confirmLabel: "Sí, reabrir",
-      message: `Liquidación de ${sel.nombre}. Vuelve a borrador: vas a poder editarla en Liquidación ${vista === "hq" ? "HQ" : "Sedes"} y tenés que volver a cerrarla para que los cambios (por ej. novedades nuevas) se congelen en el recibo.` }))) return;
-    setReabriendo(true);
-    try {
-      const sedeIds = [...new Set(sel.rows.map(r => r.sede_id ?? ""))];
-      await reabrirLiquidaciones(sedeIds.map(sid => idLiqDe(sel.id, mes, anio, sid)));
-      // Refresh liviano: solo liquidaciones (lo único que cambió), sin re-descargar
-      // categorías/pagos/legajos/novedades ni bloquear la pantalla con "Cargando…".
-      const ls = await fetchLiquidaciones(mes, anio).catch(() => []);
-      setLiqs(Array.isArray(ls) ? ls : []);
-    } catch (e) {
-      alert("Error al reabrir: " + e.message);
-    } finally { setReabriendo(false); }
-  };
 
   return (
     <div className={idsPrint ? "print-todos" : "print-solo"}
       style={{ padding: 24, fontFamily: T.font, color: T.text, maxWidth: 860, margin: "0 auto" }}>
-      {confirmUI}
       <style>{`
         #ficha-todos { display: none; }
         @media print {
@@ -238,7 +230,7 @@ export default function PantallaResumen({ pais = "AR" }) {
         {cerrada && (
           resumen?.desyncItems?.length ? (
             <span title={[
-                "El recibo no coincide con las novedades vivas — reabrí la liquidación para corregir:",
+                "El recibo no coincide con las novedades vivas — reabrí la liquidación (🔒 en Liquidación HQ / Sedes) y volvé a cerrarla para corregir:",
                 ...resumen.desyncItems.map(d => `${d.tipo === "eliminada" ? "−" : "+"} ${d.descripcion} (${fmt(d.monto)})${d.tipo === "eliminada" ? " · ya no está en vivo" : " · no está en el recibo"}`),
               ].join("\n")}
               style={{ fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 5, background: "#fee2e2", color: "#b91c1c", flexShrink: 0, cursor: "help", whiteSpace: "nowrap" }}>
@@ -251,14 +243,6 @@ export default function PantallaResumen({ pais = "AR" }) {
             </span>
           )
         )}
-        {cerrada && (
-          <button onClick={handleReabrir} disabled={reabriendo}
-            title="Reabrir la liquidación de este empleado (vuelve a borrador para poder editarla)"
-            style={{ ...fichaBtn, flexShrink: 0, opacity: reabriendo ? 0.5 : 1, cursor: reabriendo ? "default" : "pointer" }}>
-            {reabriendo ? "Reabriendo…" : "🔓 Reabrir liquidación"}
-          </button>
-        )}
-
         {/* Toggle Sedes / HQ */}
         <div style={{ display: "flex", gap: 2, background: T.head, borderRadius: 7, padding: 3 }}>
           {[["sedes", "Sedes"], ["hq", "HQ"]].map(([v, label]) => (
@@ -286,9 +270,7 @@ export default function PantallaResumen({ pais = "AR" }) {
         </div>
       ) : (
         <div id="ficha-solo">
-          {vista === "hq"
-            ? <FichaHQ sel={sel} resumen={resumen} pagos={pagosEmpleado} email={emailSel} periodo={periodo} onImprimirTodo={abrirImprimirTodo} onUpdateNota={handleUpdateNota} agrupar={agrupar} onToggleAgrupar={setAgrupar} />
-            : <FichaSedes sel={sel} resumen={resumen} pagos={pagosEmpleado} email={emailSel} periodo={periodo} onImprimirTodo={abrirImprimirTodo} onUpdateNota={handleUpdateNota} agrupar={agrupar} onToggleAgrupar={setAgrupar} />}
+          <Ficha sel={sel} resumen={resumen} pagos={pagosEmpleado} email={emailSel} periodo={periodo} onImprimirTodo={abrirImprimirTodo} onUpdateNota={handleUpdateNota} agrupar={agrupar} onToggleAgrupar={setAgrupar} />
         </div>
       )}
 
@@ -300,15 +282,12 @@ export default function PantallaResumen({ pais = "AR" }) {
               {par.map(id => {
                 const emp = empleados.find(e => e.id === id);
                 if (!emp) return null;
-                const r = vista === "hq" ? buildResumenHQ(emp, novedades) : buildResumenSedes(emp, categorias, novedades);
-                if (!r) return null;
+                const r = buildResumen(emp, categorias, novedades);
                 const legajoEmp = legajos.find(l => l.id === emp.id || l.nombre === emp.nombre) || null;
                 const pg = pagosDe(emp, pagos, vista, agrupar, legajoEmp);
                 return (
                   <div className="ficha-col" key={id}>
-                    {vista === "hq"
-                      ? <FichaHQ sel={emp} resumen={r} pagos={pg} email="" periodo={periodo} />
-                      : <FichaSedes sel={emp} resumen={r} pagos={pg} email="" periodo={periodo} />}
+                    <Ficha sel={emp} resumen={r} pagos={pg} email="" periodo={periodo} />
                   </div>
                 );
               })}
@@ -333,10 +312,12 @@ export default function PantallaResumen({ pais = "AR" }) {
 // Detallado (default): cada nb_movimiento es una transferencia real, se lista por separado
 // para que el empleado vea qué compone el total transferido. Agrupado: los movimientos de
 // un mismo lote_pago se combinan en una sola fila (más compacto para uso interno).
+// Un empleado MIXTO (HQ + Sedes el mismo mes) muestra TODOS sus pagos, de los dos ámbitos: la ficha
+// es una sola y el total pagado tiene que cerrar contra la suma de ambos mundos.
 function pagosDe(emp, pagos, vista, agrupar, legajo) {
   const filtrados = pagos
     .filter(p => (p.legajo_id === emp.id || p.legajo_nombre === emp.nombre)
-      && (p.ambito === vista || (!p.ambito && vista === "sedes")));
+      && (emp.mixto || p.ambito === vista || (!p.ambito && vista === "sedes")));
   const usadas = new Set();   // líneas de formas_pago ya asignadas a un pago (ver matchFormaDePago)
   return (agrupar ? agruparPorLote(filtrados) : filtrados)
     .map(p => ({ ...p, _notaForma: notaFormaDePago(p, legajo, usadas) }))
@@ -428,6 +409,18 @@ function composicionCantidad(contribs = []) {
   }
   if (porSede.size <= 1) return "";
   return " (" + [...porSede.values()].map(g => `${g.sede} ${fmtNum(g.cant)}`).join(" + ") + ")";
+}
+
+// Desglose completo de un empleado: lado HQ (rowsHQ) y/o lado Sedes (rowsSedes). Cada builder recibe
+// SOLO las filas de su mundo (los dos usan emp.rows). Total = suma; alarmas de desincronización = unión.
+function buildResumen(emp, categorias, novList = []) {
+  const hq    = emp.rowsHQ?.length    ? buildResumenHQ({ ...emp, rows: emp.rowsHQ }, novList) : null;
+  const sedes = emp.rowsSedes?.length ? buildResumenSedes({ ...emp, rows: emp.rowsSedes }, categorias, novList) : null;
+  return {
+    hq, sedes,
+    totalLiquidar: (hq?.totalLiquidar || 0) + (sedes?.totalLiquidar || 0),
+    desyncItems: [...(hq?.desyncItems || []), ...(sedes?.desyncItems || [])],
+  };
 }
 
 // Desglose Sedes: suma sobre las filas por sede, recalcula importes con tarifas.
@@ -592,7 +585,7 @@ function SeleccionImprimir({ empleados, checkSel, count, onToggle, onAll, onCanc
               padding: "7px 12px", borderRadius: 7, cursor: "pointer", fontSize: 13 }}>
               <input type="checkbox" checked={!!checkSel[e.id]} onChange={() => onToggle(e.id)} />
               <span style={{ fontWeight: 600, color: T.text }}>{e.nombre}</span>
-              <span style={{ fontSize: 11, color: T.dim, marginLeft: "auto" }}>{ROL_LABEL[e.rol] ?? e.rol}</span>
+              <span style={{ fontSize: 11, color: T.dim, marginLeft: "auto" }}>{e.mixto ? "HQ + Sedes" : (ROL_LABEL[e.rol] ?? e.rol)}</span>
             </label>
           ))}
         </div>
@@ -677,12 +670,55 @@ function FichaShell({ sel, subtitulo, totalLiquidar, pagos, periodo, tag, onImpr
   );
 }
 
+// ── Ficha (elige la variante según los mundos del empleado) ───────────────────
+// resumen = { hq, sedes, totalLiquidar, desyncItems } (ver buildResumen). Un solo mundo → la ficha de
+// siempre; los dos → ficha mixta con ambas secciones y el total combinado.
+function Ficha({ sel, resumen, ...rest }) {
+  if (resumen.hq && resumen.sedes) return <FichaMixta sel={sel} resumen={resumen} {...rest} />;
+  if (resumen.hq) return <FichaHQ sel={sel} resumen={resumen.hq} {...rest} />;
+  return <FichaSedes sel={sel} resumen={resumen.sedes} {...rest} />;
+}
+
+// Subtítulo del lado Sedes: sede principal (+n) · rol de coach/front.
+function subtituloSedes(resumen, rol) {
+  const n = resumen.sedes.length;
+  const sedeTxt = resumen.principalSede + (n > 1 ? ` +${n - 1}` : "");
+  return `${sedeTxt} · ${ROL_LABEL[rol] ?? rol}`;
+}
+const subtituloHQ = (sel) => `${ROL_LABEL[sel.rol] ?? sel.rol}${sel.sociedad ? ` · ${sel.sociedad}` : ""}`;
+
+// ── Ficha mixta (HQ + Sedes el mismo mes) ─────────────────────────────────────
+// El empleado es uno: una sola ficha con la sección de sueldo HQ, la de Sedes (horas/variables por
+// sede) y UN bloque de pagos con todo lo cobrado por los dos mundos. Total a liquidar = suma.
+function FichaMixta({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpdateNota, agrupar, onToggleAgrupar }) {
+  const subtitulo = `${subtituloHQ(sel)}  +  Sedes: ${subtituloSedes(resumen.sedes, sel.rolSedes)}`;
+  return (
+    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={periodo} onImprimirTodo={onImprimirTodo} onUpdateNota={onUpdateNota} agrupar={agrupar} onToggleAgrupar={onToggleAgrupar}>
+      <Section titulo={`Sueldo HQ — ${fmt(resumen.hq.totalLiquidar)}`}>
+        <TablaHQ resumen={resumen.hq} />
+      </Section>
+      <Section titulo={`Sedes — ${fmt(resumen.sedes.totalLiquidar)}`}>
+        <TablaSedes resumen={resumen.sedes} />
+      </Section>
+    </FichaShell>
+  );
+}
+
 // ── Ficha Sedes ──────────────────────────────────────────────────────────────
 function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpdateNota, agrupar, onToggleAgrupar }) {
-  const sedes = resumen.sedes.length;
   // Nombre → mes (tag); subtítulo → sede(s) · rol.
-  const sedeTxt = resumen.principalSede + (sedes > 1 ? ` +${sedes - 1}` : "");
-  const subtitulo = `${sedeTxt} · ${ROL_LABEL[sel.rol] ?? sel.rol}`;
+  const subtitulo = subtituloSedes(resumen, sel.rol);
+  return (
+    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={periodo} onImprimirTodo={onImprimirTodo} onUpdateNota={onUpdateNota} agrupar={agrupar} onToggleAgrupar={onToggleAgrupar}>
+      <Section>
+        <TablaSedes resumen={resumen} />
+      </Section>
+    </FichaShell>
+  );
+}
+
+// Tabla de conceptos de Sedes (compartida por la ficha Sedes y la mixta).
+function TablaSedes({ resumen }) {
   // Fijo = base + horas (base/feriado/domingo/yoga) + asignaciones (la base sobre la que pega la comisión grupal).
   const sueldoFijo  = resumen.fijo + resumen.horasMonto + resumen.yogaMonto + resumen.feriadosMonto + resumen.domingosMonto;
   // Sueldo Variable: asignaciones + one shot + CDP (front + coach) + comisión grupal + running + programaciones.
@@ -712,12 +748,10 @@ function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpd
     ? ` (${resumen.objGrupalPcts.map(o => `${fmtNum(o.pct)}%: ${fmt(o.monto)}`).join(" + ")})`
     : resumen.objGrupalPct ? ` (${fmtNum(resumen.objGrupalPct)}%)` : "";
   return (
-    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={periodo} onImprimirTodo={onImprimirTodo} onUpdateNota={onUpdateNota} agrupar={agrupar} onToggleAgrupar={onToggleAgrupar}>
-      <Section>
-        {/* table-layout fixed + colgroup: un concepto largo (ej. "Horas Base" con el desglose
-            de varias sedes/tarifas entre paréntesis) debe ENVOLVER dentro de su columna, no
-            ensanchar la tabla más allá de la ficha — que tiene overflow:hidden y lo recortaría
-            (caso real: coaches multi-sede como Lautaro Pablovich, Nicolás Gago, Valentino Rossi). */}
+        /* table-layout fixed + colgroup: un concepto largo (ej. "Horas Base" con el desglose
+           de varias sedes/tarifas entre paréntesis) debe ENVOLVER dentro de su columna, no
+           ensanchar la tabla más allá de la ficha — que tiene overflow:hidden y lo recortaría
+           (caso real: coaches multi-sede como Lautaro Pablovich, Nicolás Gago, Valentino Rossi). */
         <table style={{ ...tbl, tableLayout: "fixed" }}>
           <colgroup>
             <col />
@@ -758,17 +792,23 @@ function FichaSedes({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpd
             <Subtotal label="Total a Liquidar" importe={resumen.totalLiquidar} fuerte />
           </tbody>
         </table>
-      </Section>
-    </FichaShell>
   );
 }
 
 // ── Ficha HQ ─────────────────────────────────────────────────────────────────
 function FichaHQ({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpdateNota, agrupar, onToggleAgrupar }) {
-  const subtitulo = `${ROL_LABEL[sel.rol] ?? sel.rol}${sel.sociedad ? ` · ${sel.sociedad}` : ""}`;
   return (
-    <FichaShell sel={sel} subtitulo={subtitulo} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={periodo} onImprimirTodo={onImprimirTodo} onUpdateNota={onUpdateNota} agrupar={agrupar} onToggleAgrupar={onToggleAgrupar}>
+    <FichaShell sel={sel} subtitulo={subtituloHQ(sel)} totalLiquidar={resumen.totalLiquidar} pagos={pagos} email={email} periodo={periodo} tag={periodo} onImprimirTodo={onImprimirTodo} onUpdateNota={onUpdateNota} agrupar={agrupar} onToggleAgrupar={onToggleAgrupar}>
       <Section>
+        <TablaHQ resumen={resumen} />
+      </Section>
+    </FichaShell>
+  );
+}
+
+// Tabla de conceptos de HQ (compartida por la ficha HQ y la mixta): sueldo + novedades por cuenta.
+function TablaHQ({ resumen }) {
+  return (
         <table style={{ ...tbl, tableLayout: "fixed" }}>
           <colgroup>
             <col />
@@ -788,8 +828,6 @@ function FichaHQ({ sel, resumen, pagos, email, periodo, onImprimirTodo, onUpdate
             ))}
           </tbody>
         </table>
-      </Section>
-    </FichaShell>
   );
 }
 
