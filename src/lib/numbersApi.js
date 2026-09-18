@@ -1609,6 +1609,15 @@ export async function aceptarMovimiento(mov, prop = {}) {
     // escritura, cubre todos los llamadores (botón, aceptar masivo, futuros), no solo el gate de la UI.
     if (!String(destino).trim())
       throw new Error("Transferencia sin cuenta del otro lado: elegí la cuenta destino antes de aceptar.");
+    // Guarda: una transferencia mueve el MISMO nominal a la otra cuenta (la contrapartida se crea con
+    // -mov.monto), así que solo cierra entre cuentas de la misma moneda. Cross-moneda es una CONVERSIÓN:
+    // los montos difieren de cada lado y el balance por moneda no la neutraliza → va por Tesorería ›
+    // Cambio de moneda, que pide los dos montos reales. Sin este corte, una venta de USD 3,00 quedaba
+    // como +3 EUR (nominal copiado) en vez de los +2,52 EUR que entraron de verdad.
+    const monedaOrig = String(mov.moneda || "");
+    const monedaDest = String(prop.destino_moneda || mov.moneda || "");
+    if (monedaDest !== monedaOrig)
+      throw new Error(`Una transferencia no cambia de moneda (${monedaOrig} → ${monedaDest}). Si es una compra/venta de divisa, cargala en Tesorería › Cambio de moneda con los dos montos reales.`);
     const tipoMov  = interco ? "INTERCOMPANIA" : "TRANSFERENCIA";
     const sharedId = newId(interco ? "INTERCOMPANY" : "TRF");
     await post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {

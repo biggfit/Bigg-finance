@@ -949,6 +949,14 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   };
 
   const destinoDe = (mov) => (edits[mov.id]?.cuenta_destino) ?? mov.cuenta_destino ?? "";
+  // Una transferencia copia el mismo nominal a la otra cuenta, así que solo cierra entre cuentas de la
+  // misma moneda. Cross-moneda es una conversión (montos distintos de cada lado) y va por Tesorería
+  // › Cambio de moneda. Cuenta desconocida → no bloqueo acá: el corte real está en aceptarMovimiento.
+  const monedaDestinoDe = (mov) => cuentasAll.find(c => String(c.id) === String(destinoDe(mov)))?.moneda;
+  const destinoOtraMoneda = (mov) => {
+    const md = monedaDestinoDe(mov);
+    return !!md && String(md) !== String(mov.moneda ?? "");
+  };
   // Normaliza nombres para comparar (mayúsculas, sin acentos/Ñ ni no-alfanuméricos).
   const normS = (s) => String(s || "").toUpperCase().normalize("NFD").replace(/[^A-Z0-9]/g, "");
   // Transferencia entre cuentas propias: la contraparte del banco es el nombre de la sociedad
@@ -1048,7 +1056,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const puedeAceptarMov = (mov) => {
     if (modoIntercoDe(mov)) return !!intercoSocDe(mov);
     if (modoRecvDe(mov)) return !!recvSocDe(mov);
-    if (esTransferMov(mov)) return !!destinoDe(mov);
+    if (esTransferMov(mov)) return !!destinoDe(mov) && !destinoOtraMoneda(mov);
     const fr = frState(mov);
     const total = Math.abs(Number(mov.monto) || 0);
     if (fr.es) {
@@ -2101,7 +2109,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                                 ? String(c.sociedad ?? "").toLowerCase() === String(sociedad ?? "").toLowerCase()
                                 : (!anilloActivo || mismoAnillo(c.sociedad)))
                               .map(c => (
-                              <option key={c.id} value={c.id}>{c.nombre}{c.sociedad !== sociedad ? ` · ${c.sociedad}` : ""}</option>
+                              <option key={c.id} value={c.id} disabled={String(c.moneda ?? "") !== String(m.moneda ?? "")}>{c.nombre}{c.sociedad !== sociedad ? ` · ${c.sociedad}` : ""}{String(c.moneda ?? "") !== String(m.moneda ?? "") ? ` · ${c.moneda} — no es transferencia, es Cambio de moneda` : ""}</option>
                             ))}
                           </select>
                         </div>
