@@ -2598,86 +2598,177 @@ function TabEvolucionPN({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, yea
 // ─── Tab config ───────────────────────────────────────────────────────────────
 const TABS = [
   // ── Funcionando ──
-  { id: "pl_sede", label: "P&L Sedes Propias Argentina",  icon: "🏬", desc: "Resultado operativo por sede: ventas, costos variables y márgenes." },
-  { id: "pl_bigg", label: "P&L BIGG",   icon: "🏢", desc: "Resultado corporativo por centro de HQ (R&D, Sales & Mkt, G&A)." },
-  { id: "cf",      label: "Cash Flow",  icon: "💵", desc: "Flujo de caja mensual: entradas y salidas por cuenta." },
-  { id: "interco", label: "Saldos entre sociedades",   icon: "🔗", desc: "Préstamos y saldos interco entre TODAS las sociedades: posición neta por moneda (quién le debe a quién). Filtrá por sociedad y hacé click en una fila para ver el detalle de movimientos." },
-  { id: "interco_matriz", label: "Fondeo por negocio", icon: "🧮", desc: "Fondeo del grupo a cada negocio (CAPEX), consolidado en USD · meses × negocio/tipo. Click en una celda = los movimientos que la componen. Ata al Fondeo del P&L." },
-  { id: "consolidado", label: "Tesorería consolidada", icon: "🏦", desc: "Saldos y movimientos de todas las sociedades del grupo." },
-  { id: "cxp_prov", label: "CxP por proveedor", icon: "📋", desc: "Cuentas por pagar consolidadas por proveedor (todas las sociedades), con antigüedad." },
-  { id: "cxc_cli", label: "CxC por cliente", icon: "📥", desc: "Cuentas por cobrar consolidadas por cliente (todas las sociedades), con antigüedad." },
-  { id: "socios",  label: "Socios", icon: "◎", desc: "Cuenta corriente de socios: dividendos, aportes y préstamos (balance, no P&L)." },
+  { id: "pl_sede", label: "P&L · Sedes Argentina",  icon: "🏬", ico: "store", desc: "Resultado operativo por sede: ventas, costos variables y márgenes." },
+  { id: "pl_bigg", label: "P&L · BIGG (grupo)",   icon: "🏢", ico: "building", desc: "Resultado corporativo por centro de HQ (R&D, Sales & Mkt, G&A)." },
+  { id: "cf",      label: "Cash Flow",  icon: "💵", ico: "flow", desc: "Flujo de caja mensual: entradas y salidas por cuenta." },
+  { id: "interco", label: "Saldos entre sociedades",   icon: "🔗", ico: "link", desc: "Préstamos y saldos interco entre TODAS las sociedades: posición neta por moneda (quién le debe a quién). Filtrá por sociedad y hacé click en una fila para ver el detalle de movimientos." },
+  { id: "interco_matriz", label: "Fondeo por negocio", icon: "🧮", ico: "grid", desc: "Fondeo del grupo a cada negocio (CAPEX), consolidado en USD · meses × negocio/tipo. Click en una celda = los movimientos que la componen. Ata al Fondeo del P&L." },
+  { id: "consolidado", label: "Tesorería consolidada", icon: "🏦", ico: "bank", desc: "Saldos y movimientos de todas las sociedades del grupo." },
+  { id: "cxp_prov", label: "Cuentas a pagar por proveedor", icon: "📋", ico: "invoice", desc: "Cuentas por pagar consolidadas por proveedor (todas las sociedades), con antigüedad." },
+  { id: "cxc_cli", label: "Cuentas a cobrar por cliente", icon: "📥", ico: "receipt", desc: "Cuentas por cobrar consolidadas por cliente (todas las sociedades), con antigüedad." },
+  { id: "socios",  label: "Socios", icon: "◎", ico: "people", desc: "Cuenta corriente de socios: dividendos, aportes y préstamos (balance, no P&L)." },
 
-  // ── WIP (solo esqueleto navegable; sin cálculo todavía) ──
-  { id: "inf_egresos",  label: "Egresos (detalle)",  icon: "🔎", desc: "Listar y filtrar compras por cuenta · centro · proveedor · moneda · período." },
-  { id: "inf_ingresos", label: "Ingresos (detalle)", icon: "🔎", desc: "Listar y filtrar ventas/ingresos por cuenta · centro · cliente · moneda · período." },
+  // ── Detalle operativo (funcionando): el único lugar donde se ve la contabilidad de TODAS las sociedades ──
+  { id: "inf_egresos",  label: "Egresos en detalle",  icon: "🔎", ico: "out", desc: "Listar y filtrar compras por cuenta · centro · proveedor · moneda · período." },
+  { id: "inf_ingresos", label: "Ingresos en detalle", icon: "🔎", ico: "in", desc: "Listar y filtrar ventas/ingresos por cuenta · centro · cliente · moneda · período." },
 
-  { id: "er_soc",       label: "Estado de Resultados", icon: "📄", wip: true, desc: "P&L de la entidad legal seleccionada (por sociedad)." },
+  { id: "er_soc",       label: "Estado de Resultados por sociedad", icon: "📄", ico: "doc", wip: true, desc: "P&L de la entidad legal seleccionada (por sociedad)." },
 
-  { id: "op_espana",    label: "P&L Sedes Propias España", icon: "🇪🇸", desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada)." },
-  { id: "op_colombia",  label: "P&L Sedes Propias Colombia", icon: "🇨🇴", desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada)." },
-  { id: "op_puertos",   label: "P&L Puertos", icon: "⚓", wip: true, desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada, inversión USD)." },
-  { id: "op_rosedal",   label: "P&L Rosedal (Segui Fit)", icon: "🤝", desc: "P&L completo de la operación administrada hasta Free Cash Flow, con impuestos dentro; a BIGG entra el fee + su % del FCF." },
-  { id: "op_huergo",    label: "P&L Huergo", icon: "🏗️", desc: "Negocio propio (anillo 1): ingreso del edificio − horas de coaches = margen a seguir de cerca." },
+  { id: "op_espana",    label: "P&L · Sedes España", icon: "🇪🇸", ico: "store", desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada)." },
+  { id: "op_colombia",  label: "P&L · Sedes Colombia", icon: "🇨🇴", ico: "store", desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada)." },
+  { id: "op_puertos",   label: "P&L · Puertos", icon: "⚓", ico: "anchor", wip: true, desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada, inversión USD)." },
+  { id: "op_rosedal",   label: "P&L · Rosedal (Segui Fit)", icon: "🤝", ico: "handshake", desc: "P&L completo de la operación administrada hasta Free Cash Flow, con impuestos dentro; a BIGG entra el fee + su % del FCF." },
+  { id: "op_huergo",    label: "P&L · Huergo", icon: "🏗️", ico: "building", desc: "Negocio propio (anillo 1): ingreso del edificio − horas de coaches = margen a seguir de cerca." },
 
-  { id: "consol_grupo", label: "Consolidado de grupo", icon: "🌐", wip: true, desc: "P&L y patrimonio del grupo: propias full (neto de IVA) + fee/share de administradas + impuestos del anillo al final." },
+  { id: "consol_grupo", label: "Consolidado de grupo", icon: "🌐", ico: "globe", wip: true, desc: "P&L y patrimonio del grupo: propias full (neto de IVA) + fee/share de administradas + impuestos del anillo al final." },
 
-  { id: "an_ventas",    label: "Composición de Ingresos", icon: "📈", desc: "Igual que el P&L BIGG hasta Total Ingresos: cada negocio (Sedes AR con apertura por sede / Rosedal / Huergo) y las líneas de HQ." },
-  { id: "an_margenes",  label: "Márgenes por negocio", icon: "🧩", wip: true, desc: "Cuánto aporta cada negocio al Margen Bruto del grupo." },
-  { id: "an_gastos_cc", label: "Gastos por centro de costo", icon: "🧾", wip: true, desc: "Apertura del gasto por centro de costo y, dentro, por cuenta contable." },
+  { id: "an_ventas",    label: "Composición de ingresos", icon: "📈", ico: "pie", desc: "Igual que el P&L BIGG hasta Total Ingresos: cada negocio (Sedes AR con apertura por sede / Rosedal / Huergo) y las líneas de HQ." },
+  { id: "an_margenes",  label: "Márgenes por negocio", icon: "🧩", ico: "puzzle", wip: true, desc: "Cuánto aporta cada negocio al Margen Bruto del grupo." },
+  { id: "an_gastos_cc", label: "Gastos por centro de costo", icon: "🧾", ico: "tag", wip: true, desc: "Apertura del gasto por centro de costo y, dentro, por cuenta contable." },
 
-  { id: "devengado",    label: "Devengado (cuenta × mes)", icon: "🧪", desc: "Diagnóstico: devengado crudo por cuenta y mes, filtrable por sociedad/anillo · centro · moneda. Sin fondeo ni traducción de moneda → el Resultado ata contra la variación del PN del balance." },
+  { id: "devengado",    label: "Control de cierre · devengado", icon: "🧪", ico: "flask", desc: "Diagnóstico: devengado crudo por cuenta y mes, filtrable por sociedad/anillo · centro · moneda. Sin fondeo ni traducción de moneda → el Resultado ata contra la variación del PN del balance." },
 ];
 
-// ─── Menú por STORYTELLING (agrupado por la pregunta que uno se hace, no por taxonomía contable) ──
-// Pensado para navegar el negocio de arriba hacia abajo: la foto del grupo → cómo rinde cada negocio →
-// de dónde sale/va la plata → buscar el detalle → (lo fiscal/interno al fondo). Textos = management
-// (todavía NO simplificados para dueños). El anillo de la sociedad manda cómo consolida (ver memoria).
+// ─── Menú de Reportes: por lo que uno viene a HACER (operar → resultados → plata entre sociedades → control) ──
+// Decisión Martín 19/9/2026: Egresos/Ingresos en detalle + Cuentas a pagar/cobrar son el ÚNICO lugar donde se opera la
+// contabilidad de TODAS las sociedades → van primero y en grande (hero). Resultados, plata entre sociedades y control
+// como listas de una línea con su descripción. Lo que está en construcción va al FINAL de su grupo, en gris, nunca
+// primero. Los ids de TABS no cambian (los usa todo el resto de la pantalla).
 const LENTES = [
-  { id: "grupo",    label: "La foto del grupo",            tabs: ["consol_grupo", "pl_bigg", "an_ventas", "cf", "consolidado", "interco_matriz", "cxp_prov", "cxc_cli", "socios"] },
-  { id: "negocios", label: "Cómo le va a cada negocio",    tabs: ["pl_sede", "op_espana", "op_colombia", "op_rosedal", "op_huergo", "op_puertos"] },
-  { id: "flujo",    label: "De dónde sale y a dónde va",   tabs: ["an_gastos_cc"] },
-  { id: "detalle",  label: "Buscar el detalle",            tabs: ["inf_egresos", "inf_ingresos"] },
-  { id: "interno",  label: "Interno · fiscal / contable",  tabs: ["er_soc", "interco", "interco_matriz", "devengado"] },
+  { id: "operar",     label: "Operar el día a día",      hint: "La contabilidad de todas las sociedades, en un solo lugar", hero: true,
+    // Orden FIJO en 3 columnas × 2 filas (Martín 19/9): Egresos / Cuentas a pagar / Tesorería arriba; Ingresos / Cuentas a cobrar / Cash Flow abajo.
+    tabs: ["inf_egresos", "cxp_prov", "consolidado", "inf_ingresos", "cxc_cli", "cf"] },
+  { id: "resultados", label: "¿Cómo nos fue?",            hint: "Resultados del grupo y de cada negocio",
+    tabs: ["pl_bigg", "pl_sede", "op_espana", "op_colombia", "op_rosedal", "op_huergo", "an_ventas", "op_puertos", "an_margenes", "consol_grupo"] },
+  { id: "plata",      label: "La plata entre sociedades", hint: "Quién le debe a quién y qué fondeó el grupo",
+    tabs: ["interco", "interco_matriz", "socios"] },
+  { id: "control",    label: "Control y cierre",          hint: "Para atar el resultado contra el patrimonio",
+    tabs: ["devengado", "an_gastos_cc", "er_soc"] },
 ];
 
-
-// ─── Menú-landing de Reportes: tarjetas agrupadas por lente ─────────────────────
-function ReportCard({ icon, title, wip, onClick }) {
+// Íconos de un solo trazo (24×24, stroke = currentColor). Reemplazan a los emojis del menú: se ven igual en todas
+// las máquinas y van en flúo sobre el tile oscuro (marca). El emoji queda como fallback si una tab no declara `ico`.
+const ICONO_PATHS = {
+  out:       ["M4 6h16", "M4 12h9", "M4 18h6", "M14 18h6", "M17 15l3 3-3 3"],
+  in:        ["M4 6h16", "M4 12h9", "M4 18h6", "M14 18h6", "M17 21l-3-3 3-3"],
+  invoice:   ["M6 3h9l3 3v15H6z", "M15 3v3h3", "M9 10h6", "M9 14h6", "M9 18h3"],
+  receipt:   ["M5 3h14v18l-2.3-1.8L14.3 21 12 19.2 9.7 21l-2.4-1.8L5 21z", "M9 8h6", "M9 12h6"],
+  bank:      ["M3 10l9-6 9 6H3z", "M5 10v8", "M10 10v8", "M14 10v8", "M19 10v8", "M3 20h18"],
+  flow:      ["M3 13c3 0 3-6 6-6s3 8 6 8 3-6 6-6", "M3 20h18"],
+  building:  ["M4 21V5l8-3v19", "M12 21V9l8 2v10", "M2 21h20", "M8 9h1", "M8 13h1", "M8 17h1", "M15 14h1", "M15 18h1"],
+  store:     ["M4 9l1.5-5h13L20 9", "M4 9h16v3a2.5 2.5 0 01-5 0 2.5 2.5 0 01-6 0 2.5 2.5 0 01-5 0z", "M6 13v8h12v-8", "M10 21v-5h4v5"],
+  pie:       ["M12 3v9h9", "M21 12a9 9 0 11-9-9"],
+  puzzle:    ["M8 3h4v2.5a1.5 1.5 0 003 0V3h4v5h-2.5a1.5 1.5 0 000 3H19v6h-5v-2.5a1.5 1.5 0 00-3 0V17H6v-5h2.5a1.5 1.5 0 000-3H6V3z"],
+  globe:     ["M12 3a9 9 0 100 18 9 9 0 000-18z", "M3 12h18", "M12 3c3.5 3.5 3.5 14.5 0 18", "M12 3c-3.5 3.5-3.5 14.5 0 18"],
+  link:      ["M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1.2 1.2", "M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1.2-1.2"],
+  grid:      ["M4 4h7v7H4z", "M13 4h7v7h-7z", "M4 13h7v7H4z", "M13 13h7v7h-7z"],
+  people:    ["M9 11a3 3 0 100-6 3 3 0 000 6z", "M3 20a6 6 0 0112 0", "M16 11a3 3 0 100-6", "M15 20a6 6 0 016-6"],
+  flask:     ["M9 3h6", "M10 3v6l-6 11h16l-6-11V3", "M7 15h10"],
+  tag:       ["M3 12V4h8l10 10-8 8L3 12z", "M7.5 7.5h.01"],
+  doc:       ["M6 3h9l3 3v15H6z", "M15 3v3h3", "M9 12h6", "M9 16h6"],
+  anchor:    ["M12 3a2 2 0 100 4 2 2 0 000-4z", "M12 7v14", "M4 13a8 8 0 0016 0", "M2 13h4", "M18 13h4"],
+  handshake: ["M3 10l4-4 4 3-3 3", "M21 10l-4-4-4 3 3 3", "M7 12l5 5 5-5", "M12 17v3"],
+};
+function Icono({ name, emoji, size = 20, color = T.accent }) {
+  const paths = ICONO_PATHS[name];
+  if (!paths) return <span style={{ fontSize: size }}>{emoji}</span>;
   return (
-    <button onClick={onClick} style={{
-      display: "flex", gap: 14, alignItems: "center", textAlign: "left",
-      background: wip ? "#fafbfc" : T.card, border: `1px ${wip ? "dashed" : "solid"} ${T.cardBorder}`, borderRadius: 12,
-      padding: "16px 20px", cursor: "pointer", fontFamily: T.font, width: "100%",
-      boxShadow: "0 1px 3px rgba(0,0,0,.04)", transition: "all .15s ease" }}
-      onMouseEnter={e => { e.currentTarget.style.boxShadow = T.shadowMd; e.currentTarget.style.borderColor = T.accent; e.currentTarget.style.transform = "translateY(-1px)"; }}
-      onMouseLeave={e => { e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,.04)"; e.currentTarget.style.borderColor = T.cardBorder; e.currentTarget.style.transform = "none"; }}>
-      <div style={{ fontSize: 20, lineHeight: 1, flexShrink: 0, width: 42, height: 42, borderRadius: 10,
-        background: wip ? "#e5e7eb" : T.accentDark, display: "flex", alignItems: "center", justifyContent: "center", opacity: wip ? .8 : 1 }}>{icon}</div>
-      <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontSize: 15, fontWeight: 800, color: wip ? T.muted : T.text }}>{title}</span>
-        {wip && <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: ".06em", color: "#b45309",
-          background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "1px 6px" }}>🚧 WIP</span>}
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {paths.map((d, i) => <path key={i} d={d} />)}
+    </svg>
+  );
+}
+
+const WIP_BADGE = <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: ".06em", color: "#b45309", background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "1px 6px", whiteSpace: "nowrap" }}>EN CONSTRUCCIÓN</span>;
+const _tile = (wip, size) => ({ width: size, height: size, borderRadius: Math.round(size / 4), flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+  background: wip ? "#e5e7eb" : T.accentDark, color: wip ? T.dim : T.accent });
+const _hover = (on) => (e) => {
+  e.currentTarget.style.boxShadow = on ? T.shadowMd : "0 1px 3px rgba(0,0,0,.04)";
+  e.currentTarget.style.borderColor = on ? T.accent : T.cardBorder;
+  e.currentTarget.style.transform = on ? "translateY(-1px)" : "none";
+};
+
+// Tarjeta GRANDE (grupo "Operar el día a día"): tile 44 + título + descripción a dos líneas.
+function ReportCardHero({ t, onClick }) {
+  return (
+    <button onClick={onClick} style={{ display: "flex", gap: 14, alignItems: "flex-start", textAlign: "left", width: "100%",
+      background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 12, padding: "16px 18px", cursor: "pointer",
+      fontFamily: T.font, boxShadow: "0 1px 3px rgba(0,0,0,.04)", transition: "all .15s ease" }}
+      onMouseEnter={_hover(true)} onMouseLeave={_hover(false)}>
+      <div style={_tile(false, 44)}><Icono name={t.ico} emoji={t.icon} size={22} /></div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 15, fontWeight: 800, color: T.text, lineHeight: 1.25 }}>{t.label}</div>
+        <div style={{ fontSize: 12, color: T.muted, lineHeight: 1.45, marginTop: 4, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{t.desc}</div>
       </div>
     </button>
   );
 }
+// Fila COMPACTA (resto de los grupos): tile 34 + título + descripción en una línea + chevron.
+function ReportRow({ t, onClick }) {
+  const wip = !!t.wip;
+  return (
+    <button onClick={onClick} style={{ display: "flex", gap: 12, alignItems: "center", textAlign: "left", width: "100%",
+      background: wip ? "#fafbfc" : T.card, border: `1px ${wip ? "dashed" : "solid"} ${T.cardBorder}`, borderRadius: 10, padding: "10px 14px",
+      cursor: "pointer", fontFamily: T.font, boxShadow: "0 1px 3px rgba(0,0,0,.04)", transition: "all .15s ease" }}
+      onMouseEnter={_hover(true)} onMouseLeave={_hover(false)}>
+      <div style={_tile(wip, 34)}><Icono name={t.ico} emoji={t.icon} size={17} color={wip ? T.dim : T.accent} /></div>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 14, fontWeight: 800, color: wip ? T.muted : T.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.label}</span>
+          {wip && WIP_BADGE}
+        </div>
+        <div style={{ fontSize: 12, color: T.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 2 }}>{t.desc}</div>
+      </div>
+      <span style={{ color: T.dim, fontSize: 16, flexShrink: 0 }}>›</span>
+    </button>
+  );
+}
+
+const _norm = (x) => String(x ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
 function ReportesMenu({ onPick }) {
+  const [q, setQ] = useState("");
+  const tabDe = (id) => TABS.find(x => x.id === id);
+  const ordenar = (ids) => ids.map(tabDe).filter(Boolean).sort((a, b) => (a.wip ? 1 : 0) - (b.wip ? 1 : 0));   // estable: en construcción al final
+  const nq = _norm(q).trim();
+  const hits = nq ? TABS.filter(t => _norm(t.label).includes(nq) || _norm(t.desc).includes(nq)) : null;
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 26 }}>
-      {LENTES.map(lente => (
-        <div key={lente.id}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: T.muted, letterSpacing: ".1em",
-            textTransform: "uppercase", marginBottom: 10 }}>{lente.label}</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
-            {lente.tabs.map(tid => {
-              const t = TABS.find(x => x.id === tid);
-              return <ReportCard key={tid} icon={t.icon} title={t.label} desc={t.desc} wip={t.wip} onClick={() => onPick(tid)} />;
-            })}
+    <div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
+      {/* Buscador */}
+      <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar un reporte… (ej. cash, proveedor, España)"
+          style={{ flex: "1 1 320px", maxWidth: 520, background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10,
+            padding: "10px 14px", fontSize: 13, fontFamily: T.font, color: T.text, outline: "none" }} />
+      </div>
+
+      {hits ? (
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 800, color: T.muted, letterSpacing: ".1em", textTransform: "uppercase", marginBottom: 10 }}>
+            {hits.length ? `${hits.length} resultado${hits.length === 1 ? "" : "s"}` : "Sin resultados"}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(380px, 1fr))", gap: 10 }}>
+            {ordenar(hits.map(t => t.id)).map(t => <ReportRow key={t.id} t={t} onClick={() => onPick(t.id)} />)}
           </div>
         </div>
-      ))}
+      ) : LENTES.map(lente => {
+        const tabs = ordenar(lente.tabs);
+        return (
+          <div key={lente.id}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: T.text, letterSpacing: ".1em", textTransform: "uppercase" }}>{lente.label}</div>
+              {lente.hint && <div style={{ fontSize: 12, color: T.dim }}>{lente.hint}</div>}
+            </div>
+            {lente.hero
+              ? <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
+                  {tabs.map(t => <ReportCardHero key={t.id} t={t} onClick={() => onPick(t.id)} />)}
+                </div>
+              : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(380px, 1fr))", gap: 10 }}>
+                  {tabs.map(t => <ReportRow key={t.id} t={t} onClick={() => onPick(t.id)} />)}
+                </div>}
+          </div>
+        );
+      })}
     </div>
   );
 }
