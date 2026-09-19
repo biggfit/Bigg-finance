@@ -2,17 +2,19 @@
 // Reusa la derivación pura (derivarSaldos, una por sociedad) y los mismos componentes
 // de presentación que Tesorería (TabSaldos/TabMovimientos/PaginaAging). Filtro de
 // sociedades en la cabecera (arranca con todas). Datos propios (no scopeados a una sociedad).
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { T, fmtDate } from "../theme";
 import {
   fetchSociedades,
   fetchMovTesoreria, fetchEgresos, fetchIngresos, fetchPagosCobros,
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto,
   fetchFinanciaciones, fetchSocios, fetchSociosCC, fetchIntercoData, intercoLedger, primeCache,
+  montoAUSD, tcDelMes,
 } from "../../lib/numbersApi";
 import { fetchLiquidacionesCerradas } from "../../lib/sueldosApi";
 import { fetchAll } from "../../lib/sheetsApi";        // Franquicias (read-only)
 import { derivarSaldos, franqFirst, intercoConsolidado, sociedadNombreMap } from "../tesoreriaDerive";
+import { buildDevengado } from "./TabDevengado";   // resultado por mes (misma función que el reporte Devengado) → conciliación del PN
 import { TabSaldos, TabMovimientos, PaginaAging, PaginaIntercoLedger } from "../PantallaTesoreria";
 import { buildPuente, printPuente } from "./puenteDerive";   // DEV-ONLY diagnóstico (descartable)
 
@@ -34,7 +36,9 @@ const esCorriente = l => /proveedor|sueldo|carga|impuesto|interuso|franquic|aran
 // Formato de monto redondeado es-AR (— para cero, − para negativos). Compartido Balance/EEPN.
 const fmtBal = (n) => { const v = Math.round(Number(n) || 0); return v === 0 ? "—" : (v < 0 ? "−" : "") + Math.abs(v).toLocaleString("es-AR"); };
 
-export default function TabTesoreriaConsolidada() {
+// `pnl` = { inRows, egRows, cuentaMap, ccMap } del P&L (lo pasa PantallaReportes) → el Balance concilia el PN contra el
+// resultado acumulado. `tiposCambio` = mapa YYYY-MM → tasas (nb_tipos_cambio) → Balance consolidado en USD con "Todas".
+export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null } = {}) {
   const [sociedades, setSociedades] = useState([]);
   const [socSel,     setSocSel]     = useState([]);   // [] = todas
   const [socOpen,    setSocOpen]    = useState(false);
@@ -163,20 +167,23 @@ export default function TabTesoreriaConsolidada() {
 
   // ── EEPN = el Balance con MESES en columnas: el balance derivado a fin de cada mes, misma estructura de
   //    líneas (caja/bancos/CxC · corriente/otros/PN), para ver cómo se mueve cada cuenta hasta el PN. ──
+  // Balance derivado A UNA FECHA (as-of) para el set de sociedades elegido: lo usan el Balance (corte, cierre
+  // anterior, apertura) y el EEPN (fin de cada mes). Interco consolidado también as-of.
+  const deriveAsOf = useCallback((fecha) => {
+    const idsSel = socsIncluidas.map(s => s.id);
+    const perSoc = socsIncluidas.map(s => derivarSaldos({ ...data, sociedad: s.id, fechaCorte: fecha, sociedadesMap }));
+    const ic = intercoData ? intercoConsolidado(intercoData, idsSel, sociedades, fecha) : { activo: [], pasivo: [] };
+    return {
+      cuentas: perSoc.flatMap(r => r.cuentas),
+      aCobrar: mergeItems(perSoc.map(r => r.aCobrar)),
+      aPagar:  mergeItems(perSoc.map(r => r.aPagar)),
+      intercoAct: ic.activo, intercoPas: ic.pasivo,
+    };
+  }, [data, socsIncluidas, intercoData, sociedades, sociedadesMap]);
+
   const eepn = useMemo(() => {
     if (activeTab !== "evpn") return null;
     const idsSel = socsIncluidas.map(s => s.id);   // set de sociedades (no depende de la fecha)
-    const deriveAsOf = (fecha) => {
-      const perSoc = socsIncluidas.map(s => derivarSaldos({ ...data, sociedad: s.id, fechaCorte: fecha, sociedadesMap }));
-      // interco consolidado AS-OF (corta movimientos/comprobantes por la fecha) → evoluciona mes a mes.
-      const ic = intercoData ? intercoConsolidado(intercoData, idsSel, sociedades, fecha) : { activo: [], pasivo: [] };
-      return {
-        cuentas: perSoc.flatMap(r => r.cuentas),
-        aCobrar: mergeItems(perSoc.map(r => r.aCobrar)),
-        aPagar:  mergeItems(perSoc.map(r => r.aPagar)),
-        intercoAct: ic.activo, intercoPas: ic.pasivo,
-      };
-    };
     const year = new Date().getFullYear();
     const GO = year === 2026 ? 6 : 0;   // julio go-live (columna inicial = junio)
     const upto = Math.max(GO, new Date().getMonth());
@@ -190,7 +197,7 @@ export default function TabTesoreriaConsolidada() {
     const cambios = (data.movimientos || []).filter(mv => mv.origen === "cambio" && idsLC.has(String(mv.sociedad || "").toLowerCase()));
     const cambioAcum = {};
     for (let m = GO - 1; m <= upto; m++) {
-      const hasta = finDeMes(m); const acc = { ARS: 0, USD: 0, EUR: 0 };
+      const hasta = finDeMes(m); const acc = { ARS: 0, USD: 0, EUR: 0, COP: 0 };
       for (const mv of cambios) if ((mv.fecha ?? "") <= hasta) { const c = mv.moneda || "ARS"; if (c in acc) acc[c] += Number(mv.monto) || 0; }
       cambioAcum[m] = acc;
     }
@@ -200,7 +207,7 @@ export default function TabTesoreriaConsolidada() {
     const corrLabels = uniq(b => b.aPagar, it => esCorriente(it.label));
     const otrosLabels = uniq(b => b.aPagar, it => !esCorriente(it.label));
     return { year, GO, upto, balMes, cambioAcum, cxcLabels, corrLabels, otrosLabels };
-  }, [activeTab, data, socsIncluidas, intercoData, sociedades, sociedadesMap]);
+  }, [activeTab, data, socsIncluidas, intercoData, sociedades, sociedadesMap, deriveAsOf]);
 
   const toggleSoc = id => setSocSel(prev => {
     const full = prev.length === 0 ? sociedades.map(s => s.id) : prev;
@@ -378,11 +385,11 @@ export default function TabTesoreriaConsolidada() {
           onItemClick={setDrillDownItem} />
       )}
       {!loading && !error && activeTab === "balance" && (
-        <BalanceView cuentas={cuentas} aCobrar={aCobrar} aPagar={aPagar}
-          intercoAct={intercoAct} intercoPas={intercoPas} filtroMoneda={filtroMoneda} fechaCorte={fechaCorte} />
+        <BalanceView deriveAsOf={deriveAsOf} filtroMoneda={filtroMoneda} fechaCorte={fechaCorte}
+          tiposCambio={tiposCambio} pnl={pnl} socsIncluidas={socsIncluidas} movimientos={data.movimientos} />
       )}
       {!loading && !error && activeTab === "evpn" && (
-        <EEPNView eepn={eepn} filtroMoneda={filtroMoneda} />
+        <EEPNView eepn={eepn} filtroMoneda={filtroMoneda} tiposCambio={tiposCambio} />
       )}
       {!loading && !error && activeTab === "movimientos" && (
         <TabMovimientos movimientos={movimientos} cuentas={cuentas} filtroCuenta={filtroCuenta} filtroRef={filtroRef}
@@ -499,97 +506,275 @@ function BalanceTable({ cols, colLabel, minBase = 320, colW = 100, getters, deta
   );
 }
 
-// ── Balance (Estado de Situación): Activo / Pasivo / PN por moneda, a partir de los saldos derivados
-//    (mismas `cuentas/aCobrar/aPagar/interco` que la vista Saldos). PN = Activo − Pasivo (residual). ──
-function BalanceView({ cuentas = [], aCobrar = [], aPagar = [], intercoAct = [], intercoPas = [], filtroMoneda, fechaCorte }) {
-  const ALLMONS = ["ARS", "USD", "EUR", "COP"];
-  const present = new Set();
-  [cuentas, aCobrar, aPagar, intercoAct, intercoPas].forEach(a => a.forEach(it => it.moneda && present.add(it.moneda)));
-  let mons = ALLMONS.filter(m => present.has(m));
-  if (filtroMoneda && filtroMoneda !== "ALL") mons = mons.filter(m => m === filtroMoneda);
-  if (mons.length === 0) mons = ["ARS"];
+// ── Balance (Estado de Situación) a una fecha, en UNA moneda ──
+//   · Moneda elegida (ARS/USD/EUR/COP) → el balance nativo de esa moneda (circuito cerrado, como el EEPN).
+//   · "Todas" → CONSOLIDADO DEL GRUPO EN USD: cada saldo se traduce al TC del mes de su fecha (nb_tipos_cambio,
+//     misma convención que el P&L "USD · TC Real"). Sin TC de un mes/moneda → se avisa y esa parte no se suma.
+//   · Columnas: cierre del mes anterior · fecha de corte · variación (misma historia que el EEPN).
+//   · Debajo del PN, su explicación: PN apertura (30/6) + resultado acumulado (P&L, buildDevengado) − cambio de
+//     moneda = PN explicado; la diferencia con el PN real es lo que queda sin explicar (el "puente" hecho reporte).
+// Decisión Martín 19/9/2026 ("las monedas por columna me hacen ruido").
+const GO_LIVE_APERTURA = "2026-06-30";
+// Traductor a USD compartido por Balance y EEPN: TC del mes de la fecha; si ese mes no tiene TC (típico: el mes en
+// curso), usa el último disponible hacia atrás (hasta 3 meses) y lo registra en `tcSuplente`; si tampoco hay, lo
+// registra en `faltaTC` y devuelve 0 (NO suma monedas sin traducir).
+function crearTraductor(tiposCambio) {
+  const faltaTC = new Set(), tcSuplente = new Set();
+  const tcPara = (fecha) => {
+    let y = +fecha.slice(0, 4), m = +fecha.slice(5, 7);
+    for (let i = 0; i < 4; i++) {
+      const tc = tcDelMes(tiposCambio, y, m);
+      if (tc) { if (i > 0) tcSuplente.add(`${fecha.slice(0, 7)} → ${tc.yearMonth}`); return tc; }
+      m -= 1; if (m === 0) { m = 12; y -= 1; }
+    }
+    return null;
+  };
+  const aUSD = (monto, moneda, fecha) => {
+    const v = montoAUSD(monto, moneda, tcPara(fecha));
+    if (v == null) { if (Math.abs(monto) > 0.005) faltaTC.add(`${moneda} ${fecha.slice(0, 7)}`); return 0; }
+    return v;
+  };
+  return { aUSD, tcPara, faltaTC, tcSuplente };
+}
+// Avisos de TC (suplente / faltante), compartidos por Balance y EEPN.
+function AvisosTC({ tcSuplente, faltaTC }) {
+  return (<>
+    {tcSuplente.size > 0 && (
+      <div style={{ fontSize: 11, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "6px 12px", marginBottom: 10 }}>
+        Sin tipo de cambio cargado para {[...tcSuplente].map(x => x.split(" → ")[0]).filter((v, i, a) => a.indexOf(v) === i).join(", ")}: se usa el último disponible ({[...new Set([...tcSuplente].map(x => x.split(" → ")[1]))].join(", ")}). Cargalo en Maestros › Tipos de cambio.
+      </div>
+    )}
+    {faltaTC.size > 0 && (
+      <div role="alert" style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#92400e", marginBottom: 10 }}>
+        Falta tipo de cambio para: {[...faltaTC].join(", ")}. Esos saldos no están sumados en el consolidado.
+      </div>
+    )}
+  </>);
+}
+// Orden de las líneas de detalle, IGUAL en Balance y EEPN: alfabético dentro del subgrupo, intercompañía al final.
+const ordenarDetalle = (rows) => [...rows].sort((a, b) => (/^Intercompañía/.test(a.label) ? 1 : 0) - (/^Intercompañía/.test(b.label) ? 1 : 0) || a.label.localeCompare(b.label));
+const _hoyISO = () => new Date().toISOString().slice(0, 10);
+const _finMesAnterior = (iso) => { const y = +iso.slice(0, 4), m = +iso.slice(5, 7); const pm = m === 1 ? 12 : m - 1, py = m === 1 ? y - 1 : y; return `${py}-${String(pm).padStart(2, "0")}-31`; };
+const _esFinDeMes = (iso) => { const d = new Date(+iso.slice(0, 4), +iso.slice(5, 7), 0).getDate(); return +iso.slice(8, 10) >= d; };
 
-  const groupByLabel = (a) => {
-    const map = new Map();
-    for (const it of a) { if (!map.has(it.label)) map.set(it.label, {}); const r = map.get(it.label); r[it.moneda] = (r[it.moneda] || 0) + (Number(it.saldo) || 0); }
-    return [...map.entries()].map(([label, byMon]) => ({ label, byMon }));
-  };
-  // Activo: Caja / Bancos / Cuentas por cobrar (CxC + interco nos-deben).
-  const caja   = m => sumSaldo(cuentas, m, c => (c.tipo || "") === "caja");
-  const bancos = m => sumSaldo(cuentas, m, c => { const t = (c.tipo || ""); return t !== "caja" && t !== "tarjeta"; });
-  const cxcTot = m => sumSaldo(aCobrar, m) + sumSaldo(intercoAct, m);
-  const activo = m => caja(m) + bancos(m) + cxcTot(m);
-  // Pasivo: Corriente (proveedores/sueldos/cargas/impuestos/interusos/franquicias) vs Otros (financiación,
-  // anticipos, tarjetas, socios, interco). El resto que no matchea corriente cae en "otros".
-  const cxcRows = groupByLabel(aCobrar), cxpRows = groupByLabel(aPagar);
-  const pagCorr  = cxpRows.filter(r => esCorriente(r.label));
-  const pagOtros = cxpRows.filter(r => !esCorriente(r.label));
-  const sumRows  = (rows, m) => rows.reduce((s, r) => s + (r.byMon[m] || 0), 0);
-  const corrTot  = m => sumRows(pagCorr, m);
-  const otrosTot = m => sumRows(pagOtros, m) + sumSaldo(intercoPas, m);
-  const pasivo   = m => corrTot(m) + otrosTot(m);
-  const pn       = m => activo(m) - pasivo(m);
-  const hayIntA = intercoAct.some(x => Math.abs(Number(x.saldo) || 0) > 0.5);
-  const hayIntP = intercoPas.some(x => Math.abs(Number(x.saldo) || 0) > 0.5);
+function BalanceView({ deriveAsOf, filtroMoneda, fechaCorte, tiposCambio = null, pnl = null, socsIncluidas = [], movimientos = [] }) {
+  const corte = fechaCorte || _hoyISO();
+  const prev  = _finMesAnterior(corte);
+  const consolidado = !filtroMoneda || filtroMoneda === "ALL";
+  const mon = consolidado ? "USD" : filtroMoneda;
+
+  const balCorte = useMemo(() => deriveAsOf(corte), [deriveAsOf, corte]);
+  const balPrev  = useMemo(() => deriveAsOf(prev),  [deriveAsOf, prev]);
+  const balAper  = useMemo(() => deriveAsOf(GO_LIVE_APERTURA), [deriveAsOf]);
+
+  const { aUSD, tcPara, faltaTC, tcSuplente } = crearTraductor(tiposCambio);
+  const monedasDe = (bal) => { const st = new Set(); [bal.cuentas, bal.aCobrar, bal.aPagar, bal.intercoAct, bal.intercoPas].forEach(a => a.forEach(it => it.moneda && st.add(it.moneda))); return [...st]; };
+  // Suma de una lista para la vista: nativa (una moneda) o consolidada (todas → USD al TC de `fecha`).
+  const suma = (items, fecha, pred = () => true) => consolidado
+    ? monedasDe({ cuentas: items, aCobrar: [], aPagar: [], intercoAct: [], intercoPas: [] }).reduce((s, mo) => s + aUSD(sumSaldo(items, mo, pred), mo, fecha), 0)
+    : sumSaldo(items, mon, pred);
+
+  const COLS = ["prev", "corte", "var"];
+  const balDe = { prev: balPrev, corte: balCorte };
+  const fechaDe = { prev, corte };
+  const g = (fn) => (c) => c === "var" ? fn("corte") - fn("prev") : fn(c);
+  const caja   = g(c => suma(balDe[c].cuentas, fechaDe[c], x => (x.tipo || "") === "caja"));
+  const bancos = g(c => suma(balDe[c].cuentas, fechaDe[c], x => { const t = (x.tipo || ""); return t !== "caja" && t !== "tarjeta"; }));
+  const cxcTot = g(c => suma(balDe[c].aCobrar, fechaDe[c]) + suma(balDe[c].intercoAct, fechaDe[c]));
+  const activo = g(c => caja(c) + bancos(c) + cxcTot(c));
+  const corrTot  = g(c => suma(balDe[c].aPagar, fechaDe[c], x => esCorriente(x.label)));
+  const otrosTot = g(c => suma(balDe[c].aPagar, fechaDe[c], x => !esCorriente(x.label)) + suma(balDe[c].intercoPas, fechaDe[c]));
+  const pasivo = g(c => corrTot(c) + otrosTot(c));
+  const pn     = g(c => activo(c) - pasivo(c));
+
+  // Detalle: unión de etiquetas presentes en las dos fechas.
+  const labels = (arrName, pred = () => true) => [...new Set([...balPrev[arrName], ...balCorte[arrName]].filter(it => pred(it)).map(it => it.label))];
+  const porLabel = (arrName, L) => g(c => suma(balDe[c][arrName], fechaDe[c], x => x.label === L));
+  const nz = (get) => COLS.some(c => Math.abs(get(c)) > 0.5);
   const details = {
-    cxc:   [...cxcRows.map(r => ({ label: r.label, get: m => r.byMon[m] || 0 })), ...(hayIntA ? [{ label: "Intercompañía (nos deben)", get: m => sumSaldo(intercoAct, m) }] : [])],
-    corr:  pagCorr.map(r => ({ label: r.label, get: m => r.byMon[m] || 0 })),
-    otros: [...pagOtros.map(r => ({ label: r.label, get: m => r.byMon[m] || 0 })), ...(hayIntP ? [{ label: "Intercompañía (les debemos)", get: m => sumSaldo(intercoPas, m) }] : [])],
+    cxc:   ordenarDetalle([...labels("aCobrar").map(L => ({ label: L, get: porLabel("aCobrar", L) })), { label: "Intercompañía (nos deben)", get: g(c => suma(balDe[c].intercoAct, fechaDe[c])) }].filter(d => nz(d.get))),
+    corr:  ordenarDetalle(labels("aPagar", it => esCorriente(it.label)).map(L => ({ label: L, get: porLabel("aPagar", L) })).filter(d => nz(d.get))),
+    otros: ordenarDetalle([...labels("aPagar", it => !esCorriente(it.label)).map(L => ({ label: L, get: porLabel("aPagar", L) })), { label: "Intercompañía (les debemos)", get: g(c => suma(balDe[c].intercoPas, fechaDe[c])) }].filter(d => nz(d.get))),
   };
+
+  // ── Conciliación del PN: apertura + resultado acumulado − cambio de moneda = PN explicado ──
+  const pnAper = (() => {
+    const b = balAper, f = GO_LIVE_APERTURA;
+    const act = suma(b.cuentas, f, x => (x.tipo || "") !== "tarjeta") + suma(b.aCobrar, f) + suma(b.intercoAct, f);
+    const pas = suma(b.aPagar, f) + suma(b.intercoPas, f);
+    return act - pas;
+  })();
+  const yCorte = +corte.slice(0, 4), mCorte = +corte.slice(5, 7) - 1;   // mes 0-based del corte
+  const socSet = useMemo(() => new Set(socsIncluidas.map(s => String(s.id).toLowerCase())), [socsIncluidas]);
+  const resultadoAcum = useMemo(() => {
+    if (!pnl || yCorte !== 2026) return null;
+    const monedasPnL = consolidado ? [...new Set([...(pnl.inRows || []), ...(pnl.egRows || [])].map(r => r.moneda || "ARS"))] : [mon];
+    let tot = 0; const porMes = new Array(12).fill(0);
+    for (const mo of monedasPnL) {
+      const dev = buildDevengado(pnl.inRows || [], pnl.egRows || [], { cuentaMap: pnl.cuentaMap, ccMap: pnl.ccMap, year: yCorte, moneda: mo, socSet, ccSet: null, sinIva: false });
+      for (let m = 6; m <= mCorte; m++) {   // julio (go-live) … mes del corte
+        const v = dev.resultado[m] || 0;
+        const vv = consolidado ? aUSD(v, mo, `${yCorte}-${String(m + 1).padStart(2, "0")}-01`) : v;
+        porMes[m] += vv; tot += vv;
+      }
+    }
+    return { tot, porMes };
+  }, [pnl, yCorte, mCorte, consolidado, mon, socSet, tiposCambio]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // Cambio de moneda: plata movida entre cajas de distinta moneda (origen "cambio"). En una moneda sola es la
+  // pata que se ve; consolidado en USD, la diferencia entre las dos patas al TC del mes (costo de cambio).
+  const cambioAcum = (() => {
+    let acc = 0;
+    for (const mv of movimientos || []) {
+      if (mv.origen !== "cambio" || !socSet.has(String(mv.sociedad || "").toLowerCase())) continue;
+      const f = String(mv.fecha || "").slice(0, 10);
+      if (f <= GO_LIVE_APERTURA || f > corte) continue;
+      const mo = mv.moneda || "ARS";
+      if (consolidado) acc += aUSD(Number(mv.monto) || 0, mo, f);
+      else if (mo === mon) acc += Number(mv.monto) || 0;
+    }
+    return acc;
+  })();
+  const pnCorte = pn("corte");
+  // Identidad (misma que el puente): PN = PN apertura + Resultado + Cambio de moneda (la pata que entra/sale de ESTA
+  // moneda no es resultado pero sí mueve su PN) + lo que falte explicar.
+  const explicado = resultadoAcum ? pnAper + resultadoAcum.tot + cambioAcum : null;
+  const sinExplicar = explicado == null ? null : pnCorte - explicado;
+
+  const tcTxt = (() => {
+    if (!consolidado) return null;
+    const tc = tcPara(corte);
+    if (!tc) return "Sin tipo de cambio cargado para el mes del corte ni los anteriores.";
+    const parts = [tc.arsUSD ? `1 USD = ${Math.round(tc.arsUSD).toLocaleString("es-AR")} ARS` : null, tc.eurUSD ? `1 EUR = ${tc.eurUSD.toFixed(2)} USD` : null, tc.copUSD ? `1 USD = ${Math.round(tc.copUSD).toLocaleString("es-AR")} COP` : null].filter(Boolean);
+    return `TC usado para el corte (${tc.yearMonth}): ${parts.join(" · ")}. Cada columna usa el TC de su propio mes.`;
+  })();
+  const colLabel = (c) => c === "prev" ? `Cierre ${fmtDate(prev.slice(0, 8) + String(new Date(+prev.slice(0, 4), +prev.slice(5, 7), 0).getDate()).padStart(2, "0"))}` : c === "corte" ? (fechaCorte ? `Al ${fmtDate(corte)}` : "Hoy") : "Variación";
+  const rowS = (bold, color) => ({ padding: "8px 12px", fontSize: 13, textAlign: "right", fontFamily: "var(--mono)", fontWeight: bold ? 800 : 500, color: color || T.text, whiteSpace: "nowrap" });
 
   return (
     <div className="fade">
-      <div style={{ fontSize: 12, color: T.muted, margin: "2px 0 12px" }}>
-        Foto patrimonial {fechaCorte ? `al ${fmtDate(fechaCorte)}` : "a hoy"}: <b>Activo = Pasivo + Patrimonio Neto</b>. El PN sale por diferencia (Activo − Pasivo).
+      <div style={{ fontSize: 12, color: T.muted, margin: "2px 0 12px", lineHeight: 1.5 }}>
+        {consolidado
+          ? <><b>Consolidado del grupo en USD</b>: cada saldo traducido al tipo de cambio del mes de su fecha. Elegí una moneda arriba para ver el balance nativo de esa moneda.</>
+          : <>Balance en <b>{mon}</b>: solo lo que existe en esa moneda (circuito cerrado, como Evolución PN). "Todas" = consolidado del grupo en USD.</>}
+        {" "}<b>Activo = Pasivo + Patrimonio Neto</b>; el PN sale por diferencia y abajo se explica.
       </div>
-      <BalanceTable cols={mons} colLabel={m => m} minBase={380} colW={120}
+      {tcTxt && <div style={{ fontSize: 11, color: T.muted, marginBottom: 10 }}>{tcTxt}</div>}
+      <AvisosTC tcSuplente={tcSuplente} faltaTC={faltaTC} />
+      <BalanceTable cols={COLS} colLabel={colLabel} minBase={380} colW={140}
         getters={{ caja, bancos, cxcTot, activo, corrTot, otrosTot, pasivo, pn }} details={details} />
-      <div style={{ fontSize: 11, color: T.muted, marginTop: 8 }}>
-        Mismos saldos que la vista <b>Saldos</b>. Cambiá la <b>fecha</b> arriba para ver la foto a otra fecha (base del próximo paso: la variación del PN entre dos fechas).
-      </div>
+
+      {/* Conciliación del PN */}
+      {resultadoAcum && (
+        <div style={{ marginTop: 18, background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 12, overflow: "hidden", boxShadow: T.shadow }}>
+          <div style={{ background: T.tableHead, color: T.tableHeadText, padding: "8px 14px", fontSize: 11, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase" }}>
+            De dónde viene el Patrimonio Neto{fechaCorte ? ` al ${fmtDate(corte)}` : " a hoy"} · {consolidado ? "USD consolidado" : mon}
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <tbody>
+              {[
+                ["Patrimonio Neto de apertura (30/06/2026)", pnAper, false],
+                [`+ Resultado acumulado julio → ${_MESES[mCorte]} (P&L devengado)`, resultadoAcum.tot, false],
+                ["+ Cambio de moneda (plata que entró o salió de esta moneda)", cambioAcum, false],
+                ["= Patrimonio Neto explicado", explicado, true],
+                ["Patrimonio Neto del balance", pnCorte, true],
+                [consolidado ? "Diferencia de conversión + sin explicar" : "Sin explicar", sinExplicar, true, true],
+              ].map(([label, val, bold, esResto], i) => (
+                <tr key={i} style={{ borderTop: `1px solid ${T.cardBorder}`, background: esResto ? (consolidado ? "#f8fafc" : (Math.abs(val) > 0.5 ? "#fef2f2" : "#f0fdf4")) : "transparent" }}>
+                  <td style={{ padding: "8px 14px", fontSize: 13, color: T.text, fontWeight: bold ? 800 : 500 }}>{label}</td>
+                  <td style={rowS(bold, esResto && !consolidado ? (Math.abs(val) > 0.5 ? "#dc2626" : "#16a34a") : (val < 0 ? "#dc2626" : T.text))}>{fmtBal(val)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ fontSize: 11, color: T.muted, padding: "8px 14px", lineHeight: 1.5 }}>
+            {_esFinDeMes(corte) ? null : <>El corte no es fin de mes: el resultado incluye el mes de {_MESES[mCorte]} completo, así que el resto puede mostrar timing dentro del mes. </>}
+            {consolidado
+              ? <>En USD cada línea está al tipo de cambio de su mes (apertura a junio, resultados a su mes, el PN de hoy al TC del corte), así que el resto incluye la <b>diferencia de conversión</b> por la devaluación de cada moneda. Para la conciliación exacta elegí una moneda arriba.</>
+              : <>Lo que queda sin explicar es caja sin imputar, pagos sin comprobante o timing entre sociedades; el detalle está en <b>Control de cierre · devengado</b>.</>}
+          </div>
+        </div>
+      )}
+      {!resultadoAcum && (
+        <div style={{ fontSize: 11, color: T.muted, marginTop: 8 }}>
+          Mismos saldos que la vista <b>Saldos</b>. Cambiá la <b>fecha</b> arriba para ver la foto a otra fecha.
+        </div>
+      )}
     </div>
   );
 }
 
 // ── Evolución del Patrimonio Neto (EEPN), mes a mes: el Balance con MESES en columnas (cada línea a fin de
 //    cada mes, hasta el PN) + fila de variación. La variación del PN es el TEST del P&L (debería coincidir
-//    con el Resultado del P&L de ese mes/moneda). Moneda elegida en el filtro. ──
-function EEPNView({ eepn, filtroMoneda }) {
+//    con el Resultado del P&L de ese mes/moneda). Una moneda (chip) = circuito cerrado nativo. "Todas" =
+//    CONSOLIDADO EN USD mes a mes (mismo criterio que el Balance: cada saldo al TC del cierre de su mes), con
+//    una fila extra "Diferencia de conversión" = lo que el PN en USD se movió solo porque cambió el TC entre
+//    un cierre y el siguiente (no es negocio). Hasta el 19/9/2026 "Todas" mostraba solo ARS sin decirlo. ──
+function EEPNView({ eepn, filtroMoneda, tiposCambio = null }) {
   if (!eepn) return null;
-  const { GO, upto, balMes, cambioAcum, cxcLabels, corrLabels, otrosLabels } = eepn;
-  const mon = (filtroMoneda && filtroMoneda !== "ALL") ? filtroMoneda : "ARS";
+  const { year, GO, upto, balMes, cambioAcum, cxcLabels, corrLabels, otrosLabels } = eepn;
+  const consolidado = !filtroMoneda || filtroMoneda === "ALL";
+  const mon = consolidado ? "USD" : filtroMoneda;
   const meses = []; for (let m = GO - 1; m <= upto; m++) meses.push(m);   // columna inicial = mes previo al go-live
   const bd = m => balMes[m] || { cuentas: [], aCobrar: [], aPagar: [], intercoAct: [], intercoPas: [] };
-  const sumLbl = (arrName, m, L) => sumSaldo(bd(m)[arrName], mon, it => it.label === L);
-  const caja   = m => sumSaldo(bd(m).cuentas, mon, c => (c.tipo || "") === "caja");
-  const bancos = m => sumSaldo(bd(m).cuentas, mon, c => { const t = (c.tipo || ""); return t !== "caja" && t !== "tarjeta"; });
-  const cxcTot = m => sumSaldo(bd(m).aCobrar, mon) + sumSaldo(bd(m).intercoAct, mon);
+  const finDeMes = (m) => `${year}-${String(m + 1).padStart(2, "0")}-31`;
+  const { aUSD, faltaTC, tcSuplente } = crearTraductor(tiposCambio);
+  const monedasDe = (arrs) => { const st = new Set(); arrs.forEach(a => a.forEach(it => it.moneda && st.add(it.moneda))); return [...st]; };
+  // Suma de una lista al cierre del mes m: nativa (una moneda) o consolidada en USD al TC de ese cierre.
+  const suma = (arr, m, pred = () => true) => consolidado
+    ? monedasDe([arr]).reduce((s, mo) => s + aUSD(sumSaldo(arr, mo, pred), mo, finDeMes(m)), 0)
+    : sumSaldo(arr, mon, pred);
+  const sumLbl = (arrName, m, L) => suma(bd(m)[arrName], m, it => it.label === L);
+  const caja   = m => suma(bd(m).cuentas, m, c => (c.tipo || "") === "caja");
+  const bancos = m => suma(bd(m).cuentas, m, c => { const t = (c.tipo || ""); return t !== "caja" && t !== "tarjeta"; });
+  const cxcTot = m => suma(bd(m).aCobrar, m) + suma(bd(m).intercoAct, m);
   const corrTot  = m => corrLabels.reduce((s, L) => s + sumLbl("aPagar", m, L), 0);
-  const otrosTot = m => otrosLabels.reduce((s, L) => s + sumLbl("aPagar", m, L), 0) + sumSaldo(bd(m).intercoPas, mon);
+  const otrosTot = m => otrosLabels.reduce((s, L) => s + sumLbl("aPagar", m, L), 0) + suma(bd(m).intercoPas, m);
   const activo = m => caja(m) + bancos(m) + cxcTot(m);
   const pasivo = m => corrTot(m) + otrosTot(m);
   const pn     = m => activo(m) - pasivo(m);
   const someNZ = get => meses.some(m => Math.abs(get(m)) > 0.5);
   const details = {
-    cxc:   [...cxcLabels.map(L => ({ label: L, get: m => sumLbl("aCobrar", m, L) })), { label: "Intercompañía (nos deben)", get: m => sumSaldo(bd(m).intercoAct, mon) }].filter(d => someNZ(d.get)),
-    corr:  corrLabels.map(L => ({ label: L, get: m => sumLbl("aPagar", m, L) })).filter(d => someNZ(d.get)),
-    otros: [...otrosLabels.map(L => ({ label: L, get: m => sumLbl("aPagar", m, L) })), { label: "Intercompañía (les debemos)", get: m => sumSaldo(bd(m).intercoPas, mon) }].filter(d => someNZ(d.get)),
+    cxc:   ordenarDetalle([...cxcLabels.map(L => ({ label: L, get: m => sumLbl("aCobrar", m, L) })), { label: "Intercompañía (nos deben)", get: m => suma(bd(m).intercoAct, m) }].filter(d => someNZ(d.get))),
+    corr:  ordenarDetalle(corrLabels.map(L => ({ label: L, get: m => sumLbl("aPagar", m, L) })).filter(d => someNZ(d.get))),
+    otros: ordenarDetalle([...otrosLabels.map(L => ({ label: L, get: m => sumLbl("aPagar", m, L) })), { label: "Intercompañía (les debemos)", get: m => suma(bd(m).intercoPas, m) }].filter(d => someNZ(d.get))),
   };
 
-  // ── Ajustes NO económicos que se separan de la variación del PN (cada uno: efecto acumulado en `mon`;
-  //    la tabla muestra su Δ mensual y lo resta). Convención: `acum(m)` tal que restar su Δ limpia el PN.
-  //    · Cambio de moneda: plata movida entre cajas (USD↔ARS) → acum = neto de cambios a fin de mes.
-  //    (Anticipos: con carga correcta —apertura al go-live + consumo matcheado a la factura— cada leg del
-  //     anticipo es PN-neutro, así que NO distorsiona la variación → no se ajusta.)
+  // ── Ajustes NO económicos que se separan de la variación del PN (cada uno: efecto acumulado; la tabla muestra
+  //    su Δ mensual y lo resta). Convención: `acum(m)` tal que restar su Δ limpia el PN.
+  //    · Cambio de moneda: plata movida entre cajas de distinta moneda (origen "cambio"). Nativo: la pata que se ve.
+  //      Consolidado: las dos patas al TC del mes (≈ spread/costo de cambio).
+  //    · Diferencia de conversión (solo consolidado): PN nativo de cada moneda al cierre anterior, valuado al TC
+  //      nuevo menos al TC viejo. Acumulado desde el go-live.
+  const cambioAcumUSD = (m) => Object.entries(cambioAcum?.[m] || {}).reduce((s, [mo, v]) => s + aUSD(v, mo, finDeMes(m)), 0);
   const ajustes = [
-    { label: "Cambio de moneda", acum: m => (cambioAcum?.[m]?.[mon] || 0) },
+    // Nativo: la pata del cambio que se ve en esta moneda (ajuste técnico). Consolidado: las dos patas al TC del mes
+    // NO dan cero: la diferencia es el TC operado vs el TC maestro = RESULTADO por cambio de moneda, que el P&L todavía
+    // no reconoce → se separa para que la variación limpia siga comparable con el P&L (Martín 19/9/2026).
+    { label: consolidado ? "Resultado por cambio de moneda (TC operado vs TC maestro)" : "Cambio de moneda", acum: m => consolidado ? cambioAcumUSD(m) : (cambioAcum?.[m]?.[mon] || 0) },
   ];
+  if (consolidado) {
+    const monedasPN = monedasDe(meses.flatMap(m => [bd(m).cuentas, bd(m).aCobrar, bd(m).aPagar, bd(m).intercoAct, bd(m).intercoPas]));
+    const pnNativo = (m, mo) => {
+      const b = bd(m), act = sumSaldo(b.cuentas, mo, c => (c.tipo || "") !== "tarjeta") + sumSaldo(b.aCobrar, mo) + sumSaldo(b.intercoAct, mo);
+      return act - sumSaldo(b.aPagar, mo) - sumSaldo(b.intercoPas, mo);
+    };
+    const convMes = (m) => m <= GO - 1 ? 0 : monedasPN.reduce((s, mo) => s + aUSD(pnNativo(m - 1, mo), mo, finDeMes(m)) - aUSD(pnNativo(m - 1, mo), mo, finDeMes(m - 1)), 0);
+    const convAcum = {}; let acc = 0;
+    for (const m of meses) { acc += convMes(m); convAcum[m] = acc; }
+    ajustes.push({ label: "Diferencia de conversión (TC)", acum: m => convAcum[m] || 0 });
+  }
 
   return (
     <div className="fade">
+      <div style={{ fontSize: 12, color: T.muted, margin: "2px 0 12px", lineHeight: 1.5 }}>
+        {consolidado
+          ? <><b>Consolidado del grupo en USD</b>, mes a mes: cada saldo al tipo de cambio del cierre de su mes. La variación se limpia del resultado por cambio de moneda (lo que se ganó o perdió operando a un TC distinto del maestro, línea que el P&L aún no reconoce) y de la diferencia de conversión por TC; lo que queda es comparable con el P&L en "USD · TC Real". Elegí una moneda arriba para el circuito cerrado nativo.</>
+          : <>Evolución en <b>{mon}</b>: solo lo que existe en esa moneda. La "Variación sin cambio de moneda" es la que debe coincidir con el Resultado del P&L de ese mes.</>}
+      </div>
+      <AvisosTC tcSuplente={tcSuplente} faltaTC={faltaTC} />
       <BalanceTable cols={meses} colLabel={m => _MESES[m]} minBase={320} colW={92}
         getters={{ caja, bancos, cxcTot, activo, corrTot, otrosTot, pasivo, pn }} details={details}
-        showVariacion ajustes={ajustes} ajusteLabel="= Variación sin cambio de moneda" />
+        showVariacion ajustes={ajustes} ajusteLabel={consolidado ? "= Variación sin cambio de moneda ni conversión" : "= Variación sin cambio de moneda"} />
     </div>
   );
 }

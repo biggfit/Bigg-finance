@@ -4445,7 +4445,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       )}
 
       {activeTab === "consolidado" && (
-        <TabTesoreriaConsolidada />
+        <TabTesoreriaConsolidada pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
       )}
 
       {activeTab === "devengado" && (
