@@ -407,7 +407,15 @@ const SEDE_ING_ACCTS = new Set(
 const grupoSede = (key) => SEDE_GRUPOS.find(g => g.key === key);
 // Alias de cuenta → línea del P&L Sede: cuentas que deben plegarse a una línea existente (mismo grupo y misma
 // fila). Ej.: "Mantenimiento" se contabiliza dentro de "Equipamiento y Mantenimiento".
-const SEDE_CUENTA_ALIAS = { "mantenimiento": "Equipamiento y Mantenimiento" };
+// "Gastos Bancarios" y "Licencias de Software y Sistemas Contables" ya son `categoria_pnl: "Gastos
+// Operativos"` (o sea, el P&L del holding las toma bien), pero no estaban en ningún grupo de ACÁ →
+// caían en "Sin clasificar", que se muestra al pie pero NO suma a totGastosOp ni al resultado. Se
+// pliegan a "Otros Gastos del Centro" para que entren al subtotal de la sede.
+const SEDE_CUENTA_ALIAS = {
+  "mantenimiento": "Equipamiento y Mantenimiento",
+  "gastos bancarios": "Otros Gastos del Centro",
+  "licencias de software y sistemas contables": "Otros Gastos del Centro",
+};
 const aliasCuentaSede = (nombre) => SEDE_CUENTA_ALIAS[_nkSede(nombre)] || nombre;
 
 // ─── Cesión de utilidades (apropiación del resultado, DEBAJO de Resultado Final) ────────────────
