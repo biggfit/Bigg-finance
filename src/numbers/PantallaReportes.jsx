@@ -1,11 +1,12 @@
 import { useState, useMemo, useCallback, useEffect, useRef, Fragment } from "react";
 import { T, PageHeader } from "./theme";
-import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco, fondeoFondeadasMensual, intercoConsolidadoMensual, calcSaldoPendiente, primeCache, fetchTiposCambio, tcDelMes, montoAUSD, montoAMoneda, fetchPnLHistorico, RETDEP_TAG } from "../lib/numbersApi";
+import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco, fondeoFondeadasMensual, intercoConsolidadoMensual, calcSaldoPendiente, primeCache, fetchTiposCambio, tcDelMes, montoAUSD, montoAMoneda, fetchPnLHistorico, fetchProveedores, fetchClientes, RETDEP_TAG } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, pendienteSueldosPorLegajo, adelantoSueldosPorLegajo } from "../lib/sueldosApi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
 import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
 import { franquiciasIngresoPnLRows } from "../lib/franquiciasAdapter";
 import { exportarPackReportes } from "./exportReportes";
+import { exportarDetalleExcel } from "./reportes/exportDetalleComprobantes";
 import { copiarReporteComoImagen, clonarParaFoto, medirContenido } from "./fotoReporte";
 import TabTesoreriaConsolidada from "./reportes/TabTesoreriaConsolidada";
 import TabDevengado from "./reportes/TabDevengado";
@@ -2652,6 +2653,10 @@ function rangoDePreset(id, desde, hasta) {
 const TIPO_COMP_LABEL = { EGRESO: "Compra", GASTO: "Gasto", INGRESO: "Venta", NC: "Nota de crédito" };
 
 // ─── Detalle de comprobantes (Ingresos / Egresos) — listar + filtrar + KPIs ────
+// Etiqueta de tipo de una fila: la derivada (`_tipo`: Sueldo / Financiación / Franquicia / Histórico) o el
+// subtipo del comprobante traducido. La usan la columna Tipo Y su filtro → no se pueden desalinear.
+const tipoDeFila = (r) => r._tipo || TIPO_COMP_LABEL[String(r.subtipo || "").toUpperCase()] || r.subtipo || "—";
+
 function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedades = [] }) {
   const esEg = tipo === "EGRESO";
   // Egresos incluyen sueldos → la contraparte es proveedor O legajo (ambos en contraparte_nombre,
@@ -2665,7 +2670,11 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
   const [fCC, setFCC]       = useState(new Set());
   const [fCta, setFCta]     = useState(new Set());
   const [fMon, setFMon]     = useState(new Set());
+  const [fTipo, setFTipo]   = useState(new Set());
   const [fEstado, setFEstado] = useState(new Set());
+  const [menuOpen, setMenuOpen] = useState(false);   // menú ⋮
+  const [bajando, setBajando]   = useState(null);    // "ceco" | "factura" mientras se genera el Excel
+  const menuRef = useRef(null);
   const [preset, setPreset] = useState("anio");
   const [dDesde, setDDesde] = useState("");
   const [dHasta, setDHasta] = useState("");
@@ -2675,6 +2684,9 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
   const socOpts = useMemo(() => [...new Set(rows.map(r => String(r.sociedad)).filter(Boolean))].sort().map(s => ({ value: s, label: socMap.get(s) || s })), [rows, socMap]);
   const ctaOpts = useMemo(() => [...new Set(rows.map(r => r.cuenta_contable).filter(Boolean))].sort().map(c => ({ value: c, label: c })), [rows]);
   const monOpts = useMemo(() => [...new Set(rows.map(r => r.moneda || "ARS"))].sort().map(m => ({ value: m, label: m })), [rows]);
+  // Tipos presentes (Gasto, Compra, Sueldo, Financiación, Franquicia, Nota de crédito…): salen de los datos,
+  // no de una lista fija, así que aparecen solos cuando el P&L suma una fuente nueva.
+  const tipoOpts = useMemo(() => [...new Set(rows.map(tipoDeFila))].sort().map(t => ({ value: t, label: t })), [rows]);
   // Centros presentes, agrupados por operación (o grupo HQ) — igual criterio que el filtro de Sedes.
   const centroGroups = useMemo(() => {
     const present = new Set(rows.map(r => String(r.centro_costo)).filter(Boolean));
@@ -2717,6 +2729,7 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
       if (!inSet(fCC, String(r.centro_costo))) return false;
       if (!inSet(fCta, r.cuenta_contable)) return false;
       if (!inSet(fMon, r.moneda || "ARS")) return false;
+      if (!inSet(fTipo, tipoDeFila(r))) return false;
       if (fEstado.size && !fEstado.has(estadoDe(r))) return false;
       if (qq) {
         const hay = [r.contraparte_nombre, r.nro_comp, r.nota, r.cuenta_contable].map(x => String(x || "").toLowerCase()).join(" ");
@@ -2724,13 +2737,58 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
       }
       return true;
     }).sort((a, b) => String(b.fecha || "").localeCompare(String(a.fecha || "")));
-  }, [rows, q, fSoc, fCC, fCta, fMon, fEstado, desde, hasta, estadoDe]);
+  }, [rows, q, fSoc, fCC, fCta, fMon, fTipo, fEstado, desde, hasta, estadoDe]);
 
   const porMon = useMemo(() => {
     const m = {};
     for (const r of filt) { const k = r.moneda || "ARS"; m[k] = (m[k] || 0) + Math.abs(Number(r.total) || 0); }
     return m;
   }, [filt]);
+
+  // Cierre del menú ⋮ al hacer click afuera.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const h = e => { if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [menuOpen]);
+
+  // Descarga a Excel: baja las MISMAS filas que quedaron filtradas en pantalla, más columnas que en la tabla no
+  // entran (N° comp, cód. de estudio, fecha fiscal). El `cod_estudio` NO vive en el comprobante sino en el
+  // maestro de proveedores/clientes → se resuelve por contraparte, y el maestro se pide recién acá para no
+  // sumarle otra llamada a la carga del reporte.
+  const bajarExcel = async (modo) => {
+    setMenuOpen(false);
+    setBajando(modo);
+    try {
+      const maestro = await (esEg ? fetchProveedores() : fetchClientes());
+      const porId = new Map(), porNombre = new Map();
+      for (const m of (Array.isArray(maestro) ? maestro : [])) {
+        const dato = { cod: String(m.cod_estudio ?? "").trim(), cuit: String(m.cuit ?? "").trim() };
+        if (!dato.cod && !dato.cuit) continue;
+        porId.set(String(m.id), dato);
+        porNombre.set(String(m.nombre ?? "").trim().toLowerCase(), dato);
+      }
+      // Por id; si la fila no lo trae (sueldos, financiaciones, histórico), por nombre.
+      const deMaestro = r => porId.get(String(r.contraparte_id ?? ""))
+        ?? porNombre.get(String(r.contraparte_nombre ?? "").trim().toLowerCase());
+      const codEstudio = r => deMaestro(r)?.cod ?? "";
+      const cuit       = r => deMaestro(r)?.cuit ?? "";
+      await exportarDetalleExcel({
+        tipo, modo, rows: filt, totales: porMon, rango: { desde, hasta }, contraLabel,
+        campo: {
+          tipo: tipoDeFila,
+          sociedad: r => socMap.get(String(r.sociedad)) || r.sociedad || "",
+          centro:   r => ccMap.get(ccKey(r.centro_costo)) || r.centro_costo || "",
+          codEstudio, cuit,
+        },
+      });
+    } catch (e) {
+      alert("No se pudo generar el Excel: " + (e?.message || e));
+    } finally {
+      setBajando(null);
+    }
+  };
 
   const lbl = { display: "block", fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 };
   const td  = { padding: "8px 12px", fontSize: 13, borderBottom: `1px solid ${T.cardBorder}`, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
@@ -2760,11 +2818,48 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
               <input type="date" value={dHasta} onChange={e => setDHasta(e.target.value)} style={{ ...selStyle, cursor: "pointer" }} /></div>
           </>
         )}
+        <MultiSelect label="Tipo" options={tipoOpts} selected={fTipo} onChange={setFTipo} allLabel="Todos" width={170} />
         <MultiSelect label="Sociedad" options={socOpts} selected={fSoc} onChange={setFSoc} allLabel="Todas" />
         <MultiSelect label="Centro de costo" groups={centroGroups} selected={fCC} onChange={setFCC} searchable allLabel="Todos" width={220} />
         <MultiSelect label="Cuenta" options={ctaOpts} selected={fCta} onChange={setFCta} searchable allLabel="Todas" width={220} />
         <MultiSelect label="Moneda" options={monOpts} selected={fMon} onChange={setFMon} allLabel="Todas" width={120} />
         <MultiSelect label="Estado de pago" options={[{ value: "Pendiente", label: "Pendiente" }, { value: "Parcial", label: "Parcial" }, { value: "Pagado", label: "Pagado" }]} selected={fEstado} onChange={setFEstado} allLabel="Todos" width={150} />
+
+        {/* Menú ⋮ (Bajar a Excel) */}
+        <div ref={menuRef} style={{ marginLeft: "auto", position: "relative" }}>
+          <button type="button" onClick={() => setMenuOpen(o => !o)} title="Opciones" aria-haspopup="menu" aria-expanded={menuOpen}
+            style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 8, background: menuOpen ? "#eceff3" : "#fff",
+              width: 34, height: 34, cursor: "pointer", fontSize: 18, color: T.muted, lineHeight: 1,
+              display: "inline-flex", alignItems: "center", justifyContent: "center" }}>⋮</button>
+          {menuOpen && (
+            <div role="menu" style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, minWidth: 260, background: T.card,
+              border: `1px solid ${T.cardBorder}`, borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,.12)", padding: 6, zIndex: 30 }}>
+              <div style={{ fontSize: 10, fontWeight: 800, color: T.muted, textTransform: "uppercase",
+                letterSpacing: ".08em", padding: "6px 11px 4px" }}>Bajar a Excel</div>
+              {/* Dos aperturas del mismo dato: por centro (management) o por comprobante (fiscal). */}
+              {[{ modo: "ceco", label: "Por centro de costo", desc: "Una fila por línea, con centro y cuenta" },
+                { modo: "factura", label: "Por factura", desc: "Una fila por comprobante, sin centro ni cuenta" }].map(op => {
+                const off = filt.length === 0 || !!bajando;
+                return (
+                  <button key={op.modo} type="button" role="menuitem" onClick={() => bajarExcel(op.modo)} disabled={off}
+                    style={{ display: "flex", alignItems: "flex-start", gap: 9, width: "100%", textAlign: "left", background: "transparent",
+                      border: "none", borderRadius: 7, padding: "8px 11px", fontFamily: T.font,
+                      color: off ? T.dim : T.text, cursor: off ? "not-allowed" : "pointer" }}
+                    onMouseEnter={e => { if (!off) e.currentTarget.style.background = "#eceff3"; }}
+                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                    <span aria-hidden style={{ fontSize: 15, lineHeight: 1.3 }}>⬇️</span>
+                    <span>
+                      <span style={{ display: "block", fontSize: 13, fontWeight: 600 }}>
+                        {bajando === op.modo ? "Generando…" : op.label}
+                      </span>
+                      <span style={{ display: "block", fontSize: 11, color: T.muted, marginTop: 1 }}>{op.desc}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* KPIs */}
