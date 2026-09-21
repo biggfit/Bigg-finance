@@ -615,6 +615,14 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     planCuentas.forEach(c => m.set(String(c.nombre || "").trim().toLowerCase(), String(c.id)));
     return name => m.get(String(name || "").trim().toLowerCase()) || "";
   }, [planCuentas]);
+  // Resuelve la cuenta propuesta de un movimiento a un ID válido del plan. El ingest del extracto
+  // guarda `cuenta_contable` como NOMBRE (sin el prefijo del id) y deja `cuenta_contable_id` vacío,
+  // pero el <select> matchea por ID → sin esto, una cuenta bien clasificada por regla (ej. impuestos:
+  // "Imp. Cred. y Deb.", "IIBB", "IVA") se ve como "— cuenta —". Prioriza el id; si no, mapea nombre→id.
+  const cuentaIdDe = (mov) => {
+    const c = mov.cuenta_contable_id || mov.cuenta_contable || "";
+    return cuentaValida(c) ? c : (cuentaIdPorNombre(c) || "");
+  };
   // Centro: normaliza (saca prefijo "NN - ", tildes y no-alfanuméricos) → "Recoleta"/"01 - Recoleta"
   // /"Belgrano" caen todos al mismo id. Match exacto normalizado (no substring) para no colisionar.
   const centroIdPorNombre = useMemo(() => {
@@ -1081,7 +1089,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     if (esCuentaVD(mov.cuenta_bancaria)) return false;
     // Otros bancos: si YA viene con propuesta (cuenta+centro) es ingreso rápido; sin propuesta,
     // un crédito arranca como cobro-contra-factura (cobranza B2B).
-    const cuentaProp = mov.cuenta_contable ?? "";
+    const cuentaProp = cuentaIdDe(mov);
     const ccProp     = mov.centro_costo   ?? "";
     return !(cuentaValida(cuentaProp) && ccValido(ccProp));
   };
@@ -1116,7 +1124,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     }
     const cs = cuotaState(mov);
     if (cs.es) return !!cs.cuotaSel;
-    const cuentaSel = (edits[mov.id]?.cuenta_contable) ?? mov.cuenta_contable ?? "";
+    const cuentaSel = (edits[mov.id]?.cuenta_contable) ?? cuentaIdDe(mov);
     const ccSel = (edits[mov.id]?.centro_costo) ?? mov.centro_costo ?? "";
     // cuenta y centro deben resolver a una opción real (si no, no se ven y se perderían en el P&L).
     return cuentaValida(cuentaSel) && ccValido(ccSel);
@@ -1989,7 +1997,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                 const destinoSel = (edits[m.id]?.cuenta_destino) ?? m.cuenta_destino ?? "";
                 const interco = !!destinoSel && (cuentasAll.find(c => String(c.id) === String(destinoSel))?.sociedad ?? sociedad) !== sociedad;
                 const fr = frState(m);
-                const cuentaSel = (edits[m.id]?.cuenta_contable) ?? m.cuenta_contable ?? "";
+                const cuentaSel = (edits[m.id]?.cuenta_contable) ?? cuentaIdDe(m);
                 const ccSel = (edits[m.id]?.centro_costo) ?? m.centro_costo ?? "";
                 // Verde solo si el centro RESUELVE a una opción real (un valor que no matchea —ej. casing—
                 // muestra "— centro —" y no debe contar como completo, ni dejarse aceptar: se perdería en el P&L).
