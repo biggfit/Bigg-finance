@@ -2558,17 +2558,23 @@ export const deleteIntercompania = _deleteMovRows;
 
 // ── LECTURA intercompañía (el corazón del módulo — LECTURA, no escribe) ──────────
 // Trae TODO lo necesario para leer lo intercompany (todas las sociedades).
+// Cada fuente es tolerante (si una falla, las demás siguen) pero la falla NO se traga en silencio: queda
+// anotada en `faltantes` para que la pantalla avise "no cargó X". Sin esto, un 404 transitorio del backend
+// dejaba la posición interco calculada sin movimientos (o sin comprobantes) y el Balance mostraba un PN
+// equivocado sin ninguna señal (21/9/2026: gap fantasma de +5,87M en el puente por `movs` vacío).
 export async function fetchIntercoData() {
+  const faltantes = [];
+  const tol = (label, p) => p.catch(() => { faltantes.push(label); return []; });
   const [movs, comps, centros, clientes, sociedades, cuentasBancarias, cuentas, legajos, liqs] = await Promise.all([
-    get("nb_movimientos", {}).catch(() => []),
-    get("nb_comprobantes", {}).catch(() => []),
-    get("nb_centros_costo", {}).catch(() => []),
-    get("nb_clientes", {}).catch(() => []),
-    get("nb_sociedades", {}).catch(() => []),
-    get("nb_cuentas_bancarias", {}).catch(() => []),   // para resolver cuenta_destino → nombre en el ledger interco
-    get("nb_cuentas", {}).catch(() => []),             // para resolver cuenta_contable (id CUENTA_/CTA-) → nombre
-    fetchLegajos().catch(() => []),   // para derivar la interco de sueldos (legajo → sociedad empleadora)
-    fetchLiquidacionesCerradas().catch(() => []),   // devengado de sueldos → interco por DEVENGADO (fuente 6)
+    tol("movimientos",        get("nb_movimientos", {})),
+    tol("comprobantes",       get("nb_comprobantes", {})),
+    tol("centros de costo",   get("nb_centros_costo", {})),
+    tol("clientes",           get("nb_clientes", {})),
+    tol("sociedades",         get("nb_sociedades", {})),
+    tol("cuentas bancarias",  get("nb_cuentas_bancarias", {})),   // para resolver cuenta_destino → nombre en el ledger interco
+    tol("plan de cuentas",    get("nb_cuentas", {})),             // para resolver cuenta_contable (id CUENTA_/CTA-) → nombre
+    tol("legajos",            fetchLegajos()),                    // para derivar la interco de sueldos (legajo → sociedad empleadora)
+    tol("liquidaciones de sueldos", fetchLiquidacionesCerradas()),   // devengado de sueldos → interco por DEVENGADO (fuente 6)
   ]);
   // Mapa legajo → sociedad empleadora: cuando la caja que paga un sueldo (mov.sociedad) ≠ la sociedad
   // del legajo, hubo fondeo cross-society (ej. Beta paga el efectivo de un coach de Segui). lecturaInterco lo lee.
@@ -2586,6 +2592,7 @@ export async function fetchIntercoData() {
     cuentas:    Array.isArray(cuentas) ? cuentas : [],
     legajoSoc,
     liqsSueldos: Array.isArray(liqs) ? liqs : [],   // liquidaciones CERRADAS (todas las sociedades)
+    faltantes,   // fuentes que NO cargaron (labels legibles) → la pantalla avisa; vacío = todo OK
   };
 }
 

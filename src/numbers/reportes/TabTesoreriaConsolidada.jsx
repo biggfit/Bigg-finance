@@ -70,6 +70,12 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
   // Interco aparte de `data` (NO se spreadea a derivarSaldos por-sociedad, para no duplicar;
   // se netea a nivel consolidado con intercoConsolidado).
   const [intercoData, setIntercoData] = useState(null);
+  // Fuentes que NO cargaron (labels legibles) → aviso "no cargó X" con botón Recargar. Antes cada fetch hacía
+  // `.catch(() => [])` y el Balance se dibujaba con movimientos/franquicias/interco vacíos sin ninguna señal.
+  const [cargaFallida, setCargaFallida] = useState([]);
+  // Fuentes secundarias (fuera del batch principal) todavía en vuelo → aviso suave, no bloqueante.
+  const [secPend, setSecPend] = useState({ franq: true, interco: true });
+  const [loadKey, setLoadKey] = useState(0);
 
   const socRef = useRef(null);
   const dateRef = useRef(null);
@@ -85,10 +91,13 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      setLoading(true); setError(null);
+      setLoading(true); setError(null); setCargaFallida([]); setSecPend({ franq: true, interco: true });
+      // Tolerante: si una fuente falla, las demás siguen; la falla queda anotada para avisar (no se traga).
+      const fallas = [];
+      const tol = (label, p) => p.catch(() => { fallas.push(label); return []; });
       try {
         // Liquidaciones vive en el backend de Sueldos → en paralelo al batch de Numbers.
-        const liqsP = fetchLiquidacionesCerradas().catch(() => []);
+        const liqsP = tol("liquidaciones de sueldos", fetchLiquidacionesCerradas());
         // Batch: 9 hojas group-wide de Numbers en UNA llamada → los fetch de abajo salen de caché.
         await primeCache([
           { resource: "nb_sociedades" },
@@ -102,20 +111,21 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
           { resource: "nb_socios_cc" },
         ]);
         const [socs, movs, egs, ings, pcs, cbList, ctaList, ccList, fin, sos, sosCC] = await Promise.all([
-          fetchSociedades().catch(() => []),
-          fetchMovTesoreria().catch(() => []),
-          fetchEgresos().catch(() => []),
-          fetchIngresos().catch(() => []),
-          fetchPagosCobros().catch(() => []),
-          fetchCuentasBancarias().catch(() => []),
-          fetchCuentas().catch(() => []),
-          fetchCentrosCosto().catch(() => []),
-          fetchFinanciaciones().catch(() => []),
-          fetchSocios().catch(() => []),
-          fetchSociosCC().catch(() => []),
+          tol("sociedades",              fetchSociedades()),
+          tol("movimientos",             fetchMovTesoreria()),
+          tol("comprobantes de egreso",  fetchEgresos()),
+          tol("comprobantes de ingreso", fetchIngresos()),
+          tol("pagos y cobros",          fetchPagosCobros()),
+          tol("cuentas bancarias",       fetchCuentasBancarias()),
+          tol("plan de cuentas",         fetchCuentas()),
+          tol("centros de costo",        fetchCentrosCosto()),
+          tol("financiaciones",          fetchFinanciaciones()),
+          tol("socios",                  fetchSocios()),
+          tol("cuenta corriente de socios", fetchSociosCC()),
         ]);
         const liqsS = await liqsP;
         if (cancelled) return;
+        if (fallas.length) setCargaFallida(f => [...f, ...fallas]);
         const activas = (Array.isArray(socs) ? socs : []).filter(s => {
           const a = s.activo;
           return !(a === false || a === 0 || a === "FALSE" || a === "false" || a === "0" || a === "");
@@ -132,8 +142,23 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
           liqsSueldos: arr(liqsS), financiaciones: arr(fin), socios: arr(sos), sociosCC: arr(sosCC),
         }));
         // Franquicias (read-only) — fuera del Promise.all para no bloquear el consolidado.
-        fetchAll().then(fr => { if (!cancelled && fr && fr.comps) setData(d => ({ ...d, franqData: fr })); }).catch(() => {});
-        fetchIntercoData().then(ic => { if (!cancelled && ic) setIntercoData(ic); }).catch(() => {});
+        fetchAll()
+          .then(fr => {
+            if (cancelled) return;
+            if (fr && fr.comps) setData(d => ({ ...d, franqData: fr }));
+            else setCargaFallida(f => [...f, "franquicias"]);
+          })
+          .catch(() => { if (!cancelled) setCargaFallida(f => [...f, "franquicias"]); })
+          .finally(() => { if (!cancelled) setSecPend(s => ({ ...s, franq: false })); });
+        // Intercompañía: trae su propia lista de fuentes que no cargaron (`faltantes`) → se avisa igual.
+        fetchIntercoData()
+          .then(ic => {
+            if (cancelled || !ic) return;
+            setIntercoData(ic);
+            if (ic.faltantes?.length) setCargaFallida(f => [...f, `intercompañía (${ic.faltantes.join(", ")})`]);
+          })
+          .catch(() => { if (!cancelled) setCargaFallida(f => [...f, "intercompañía"]); })
+          .finally(() => { if (!cancelled) setSecPend(s => ({ ...s, interco: false })); });
       } catch (e) {
         if (!cancelled) setError(e.message);
       } finally {
@@ -141,7 +166,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [loadKey]);
 
   const socsIncluidas = useMemo(
     () => socSel.length === 0 ? sociedades : sociedades.filter(s => socSel.includes(s.id)),
@@ -407,6 +432,31 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
           </>
         )}
       </div>
+
+      {/* Aviso SUAVE: franquicias / intercompañía cargan fuera del batch principal → mientras falten, la CxC de
+           franquiciados y la posición interco pueden completarse en unos segundos. No bloquea. */}
+      {!loading && cargaFallida.length === 0 && (secPend.franq || secPend.interco) && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#eff6ff", border: "1px solid #bfdbfe",
+          borderRadius: 10, padding: "9px 16px", marginBottom: 16, fontSize: 13, color: "#1e40af", fontWeight: 600, lineHeight: 1.4 }}>
+          Cargando datos complementarios (<strong>{[secPend.franq && "franquicias", secPend.interco && "intercompañía"].filter(Boolean).join(" · ")}</strong>)…
+          los saldos de franquiciados e intercompañía pueden completarse en unos segundos.
+        </div>
+      )}
+      {/* Aviso: alguna fuente NO cargó (backend lento / 404) → los saldos y el PN pueden estar incompletos.
+           Mejor decirlo que mostrar un Balance a medias en silencio. */}
+      {cargaFallida.length > 0 && (
+        <div role="alert" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+          background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 10, padding: "10px 16px", marginBottom: 16 }}>
+          <div style={{ fontSize: 13, color: "#92400e", fontWeight: 600, lineHeight: 1.4 }}>
+            ⚠ No cargó <strong>{cargaFallida.join(", ")}</strong> (backend lento). Los saldos, el Balance y el PN pueden estar incompletos — recargá.
+          </div>
+          <button type="button" onClick={() => setLoadKey(k => k + 1)} style={{
+            flexShrink: 0, background: "#92400e", color: "#fff", border: "none", borderRadius: 999,
+            padding: "6px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: T.font }}>
+            Recargar
+          </button>
+        </div>
+      )}
 
       {loading && (
         <div style={{ padding: "60px 32px", textAlign: "center", color: T.muted, fontSize: 14 }}>

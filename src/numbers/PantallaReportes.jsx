@@ -3021,8 +3021,14 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const [sedeOpen,        setSedeOpen]        = useState(false);
   useEffect(() => { try { localStorage.setItem("pnlSinIva", sinIva ? "1" : "0"); } catch {} }, [sinIva]);
   const [monedaSel,      setMonedaSel]      = useState("ARS");   // valor crudo del selector (incl. modos FX consolidados)
+  // Declarados ANTES de los efectos que los usan (tipos de cambio / histórico dependen de loadKey).
+  const [cargaFallida, setCargaFallida] = useState([]);  // fuentes que NO cargaron (tras reintentos) → aviso "no cargó X"
+  const [loadKey,   setLoadKey]   = useState(0);         // Recargar → re-dispara TODAS las cargas
   const [tiposCambio,    setTiposCambio]    = useState({});      // nb_tipos_cambio: mapa YYYY-MM → tasas USD
-  useEffect(() => { fetchTiposCambio().then(setTiposCambio).catch(() => {}); }, []);
+  // Sin tipos de cambio no hay consolidado USD/€ → si no carga, avisar (se re-pide con Recargar).
+  useEffect(() => {
+    fetchTiposCambio().then(setTiposCambio).catch(() => setCargaFallida(f => [...f, "tipos de cambio"]));
+  }, [loadKey]);
   // Fuentes secundarias que cargan FUERA del batch principal (fire-and-forget, para no colgar el reporte si su
   // backend tarda): histórico, franquicias (Ingresos HQ) y fondeo/interco (Capex). `loading` se apaga con el
   // batch → estas siguen llegando después. Marcamos cada una "settled" (ok o falla) para un aviso suave: mientras
@@ -3031,9 +3037,11 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const [rawHist,        setRawHist]        = useState([]);      // nb_pnl_historico: leaf rows pre go-live (USD, sin IVA)
   useEffect(() => {
     if (!HISTORICO_HABILITADO) { setSecReady(s => ({ ...s, hist: true })); return; }
-    fetchPnLHistorico().then(r => setRawHist(Array.isArray(r) ? r : [])).catch(() => {})
+    setSecReady(s => ({ ...s, hist: false }));
+    fetchPnLHistorico().then(r => setRawHist(Array.isArray(r) ? r : []))
+      .catch(() => setCargaFallida(f => [...f, "histórico"]))
       .finally(() => setSecReady(s => ({ ...s, hist: true })));
-  }, []);
+  }, [loadKey]);
   // Modo de consolidación FX derivado del selector. "native" = filtra por moneda (como siempre);
   // "real" = traduce TODO a la moneda destino al TC de cierre de CADA mes (mezcla operación + efecto
   // cambiario); "const" = traduce TODO al TC de UN mes ancla (el del selector Mes) → comparable, aísla el FX
@@ -3053,12 +3061,10 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const [socios,    setSocios]    = useState([]);        // maestro de socios (group-level)
   const [sociosCC,  setSociosCC]  = useState([]);        // cuenta corriente de socios no-cash (dividendos + apertura)
   const [rawFranq,  setRawFranq]  = useState({});        // comprobantes de Franquicias (read-only)
-  const [cargaFallida, setCargaFallida] = useState([]);  // fuentes secundarias lentas que NO cargaron (tras reintentos) → aviso
   const [intercoData,  setIntercoData]  = useState({ movs: [], comps: [], centros: [] });  // fuentes interco (read-only, todas las sociedades)
   const [sociedades,   setSociedades]   = useState([]);  // maestro sociedades (id→nombre/anillo)
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState(null);
-  const [loadKey,   setLoadKey]   = useState(0);
 
   const sedeRef = useRef(null);
   const tabsRef = useRef(null);
@@ -3103,22 +3109,27 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
           { resource: "nb_socios" },
           { resource: "nb_socios_cc" },
         ]);
+        // Tolerante: si una hoja falla, las demás siguen; pero la falla queda anotada para el aviso "no cargó X"
+        // (antes `.catch(() => [])` y el P&L salía sin comprobantes o sin movimientos, en silencio).
+        const fallas = [];
+        const tol = (label, p) => p.catch(() => { fallas.push(label); return []; });
         const [eg, ing, movs, cbs, ccList, ctaList, fin, socs, socsCC] = await Promise.all([
           // P&L Sedes/BIGG son group-level (todas las sociedades). Cash Flow (por sociedad) filtra client-side.
-          fetchLineasEnriquecidas(null, ["EGRESO", "GASTO"]).catch(() => []),
-          fetchLineasEnriquecidas(null, "INGRESO").catch(() => []),
-          fetchMovTesoreria().catch(() => []),
-          fetchCuentasBancarias().catch(() => []),
-          fetchCentrosCosto().catch(() => []),
-          fetchCuentas().catch(() => []),
-          fetchFinanciaciones().catch(() => []),
-          fetchSocios().catch(() => []),
-          fetchSociosCC().catch(() => []),
+          tol("comprobantes de egreso",  fetchLineasEnriquecidas(null, ["EGRESO", "GASTO"])),
+          tol("comprobantes de ingreso", fetchLineasEnriquecidas(null, "INGRESO")),
+          tol("movimientos",             fetchMovTesoreria()),
+          tol("cuentas bancarias",       fetchCuentasBancarias()),
+          tol("centros de costo",        fetchCentrosCosto()),
+          tol("plan de cuentas",         fetchCuentas()),
+          tol("financiaciones",          fetchFinanciaciones()),
+          tol("socios",                  fetchSocios()),
+          tol("cuenta corriente de socios", fetchSociosCC()),
         ]);
         const [liqsR, pagosR] = [await liqsP, await pagosP];
         const liqsC = liqsR.v, pagosS = pagosR.v;
         if (cancelled) return;
-        if (!liqsR.ok || !pagosR.ok) setCargaFallida(f => [...f, "Sueldos"]);
+        if (!liqsR.ok || !pagosR.ok) fallas.push("sueldos");
+        if (fallas.length) setCargaFallida(f => [...f, ...fallas]);
         setRawEg(eg);
         setRawIn(ing);
         setRawMovs(Array.isArray(movs) ? movs : []);
@@ -3132,15 +3143,17 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
         setSociosCC(Array.isArray(socsCC) ? socsCC : []);
         // Franquicias (read-only) — fuera del Promise.all para NO bloquear Reportes si ese backend tarda.
         fetchComps().then(c => { if (!cancelled && c && typeof c === "object") setRawFranq(c); })
-          .catch(() => { if (!cancelled) setCargaFallida(f => [...f, "Franquicias"]); })
+          .catch(() => { if (!cancelled) setCargaFallida(f => [...f, "franquicias"]); })
           .finally(() => { if (!cancelled) setSecReady(s => ({ ...s, franq: true })); });
         // Intercompañía (read-only) — todas las fuentes (fondeo + transfers) + maestro sociedades (anillo).
-        // `fetchIntercoData` ya trae `sociedades`, así que no hace falta un fetch aparte.
+        // `fetchIntercoData` ya trae `sociedades`, así que no hace falta un fetch aparte. Si alguna de SUS
+        // fuentes no cargó (`faltantes`), el núcleo/anillos y el fondeo salen incompletos → se avisa.
         fetchIntercoData().then(d => {
           if (cancelled || !d) return;
           setIntercoData(d);
           if (Array.isArray(d.sociedades)) setSociedades(d.sociedades);
-        }).catch(() => {})
+          if (d.faltantes?.length) setCargaFallida(f => [...f, `intercompañía (${d.faltantes.join(", ")})`]);
+        }).catch(() => { if (!cancelled) setCargaFallida(f => [...f, "intercompañía"]); })
           .finally(() => { if (!cancelled) setSecReady(s => ({ ...s, interco: true })); });
       } catch (e) {
         if (!cancelled) setError(e.message);
@@ -3867,7 +3880,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
           background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 10, padding: "10px 16px", marginBottom: 16 }}>
           <div style={{ fontSize: 13, color: "#92400e", fontWeight: 600, lineHeight: 1.4 }}>
-            ⚠ No cargó <strong>{cargaFallida.join(" y ")}</strong> (backend lento). El P&amp;L puede estar incompleto — recargá.
+            ⚠ No cargó <strong>{cargaFallida.join(", ")}</strong> (backend lento). El reporte puede estar incompleto — recargá.
           </div>
           <button onClick={() => setLoadKey(k => k + 1)} style={{
             flexShrink: 0, background: "#92400e", color: "#fff", border: "none", borderRadius: 999,
