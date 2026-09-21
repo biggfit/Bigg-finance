@@ -2179,287 +2179,11 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCer
   );
 }
 
-// ─── Cash Flow: clasificación por ACTIVIDAD (método directo) ───────────────────
-// Cada movimiento de caja se mapea a una actividad (operativo / inversión / financiación)
-// y a un concepto (la línea de detalle). Los movimientos internos (transferencias entre
-// cuentas propias y cambio de moneda) van a su propia sección: netean a nivel grupo pero
-// mueven caja por cuenta/moneda, así el saldo de caja reconcilia con el banco.
-// v1 curado; se itera. La clasificación fina inversión vs financiación de interco se hará por anillo.
-const CF_ACT = [
-  { key: "operativo",    label: "Actividades operativas" },
-  { key: "inversion",    label: "Actividades de inversión" },
-  { key: "financiacion", label: "Actividades de financiación" },
-  { key: "internos",     label: "Movimientos internos (transferencias / cambio)" },
-];
-// Orden fijo de conceptos por actividad (para que las líneas salgan en orden de negocio, no por magnitud).
-const CF_CONCEPTO_ORDEN = {
-  operativo:    ["Ingresos Sedes", "Ingresos HQ", "Franquicias (neto)", "Costos Sedes", "Costos HQ", "Sin conciliar (pendiente)"],
-  inversion:    ["Movimientos intercompañía", "Fondeo a otros negocios"],
-  financiacion: ["Préstamos recibidos", "Pago de préstamos / cuotas", "Anticipos de clientes", "Aportes / dividendos / préstamos de socios"],
-  internos:     ["Transferencias entre cuentas", "Cambio de moneda"],
-};
-// Clasifica un movimiento de caja por ACTIVIDAD + concepto de NEGOCIO. Resuelve el centro del propio
-// movimiento o —si es cobro/pago contra factura— de la factura linkeada (docCentro). El negocio sale del
-// centro: grupo=hq → HQ, sino sede. Fondeo = gasto a un centro de sociedad FUERA del núcleo → inversión.
-function clasificarFlujo(m, { ccMap, nucleoEmpresas, docCentro } = {}) {
-  const origen = String(m.origen || "").toLowerCase();
-  const tipo   = String(m.tipo || "").toUpperCase();
-  const doc    = String(m.documento_id || "");
-  const entra  = (Number(m.monto) || 0) >= 0;
-  // Internos (plata entre cajas/monedas propias — no es flujo del negocio)
-  if (tipo === "TRANSFERENCIA") return { act: "internos", concepto: "Transferencias entre cuentas" };
-  if (tipo === "CAMBIO")        return { act: "internos", concepto: "Cambio de moneda" };
-  // Financiación
-  if (origen === "socios") return { act: "financiacion", concepto: "Aportes / dividendos / préstamos de socios" };
-  if (origen.startsWith("financiacion") || origen === "cuota" || doc.startsWith("FIN-"))
-    return { act: "financiacion", concepto: entra ? "Préstamos recibidos" : "Pago de préstamos / cuotas" };
-  if (origen === "anticipo_alta") return { act: "financiacion", concepto: "Anticipos de clientes" };   // el cliente te financia
-  // Pago del resumen de tarjeta: settlement central → Costos HQ.
-  if (tipo === "PAGO_TARJETA" || origen === "pago_tarjeta") return { act: "operativo", concepto: "Costos HQ" };
-  // Franquicias (neto ingreso − egreso)
-  if (origen === "franquicias") return { act: "operativo", concepto: "Franquicias (neto)" };
-  // Inversión — interco
-  if (origen === "intercompania" || origen === "interco_park" || origen === "interco_recibida" || tipo === "INTERCOMPANIA")
-    return { act: "inversion", concepto: "Movimientos intercompañía" };
-  // Resolver el centro: el del movimiento o el de la factura que paga/cobra (cobros/pagos no traen centro).
-  const centroId = String(m.centro_costo || "").trim() || (doc && docCentro ? (docCentro.get(doc) || "") : "");
-  const cc = centroId && ccMap ? ccMap.get(ccKey(centroId)) : null;
-  const empresa = String(cc?.empresa || "").trim();
-  const grupo   = String(cc?.grupo || "").toLowerCase();
-  // Inversión — fondeo: gasto/ingreso a un centro cuya sociedad dueña está FUERA del núcleo.
-  if (empresa && nucleoEmpresas && !nucleoEmpresas.has(empresa))
-    return { act: "inversion", concepto: "Fondeo a otros negocios" };
-  // Operativo por negocio. HQ = todo lo que NO es sede ni franquicia (sueldos HQ, otros gastos, catch-all).
-  if (grupo === "hq")
-    return { act: "operativo", concepto: entra ? "Ingresos HQ" : "Costos HQ" };
-  if (cc && grupo !== "inversiones")   // centro de sede (operaciones): sueldos de sede caen en Costos Sedes
-    return { act: "operativo", concepto: entra ? "Ingresos Sedes" : "Costos Sedes" };
-  // Línea del extracto TODAVÍA no aceptada en la bandeja (caja real, aún sin imputar) = backlog de conciliación.
-  // Una sola línea (neta): que dé CERO = los motores de conciliación están limpios para ese mes.
-  if (origen === "extracto" && !doc)
-    return { act: "operativo", concepto: "Sin conciliar (pendiente)" };
-  // Catch-all: sin centro resoluble (raro) → HQ (no es sede ni franquicia).
-  return { act: "operativo", concepto: entra ? "Ingresos HQ" : "Costos HQ" };
-}
-
-// ─── Tab Cash Flow ────────────────────────────────────────────────────────────
-// CONSOLIDADO del núcleo (anillo 1): suma las cajas de todas las sociedades núcleo. El interco
-// intra-núcleo se netea SOLO (ambas patas —origen "intercompania", mismo documento_id— están en el
-// set y son opuestas → suman 0). El fondeo hacia anillo 2/3 queda (solo está la pata del núcleo) →
-// aparece como Inversión: es plata que salió del perímetro del grupo.
-const CF_GO_LIVE_YEAR = 2026;   // año del go-live
-const CF_START_MES = 6;   // Julio (0-indexed): el Cash Flow arranca acá SOLO el año de go-live (1/7/2026).
-                          // Los años posteriores arrancan en enero (todo lo previo va al saldo inicial).
-// Orden de anillos en el filtro (los que no matcheen van al final, alfabético).
+// ─── Cash Flow: vive en reportes/cashflowDerive.js + reportes/CashFlowViews.jsx y se muestra dentro de
+// TabTesoreriaConsolidada (vistas "cf" y "flujo"), con las mismas cajas, sociedades y moneda que el Balance (19/9/2026).
+// Orden de anillos en el filtro de sociedades (los que no matcheen van al final, alfabético).
 const CF_ANILLO_ORDEN = ["cleo", "fond", "extern"];
 const anilloRank = (a) => { const x = String(a || "").toLowerCase(); const i = CF_ANILLO_ORDEN.findIndex(k => x.includes(k)); return i === -1 ? 99 : i; };
-
-// Motor de caja (método directo), PURO y reusable: lo consumen la vista directa (TabCashFlow) y el puente
-// indirecto (TabPuenteCaja, que lee `flujoNeto` como destino + las líneas de financiación/internos). Misma
-// moneda de vista y traductor `fx` que usa el CF. Devuelve los agregados mensuales.
-function computeCashFlow({ rawMovs = [], rawIn = [], rawEg = [], ccMap, nucleoEmpresas, selSoc = new Set(), year, moneda, fx = null, tarjetaIds, cuentasBancarias = [] }) {
-  // Índice factura → centro (los cobros/pagos no traen centro; lo sacamos de la factura linkeada). El pago
-  // referencia el id_comp (ej. EG-123); las líneas de comprobante traen sufijo (EG-123-L00001) → clavear por
-  // ambos. 1ª línea con centro gana.
-  const docCentro = new Map();
-  for (const r of [...rawIn, ...rawEg]) {
-    const centro = String(r.centro_costo ?? ""); if (!centro) continue;
-    const full = String(r.id ?? ""); const comp = full.replace(/-L\d+$/i, "");
-    if (full && !docCentro.has(full)) docCentro.set(full, centro);
-    if (comp && !docCentro.has(comp)) docCentro.set(comp, centro);
-  }
-  const ctx = { ccMap, nucleoEmpresas, docCentro };
-  // Moneda AUTORITATIVA = la de la cuenta bancaria; el campo `moneda` del movimiento es fallback.
-  const cuentaMoneda = new Map();
-  for (const c of (cuentasBancarias || [])) cuentaMoneda.set(String(c.id), String(c.moneda || "ARS"));
-  const monedaDe = (m) => cuentaMoneda.get(String(m.cuenta_bancaria)) || (m.moneda ?? "ARS");
-  // Monto en la moneda de vista: nativo, o traducido con `fx`. Sin TC → 0 (convención del P&L consolidado).
-  const montoDe = (m) => {
-    const v = Number(m.monto) || 0;
-    if (!fx) return v;
-    const anio = parseInt(m.fecha.slice(0, 4), 10), mes = parseInt(m.fecha.slice(5, 7), 10);
-    return fx(v, monedaDe(m), anio, mes) ?? 0;
-  };
-  // Predicado de caja: sociedad elegida, banco real, no ignorada, no tarjeta. Nativo → en LA moneda; con `fx`
-  // → todas las monedas (cada una se traduce).
-  const esCash = (m) => !!m.fecha && !esIgnorado(m) && !!m.cuenta_bancaria
-    && !(tarjetaIds?.has(m.cuenta_bancaria)) && (fx ? true : monedaDe(m) === moneda)
-    && (selSoc.size === 0 || selSoc.has(String(m.sociedad ?? "").trim()));
-  // Arranque del período: el año de go-live empieza en julio; los posteriores en enero. Lo previo → saldo inicial.
-  const cfStartMes = year === CF_GO_LIVE_YEAR ? CF_START_MES : 0;
-  const cutoff = `${year}-${String(cfStartMes + 1).padStart(2, "0")}-01`;
-  const movsFilt = rawMovs.filter(m => esCash(m) && m.fecha.slice(0, 4) === String(year) && m.fecha >= cutoff);
-  const openingCash = rawMovs.reduce((s, m) => (esCash(m) && m.fecha < cutoff) ? s + montoDe(m) : s, 0);
-  const porAct = { operativo: {}, inversion: {}, financiacion: {}, internos: {} };
-  for (const m of movsFilt) {
-    const mes = parseInt(m.fecha.slice(5, 7), 10) - 1; if (mes < 0 || mes > 11) continue;
-    const { act, concepto } = clasificarFlujo(m, ctx);
-    (porAct[act][concepto] ??= new Array(12).fill(0))[mes] += montoDe(m);
-  }
-  const actTot = {};
-  for (const k of Object.keys(porAct)) actTot[k] = MESES.map((_, m) => Object.values(porAct[k]).reduce((s, a) => s + a[m], 0));
-  const flujoNeto = MESES.map((_, m) => CF_ACT.reduce((s, a) => s + actTot[a.key][m], 0));
-  let cum = openingCash;
-  const saldoFinal = flujoNeto.map(v => { cum += v; return cum; });
-  const saldoInicioMes = MESES.map((_, m) => saldoFinal[m] - flujoNeto[m]);
-  const months = new Set();
-  movsFilt.forEach(m => { const i = parseInt(m.fecha.slice(5, 7), 10) - 1; if (i >= cfStartMes && i <= 11) months.add(i); });
-  const finYear = new Date().getFullYear() === year ? new Date().getMonth() : 11;
-  for (let i = cfStartMes; i <= Math.max(finYear, cfStartMes); i++) months.add(i);
-  const activeMonths = [...months].sort((a, b) => a - b);
-  return { porAct, actTot, flujoNeto, openingCash, saldoFinal, saldoInicioMes, activeMonths, cfStartMes };
-}
-
-function TabCashFlow({ rawMovs, rawIn = [], rawEg = [], ccMap, nucleoEmpresas, selSoc = new Set(), year, moneda, fx = null, tarjetaIds, cuentasBancarias = [] }) {
-  const [open, setOpen] = useState({ operativo: true, inversion: true, financiacion: true, internos: false });
-  const toggle = (k) => setOpen(o => ({ ...o, [k]: !o[k] }));
-
-  const cf = useMemo(() => computeCashFlow({ rawMovs, rawIn, rawEg, ccMap, nucleoEmpresas, selSoc, year, moneda, fx, tarjetaIds, cuentasBancarias }),
-    [rawMovs, rawIn, rawEg, ccMap, nucleoEmpresas, selSoc, year, moneda, fx, tarjetaIds, cuentasBancarias]);
-  const { porAct, actTot, flujoNeto, openingCash, saldoFinal, saldoInicioMes, activeMonths } = cf;
-
-  if (activeMonths.length === 0) return (
-    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
-      padding: "60px 24px", textAlign: "center", boxShadow: T.shadow }}>
-      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke={T.dim} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginBottom: 10 }}>
-        <path d="M12 2v20M17 5H9.5a3.5 3.5 0 100 7h5a3.5 3.5 0 110 7H6"/>
-      </svg>
-      <div style={{ fontSize: 14, color: T.muted }}>Sin movimientos para {year} en {moneda}.</div>
-    </div>
-  );
-
-  // Totales del período (columna TOTAL) por actividad, para la banda-resumen.
-  const totPer = (arr) => activeMonths.reduce((s, m) => s + (arr[m] || 0), 0);
-  const chips = [
-    { label: "Operativo", v: totPer(actTot.operativo) },
-    { label: "Inversión", v: totPer(actTot.inversion) },
-    { label: "Financiación", v: totPer(actTot.financiacion) },
-    { label: "Δ Caja del período", v: totPer(flujoNeto), strong: true },
-  ];
-
-  return (
-    <>
-    <div style={{ fontSize: 12, color: T.muted, margin: "2px 0 10px", maxWidth: 860, lineHeight: 1.5 }}>
-      Consolidado desde <b>julio</b> (go-live). El interco entre las sociedades <b>elegidas</b> se netea; el fondeo
-      hacia una sociedad no elegida queda como <b>Inversión</b>. <b>Financiación</b> (préstamos, anticipos, aportes)
-      = plata que entra a caja pero <b>no es resultado</b>: sostiene el pozo. Para ver cómo el resultado se vuelve
-      caja, usá la vista <b>Resultado → Caja</b>.
-    </div>
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
-      {chips.map(c => (
-        <div key={c.label} style={{ flex: "1 1 150px", minWidth: 150, background: T.card,
-          border: `1px solid ${c.strong ? (c.v >= 0 ? T.green : T.red) : T.cardBorder}`, borderRadius: 10,
-          padding: "10px 14px", boxShadow: T.shadow }}>
-          <div style={{ fontSize: 10.5, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: ".06em" }}>{c.label}</div>
-          <div style={{ fontSize: 18, fontWeight: 900, fontFamily: "var(--mono)",
-            color: c.strong ? (c.v >= 0 ? T.green : T.red) : T.text, marginTop: 3 }}>{fmtSigned(c.v)}</div>
-        </div>
-      ))}
-    </div>
-    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
-      boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
-      <table style={{ width: "100%", minWidth: 280 + activeMonths.length * 110, borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th style={{ ...thStyle, textAlign: "left", minWidth: 260,
-              ...stickyCol, background: T.tableHead, zIndex: 4 }}>Concepto</th>
-            {activeMonths.map(m => <th key={m} style={thStyle}>{MESES[m]}</th>)}
-            <th style={{ ...thStyle, borderLeft: "1px solid rgba(255,255,255,.12)" }}>TOTAL</th>
-          </tr>
-        </thead>
-        <tbody>
-          {/* Saldo de caja al inicio de cada mes. TOTAL = saldo al arranque del período (NO la suma de meses). */}
-          <SubtotalRow label="Saldo inicial de caja" values={saldoInicioMes} activeMonths={activeMonths} color={T.muted} noBottom
-            totalOverride={saldoInicioMes[activeMonths[0]] ?? 0} />
-
-          {CF_ACT.map(({ key, label }) => {
-            const ord = CF_CONCEPTO_ORDEN[key] || [];
-            const rank = (n) => { const i = ord.indexOf(n); return i === -1 ? 99 : i; };
-            const conceptos = Object.entries(porAct[key])
-              .sort((a, b) => rank(a[0]) - rank(b[0]) || Math.abs(rowSum(b[1])) - Math.abs(rowSum(a[1])));
-            const hasData = conceptos.length > 0;
-            return (
-              <Fragment key={key}>
-                <SectionRow label={label} values={actTot[key]} activeMonths={activeMonths}
-                  expanded={open[key]} onToggle={hasData ? () => toggle(key) : undefined} />
-                {open[key] && conceptos.map(([nombre, vals]) => (
-                  <DataRow key={nombre} label={nombre} values={vals} activeMonths={activeMonths}
-                    color={rowSum(vals) >= 0 ? T.green : T.red} />
-                ))}
-              </Fragment>
-            );
-          })}
-
-          <ResultadoRow label="Flujo neto del período" values={flujoNeto} activeMonths={activeMonths} />
-          {/* TOTAL = saldo final del último mes activo (el saldo de caja "a hoy"), NO la suma de los meses. */}
-          <SubtotalRow label="Saldo final de caja" values={saldoFinal} activeMonths={activeMonths} color={T.text} strong
-            totalOverride={saldoFinal[activeMonths[activeMonths.length - 1]] ?? 0} />
-        </tbody>
-      </table>
-    </div>
-    </>
-  );
-}
-
-// ─── Puente Resultado → Caja (cash flow indirecto) ─────────────────────────────
-// Presentacional: recibe los arrays [12] ya computados en el padre (`puenteData`) y arma el waterfall que
-// arranca en el Resultado del Grupo (P&L) y termina en el Δ Caja (= Flujo neto del CF directo). Reusa las
-// mismas filas que el CF. El renglón "Otros / perímetro y timing" es el residuo que hace cerrar el puente.
-function TabPuenteCaja({ data, moneda }) {
-  // Data completa = todas las series [12] presentes. Si falta alguna (recomputando / cargando), estado vacío.
-  const CAMPOS = ["resGrupo", "capex", "resFinal", "financiacion", "internos", "capTrabajo", "flujoNeto", "saldoFinal"];
-  const ready = !!data && Array.isArray(data.activeMonths) && CAMPOS.every(k => Array.isArray(data[k]));
-  const am = ready ? data.activeMonths : [];
-  if (am.length === 0) return (
-    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
-      padding: "60px 24px", textAlign: "center", boxShadow: T.shadow }}>
-      <div style={{ fontSize: 14, color: T.muted }}>Sin datos para el puente en {moneda}.</div>
-    </div>
-  );
-  const span = am.length + 2;
-  const colDe = (vals) => rowSum(vals) >= 0 ? T.green : T.red;
-  return (
-    <>
-    <div style={{ fontSize: 12, color: T.muted, margin: "2px 0 10px", maxWidth: 880, lineHeight: 1.5 }}>
-      Cómo el <b>resultado económico</b> (devengado) se convierte en <b>caja</b>: arranca en el Resultado del Grupo
-      del P&L y ajusta lo que no es caja del período — inversión/fondeo, capital de trabajo (cobros/pagos/anticipos)
-      y financiación. La última fila coincide con el <b>Flujo neto</b> del Cash Flow directo.
-    </div>
-    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
-      boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
-      <table style={{ width: "100%", minWidth: 280 + am.length * 110, borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th style={{ ...thStyle, textAlign: "left", minWidth: 280, ...stickyCol, background: T.tableHead, zIndex: 4 }}>Concepto</th>
-            {am.map(m => <th key={m} style={thStyle}>{MESES[m]}</th>)}
-            <th style={{ ...thStyle, borderLeft: "1px solid rgba(255,255,255,.12)" }}>TOTAL</th>
-          </tr>
-        </thead>
-        <tbody>
-          <SubtotalRow label="Resultado del Grupo (económico)" values={data.resGrupo} activeMonths={am} color={T.muted} noBottom />
-          <DataRow label="− Inversiones / Capex (fondeo a España/Colombia/etc.)" values={data.capex} activeMonths={am} neg color={T.red} />
-          <SubtotalRow label="Resultado Final del Grupo" values={data.resFinal} activeMonths={am} />
-
-          <SectionRow label="De resultado a caja (movimientos que no son resultado)" span={span} activeMonths={am} />
-          <DataRow label="Financiación (préstamos, anticipos de clientes, aportes)" values={data.financiacion} activeMonths={am} color={colDe(data.financiacion)} />
-          <DataRow label="Transferencias internas / cambio de moneda" values={data.internos} activeMonths={am} color={colDe(data.internos)} />
-          <DataRow label="Capital de trabajo y timing (cobros/pagos pendientes)" values={data.capTrabajo} activeMonths={am} color={colDe(data.capTrabajo)} />
-
-          <ResultadoRow label="Δ Caja del período" values={data.flujoNeto} activeMonths={am} strong />
-          <SubtotalRow label="Saldo final de caja" values={data.saldoFinal} activeMonths={am} color={T.text} strong
-            totalOverride={data.saldoFinal[am[am.length - 1]] ?? 0} />
-        </tbody>
-      </table>
-    </div>
-    <div style={{ fontSize: 11, color: T.muted, marginTop: 8, maxWidth: 880, lineHeight: 1.5 }}>
-      <b>Capital de trabajo y timing</b> = la brecha entre lo devengado y lo cobrado/pagado: ventas facturadas que
-      todavía no cobraste (suben CxC, restan caja), gastos devengados aún sin pagar (suman caja), más el timing de
-      sueldos/impuestos, retenciones y diferencias de perímetro (el P&L consolida el núcleo; el CF, las cajas). Es
-      el renglón que explica por qué el resultado todavía no es caja.
-    </div>
-    </>
-  );
-}
 
 // ─── Tab Evolución Patrimonio Neto ────────────────────────────────────────────
 function TabEvolucionPN({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, year }) {
@@ -2608,10 +2332,11 @@ const TABS = [
   // ── Funcionando ──
   { id: "pl_sede", label: "P&L · Sedes Argentina",  icon: "🏬", ico: "store", desc: "Resultado operativo por sede: ventas, costos variables y márgenes." },
   { id: "pl_bigg", label: "P&L · BIGG (grupo)",   icon: "🏢", ico: "building", desc: "Resultado corporativo por centro de HQ (R&D, Sales & Mkt, G&A)." },
-  { id: "cf",      label: "Cash Flow",  icon: "💵", ico: "flow", desc: "Flujo de caja mensual: entradas y salidas por cuenta." },
+  { id: "cf",      label: "Cash Flow",  icon: "💵", ico: "flow", desc: "Por qué la caja subió o bajó cada mes (cobros, pagos, fondeo, financiación, cambio de moneda) y cómo el resultado se convirtió en caja." },
   { id: "interco", label: "Saldos entre sociedades",   icon: "🔗", ico: "link", desc: "Préstamos y saldos interco entre TODAS las sociedades: posición neta por moneda (quién le debe a quién). Filtrá por sociedad y hacé click en una fila para ver el detalle de movimientos." },
   { id: "interco_matriz", label: "Fondeo por negocio", icon: "🧮", ico: "grid", desc: "Fondeo del grupo a cada negocio (CAPEX), consolidado en USD · meses × negocio/tipo. Click en una celda = los movimientos que la componen. Ata al Fondeo del P&L." },
-  { id: "consolidado", label: "Tesorería consolidada", icon: "🏦", ico: "bank", desc: "Saldos y movimientos de todas las sociedades del grupo." },
+  { id: "consolidado", label: "Tesorería consolidada", icon: "🏦", ico: "bank", desc: "Cuánta plata hay hoy y dónde: saldos de cajas y bancos, cuentas a cobrar/pagar y movimientos de todas las sociedades." },
+  { id: "balance_pn",  label: "Balance y Evolución del PN", icon: "⚖️", ico: "scale", desc: "Cuánto vale cada sociedad (o el grupo en USD) a una fecha y por qué cambió mes a mes: apertura + resultado + cambio de moneda = Patrimonio Neto." },
   { id: "cxp_prov", label: "Cuentas a pagar por proveedor", icon: "📋", ico: "invoice", desc: "Cuentas por pagar consolidadas por proveedor (todas las sociedades), con antigüedad." },
   { id: "cxc_cli", label: "Cuentas a cobrar por cliente", icon: "📥", ico: "receipt", desc: "Cuentas por cobrar consolidadas por cliente (todas las sociedades), con antigüedad." },
   { id: "socios",  label: "Socios", icon: "◎", ico: "people", desc: "Cuenta corriente de socios: dividendos, aportes y préstamos (balance, no P&L)." },
@@ -2634,7 +2359,7 @@ const TABS = [
   { id: "an_margenes",  label: "Márgenes por negocio", icon: "🧩", ico: "puzzle", wip: true, desc: "Cuánto aporta cada negocio al Margen Bruto del grupo." },
   { id: "an_gastos_cc", label: "Gastos por centro de costo", icon: "🧾", ico: "tag", wip: true, desc: "Apertura del gasto por centro de costo y, dentro, por cuenta contable." },
 
-  { id: "devengado",    label: "Control de cierre · devengado", icon: "🧪", ico: "flask", desc: "Diagnóstico: devengado crudo por cuenta y mes, filtrable por sociedad/anillo · centro · moneda. Sin fondeo ni traducción de moneda → el Resultado ata contra la variación del PN del balance." },
+  { id: "devengado",    label: "Resultado devengado por cuenta", icon: "🧪", ico: "flask", desc: "Diagnóstico: devengado crudo por cuenta y mes, filtrable por sociedad/anillo · centro · moneda. Sin fondeo ni traducción de moneda → el Resultado ata contra la variación del PN del balance." },
 ];
 
 // ─── Menú de Reportes: por lo que uno viene a HACER (operar → resultados → plata entre sociedades → control) ──
@@ -2651,7 +2376,8 @@ const LENTES = [
   { id: "plata",      label: "La plata entre sociedades", hint: "Quién le debe a quién y qué fondeó el grupo",
     tabs: ["interco", "interco_matriz", "socios"] },
   { id: "control",    label: "Control y cierre",          hint: "Para atar el resultado contra el patrimonio",
-    tabs: ["devengado", "an_gastos_cc", "er_soc"] },
+    // Trilogía de cierre: Balance/EEPN (afuera de Tesorería desde 19/9, pedido Martín) + devengado que ata contra el PN.
+    tabs: ["balance_pn", "devengado", "an_gastos_cc", "er_soc"] },
 ];
 
 // Íconos de un solo trazo (24×24, stroke = currentColor). Reemplazan a los emojis del menú: se ven igual en todas
@@ -2676,6 +2402,7 @@ const ICONO_PATHS = {
   doc:       ["M6 3h9l3 3v15H6z", "M15 3v3h3", "M9 12h6", "M9 16h6"],
   anchor:    ["M12 3a2 2 0 100 4 2 2 0 000-4z", "M12 7v14", "M4 13a8 8 0 0016 0", "M2 13h4", "M18 13h4"],
   handshake: ["M3 10l4-4 4 3-3 3", "M21 10l-4-4-4 3 3 3", "M7 12l5 5 5-5", "M12 17v3"],
+  scale:     ["M12 3v18", "M8 21h8", "M4 7h16", "M6 7l-3 7a3 3 0 006 0z", "M18 7l-3 7a3 3 0 006 0z"],
 };
 function Icono({ name, emoji, size = 20, color = T.accent }) {
   const paths = ICONO_PATHS[name];
@@ -3174,8 +2901,6 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const fxMode   = monedaSel === "USD_REAL" ? "real" : monedaSel === "USD_CONST" ? "const" : "native";
   const monedaPL = fxMode === "native" ? monedaSel : "USD";
   const setMonedaPL = setMonedaSel;   // los efectos que forzaban moneda (fondeadas/Huergo) siguen andando
-  const [monedaCF,       setMonedaCF]       = useState("ARS");
-  const [cfVista,        setCfVista]        = useState("directo");   // "directo" (por actividad) | "puente" (Resultado → Caja)
   const [rawEg,     setRawEg]     = useState([]);
   const [rawIn,     setRawIn]     = useState([]);
   const [rawMovs,   setRawMovs]   = useState([]);
@@ -3342,10 +3067,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       .map(s => s.id)
   ), [sociedades]);
 
-  // Cash Flow: sociedades a consolidar (default = núcleo). Estado en el padre para que el filtro
-  // viva en el box de filtros (junto a Año/Moneda). null = todavía sin tocar → usa el núcleo.
-  const [cfSelSoc, setCfSelSoc] = useState(null);
-  const cfSel = cfSelSoc ?? new Set(nucleoEmpresas);
+  // Sociedades agrupadas por anillo (filtro del Devengado).
   const cfSocGroups = useMemo(() => {
     const byAnillo = {};
     for (const s of (sociedades ?? [])) (byAnillo[s.anillo || "Sin anillo"] ??= []).push(s);
@@ -3505,19 +3227,6 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     return null;
   }, [fxMode, tiposCambio, fxConstTC]);
 
-  // FX del Cash Flow — independiente del selector del P&L (el CF tiene su propio `monedaCF`). Mismos dos modos
-  // consolidados: "real" = cada movimiento al TC de su mes; "const" = todo al TC del mes ancla (comparable, sin
-  // efecto cambiario). Ancla = último mes completo del año (como la Evolución del P&L; el CF no tiene selector de mes).
-  const fxModeCF   = monedaCF === "USD_REAL" ? "real" : monedaCF === "USD_CONST" ? "const" : "native";
-  const monedaCFView = fxModeCF === "native" ? monedaCF : "USD";
-  const anchorMesCF  = year >= CUR_YEAR ? Math.max(0, new Date().getMonth() - 1) : 11;
-  const fxConstTCCF  = useMemo(() => fxModeCF === "const" ? tcDelMes(tiposCambio, year, anchorMesCF + 1) : null, [fxModeCF, tiposCambio, year, anchorMesCF]);
-  const fxConstFaltaCF = fxModeCF === "const" && !fxConstTCCF;
-  const fxConvCF = useMemo(() => {
-    if (fxModeCF === "real")  return (monto, moneda, anio, mes) => montoAUSD(monto, moneda, tcDelMes(tiposCambio, anio, mes));
-    if (fxModeCF === "const") return (monto, moneda) => montoAUSD(monto, moneda, fxConstTCCF);
-    return null;
-  }, [fxModeCF, tiposCambio, fxConstTCCF]);
   // Matriz del reporte "Intercompañía por negocio" (siempre en USD, independiente del modo FX del P&L). Se
   // computa acá (una vez) para poder dibujar el selector de Negocio junto al de Año y pasarla ya lista al tab.
   const intercoFx = useCallback((m, mon, a, me) => montoAUSD(m, mon, tcDelMes(tiposCambio, a, me)), [tiposCambio]);
@@ -3794,33 +3503,6 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const pnlBiggPrev = biggPrev?.pnl || null;
   const subBiggPrev = biggPrev?.sub || null;
 
-  // ── Puente Resultado → Caja (cash flow indirecto). Solo se computa en el CF, vista "puente". Ata por
-  // construcción al Flujo neto del CF directo: cada renglón explica la diferencia contra el Resultado del Grupo,
-  // y el residuo "Otros" cierra la ecuación. Holding y caja en la MISMA moneda (la del CF). ──
-  const puenteActivo = activeTab === "cf" && cfVista === "puente";
-  const inFxCF = useMemo(() => puenteActivo ? traducirFilasUSD(inConFranq, fxConvCF).rows : null, [puenteActivo, inConFranq, fxConvCF]);
-  const egFxCF = useMemo(() => puenteActivo ? traducirFilasUSD(egConSueldos, fxConvCF).rows : null, [puenteActivo, egConSueldos, fxConvCF]);
-  const puenteData = useMemo(() => {
-    if (!puenteActivo || !inFxCF || !egFxCF) return null;
-    // Estados transitorios de carga (intercoData/filas aún llegando) pueden dejar entradas a medio computar →
-    // devolvemos null (el tab muestra el estado vacío) en vez de tirar. Cuando la data está completa, renderiza.
-    try {
-      // Resultado del Grupo es invariante Con/Sin IVA → sinIvaArg no cambia el arranque; usamos true.
-      const hold = holdingDe(year, { inR: inFxCF, egR: egFxCF, fx: fxConvCF, moneda: monedaCFView, sinIvaArg: true });
-      const resGrupo = hold.sub.resGrupo, capex = hold.sub.capex, resFinal = hold.sub.resFinal;
-      const cf = computeCashFlow({ rawMovs, rawIn, rawEg, ccMap, nucleoEmpresas, selSoc: cfSel, year, moneda: monedaCFView, fx: fxConvCF, tarjetaIds, cuentasBancarias });
-      // Financiación (préstamos + anticipos + aportes) e internos salen del CF directo (caja no-resultado). El
-      // resto de la brecha devengado↔caja (capital de trabajo: cobros/pagos/inventario pendientes; timing de
-      // sueldos/impuestos; retenciones; diferencias de perímetro) va a UNA línea residual que cierra la ecuación.
-      // v1 deliberado: en vez de un split CxC/CxP/anticipos ruidoso (aperturas + FX sobre stocks), una sola línea
-      // legible = "por qué el resultado todavía no es caja". El split fino queda para una iteración.
-      const financiacion = cf.actTot.financiacion.slice();
-      const internos = cf.actTot.internos.slice();
-      const capTrabajo = MESES.map((_, m) => cf.flujoNeto[m] - (resFinal[m] + financiacion[m] + internos[m]));
-      return { activeMonths: cf.activeMonths, resGrupo, capex, resFinal, financiacion, internos, capTrabajo, flujoNeto: cf.flujoNeto, saldoFinal: cf.saldoFinal };
-    } catch { return null; }
-  }, [puenteActivo, year, inFxCF, egFxCF, fxConvCF, monedaCFView, rawMovs, rawIn, rawEg, ccMap, nucleoEmpresas, cfSel, tarjetaIds, cuentasBancarias]); // eslint-disable-line react-hooks/exhaustive-deps
-
   // Apertura por sede (reporte "Composición de Ingresos"): resultado final de cada sede del núcleo AR, para
   // abrir la línea "Sedes Propias Argentina". La fila de reconciliación (en el builder) cierra contra `sar`.
   const nombreCC = (cc) => {
@@ -3892,7 +3574,6 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   );
 
   const showMonedaPL = isPnlTiempo || activeTab === "pl_bigg" || isVentasHQ;
-  const showMonedaCF = activeTab === "cf";
   const showSedes    = isSedeLike && sedeCCsSel.length > 0;
 
   // Menú-landing: sin reporte elegido → tarjetas agrupadas por lente (Operaciones = 1 tarjeta x operación).
@@ -4025,7 +3706,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       {activeTab !== "cxp_prov" && activeTab !== "cxc_cli" && !((activeTab === "interco_matriz" || activeTab === "interco") && intercoDrilling) && (
       <PageHeader
         title={curTab?.label ?? "Reporte"}
-        subtitle={(isPnlTiempo || isBigg || isVentasHQ || activeTab === "cxp_prov" || activeTab === "cxc_cli" || activeTab === "consolidado") ? undefined : (activeTab === "interco_matriz" || activeTab === "interco") ? curTab?.desc : curLente?.label}
+        subtitle={(isPnlTiempo || isBigg || isVentasHQ || activeTab === "cxp_prov" || activeTab === "cxc_cli" || activeTab === "consolidado" || activeTab === "balance_pn" || activeTab === "cf") ? undefined : (activeTab === "interco_matriz" || activeTab === "interco") ? curTab?.desc : curLente?.label}
         back={
           <button onClick={() => setActiveTab(null)} style={{
             display: "inline-flex", alignItems: "center", gap: 6,
@@ -4091,7 +3772,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       )}
 
       {/* ── Toolbar / Filters (Consolidado y los detalles traen su propia barra; los WIP no llevan) ── */}
-      {activeTab !== "consolidado" && activeTab !== "cxp_prov" && activeTab !== "cxc_cli" && !curTab?.wip && activeTab !== "inf_egresos" && activeTab !== "inf_ingresos" && activeTab !== "devengado" && !((activeTab === "interco_matriz" || activeTab === "interco") && intercoDrilling) && (
+      {activeTab !== "consolidado" && activeTab !== "balance_pn" && activeTab !== "cf" && activeTab !== "cxp_prov" && activeTab !== "cxc_cli" && !curTab?.wip && activeTab !== "inf_egresos" && activeTab !== "inf_ingresos" && activeTab !== "devengado" && !((activeTab === "interco_matriz" || activeTab === "interco") && intercoDrilling) && (
       <div style={{
         display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap", alignItems: "flex-end",
         background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
@@ -4192,66 +3873,6 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
               })}
             </div>
           </div>
-        )}
-
-        {/* Moneda — CF (mismos modos consolidados que el P&L: U$D · TC Real / U$D · Constante) */}
-        {showMonedaCF && (
-          <div>
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 700, color: T.muted,
-              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>
-              Moneda
-              {fxModeCF === "const" && (
-                <span className="nb-tip" style={{ fontSize: 12, lineHeight: 1 }}>
-                  {fxConstFaltaCF ? "⚠️" : "🔒"}
-                  <span className="nb-tip-box">
-                    {fxConstFaltaCF
-                      ? `Falta el tipo de cambio de ${MESES[anchorMesCF]} ${year} (mes ancla del modo constante). Cargalo en Maestros (nb_tipos_cambio).`
-                      : `U$D constante — todo valuado al TC de ${MESES[anchorMesCF]} ${year} (comparable, sin efecto cambiario).`}
-                  </span>
-                </span>
-              )}
-            </label>
-            <select value={monedaCF} onChange={e => setMonedaCF(e.target.value)} style={selStyle}>
-              <optgroup label="Monedas">
-                {Object.entries(MONEDA_SYM).map(([k, v]) => (
-                  <option key={k} value={k}>{v} {k}</option>
-                ))}
-              </optgroup>
-              <optgroup label="Consolidado">
-                <option value="USD_REAL">U$D · TC Real</option>
-                <option value="USD_CONST">U$D · Constante</option>
-              </optgroup>
-            </select>
-          </div>
-        )}
-
-        {/* Vista — CF: directo (por actividad de caja) | indirecto (puente Resultado → Caja) */}
-        {showMonedaCF && (
-          <div>
-            <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
-              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Vista</label>
-            <div style={{ display: "inline-flex", gap: 2, background: "#f3f4f6", borderRadius: 9, padding: 3 }}>
-              {[{ id: "directo", label: "Directo" }, { id: "puente", label: "Resultado → Caja" }].map(o => {
-                const active = cfVista === o.id;
-                return (
-                  <button key={o.id} onClick={() => setCfVista(o.id)} style={{
-                    background: active ? T.accentDark : "transparent", border: "none", borderRadius: 7,
-                    color: active ? T.accent : T.muted, fontFamily: T.font, fontSize: 12.5,
-                    fontWeight: active ? 800 : 600, padding: "6px 14px", cursor: "pointer", transition: "all .15s ease" }}
-                    onMouseEnter={e => { if (!active) e.currentTarget.style.background = "#e5e7eb"; }}
-                    onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}>
-                    {o.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* Sociedades a consolidar — CF (agrupadas por anillo) */}
-        {showMonedaCF && (
-          <MultiSelect label="Sociedades a consolidar" groups={cfSocGroups} selected={cfSel}
-            onChange={setCfSelSoc} allLabel="Todas" width={230} />
         )}
 
         {/* Mes — solo para vistas comparativas (Mensual / YTD) */}
@@ -4398,13 +4019,11 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
         </div>
       )}
 
-      {/* ── Cash Flow ── */}
-      {activeTab === "cf" && cfVista === "directo" && (
-        <TabCashFlow rawMovs={rawMovs} rawIn={rawIn} rawEg={rawEg} ccMap={ccMap} nucleoEmpresas={nucleoEmpresas}
-          selSoc={cfSel} year={year} moneda={monedaCFView} fx={fxConvCF} tarjetaIds={tarjetaIds} cuentasBancarias={cuentasBancarias} />
-      )}
-      {activeTab === "cf" && cfVista === "puente" && (
-        <TabPuenteCaja data={puenteData} moneda={monedaCFView} />
+      {/* ── Cash Flow: dentro del consolidado de Tesorería (mismas cajas, sociedades y moneda que el Balance).
+             Arranca con el núcleo tildado. Vista "cf" = por qué se movió la caja; "flujo" = del resultado a la caja. ── */}
+      {activeTab === "cf" && (
+        <TabTesoreriaConsolidada vistas={["cf", "flujo"]} socInicial="nucleo" monedaInicial="ARS"
+          pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
       )}
 
       {activeTab === "balance" && (
@@ -4453,7 +4072,12 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       )}
 
       {activeTab === "consolidado" && (
-        <TabTesoreriaConsolidada pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
+        <TabTesoreriaConsolidada vistas={["saldos", "movimientos"]}
+          pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
+      )}
+      {activeTab === "balance_pn" && (
+        <TabTesoreriaConsolidada vistas={["balance", "evpn"]}
+          pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
       )}
 
       {activeTab === "devengado" && (

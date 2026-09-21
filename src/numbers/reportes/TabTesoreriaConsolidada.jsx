@@ -9,7 +9,7 @@ import {
   fetchMovTesoreria, fetchEgresos, fetchIngresos, fetchPagosCobros,
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto,
   fetchFinanciaciones, fetchSocios, fetchSociosCC, fetchIntercoData, intercoLedger, primeCache,
-  montoAUSD, tcDelMes,
+  esCuentaCredito,
 } from "../../lib/numbersApi";
 import { fetchLiquidacionesCerradas } from "../../lib/sueldosApi";
 import { fetchAll } from "../../lib/sheetsApi";        // Franquicias (read-only)
@@ -17,6 +17,10 @@ import { derivarSaldos, franqFirst, intercoConsolidado, sociedadNombreMap } from
 import { buildDevengado } from "./TabDevengado";   // resultado por mes (misma función que el reporte Devengado) → conciliación del PN
 import { TabSaldos, TabMovimientos, PaginaAging, PaginaIntercoLedger } from "../PantallaTesoreria";
 import { buildPuente, printPuente } from "./puenteDerive";   // DEV-ONLY diagnóstico (descartable)
+import { GO_LIVE_APERTURA, MESES_CORTOS as _MESES, sumSaldo, esCorriente, fmtBal, crearTraductor, AvisosTC, ordenarDetalle,
+  hoyISO as _hoyISO, finMesAnterior as _finMesAnterior, esFinDeMes as _esFinDeMes } from "./balanceUtils";
+import { computeCashFlow } from "./cashflowDerive";
+import { CashFlowDirectoView, ResultadoACajaView } from "./CashFlowViews";
 
 // Fusiona los items de Activo/Pasivo de varias sociedades por label+moneda (suma saldo, une docs).
 function mergeItems(arrays) {
@@ -29,21 +33,27 @@ function mergeItems(arrays) {
   return [...map.values()].sort(franqFirst);
 }
 
-// Suma el saldo de una lista de items para una moneda (con predicado opcional). Compartido Balance/EEPN.
-const sumSaldo = (a, m, pred = () => true) => a.reduce((s, it) => s + ((it.moneda === m && pred(it)) ? (Number(it.saldo) || 0) : 0), 0);
-// Clasificación del pasivo: corriente (operativo) vs otros (financiación/anticipos/socios). Compartido.
-const esCorriente = l => /proveedor|sueldo|carga|impuesto|interuso|franquic|arancel/i.test(l || "");
-// Formato de monto redondeado es-AR (— para cero, − para negativos). Compartido Balance/EEPN.
-const fmtBal = (n) => { const v = Math.round(Number(n) || 0); return v === 0 ? "—" : (v < 0 ? "−" : "") + Math.abs(v).toLocaleString("es-AR"); };
+// sumSaldo / esCorriente / fmtBal / crearTraductor / AvisosTC: en ./balanceUtils (compartidos con CashFlowViews).
 
 // `pnl` = { inRows, egRows, cuentaMap, ccMap } del P&L (lo pasa PantallaReportes) → el Balance concilia el PN contra el
 // resultado acumulado. `tiposCambio` = mapa YYYY-MM → tasas (nb_tipos_cambio) → Balance consolidado en USD con "Todas".
-export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null } = {}) {
+// Vistas del componente. El menú de Reportes lo monta DOS veces con distinto recorte (Martín 19/9):
+//  · "Tesorería consolidada" (operar el día a día) = saldos + movimientos: ¿cuánta plata hay hoy y dónde?
+//  · "Balance y Evolución del PN" (control y cierre) = balance + evpn: ¿cuánto vale la empresa y por qué cambió?
+// Comparten motor, carga y filtros; por eso es un solo componente y no dos.
+//  · "Cash Flow" (operar) = cf + flujo: ¿por qué se movió la caja? y ¿cómo el resultado se volvió caja? (19/9 noche)
+const VISTAS_TODAS = ["saldos", "balance", "evpn", "movimientos", "cf", "flujo"];
+
+// `socInicial`: "nucleo" → arranca con las sociedades del núcleo tildadas (el Cash Flow se mira así); null → todas.
+// `monedaInicial`: moneda con la que abre ("ALL" = consolidado USD). El Cash Flow abre en ARS (Martín 19/9: la historia
+// de la caja del núcleo —la operación consume pesos y se sostiene vendiendo USD— solo se ve en la moneda nativa).
+export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null, vistas = null, socInicial = null, monedaInicial = "ALL" } = {}) {
+  const vistasOn = Array.isArray(vistas) && vistas.length ? vistas : VISTAS_TODAS;
   const [sociedades, setSociedades] = useState([]);
   const [socSel,     setSocSel]     = useState([]);   // [] = todas
   const [socOpen,    setSocOpen]    = useState(false);
-  const [activeTab,  setActiveTab]  = useState("saldos");
-  const [filtroMoneda, setFiltroMoneda] = useState("ALL");
+  const [activeTab,  setActiveTab]  = useState(vistasOn[0]);
+  const [filtroMoneda, setFiltroMoneda] = useState(monedaInicial || "ALL");
   const [fechaCorte,   setFechaCorte]   = useState("");
   const [filtroCuenta, setFiltroCuenta] = useState(null);
   const [filtroRef,    setFiltroRef]    = useState(null);   // "ir al movimiento" desde el extracto interco
@@ -111,6 +121,10 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
           return !(a === false || a === 0 || a === "FALSE" || a === "false" || a === "0" || a === "");
         });
         setSociedades(activas);
+        if (socInicial === "nucleo") {
+          const nuc = activas.filter(s => /cleo/i.test(String(s.anillo || ""))).map(s => s.id);
+          if (nuc.length && nuc.length < activas.length) setSocSel(nuc);
+        }
         setData(d => ({
           ...d,
           movimientos: arr(movs), egresos: arr(egs), ingresos: arr(ings), pagosCobros: arr(pcs),
@@ -182,7 +196,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
   }, [data, socsIncluidas, intercoData, sociedades, sociedadesMap]);
 
   const eepn = useMemo(() => {
-    if (activeTab !== "evpn") return null;
+    if (activeTab !== "evpn" && activeTab !== "flujo") return null;   // "flujo" (Resultado → Caja) usa los mismos cierres
     const idsSel = socsIncluidas.map(s => s.id);   // set de sociedades (no depende de la fecha)
     const year = new Date().getFullYear();
     const GO = year === 2026 ? 6 : 0;   // julio go-live (columna inicial = junio)
@@ -209,6 +223,27 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
     return { year, GO, upto, balMes, cambioAcum, cxcLabels, corrLabels, otrosLabels };
   }, [activeTab, data, socsIncluidas, intercoData, sociedades, sociedadesMap, deriveAsOf]);
 
+  // ── Cash Flow directo (método directo por naturaleza) sobre las MISMAS cajas y sociedades que el Balance: la
+  //    sociedad de un movimiento es la de su CUENTA (como derivarSaldos) → la variación de caja ata con los saldos.
+  //    Moneda: la elegida (nativo) o consolidado USD al TC del mes de cada movimiento ("Todas"). ──
+  const cfDirecto = useMemo(() => {
+    if (activeTab !== "cf" && activeTab !== "flujo") return null;
+    const consolidado = filtroMoneda === "ALL";
+    const { aUSD, faltaTC, tcSuplente } = crearTraductor(tiposCambio);
+    const fx = consolidado ? (monto, mo, anio, mes) => aUSD(monto, mo, `${anio}-${String(mes).padStart(2, "0")}-01`) : null;
+    const cf = computeCashFlow({
+      rawMovs: data.movimientos, rawIn: pnl?.inRows || [], rawEg: pnl?.egRows || [], docs: [...data.egresos, ...data.ingresos],
+      ccMap: pnl?.ccMap || new Map(data.centrosCosto.map(c => [String(c.id ?? "").trim().toLowerCase(), c])),
+      cuentaMap: pnl?.cuentaMap || null,
+      perimetro: new Set(socsIncluidas.map(s => s.id)),
+      year: new Date().getFullYear(), moneda: consolidado ? "USD" : filtroMoneda, fx,
+      tarjetaIds: new Set(data.cuentasBancarias.filter(esCuentaCredito).map(c => c.id)),
+      cuentasBancarias: data.cuentasBancarias,
+    });
+    return { ...cf, faltaTC, tcSuplente };
+  }, [activeTab, filtroMoneda, tiposCambio, data, pnl, socsIncluidas]);
+  const socSetLC = useMemo(() => new Set(socsIncluidas.map(s => String(s.id).toLowerCase())), [socsIncluidas]);
+
   const toggleSoc = id => setSocSel(prev => {
     const full = prev.length === 0 ? sociedades.map(s => s.id) : prev;
     const next = full.includes(id) ? full.filter(x => x !== id) : [...full, id];
@@ -225,7 +260,9 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
         moneda: drillDownItem.moneda,
       });
       return <PaginaIntercoLedger item={drillDownItem} ledger={ledger} onBack={() => setDrillDownItem(null)}
-        onGoToMov={e => { setDrillDownItem(null); setFiltroCuenta(null); setFiltroRef(e?.ref || null); setActiveTab("movimientos"); }} />;
+        onGoToMov={vistasOn.includes("movimientos")
+          ? (e => { setDrillDownItem(null); setFiltroCuenta(null); setFiltroRef(e?.ref || null); setActiveTab("movimientos"); })
+          : undefined} />;
     }
     return (
       <PaginaAging item={drillDownItem} fechaCorte={fechaCorte}
@@ -238,7 +275,9 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
     { id: "balance", label: "Balance" },
     { id: "evpn", label: "Evolución PN" },
     { id: "movimientos", label: `Movimientos${movimientos.length ? ` (${movimientos.length})` : ""}` },
-  ];
+    { id: "cf",    label: "Por qué se movió la caja" },
+    { id: "flujo", label: "Del resultado a la caja" },
+  ].filter(t => vistasOn.includes(t.id));
   const nSel = socSel.length === 0 ? sociedades.length : socSel.length;
 
   return (
@@ -342,8 +381,8 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
           })}
         </div>
 
-        {/* Fecha corte — solo Saldos/Balance (el EEPN es mensual, no usa corte) */}
-        {activeTab !== "evpn" && (
+        {/* Fecha corte — solo Saldos/Balance/Movimientos (EEPN y Cash Flow son mensuales, no usan corte) */}
+        {!["evpn", "cf", "flujo"].includes(activeTab) && (
           <>
           <div style={{ width: 1, height: 24, background: T.cardBorder, flexShrink: 0 }} />
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -391,6 +430,14 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
       {!loading && !error && activeTab === "evpn" && (
         <EEPNView eepn={eepn} filtroMoneda={filtroMoneda} tiposCambio={tiposCambio} />
       )}
+      {!loading && !error && activeTab === "cf" && (
+        <CashFlowDirectoView cf={cfDirecto} consolidado={filtroMoneda === "ALL"} mon={filtroMoneda}
+          avisosTC={cfDirecto ? <AvisosTC tcSuplente={cfDirecto.tcSuplente} faltaTC={cfDirecto.faltaTC} /> : null} />
+      )}
+      {!loading && !error && activeTab === "flujo" && (
+        <ResultadoACajaView eepn={eepn} consolidado={filtroMoneda === "ALL"} mon={filtroMoneda === "ALL" ? "USD" : filtroMoneda}
+          tiposCambio={tiposCambio} pnl={pnl} socSet={socSetLC} movimientos={data.movimientos} cfDirecto={cfDirecto} />
+      )}
       {!loading && !error && activeTab === "movimientos" && (
         <TabMovimientos movimientos={movimientos} cuentas={cuentas} filtroCuenta={filtroCuenta} filtroRef={filtroRef}
           onLimpiarFiltro={() => { setFiltroCuenta(null); setFiltroRef(null); }} centrosCosto={data.centrosCosto} />
@@ -400,8 +447,6 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
 }
 
 const arr = x => Array.isArray(x) ? x : [];
-
-const _MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
 
 // ── Tabla de Balance (Activo / Pasivo / PN) compartida por la vista Balance (columnas = monedas) y la
 //    vista Evolución PN (columnas = meses). El padre arma columnas + getters + detalle; la tabla sólo
@@ -514,48 +559,7 @@ function BalanceTable({ cols, colLabel, minBase = 320, colW = 100, getters, deta
 //   · Debajo del PN, su explicación: PN apertura (30/6) + resultado acumulado (P&L, buildDevengado) − cambio de
 //     moneda = PN explicado; la diferencia con el PN real es lo que queda sin explicar (el "puente" hecho reporte).
 // Decisión Martín 19/9/2026 ("las monedas por columna me hacen ruido").
-const GO_LIVE_APERTURA = "2026-06-30";
-// Traductor a USD compartido por Balance y EEPN: TC del mes de la fecha; si ese mes no tiene TC (típico: el mes en
-// curso), usa el último disponible hacia atrás (hasta 3 meses) y lo registra en `tcSuplente`; si tampoco hay, lo
-// registra en `faltaTC` y devuelve 0 (NO suma monedas sin traducir).
-function crearTraductor(tiposCambio) {
-  const faltaTC = new Set(), tcSuplente = new Set();
-  const tcPara = (fecha) => {
-    let y = +fecha.slice(0, 4), m = +fecha.slice(5, 7);
-    for (let i = 0; i < 4; i++) {
-      const tc = tcDelMes(tiposCambio, y, m);
-      if (tc) { if (i > 0) tcSuplente.add(`${fecha.slice(0, 7)} → ${tc.yearMonth}`); return tc; }
-      m -= 1; if (m === 0) { m = 12; y -= 1; }
-    }
-    return null;
-  };
-  const aUSD = (monto, moneda, fecha) => {
-    const v = montoAUSD(monto, moneda, tcPara(fecha));
-    if (v == null) { if (Math.abs(monto) > 0.005) faltaTC.add(`${moneda} ${fecha.slice(0, 7)}`); return 0; }
-    return v;
-  };
-  return { aUSD, tcPara, faltaTC, tcSuplente };
-}
-// Avisos de TC (suplente / faltante), compartidos por Balance y EEPN.
-function AvisosTC({ tcSuplente, faltaTC }) {
-  return (<>
-    {tcSuplente.size > 0 && (
-      <div style={{ fontSize: 11, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "6px 12px", marginBottom: 10 }}>
-        Sin tipo de cambio cargado para {[...tcSuplente].map(x => x.split(" → ")[0]).filter((v, i, a) => a.indexOf(v) === i).join(", ")}: se usa el último disponible ({[...new Set([...tcSuplente].map(x => x.split(" → ")[1]))].join(", ")}). Cargalo en Maestros › Tipos de cambio.
-      </div>
-    )}
-    {faltaTC.size > 0 && (
-      <div role="alert" style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#92400e", marginBottom: 10 }}>
-        Falta tipo de cambio para: {[...faltaTC].join(", ")}. Esos saldos no están sumados en el consolidado.
-      </div>
-    )}
-  </>);
-}
-// Orden de las líneas de detalle, IGUAL en Balance y EEPN: alfabético dentro del subgrupo, intercompañía al final.
-const ordenarDetalle = (rows) => [...rows].sort((a, b) => (/^Intercompañía/.test(a.label) ? 1 : 0) - (/^Intercompañía/.test(b.label) ? 1 : 0) || a.label.localeCompare(b.label));
-const _hoyISO = () => new Date().toISOString().slice(0, 10);
-const _finMesAnterior = (iso) => { const y = +iso.slice(0, 4), m = +iso.slice(5, 7); const pm = m === 1 ? 12 : m - 1, py = m === 1 ? y - 1 : y; return `${py}-${String(pm).padStart(2, "0")}-31`; };
-const _esFinDeMes = (iso) => { const d = new Date(+iso.slice(0, 4), +iso.slice(5, 7), 0).getDate(); return +iso.slice(8, 10) >= d; };
+// GO_LIVE_APERTURA, crearTraductor, AvisosTC, ordenarDetalle, _hoyISO/_finMesAnterior/_esFinDeMes: en ./balanceUtils.
 
 function BalanceView({ deriveAsOf, filtroMoneda, fechaCorte, tiposCambio = null, pnl = null, socsIncluidas = [], movimientos = [] }) {
   const corte = fechaCorte || _hoyISO();
