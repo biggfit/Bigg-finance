@@ -36,12 +36,14 @@ function cxLedger(entries = []) {
   return { opening: 0, entries, final: saldo };
 }
 
-// Vista CONSOLIDADA del interco sobre un set de sociedades: las posiciones núcleo↔núcleo internas
-// al set se ELIMINAN (intra-grupo); las demás (fondeadas/externas) se muestran. Devuelve {activo,pasivo}.
+// Vista CONSOLIDADA del interco sobre un set de sociedades: toda posición cuyas DOS puntas están dentro
+// del set se ELIMINA (intra-grupo: el activo de una y el pasivo de la otra se cancelan); solo se muestran
+// las posiciones contra sociedades FUERA del set. Devuelve {activo,pasivo}.
+// 21/9/2026: antes solo se eliminaba núcleo↔núcleo y, para un par interno núcleo↔fondeada/externa, el
+// `else if` cargaba la pata activa del acreedor sin la pasiva del deudor → en "Todas" el PN quedaba
+// inflado por esos activos sueltos (ARS: +1.186.925 jul / −4.900.800 ago; USD: 1,09M "sin espejo").
 export function intercoConsolidado(intercoData, selectedIds, sociedades = [], corte = null) {
-  const anilloDe = new Map(sociedades.map(s => [String(s.id), String(s.anillo || "")]));
   const nombreDe = sociedadNombreMap(sociedades);
-  const esNucleo = id => /^n[úu]cleo/i.test(anilloDe.get(String(id)) || "");
   const nom      = id => nombreDe.get(String(id)) || String(id);
   const sel      = new Set((selectedIds || []).map(String));
   const activo = [], pasivo = [];
@@ -49,7 +51,7 @@ export function intercoConsolidado(intercoData, selectedIds, sociedades = [], co
     if (p.neto <= 0.01) continue;
     const s = String(p.sociedad), c = String(p.contraparte);
     const sIn = sel.has(s), cIn = sel.has(c);
-    if (esNucleo(s) && esNucleo(c) && sIn && cIn) continue;   // núcleo↔núcleo interno → netea
+    if (sIn && cIn) continue;   // par interno al set (núcleo↔núcleo, núcleo↔fondeada, etc.) → netea
     if (sIn)      activo.push(intercoItem(+p.neto, p.moneda, nom(c), { sociedadId: s, contraparteId: c }));   // una del set es acreedora
     else if (cIn) pasivo.push(intercoItem(-p.neto, p.moneda, nom(s), { sociedadId: c, contraparteId: s }));   // una del set es deudora
   }
