@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, Fragment } from "react";
-import { T, Badge, PageHeader, Btn, CompactCard, fmtMoney, fmtDate } from "./theme";
+import { T, Badge, PageHeader, Btn, CompactCard, fmtMoney, fmtDate, MoneyField } from "./theme";
 import {
   fetchFinanciaciones, appendFinanciacion, generarCuotas,
   pagarCuota, cancelarFinanciacion, deleteFinanciacion,
@@ -368,7 +368,7 @@ function AltaAnticipo({ sociedad, bancos, clientes, onCancel, onSaved }) {
               </select>
             </Field>
           </div>
-          <Field label="Monto *"><input type="number" value={f.monto} onChange={e => set("monto", e.target.value)} style={inputStyle} /></Field>
+          <Field label="Monto *"><MoneyField value={f.monto} onChange={e => set("monto", e.target.value)} style={inputStyle} /></Field>
           <Field label="Moneda"><select value={f.moneda} onChange={e => set("moneda", e.target.value)} style={inputStyle}>{["ARS", "USD", "EUR"].map(m => <option key={m} value={m}>{m}</option>)}</select></Field>
           <Field label="Fecha *"><input type="date" value={f.fecha} onChange={e => set("fecha", e.target.value)} style={inputStyle} /></Field>
           <Field label="Cuenta de cobro">
@@ -583,8 +583,13 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
         <div style={{ gridColumn: "1 / -1" }}>
           <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: T.text, cursor: "pointer" }}>
             <input type="checkbox" checked={h.es_apertura} onChange={e => set("es_apertura", e.target.checked)} />
-            Apertura (plan vivo al go-live): el capital ya está contabilizado afuera → no impacta el P&L; solo carga el pasivo remanente + cuotas vigentes
+            Apertura (deuda anterior al go-live): el capital ya está contabilizado afuera → no impacta el P&L; solo carga el pasivo remanente + cuotas vigentes
           </label>
+          {h.es_apertura && h.fecha_consolidacion > "2026-06-30" && (
+            <div style={{ marginTop: 6, fontSize: 11, color: T.muted, lineHeight: 1.5 }}>
+              El pasivo se fecha al <b>30/06/2026</b> (apertura), no al {h.fecha_consolidacion}: la fecha de consolidación real queda anotada en la nota y las cuotas conservan sus vencimientos.
+            </div>
+          )}
         </div>
         <div style={{ gridColumn: "1 / -1" }}>
           <Field label="Nota"><input value={h.nota} onChange={e => set("nota", e.target.value)} style={inputStyle} /></Field>
@@ -643,7 +648,7 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
       <div style={{ background: "#eceff3", border: `1px dashed ${T.cardBorder}`, borderRadius: T.radius, padding: 14, marginBottom: 14 }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: T.muted, marginBottom: 10 }}>O generar a mano (sistema francés — después editás cada cuota)</div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
-          <Field label="Capital total"><input type="number" value={gen.capital_original} onChange={e => setGen(s => ({ ...s, capital_original: e.target.value }))} style={{ ...inputStyle, width: 140 }} /></Field>
+          <Field label="Capital total"><MoneyField value={gen.capital_original} onChange={e => setGen(s => ({ ...s, capital_original: e.target.value }))} style={{ ...inputStyle, width: 140 }} /></Field>
           <Field label="Nº cuotas"><input type="number" value={gen.n_cuotas} onChange={e => setGen(s => ({ ...s, n_cuotas: e.target.value }))} style={{ ...inputStyle, width: 80 }} /></Field>
           <Field label="Tasa mensual %"><input type="number" value={gen.tasaMensual} onChange={e => setGen(s => ({ ...s, tasaMensual: e.target.value }))} style={{ ...inputStyle, width: 100 }} /></Field>
           <Field label="IVA % s/interés"><input type="number" value={gen.ivaPct} onChange={e => setGen(s => ({ ...s, ivaPct: e.target.value }))} style={{ ...inputStyle, width: 100 }} /></Field>
@@ -820,7 +825,7 @@ function PagoCuotaModal({ cuota, plan, bancos, busy, onCancel, onConfirm }) {
         <Field label="Fecha de pago"><input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={inputStyle} /></Field>
         <div style={{ marginTop: 12 }}>
           <Field label={`Monto a pagar (${plan.moneda})`}>
-            <input type="number" step="0.01" value={monto} onChange={e => setMonto(e.target.value)} style={inputStyle} />
+            <MoneyField value={monto} onChange={e => setMonto(e.target.value)} style={inputStyle} />
           </Field>
           {parcial && !excede && (
             <div style={{ fontSize: 11, color: "#a16207", marginTop: 6 }}>Pago parcial — queda pendiente {fmtMoney(saldo - montoNum, plan.moneda)}.</div>

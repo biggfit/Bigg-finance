@@ -11,7 +11,8 @@
 // dejan un remanente que el resumen sí mete en el TOTAL A PAGAR pero que estas líneas no explican
 // → se devuelve `totalAPagar` (el importe real) para que el caller pueda armar un ajuste por la
 // diferencia, en vez de tener que parsear esa sección (formato variable, no vale la pena).
-import { extractLines } from "./planPdf";
+// La extracción del texto la hace el caller (parsers/resumenTarjeta.js), que la necesita antes para
+// saber de qué emisor es el PDF.
 
 const arNum = s => { const n = parseFloat(String(s).replace(/\./g, "").replace(",", ".")); return isNaN(n) ? 0 : n; };
 const DATE  = /^(\d{2}-\d{2}-\d{2})\b/;
@@ -51,8 +52,9 @@ function parseTotalAPagar(lines) {
   return null;
 }
 
-export async function parseTarjetaPdf(file) {
-  const lines = await extractLines(file);
+/** Parsea las líneas ya extraídas. Pura (sin pdfjs) → testeable, y deja que el caller extraiga
+ *  una sola vez para decidir qué parser usar (ver parsers/resumenTarjeta.js). */
+export function parseTarjetaLines(lines) {
   const header = parseHeader(lines);
   const totalAPagar = parseTotalAPagar(lines);
   const out = [];

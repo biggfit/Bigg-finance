@@ -1,4 +1,6 @@
 // ─── BIGG Numbers — Design tokens compartidos ─────────────────────────────
+import { useRef, useLayoutEffect } from "react";
+
 export const T = {
   sidebar:       "#16181a",
   sidebarBorder: "rgba(173,255,25,.35)",
@@ -114,17 +116,111 @@ export function Btn({ children, onClick, variant = "primary", disabled }) {
   );
 }
 
+// ─── Formato pesos ($ 22.400.000,50) ──────────────────────────────────────
+// El "valor" que viaja por props/estado sigue siendo el número plano de siempre
+// (punto decimal, sin miles — lo que ya esperan Number()/parseFloat() y el backend).
+// Sólo la representación que ve el usuario en el input se muestra con puntos de
+// miles y coma decimal, a la manera argentina.
+export function formatPesosDisplay(canonical) {
+  if (canonical == null) return "";
+  const str = String(canonical);
+  if (str === "" || str === "-") return str;
+  const neg = str.startsWith("-");
+  const body = neg ? str.slice(1) : str;
+  const [intRaw, decRaw] = body.split(".");
+  const intDisplay = (intRaw || "").replace(/\D/g, "").replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  const out = decRaw !== undefined ? `${intDisplay},${decRaw}` : intDisplay;
+  return neg ? `-${out}` : out;
+}
+
+// Preserva la posición lógica del cursor cuando un input se reformatea en vivo: cuenta
+// cuántos caracteres "significativos" (los de `clase`, p.ej. "0-9," o "A-Za-z0-9") hay
+// antes del cursor y, tras reformatear a `display`, reubica el cursor en ese mismo punto
+// lógico. Lo comparten useMoneyMask (acá) y useNroCompMask (formUtils).
+// Uso: const { ref, capture } = useCaretMask(display, clase);
+//      onChange = e => { capture(e.target.value, e.target.selectionStart); setValue(...) }
+export function useCaretMask(display, clase) {
+  const ref = useRef(null);
+  const caret = useRef(null);
+  const capture = (raw, pos) => {
+    caret.current = (raw.slice(0, pos ?? raw.length).match(new RegExp(`[${clase}]`, "g")) || []).length;
+  };
+  useLayoutEffect(() => {
+    if (caret.current == null || !ref.current) return;
+    const target = caret.current;
+    caret.current = null;
+    const re = new RegExp(`[${clase}]`);
+    let pos = 0, seen = 0;
+    while (pos < display.length && seen < target) {
+      if (re.test(display[pos])) seen++;
+      pos++;
+    }
+    try { ref.current.setSelectionRange(pos, pos); } catch { /* input sin selección */ }
+  }, [display]);
+  return { ref, capture };
+}
+
+// Hook que traduce entre el valor plano (canonical) y lo que se muestra en el input,
+// reformateando en cada tecla sin perder la posición del cursor (ver useCaretMask).
+export function useMoneyMask(value, onChange) {
+  const str = value == null ? "" : String(value);
+  const display = formatPesosDisplay(str);
+  const { ref, capture } = useCaretMask(display, "0-9,");
+
+  const handleChange = (e) => {
+    const el = e.target;
+    let raw = el.value;
+    const pos = el.selectionStart ?? raw.length;
+
+    // Tolerar "." como separador decimal (hábito del numpad): si la única tecla nueva
+    // es un punto y todavía no hay coma cargada, se lo trata igual que si fuera ",".
+    // Los demás puntos (los de miles, auto-insertados) se siguen ignorando como antes.
+    if (!str.includes(".") && raw.length === display.length + 1 && raw[pos - 1] === ".") {
+      const withoutInserted = raw.slice(0, pos - 1) + raw.slice(pos);
+      if (withoutInserted === display) raw = raw.slice(0, pos - 1) + "," + raw.slice(pos);
+    }
+
+    capture(raw, pos);
+
+    let s = raw.replace(/\./g, "");           // los puntos restantes son sólo separador de miles (auto)
+    const neg = s.trim().startsWith("-");
+    s = s.replace(/-/g, "");
+    const firstComma = s.indexOf(",");
+    const canonicalBody = firstComma === -1
+      ? s.replace(/\D/g, "")
+      : `${s.slice(0, firstComma).replace(/\D/g, "")}.${s.slice(firstComma + 1).replace(/\D/g, "")}`;
+
+    onChange(neg ? `-${canonicalBody}` : canonicalBody);
+  };
+
+  return { ref, display, onChange: handleChange };
+}
+
+/** Reemplazo directo de <input type="number"> para montos: mismo contrato de
+ *  onChange basado en evento (e.target.value), pero muestra "$ 22.400.000,50". */
+export function MoneyField({ value, onChange, ...rest }) {
+  const mask = useMoneyMask(value, (canonical) => onChange({ target: { value: canonical } }));
+  return (
+    <input ref={mask.ref} type="text" inputMode="decimal"
+      value={mask.display} onChange={mask.onChange} {...rest} />
+  );
+}
+
 export function Input({ label, value, onChange, placeholder, type="text", required }) {
+  // type="number" (montos) delega en MoneyField (máscara + caret); el resto es input plano.
+  const inputStyle = { width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`,
+    borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text,
+    fontFamily:T.font, outline:"none", boxSizing:"border-box" };
   return (
     <div>
       <label style={{ fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:5 }}>
         {label}{required && <span style={{ color:T.red }}> *</span>}
       </label>
-      <input type={type} value={value} onChange={e=>onChange(e.target.value)}
-        placeholder={placeholder}
-        style={{ width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`,
-          borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text,
-          fontFamily:T.font, outline:"none", boxSizing:"border-box" }} />
+      {type === "number"
+        ? <MoneyField value={value} onChange={e => onChange(e.target.value)}
+            placeholder={placeholder} style={inputStyle} />
+        : <input type={type} value={value} onChange={e => onChange(e.target.value)}
+            placeholder={placeholder} style={inputStyle} />}
     </div>
   );
 }

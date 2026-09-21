@@ -3,7 +3,7 @@
 // Reusa calcSaldoPendiente (mismo neteo que Tesorería/Ingresos) y la matemática de aging de PaginaAging.
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, fmtDate, fmtMoney } from "../theme";
-import { fetchIngresos, fetchPagosCobros, fetchSociedades, calcSaldoPendiente, fetchCuentasBancarias, appendCobro } from "../../lib/numbersApi";
+import { fetchIngresos, fetchPagosCobros, fetchSociedades, calcSaldoNeto, fetchCuentasBancarias, appendCobro } from "../../lib/numbersApi";
 import { exportarCxPExcel } from "./exportCxP";
 import RegistrarCobroModal from "../pagos/RegistrarCobroModal";
 
@@ -114,11 +114,12 @@ export default function TabCxCClientes({ onBack, onVerComprobante }) {
     for (const ing of ingresos) {
       if ((ing.moneda || "ARS") !== filtroMoneda) continue;
       if (corte && (ing.fecha ?? "") > corte) continue;
-      const saldo = calcSaldoPendiente(ing.importe, cobrosByDoc.get(String(ing.id)) || []);
-      if (saldo <= 0.01) continue;
+      // Saldo NETO: una venta cobrada DE MÁS entra con saldo NEGATIVO (crédito del cliente) y netea su total (18/9/2026).
+      const saldo = calcSaldoNeto(ing.importe, cobrosByDoc.get(String(ing.id)) || []);
+      if (Math.abs(saldo) <= 0.01) continue;
       const vto  = parseVto(ing.vto);
       const dias = (vto && !isNaN(vto)) ? Math.floor((hoy - vto) / 86400000) : -1;  // vto inválido → a vencer, no +90
-      const banda = bandaDe(dias);
+      const banda = saldo < 0 ? "avencer" : bandaDe(dias);
       const key = ing.clienteId || `N:${(ing.cliente || "").trim().toLowerCase()}`;
       let c = clis.get(key);
       if (!c) { c = { key, nombre: ing.cliente || "Sin cliente", total:0, lineasMap: new Map() }; clis.set(key, c); }
@@ -142,7 +143,7 @@ export default function TabCxCClientes({ onBack, onVerComprobante }) {
     return { rows, totales };
   }, [ingresos, cobros, filtroMoneda, fechaCorte]);
 
-  const fmt = v => v > 0.01 ? fmtMoney(v, filtroMoneda) : <span style={{ color: T.dim }}>—</span>;
+  const fmt = v => v > 0.01 ? fmtMoney(v, filtroMoneda) : v < -0.01 ? <span style={{ color: T.blue }}>-{fmtMoney(v, filtroMoneda)}</span> : <span style={{ color: T.dim }}>—</span>;
   const cellS = (bold, red) => ({ padding:"9px 14px", fontSize:13, textAlign:"right", whiteSpace:"nowrap",
     fontFamily:"var(--mono)", fontWeight: bold ? 800 : 600, color: red ? "#dc2626" : T.text });
   const thS = { padding:"10px 14px", fontSize:11, fontWeight:800, color:"rgba(255,255,255,.9)",
@@ -248,7 +249,7 @@ export default function TabCxCClientes({ onBack, onVerComprobante }) {
             </tr></thead>
             <tbody>
               {docs.map((d, i) => {
-                const vencido = d.dias >= 0 && d.vto;
+                const vencido = d.saldo > 0 && d.dias >= 0 && d.vto;   // un sobrepago (saldo < 0) no "vence"
                 return (
                   <tr key={i} onClick={() => abrirCobro(d)} title="Registrar cobro"
                     style={{ borderBottom:`1px solid ${T.cardBorder}`, background: i%2===0 ? T.card : "#fafbfc", cursor:"pointer" }}
@@ -260,7 +261,10 @@ export default function TabCxCClientes({ onBack, onVerComprobante }) {
                     <td style={cellS(false, vencido)}>
                       {d.vto ? (vencido ? `${d.dias} venc.` : `${-d.dias} rest.`) : "—"}
                     </td>
-                    <td style={cellS(true, vencido)}>{fmtMoney(d.saldo, filtroMoneda)}</td>
+                    <td style={{ ...cellS(true, vencido), color: d.saldo < 0 ? T.blue : cellS(true, vencido).color }}
+                      title={d.saldo < 0 ? "Se pagó más que el comprobante: crédito a favor contra la contraparte" : undefined}>
+                      {d.saldo < 0 ? `-${fmtMoney(d.saldo, filtroMoneda)}` : fmtMoney(d.saldo, filtroMoneda)}
+                    </td>
                   </tr>
                 );
               })}

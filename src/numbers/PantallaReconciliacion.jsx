@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, Fragment } from "react";
-import { T, fmtDate } from "./theme";
+import { T, fmtDate, MoneyField } from "./theme";
 import {
   fetchCuentasBancarias, fetchMovimientosPendientes, ingestarExtracto, aceptarMovimiento,
   aceptarCobroFranquicia, fetchBancoReglas, fetchProveedores, fetchCuentas, fetchCentrosCosto, fetchSociedades,
@@ -9,7 +9,7 @@ import {
   appendEgreso, appendProveedor, appendCuenta,
   appendIngreso, fetchClientes, appendCliente,
   appendBancoRegla, fetchIngresos, imputarCobroIngreso,
-  fetchFinanciaciones, imputarCuota, pagarTarjeta, esCuentaCredito, fetchMovTesoreria,
+  fetchFinanciaciones, imputarCuota, pagarTarjeta, esCuentaCredito, fetchMovTesoreria, fetchMovFranquicias,
   fetchIntercoData, pendientesInterco, reconocerVentaInterco, reconocerInterusoGestion, revertirInterusoGestion, normCuit,
   pendientesIntercoRecibir, declararIntercoRecibida, declararIntercoEnviada, intercoMatchCandidato,
   esCuentaStripe, esCuentaVentaDirecta, ultimaCargaExtractoPorCuenta,
@@ -18,7 +18,7 @@ import { BancoReglaModal } from "./PantallaMaestros";
 import MundoTarjeta from "./reconciliacion/MundoTarjeta";
 import { useConfirm } from "./useConfirm";
 import { fetchAll, removeComp } from "../lib/sheetsApi";
-import { franquiciasPendientesInterco } from "../lib/franquiciasAdapter";
+import { franquiciasPendientesInterco, enriquecerCompsConMovs } from "../lib/franquiciasAdapter";
 import { groupCentrosCosto, makeCrearMaestro } from "./formUtils";
 import NuevoEgresoModal from "./NuevoEgresoModal";
 import NuevoIngresoModal from "./NuevoIngresoModal";
@@ -67,14 +67,24 @@ const grupoGlosa = (mov) => {
 };
 // Tipos "débiles": no clasificados por una regla explícita → elegibles para glosa/cobranza.
 const TIPOS_DEBILES = ["pago_proveedor", "servicio", "sin_clasificar", ""];
-// fr_tipo según monto vs deuda viva del franquiciado. Crédito que matchea la deuda → PAGO de CC;
-// si no hay deuda que lo respalde → PAGO_PAUTA (a cuenta). Débito → PAGO_ENVIADO.
-const sugerirFrTipo = (monto, deuda) => {
+// fr_tipo sugerido para un crédito de franquicia. Débito → PAGO_ENVIADO. Si no:
+//   1. El importe matchea la deuda viva de la CC (±2%) → PAGO de CC. Sirve para las sedes sin pauta.
+//   2. Hay pauta FACTURADA esperando cobro → PAGO de CC: la factura ya existe y este cobro la paga,
+//      así que la deuda tiene que bajar en el mes del cobro.
+//   3. Si no → PAGO_PAUTA: la plata llega antes de facturar, es un adelanto y Pendientes lo reclama.
+// La 2 es la regla del negocio: se factura a fin de mes; lo que entra ANTES (o el mismo día) es
+// adelanto, lo que entra DESPUÉS paga esa factura. Se mide con `pautaSinCobrar`, no con la fecha
+// suelta de la última factura: hay sedes que pagan primero y facturan después TODOS los meses
+// (Corrientes, Nordelta), y ahí un cobro posterior a una factura ya cobrada sigue siendo adelanto.
+const sugerirFrTipo = (monto, deuda, pautaSinCobrar = 0) => {
   if ((Number(monto) || 0) < 0) return "PAGO_ENVIADO";
-  const d = Number(deuda) || 0;   // positivo = debe; solo es Pago de CC si hay deuda que lo respalde
-  return d > 0 && Math.abs(Math.abs(monto) - d) <= Math.max(500, d * 0.02) ? "PAGO" : "PAGO_PAUTA";
+  const d = Number(deuda) || 0;   // positivo = debe
+  if (d > 0 && Math.abs(Math.abs(monto) - d) <= Math.max(500, d * 0.02)) return "PAGO";
+  return pautaSinCobrar > 0.01 ? "PAGO" : "PAGO_PAUTA";
 };
 const FR_TIPO_LABEL = { PAGO: "Pago de CC", PAGO_PAUTA: "Pago a cuenta", PAGO_ENVIADO: "Transf. enviada" };
+// DD/MM/YYYY → YYYY-MM-DD (para ordenar/comparar fechas de comprobantes de Franquicias).
+const dmyISO = (d) => { const [dd, mm, yyyy] = String(d || "").split("/"); return `${yyyy}-${mm}-${dd}`; };
 // Etiqueta legible del saldo de CC (positivo = debe, negativo = a favor).
 const deudaLabel = (d) => Math.abs(Number(d) || 0) < 1 ? "al día" : (Number(d) > 0 ? `debe ${fmt(d)}` : `a favor ${fmt(-d)}`);
 const fmt = n => (Number(n) || 0).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -149,8 +159,10 @@ function ModalImputarVarias({ mov, tipo, facturas, onClose, onConfirm }) {
                         <input type="checkbox" checked={on} onChange={() => toggle(f)} />
                       </td>
                       <td style={td}>
-                        <div style={{ fontWeight: 600 }}>{f.nroComp || f.id}</div>
-                        {f.vto && <div style={{ fontSize: 10.5, color: T.muted }}>vto {fmtDate(f.vto)}</div>}
+                        <div style={{ fontWeight: 600 }}>{f.proveedor || f.cliente || f.nroComp || f.id}</div>
+                        <div style={{ fontSize: 10.5, color: T.muted }}>
+                          {[f.cuenta, f.nroComp && `Nº ${f.nroComp}`, f.vto && `vto ${fmtDate(f.vto)}`].filter(Boolean).join(" · ")}
+                        </div>
                       </td>
                       <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmt(f.saldo)}</td>
                       <td style={{ ...td, textAlign: "right" }}>
@@ -351,6 +363,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const [franquicias,setFranquicias]= useState([]);
   const [sociedades, setSociedades] = useState([]); // nb_sociedades (con cuit) para detectar intercompany
   const [frComps,    setFrComps]    = useState({});
+  const [frMovs,     setFrMovs]     = useState([]);    // cobros/pagos de franquicia en nb_movimientos
   const [frSaldos,   setFrSaldos]   = useState({});
   const [pagosSueldos,setPagosSueldos]= useState([]); // movs origen=sueldos haberes (para matchear lotes)
   const [egresos,    setEgresos]    = useState([]);    // facturas de proveedor (para imputar pagos)
@@ -363,7 +376,10 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const [progreso,   setProgreso]   = useState(null); // { done, total } mientras sube el extracto
   const [filtroTipo, setFiltroTipo] = useState("");   // filtro por grupo de Propuesta (para aprobar por grupos)
   const [busqueda,   setBusqueda]   = useState("");   // texto libre: filtra por descripción/proveedor (ej. juntar todo un proveedor)
-  const [verIgnorados,setVerIgnorados]= useState(false);
+  const [panelBanco, setPanelBanco] = useState(null); // null | "ignorados" | "conciliados": acordeón — abrir uno cierra el otro
+  const [concDesde,  setConcDesde]  = useState("");   // filtro de fecha del histórico "Conciliados"
+  const [concHasta,  setConcHasta]  = useState("");
+  const [saldoRealInput, setSaldoRealInput] = useState({}); // cuentaTab → saldo real tipeado a mano, solo para el chequeo post-carga del día
   const [reglaModal, setReglaModal] = useState(null);  // {prefill} para crear regla desde una línea
   const [loading,    setLoading]    = useState(true);
   const [uploading,  setUploading]  = useState(false);
@@ -509,6 +525,9 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       setFrComps(comps || {});
       setFrSaldos(saldos || {});
     }).catch(console.error);
+    // Los cobros de franquicia desde el cutover viven en nb_movimientos, no en `comprobantes`:
+    // sin ellos la deuda viva y la pauta pendiente de cobro se leen de más (faltan los cobros).
+    fetchMovFranquicias().then(m => setFrMovs(m || [])).catch(console.error);
     fetchPagosSueldos(sociedad).then(p => setPagosSueldos(p || [])).catch(console.error);
     fetchMovimientosIgnorados(sociedad).then(i => setIgnorados(i || [])).catch(console.error);
     fetchEgresos(sociedad).then(e => setEgresos(e || [])).catch(console.error);
@@ -519,6 +538,23 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     recargar();
   }, [sociedad]);
 
+  // Cuenta corriente completa: cuaderno de Franquicias + cobros anotados en Numbers.
+  const frCompsCC = useMemo(() => enriquecerCompsConMovs(frComps, frMovs), [frComps, frMovs]);
+
+  // Pauta FACTURADA que todavía nadie cobró, a una fecha (ISO). Facturas de pauta menos sus NC
+  // menos los pagos a cuenta anteriores. > 0 ⇒ hay una factura esperando que la paguen.
+  const pautaSinCobrar = (frId, iso) => {
+    let saldo = 0;
+    for (const c of (frCompsCC[String(frId)] ?? [])) {
+      const cIso = dmyISO(c.date);
+      if (!cIso || cIso > iso) continue;
+      if      (c.type === "FACTURA|PAUTA") saldo += c.amount ?? 0;
+      else if (c.type === "NC|PAUTA")      saldo -= c.amount ?? 0;
+      else if (c.type === "PAGO_PAUTA")    saldo -= c.amount ?? 0;
+    }
+    return saldo;
+  };
+
   // Deuda viva del franquiciado (saldo de su CC al mes actual). Positivo = debe.
   // Memoizado con cache por franquicia: computeSaldoReal es pesado y se pide muchas veces por render.
   const deudaFr = useMemo(() => {
@@ -528,12 +564,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       if (cache.has(key)) return cache.get(key);
       const fr = franquicias.find(f => String(f.id) === key);
       let v = 0;
-      if (fr) { const now = new Date(); v = computeSaldoReal(fr.id, now.getFullYear(), now.getMonth(), frComps, frSaldos, fr.moneda || fr.currency || "ARS", null, null); }
+      if (fr) { const now = new Date(); v = computeSaldoReal(fr.id, now.getFullYear(), now.getMonth(), frCompsCC, frSaldos, fr.moneda || fr.currency || "ARS", null, null); }
       cache.set(key, v);
       return v;
     };
-  }, [franquicias, frComps, frSaldos]);
+  }, [franquicias, frCompsCC, frSaldos]);
   const frNombre = (frId) => franquicias.find(f => String(f.id) === String(frId))?.name || "";
+
 
   const byName = (a, b) => String(a.name ?? a.nombre ?? "").localeCompare(String(b.name ?? b.nombre ?? ""));
   const monedaCuenta = useMemo(() => cuentas.find(c => c.id === cuentaTab)?.moneda || "ARS", [cuentas, cuentaTab]);
@@ -578,6 +615,14 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     planCuentas.forEach(c => m.set(String(c.nombre || "").trim().toLowerCase(), String(c.id)));
     return name => m.get(String(name || "").trim().toLowerCase()) || "";
   }, [planCuentas]);
+  // Resuelve la cuenta propuesta de un movimiento a un ID válido del plan. El ingest del extracto
+  // guarda `cuenta_contable` como NOMBRE (sin el prefijo del id) y deja `cuenta_contable_id` vacío,
+  // pero el <select> matchea por ID → sin esto, una cuenta bien clasificada por regla (ej. impuestos:
+  // "Imp. Cred. y Deb.", "IIBB", "IVA") se ve como "— cuenta —". Prioriza el id; si no, mapea nombre→id.
+  const cuentaIdDe = (mov) => {
+    const c = mov.cuenta_contable_id || mov.cuenta_contable || "";
+    return cuentaValida(c) ? c : (cuentaIdPorNombre(c) || "");
+  };
   // Centro: normaliza (saca prefijo "NN - ", tildes y no-alfanuméricos) → "Recoleta"/"01 - Recoleta"
   // /"Belgrano" caen todos al mismo id. Match exacto normalizado (no substring) para no colisionar.
   const centroIdPorNombre = useMemo(() => {
@@ -941,11 +986,19 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     const opciones = franquiciasManual;                      // todas las activas (alfabético, con sufijo de moneda)
     const franquiciaSel = ed.franquicia_id ?? recomendada;
     const deuda = franquiciaSel ? deudaFr(franquiciaSel) : 0;
-    const frTipoSel = ed.fr_tipo ?? sugerirFrTipo(mov.monto, deuda);
+    const frTipoSel = ed.fr_tipo ?? sugerirFrTipo(mov.monto, deuda, franquiciaSel ? pautaSinCobrar(franquiciaSel, String(mov.fecha).slice(0, 10)) : 0);
     return { es: true, manual: !!ed.modoFranquicia, opciones, franquiciaSel, deuda, frTipoSel, split: ed.split || null };
   };
 
   const destinoDe = (mov) => (edits[mov.id]?.cuenta_destino) ?? mov.cuenta_destino ?? "";
+  // Una transferencia copia el mismo nominal a la otra cuenta, así que solo cierra entre cuentas de la
+  // misma moneda. Cross-moneda es una conversión (montos distintos de cada lado) y va por Tesorería
+  // › Cambio de moneda. Cuenta desconocida → no bloqueo acá: el corte real está en aceptarMovimiento.
+  const monedaDestinoDe = (mov) => cuentasAll.find(c => String(c.id) === String(destinoDe(mov)))?.moneda;
+  const destinoOtraMoneda = (mov) => {
+    const md = monedaDestinoDe(mov);
+    return !!md && String(md) !== String(mov.moneda ?? "");
+  };
   // Normaliza nombres para comparar (mayúsculas, sin acentos/Ñ ni no-alfanuméricos).
   const normS = (s) => String(s || "").toUpperCase().normalize("NFD").replace(/[^A-Z0-9]/g, "");
   // Transferencia entre cuentas propias: la contraparte del banco es el nombre de la sociedad
@@ -1036,7 +1089,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     if (esCuentaVD(mov.cuenta_bancaria)) return false;
     // Otros bancos: si YA viene con propuesta (cuenta+centro) es ingreso rápido; sin propuesta,
     // un crédito arranca como cobro-contra-factura (cobranza B2B).
-    const cuentaProp = mov.cuenta_contable ?? "";
+    const cuentaProp = cuentaIdDe(mov);
     const ccProp     = mov.centro_costo   ?? "";
     return !(cuentaValida(cuentaProp) && ccValido(ccProp));
   };
@@ -1045,23 +1098,33 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const puedeAceptarMov = (mov) => {
     if (modoIntercoDe(mov)) return !!intercoSocDe(mov);
     if (modoRecvDe(mov)) return !!recvSocDe(mov);
-    if (esTransferMov(mov)) return !!destinoDe(mov);
+    if (esTransferMov(mov)) return !!destinoDe(mov) && !destinoOtraMoneda(mov);
     const fr = frState(mov);
     const total = Math.abs(Number(mov.monto) || 0);
     if (fr.es) {
       if (fr.split) { const sum = fr.split.reduce((s, p) => s + (Number(p.monto) || 0), 0); return fr.split.every(p => p.franquicia_id) && Math.abs(sum - total) <= 0.01; }
       return !!fr.franquiciaSel && !!fr.frTipoSel;
     }
-    if (modoFCde(mov)) return !!fcIdDe(mov);
+    if (modoFCde(mov)) {
+      const fcId = fcIdDe(mov); if (!fcId) return false;
+      // La línea del banco NO puede superar el saldo de la factura (18/9/2026): el exceso salía de caja sin CxP ni
+      // P&L y desaparecía del PN. Misma regla que AgregarPagoModal. Salidas: "Imputar a varias facturas…" (repartir)
+      // o "Cargar factura nueva…" (falta el comprobante).
+      const fc = facturasPendientes.find(f => String(f.id) === String(fcId));
+      return !fc || total <= (Number(fc.saldo) || 0) + 0.01;
+    }
     if (modoCobroDe(mov)) {
-      if (!cobIdDe(mov)) return false;
+      const cobId = cobIdDe(mov); if (!cobId) return false;
       const rets = edits[mov.id]?.rets || [];
       if (rets.some(r => (Number(r.monto) || 0) > 0 && !r.cuenta)) return false;   // falta cuenta en una retención
-      return true;
+      // depósito + retenciones no pueden superar el saldo de la factura de venta (simétrico al pago).
+      const v = ventasPendientes.find(x => String(x.id) === String(cobId));
+      const retSum = rets.reduce((s, r) => s + (Number(r.monto) || 0), 0);
+      return !v || total + retSum <= (Number(v.saldo) || 0) + 0.01;
     }
     const cs = cuotaState(mov);
     if (cs.es) return !!cs.cuotaSel;
-    const cuentaSel = (edits[mov.id]?.cuenta_contable) ?? mov.cuenta_contable ?? "";
+    const cuentaSel = (edits[mov.id]?.cuenta_contable) ?? cuentaIdDe(mov);
     const ccSel = (edits[mov.id]?.centro_costo) ?? mov.centro_costo ?? "";
     // cuenta y centro deben resolver a una opción real (si no, no se ven y se perderían en el P&L).
     return cuentaValida(cuentaSel) && ccValido(ccSel);
@@ -1159,11 +1222,12 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       // para que quede como contraparte (y no la glosa del banco).
       const provId  = ed.proveedor_id || meta.prov || "";
       const provNom = provId ? (proveedores.find(p => String(p.id) === String(provId))?.nombre || "") : "";
+      // El P&L de un gasto/ingreso rápido de caja SIEMPRE se contabiliza en el mes de la fecha del banco
+      // (no se permite mandarlo a un mes anterior) → no se envía periodo_contable.
       await aceptarMovimiento(mov, {
         tipo, cuenta_contable: ed.cuenta_contable || mov.cuenta_contable || "",
         centro_costo: ed.centro_costo || mov.centro_costo || "",
         proveedor_id: provId, proveedor_nombre: provNom,
-        periodo_contable: ed.periodo_contable || "",
       });
     }
     setPendientes(prev => prev.filter(m => m.id !== mov.id));
@@ -1180,10 +1244,15 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     try { await doAceptar(mov); } catch (e) { setMsg("Error al aceptar: " + e.message); }
   };
 
+  // Cuentas-tarjeta candidatas para pagar esta fila: las de crédito en la misma moneda.
+  const cuentasTarjetaDe = (mov) => cuentas.filter(c => esCuentaCredito(c) && c.moneda === (mov.moneda || "ARS"));
+
   // 💳 El débito es el pago de la tarjeta: la fila del extracto es el lado real (caja baja) y se crea
   // el lado tarjeta (+) que reduce su deuda. No es transferencia. Requiere una cuenta-tarjeta de esa moneda.
-  const pagarTarjetaDesdeExtracto = async (mov) => {
-    const card = cuentas.find(c => esCuentaCredito(c) && c.moneda === (mov.moneda || "ARS"));
+  // `card` lo elige el menú: con más de una tarjeta en la misma moneda (ej. Galicia Visa + Amex),
+  // agarrar la primera le bajaba la deuda a la tarjeta equivocada sin decir nada.
+  const pagarTarjetaDesdeExtracto = async (mov, card = null) => {
+    if (!card) card = cuentasTarjetaDe(mov)[0];
     if (!card) { setMsg(`No hay una cuenta-tarjeta en ${mov.moneda || "ARS"} para esta sociedad. Creala en Maestros.`); return; }
     try {
       await pagarTarjeta({
@@ -1348,7 +1417,9 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     const q = busqueda.trim().toLowerCase();
     if (q) list = list.filter(m =>
       (m.concepto ?? "").toLowerCase().includes(q) || (m.contraparte_nombre ?? "").toLowerCase().includes(q));
-    return list;
+    // Ordenado por fecha, más recientes arriba (descendente) — la ingesta del extracto no garantiza
+    // orden. Se compara en ISO (fechaComprobanteISO tolera DD/MM/YYYY e ISO); copia nueva para no mutar.
+    return [...list].sort((a, b) => fechaComprobanteISO(b.fecha).localeCompare(fechaComprobanteISO(a.fecha)));
   }, [pendCuenta, filtroTipo, busqueda, franquicias, pagosSueldos, cuotasPendientes, edits]);
   const countByCuenta = useMemo(() => {
     const o = {}; pendientes.forEach(m => { o[m.cuenta_bancaria] = (o[m.cuenta_bancaria] || 0) + 1; }); return o;
@@ -1357,6 +1428,153 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const ultimaCarga = useMemo(() => ultimaCargaExtractoPorCuenta(movsCuenta), [movsCuenta]);
   // Memoizado: puedeAceptarMov es caro (frState/cuotaState/haberesMatch por fila) y esto corre por render.
   const listosCount = useMemo(() => filtered.filter(puedeAceptarMov).length, [filtered, edits, cuotasPendientes]);
+
+  // ── Conciliados: todo lo que ya salió de "pendientes" en esta cuenta (matcheado solo contra un
+  // pago/cobro ya cargado, imputado a factura, transferencia, gasto/ingreso directo, o ignorado).
+  // Sirve para auditar cuando el banco "no da": hoy esto queda desperdigado en Egresos/Ingresos/
+  // Tesorería (o invisible del todo, si matcheó solo) sin un lugar que junte todo por cuenta+fecha.
+  const ctaNombre = (id) => cuentasAll.find(c => String(c.id) === String(id))?.nombre || (id || "—");
+  const egresoPorId  = useMemo(() => new Map(egresos.map(e => [String(e.id), e])),  [egresos]);
+  const ingresoPorId = useMemo(() => new Map(ingresos.map(e => [String(e.id), e])), [ingresos]);
+  const estadoConciliado = (m) => {
+    if (m._ignorado) return { label: "Ignorado", color: "#dc2626" };
+    const doc = String(m.documento_id || "");
+    if (m.origen === "extracto") {
+      if (doc.startsWith("CONTAB-")) return { label: "Directo", color: "#2563eb" };
+      if (doc.startsWith("TRF-") || doc.startsWith("INTERCOMPANY-")) return { label: "Transferencia", color: "#7c3aed" };
+      if (doc) return { label: "Imputado a FC", color: "#16a34a" };
+    }
+    if ((m.origen === "pago" || m.origen === "cobro") && m.extracto_saldo) return { label: "Auto-match", color: "#0891b2" };
+    return { label: m.tipo || "—", color: T.muted };
+  };
+  const detalleConciliado = (m) => {
+    if (m._ignorado) {
+      const ig = parseMeta(m.referencia).ign || "";
+      return ig ? `Motivo: ${ig}` : "—";
+    }
+    if (m.tipo === "PAGO" || m.tipo === "COBRO") {
+      const fc = (m.tipo === "PAGO" ? egresoPorId : ingresoPorId).get(String(m.documento_id));
+      if (fc) return `${(m.tipo === "PAGO" ? fc.proveedor : fc.cliente) || "—"} · FC ${fc.nroComp || fc.id}`;
+    }
+    const doc = String(m.documento_id || "");
+    if (doc.startsWith("TRF-") || doc.startsWith("INTERCOMPANY-")) return `→ ${ctaNombre(m.cuenta_destino)}`;
+    return m.cuenta_contable || "—";
+  };
+  const conciliadosCuenta = useMemo(() => {
+    // "Todo lo que no está esperando en Pendientes" — no una lista de tipos conocidos. La versión
+    // anterior solo incluía extracto-imputado/transferencia/directo y pago/cobro auto-matcheado:
+    // dejaba afuera (invisibles, ni en Pendientes ni acá) cosas como pago de tarjeta, gestión/interco,
+    // sueldos, retenciones, o un pago manual nunca matcheado — que sí suman al saldo de la cuenta.
+    // Confirmado con un descuadre real (Ñako/Galicia ARS): la marca "sin extracto" nunca aparecía
+    // porque el movimiento candidato ni siquiera estaba en esta lista.
+    const resueltos = movsCuenta.filter(m => String(m.cuenta_bancaria) === String(cuentaTab) &&
+      !(m.origen === "extracto" && !m.documento_id));
+    const ign = ignorados.filter(m => String(m.cuenta_bancaria) === String(cuentaTab)).map(m => ({ ...m, _ignorado: true }));
+    let list = [...resueltos, ...ign];
+    if (concDesde) list = list.filter(m => (m.fecha || "") >= concDesde);
+    if (concHasta) list = list.filter(m => (m.fecha || "") <= concHasta);
+    return list.sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
+  }, [movsCuenta, ignorados, cuentaTab, concDesde, concHasta]);
+  const totalConciliado = useMemo(() => conciliadosCuenta.reduce((s, m) => s + (Number(m.monto) || 0), 0), [conciliadosCuenta]);
+
+  // ── Chequeo de saldo: compara el ÚLTIMO saldo que el banco informó (columna "saldo" del extracto,
+  // clavada en extracto_saldo — no algo que calculemos nosotros) contra lo que el usuario ve HOY en
+  // su homebanking. Se fija en pendientes + conciliados + ignorados: una línea ignorada sigue siendo
+  // plata real que el banco ya contó, así que también cuenta para saber "hasta dónde es válido este saldo".
+  // Algunos parsers (InterAudi) no traen saldo corriente y usan un id sintético como clave de dedup
+  // ("IA-3") → Number() de eso da NaN y se descarta correctamente.
+  const cuentaCandidatosSaldo = useMemo(
+    () => [...movsCuenta, ...ignorados].filter(m => String(m.cuenta_bancaria) === String(cuentaTab) &&
+      String(m.extracto_saldo ?? "").trim() !== "" && Number.isFinite(Number(m.extracto_saldo))),
+    [movsCuenta, ignorados, cuentaTab]);
+  // No alcanza con "la fila de fecha más reciente": un día con varias transacciones (típico —
+  // transferencias, pago de tarjeta, débitos) tiene varias filas con esa misma fecha, cada una con su
+  // propio saldo corriente, y el orden en que la API las devuelve NO es confiable como orden real del
+  // día. Confirmado con captura real del homebanking de Galicia (Hektor, 10/09/2026): con la fila
+  // "más reciente" a secas mostraba $972.055,28 en vez del cierre real de $594.254,03.
+  // Se reconstruye la secuencia real encadenando, día por día, saldo_anterior + monto ≈ saldo_actual
+  // (única relación de la que sí podemos estar seguros, viene del propio banco) arrancando del cierre
+  // del día anterior. Si algo no encadena (dato suelto/redondeo), se usa la última fila de ese día
+  // como está devuelta, igual que antes — solo como último recurso.
+  const ultimoSaldoBanco = useMemo(() => {
+    if (!cuentaCandidatosSaldo.length) return null;
+    const porFecha = new Map();
+    for (const m of cuentaCandidatosSaldo) {
+      const f = m.fecha || "";
+      if (!porFecha.has(f)) porFecha.set(f, []);
+      porFecha.get(f).push(m);
+    }
+    const fechas = [...porFecha.keys()].sort();
+    let saldoPrevio = null, ultimaFecha = null, ultimoSaldo = null;
+    for (const f of fechas) {
+      const filasDia = porFecha.get(f);
+      const pendientes = [...filasDia];
+      let saldoActual = saldoPrevio;
+      let avanzo = true;
+      while (avanzo && pendientes.length) {
+        avanzo = false;
+        for (let i = 0; i < pendientes.length; i++) {
+          const m = pendientes[i];
+          const previo = Number(m.extracto_saldo) - (Number(m.monto) || 0);
+          if (saldoActual === null || Math.abs(previo - saldoActual) < 0.02) {
+            saldoActual = Number(m.extracto_saldo);
+            pendientes.splice(i, 1);
+            avanzo = true;
+            break;
+          }
+        }
+      }
+      // Nada encadenó (primer día sin ancla previa, o dato suelto): último recurso, la última fila tal cual vino.
+      if (saldoActual === saldoPrevio) saldoActual = Number(filasDia[filasDia.length - 1].extracto_saldo);
+      saldoPrevio = saldoActual; ultimaFecha = f; ultimoSaldo = saldoActual;
+    }
+    return ultimaFecha ? { fecha: ultimaFecha, saldo: ultimoSaldo } : null;
+  }, [cuentaCandidatosSaldo]);
+  const saldoNoDisponible = String(cuentaTab || "") !== "" &&
+    [...movsCuenta, ...ignorados].some(m => String(m.cuenta_bancaria) === String(cuentaTab)) && !ultimoSaldoBanco;
+
+  // ── Chequeo contra el saldo REAL de hoy (distinto del anterior): éste sí puede quedar mal si hay un
+  // duplicado, porque suma TODO lo no ignorado (pendiente + conciliado) igual que Tesorería — no solo
+  // lo que el banco confirmó con su propio saldo corriente. `ultimoSaldoBanco` de arriba es inmune a un
+  // pago manual duplicado (nunca tuvo extracto_saldo); éste no. Solo tiene sentido compararlo cuando el
+  // extracto está cargado a HOY/AYER — cualquier otro día, la diferencia sería "actividad sin subir
+  // todavía", no un error.
+  const movsCuentaTab = useMemo(
+    () => movsCuenta.filter(m => String(m.cuenta_bancaria) === String(cuentaTab)),
+    [movsCuenta, cuentaTab]);
+  const saldoCuentaTab = useMemo(
+    () => movsCuentaTab.reduce((s, m) => s + (Number(m.monto) || 0), 0),
+    [movsCuentaTab]);
+  const diasUltimaCarga = ultimaCarga[cuentaTab]
+    ? Math.floor((Date.now() - new Date(ultimaCarga[cuentaTab] + "T00:00:00").getTime()) / 86400000) : null;
+  const chequeoSaldoHabilitado = diasUltimaCarga !== null && diasUltimaCarga <= 1;
+
+  // Busca, entre TODOS los movimientos de la cuenta, un par con el mismo importe (con signo) y fechas
+  // dentro de 10 días — la firma de "esto se cargó dos veces" — priorizando el par cuyo importe explica
+  // exactamente la diferencia observada. Si no hay un par así, no inventa nada: mejor no sugerir que
+  // sugerir mal.
+  function candidatosDiferencia(movs, diff) {
+    const target = Math.abs(diff);
+    if (!Number.isFinite(target) || target < 1) return [];
+    const tol = Math.max(1, target * 0.01);
+    const porMonto = new Map();
+    for (const m of movs) {
+      const key = Math.round((Number(m.monto) || 0) * 100);
+      if (!porMonto.has(key)) porMonto.set(key, []);
+      porMonto.get(key).push(m);
+    }
+    const pares = [];
+    for (const grupo of porMonto.values()) {
+      if (grupo.length < 2) continue;
+      for (let i = 0; i < grupo.length; i++) {
+        for (let j = i + 1; j < grupo.length; j++) {
+          const dDias = Math.abs((+new Date(grupo[i].fecha) - +new Date(grupo[j].fecha)) / 86400000);
+          if (dDias <= 10) pares.push({ a: grupo[i], b: grupo[j], monto: Math.abs(Number(grupo[i].monto) || 0) });
+        }
+      }
+    }
+    return pares.filter(p => Math.abs(p.monto - target) <= tol);
+  }
 
   // Re-evaluar las reglas actuales sobre los pendientes de la cuenta (sin re-subir ni escribir):
   // reconstruye la línea desde el movimiento, la clasifica y pre-carga la propuesta en `edits`.
@@ -1779,7 +1997,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                 const destinoSel = (edits[m.id]?.cuenta_destino) ?? m.cuenta_destino ?? "";
                 const interco = !!destinoSel && (cuentasAll.find(c => String(c.id) === String(destinoSel))?.sociedad ?? sociedad) !== sociedad;
                 const fr = frState(m);
-                const cuentaSel = (edits[m.id]?.cuenta_contable) ?? m.cuenta_contable ?? "";
+                const cuentaSel = (edits[m.id]?.cuenta_contable) ?? cuentaIdDe(m);
                 const ccSel = (edits[m.id]?.centro_costo) ?? m.centro_costo ?? "";
                 // Verde solo si el centro RESUELVE a una opción real (un valor que no matchea —ej. casing—
                 // muestra "— centro —" y no debe contar como completo, ni dejarse aceptar: se perdería en el P&L).
@@ -1865,18 +2083,26 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                         <div>
                           <span style={{ fontSize: 11, fontWeight: 700, color: "#0ea5e9" }}>Pago de factura</span>
                           {fcSelObj
-                            ? <div style={{ fontSize: 10, color: total + 0.01 < fcSelObj.saldo ? "#b45309" : T.muted }}>
-                                {fcSelObj.proveedor} · {total + 0.01 < fcSelObj.saldo ? `parcial: $${fmt(total)} de $${fmt(fcSelObj.saldo)} (queda $${fmt(fcSelObj.saldo - total)})` : `saldo $${fmt(fcSelObj.saldo)}`}
-                              </div>
+                            ? (total > fcSelObj.saldo + 0.01
+                              ? <div style={{ fontSize: 10, color: "#dc2626", fontWeight: 700 }}>
+                                  {fcSelObj.proveedor} · {`supera el saldo de la factura: $${fmt(total)} contra $${fmt(fcSelObj.saldo)} (+$${fmt(total - fcSelObj.saldo)})`} — repartila con "Imputar a varias facturas…" o cargá la factura que falta (⋯)
+                                </div>
+                              : <div style={{ fontSize: 10, color: total + 0.01 < fcSelObj.saldo ? "#b45309" : T.muted }}>
+                                  {fcSelObj.proveedor} · {total + 0.01 < fcSelObj.saldo ? `parcial: $${fmt(total)} de $${fmt(fcSelObj.saldo)} (queda $${fmt(fcSelObj.saldo - total)})` : `saldo $${fmt(fcSelObj.saldo)}`}
+                                </div>)
                             : <div style={{ fontSize: 10, color: "#b45309" }}>{!fcProvSel ? "elegí proveedor" : fcDelProv.length ? "elegí factura" : "sin factura cargada — cargala o gasto directo (⋯)"}</div>}
                         </div>
                       ) : modoCobro ? (
                         <div>
                           <span style={{ fontSize: 11, fontWeight: 700, color: "#0ea5e9" }}>Cobro de venta</span>
                           {cobSelObj
-                            ? <div style={{ fontSize: 10, color: cobDiff > 0.01 ? "#b45309" : T.muted }}>
-                                {cobSelObj.cliente} · {cobDiff > 0.01 ? `dep $${fmt(total)}${cobRetSum > 0 ? ` + ret $${fmt(cobRetSum)}` : ""} de $${fmt(cobSelObj.saldo)}` : `saldo $${fmt(cobSelObj.saldo)}`}
-                              </div>
+                            ? (total + cobRetSum > cobSelObj.saldo + 0.01
+                              ? <div style={{ fontSize: 10, color: "#dc2626", fontWeight: 700 }}>
+                                  {cobSelObj.cliente} · {`supera el saldo de la factura: $${fmt(total + cobRetSum)} contra $${fmt(cobSelObj.saldo)} (+$${fmt(total + cobRetSum - cobSelObj.saldo)})`} — repartilo con "Imputar a varias facturas…" o cargá la factura que falta (⋯)
+                                </div>
+                              : <div style={{ fontSize: 10, color: cobDiff > 0.01 ? "#b45309" : T.muted }}>
+                                  {cobSelObj.cliente} · {cobDiff > 0.01 ? `dep $${fmt(total)}${cobRetSum > 0 ? ` + ret $${fmt(cobRetSum)}` : ""} de $${fmt(cobSelObj.saldo)}` : `saldo $${fmt(cobSelObj.saldo)}`}
+                                </div>)
                             : <div style={{ fontSize: 10, color: "#b45309" }}>{!cobCliSel ? "elegí cliente" : venDelCli.length ? "elegí factura" : "sin factura de venta — cargala o volvé a normal (⋯)"}</div>}
                         </div>
                       ) : modoCuota ? (
@@ -1926,7 +2152,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                             <option value="">— origen —</option>
                             {socInterco.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
                           </select>
-                          <input type="number" placeholder="costo fin. (opc)" value={edits[m.id]?.recv_costo ?? ""}
+                          <MoneyField placeholder="costo fin. (opc)" value={edits[m.id]?.recv_costo ?? ""}
                             onChange={e => setModo(m.id, { recv_costo: e.target.value })} style={fld(false, 110)}
                             title="Costo de transferencia/clearing → Perdidas Financieras (P&L)" />
                         </div>
@@ -1945,7 +2171,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                                 ? String(c.sociedad ?? "").toLowerCase() === String(sociedad ?? "").toLowerCase()
                                 : (!anilloActivo || mismoAnillo(c.sociedad)))
                               .map(c => (
-                              <option key={c.id} value={c.id}>{c.nombre}{c.sociedad !== sociedad ? ` · ${c.sociedad}` : ""}</option>
+                              <option key={c.id} value={c.id} disabled={String(c.moneda ?? "") !== String(m.moneda ?? "")}>{c.nombre}{c.sociedad !== sociedad ? ` · ${c.sociedad}` : ""}{String(c.moneda ?? "") !== String(m.moneda ?? "") ? ` · ${c.moneda} — no es transferencia, es Cambio de moneda` : ""}</option>
                             ))}
                           </select>
                         </div>
@@ -1997,7 +2223,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                                     <option value="">— retención —</option>
                                     {cuentasTodas.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                                   </select>
-                                  <input type="number" value={r.monto} onChange={e => updRet(m.id, idx, "monto", e.target.value)}
+                                  <MoneyField value={r.monto} onChange={e => updRet(m.id, idx, "monto", e.target.value)}
                                     style={{ width: 90, textAlign: "right", ...sel }} />
                                   <button onClick={() => rmRet(m.id, idx)} title="Quitar" style={{ border: "none", background: "transparent", color: T.muted, cursor: "pointer", fontSize: 12 }}>✕</button>
                                 </div>
@@ -2032,10 +2258,6 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                             <option value="">— centro —</option>
                             {centroOptionsEls}
                           </select>
-                          <input type="month" value={edits[m.id]?.periodo_contable || ""}
-                            onChange={e => setEdit(m.id, "periodo_contable", e.target.value)}
-                            title="Período P&L, si es distinto al mes de esta fecha (ej. nómina devengada el mes anterior al pago). Vacío = usa la fecha del banco."
-                            style={{ ...sel, width: 112 }} />
                         </div>
                       )}
                     </td>
@@ -2106,9 +2328,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           {neg && !fr.es && !modoTransfer && !modoInterco && !modoFC && !modoCobro && !modoCuota && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoCuota: true, noCuota: false, modoFranquicia: false, modoTransfer: false, modoFC: false, modoCobro: false, noFranquicia: true }); setMenuFor(null); }}>💳 Imputar a cuota de financiación</button>
                           )}
-                          {neg && !fr.es && !modoTransfer && !modoInterco && !modoFC && !modoCuota && !modoCobro && cuentas.some(c => esCuentaCredito(c) && c.moneda === (m.moneda || "ARS")) && (
-                            <button style={MENU_ITEM} onClick={() => { setMenuFor(null); pagarTarjetaDesdeExtracto(m); }}>💳 Pago de tarjeta</button>
-                          )}
+                          {/* Una entrada por cuenta-tarjeta de esa moneda — con varias (Galicia Visa, Amex…) hay que elegir cuál. */}
+                          {neg && !fr.es && !modoTransfer && !modoInterco && !modoFC && !modoCuota && !modoCobro &&
+                            cuentasTarjetaDe(m).map((c, _i, arr) => (
+                              <button key={c.id} style={MENU_ITEM} onClick={() => { setMenuFor(null); pagarTarjetaDesdeExtracto(m, c); }}>
+                                💳 Pago de tarjeta{arr.length > 1 ? ` · ${c.nombre}` : ""}
+                              </button>
+                            ))}
                           {/* Toggles contextuales: volver a normal / dividir (solo con el modo activo) */}
                           {modoInterco && (
                             <button style={MENU_ITEM} onClick={() => { setModo(m.id, { modoInterco: false, interco_soc: undefined, noFranquicia: false, noTransfer: false }); setMenuFor(null); }}>↩ Volver a normal (no es interco)</button>
@@ -2152,7 +2378,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                         <tr key={`${m.id}-sp-${idx}`} style={{ background: bg, borderLeft: `3px solid ${T.accent}` }}>
                           <td /><td />
                           <td style={{ padding: "4px 12px", textAlign: "right" }}>
-                            <input type="number" value={p.monto} onChange={e => updSplit(m.id, idx, "monto", e.target.value)}
+                            <MoneyField value={p.monto} onChange={e => updSplit(m.id, idx, "monto", e.target.value)}
                               style={{ width: 110, textAlign: "right", ...sel }} />
                           </td>
                           <td />
@@ -2201,17 +2427,29 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         )}
       </div>
 
-      {/* Ignorados de la cuenta activa: descartados sin contabilizar, restaurables. */}
+      {/* Ignorados y Conciliados de la cuenta activa: ambos colapsados por defecto — no cambian la
+          pantalla de todos los días, están ahí para cuando hace falta auditar. */}
       {(() => {
         const ign = ignorados.filter(m => String(m.cuenta_bancaria) === String(cuentaTab));
-        if (!ign.length) return null;
+        if (!ign.length && !conciliadosCuenta.length) return null;
         return (
           <div style={{ marginTop: 10 }}>
-            <button onClick={() => setVerIgnorados(v => !v)}
-              style={{ background: "transparent", border: "none", color: T.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: T.font, padding: 0 }}>
-              {verIgnorados ? "▾" : "▸"} Ignorados ({ign.length})
-            </button>
-            {verIgnorados && (
+            <div style={{ display: "flex", gap: 16 }}>
+              {ign.length > 0 && (
+                <button onClick={() => setPanelBanco(p => p === "ignorados" ? null : "ignorados")}
+                  style={{ background: "transparent", border: "none", color: panelBanco === "ignorados" ? T.text : T.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: T.font, padding: 0 }}>
+                  {panelBanco === "ignorados" ? "▾" : "▸"} Ignorados ({ign.length})
+                </button>
+              )}
+              {conciliadosCuenta.length > 0 && (
+                <button onClick={() => setPanelBanco(p => p === "conciliados" ? null : "conciliados")}
+                  style={{ background: "transparent", border: "none", color: panelBanco === "conciliados" ? T.text : T.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: T.font, padding: 0 }}>
+                  {panelBanco === "conciliados" ? "▾" : "▸"} Conciliados ({conciliadosCuenta.length})
+                </button>
+              )}
+            </div>
+
+            {panelBanco === "ignorados" && ign.length > 0 && (
               <div style={{ marginTop: 6, background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 8, maxHeight: 360, overflowY: "auto" }}>
                 {ign.map(m => {
                   const ig = parseMeta(m.referencia).ign || "";
@@ -2228,6 +2466,119 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                     </div>
                   );
                 })}
+              </div>
+            )}
+
+            {panelBanco === "conciliados" && conciliadosCuenta.length > 0 && (
+              <div style={{ marginTop: 6 }}>
+                {/* Dato informativo: el saldo que el banco informó en la última línea cargada (propio
+                    o conciliado, reconstruido — no una comparación contra nada externo). */}
+                {(ultimoSaldoBanco || saldoNoDisponible) && (
+                  <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 8 }}>
+                    {saldoNoDisponible
+                      ? <span>Este banco no informa saldo corriente en el extracto.</span>
+                      : <span>Saldo informado por el banco al <b>{fmtDate(ultimoSaldoBanco.fecha)}</b>: <b>{fmt(ultimoSaldoBanco.saldo)}</b></span>}
+                  </div>
+                )}
+
+                {/* Chequeo puntual: solo tiene sentido el mismo día (o al siguiente) de cargar el
+                    extracto — cualquier otro momento, una diferencia sería "todavía no subí lo último",
+                    no un error. Si no coincide, busca un posible pago duplicado entre TODOS los
+                    movimientos de la cuenta (pendientes + conciliados). */}
+                {chequeoSaldoHabilitado && (() => {
+                  const real = saldoRealInput[cuentaTab] ?? "";
+                  const realNum = real.trim() === "" ? null : Number(real.replace(",", "."));
+                  const diff = (realNum !== null && Number.isFinite(realNum)) ? realNum - saldoCuentaTab : null;
+                  const ok = diff !== null && Math.abs(diff) < 0.5;
+                  const candidatos = (diff !== null && !ok) ? candidatosDiferencia(movsCuentaTab, diff) : [];
+                  return (
+                    <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span>Recién cargaste el extracto — <b>saldo según Numbers hoy: {fmt(saldoCuentaTab)}</b></span>
+                        <span style={{ color: T.dim }}>·</span>
+                        <label style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                          ¿Cuánto te muestra el banco ahora?
+                          <input value={real} onChange={e => setSaldoRealInput(prev => ({ ...prev, [cuentaTab]: e.target.value }))}
+                            placeholder="0.00" inputMode="decimal"
+                            style={{ width: 100, fontSize: 12, padding: "3px 7px", borderRadius: 6, border: `1px solid ${T.cardBorder}`, background: "#fff", color: T.text, fontFamily: T.font }} />
+                        </label>
+                        {diff !== null && (
+                          ok
+                            ? <span style={{ fontWeight: 700, color: "#16a34a" }}>Coincide ✓</span>
+                            : <span style={{ fontWeight: 700, color: "#dc2626" }}>Diferencia: {fmt(diff)}</span>
+                        )}
+                      </div>
+                      {diff !== null && !ok && (
+                        <div style={{ marginTop: 6 }}>
+                          {candidatos.length > 0 ? candidatos.map((c, i) => (
+                            <div key={i} style={{ padding: "5px 0", color: "#b45309" }}>
+                              ⚠ Posible duplicado: <b>{fmt(c.monto)}</b> el <b>{fmtDate(c.a.fecha)}</b> ({c.a.concepto || c.a.origen}) y el <b>{fmtDate(c.b.fecha)}</b> ({c.b.concepto || c.b.origen}) — mismo importe, fechas cercanas.
+                            </div>
+                          )) : (
+                            <div style={{ color: T.dim }}>No encontré un movimiento puntual que explique la diferencia — puede ser una combinación de varios, o algo fuera de esta cuenta.</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+                  <label style={{ fontSize: 11.5, color: T.muted, display: "flex", alignItems: "center", gap: 5 }}>
+                    Desde
+                    <input type="date" value={concDesde} onChange={e => setConcDesde(e.target.value)}
+                      style={{ fontSize: 12, padding: "4px 7px", borderRadius: 6, border: `1px solid ${T.cardBorder}`, background: "#fff", color: T.text, fontFamily: T.font }} />
+                  </label>
+                  <label style={{ fontSize: 11.5, color: T.muted, display: "flex", alignItems: "center", gap: 5 }}>
+                    Hasta
+                    <input type="date" value={concHasta} onChange={e => setConcHasta(e.target.value)}
+                      style={{ fontSize: 12, padding: "4px 7px", borderRadius: 6, border: `1px solid ${T.cardBorder}`, background: "#fff", color: T.text, fontFamily: T.font }} />
+                  </label>
+                  {(concDesde || concHasta) && (
+                    <button onClick={() => { setConcDesde(""); setConcHasta(""); }}
+                      style={{ background: "transparent", border: "none", color: T.muted, fontSize: 11.5, cursor: "pointer", fontFamily: T.font, textDecoration: "underline" }}>
+                      limpiar rango
+                    </button>
+                  )}
+                  <span style={{ marginLeft: "auto", fontSize: 12, fontWeight: 700, color: T.muted }}>
+                    Neto del período: <b style={{ color: totalConciliado < 0 ? "#dc2626" : "#16a34a" }}>{fmt(totalConciliado)}</b>
+                  </span>
+                </div>
+                <div className="nb-hscroll" style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 8, maxHeight: 420, overflow: "auto" }}>
+                  {conciliadosCuenta.length === 0 ? (
+                    <div style={{ padding: 30, textAlign: "center", color: T.muted, fontSize: 13 }}>
+                      Nada en ese rango de fechas.
+                    </div>
+                  ) : (
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ background: T.tableHead, position: "sticky", top: 0, zIndex: 1 }}>
+                          {[["Fecha","left"],["Descripción","left"],["Monto","right"],["Estado","left"],["Detalle","left"]].map(([h, al]) => (
+                            <th key={h} style={{ padding: "8px 12px", textAlign: al, fontSize: 10, fontWeight: 700,
+                              color: T.tableHeadText, letterSpacing: ".06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {conciliadosCuenta.map((m, i) => {
+                          const est = estadoConciliado(m);
+                          const neg = Number(m.monto) < 0;
+                          return (
+                            <tr key={m.id} style={{ background: i % 2 ? "#eef2f7" : "#ffffff", borderBottom: "1px solid #f1f5f9" }}>
+                              <td style={{ padding: "7px 12px", color: T.muted, whiteSpace: "nowrap" }}>{fmtDate(m.fecha)}</td>
+                              <td style={{ padding: "7px 12px", color: T.text, maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.concepto || "—"}</td>
+                              <td style={{ padding: "7px 12px", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap", color: neg ? "#dc2626" : "#16a34a" }}>{fmt(Math.abs(Number(m.monto) || 0))}</td>
+                              <td style={{ padding: "7px 12px", whiteSpace: "nowrap" }}>
+                                <span style={{ fontSize: 10, fontWeight: 800, color: est.color, background: `${est.color}18`, borderRadius: 6, padding: "2px 8px" }}>{est.label}</span>
+                              </td>
+                              <td style={{ padding: "7px 12px", color: T.muted, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{detalleConciliado(m)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -2335,20 +2686,24 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                 alert("No se pudo crear la factura: " + (e?.message || e));
                 throw e;   // nada se creó → el modal queda abierto para reintentar
               }
-              try {
-                await imputarPagoFC(mov, {
-                  documento_id: payload.id,
-                  cuenta_contable: payload.cuentaId || payload.cuenta || "",
-                  centro_costo: String(payload.cc || "").split(",")[0].trim(),
-                  proveedor_id: payload.proveedorId || "",
-                  proveedor_nombre: payload.proveedor || "",
-                });
-                setPendientes(prev => prev.filter(x => x.id !== mov.id));   // sale de la bandeja
-              } catch (e) {
-                alert(`La factura ${payload.id} se creó, pero no se pudo vincular el pago automáticamente. Usá "Imputar a factura" en esta misma fila para completarlo. Detalle: ${e?.message || e}`);
-              }
-              fetchEgresos(sociedad).then(e => setEgresos(e || [])).catch(() => {});   // refresca Compras
-              setCargarFacturaFor(null);
+              // Paso 2 OPTIMISTA + EN SEGUNDO PLANO: imputar el pago es 1 write del GAS (~3-4s) que antes
+              // bloqueaba el modal → parecía "congelado" y "no enganchaba". Ahora la línea sale de la
+              // bandeja YA (optimista) y el write corre solo; si falla, se devuelve la línea y se avisa
+              // (la factura ya se creó → "Imputar a factura" a mano). El modal cierra apenas se crea la FC.
+              setPendientes(prev => prev.filter(x => x.id !== mov.id));   // optimista: sale de la bandeja al instante
+              imputarPagoFC(mov, {
+                documento_id: payload.id,
+                cuenta_contable: payload.cuentaId || payload.cuenta || "",
+                centro_costo: String(payload.cc || "").split(",")[0].trim(),
+                proveedor_id: payload.proveedorId || "",
+                proveedor_nombre: payload.proveedor || "",
+              })
+                .catch(e => {
+                  setPendientes(prev => prev.some(x => x.id === mov.id) ? prev : [mov, ...prev]);   // falló → vuelve a la bandeja
+                  alert(`La factura ${payload.id} se creó, pero no se pudo vincular el pago automáticamente. Usá "Imputar a factura" en esta misma fila para completarlo. Detalle: ${e?.message || e}`);
+                })
+                .finally(() => fetchEgresos(sociedad).then(e => setEgresos(e || [])).catch(() => {}));   // refresca Compras
+              // onSave resuelve acá → runSaveThenMaybeClose cierra el modal sin esperar el pago.
             }}
           />
         );
@@ -2394,20 +2749,23 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                 alert("No se pudo crear la factura de venta: " + (e?.message || e));
                 throw e;   // nada se creó → el modal queda abierto para reintentar
               }
-              try {
-                await imputarCobroIngreso(mov, {
-                  documento_id: payload.id,
-                  cuenta_contable: payload.cuentaId || payload.cuenta || "",
-                  centro_costo: String(payload.cc || "").split(",")[0].trim(),
-                  cliente_id: payload.clienteId || "", cliente_nombre: payload.cliente || "",
-                  retenciones: [], retencion_centro: centroRetencion,
-                });
-                setPendientes(prev => prev.filter(x => x.id !== mov.id));   // sale de la bandeja
-              } catch (e) {
-                alert(`La factura ${payload.id} se creó, pero no se pudo vincular el cobro automáticamente. Usá "Imputar a factura" en esta misma fila para completarlo. Detalle: ${e?.message || e}`);
-              }
-              fetchIngresos(sociedad).then(i => setIngresos(i || [])).catch(() => {});   // refresca Ventas
-              setCargarIngresoFor(null);
+              // Paso 2 OPTIMISTA + EN SEGUNDO PLANO (espejo de Compras): la línea sale de la bandeja ya y
+              // el cobro se vincula solo; si falla, se devuelve la línea y se avisa. El modal cierra apenas
+              // se crea la factura.
+              setPendientes(prev => prev.filter(x => x.id !== mov.id));   // optimista: sale de la bandeja al instante
+              imputarCobroIngreso(mov, {
+                documento_id: payload.id,
+                cuenta_contable: payload.cuentaId || payload.cuenta || "",
+                centro_costo: String(payload.cc || "").split(",")[0].trim(),
+                cliente_id: payload.clienteId || "", cliente_nombre: payload.cliente || "",
+                retenciones: [], retencion_centro: centroRetencion,
+              })
+                .catch(e => {
+                  setPendientes(prev => prev.some(x => x.id === mov.id) ? prev : [mov, ...prev]);   // falló → vuelve a la bandeja
+                  alert(`La factura ${payload.id} se creó, pero no se pudo vincular el cobro automáticamente. Usá "Imputar a factura" en esta misma fila para completarlo. Detalle: ${e?.message || e}`);
+                })
+                .finally(() => fetchIngresos(sociedad).then(i => setIngresos(i || [])).catch(() => {}));   // refresca Ventas
+              // onSave resuelve acá → runSaveThenMaybeClose cierra el modal sin esperar el cobro.
             }}
           />
         );

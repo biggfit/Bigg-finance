@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect, useRef, Fragment } from "react";
 import { T, PageHeader } from "./theme";
-import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco, fondeoFondeadasMensual, calcSaldoPendiente, primeCache, fetchTiposCambio, tcDelMes, montoAUSD, fetchPnLHistorico, RETDEP_TAG } from "../lib/numbersApi";
+import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco, fondeoFondeadasMensual, intercoConsolidadoMensual, calcSaldoPendiente, primeCache, fetchTiposCambio, tcDelMes, montoAUSD, montoAMoneda, fetchPnLHistorico, RETDEP_TAG } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, pendienteSueldosPorLegajo, adelantoSueldosPorLegajo } from "../lib/sueldosApi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
 import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
@@ -8,17 +8,20 @@ import { franquiciasIngresoPnLRows } from "../lib/franquiciasAdapter";
 import { exportarPackReportes } from "./exportReportes";
 import { copiarReporteComoImagen, clonarParaFoto, medirContenido } from "./fotoReporte";
 import TabTesoreriaConsolidada from "./reportes/TabTesoreriaConsolidada";
+import TabDevengado from "./reportes/TabDevengado";
+import TabIntercoConsolidado from "./reportes/TabIntercoConsolidado";
+import TabSaldosInterco from "./reportes/TabSaldosInterco";
 import TabCxPProveedores from "./reportes/TabCxPProveedores";
 import TabCxCClientes from "./reportes/TabCxCClientes";
 import PantallaSocios from "./PantallaSocios";
 
-const MESES    = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+export const MESES    = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
 const CUR_YEAR = new Date().getFullYear();
 // Desde 2022: España (Wellness) tiene histórico cargado desde Abr 2022 en nb_pnl_historico.
 const PNL_HIST_ANIO_MIN = 2022;
 const YEARS    = Array.from({ length: Math.max(3, CUR_YEAR - PNL_HIST_ANIO_MIN + 1) }, (_, i) => PNL_HIST_ANIO_MIN + i);
 
-function normCat(raw) {
+export function normCat(raw) {
   const s = (raw ?? "").trim().toLowerCase().replace(/\s+/g, "_");
   if (s === "ventas")                                          return "ventas";
   if (s === "costo_venta"  || s.includes("costo")
@@ -38,7 +41,7 @@ function normCat(raw) {
 // Match de id de centro de costo CASE-INSENSITIVE. El maestro tiene ids con caja inconsistente
 // (ej. "CC-2026-88265" vs "cc-2026-88265") y el lookup sensible a mayúsculas hacía que un CECO no
 // resolviera → la fila caía en la línea/bucket equivocado. Normalizar a minúsculas lo evita.
-const ccKey = s => String(s ?? "").trim().toLowerCase();
+export const ccKey = s => String(s ?? "").trim().toLowerCase();
 const ccEnFiltro = (ccFilter, cc) => {
   const k = ccKey(cc);
   return Array.isArray(ccFilter) ? ccFilter.some(f => ccKey(f) === k) : ccKey(ccFilter) === k;
@@ -84,14 +87,10 @@ function buildPnL(inRows, egRows, cuentaMap, ccFilter, year, moneda) {
 //     crédito (+) resta (reintegro, ej. Intereses Ganados en "Financieros" → mejora el resultado).
 //   · Retención sufrida: siempre costo (se guarda con monto +) → valor absoluto.
 // Requiere cuentaMap (nombre→cuenta) para leer la categoría de la cuenta.
-// Período contable (P&L) vs fecha de caja: un gasto pagado en un mes puede "pertenecer" a otro
-// (ej. nómina de julio pagada el 3/8) → override opcional embebido en `referencia` (sin columna
-// nueva en la sheet, mismo patrón que el resto de la metadata empacada ahí: cod=/tipo=/regla=…).
-// Cash Flow/Tesorería siguen usando `m.fecha` (la plata se movió ese día); sólo el P&L respeta esto.
-const periodoPnLDe = (m) => {
-  const hit = String(m.referencia ?? "").match(/(?:^|;)periodo=([^;]*)/);
-  return hit && hit[1] ? `${hit[1]}-01` : m.fecha;
-};
+// Período P&L = FECHA del movimiento, siempre (la misma con la que la caja/deuda lo ve). Hasta el 17/9/2026 se
+// respetaba un override `periodo=YYYY-MM` empacado en `referencia` (consumos de tarjeta movidos de mes a mano):
+// separaba el P&L del balance y rompía el cierre del PN. Los tags viejos que quedaron en la hoja se IGNORAN.
+const periodoPnLDe = (m) => m.fecha;
 function movimientoToPnLRows(movs, sociedad, cuentaMap) {
   const soc = (sociedad ?? "").toLowerCase();
   const out = [];
@@ -146,7 +145,10 @@ function movimientoToPnLRows(movs, sociedad, cuentaMap) {
 //   · Capital del plan AFIP = el impuesto → 1 fila en el mes de consolidación (salvo apertura,
 //     que ya está en Contagram). El capital de un préstamo NO entra (es deuda, no gasto).
 //   · Interés financiero + IVA + sellos de cada cuota → en el mes de su VENCIMIENTO (devengo
-//     mes a mes, pagada o no). El resarcitorio solo si se pagó tardío (fecha_pago > vto).
+//     mes a mes, pagada o no). El resarcitorio (recargo por mora) se contabiliza por lo que la CAJA
+//     pagó de más sobre el importe normal de la cuota: AFIP cobra el importe normal o el "tardío", y el
+//     débito del banco dice cuál. (Antes: por fecha_pago > vto → 15 cuotas con vto domingo 16/8/2026
+//     debitadas el martes 18/8 por el importe justo devengaban 66.269 de recargo que nadie cobró.)
 function financiacionToPnLRows(planes, sociedad) {
   const soc = (sociedad ?? "").toLowerCase();
   const out = [];
@@ -163,8 +165,13 @@ function financiacionToPnLRows(planes, sociedad) {
       push(p.cuenta_interes,   p.centro_interes,   c.interes,   c.vto);
       push(p.cuenta_iva,       p.centro_iva,       c.iva,       c.vto);
       push(p.cuenta_impuestos, p.centro_impuestos, c.impuestos, c.vto);
-      if (c.estado === "pagada" && c.fecha_pago && c.fecha_pago > c.vto)
-        push(p.cuenta_interes, p.centro_interes, c.interes_resarc, c.fecha_pago);   // resarcitorio (pago tardío)
+      // Recargo real = pagado − importe normal de la cuota (si se pagó de más). Sin pago en caja no hay recargo.
+      const pagadoCuota = Number(c.pagado) || 0;
+      const recargo = pagadoCuota > 0 ? Math.round((pagadoCuota - (Number(c.total) || 0)) * 100) / 100 : 0;
+      if (recargo > 0.5) {
+        const fechaRec = (c.pagos ?? []).map(x => x.fecha).sort().pop() || c.fecha_pago || c.vto;
+        push(p.cuenta_interes, p.centro_interes, recargo, fechaRec);   // resarcitorio efectivamente cobrado
+      }
     }
   }
   return out;
@@ -194,9 +201,9 @@ function computeSubtotals(pnl) {
            activeMonths: [...months].sort((a,b) => a-b) };
 }
 
-const rowSum = arr => arr.reduce((s, v) => s + v, 0);
-const fmtN   = n => !n ? "—" : Math.round(Math.abs(n)).toLocaleString("es-AR");
-const fmtSigned = n => !n ? "—" : (n < 0 ? "−" : "") + fmtN(n);   // conserva el signo (fmtN es absoluto)
+const rowSum = arr => (arr || []).reduce((s, v) => s + v, 0);
+export const fmtN   = n => !n ? "—" : Math.round(Math.abs(n)).toLocaleString("es-AR");
+export const fmtSigned = n => !n ? "—" : (n < 0 ? "−" : "") + fmtN(n);   // conserva el signo (fmtN es absoluto)
 // Convención contable. neg=false (ingresos/resultados): positivo normal, negativo (pérdida) entre
 // paréntesis. neg=true (líneas de gasto/que restan): positivo = egreso entre paréntesis, negativo = crédito
 // (ej. Intereses Ganados dentro de Financieros) normal. Siempre se muestra la magnitud.
@@ -205,7 +212,7 @@ const fmtPar = (n, neg = false) => !n ? "—" : (neg ? n > 0 : n < 0) ? `(${fmtN
 // ─── Estilos base ─────────────────────────────────────────────────────────────
 const CTRL_H = 36;
 
-const selStyle = {
+export const selStyle = {
   background: "#eceff3", border: `1px solid ${T.cardBorder}`,
   borderRadius: 8, padding: "0 12px", fontSize: 13, color: T.text,
   fontFamily: T.font, outline: "none", cursor: "pointer", height: CTRL_H,
@@ -369,17 +376,20 @@ function ResultadoRow({ label, values, activeMonths, strong, noBottom = false })
 // (verde/rojo) se reserva para las líneas de resultado. Las bandas de sección aportan la estructura.
 const SEDE_HDR = "#475569";   // slate — encabezados de subgrupo y montos de cuenta
 const SEDE_GRUPOS = [
-  { key: "vta_cf",    label: "Ventas consumidor final",  color: SEDE_HDR, cuentas: ["Ventas Mercado Pago", "Ing.Stripe", "Ing. Datafono", "Ing. via Banco", "Ing. Efectivo", "Depositos", "Ventas en Efectivo", "Otros Ingresos"] },
+  { key: "vta_cf",    label: "Ventas consumidor final",  color: SEDE_HDR, cuentas: ["Ventas Mercado Pago", "Ing.Stripe", "Ing. Datafono", "Ing. via Banco", "Ing. Efectivo", "Depositos", "Ventas en Efectivo", "Otros Ingresos", "Ventas", "Efectivo", "Devolucion"] },
   { key: "int_bigg",  label: "Interusos red BIGG",       color: SEDE_HDR, cuentas: ["Interusos", "Interusos Genericos"] },
   { key: "int_corp",  label: "Interusos corporativos",   color: SEDE_HDR, cuentas: ["Coorporativos", "Interusos Gympass"] },
-  { key: "cvar",      label: "Costos Variables",         color: SEDE_HDR, cuentas: ["Fee Facturación", "Fee Facturacion", "Fees Stripe", "Aranceles y Otros Financieros", "IIBB", "Imp. Cred. y Deb."] },
-  { key: "gp_pers",   label: "Personal",                 color: SEDE_HDR, cuentas: ["Sueldos", "Incentivos", "Comisiones", "Cargas Sociales", "Otros Gastos Salariales", "Aguinaldos", "Costos Salariales"] },
+  { key: "cvar",      label: "Costos Variables",         color: SEDE_HDR, cuentas: ["Fee Facturación", "Fee Facturacion", "Fees Stripe", "Aranceles y Otros Financieros", "IIBB", "Imp. Cred. y Deb.", "Aranceles / Pasarela de Pagos", "Gastos Financieros"] },
+  { key: "gp_pers",   label: "Personal",                 color: SEDE_HDR, cuentas: ["Sueldos", "Incentivos", "Comisiones", "Cargas Sociales", "Otros Gastos Salariales", "Aguinaldos", "Costos Salariales", "Otros gastos Salariales"] },
   { key: "gp_ocup",   label: "Ocupación",                color: SEDE_HDR, cuentas: ["Alquiler", "Expensas", "ABL", "Servicios"] },
   { key: "gp_mkt",    label: "Mkt y Pauta",              color: SEDE_HDR, cuentas: ["Acciones de Mkt", "Pauta"] },
-  { key: "gp_otros",  label: "Otros Gastos de la Sede",  color: SEDE_HDR, cuentas: ["Honorarios Profesionales", "Equipamiento y Mantenimiento", "Limpieza", "Otros Gastos del Centro", "Gastos Menores de Caja"] },
+  { key: "gp_otros",  label: "Otros Gastos de la Sede",  color: SEDE_HDR, cuentas: ["Honorarios Profesionales", "Equipamiento y Mantenimiento", "Limpieza", "Otros Gastos del Centro", "Gastos Menores de Caja", "Gastos sin Asignar"] },
   { key: "com_res",   label: "Comisión por resultados",  color: SEDE_HDR, cuentas: ["Comision S/Resultado"] },
   { key: "inv_no_op", label: "Inversiones no operativas", color: SEDE_HDR, cuentas: ["Inversiones / Gastos no Operativos"] },
 ];
+// Los 4 grupos que forman "Total Gastos Operativos" de la sede. Una sola lista para el subtotal y para el
+// detalle por cuenta de la estructura → no pueden quedar desalineados.
+const SEDE_OPEX_GRUPOS = ["gp_pers", "gp_ocup", "gp_mkt", "gp_otros"];
 const _nkSede = s => (s ?? "").trim().toLowerCase();
 // Cuentas que se OCULTAN si están vacías (todo el año en cero). Ing.Stripe / Ing. Datafono son naturales de
 // España → en el resto de las sedes vienen en 0 y ensucian; en España, donde sí hay dato, se muestran solas.
@@ -400,7 +410,15 @@ const SEDE_ING_ACCTS = new Set(
 const grupoSede = (key) => SEDE_GRUPOS.find(g => g.key === key);
 // Alias de cuenta → línea del P&L Sede: cuentas que deben plegarse a una línea existente (mismo grupo y misma
 // fila). Ej.: "Mantenimiento" se contabiliza dentro de "Equipamiento y Mantenimiento".
-const SEDE_CUENTA_ALIAS = { "mantenimiento": "Equipamiento y Mantenimiento" };
+// "Gastos Bancarios" y "Licencias de Software y Sistemas Contables" ya son `categoria_pnl: "Gastos
+// Operativos"` (o sea, el P&L del holding las toma bien), pero no estaban en ningún grupo de ACÁ →
+// caían en "Sin clasificar", que se muestra al pie pero NO suma a totGastosOp ni al resultado. Se
+// pliegan a "Otros Gastos del Centro" para que entren al subtotal de la sede.
+const SEDE_CUENTA_ALIAS = {
+  "mantenimiento": "Equipamiento y Mantenimiento",
+  "gastos bancarios": "Otros Gastos del Centro",
+  "licencias de software y sistemas contables": "Otros Gastos del Centro",
+};
 const aliasCuentaSede = (nombre) => SEDE_CUENTA_ALIAS[_nkSede(nombre)] || nombre;
 
 // ─── Cesión de utilidades (apropiación del resultado, DEBAJO de Resultado Final) ────────────────
@@ -454,7 +472,7 @@ function computeImpuestos(sinClasificar, matchers, resFinal) {
 // (Huergo NO entra acá: es anillo 1, sin cola de impuestos.)
 const FONDEADAS = {
   op_espana:   { empresa: "wellness",   moneda: "EUR", label: "España",   familia: "propios", estructuraCC: "cc-2026-88271" },
-  op_colombia: { empresa: "tigre-loco", moneda: "COP", label: "Colombia", familia: "propios" },
+  op_colombia: { empresa: "tigre-loco", moneda: "USD", label: "Colombia", familia: "propios", estructuraCuenta: "Estructura Tigre Loco" },   // USD consolidado; estructura = cuenta, no centro
   op_puertos:  { empresa: "puertos",    moneda: "USD", label: "Puertos",  familia: "propios" },
   op_rosedal:  { empresa: "segui-fit",  moneda: "ARS", label: "Rosedal",  familia: "gerenciamiento", netoLabel: "Free Cash Flow" },
 };
@@ -463,7 +481,7 @@ const FONDEADAS = {
 // que pertenece a esta cola. Sin esto quedaban en "Sin clasificar", fuera de todo total.
 // TODO: esta lista curada por nombre debería salir de categoria_pnl="impuestos" en maestros —
 // hoy cada cuenta de impuesto nueva hay que acordarse de agregarla acá o desaparece del resultado.
-const IMPUESTOS_FOND = ["IVA", "Ganancias", "Retenciones"];
+const IMPUESTOS_FOND = ["IVA", "Ganancias", "Retenciones", "RTEFTE", "RTEICA"];   // RTEFTE/RTEICA = retenciones Colombia
 // Cola de resultado financiero (Fondeadas/Rosedal): cuentas de "Sin clasificar" que son financieras
 // (intereses ganados suma, pérdidas financieras resta) → línea debajo de impuestos, antes del neto/FCF.
 const FINANCIEROS_FOND = ["Intereses Ganados", "Perdidas Financieras"];
@@ -499,20 +517,48 @@ const PNL_INICIO = "2026-07-01";
 // Mes en curso "YYYY-MM": corte para el aviso de TC faltante (mes pasado sin TC = hueco; en curso = esperado).
 const _mesActualYM = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; })();
 
-// Pre-traduce filas de P&L a USD (consolidado): convierte `total` + `iva_monto` al TC del mes de CADA fila
-// (mes por mes) y marca `moneda:"USD"`, para que los builders corran nativos en USD sin tocar su lógica.
+// Selector de moneda → [modo, destino]. "ARS"/"USD"/… = nativo (el reporte filtra por esa moneda, como
+// siempre). "<CUR>_REAL" / "<CUR>_CONST" = consolidado: traduce TODAS las monedas a <CUR>, al TC del mes de
+// cada fila (real) o al de un mes ancla (const). El destino sale del mismo valor, no de una variable aparte.
+// Monedas en las que se puede consolidar: U$D (grupo), € (España se analiza en euros) y COP (la moneda de
+// gestión de Colombia). El ARS no está: Rosedal/Huergo son negocios de una sola moneda y no lo necesitan.
+const FX_DESTINOS = ["USD", "EUR", "COP"];
+// Dónde se OFRECE cada destino. El U$D va en todos (moneda del grupo y pivote del TC); los demás son la moneda
+// de UNA operación y solo se ofrecen en su reporte — consolidar el grupo en euros o en pesos colombianos afuera
+// de España/Colombia no significa nada y ensucia el selector. NO se deriva de FONDEADAS: ahí Colombia figura con
+// moneda "USD" (así se la mira), el COP es su moneda de gestión, no la del reporte.
+const FX_DESTINO_SOLO_EN = { EUR: "op_espana", COP: "op_colombia" };
+const fxDestinosDe = (tab) => FX_DESTINOS.filter(d => !FX_DESTINO_SOLO_EN[d] || FX_DESTINO_SOLO_EN[d] === tab);
+// Si venías de España/Colombia con su consolidado elegido y saltás a otro reporte, ese valor ya no está en la
+// lista y el select quedaría mostrando un fantasma → se cae a U$D · TC Real, que se ofrece en todos.
+const monedaValidaEn = (sel, tab) => {
+  const [modo, dst] = parseMonedaSel(sel);
+  return modo === "native" || fxDestinosDe(tab).includes(dst);
+};
+function parseMonedaSel(sel) {
+  const m = /^([A-Z]{3})_(REAL|CONST)$/.exec(String(sel || ""));
+  if (!m || !FX_DESTINOS.includes(m[1])) return ["native", null];
+  return [m[2] === "REAL" ? "real" : "const", m[1]];
+}
+
+// Pre-traduce filas de P&L a la moneda del consolidado: convierte `total` + `iva_monto` al TC del mes de CADA
+// fila (mes por mes) y las marca con `destino`, para que los builders corran nativos ahí sin tocar su lógica.
 // `fx(monto, moneda, anio, mes)` traduce (o null si falta TC). Filas sin TC se dropean; los meses PASADOS
 // sin TC se listan en `mesesSinTC` (el mes en curso sin TC de cierre es esperado → no se lista).
-function traducirFilasUSD(rows, fx) {
+// Desde qué mes avisar por TC faltante = el go-live. TODO lo anterior (histórico pre 1/7/2026) se cargó ya
+// consolidado en USD, así que esos tipos de cambio NO se van a cargar nunca (decisión de Martín, 18/9): pedirlos
+// es ruido permanente. Sin TC esas filas igual se dropean del consolidado, pero no ensucian el cartel.
+const TC_WARN_DESDE = PNL_INICIO.slice(0, 7);
+function traducirFilasFx(rows, fx, destino = "USD") {
   if (!fx) return { rows, mesesSinTC: [] };
   const out = [], sin = new Set();
   for (const r of (rows || [])) {
     if (!r?.fecha) { out.push(r); continue; }
     const anio = parseInt(r.fecha.slice(0, 4), 10), mes = parseInt(r.fecha.slice(5, 7), 10);
     const t = fx(Number(r.total) || 0, r.moneda || "ARS", anio, mes);
-    if (t == null) { const ym = r.fecha.slice(0, 7); if (ym < _mesActualYM) sin.add(ym); continue; }
+    if (t == null) { const ym = r.fecha.slice(0, 7); if (ym < _mesActualYM && ym >= TC_WARN_DESDE) sin.add(ym); continue; }
     const iva = fx(Number(r.iva_monto) || 0, r.moneda || "ARS", anio, mes) ?? 0;
-    out.push({ ...r, total: t, iva_monto: iva, moneda: "USD" });
+    out.push({ ...r, total: t, iva_monto: iva, moneda: destino });
   }
   return { rows: out, mesesSinTC: [...sin].sort() };
 }
@@ -539,8 +585,8 @@ const montoPnL = (row, sinIva) => {
 // Grupos de INGRESO del P&L Sede (los que suman en totIngresos) → su IVA es débito (ventas); el resto, crédito.
 const SEDE_ING_KEYS = new Set(["vta_cf", "int_bigg", "int_corp"]);
 
-// La consolidación FX (USD) se resuelve pre-traduciendo las filas a USD ANTES de llamar acá
-// (ver traducirFilasUSD): este builder corre siempre en modo nativo (filtra por `moneda`).
+// La consolidación FX se resuelve pre-traduciendo las filas a la moneda destino ANTES de llamar acá
+// (ver traducirFilasFx): este builder corre siempre en modo nativo (filtra por `moneda`).
 function buildPnLSede(inRows, egRows, ccFilter, year, moneda, sinIva = false) {
   // Pre-poblar cada grupo con sus cuentas configuradas en 0 → se muestran aunque no tengan monto.
   const grupos = {};
@@ -589,7 +635,7 @@ function computeSubtotalsSede(pnl) {
   for (const g of SEDE_GRUPOS) st[g.key] = sumGrupoSede(grupos[g.key]);
   const totIngresos   = MESES.map((_, m) => st.vta_cf[m] + st.int_bigg[m] + st.int_corp[m]);
   const margenContrib = MESES.map((_, m) => totIngresos[m] - st.cvar[m]);
-  const totGastosOp   = MESES.map((_, m) => st.gp_pers[m] + st.gp_ocup[m] + st.gp_mkt[m] + st.gp_otros[m]);
+  const totGastosOp   = MESES.map((_, m) => SEDE_OPEX_GRUPOS.reduce((s, gk) => s + (st[gk][m] || 0), 0));
   const resOp         = MESES.map((_, m) => margenContrib[m] - totGastosOp[m]);
   const resFinal      = MESES.map((_, m) => resOp[m] - st.com_res[m] - st.inv_no_op[m]);
   const months = new Set();
@@ -674,7 +720,7 @@ const GRAF_CATS = [
   { key: "oper",    label: "Rosedal + Huergo", color: "#eb6834" },
   { key: "reg",     label: "Regalías",         color: "#1baf7a" },
   { key: "corp",    label: "Coorporativos",    color: "#eda100" },
-  { key: "lic",     label: "Licencia de Marca",color: "#e87ba4" },
+  { key: "lic",     label: "Access Fees",      color: "#e87ba4" },
   { key: "app",     label: "Gympass",          color: "#008300" },
   { key: "spon",    label: "Sponsor",          color: "#4a3aa7" },
   { key: "otros",   label: "Otros HQ",         color: "#e34948" },
@@ -685,7 +731,7 @@ function GraficoComposicion({ sub, year, caption, hayHistorico, mesMax, onClose 
   const serie = {
     sar: sub.sar || ZERO12,
     oper: MESES.map((_, m) => (Number(sub.fg?.[m]) || 0) + (Number(sub.wre?.[m]) || 0)),
-    reg: g("Regalias s/Ventas"), corp: g("Coorporativos"), lic: g("Licencia Uso de Marca"),
+    reg: g("Regalias s/Ventas"), corp: g("Coorporativos"), lic: g("Access Fees"),
     app: g("APP (Gympass)"), spon: g("Sponsor"),
     otros: MESES.map((_, m) => (Number(g("Pauta")[m]) || 0) + (Number(g("Otros Ingresos")[m]) || 0)),
   };
@@ -914,7 +960,8 @@ export function buildPnLSedeFilas(props, isCol) {
           financieros = null, distribucion = null, retirosVivos = null, feeIvaVivo = null,
           netoLabel = "Resultado Neto", nombreCuenta = (x) => x, hayHistorico = false, mesMax = null,
           cesionResFinal = null, cesionRetiros = null, comBaseResOp = null,
-          estructuraCuota = null, estructuraEnOpex = false, estructuraLabel = "Estructura Wellness" } = props;
+          estructuraCuota = null, estructuraEnOpex = false, estructuraLabel = "Estructura Wellness",
+          estructuraDetalle = null } = props;
   const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths: _amRaw } = sub;
   const activeMonths = mesesVisibles(_amRaw, year, hayHistorico, mesMax);
 
@@ -965,7 +1012,9 @@ export function buildPnLSedeFilas(props, isCol) {
   // sedes juntas) NO es una cuenta "sin clasificar" real → se oculta SIEMPRE del diagnóstico. Es un match por
   // nombre exacto a esa única cuenta: cualquier otra cuenta genuinamente sin clasificar sigue con su alerta.
   const invKey = Object.keys(pnl.sinClasificar).find(k => _nkSede(k) === _nkSede(CESION_CUENTA));
-  const hidden = new Set([cesKey, invKey, ...(impData?.keys || []), ...(finData?.keys || [])].filter(Boolean));
+  // Cuenta de estructura (Colombia: "Estructura Tigre Loco") → se muestra como su propia línea, no en Sin clasificar.
+  const estrKey = estructuraCuota ? Object.keys(pnl.sinClasificar).find(k => _nkSede(k) === _nkSede(estructuraLabel)) : null;
+  const hidden = new Set([cesKey, invKey, estrKey, ...(impData?.keys || []), ...(finData?.keys || [])].filter(Boolean));
   const sinClasView = hidden.size
     ? Object.fromEntries(Object.entries(pnl.sinClasificar).filter(([k]) => !hidden.has(k)))
     : pnl.sinClasificar;
@@ -1013,7 +1062,15 @@ export function buildPnLSedeFilas(props, isCol) {
     if (!isCol("sec_gop")) { pushGrupo("gp_pers", -1); pushGrupo("gp_ocup", -1); pushGrupo("gp_mkt", -1); pushGrupo("gp_otros", -1); }
     filas.push({ kind: "subtotal", label: "Total Gastos Operativos", cur: sedeOpexView, prev: subPrev.totGastosOp, pol: -1 });
     // Estructura (Wellness): costo debajo de Total Gastos Operativos (como en el Excel). OPEX positivo → (x).
-    if (estruc) filas.push({ kind: "cuenta", label: estructuraLabel, cur: estruc, prev: ZERO12, pol: -1 });
+    // Con detalle por cuenta (España: la estructura es un CENTRO) la línea se despliega como un grupo más, para
+    // poder auditar qué hay adentro. Colombia es una CUENTA única → sin detalle, la fila queda plana.
+    if (estruc) {
+      const detEstruc = estructuraDetalle?.length ? estructuraDetalle : null;
+      filas.push({ kind: "cuenta", label: estructuraLabel, cur: estruc, prev: ZERO12, pol: -1,
+                   ...(detEstruc ? { toggleKey: "estruc" } : {}) });
+      if (detEstruc && !isCol("estruc")) for (const d of detEstruc)
+        filas.push({ kind: "cuenta", label: d.label, cur: d.cur, prev: ZERO12, pol: -1, nested: true });
+    }
     filas.push({ kind: "result", label: "Resultado Operativo", cur: resOpEff, prev: subPrev.resOp, pol: 1 });
 
     let fcfArr = resFinalEff;   // FCF (o Resultado Final sin cola) → base de la ganancia viva de la distribución
@@ -1107,7 +1164,7 @@ export function buildPnLSedeFilas(props, isCol) {
 function PnLTableSede(props) {
   const { moneda, label, year, vista = "evolucion", mes = 0 } = props;
   // Colapso jerárquico: bandas de sección (Ingresos / Gastos Op) + cada sub-grupo + Distribución + toggle maestro.
-  const ALLKEYS = ["sec_ing", "sec_gop", "distrib", ...SEDE_GRUPOS.map(g => g.key)];
+  const ALLKEYS = ["sec_ing", "sec_gop", "distrib", "estruc", ...SEDE_GRUPOS.map(g => g.key)];
   const [collapsed, setCollapsed] = useState(() => Object.fromEntries(ALLKEYS.map(k => [k, true])));   // arranca compactado
   const isCol  = k => !!collapsed[k];
   const toggle = k => setCollapsed(c => ({ ...c, [k]: !c[k] }));
@@ -1186,15 +1243,23 @@ function PnLTableSede(props) {
                   {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "7px 12px", fs: 12, fw: 800, color: SEDE_HDR })}
                 </tr>
               );
-              if (f.kind === "cuenta") return (
-                <tr key={idx} style={{ borderBottom: `1px solid ${T.cardBorder}`, background: T.card }}
-                  onMouseEnter={e => { e.currentTarget.style.background = "#f0f9ff"; e.currentTarget.firstChild.style.background = "#f0f9ff"; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = T.card; e.currentTarget.firstChild.style.background = T.card; }}>
-                  <td style={{ padding: "6px 14px 6px 32px", fontSize: 13, color: f.color || T.text, whiteSpace: "nowrap",
-                    borderBottom: `1px solid ${T.cardBorder}`, ...stickyCol, background: T.card }}>{f.label}</td>
-                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "6px 12px", fs: 13, fw: 400, color: f.color || SEDE_HDR, stock: f.stock, lastM })}
-                </tr>
-              );
+              if (f.kind === "cuenta") {
+                // `toggleKey` → la cuenta se despliega (Estructura Wellness); `nested` → es una de esas hijas.
+                const clickable = !!f.toggleKey;
+                const cbg = f.nested ? "#eef1f5" : T.card;
+                const pad = f.nested ? "6px 14px 6px 48px" : "6px 14px 6px 32px";
+                return (
+                  <tr key={idx} onClick={clickable ? () => toggle(f.toggleKey) : undefined}
+                    style={{ borderBottom: `1px solid ${T.cardBorder}`, background: cbg, cursor: clickable ? "pointer" : "default" }}
+                    onMouseEnter={e => { e.currentTarget.style.background = "#f0f9ff"; e.currentTarget.firstChild.style.background = "#f0f9ff"; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = cbg; e.currentTarget.firstChild.style.background = cbg; }}>
+                    <td style={{ padding: pad, fontSize: 13, color: f.color || T.text, whiteSpace: "nowrap",
+                      borderBottom: `1px solid ${T.cardBorder}`, userSelect: clickable ? "none" : undefined, ...stickyCol, background: cbg }}>
+                      {clickable && <span style={{ display: "inline-block", width: 18, marginLeft: -18, fontSize: 9, opacity: .7 }}>{isCol(f.toggleKey) ? "▶" : "▼"}</span>}{f.label}</td>
+                    {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "6px 12px", fs: 13, fw: 400, color: f.color || SEDE_HDR, stock: f.stock, lastM })}
+                  </tr>
+                );
+              }
               if (f.kind === "cesion") {
                 const bg = "#faf5ff", top = f.top ? { borderTop: "2px solid #7c3aed" } : {};
                 return (
@@ -1368,7 +1433,7 @@ const BIGG_GRUPOS = [
 // Orden de las cuentas dentro de cada subgrupo (display; las que no figuran van al final, alfabéticas).
 // Hardcodeado a propósito: es presentación, bajo riesgo (un nombre que no matchea solo se ordena último).
 const BIGG_ORDEN = [
-  "Regalias s/Ventas", "Licencia Uso de Marca", "Equipamientos", "Coorporativos (Gympass)",
+  "Access Fees", "Regalias s/Ventas", "Equipamientos", "Coorporativos (Gympass)",
   "Coorporativos", "APP (Gympass)", "Sponsor", "Pauta", "Otros Ingresos",
 ];
 
@@ -2159,223 +2224,11 @@ function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCer
   );
 }
 
-// ─── Cash Flow: clasificación por ACTIVIDAD (método directo) ───────────────────
-// Cada movimiento de caja se mapea a una actividad (operativo / inversión / financiación)
-// y a un concepto (la línea de detalle). Los movimientos internos (transferencias entre
-// cuentas propias y cambio de moneda) van a su propia sección: netean a nivel grupo pero
-// mueven caja por cuenta/moneda, así el saldo de caja reconcilia con el banco.
-// v1 curado; se itera. La clasificación fina inversión vs financiación de interco se hará por anillo.
-const CF_ACT = [
-  { key: "operativo",    label: "Actividades operativas" },
-  { key: "inversion",    label: "Actividades de inversión" },
-  { key: "financiacion", label: "Actividades de financiación" },
-  { key: "internos",     label: "Movimientos internos (transferencias / cambio)" },
-];
-// Orden fijo de conceptos por actividad (para que las líneas salgan en orden de negocio, no por magnitud).
-const CF_CONCEPTO_ORDEN = {
-  operativo:    ["Ingresos Sedes", "Ingresos HQ", "Franquicias (neto)", "Costos Sedes", "Costos HQ", "Sin conciliar (pendiente)"],
-  inversion:    ["Movimientos intercompañía", "Fondeo a otros negocios"],
-  financiacion: ["Préstamos recibidos", "Pago de préstamos / cuotas", "Anticipos de clientes", "Aportes / dividendos / préstamos de socios"],
-  internos:     ["Transferencias entre cuentas", "Cambio de moneda"],
-};
-// Clasifica un movimiento de caja por ACTIVIDAD + concepto de NEGOCIO. Resuelve el centro del propio
-// movimiento o —si es cobro/pago contra factura— de la factura linkeada (docCentro). El negocio sale del
-// centro: grupo=hq → HQ, sino sede. Fondeo = gasto a un centro de sociedad FUERA del núcleo → inversión.
-function clasificarFlujo(m, { ccMap, nucleoEmpresas, docCentro } = {}) {
-  const origen = String(m.origen || "").toLowerCase();
-  const tipo   = String(m.tipo || "").toUpperCase();
-  const doc    = String(m.documento_id || "");
-  const entra  = (Number(m.monto) || 0) >= 0;
-  // Internos (plata entre cajas/monedas propias — no es flujo del negocio)
-  if (tipo === "TRANSFERENCIA") return { act: "internos", concepto: "Transferencias entre cuentas" };
-  if (tipo === "CAMBIO")        return { act: "internos", concepto: "Cambio de moneda" };
-  // Financiación
-  if (origen === "socios") return { act: "financiacion", concepto: "Aportes / dividendos / préstamos de socios" };
-  if (origen.startsWith("financiacion") || origen === "cuota" || doc.startsWith("FIN-"))
-    return { act: "financiacion", concepto: entra ? "Préstamos recibidos" : "Pago de préstamos / cuotas" };
-  if (origen === "anticipo_alta") return { act: "financiacion", concepto: "Anticipos de clientes" };   // el cliente te financia
-  // Pago del resumen de tarjeta: settlement central → Costos HQ.
-  if (tipo === "PAGO_TARJETA" || origen === "pago_tarjeta") return { act: "operativo", concepto: "Costos HQ" };
-  // Franquicias (neto ingreso − egreso)
-  if (origen === "franquicias") return { act: "operativo", concepto: "Franquicias (neto)" };
-  // Inversión — interco
-  if (origen === "intercompania" || origen === "interco_park" || origen === "interco_recibida" || tipo === "INTERCOMPANIA")
-    return { act: "inversion", concepto: "Movimientos intercompañía" };
-  // Resolver el centro: el del movimiento o el de la factura que paga/cobra (cobros/pagos no traen centro).
-  const centroId = String(m.centro_costo || "").trim() || (doc && docCentro ? (docCentro.get(doc) || "") : "");
-  const cc = centroId && ccMap ? ccMap.get(ccKey(centroId)) : null;
-  const empresa = String(cc?.empresa || "").trim();
-  const grupo   = String(cc?.grupo || "").toLowerCase();
-  // Inversión — fondeo: gasto/ingreso a un centro cuya sociedad dueña está FUERA del núcleo.
-  if (empresa && nucleoEmpresas && !nucleoEmpresas.has(empresa))
-    return { act: "inversion", concepto: "Fondeo a otros negocios" };
-  // Operativo por negocio. HQ = todo lo que NO es sede ni franquicia (sueldos HQ, otros gastos, catch-all).
-  if (grupo === "hq")
-    return { act: "operativo", concepto: entra ? "Ingresos HQ" : "Costos HQ" };
-  if (cc && grupo !== "inversiones")   // centro de sede (operaciones): sueldos de sede caen en Costos Sedes
-    return { act: "operativo", concepto: entra ? "Ingresos Sedes" : "Costos Sedes" };
-  // Línea del extracto TODAVÍA no aceptada en la bandeja (caja real, aún sin imputar) = backlog de conciliación.
-  // Una sola línea (neta): que dé CERO = los motores de conciliación están limpios para ese mes.
-  if (origen === "extracto" && !doc)
-    return { act: "operativo", concepto: "Sin conciliar (pendiente)" };
-  // Catch-all: sin centro resoluble (raro) → HQ (no es sede ni franquicia).
-  return { act: "operativo", concepto: entra ? "Ingresos HQ" : "Costos HQ" };
-}
-
-// ─── Tab Cash Flow ────────────────────────────────────────────────────────────
-// CONSOLIDADO del núcleo (anillo 1): suma las cajas de todas las sociedades núcleo. El interco
-// intra-núcleo se netea SOLO (ambas patas —origen "intercompania", mismo documento_id— están en el
-// set y son opuestas → suman 0). El fondeo hacia anillo 2/3 queda (solo está la pata del núcleo) →
-// aparece como Inversión: es plata que salió del perímetro del grupo.
-const CF_GO_LIVE_YEAR = 2026;   // año del go-live
-const CF_START_MES = 6;   // Julio (0-indexed): el Cash Flow arranca acá SOLO el año de go-live (1/7/2026).
-                          // Los años posteriores arrancan en enero (todo lo previo va al saldo inicial).
-// Orden de anillos en el filtro (los que no matcheen van al final, alfabético).
+// ─── Cash Flow: vive en reportes/cashflowDerive.js + reportes/CashFlowViews.jsx y se muestra dentro de
+// TabTesoreriaConsolidada (vistas "cf" y "flujo"), con las mismas cajas, sociedades y moneda que el Balance (19/9/2026).
+// Orden de anillos en el filtro de sociedades (los que no matcheen van al final, alfabético).
 const CF_ANILLO_ORDEN = ["cleo", "fond", "extern"];
 const anilloRank = (a) => { const x = String(a || "").toLowerCase(); const i = CF_ANILLO_ORDEN.findIndex(k => x.includes(k)); return i === -1 ? 99 : i; };
-
-function TabCashFlow({ rawMovs, rawIn = [], rawEg = [], ccMap, nucleoEmpresas, selSoc = new Set(), year, moneda, tarjetaIds, cuentasBancarias = [] }) {
-  const [open, setOpen] = useState({ operativo: true, inversion: true, financiacion: true, internos: false });
-  const toggle = (k) => setOpen(o => ({ ...o, [k]: !o[k] }));
-
-  // Índice factura → centro (los cobros/pagos no traen centro; lo sacamos de la factura linkeada).
-  // El pago referencia el id_comp (ej. EG-123); las filas de comprobante traen sufijo de línea
-  // (EG-123-L00001) → clavear por id_comp (sin -L) además del id completo. 1ª línea con centro gana.
-  const docCentro = useMemo(() => {
-    const m = new Map();
-    for (const r of [...rawIn, ...rawEg]) {
-      const centro = String(r.centro_costo ?? "");
-      if (!centro) continue;
-      const full = String(r.id ?? "");
-      const comp = full.replace(/-L\d+$/i, "");
-      if (full && !m.has(full)) m.set(full, centro);
-      if (comp && !m.has(comp)) m.set(comp, centro);
-    }
-    return m;
-  }, [rawIn, rawEg]);
-  const ctx = useMemo(() => ({ ccMap, nucleoEmpresas, docCentro }), [ccMap, nucleoEmpresas, docCentro]);
-
-  // Moneda AUTORITATIVA = la de la cuenta bancaria (una cuenta USD solo tiene USD). El campo `moneda` del
-  // movimiento es fallback (por si una cuenta no está en el maestro). Evita que un movimiento mal cargado
-  // (moneda en blanco → antes caía a ARS) se cuele en la moneda equivocada.
-  const cuentaMoneda = useMemo(() => {
-    const mm = new Map();
-    for (const c of (cuentasBancarias || [])) mm.set(String(c.id), String(c.moneda || "ARS"));
-    return mm;
-  }, [cuentasBancarias]);
-  const monedaDe = (m) => cuentaMoneda.get(String(m.cuenta_bancaria)) || (m.moneda ?? "ARS");
-
-  // Predicado de caja: sociedad ELEGIDA (filtro en el box), con banco real, no ignorada, no tarjeta, en la moneda.
-  const esCash = (m) => !!m.fecha && !esIgnorado(m) && !!m.cuenta_bancaria
-    && !(tarjetaIds?.has(m.cuenta_bancaria)) && monedaDe(m) === moneda
-    && (selSoc.size === 0 || selSoc.has(String(m.sociedad ?? "").trim()));
-
-  // Arranque del período: SOLO el año de go-live empieza en julio (1/7/2026); los años posteriores en enero.
-  // Todo lo previo al cutoff (incl. las aperturas al 30/6/2026) va al saldo inicial.
-  const cfStartMes = year === CF_GO_LIVE_YEAR ? CF_START_MES : 0;
-  const cutoff = `${year}-${String(cfStartMes + 1).padStart(2, "0")}-01`;
-
-  const movsFilt = useMemo(() => rawMovs.filter(m => esCash(m) && m.fecha.slice(0, 4) === String(year) && m.fecha >= cutoff),
-    [rawMovs, year, moneda, tarjetaIds, selSoc, cuentaMoneda]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Saldo de caja al inicio del período (todo lo movido ANTES del cutoff, en esta moneda).
-  const openingCash = useMemo(() => rawMovs.reduce((s, m) =>
-    (esCash(m) && m.fecha < cutoff) ? s + (Number(m.monto) || 0) : s, 0),
-    [rawMovs, year, moneda, tarjetaIds, selSoc, cuentaMoneda]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // porAct[actividad][concepto] = 12 meses (neto firmado); actTot[actividad] = subtotal mensual.
-  const { porAct, actTot } = useMemo(() => {
-    const porAct = { operativo: {}, inversion: {}, financiacion: {}, internos: {} };
-    for (const m of movsFilt) {
-      const mes = parseInt(m.fecha.slice(5, 7), 10) - 1;
-      if (mes < 0 || mes > 11) continue;
-      const { act, concepto } = clasificarFlujo(m, ctx);
-      (porAct[act][concepto] ??= new Array(12).fill(0))[mes] += Number(m.monto) || 0;
-    }
-    const actTot = {};
-    for (const k of Object.keys(porAct))
-      actTot[k] = MESES.map((_, m) => Object.values(porAct[k]).reduce((s, a) => s + a[m], 0));
-    return { porAct, actTot };
-  }, [movsFilt]);
-
-  const flujoNeto = useMemo(() =>
-    MESES.map((_, m) => CF_ACT.reduce((s, a) => s + actTot[a.key][m], 0)), [actTot]);
-
-  // Saldo de caja acumulado (arranca en openingCash) y saldo al inicio de cada mes.
-  const saldoFinal = useMemo(() => {
-    let cum = openingCash;
-    return flujoNeto.map(v => { cum += v; return cum; });
-  }, [flujoNeto, openingCash]);
-  const saldoInicioMes = useMemo(() => MESES.map((_, m) => saldoFinal[m] - flujoNeto[m]), [saldoFinal, flujoNeto]);
-
-  const activeMonths = useMemo(() => {
-    const s = new Set();
-    movsFilt.forEach(m => { const i = parseInt(m.fecha.slice(5, 7), 10) - 1; if (i >= cfStartMes && i <= 11) s.add(i); });
-    const finYear = new Date().getFullYear() === year ? new Date().getMonth() : 11;
-    for (let i = cfStartMes; i <= Math.max(finYear, cfStartMes); i++) s.add(i);
-    return [...s].sort((a, b) => a - b);
-  }, [movsFilt, year]);
-
-  if (activeMonths.length === 0) return (
-    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
-      padding: "60px 24px", textAlign: "center", boxShadow: T.shadow }}>
-      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke={T.dim} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginBottom: 10 }}>
-        <path d="M12 2v20M17 5H9.5a3.5 3.5 0 100 7h5a3.5 3.5 0 110 7H6"/>
-      </svg>
-      <div style={{ fontSize: 14, color: T.muted }}>Sin movimientos para {year} en {moneda}.</div>
-    </div>
-  );
-
-  return (
-    <>
-    <div style={{ fontSize: 12, color: T.muted, margin: "2px 0 10px", maxWidth: 820, lineHeight: 1.5 }}>
-      Consolidado desde <b>julio</b> (go-live). El interco entre las sociedades <b>elegidas</b> se netea;
-      el fondeo hacia una sociedad no elegida queda como <b>Inversión</b> (caja que sale del perímetro).
-    </div>
-    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
-      boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
-      <table style={{ width: "100%", minWidth: 280 + activeMonths.length * 110, borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th style={{ ...thStyle, textAlign: "left", minWidth: 260,
-              ...stickyCol, background: T.tableHead, zIndex: 4 }}>Concepto</th>
-            {activeMonths.map(m => <th key={m} style={thStyle}>{MESES[m]}</th>)}
-            <th style={{ ...thStyle, borderLeft: "1px solid rgba(255,255,255,.12)" }}>TOTAL</th>
-          </tr>
-        </thead>
-        <tbody>
-          {/* Saldo de caja al inicio de cada mes. TOTAL = saldo al arranque del período (NO la suma de meses). */}
-          <SubtotalRow label="Saldo inicial de caja" values={saldoInicioMes} activeMonths={activeMonths} color={T.muted} noBottom
-            totalOverride={saldoInicioMes[activeMonths[0]] ?? 0} />
-
-          {CF_ACT.map(({ key, label }) => {
-            const ord = CF_CONCEPTO_ORDEN[key] || [];
-            const rank = (n) => { const i = ord.indexOf(n); return i === -1 ? 99 : i; };
-            const conceptos = Object.entries(porAct[key])
-              .sort((a, b) => rank(a[0]) - rank(b[0]) || Math.abs(rowSum(b[1])) - Math.abs(rowSum(a[1])));
-            const hasData = conceptos.length > 0;
-            return (
-              <Fragment key={key}>
-                <SectionRow label={label} values={actTot[key]} activeMonths={activeMonths}
-                  expanded={open[key]} onToggle={hasData ? () => toggle(key) : undefined} />
-                {open[key] && conceptos.map(([nombre, vals]) => (
-                  <DataRow key={nombre} label={nombre} values={vals} activeMonths={activeMonths}
-                    color={rowSum(vals) >= 0 ? T.green : T.red} />
-                ))}
-              </Fragment>
-            );
-          })}
-
-          <ResultadoRow label="Flujo neto del período" values={flujoNeto} activeMonths={activeMonths} />
-          {/* TOTAL = saldo final del último mes activo (el saldo de caja "a hoy"), NO la suma de los meses. */}
-          <SubtotalRow label="Saldo final de caja" values={saldoFinal} activeMonths={activeMonths} color={T.text} strong
-            totalOverride={saldoFinal[activeMonths[activeMonths.length - 1]] ?? 0} />
-        </tbody>
-      </table>
-    </div>
-    </>
-  );
-}
 
 // ─── Tab Evolución Patrimonio Neto ────────────────────────────────────────────
 function TabEvolucionPN({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, year }) {
@@ -2522,133 +2375,187 @@ function TabEvolucionPN({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, yea
 // ─── Tab config ───────────────────────────────────────────────────────────────
 const TABS = [
   // ── Funcionando ──
-  { id: "pl_sede", label: "P&L Sedes Propias Argentina",  icon: "🏬", desc: "Resultado operativo por sede: ventas, costos variables y márgenes." },
-  { id: "pl_bigg", label: "P&L BIGG",   icon: "🏢", desc: "Resultado corporativo por centro de HQ (R&D, Sales & Mkt, G&A)." },
-  { id: "cf",      label: "Cash Flow",  icon: "💵", desc: "Flujo de caja mensual: entradas y salidas por cuenta." },
-  { id: "interco", label: "Intercompañía",   icon: "🔗", desc: "Posiciones entre sociedades, agrupadas por anillo." },
-  { id: "consolidado", label: "Tesorería consolidada", icon: "🏦", desc: "Saldos y movimientos de todas las sociedades del grupo." },
-  { id: "cxp_prov", label: "CxP por proveedor", icon: "📋", desc: "Cuentas por pagar consolidadas por proveedor (todas las sociedades), con antigüedad." },
-  { id: "cxc_cli", label: "CxC por cliente", icon: "📥", desc: "Cuentas por cobrar consolidadas por cliente (todas las sociedades), con antigüedad." },
-  { id: "socios",  label: "Socios", icon: "◎", desc: "Cuenta corriente de socios: dividendos, aportes y préstamos (balance, no P&L)." },
+  { id: "pl_sede", label: "P&L · Sedes Argentina",  icon: "🏬", ico: "store", desc: "Resultado operativo por sede: ventas, costos variables y márgenes." },
+  { id: "pl_bigg", label: "P&L · BIGG (grupo)",   icon: "🏢", ico: "building", desc: "Resultado corporativo por centro de HQ (R&D, Sales & Mkt, G&A)." },
+  { id: "cf",      label: "Cash Flow",  icon: "💵", ico: "flow", desc: "Por qué la caja subió o bajó cada mes (cobros, pagos, fondeo, financiación, cambio de moneda) y cómo el resultado se convirtió en caja." },
+  { id: "interco", label: "Saldos entre sociedades",   icon: "🔗", ico: "link", desc: "Préstamos y saldos interco entre TODAS las sociedades: posición neta por moneda (quién le debe a quién). Filtrá por sociedad y hacé click en una fila para ver el detalle de movimientos." },
+  { id: "interco_matriz", label: "Fondeo por negocio", icon: "🧮", ico: "grid", desc: "Fondeo del grupo a cada negocio (CAPEX), consolidado en USD · meses × negocio/tipo. Click en una celda = los movimientos que la componen. Ata al Fondeo del P&L." },
+  { id: "consolidado", label: "Tesorería consolidada", icon: "🏦", ico: "bank", desc: "Cuánta plata hay hoy y dónde: saldos de cajas y bancos, cuentas a cobrar/pagar y movimientos de todas las sociedades." },
+  { id: "balance_pn",  label: "Balance y Evolución del PN", icon: "⚖️", ico: "scale", desc: "Cuánto vale cada sociedad (o el grupo en USD) a una fecha y por qué cambió mes a mes: apertura + resultado + cambio de moneda = Patrimonio Neto." },
+  { id: "cxp_prov", label: "Cuentas a pagar por proveedor", icon: "📋", ico: "invoice", desc: "Cuentas por pagar consolidadas por proveedor (todas las sociedades), con antigüedad." },
+  { id: "cxc_cli", label: "Cuentas a cobrar por cliente", icon: "📥", ico: "receipt", desc: "Cuentas por cobrar consolidadas por cliente (todas las sociedades), con antigüedad." },
+  { id: "socios",  label: "Socios", icon: "◎", ico: "people", desc: "Cuenta corriente de socios: dividendos, aportes y préstamos (balance, no P&L)." },
 
-  // ── WIP (solo esqueleto navegable; sin cálculo todavía) ──
-  { id: "inf_egresos",  label: "Egresos (detalle)",  icon: "🔎", desc: "Listar y filtrar compras por cuenta · centro · proveedor · moneda · período." },
-  { id: "inf_ingresos", label: "Ingresos (detalle)", icon: "🔎", desc: "Listar y filtrar ventas/ingresos por cuenta · centro · cliente · moneda · período." },
+  // ── Detalle operativo (funcionando): el único lugar donde se ve la contabilidad de TODAS las sociedades ──
+  { id: "inf_egresos",  label: "Egresos en detalle",  icon: "🔎", ico: "out", desc: "Listar y filtrar compras por cuenta · centro · proveedor · moneda · período." },
+  { id: "inf_ingresos", label: "Ingresos en detalle", icon: "🔎", ico: "in", desc: "Listar y filtrar ventas/ingresos por cuenta · centro · cliente · moneda · período." },
 
-  { id: "er_soc",       label: "Estado de Resultados", icon: "📄", wip: true, desc: "P&L de la entidad legal seleccionada (por sociedad)." },
+  { id: "er_soc",       label: "Estado de Resultados por sociedad", icon: "📄", ico: "doc", wip: true, desc: "P&L de la entidad legal seleccionada (por sociedad)." },
 
-  { id: "op_espana",    label: "P&L Sedes Propias España", icon: "🇪🇸", desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada)." },
-  { id: "op_colombia",  label: "P&L Sedes Propias Colombia", icon: "🇨🇴", desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada)." },
-  { id: "op_puertos",   label: "P&L Puertos", icon: "⚓", wip: true, desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada, inversión USD)." },
-  { id: "op_rosedal",   label: "P&L Rosedal (Segui Fit)", icon: "🤝", desc: "P&L completo de la operación administrada hasta Free Cash Flow, con impuestos dentro; a BIGG entra el fee + su % del FCF." },
-  { id: "op_huergo",    label: "P&L Huergo", icon: "🏗️", desc: "Negocio propio (anillo 1): ingreso del edificio − horas de coaches = margen a seguir de cerca." },
+  { id: "op_espana",    label: "P&L · Sedes España", icon: "🇪🇸", ico: "store", desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada)." },
+  { id: "op_colombia",  label: "P&L · Sedes Colombia", icon: "🇨🇴", ico: "store", desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada)." },
+  { id: "op_puertos",   label: "P&L · Puertos", icon: "⚓", ico: "anchor", wip: true, desc: "Igual que Sedes propias AR + impuestos debajo del Resultado Operativo (sociedad Fondeada, inversión USD)." },
+  { id: "op_rosedal",   label: "P&L · Rosedal (Segui Fit)", icon: "🤝", ico: "handshake", desc: "P&L completo de la operación administrada hasta Free Cash Flow, con impuestos dentro; a BIGG entra el fee + su % del FCF." },
+  { id: "op_huergo",    label: "P&L · Huergo", icon: "🏗️", ico: "building", desc: "Negocio propio (anillo 1): ingreso del edificio − horas de coaches = margen a seguir de cerca." },
 
-  { id: "consol_grupo", label: "Consolidado de grupo", icon: "🌐", wip: true, desc: "P&L y patrimonio del grupo: propias full (neto de IVA) + fee/share de administradas + impuestos del anillo al final." },
+  { id: "consol_grupo", label: "Consolidado de grupo", icon: "🌐", ico: "globe", wip: true, desc: "P&L y patrimonio del grupo: propias full (neto de IVA) + fee/share de administradas + impuestos del anillo al final." },
 
-  { id: "an_ventas",    label: "Composición de Ingresos", icon: "📈", desc: "Igual que el P&L BIGG hasta Total Ingresos: cada negocio (Sedes AR con apertura por sede / Rosedal / Huergo) y las líneas de HQ." },
-  { id: "an_margenes",  label: "Márgenes por negocio", icon: "🧩", wip: true, desc: "Cuánto aporta cada negocio al Margen Bruto del grupo." },
-  { id: "an_gastos_cc", label: "Gastos por centro de costo", icon: "🧾", wip: true, desc: "Apertura del gasto por centro de costo y, dentro, por cuenta contable." },
+  { id: "an_ventas",    label: "Composición de ingresos", icon: "📈", ico: "pie", desc: "Igual que el P&L BIGG hasta Total Ingresos: cada negocio (Sedes AR con apertura por sede / Rosedal / Huergo) y las líneas de HQ." },
+  { id: "an_margenes",  label: "Márgenes por negocio", icon: "🧩", ico: "puzzle", wip: true, desc: "Cuánto aporta cada negocio al Margen Bruto del grupo." },
+  { id: "an_gastos_cc", label: "Gastos por centro de costo", icon: "🧾", ico: "tag", wip: true, desc: "Apertura del gasto por centro de costo y, dentro, por cuenta contable." },
+
+  { id: "devengado",    label: "Resultado devengado por cuenta", icon: "🧪", ico: "flask", desc: "Diagnóstico: devengado crudo por cuenta y mes, filtrable por sociedad/anillo · centro · moneda. Sin fondeo ni traducción de moneda → el Resultado ata contra la variación del PN del balance." },
 ];
 
-// ─── Menú por STORYTELLING (agrupado por la pregunta que uno se hace, no por taxonomía contable) ──
-// Pensado para navegar el negocio de arriba hacia abajo: la foto del grupo → cómo rinde cada negocio →
-// de dónde sale/va la plata → buscar el detalle → (lo fiscal/interno al fondo). Textos = management
-// (todavía NO simplificados para dueños). El anillo de la sociedad manda cómo consolida (ver memoria).
+// ─── Menú de Reportes: por lo que uno viene a HACER (operar → resultados → plata entre sociedades → control) ──
+// Decisión Martín 19/9/2026: Egresos/Ingresos en detalle + Cuentas a pagar/cobrar son el ÚNICO lugar donde se opera la
+// contabilidad de TODAS las sociedades → van primero y en grande (hero). Resultados, plata entre sociedades y control
+// como listas de una línea con su descripción. Lo que está en construcción va al FINAL de su grupo, en gris, nunca
+// primero. Los ids de TABS no cambian (los usa todo el resto de la pantalla).
 const LENTES = [
-  { id: "grupo",    label: "La foto del grupo",            tabs: ["consol_grupo", "pl_bigg", "an_ventas", "cf", "consolidado", "cxp_prov", "cxc_cli", "socios"] },
-  { id: "negocios", label: "Cómo le va a cada negocio",    tabs: ["pl_sede", "op_espana", "op_colombia", "op_rosedal", "op_huergo", "op_puertos"] },
-  { id: "flujo",    label: "De dónde sale y a dónde va",   tabs: ["an_gastos_cc"] },
-  { id: "detalle",  label: "Buscar el detalle",            tabs: ["inf_egresos", "inf_ingresos"] },
-  { id: "interno",  label: "Interno · fiscal / contable",  tabs: ["er_soc", "interco"] },
+  { id: "operar",     label: "Operar el día a día",      hint: "La contabilidad de todas las sociedades, en un solo lugar", hero: true,
+    // Orden FIJO en 3 columnas × 2 filas (Martín 19/9): Egresos / Cuentas a pagar / Tesorería arriba; Ingresos / Cuentas a cobrar / Cash Flow abajo.
+    tabs: ["inf_egresos", "cxp_prov", "consolidado", "inf_ingresos", "cxc_cli", "cf"] },
+  { id: "resultados", label: "¿Cómo nos fue?",            hint: "Resultados del grupo y de cada negocio",
+    tabs: ["pl_bigg", "pl_sede", "op_espana", "op_colombia", "op_rosedal", "op_huergo", "an_ventas", "op_puertos", "an_margenes", "consol_grupo"] },
+  { id: "plata",      label: "La plata entre sociedades", hint: "Quién le debe a quién y qué fondeó el grupo",
+    tabs: ["interco", "interco_matriz", "socios"] },
+  { id: "control",    label: "Control y cierre",          hint: "Para atar el resultado contra el patrimonio",
+    // Trilogía de cierre: Balance/EEPN (afuera de Tesorería desde 19/9, pedido Martín) + devengado que ata contra el PN.
+    tabs: ["balance_pn", "devengado", "an_gastos_cc", "er_soc"] },
 ];
 
-// ─── Tab Intercompañía (resumen de posiciones por anillo — LECTURA) ─────────────
-function TabInterco({ data, sociedades }) {
-  const socMap  = useMemo(() => new Map((sociedades || []).map(s => [String(s.id), s])), [sociedades]);
-  const nombre  = id => socMap.get(String(id))?.nombre || id;
-  const anilloDe = id => socMap.get(String(id))?.anillo || "Sin anillo";
-  // Cada relación una sola vez: neto>0 → `sociedad` es ACREEDOR (le deben) de `contraparte`.
-  const pos = useMemo(() => lecturaInterco(data).filter(p => p.neto > 0.01), [data]);
-  const grupos = {};
-  for (const p of pos) (grupos[anilloDe(p.contraparte)] ??= []).push(p);
-  const anillos = Object.keys(grupos).sort();
-  const money = (n, mon) => `${MONEDA_SYM[mon] ?? mon} ${fmtN(n)}`;
-
+// Íconos de un solo trazo (24×24, stroke = currentColor). Reemplazan a los emojis del menú: se ven igual en todas
+// las máquinas y van en flúo sobre el tile oscuro (marca). El emoji queda como fallback si una tab no declara `ico`.
+const ICONO_PATHS = {
+  out:       ["M4 6h16", "M4 12h9", "M4 18h6", "M14 18h6", "M17 15l3 3-3 3"],
+  in:        ["M4 6h16", "M4 12h9", "M4 18h6", "M14 18h6", "M17 21l-3-3 3-3"],
+  invoice:   ["M6 3h9l3 3v15H6z", "M15 3v3h3", "M9 10h6", "M9 14h6", "M9 18h3"],
+  receipt:   ["M5 3h14v18l-2.3-1.8L14.3 21 12 19.2 9.7 21l-2.4-1.8L5 21z", "M9 8h6", "M9 12h6"],
+  bank:      ["M3 10l9-6 9 6H3z", "M5 10v8", "M10 10v8", "M14 10v8", "M19 10v8", "M3 20h18"],
+  flow:      ["M3 13c3 0 3-6 6-6s3 8 6 8 3-6 6-6", "M3 20h18"],
+  building:  ["M4 21V5l8-3v19", "M12 21V9l8 2v10", "M2 21h20", "M8 9h1", "M8 13h1", "M8 17h1", "M15 14h1", "M15 18h1"],
+  store:     ["M4 9l1.5-5h13L20 9", "M4 9h16v3a2.5 2.5 0 01-5 0 2.5 2.5 0 01-6 0 2.5 2.5 0 01-5 0z", "M6 13v8h12v-8", "M10 21v-5h4v5"],
+  pie:       ["M12 3v9h9", "M21 12a9 9 0 11-9-9"],
+  puzzle:    ["M8 3h4v2.5a1.5 1.5 0 003 0V3h4v5h-2.5a1.5 1.5 0 000 3H19v6h-5v-2.5a1.5 1.5 0 00-3 0V17H6v-5h2.5a1.5 1.5 0 000-3H6V3z"],
+  globe:     ["M12 3a9 9 0 100 18 9 9 0 000-18z", "M3 12h18", "M12 3c3.5 3.5 3.5 14.5 0 18", "M12 3c-3.5 3.5-3.5 14.5 0 18"],
+  link:      ["M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1.2 1.2", "M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1.2-1.2"],
+  grid:      ["M4 4h7v7H4z", "M13 4h7v7h-7z", "M4 13h7v7H4z", "M13 13h7v7h-7z"],
+  people:    ["M9 11a3 3 0 100-6 3 3 0 000 6z", "M3 20a6 6 0 0112 0", "M16 11a3 3 0 100-6", "M15 20a6 6 0 016-6"],
+  flask:     ["M9 3h6", "M10 3v6l-6 11h16l-6-11V3", "M7 15h10"],
+  tag:       ["M3 12V4h8l10 10-8 8L3 12z", "M7.5 7.5h.01"],
+  doc:       ["M6 3h9l3 3v15H6z", "M15 3v3h3", "M9 12h6", "M9 16h6"],
+  anchor:    ["M12 3a2 2 0 100 4 2 2 0 000-4z", "M12 7v14", "M4 13a8 8 0 0016 0", "M2 13h4", "M18 13h4"],
+  handshake: ["M3 10l4-4 4 3-3 3", "M21 10l-4-4-4 3 3 3", "M7 12l5 5 5-5", "M12 17v3"],
+  scale:     ["M12 3v18", "M8 21h8", "M4 7h16", "M6 7l-3 7a3 3 0 006 0z", "M18 7l-3 7a3 3 0 006 0z"],
+};
+function Icono({ name, emoji, size = 20, color = T.accent }) {
+  const paths = ICONO_PATHS[name];
+  if (!paths) return <span style={{ fontSize: size }}>{emoji}</span>;
   return (
-    <div className="fade" style={{ padding: "8px 0" }}>
-      <PageHeader title="Posiciones Intercompañía" subtitle="Quién le debe a quién, por anillo (lectura). El que manda la plata queda como acreedor." />
-      {pos.length === 0 ? (
-        <div style={{ color: T.muted, fontSize: 13, padding: "24px 4px" }}>No hay posiciones intercompañía registradas todavía.</div>
-      ) : anillos.map(a => (
-        <div key={a} style={{ marginBottom: 20, background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, overflow: "hidden", boxShadow: T.shadow }}>
-          <div style={{ background: T.tableHead, color: T.tableHeadText, padding: "8px 14px", fontSize: 12, fontWeight: 800, letterSpacing: ".05em", textTransform: "uppercase" }}>{a}</div>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ fontSize: 11, color: T.muted, textTransform: "uppercase", letterSpacing: ".04em" }}>
-                <th style={{ textAlign: "left", padding: "8px 14px" }}>Acreedor (le deben)</th>
-                <th style={{ textAlign: "left", padding: "8px 14px" }}>Deudor (debe)</th>
-                <th style={{ textAlign: "right", padding: "8px 14px" }}>Saldo</th>
-              </tr>
-            </thead>
-            <tbody>
-              {grupos[a].sort((x, y) => y.neto - x.neto).map((p, i) => (
-                <tr key={i} style={{ borderTop: `1px solid ${T.cardBorder}` }}>
-                  <td style={{ padding: "9px 14px", fontSize: 13, fontWeight: 600, color: T.text }}>{nombre(p.sociedad)}</td>
-                  <td style={{ padding: "9px 14px", fontSize: 13, color: T.text }}>{nombre(p.contraparte)}</td>
-                  <td style={{ padding: "9px 14px", fontSize: 13, fontWeight: 700, textAlign: "right", fontFamily: T.mono, color: T.green }}>{money(p.neto, p.moneda)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ))}
-    </div>
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {paths.map((d, i) => <path key={i} d={d} />)}
+    </svg>
   );
 }
 
-// ─── Menú-landing de Reportes: tarjetas agrupadas por lente ─────────────────────
-function ReportCard({ icon, title, wip, onClick }) {
+const WIP_BADGE = <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: ".06em", color: "#b45309", background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "1px 6px", whiteSpace: "nowrap" }}>EN CONSTRUCCIÓN</span>;
+const _tile = (wip, size) => ({ width: size, height: size, borderRadius: Math.round(size / 4), flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+  background: wip ? "#e5e7eb" : T.accentDark, color: wip ? T.dim : T.accent });
+const _hover = (on) => (e) => {
+  e.currentTarget.style.boxShadow = on ? T.shadowMd : "0 1px 3px rgba(0,0,0,.04)";
+  e.currentTarget.style.borderColor = on ? T.accent : T.cardBorder;
+  e.currentTarget.style.transform = on ? "translateY(-1px)" : "none";
+};
+
+// Tarjeta GRANDE (grupo "Operar el día a día"): tile 44 + título + descripción a dos líneas.
+function ReportCardHero({ t, onClick }) {
   return (
-    <button onClick={onClick} style={{
-      display: "flex", gap: 14, alignItems: "center", textAlign: "left",
-      background: wip ? "#fafbfc" : T.card, border: `1px ${wip ? "dashed" : "solid"} ${T.cardBorder}`, borderRadius: 12,
-      padding: "16px 20px", cursor: "pointer", fontFamily: T.font, width: "100%",
-      boxShadow: "0 1px 3px rgba(0,0,0,.04)", transition: "all .15s ease" }}
-      onMouseEnter={e => { e.currentTarget.style.boxShadow = T.shadowMd; e.currentTarget.style.borderColor = T.accent; e.currentTarget.style.transform = "translateY(-1px)"; }}
-      onMouseLeave={e => { e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,.04)"; e.currentTarget.style.borderColor = T.cardBorder; e.currentTarget.style.transform = "none"; }}>
-      <div style={{ fontSize: 20, lineHeight: 1, flexShrink: 0, width: 42, height: 42, borderRadius: 10,
-        background: wip ? "#e5e7eb" : T.accentDark, display: "flex", alignItems: "center", justifyContent: "center", opacity: wip ? .8 : 1 }}>{icon}</div>
-      <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontSize: 15, fontWeight: 800, color: wip ? T.muted : T.text }}>{title}</span>
-        {wip && <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: ".06em", color: "#b45309",
-          background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "1px 6px" }}>🚧 WIP</span>}
+    <button onClick={onClick} style={{ display: "flex", gap: 14, alignItems: "flex-start", textAlign: "left", width: "100%",
+      background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 12, padding: "16px 18px", cursor: "pointer",
+      fontFamily: T.font, boxShadow: "0 1px 3px rgba(0,0,0,.04)", transition: "all .15s ease" }}
+      onMouseEnter={_hover(true)} onMouseLeave={_hover(false)}>
+      <div style={_tile(false, 44)}><Icono name={t.ico} emoji={t.icon} size={22} /></div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 15, fontWeight: 800, color: T.text, lineHeight: 1.25 }}>{t.label}</div>
+        <div style={{ fontSize: 12, color: T.muted, lineHeight: 1.45, marginTop: 4, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{t.desc}</div>
       </div>
     </button>
   );
 }
+// Fila COMPACTA (resto de los grupos): tile 34 + título + descripción en una línea + chevron.
+function ReportRow({ t, onClick }) {
+  const wip = !!t.wip;
+  return (
+    <button onClick={onClick} style={{ display: "flex", gap: 12, alignItems: "center", textAlign: "left", width: "100%",
+      background: wip ? "#fafbfc" : T.card, border: `1px ${wip ? "dashed" : "solid"} ${T.cardBorder}`, borderRadius: 10, padding: "10px 14px",
+      cursor: "pointer", fontFamily: T.font, boxShadow: "0 1px 3px rgba(0,0,0,.04)", transition: "all .15s ease" }}
+      onMouseEnter={_hover(true)} onMouseLeave={_hover(false)}>
+      <div style={_tile(wip, 34)}><Icono name={t.ico} emoji={t.icon} size={17} color={wip ? T.dim : T.accent} /></div>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 14, fontWeight: 800, color: wip ? T.muted : T.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.label}</span>
+          {wip && WIP_BADGE}
+        </div>
+        <div style={{ fontSize: 12, color: T.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 2 }}>{t.desc}</div>
+      </div>
+      <span style={{ color: T.dim, fontSize: 16, flexShrink: 0 }}>›</span>
+    </button>
+  );
+}
+
+const _norm = (x) => String(x ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
 function ReportesMenu({ onPick }) {
+  const [q, setQ] = useState("");
+  const tabDe = (id) => TABS.find(x => x.id === id);
+  const ordenar = (ids) => ids.map(tabDe).filter(Boolean).sort((a, b) => (a.wip ? 1 : 0) - (b.wip ? 1 : 0));   // estable: en construcción al final
+  const nq = _norm(q).trim();
+  const hits = nq ? TABS.filter(t => _norm(t.label).includes(nq) || _norm(t.desc).includes(nq)) : null;
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 26 }}>
-      {LENTES.map(lente => (
-        <div key={lente.id}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: T.muted, letterSpacing: ".1em",
-            textTransform: "uppercase", marginBottom: 10 }}>{lente.label}</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
-            {lente.tabs.map(tid => {
-              const t = TABS.find(x => x.id === tid);
-              return <ReportCard key={tid} icon={t.icon} title={t.label} desc={t.desc} wip={t.wip} onClick={() => onPick(tid)} />;
-            })}
+    <div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
+      {/* Buscador */}
+      <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar un reporte… (ej. cash, proveedor, España)"
+          style={{ flex: "1 1 320px", maxWidth: 520, background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10,
+            padding: "10px 14px", fontSize: 13, fontFamily: T.font, color: T.text, outline: "none" }} />
+      </div>
+
+      {hits ? (
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 800, color: T.muted, letterSpacing: ".1em", textTransform: "uppercase", marginBottom: 10 }}>
+            {hits.length ? `${hits.length} resultado${hits.length === 1 ? "" : "s"}` : "Sin resultados"}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(380px, 1fr))", gap: 10 }}>
+            {ordenar(hits.map(t => t.id)).map(t => <ReportRow key={t.id} t={t} onClick={() => onPick(t.id)} />)}
           </div>
         </div>
-      ))}
+      ) : LENTES.map(lente => {
+        const tabs = ordenar(lente.tabs);
+        return (
+          <div key={lente.id}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: T.text, letterSpacing: ".1em", textTransform: "uppercase" }}>{lente.label}</div>
+              {lente.hint && <div style={{ fontSize: 12, color: T.dim }}>{lente.hint}</div>}
+            </div>
+            {lente.hero
+              ? <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
+                  {tabs.map(t => <ReportCardHero key={t.id} t={t} onClick={() => onPick(t.id)} />)}
+                </div>
+              : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(380px, 1fr))", gap: 10 }}>
+                  {tabs.map(t => <ReportRow key={t.id} t={t} onClick={() => onPick(t.id)} />)}
+                </div>}
+          </div>
+        );
+      })}
     </div>
   );
 }
 
 // ─── Multi-select con checkboxes (opciones planas o agrupadas · búsqueda opcional) ──
 // selected = Set de values (vacío ⇒ "todos", sin filtro). groups = [{key,label,items:[{value,label}]}].
-function MultiSelect({ label, options = null, groups = null, selected, onChange, searchable = false, allLabel = "Todos", width = 200 }) {
+export function MultiSelect({ label, options = null, groups = null, selected, onChange, searchable = false, allLabel = "Todos", width = 200 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const ref = useRef(null);
@@ -3012,22 +2919,33 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const actMenuRef = useRef(null);   // menú ⋮ (outside-click)
   const reportRef  = useRef(null);   // contenedor de la tabla del reporte (fuente de la "foto")
   const [year,           setYear]           = useState(CUR_YEAR);
+  const [intercoNegocio, setIntercoNegocio] = useState("");   // filtro de negocio del reporte Fondeo por negocio
+  const [saldoSoc,       setSaldoSoc]       = useState("");   // filtro de sociedad del reporte Saldos entre sociedades
+  const [intercoDrilling, setIntercoDrilling] = useState(false);  // en el drill de cualquier reporte interco se oculta header + filtros
   const [selectedSedeCCs, setSelectedSedeCCs] = useState(null);   // null = todas · [] = ninguna · [ids] = subconjunto
   const [sedeOpen,        setSedeOpen]        = useState(false);
   useEffect(() => { try { localStorage.setItem("pnlSinIva", sinIva ? "1" : "0"); } catch {} }, [sinIva]);
   const [monedaSel,      setMonedaSel]      = useState("ARS");   // valor crudo del selector (incl. modos FX consolidados)
   const [tiposCambio,    setTiposCambio]    = useState({});      // nb_tipos_cambio: mapa YYYY-MM → tasas USD
   useEffect(() => { fetchTiposCambio().then(setTiposCambio).catch(() => {}); }, []);
+  // Fuentes secundarias que cargan FUERA del batch principal (fire-and-forget, para no colgar el reporte si su
+  // backend tarda): histórico, franquicias (Ingresos HQ) y fondeo/interco (Capex). `loading` se apaga con el
+  // batch → estas siguen llegando después. Marcamos cada una "settled" (ok o falla) para un aviso suave: mientras
+  // falte alguna, el P&L puede mostrar líneas incompletas y avisamos, sin bloquear.
+  const [secReady, setSecReady] = useState({ hist: false, franq: false, interco: false });
   const [rawHist,        setRawHist]        = useState([]);      // nb_pnl_historico: leaf rows pre go-live (USD, sin IVA)
-  useEffect(() => { if (!HISTORICO_HABILITADO) return; fetchPnLHistorico().then(r => setRawHist(Array.isArray(r) ? r : [])).catch(() => {}); }, []);
+  useEffect(() => {
+    if (!HISTORICO_HABILITADO) { setSecReady(s => ({ ...s, hist: true })); return; }
+    fetchPnLHistorico().then(r => setRawHist(Array.isArray(r) ? r : [])).catch(() => {})
+      .finally(() => setSecReady(s => ({ ...s, hist: true })));
+  }, []);
   // Modo de consolidación FX derivado del selector. "native" = filtra por moneda (como siempre);
-  // "real" = traduce TODO a USD al TC de cierre de CADA mes (mezcla operación + efecto cambiario);
-  // "const" = traduce TODO a USD al TC de UN mes ancla (el del selector Mes) → comparable, aísla el FX
-  // (ARS vs USD y EUR vs USD quedan fijos, sin ruido de devaluación/caída del euro).
-  const fxMode   = monedaSel === "USD_REAL" ? "real" : monedaSel === "USD_CONST" ? "const" : "native";
-  const monedaPL = fxMode === "native" ? monedaSel : "USD";
+  // "real" = traduce TODO a la moneda destino al TC de cierre de CADA mes (mezcla operación + efecto
+  // cambiario); "const" = traduce TODO al TC de UN mes ancla (el del selector Mes) → comparable, aísla el FX
+  // (las paridades quedan fijas, sin ruido de devaluación/caída del euro). Destino = U$D o € (ver FX_DESTINOS).
+  const [fxMode, fxTarget] = parseMonedaSel(monedaSel);
+  const monedaPL = fxMode === "native" ? monedaSel : fxTarget;
   const setMonedaPL = setMonedaSel;   // los efectos que forzaban moneda (fondeadas/Huergo) siguen andando
-  const [monedaCF,       setMonedaCF]       = useState("ARS");
   const [rawEg,     setRawEg]     = useState([]);
   const [rawIn,     setRawIn]     = useState([]);
   const [rawMovs,   setRawMovs]   = useState([]);
@@ -3040,6 +2958,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const [socios,    setSocios]    = useState([]);        // maestro de socios (group-level)
   const [sociosCC,  setSociosCC]  = useState([]);        // cuenta corriente de socios no-cash (dividendos + apertura)
   const [rawFranq,  setRawFranq]  = useState({});        // comprobantes de Franquicias (read-only)
+  const [cargaFallida, setCargaFallida] = useState([]);  // fuentes secundarias lentas que NO cargaron (tras reintentos) → aviso
   const [intercoData,  setIntercoData]  = useState({ movs: [], comps: [], centros: [] });  // fuentes interco (read-only, todas las sociedades)
   const [sociedades,   setSociedades]   = useState([]);  // maestro sociedades (id→nombre/anillo)
   const [loading,   setLoading]   = useState(true);
@@ -3071,11 +2990,13 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
-      setLoading(true); setError(null);
+      setLoading(true); setError(null); setCargaFallida([]);
+      setSecReady(s => ({ ...s, franq: false, interco: false }));   // se re-piden en esta carga (hist no)
       try {
         // Sueldos (liquidaciones + pagos) vive en otro backend → se dispara en paralelo al batch de Numbers.
-        const liqsP  = fetchLiquidacionesCerradas().catch(() => []);
-        const pagosP = fetchPagosAnio().catch(() => []);
+        // Envuelto para saber si cargó (tras reintentos): si falla, el P&L queda sin sueldos → avisamos.
+        const liqsP  = fetchLiquidacionesCerradas().then(v => ({ ok: true, v })).catch(() => ({ ok: false, v: [] }));
+        const pagosP = fetchPagosAnio().then(v => ({ ok: true, v })).catch(() => ({ ok: false, v: [] }));
         // Batch: 8 hojas group-wide de Numbers en UNA llamada → los fetch de abajo salen de caché.
         await primeCache([
           { resource: "nb_comprobantes" },
@@ -3099,8 +3020,10 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
           fetchSocios().catch(() => []),
           fetchSociosCC().catch(() => []),
         ]);
-        const [liqsC, pagosS] = [await liqsP, await pagosP];
+        const [liqsR, pagosR] = [await liqsP, await pagosP];
+        const liqsC = liqsR.v, pagosS = pagosR.v;
         if (cancelled) return;
+        if (!liqsR.ok || !pagosR.ok) setCargaFallida(f => [...f, "Sueldos"]);
         setRawEg(eg);
         setRawIn(ing);
         setRawMovs(Array.isArray(movs) ? movs : []);
@@ -3113,14 +3036,17 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
         setSocios(Array.isArray(socs) ? socs : []);
         setSociosCC(Array.isArray(socsCC) ? socsCC : []);
         // Franquicias (read-only) — fuera del Promise.all para NO bloquear Reportes si ese backend tarda.
-        fetchComps().then(c => { if (!cancelled && c && typeof c === "object") setRawFranq(c); }).catch(() => {});
+        fetchComps().then(c => { if (!cancelled && c && typeof c === "object") setRawFranq(c); })
+          .catch(() => { if (!cancelled) setCargaFallida(f => [...f, "Franquicias"]); })
+          .finally(() => { if (!cancelled) setSecReady(s => ({ ...s, franq: true })); });
         // Intercompañía (read-only) — todas las fuentes (fondeo + transfers) + maestro sociedades (anillo).
         // `fetchIntercoData` ya trae `sociedades`, así que no hace falta un fetch aparte.
         fetchIntercoData().then(d => {
           if (cancelled || !d) return;
           setIntercoData(d);
           if (Array.isArray(d.sociedades)) setSociedades(d.sociedades);
-        }).catch(() => {});
+        }).catch(() => {})
+          .finally(() => { if (!cancelled) setSecReady(s => ({ ...s, interco: true })); });
       } catch (e) {
         if (!cancelled) setError(e.message);
       } finally {
@@ -3136,6 +3062,15 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const curTab   = TABS.find(t => t.id === activeTab);
   const curLente = LENTES.find(l => l.tabs.includes(activeTab));
 
+  // Fuentes secundarias todavía en vuelo (tras apagarse `loading`): mientras falte alguna, las líneas que
+  // alimentan (histórico = meses pre go-live; franquicias = Ingresos HQ; fondeo = Capex/interco) pueden estar
+  // incompletas → banner suave, no bloqueante.
+  const secPend = [
+    !secReady.hist && "histórico",
+    !secReady.franq && "franquicias",
+    !secReady.interco && "fondeo",
+  ].filter(Boolean);
+
   // Fondeada activa (España/Colombia/Puertos ya construida). Usa el MISMO reporte de sede (mismos filtros
   // moneda + sede), pero escopea el universo de sedes a las de ESA sociedad y agrega la cola de impuestos.
   const fondCfg    = FONDEADAS[activeTab] || null;
@@ -3143,8 +3078,19 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const isSedeLike = activeTab === "pl_sede" || isFond;
   const isHuergo   = activeTab === "op_huergo" && !curTab?.wip;   // negocio de margen (WRE, anillo 1)
   const isPnlTiempo = isSedeLike || isHuergo;   // reportes con toggle de vista (Evolución/Mensual/YTD) + Año/Moneda
-  // Al entrar a un negocio, arrancar en su moneda (fondeada = la suya; Huergo = ARS). Igual se puede cambiar.
-  useEffect(() => { if (isFond) setMonedaPL(fondCfg.moneda); else if (isHuergo) setMonedaPL("ARS"); }, [activeTab]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // Al entrar a un negocio, arrancar en su moneda… pero en el modo CONSOLIDADO (TC Real), no en el nativo:
+  // el nativo FILTRA por moneda, así que se come todo lo que la fondeada paga en otra (España: sueldos en USD
+  // y gastos en ARS del centro de estructura, 4.935 € en jul+ago; Colombia: la operación entera está en COP y
+  // el P&L en U$D nativo mostraba ingresos CERO de julio en adelante). La moneda nativa sigue en el selector.
+  // Huergo = ARS nativo (negocio de una sola moneda; el ARS no es destino de consolidación).
+  const monedaDeEntrada = (mon) => FX_DESTINOS.includes(mon) ? `${mon}_REAL` : mon;
+  useEffect(() => {
+    if (isFond) setMonedaPL(monedaDeEntrada(fondCfg.moneda));
+    else if (isHuergo) setMonedaPL("ARS");
+    // Resto de los reportes: respetá lo elegido, salvo que ya no se ofrezca acá (venías de España en € o de
+    // Colombia en COP) → U$D · TC Real.
+    else setMonedaPL(m => monedaValidaEn(m, activeTab) ? m : "USD_REAL");
+  }, [activeTab]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Clave por NOMBRE (lo que guardan las filas) y TAMBIÉN por id: varios writers de numbersApi
   // convierten id→nombre con `.replace(/^CUENTA_/, "")`, que no toca los ids nuevos (`CTA-…`) y
@@ -3177,10 +3123,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       .map(s => s.id)
   ), [sociedades]);
 
-  // Cash Flow: sociedades a consolidar (default = núcleo). Estado en el padre para que el filtro
-  // viva en el box de filtros (junto a Año/Moneda). null = todavía sin tocar → usa el núcleo.
-  const [cfSelSoc, setCfSelSoc] = useState(null);
-  const cfSel = cfSelSoc ?? new Set(nucleoEmpresas);
+  // Sociedades agrupadas por anillo (filtro del Devengado).
   const cfSocGroups = useMemo(() => {
     const byAnillo = {};
     for (const s of (sociedades ?? [])) (byAnillo[s.anillo || "Sin anillo"] ??= []).push(s);
@@ -3215,6 +3158,9 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   // agregado "Todas las Sedes" (sus ventas/cvar/IVA son parte del consolidado). Su OPEX se separa como línea
   // "Estructura Wellness" (abajo de Total Gastos Operativos), y en una sede sola se prorratea por ventas.
   const estructuraCCId = fondCfg?.estructuraCC || null;
+  // Colombia: la estructura es una CUENTA ("Estructura Tigre Loco") dentro del único centro consolidado
+  // (no un centro aparte como Wellness). Se saca de "Sin clasificar" y se muestra como línea propia.
+  const estructuraCuentaName = fondCfg?.estructuraCuenta || null;
   const sedeCCsSel = useMemo(   // sedes SELECCIONABLES (sin el centro de estructura)
     () => estructuraCCId ? sedeCCs.filter(c => ccKey(c.id) !== ccKey(estructuraCCId)) : sedeCCs,
     [sedeCCs, estructuraCCId]
@@ -3292,11 +3238,16 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       const catSede = String(meta?.categoria_pnl_sede || "").trim().toLowerCase();
       // Solo VENTAS/otros ingresos van por el lado ingreso (rutean a vta/int/ger/wre/hq). Financieros (incl.
       // Intereses Ganados), impuestos, costos y opex van por egRows → caen en su branch del motor por cuenta.
-      // "Pauta" es ingreso HQ (netea con su compra vía ING_CONTRA_HQ) aunque no esté categorizada en el maestro.
+      // "Pauta" depende del CENTRO: en un centro HQ es la VENTA de pauta (ingreso, netea con su compra vía
+      // ING_CONTRA_HQ, aunque el maestro no la categorice); en una SEDE es la COMPRA de pauta (costo, positivo como
+      // Sueldos/Alquiler). Hasta el 18/9/2026 iba siempre a ingreso → en España el P&L Sede la tomaba como contra
+      // y mostraba la pauta de cada sede como crédito (resOp inflado 2× en todo el histórico).
       // SEDE_ING_ACCTS: cuentas de ventas/interusos por definición (aunque el maestro no las tenga) → mantienen
       // su signo natural (los interusos del histórico ya vienen neteados; sin esto el motor se los invertía).
-      const esIngreso = catSede === "ventas" || catSede === "otros ingresos" || catPnl === "ventas"
-        || cuenta.toLowerCase() === "pauta" || SEDE_ING_ACCTS.has(_nkSede(cuenta));
+      const esPauta   = cuenta.toLowerCase() === "pauta";
+      const esIngreso = esPauta
+        ? familiaCentro(ccMap?.get(ccKey(r.centro_costo))) === "hq"
+        : (catSede === "ventas" || catSede === "otros ingresos" || catPnl === "ventas" || SEDE_ING_ACCTS.has(_nkSede(cuenta)));
       const total = Number(r.total) || 0, neto = Number(r.neto) || 0;
       const row = {
         fecha: String(r.fecha || "").slice(0, 10), centro_costo: r.centro_costo || "",
@@ -3308,7 +3259,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       (esIngreso ? ins : egs).push(row);
     }
     return { histIn: ins, histEg: egs };
-  }, [rawHist, cuentaMap]);
+  }, [rawHist, cuentaMap, ccMap]);
   const hayHistorico = rawHist.length > 0;   // hay overlay pre go-live → mostrar los meses previos al go-live
 
   // Los comprobantes de retención practicada (tag RETDEP) son el "por pagar a AFIP" que nace al retenerle
@@ -3323,14 +3274,30 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     ? (mesCorte ?? (year >= CUR_YEAR ? Math.max(0, new Date().getMonth() - 1) : 11))
     : mesSel;
   const fxConstTC   = useMemo(() => fxMode === "const" ? tcDelMes(tiposCambio, year, anchorMes + 1) : null, [fxMode, tiposCambio, year, anchorMes]);
-  const fxConstFalta = fxMode === "const" && !fxConstTC;   // el mes ancla no tiene TC cargado
-  // Traductor FX del P&L (consolidación). null en modo nativo. "real" = a USD al TC de cierre del mes de cada
-  // fila (traducí mes por mes y sumá). "const" = a USD al TC del mes ancla, ignorando el mes de la fila.
+  // El mes ancla no tiene TC cargado… o lo tiene pero sin la tasa del destino (ej. el mes existe pero le falta
+  // eurUSD): en ese caso la traducción devolvería null para todo y el reporte quedaría vacío sin explicación.
+  const fxConstFalta = fxMode === "const" &&
+    (!fxConstTC || (fxTarget !== "USD" && montoAMoneda(1, "USD", fxConstTC, fxTarget) == null));
+  // Traductor FX del P&L (consolidación). null en modo nativo. "real" = al destino con el TC de cierre del mes
+  // de cada fila (traducí mes por mes y sumá). "const" = al destino con el TC del mes ancla, ignorando el mes.
   const fxConv = useMemo(() => {
-    if (fxMode === "real")  return (monto, moneda, anio, mes) => montoAUSD(monto, moneda, tcDelMes(tiposCambio, anio, mes));
-    if (fxMode === "const") return (monto, moneda) => montoAUSD(monto, moneda, fxConstTC);
+    if (fxMode === "real")  return (monto, moneda, anio, mes) => montoAMoneda(monto, moneda, tcDelMes(tiposCambio, anio, mes), fxTarget);
+    if (fxMode === "const") return (monto, moneda) => montoAMoneda(monto, moneda, fxConstTC, fxTarget);
     return null;
-  }, [fxMode, tiposCambio, fxConstTC]);
+  }, [fxMode, fxTarget, tiposCambio, fxConstTC]);
+
+  // Matriz del reporte "Intercompañía por negocio" (siempre en USD, independiente del modo FX del P&L). Se
+  // computa acá (una vez) para poder dibujar el selector de Negocio junto al de Año y pasarla ya lista al tab.
+  const intercoFx = useCallback((m, mon, a, me) => montoAUSD(m, mon, tcDelMes(tiposCambio, a, me)), [tiposCambio]);
+  // Para saldos (balance, no ligado a un mes): traduce a USD con el ÚLTIMO TC cargado.
+  const fxSaldo = useMemo(() => {
+    const ym = Object.keys(tiposCambio || {}).filter(k => tiposCambio[k]).sort().pop();
+    const tc = ym ? tiposCambio[ym] : null;
+    return (m, mon) => montoAUSD(m, mon, tc);
+  }, [tiposCambio]);
+  const intercoMatriz = useMemo(
+    () => activeTab === "interco_matriz" ? intercoConsolidadoMensual(intercoData, { year, desde: PNL_INICIO, fx: intercoFx }) : null,
+    [activeTab, intercoData, year, intercoFx]);
   // Traduce un array mensual ARS [12] a USD al TC de cierre de cada mes (o lo deja igual en modo nativo).
   const fxArrARS = useCallback((arr, anio) => {
     if (!fxConv || !arr) return arr;
@@ -3383,10 +3350,26 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     () => ccs.find(c => (c.grupo ?? "").toLowerCase() === "hq" && normCat(c.categoria_pnl) === "ventas")?.id ?? "",
     [ccs]
   );
-  const franqRows = useMemo(
-    () => franquiciasIngresoPnLRows(rawFranq, "", ventasCcId).map(r => ({ ...r, _tipo: "Franquicia" })),
-    [rawFranq, ventasCcId]
-  );
+  // Solo las franquicias contabilizadas con una sociedad DEL NÚCLEO entran al P&L BIGG. Las emitidas por
+  // una fondeada (ej. la Pauta / interusos genéricos contabilizados con `wellness` = Gestión Deportiva y
+  // Wellness / España) son resultado de ESA sociedad, no del núcleo → van a su propio P&L, no acá. Se rutean
+  // todas al mismo centro "HQ Ventas", así que el filtro correcto es por la SOCIEDAD del emisor, no por centro.
+  // Centro de la facturación de franquicias según la SOCIEDAD emisora:
+  //   · núcleo (Ñako / Bigg Fit) → "HQ - Ventas", como siempre (Ingresos HQ del P&L BIGG).
+  //   · fondeada con centro de estructura (España = Gestión Deportiva y Wellness → "16 - Wellness") → ESE centro,
+  //     con subtipo INGRESO. Decisión Martín 18/9/2026: Wellness es PASAMANOS de la pauta — se la vende a los
+  //     franquiciados y se la compra a Untangle en la misma cuenta "Pauta" → en el P&L de sedes la venta resta en
+  //     la línea Pauta (contra) y con la FC de compra el efecto es cero. El Devengado/balance por sociedad la ven
+  //     como ingreso de Wellness (antes se descartaba y la CxC de franquiciados quedaba sin contrapartida).
+  //   · sociedad sin centro conocido → afuera (no hay dónde ponerla sin inflar a otro).
+  const franqRows = useMemo(() => {
+    const estructuraDe = Object.fromEntries(Object.values(FONDEADAS).filter(f => f.estructuraCC).map(f => [f.empresa, f.estructuraCC]));
+    return franquiciasIngresoPnLRows(rawFranq, "", ventasCcId).map(r => {
+      if (nucleoEmpresas.has(r.sociedad)) return { ...r, _tipo: "Franquicia" };
+      const cc = estructuraDe[r.sociedad];
+      return cc ? { ...r, centro_costo: cc, subtipo: "INGRESO", _tipo: "Franquicia" } : null;
+    }).filter(Boolean);
+  }, [rawFranq, ventasCcId, nucleoEmpresas]);
   const inConFranq = useMemo(() => [...rawIn, ...franqRows, ...histIn], [rawIn, franqRows, histIn]);
 
   // Detalle de Informes: las MISMAS fuentes que el P&L (comprobantes + gastos directos + sueldos +
@@ -3395,11 +3378,11 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const egDetalle  = useMemo(() => egConSueldos.filter(r => !r._tipo || ["Gasto", "Sueldo", "Financiación"].includes(r._tipo)), [egConSueldos]);
   const ingDetalle = useMemo(() => [...inConFranq, ...gastoMovRows.filter(r => r._tipo === "Ingreso" || r._tipo === "Retención")], [inConFranq, gastoMovRows]);
 
-  // Filas pre-traducidas a USD para el consolidado (UNA vez, mes por mes). En modo nativo (fxConv null) son
-  // las mismas filas → todos los P&L (Sedes/Huergo/BIGG) corren nativos en USD sin tocar su lógica. Mecanismo
+  // Filas pre-traducidas a la moneda del consolidado (UNA vez, mes por mes). En modo nativo (fxConv null) son
+  // las mismas filas → todos los P&L (Sedes/Huergo/BIGG) corren nativos ahí sin tocar su lógica. Mecanismo
   // único de traducción del consolidado.
-  const inFxRows = useMemo(() => traducirFilasUSD(inConFranq, fxConv), [inConFranq, fxConv]);
-  const egFxRows = useMemo(() => traducirFilasUSD(egConSueldos, fxConv), [egConSueldos, fxConv]);
+  const inFxRows = useMemo(() => traducirFilasFx(inConFranq, fxConv, fxTarget), [inConFranq, fxConv, fxTarget]);
+  const egFxRows = useMemo(() => traducirFilasFx(egConSueldos, fxConv, fxTarget), [egConSueldos, fxConv, fxTarget]);
   const inFx = inFxRows.rows, egFx = egFxRows.rows;
   // Meses PASADOS sin TC (alimenta el aviso). El mes en curso sin TC de cierre es esperado → no entra.
   const mesesSinTC = useMemo(
@@ -3438,10 +3421,12 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   // y costos variables (Otros Ingresos, Fees) quedan en el consolidado. En "Todas las Sedes" el centro está
   // en el scope → su OPEX ya viaja dentro de Total Gastos Operativos y solo se SEPARA visualmente. En una
   // sede sola (Wellness fuera del scope), esa estructura se PRORRATEA por ventas y se suma como costo.
-  const estructuraOpexFull = useMemo(() => {   // OPEX del centro de estructura (positivo), mes a mes
-    if (!estructuraCCId) return null;
-    return computeSubtotalsSede(buildPnLSede(inFx, egFx, [estructuraCCId], year, monedaPL, sinIva)).totGastosOp;
-  }, [estructuraCCId, inFx, egFx, year, monedaPL, sinIva]);
+  const estructuraPnl = useMemo(() => (   // P&L del centro de estructura solo (para el total y su detalle)
+    estructuraCCId ? buildPnLSede(inFx, egFx, [estructuraCCId], year, monedaPL, sinIva) : null
+  ), [estructuraCCId, inFx, egFx, year, monedaPL, sinIva]);
+  const estructuraOpexFull = useMemo(() => (   // OPEX del centro de estructura (positivo), mes a mes
+    estructuraPnl ? computeSubtotalsSede(estructuraPnl).totGastosOp : null
+  ), [estructuraPnl]);
   const wellnessEnScope = !!estructuraCCId && resolvedCCSede.some(id => ccKey(id) === ccKey(estructuraCCId));
   // Ventas de TODAS las sedes reales (denominador del prorrateo) — sin el centro de estructura.
   const ventasTotalesSedes = useMemo(() => {
@@ -3461,6 +3446,34 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       return den ? estructuraOpexFull[m] * (Number(ventasScope[m]) || 0) / den : 0;
     });
   }, [estructuraOpexFull, wellnessEnScope, ventasTotalesSedes, pnlSede]);
+  // Colombia: valores de la cuenta "Estructura Tigre Loco" (viven en Sin clasificar del centro consolidado).
+  const estructuraCuentaVals = useMemo(() => {
+    if (!estructuraCuentaName) return null;
+    const k = Object.keys(pnlSede.sinClasificar).find(x => _nkSede(x) === _nkSede(estructuraCuentaName));
+    return k ? pnlSede.sinClasificar[k] : ZERO12;
+  }, [estructuraCuentaName, pnlSede]);
+  // Detalle por cuenta de la estructura, para desplegar la línea. Son las mismas cuentas que forman
+  // `estructuraOpexFull` (los 4 grupos de Gastos Operativos del centro), escaladas por el MISMO factor que la
+  // cuota → con una sede sola (prorrateo por ventas) las cuentas siguen sumando exactamente la línea.
+  const estructuraDetalle = useMemo(() => {
+    if (!estructuraPnl || !estructuraOpexFull || !estructuraCuota) return null;
+    const factor = MESES.map((_, m) => {
+      const full = Number(estructuraOpexFull[m]) || 0;
+      return full ? (Number(estructuraCuota[m]) || 0) / full : 0;
+    });
+    const out = [];
+    for (const gk of SEDE_OPEX_GRUPOS)
+      for (const [name, arr] of Object.entries(estructuraPnl.grupos[gk])) {
+        const cur = MESES.map((_, m) => (Number(arr[m]) || 0) * factor[m]);
+        if (cur.some(v => Math.abs(v) >= 0.005)) out.push({ label: name, cur });   // cuentas en cero no ensucian
+      }
+    return out.length ? out : null;
+  }, [estructuraPnl, estructuraOpexFull, estructuraCuota]);
+  // Estructura efectiva a pasar a la tabla: centro (España, ya está dentro de Gastos Op → estructuraEnOpex)
+  // o cuenta (Colombia, fuera de Gastos Op → resta al Resultado Operativo). Label según la lente.
+  const estructuraCuotaEff  = estructuraCuota ?? estructuraCuentaVals;
+  const estructuraEnOpexEff = estructuraCuota ? wellnessEnScope : false;
+  const estructuraLabelEff  = estructuraCuentaName || "Estructura Wellness";
 
   // Retiros de la cesión (cuenta "Inversores") SIEMPRE con IVA (total), independiente del toggle: el retiro es
   // el efectivo real pagado al inversor. Tomo la versión Con IVA del pnl de sede.
@@ -3498,12 +3511,15 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
 
   // Holding (P&L BIGG) para un año dado → { pnl (grupos+capex con fondeo), sub (subtotales) }. Se calcula para
   // `year` y `year-1` (comparativas Mensual/YTD). Usa las filas pre-traducidas inBigg/egBigg (USD en consolidado).
-  const holdingDe = (yr) => {
+  // `holdingDe(yr, opts)` — computa el P&L holding. Los defaults reproducen el comportamiento del P&L BIGG
+  // (filas pre-traducidas del selector del P&L, monedaPL, sinIva). El puente de caja lo llama con las filas
+  // traducidas a la moneda del CF (`inR/egR`, `fx`, `moneda`) para que ambos motores hablen la misma moneda.
+  const holdingDe = (yr, { inR = inBigg, egR = egBigg, fx = fxConv, moneda = monedaPL, sinIvaArg = sinIva } = {}) => {
     // Sedes Propias AR neto del 49% de Barrio Norte. La cesión es una apropiación del resultado NETO (no lleva
     // IVA): se resta 0,49 × resultado neto de BN al `res` y NO se toca el tracking de IVA. Así coincide con los
     // DIVIDENDOS BN y no se infla en la vista Con IVA (antes cedía 0,49 × resultado bruto → sobrestimaba ~1,7M/mes).
-    const sAR = computeSubtotalsSede(buildPnLSede(inBigg, egBigg, arNucleoCCs, yr, monedaPL, sinIva));
-    const sBNnet = bnCcId ? computeSubtotalsSede(buildPnLSede(inBigg, egBigg, [bnCcId], yr, monedaPL, true)) : null;
+    const sAR = computeSubtotalsSede(buildPnLSede(inR, egR, arNucleoCCs, yr, moneda, sinIvaArg));
+    const sBNnet = bnCcId ? computeSubtotalsSede(buildPnLSede(inR, egR, [bnCcId], yr, moneda, true)) : null;
     // IVA de aranceles de sedes AR (total − neto): el histórico no trae iva_monto, así que la sede computa aranceles
     // BRUTO. Ese IVA es un costo que NO va a la sede (los socios se liquidan neto → sus saldos ya cierran): se
     // DEVUELVE al resultado de sede (queda neto) y se reconoce como costo en HQ (abajo). No toca el dato de sede.
@@ -3511,7 +3527,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     const sumaArIVA = (r) => {
       if (!/aranceles/i.test(String(r.cuenta_contable || ""))) return;
       if (!r.fecha || (r.fecha < PNL_INICIO && !r._historico) || r.fecha.slice(0, 4) !== String(yr)) return;
-      if ((r.moneda ?? "ARS") !== monedaPL) return;
+      if ((r.moneda ?? "ARS") !== moneda) return;
       if (!ccEnFiltro(arNucleoCCs, r.centro_costo)) return;
       const m = parseInt(r.fecha.slice(5, 7), 10) - 1;
       const t = Number(r.total) || 0, n = Number(r.neto);
@@ -3519,31 +3535,32 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       const iva = Number(r.iva_monto) || (Number.isFinite(n) && n ? t - n : t * 0.21 / 1.21);
       if (m >= 0 && m < 12 && Number.isFinite(iva)) arIVASedes[m] += iva;
     };
-    for (const r of inBigg) sumaArIVA(r);
-    for (const r of egBigg) sumaArIVA(r);
+    for (const r of inR) sumaArIVA(r);
+    for (const r of egR) sumaArIVA(r);
     const resSedesAR = {
       res:    sAR.resFinal.map((v, m) => v - CESION.pct * (Number(sBNnet?.resFinal?.[m]) || 0) + arIVASedes[m]),
       ivaDeb: sAR.ivaDeb, ivaCred: sAR.ivaCred,
     };
     // Gerenciamiento (Rosedal) = fee Ñako→Segui (cuenta "Fee de Gestion y Adm" exacta, núcleo; venta → IVA débito).
     const fRes = new Array(12).fill(0), fDeb = new Array(12).fill(0);
-    for (const r of inBigg) {
+    for (const r of inR) {
       if (_nkSede(r.cuenta_contable) !== _nkSede("Fee de Gestion y Adm")) continue;
       if (!nucleoEmpresas.has((r.sociedad ?? "").trim())) continue;
       if (!r.fecha || (r.fecha < PNL_INICIO && !r._historico) || r.fecha.slice(0, 4) !== String(yr)) continue;
-      if ((r.moneda ?? "ARS") !== monedaPL) continue;
+      if ((r.moneda ?? "ARS") !== moneda) continue;
       const m = parseInt(r.fecha.slice(5, 7), 10) - 1;
-      if (m >= 0 && m < 12) { fRes[m] += montoPnL(r, sinIva); if (sinIva) fDeb[m] += Number(r.iva_monto) || 0; }
+      if (m >= 0 && m < 12) { fRes[m] += montoPnL(r, sinIvaArg); if (sinIvaArg) fDeb[m] += Number(r.iva_monto) || 0; }
     }
     const feeGer = { res: fRes, ivaDeb: fDeb, ivaCred: new Array(12).fill(0) };
     // Wellness Real Estate = margen de Huergo (+ Puertos a futuro).
-    const sH = computeSubtotalsHuergo(buildPnLHuergo(inBigg, egBigg, huergoCCs, yr, monedaPL, sinIva));
+    const sH = computeSubtotalsHuergo(buildPnLHuergo(inR, egR, huergoCCs, yr, moneda, sinIvaArg));
     const resWRE = { res: sH.margen, ivaDeb: sH.ivaDeb, ivaCred: sH.ivaCred };
-    // HQ + fondeo de las fondeadas (anillo 2) dentro de Inversiones/Capex. El fondeo interco ya está en USD.
-    const pnl = buildPnLBigg(inBigg, egBigg, ccMap, cuentaMap, nucleoEmpresas, yr, monedaPL, sinIva);
+    // HQ + fondeo de las fondeadas (anillo 2) dentro de Inversiones/Capex. En modo consolidado se traduce a USD
+    // con fx (antes filtraba por moneda y descartaba el fondeo en ARS/EUR → subcontaba la línea Fondeo).
+    const pnl = buildPnLBigg(inR, egR, ccMap, cuentaMap, nucleoEmpresas, yr, moneda, sinIvaArg);
     // Nota: el IVA de aranceles de sedes (arIVASedes) YA se devolvió al resultado de sede arriba (queda neta). NO
     // se reconoce como gasto en HQ: es crédito fiscal recuperable, no un costo del P&L → sale del resultado.
-    const fondeo = fondeoFondeadasMensual(intercoData, { year: yr, moneda: monedaPL, desde: PNL_INICIO });
+    const fondeo = fondeoFondeadasMensual(intercoData, { year: yr, moneda, desde: PNL_INICIO, fx });
     const nomSoc = new Map((intercoData?.sociedades || []).map(s => [String(s.id), s.nombre || s.id]));
     for (const [fid, arr] of Object.entries(fondeo)) {
       if (!arr.some(v => Math.abs(v) > 0.01)) continue;
@@ -3556,9 +3573,9 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     return { pnl, sub: computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) };
   };
   const biggCur  = useMemo(() => (isBigg || isVentasHQ) ? holdingDe(year)     : null,   // eslint-disable-line react-hooks/exhaustive-deps
-    [isBigg, isVentasHQ, inBigg, egBigg, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva, intercoData]);
+    [isBigg, isVentasHQ, inBigg, egBigg, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva, intercoData, fxConv]);
   const biggPrev = useMemo(() => (isBigg || isVentasHQ) ? holdingDe(year - 1) : null,   // eslint-disable-line react-hooks/exhaustive-deps
-    [isBigg, isVentasHQ, inBigg, egBigg, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva, intercoData]);
+    [isBigg, isVentasHQ, inBigg, egBigg, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva, intercoData, fxConv]);
   const pnlBigg     = biggCur?.pnl  || null;
   const subBigg     = biggCur?.sub  || null;
   const pnlBiggPrev = biggPrev?.pnl || null;
@@ -3635,7 +3652,6 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   );
 
   const showMonedaPL = isPnlTiempo || activeTab === "pl_bigg" || isVentasHQ;
-  const showMonedaCF = activeTab === "cf";
   const showSedes    = isSedeLike && sedeCCsSel.length > 0;
 
   // Menú-landing: sin reporte elegido → tarjetas agrupadas por lente (Operaciones = 1 tarjeta x operación).
@@ -3684,7 +3700,8 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     const baseSede = {
       pnl: pnlSede, sub: subSede, pnlPrev: pnlSedePrev, subPrev: subSedePrev, year,
       nombreCuenta, cesion: cesionSede, cesionResFinal: subSedeNet?.resFinal, cesionRetiros: cesionRetirosCI,
-      comBaseResOp, estructuraCuota, estructuraEnOpex: wellnessEnScope,
+      comBaseResOp, estructuraCuota: estructuraCuotaEff, estructuraEnOpex: estructuraEnOpexEff, estructuraLabel: estructuraLabelEff,
+      estructuraDetalle,
       impuestos: isFond ? IMPUESTOS_FOND : null, financieros: isFond ? FINANCIEROS_FOND : null,
       distribucion: activeTab === "op_rosedal" ? distribRosedalFx : null,
       retirosVivos: activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null,
@@ -3712,7 +3729,9 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   // Encabezado de la "foto" (Ampliar / Copiar imagen): título + año + vista + moneda + IVA, para entender
   // qué se está viendo (igual criterio que la bajada a Excel).
   const monedaFotoLabel = { ARS: "$ ARS", USD: "U$D", EUR: "€ EUR", COP: "COP",
-    USD_REAL: "U$D · TC Real", USD_CONST: `U$D constante (${MESES[anchorMes]} ${year})` }[monedaSel] || monedaSel;
+    USD_REAL: "U$D · TC Real", USD_CONST: `U$D constante (${MESES[anchorMes]} ${year})`,
+    EUR_REAL: "€ · TC Real",   EUR_CONST: `€ constante (${MESES[anchorMes]} ${year})`,
+    COP_REAL: "COP · TC Real", COP_CONST: `COP constante (${MESES[anchorMes]} ${year})` }[monedaSel] || monedaSel;
   const vistaFotoLabel = vistaPnl === "evolucion" ? "Evolución mensual"
     : vistaPnl === "mensual" ? `Mensual · ${MESES[mesSel]}`
     : `YTD a ${MESES[mesSel]}`;
@@ -3735,12 +3754,40 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     // cards blancas; así la regla global `td/th{border:var(--border)}` no pinta líneas oscuras sobre blanco.
     <div style={{ padding: "28px 32px", maxWidth: 1400, "--border": T.cardBorder }} className="fade">
 
+      {/* Aviso SUAVE: fuentes secundarias todavía llegando (el batch principal ya está, pero histórico /
+           franquicias / fondeo cargan aparte). No bloquea: avisa que algunas líneas pueden moverse. */}
+      {secPend.length > 0 && cargaFallida.length === 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10,
+          background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 10, padding: "9px 16px", marginBottom: 16 }}>
+          <Spinner size={15} />
+          <div style={{ fontSize: 13, color: "#1e40af", fontWeight: 600, lineHeight: 1.4 }}>
+            Cargando datos complementarios (<strong>{secPend.join(" · ")}</strong>)… algunas líneas pueden completarse en unos segundos.
+          </div>
+        </div>
+      )}
+
+      {/* Aviso: alguna fuente secundaria lenta (Franquicias/Sueldos) no cargó tras reintentos → el P&L
+           puede estar incompleto. Mejor avisar que mostrar el número a medias en silencio. */}
+      {cargaFallida.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+          background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 10, padding: "10px 16px", marginBottom: 16 }}>
+          <div style={{ fontSize: 13, color: "#92400e", fontWeight: 600, lineHeight: 1.4 }}>
+            ⚠ No cargó <strong>{cargaFallida.join(" y ")}</strong> (backend lento). El P&amp;L puede estar incompleto — recargá.
+          </div>
+          <button onClick={() => setLoadKey(k => k + 1)} style={{
+            flexShrink: 0, background: "#92400e", color: "#fff", border: "none", borderRadius: 999,
+            padding: "6px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: T.font }}>
+            Recargar
+          </button>
+        </div>
+      )}
+
       {/* ── Header del reporte: "← Reportes" al lado del título; a la derecha vista + menú ⋮ ──
            CxP/CxC arman su propio header (Volver reemplaza a Reportes en el drill), así que acá se omite. */}
-      {activeTab !== "cxp_prov" && activeTab !== "cxc_cli" && (
+      {activeTab !== "cxp_prov" && activeTab !== "cxc_cli" && !((activeTab === "interco_matriz" || activeTab === "interco") && intercoDrilling) && (
       <PageHeader
         title={curTab?.label ?? "Reporte"}
-        subtitle={(isPnlTiempo || isBigg || isVentasHQ || activeTab === "cxp_prov" || activeTab === "cxc_cli") ? undefined : curLente?.label}
+        subtitle={(isPnlTiempo || isBigg || isVentasHQ || activeTab === "cxp_prov" || activeTab === "cxc_cli" || activeTab === "consolidado" || activeTab === "balance_pn" || activeTab === "cf") ? undefined : (activeTab === "interco_matriz" || activeTab === "interco") ? curTab?.desc : curLente?.label}
         back={
           <button onClick={() => setActiveTab(null)} style={{
             display: "inline-flex", alignItems: "center", gap: 6,
@@ -3806,7 +3853,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       )}
 
       {/* ── Toolbar / Filters (Consolidado y los detalles traen su propia barra; los WIP no llevan) ── */}
-      {activeTab !== "consolidado" && activeTab !== "cxp_prov" && activeTab !== "cxc_cli" && !curTab?.wip && activeTab !== "inf_egresos" && activeTab !== "inf_ingresos" && (
+      {activeTab !== "consolidado" && activeTab !== "balance_pn" && activeTab !== "cf" && activeTab !== "cxp_prov" && activeTab !== "cxc_cli" && !curTab?.wip && activeTab !== "inf_egresos" && activeTab !== "inf_ingresos" && activeTab !== "devengado" && !((activeTab === "interco_matriz" || activeTab === "interco") && intercoDrilling) && (
       <div style={{
         display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap", alignItems: "flex-end",
         background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
@@ -3821,6 +3868,30 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
           </select>
         </div>
 
+        {/* Negocio — reporte "Intercompañía por negocio" */}
+        {activeTab === "interco_matriz" && (
+          <div>
+            <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
+              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Negocio</label>
+            <select value={intercoNegocio} onChange={e => setIntercoNegocio(e.target.value)} style={selStyle}>
+              <option value="">Todos</option>
+              {(intercoMatriz?.negocios || []).map(n => <option key={n.negocioId} value={n.negocioId}>{n.negocioNombre}</option>)}
+            </select>
+          </div>
+        )}
+
+        {/* Sociedad — reporte "Saldos entre sociedades" */}
+        {activeTab === "interco" && (
+          <div>
+            <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
+              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Sociedad</label>
+            <select value={saldoSoc} onChange={e => setSaldoSoc(e.target.value)} style={selStyle}>
+              <option value="">Todas</option>
+              {[...sociedades].sort((a, b) => String(a.nombre || a.id).localeCompare(String(b.nombre || b.id))).map(s => <option key={s.id} value={s.id}>{s.nombre || s.id}</option>)}
+            </select>
+          </div>
+        )}
+
         {/* Moneda — P&L (en sede, arranca el grupo derecho) */}
         {showMonedaPL && (
           <div style={{ order: ordControls ? 4 : 0, marginLeft: ordControls ? "auto" : undefined }}>
@@ -3833,8 +3904,8 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
                   {fxConstFalta ? "⚠️" : "🔒"}
                   <span className="nb-tip-box">
                     {fxConstFalta
-                      ? `Falta el tipo de cambio de ${MESES[anchorMes]} ${year} (mes ancla del modo constante). Cargalo en Maestros (nb_tipos_cambio) o elegí otro mes.`
-                      : `U$D constante — todo valuado al TC de ${MESES[anchorMes]} ${year} (comparable, sin efecto cambiario). El mes ancla lo fija el selector ${vistaPnl === "evolucion" ? "Hasta" : "Mes"}.`}
+                      ? `Falta el tipo de cambio de ${MESES[anchorMes]} ${year} a ${MONEDA_SYM[fxTarget] || fxTarget} (mes ancla del modo constante). Cargalo en Maestros (nb_tipos_cambio) o elegí otro mes.`
+                      : `${MONEDA_SYM[fxTarget] || fxTarget} constante — todo valuado al TC de ${MESES[anchorMes]} ${year} (comparable, sin efecto cambiario). El mes ancla lo fija el selector ${vistaPnl === "evolucion" ? "Hasta" : "Mes"}.`}
                   </span>
                 </span>
               )}
@@ -3846,8 +3917,10 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
                 ))}
               </optgroup>
               <optgroup label="Consolidado">
-                <option value="USD_REAL">U$D · TC Real</option>
-                <option value="USD_CONST">U$D · Constante</option>
+                {fxDestinosDe(activeTab).flatMap(d => [
+                  <option key={`${d}_REAL`}  value={`${d}_REAL`}>{MONEDA_SYM[d] || d} · TC Real</option>,
+                  <option key={`${d}_CONST`} value={`${d}_CONST`}>{MONEDA_SYM[d] || d} · Constante</option>,
+                ])}
               </optgroup>
             </select>
           </div>
@@ -3883,25 +3956,6 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
               })}
             </div>
           </div>
-        )}
-
-        {/* Moneda — CF */}
-        {showMonedaCF && (
-          <div>
-            <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: T.muted,
-              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Moneda</label>
-            <select value={monedaCF} onChange={e => setMonedaCF(e.target.value)} style={selStyle}>
-              {Object.entries(MONEDA_SYM).map(([k, v]) => (
-                <option key={k} value={k}>{v} {k}</option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {/* Sociedades a consolidar — CF (agrupadas por anillo) */}
-        {showMonedaCF && (
-          <MultiSelect label="Sociedades a consolidar" groups={cfSocGroups} selected={cfSel}
-            onChange={setCfSelSoc} allLabel="Todas" width={230} />
         )}
 
         {/* Mes — solo para vistas comparativas (Mensual / YTD) */}
@@ -4006,7 +4060,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       {fxMode === "real" && mesesSinTC.length > 0 && (
         <div style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 8, padding: "8px 14px",
           marginBottom: 16, fontSize: 12, color: "#92400e", fontWeight: 600 }}>
-          ⚠ Faltan tipos de cambio de: {mesesSinTC.join(", ")} → esos meses no se tradujeron a USD. Cargalos en Maestros (nb_tipos_cambio).
+          ⚠ Faltan tipos de cambio de: {mesesSinTC.join(", ")} → esos meses no se tradujeron a {MONEDA_SYM[fxTarget] || fxTarget}. Cargalos en Maestros (nb_tipos_cambio).
         </div>
       )}
 
@@ -4017,7 +4071,8 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
         <PnLTableSede pnl={pnlSede} sub={subSede} pnlPrev={pnlSedePrev} subPrev={subSedePrev}
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} nombreCuenta={nombreCuenta}
           cesion={cesionSede} cesionResFinal={subSedeNet?.resFinal} cesionRetiros={cesionRetirosCI}
-          comBaseResOp={comBaseResOp} estructuraCuota={estructuraCuota} estructuraEnOpex={wellnessEnScope}
+          comBaseResOp={comBaseResOp} estructuraCuota={estructuraCuotaEff} estructuraEnOpex={estructuraEnOpexEff} estructuraLabel={estructuraLabelEff}
+          estructuraDetalle={estructuraDetalle}
           impuestos={isFond ? IMPUESTOS_FOND : null} financieros={isFond ? FINANCIEROS_FOND : null}
           distribucion={activeTab === "op_rosedal" ? distribRosedalFx : null}
           retirosVivos={activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null}
@@ -4048,10 +4103,11 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
         </div>
       )}
 
-      {/* ── Cash Flow ── */}
+      {/* ── Cash Flow: dentro del consolidado de Tesorería (mismas cajas, sociedades y moneda que el Balance).
+             Arranca con el núcleo tildado. Vista "cf" = por qué se movió la caja; "flujo" = del resultado a la caja. ── */}
       {activeTab === "cf" && (
-        <TabCashFlow rawMovs={rawMovs} rawIn={rawIn} rawEg={rawEg} ccMap={ccMap} nucleoEmpresas={nucleoEmpresas}
-          selSoc={cfSel} year={year} moneda={monedaCF} tarjetaIds={tarjetaIds} cuentasBancarias={cuentasBancarias} />
+        <TabTesoreriaConsolidada vistas={["cf", "flujo"]} socInicial="nucleo" monedaInicial="ARS"
+          pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
       )}
 
       {activeTab === "balance" && (
@@ -4081,7 +4137,14 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       )}
 
       {activeTab === "interco" && (
-        <TabInterco data={intercoData} sociedades={sociedades} />
+        <TabSaldosInterco data={intercoData} sociedades={sociedades} saldoSoc={saldoSoc} fx={fxSaldo}
+          onDrillActive={setIntercoDrilling} onVerComprobante={onVerComprobante} />
+      )}
+
+      {activeTab === "interco_matriz" && intercoMatriz && (
+        <TabIntercoConsolidado data={intercoData} sociedades={sociedades} year={year}
+          matriz={intercoMatriz} negocioFiltro={intercoNegocio} fx={intercoFx}
+          onDrillActive={setIntercoDrilling} onVerComprobante={onVerComprobante} />
       )}
 
       {isVentasHQ && subBigg && (
@@ -4093,7 +4156,21 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       )}
 
       {activeTab === "consolidado" && (
-        <TabTesoreriaConsolidada />
+        <TabTesoreriaConsolidada vistas={["saldos", "movimientos"]}
+          pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
+      )}
+      {activeTab === "balance_pn" && (
+        <TabTesoreriaConsolidada vistas={["balance", "evpn"]}
+          pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
+      )}
+
+      {activeTab === "devengado" && (
+        <TabDevengado
+          inRows={inConFranq} egRows={egConSueldos}
+          cuentaMap={cuentaMap} ccMap={ccMap} ccs={ccs}
+          socGroups={cfSocGroups} nucleoEmpresas={nucleoEmpresas}
+          year={year} setYear={setYear} years={YEARS}
+        />
       )}
 
       {activeTab === "cxp_prov" && (

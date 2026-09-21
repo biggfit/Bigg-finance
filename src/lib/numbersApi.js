@@ -5,7 +5,7 @@
 
 import { stamp, firma } from "./auth";
 import { bustToken, forzarRefresco } from "./cacheBust";
-import { fetchLegajos } from "./sueldosApi";   // solo lectura (mapa legajo→sociedad para interco de sueldos)
+import { fetchLegajos, fetchLiquidacionesCerradas, devengadoPorFormaYSociedad, sociedadDeFormaPago } from "./sueldosApi";   // solo lectura (interco de sueldos por devengado)
 
 const CONFIGURED = !!import.meta.env.VITE_NUMBERS_API_URL;
 const TOKEN      = import.meta.env.VITE_SHEETS_TOKEN;   // mismo token
@@ -209,6 +209,38 @@ export async function primeCache(specs = []) {
   }
 }
 
+// ─── Cuenta contable: id → NOMBRE ────────────────────────────────────────────
+// En `nb_movimientos`/`nb_comprobantes` la columna `cuenta_contable` guarda el NOMBRE, porque el P&L
+// busca la cuenta por nombre. Los callers traen indistintamente el id o el nombre, y durante años el
+// id→nombre se hizo con `String(x).replace(/^CUENTA_/, "")`: alcanzaba porque el id legacy ERA el
+// nombre con prefijo (`CUENTA_Sueldos` → `Sueldos`). Con los ids nuevos y opacos que genera newId()
+// (`CTA-48002-w6u8`) ese replace no hace nada y deja el id crudo en la celda — y una fila cuya cuenta
+// no resuelve por nombre cae en "Sin clasificar", que no suma a ningún subtotal: la plata desaparece
+// del resultado en silencio. Por eso el lookup va contra el catálogo real.
+//
+// `nb_cuentas` es maestro (cache de 10 min, y get() deduplica los requests en vuelo), así que llamar
+// a esto por fila es barato: solo la primera resuelve contra la red. Si la hoja no se puede leer o el
+// id no está en el catálogo, cae al replace de siempre → nunca es peor que el comportamiento previo.
+// Un valor que YA es un nombre ("Pauta") no matchea por id y se devuelve tal cual, que es lo correcto.
+async function resolverCuenta() {
+  let cuentas = [];
+  try { cuentas = await get("nb_cuentas"); } catch { /* sin catálogo → fallback */ }
+  const porId = new Map();
+  for (const c of cuentas || []) {
+    if (!c?.id) continue;
+    const nom = String(c.nombre ?? "").trim();
+    porId.set(String(c.id).trim(), nom || String(c.id).trim());
+  }
+  return (x) => {
+    const raw = String(x ?? "").trim();
+    if (!raw) return "";
+    return porId.get(raw) || raw.replace(/^CUENTA_/, "");
+  };
+}
+
+// Atajo de una sola cuenta. Dentro de un loop conviene `const nc = await resolverCuenta()` una vez.
+const nombreCuentaContable = async (x) => (await resolverCuenta())(x);
+
 // ─── Generador de IDs ────────────────────────────────────────────────────────
 
 const pad  = (n, l = 5) => String(n).padStart(l, "0");
@@ -284,37 +316,35 @@ export async function appendEgreso(egreso) {
   const id_comp    = header.id || newId("EG");
   const created_at = new Date().toISOString();
 
-  for (let i = 0; i < lineas.length; i++) {
-    const l   = lineas[i];
+  // Todas las líneas en UN solo add_batch (ver appendIngreso): antes 1 write del GAS por línea →
+  // el modal se colgaba "creando la FC". El reintento de post deduplica por id → sin duplicados.
+  const rows = lineas.map((l, i) => {
     const sub = round2(Number(l.subtotal) || 0);
     const iva = round2(sub * ((Number(l.ivaRate) || 0) / 100));
-    await post({
-      action: "add",
-      sheet:  "nb_comprobantes",
-      row: {
-        id:                  `${id_comp}-L${pad(i + 1)}`,
-        id_comp,
-        sociedad:            header.sociedad,
-        fecha:               header.fecha,
-        fecha_fiscal:        header.fechaFiscal ?? header.fecha,
-        vto:                 header.vto ?? "",
-        subtipo:             "EGRESO",
-        contraparte_id:      header.proveedorId ?? "",
-        contraparte_nombre:  header.proveedor   ?? "",
-        cuenta_contable:     header.cuenta      ?? "",
-        cuenta_contable_id:  header.cuentaId    ?? "",
-        moneda:              header.moneda ?? "ARS",
-        centro_costo:        l.cc ?? "",
-        subtotal:            sub,
-        iva_rate:            Number(l.ivaRate) || 0,
-        iva_monto:           iva,
-        total:               round2(sub + iva),
-        nro_comp:            header.nroComp ?? "",
-        nota:                header.nota    ?? "",
-        created_at,
-      },
-    });
-  }
+    return {
+      id:                  `${id_comp}-L${pad(i + 1)}`,
+      id_comp,
+      sociedad:            header.sociedad,
+      fecha:               header.fecha,
+      fecha_fiscal:        header.fechaFiscal ?? header.fecha,
+      vto:                 header.vto ?? "",
+      subtipo:             "EGRESO",
+      contraparte_id:      header.proveedorId ?? "",
+      contraparte_nombre:  header.proveedor   ?? "",
+      cuenta_contable:     header.cuenta      ?? "",
+      cuenta_contable_id:  header.cuentaId    ?? "",
+      moneda:              header.moneda ?? "ARS",
+      centro_costo:        l.cc ?? "",
+      subtotal:            sub,
+      iva_rate:            Number(l.ivaRate) || 0,
+      iva_monto:           iva,
+      total:               round2(sub + iva),
+      nro_comp:            header.nroComp ?? "",
+      nota:                header.nota    ?? "",
+      created_at,
+    };
+  });
+  if (rows.length) await post({ action: "add_batch", sheet: "nb_comprobantes", rows });
   return { ok: true, id_comp };
 }
 
@@ -331,7 +361,7 @@ export async function appendCargaSocial({ sociedad, proveedorId = "", proveedor 
   const nota = `${CS_TAG} ${concepto || `Cargas sociales ${mes}/${anio}`}`;
   const id_comp = newId("EG");
   const created_at = new Date().toISOString();
-  const cta = String(cuenta || "").replace(/^CUENTA_/, "");
+  const cta = await nombreCuentaContable(cuenta);
   // UNA sola escritura atómica (add_batch): todas las líneas de centro en un POST. Evita el
   // comprobante a medias que dejaba el loop secuencial de appendEgreso cuando el GAS se cuelga.
   const rows = lineas
@@ -554,37 +584,37 @@ export async function appendIngreso(ingreso) {
   const id_comp    = header.id || newId("IN");
   const created_at = new Date().toISOString();
 
-  for (let i = 0; i < lineas.length; i++) {
-    const l   = lineas[i];
+  // Todas las líneas en UN solo add_batch. Antes era 1 write del GAS POR línea (for + await) → una
+  // FC de 4 líneas eran 4 writes secuenciales (~15s) y el modal se colgaba "creando la FC" (a veces
+  // la escritura ya había entrado en el backend). El reintento de post deduplica por id → un
+  // add_batch reintentado tras una respuesta perdida no duplica.
+  const rows = lineas.map((l, i) => {
     const sub = round2(Number(l.subtotal) || 0);
     const iva = round2(sub * ((Number(l.ivaRate) || 0) / 100));
-    await post({
-      action: "add",
-      sheet:  "nb_comprobantes",
-      row: {
-        id:                  `${id_comp}-L${pad(i + 1)}`,
-        id_comp,
-        sociedad:            header.sociedad,
-        fecha:               header.fecha,
-        fecha_fiscal:        header.fechaFiscal ?? header.fecha,
-        vto:                 header.vto ?? "",
-        subtipo:             "INGRESO",
-        contraparte_id:      header.clienteId ?? "",
-        contraparte_nombre:  header.cliente   ?? "",
-        cuenta_contable:     header.cuenta    ?? "",
-        cuenta_contable_id:  header.cuentaId  ?? "",
-        moneda:              header.moneda ?? "ARS",
-        centro_costo:        l.cc ?? "",
-        subtotal:            sub,
-        iva_rate:            Number(l.ivaRate) || 0,
-        iva_monto:           iva,
-        total:               round2(sub + iva),
-        nro_comp:            header.nroComp ?? "",
-        nota:                header.nota    ?? "",
-        created_at,
-      },
-    });
-  }
+    return {
+      id:                  `${id_comp}-L${pad(i + 1)}`,
+      id_comp,
+      sociedad:            header.sociedad,
+      fecha:               header.fecha,
+      fecha_fiscal:        header.fechaFiscal ?? header.fecha,
+      vto:                 header.vto ?? "",
+      subtipo:             "INGRESO",
+      contraparte_id:      header.clienteId ?? "",
+      contraparte_nombre:  header.cliente   ?? "",
+      cuenta_contable:     header.cuenta    ?? "",
+      cuenta_contable_id:  header.cuentaId  ?? "",
+      moneda:              header.moneda ?? "ARS",
+      centro_costo:        l.cc ?? "",
+      subtotal:            sub,
+      iva_rate:            Number(l.ivaRate) || 0,
+      iva_monto:           iva,
+      total:               round2(sub + iva),
+      nro_comp:            header.nroComp ?? "",
+      nota:                header.nota    ?? "",
+      created_at,
+    };
+  });
+  if (rows.length) await post({ action: "add_batch", sheet: "nb_comprobantes", rows });
   return { ok: true, id_comp };
 }
 
@@ -702,12 +732,18 @@ async function _imputarVariasDesdeExtracto(mov, partes, appendFn) {
 export const pagarFacturasDesdeExtracto  = (mov, partes) => _imputarVariasDesdeExtracto(mov, partes, appendPago);
 export const cobrarFacturasDesdeExtracto = (mov, partes) => _imputarVariasDesdeExtracto(mov, partes, appendCobro);
 
-/** Saldo pendiente de un documento. Usa Math.abs porque PAGOs tienen monto negativo. */
-export function calcSaldoPendiente(totalDoc, pagos = []) {
+/** Saldo NETO de un documento, SIN piso: > 0 pendiente · < 0 pagado/cobrado DE MÁS (crédito a favor contra la
+ *  contraparte: doble vínculo, línea del banco mayor a la factura). Usa Math.abs porque PAGOs tienen monto negativo.
+ *  Redondeo a centavos: evita que un residuo de milésimas (total ×1,21 con float) deje la factura colgada en
+ *  "A Pagar $0,00" y nunca cierre. */
+export function calcSaldoNeto(totalDoc, pagos = []) {
   const totalPagado = pagos.reduce((s, p) => s + Math.abs(Number(p.monto) || 0), 0);
-  // Redondeo a centavos: evita que un residuo de milésimas (total ×1,21 con float) deje la
-  // factura colgada en "A Pagar $0,00" y nunca cierre.
-  return Math.max(0, round2(round2(totalDoc) - round2(totalPagado)));
+  return round2(round2(totalDoc) - round2(totalPagado));
+}
+/** Saldo pendiente de un documento (piso 0). Para ver un sobrepago usar calcSaldoNeto (18/9/2026: el piso escondía
+ *  en Compras/CxP/PN lo pagado de más → Tesorería lo lleva ahora al activo "Pagos a cuenta a proveedores"). */
+export function calcSaldoPendiente(totalDoc, pagos = []) {
+  return Math.max(0, calcSaldoNeto(totalDoc, pagos));
 }
 
 function _hoy() {
@@ -816,11 +852,31 @@ export async function updateTransferencia({ salidaId, entradaId, fecha, moneda, 
  * tipo "PAGO_TARJETA" (no TRANSFERENCIA: el Cash Flow no lo filtra; el lado tarjeta se excluye por ser cuenta tipo tarjeta).
  * Si `mov_existente` viene (caso conciliación: la fila del extracto ya es el lado real), se edita esa fila
  * como lado real y solo se crea el lado tarjeta.
+ * EXCESO (decisión de Martín 17/9/2026): la tarjeta en USD se paga por ventanilla y nunca dan vuelto → se paga de
+ * más y el banco lo devuelve pesificado en OTRO resumen. Si lo pagado supera la deuda de la tarjeta a esa fecha,
+ * el exceso se manda a GASTO ("Diferencias tarjeta") el mismo día, como línea de ajuste sobre la cuenta-tarjeta,
+ * y la tarjeta queda en CERO (no arrastra un saldo a favor que después nadie limpia; la devolución, cuando llega
+ * en el resumen, se imputa a la misma cuenta como ingreso). Guardas: solo si la tarjeta TIENE deuda cargada
+ * (si el resumen no se importó todavía, deuda=0 y NO se toca nada) y solo si el exceso es chico (≤ 1% del
+ * pago): un exceso grande es un resumen incompleto, no un redondeo → queda como saldo a favor visible.
  */
+export const CUENTA_DIF_TARJETA = "Diferencias tarjeta";
 export async function pagarTarjeta({ sociedad, fecha, monto, moneda, cuenta_real, tarjeta_id, nota = "", mov_existente = null }) {
   const m    = Math.abs(Number(monto) || 0);
   const pair = newId("PTJ");
   const concepto = nota || "Pago de tarjeta";
+  // Deuda de la tarjeta a la fecha del pago (mismo criterio que Tesorería: Σ movimientos de la cuenta-tarjeta,
+  // sin ignorados) + centro más usado por sus consumos contabilizados (para la línea de ajuste). Lectura cacheada.
+  let deuda = 0, centroAjuste = "";
+  try {
+    const rows = await get("nb_movimientos", { sociedad });
+    const cardMovs = (Array.isArray(rows) ? rows : []).filter(r => String(r.cuenta_bancaria) === String(tarjeta_id)
+      && !esIgnorado(r) && String(r.fecha || "").slice(0, 10) <= String(fecha || "").slice(0, 10) && (!mov_existente || r.id !== mov_existente.id));
+    deuda = Math.max(0, -cardMovs.reduce((s, r) => s + toNum(r.monto), 0));
+    const porCentro = {};
+    for (const r of cardMovs) if (String(r.documento_id || "").startsWith("CONTAB-") && r.centro_costo) porCentro[r.centro_costo] = (porCentro[r.centro_costo] || 0) + 1;
+    centroAjuste = Object.entries(porCentro).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+  } catch { deuda = 0; }
   if (mov_existente) {
     await updateMovTesoreria(mov_existente.id, {
       tipo: "PAGO_TARJETA", origen: "pago_tarjeta", documento_id: pair, concepto,
@@ -829,7 +885,24 @@ export async function pagarTarjeta({ sociedad, fecha, monto, moneda, cuenta_real
     await appendMovTesoreria({ sociedad, fecha, tipo: "PAGO_TARJETA", cuenta_bancaria: cuenta_real, moneda, monto: -m, concepto, origen: "pago_tarjeta", origen_id: pair });
   }
   await appendMovTesoreria({ sociedad, fecha, tipo: "PAGO_TARJETA", cuenta_bancaria: tarjeta_id, moneda, monto: m, concepto, origen: "pago_tarjeta", origen_id: pair });
-  return { ok: true, pair };
+  // Exceso pagado sobre la deuda → gasto el mismo día sobre la cuenta-tarjeta (la deja en cero).
+  const exceso = round2(m - deuda);
+  let ajuste = null;
+  if (deuda > 0 && exceso > 0.005 && exceso <= m * 0.01) {
+    const idAj = newId("TAR");
+    await post({ action: "add", sheet: "nb_movimientos", row: {
+      id: idAj, sociedad, fecha, tipo: "EGRESO_GASTO",
+      cuenta_bancaria: tarjeta_id, cuenta_destino: "",
+      cuenta_contable: CUENTA_DIF_TARJETA, centro_costo: centroAjuste,
+      moneda, monto: -exceso, documento_id: "CONTAB-" + idAj,
+      iva_rate: 0, iva_monto: 0,
+      concepto: `Pago de tarjeta en exceso (redondeo/ventanilla) · ${concepto}`,
+      contraparte_id: "", contraparte_nombre: "",
+      referencia: `ajuste=1;pago=${pair}`, origen: "tarjeta", created_at: new Date().toISOString(),
+    }});
+    ajuste = { id: idAj, exceso, cuenta: CUENTA_DIF_TARJETA, centro: centroAjuste };
+  }
+  return { ok: true, pair, deuda, exceso: ajuste ? exceso : 0, ajuste };
 }
 
 export async function updateMovTesoreria(id, patch) {
@@ -1036,6 +1109,22 @@ export function montoAUSD(monto, moneda, tcMes) {
   if (cur === "EUR") return tcMes.eurUSD > 0 ? n * tcMes.eurUSD : null;
   const rate = tcMes[cur.toLowerCase() + "USD"];  // ARS→arsUSD, COP→copUSD, ...
   return rate > 0 ? n / rate : null;
+}
+
+// Igual que montoAUSD pero a una moneda destino cualquiera: el consolidado puede mirarse en U$D o en €
+// (España se analiza en euros). Usa el USD como pivote y después aplica la tasa del destino. Mismo criterio
+// ante dato faltante: null, nunca 0 silencioso. Si origen y destino coinciden no toca el número (ni pide TC:
+// una fila en euros no necesita traducción para un consolidado en euros).
+export function montoAMoneda(monto, moneda, tcMes, destino = "USD") {
+  const dst = String(destino || "USD").toUpperCase();
+  const cur = String(moneda || "").toUpperCase();
+  if (cur === dst) return Number(monto) || 0;
+  const usd = montoAUSD(monto, moneda, tcMes);
+  if (usd == null || dst === "USD") return usd;
+  if (!tcMes) return null;
+  if (dst === "EUR") return tcMes.eurUSD > 0 ? usd / tcMes.eurUSD : null;
+  const rate = tcMes[dst.toLowerCase() + "USD"];  // USD → ARS/COP/…: unidades por USD, se MULTIPLICA
+  return rate > 0 ? usd * rate : null;
 }
 
 // ─── SOCIEDADES ──────────────────────────────────────────────────────────────
@@ -1359,6 +1448,21 @@ const _saldoDe = m => { const x = String(m.referencia || "").match(/saldo=([^;]*
 const _extractoRef = m => String(m.extracto_saldo || "") || String(_saldoDe(m) || "");
 const _r2 = n => Math.round((Number(n) || 0) * 100);   // monto a centavos, para comparar sin ruido de float
 
+// Clave de COMPARACIÓN del dedup (lo que se GUARDA en `extracto_saldo` sigue siendo el saldo crudo).
+// El mismo saldo puede volver escrito distinto: el export COMPLETO del BBVA arrastra el ruido de float
+// del saldo de apertura y trae `8526723.090000108` donde se guardó `8526723.09`. Comparando los strings
+// eso es "no está" → se recreaba el extracto entero (simulado sobre Tigre Loco: 294 de 294 líneas
+// duplicadas, cero dedup). Se compara en centavos, el mismo criterio que `_r2` usa para los montos.
+// Los parsers sin saldo corriente (InterAudi) usan un id sintético ("IA-3") y MP guarda una tupla
+// ("venta|…|111314982.92"): no son numéricos → caen al string crudo, igual que antes.
+// El prefijo "c" evita que un centavo colisione con un id sintético que sea todo dígitos.
+const _refKey = v => {
+  const s = String(v ?? "").trim();
+  if (!s) return "";
+  const n = Number(s);
+  return Number.isFinite(n) ? `c${Math.round(n * 100)}` : s;
+};
+
 // Ingesta del extracto = "matchear o crear" (ya NO "crear o ignorar"):
 //  1) DEDUP: si la línea del banco ya existe (mismo `saldo` en `extracto_saldo`) → se saltea.
 //  2) AUTO-MATCH: si hay un movimiento YA cargado por el tesorero/otro módulo (mismo monto + cuenta +
@@ -1373,7 +1477,7 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
   // invalidar la caché → el reintento 86s después leyó el snapshot previo y recreó las 28 líneas.
   const todos = await _fetchRowsRaw("nb_movimientos", { sociedad });
   const dela  = todos.filter(m => String(m.cuenta_bancaria) === String(cuenta_bancaria));
-  const seen  = new Set(dela.map(_extractoRef).filter(Boolean));   // dedup vs DB + dentro del archivo
+  const seen  = new Set(dela.map(m => _refKey(_extractoRef(m))).filter(Boolean));   // dedup vs DB + dentro del archivo
   // Candidatos a auto-match: cargados por un humano/otro módulo, sin atar a línea de banco, no ignorados.
   // Se excluye origen="extracto" (esas YA son líneas de banco; las rotas sin ref se sanean aparte, no acá).
   // Precomputo ts/centavos una vez por candidato (evita re-parsear fechas L×C veces en el loop).
@@ -1393,10 +1497,16 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
   };
 
   const nuevas = [], matches = []; let dups = 0;
+  // La propuesta del importador depurado (MP/Stripe) resuelve la cuenta a ID (cuentaIdPorNombre en
+  // PantallaReconciliacion), y acá se guardaba tal cual → la fila nacía con el id crudo en una
+  // columna que guarda nombres. Se canoniza en el alta, que es el único lugar por el que pasan
+  // TODAS las líneas del extracto.
+  const nc = await resolverCuenta();
   for (const l of lineas) {
     const ref = String(l.saldo);   // identidad estable = saldo (NO fecha: el banco re-fecha entre descargas)
-    if (seen.has(ref)) { dups++; continue; }
-    seen.add(ref);
+    const key = _refKey(ref);      // ...pero se COMPARA normalizado a centavos (ver _refKey)
+    if (seen.has(key)) { dups++; continue; }
+    seen.add(key);
     const m = buscarMatch(l);
     if (m) { usados.add(m.id); matches.push({ mov: m, ref, linea: l }); continue; }
     const p = l.propuesta || {};
@@ -1404,7 +1514,7 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
       id: newId("EXT"), sociedad, fecha: l.fecha,
       tipo: (Number(l.monto) || 0) > 0 ? "INGRESO" : "EGRESO",
       cuenta_bancaria, cuenta_destino: p.cuenta_destino || "",
-      cuenta_contable: p.cuenta_contable || "", centro_costo: p.centro_costo || "",
+      cuenta_contable: nc(p.cuenta_contable), centro_costo: p.centro_costo || "",
       moneda, monto: Number(l.monto) || 0, documento_id: "",
       iva_rate: Number(l.iva_rate) || 0, iva_monto: Number(l.iva_monto) || 0,
       concepto: l.descripcion || "",
@@ -1488,31 +1598,74 @@ export async function ingestarResumenTarjeta({ sociedad, tarjeta = "", periodo =
   // Sin caché, por lo mismo que ingestarExtracto: de esta lista salen el borrado de pendientes y el
   // pool de ya-autorizados. Leer stale = no borrar/no reconocer nada = resumen duplicado.
   const todos = await _fetchRowsRaw("nb_movimientos", { sociedad });
+  // FECHA EFECTIVA de cada consumo (decisión de Martín 17/9/2026): el consumo pega en su fecha (P&L y deuda de la
+  // tarjeta juntos), pero nunca más de UN MES para atrás del período del resumen ni antes del go-live. Las cuotas
+  // vienen con la fecha de la COMPRA original (meses atrás, incluso pre go-live): fechadas así desaparecen del P&L
+  // (corte go-live) y ensucian el saldo de apertura de la tarjeta. Se fechan el 1° del período del resumen, que
+  // es cuando la tarjeta las cobra. Reemplaza al "período contable" manual (que separaba P&L de deuda).
+  const GO_LIVE = "2026-07-01";
+  const pisoDe = (per) => {
+    const m = String(per || "").match(/^(\d{4})-(\d{2})$/); if (!m) return GO_LIVE;
+    const y = Number(m[1]), mo = Number(m[2]) - 1;   // mes anterior al período
+    const prev = mo === 0 ? `${y - 1}-12-01` : `${y}-${String(mo).padStart(2, "0")}-01`;
+    return prev > GO_LIVE ? prev : GO_LIVE;
+  };
+  const piso = pisoDe(periodo);
+  const fechaEfectiva = (f) => {
+    const d = String(f || fecha || "").slice(0, 10);
+    if (!d) return d;
+    if (d >= piso) return d;                                        // dentro del ciclo → fecha real del consumo
+    return periodo ? `${periodo}-01` : (String(fecha || "").slice(0, 10) || d);   // cuota / consumo viejo → 1° del período
+  };
   const cardIds = new Set(lineas.map(l => String(l.cuenta_bancaria)).filter(Boolean));
+  // Titulares de ESTA tanda. El reemplazo se limita a ellos porque Amex emite UN RESUMEN POR
+  // TITULAR: subir el segundo archivo no puede borrar los consumos que dejó el primero. Galicia
+  // trae todos los titulares en un solo PDF → su set los cubre a todos y no cambia en nada.
+  // El "" entra a propósito: impuestos y líneas de ajuste se guardan sin titular.
+  const titulares = new Set(lineas.map(l => String(l.titular || "").trim()));
   const delMismoResumen = m => m.origen === "tarjeta" && cardIds.has(String(m.cuenta_bancaria))
-    && (!periodo || metaVal(m.referencia, "per") === String(periodo));
+    && (!periodo || metaVal(m.referencia, "per") === String(periodo))
+    && titulares.has(String(metaVal(m.referencia, "tit") || "").trim());
 
-  // 1) Borrar los PENDIENTES de este resumen (reemplazo). Los autorizados se conservan.
-  let borradas = 0;
-  for (const m of todos.filter(m => delMismoResumen(m) && !m.documento_id)) {
-    await post({ action: "del", sheet: "nb_movimientos", id: m.id }); borradas++;
-  }
-  // 2) No re-crear consumos ya AUTORIZADOS de este período (pool por comercio|monto|moneda).
+  // 1) No re-crear consumos ya AUTORIZADOS de este período (pool por comercio|monto|moneda).
   const pool = todos.filter(m => delMismoResumen(m) && m.documento_id)
     .map(m => ({ k: `${metaVal(m.referencia, "com")}|${Math.abs(Number(m.monto) || 0)}|${m.moneda}`, used: false }));
 
+  // 2) SINCRONIZAR, no reemplazar. Antes esto borraba TODOS los pendientes del resumen y los volvía
+  // a crear. Pero el `del` del Apps Script borra de a UNA fila y lee la hoja entera en cada llamada
+  // (~3-4s con nb_movimientos), así que reemplazar 30 consumos eran 30 viajes secuenciales: algo
+  // cortaba a mitad, el add_batch nunca corría, y cada reintento se comía otro puñado de filas sin
+  // reponer ninguna. Ahora se compara lo que hay contra lo que tiene que haber y se toca SOLO la
+  // diferencia: re-subir el mismo resumen no escribe nada, y una carga que quedó a medias se
+  // completa sola. Se cuenta por clave para no confundir dos consumos idénticos del mismo día.
+  // La fecha se recorta a YYYY-MM-DD: el GAS puede devolverla como fecha serializada con hora, y un
+  // "2026-08-04T03:00:00.000Z" contra un "2026-08-04" haría fallar todas las comparaciones.
+  const claveDe = (fecha, com, monto, moneda) =>
+    `${String(fecha || "").slice(0, 10)}|${com}|${Math.abs(monto).toFixed(2)}|${moneda || "ARS"}`;
+  const existentes = new Map();   // clave → filas pendientes que ya están en la hoja
+  for (const m of todos.filter(m => delMismoResumen(m) && !m.documento_id)) {
+    const k = claveDe(m.fecha, _normCom(m.concepto), Number(m.monto) || 0, m.moneda);
+    if (!existentes.has(k)) existentes.set(k, []);
+    existentes.get(k).push(m);
+  }
+
   const nuevas = [];
-  let yaAutorizadas = 0;
+  const sobran = [];
+  let yaAutorizadas = 0, sinCambio = 0;
+  const nc = await resolverCuenta();   // catálogo una sola vez para todo el resumen
   for (const l of lineas) {
     const monto = Math.abs(Number(l.monto) || 0);
     if (!monto || !l.cuenta_bancaria) continue;
     const mon = l.moneda || "ARS";
     const hit = pool.find(p => !p.used && p.k === `${_normCom(l.comercio)}|${monto}|${mon}`);
     if (hit) { hit.used = true; yaAutorizadas++; continue; }
+    // ¿Ya está pendiente en la hoja, idéntico? → no tocar (ni borrar ni re-crear).
+    const ya = existentes.get(claveDe(fechaEfectiva(l.fecha), _normCom(l.comercio), monto, mon));
+    if (ya?.length) { ya.shift(); sinCambio++; continue; }
     nuevas.push({
-      id: newId("TAR"), sociedad, fecha: l.fecha || fecha,
+      id: newId("TAR"), sociedad, fecha: fechaEfectiva(l.fecha),
       tipo: "EGRESO", cuenta_bancaria: l.cuenta_bancaria, cuenta_destino: "",
-      cuenta_contable: String(l.cuenta_contable || "").replace(/^CUENTA_/, ""),
+      cuenta_contable: nc(l.cuenta_contable),
       centro_costo: l.centro_costo || "",
       // Signo: consumo normal = siempre cargo (egreso, -monto). Una línea de AJUSTE (l.credito, ver
       // MundoTarjeta → diferencia contra el TOTAL A PAGAR real del resumen) puede ir para el otro lado
@@ -1525,13 +1678,29 @@ export async function ingestarResumenTarjeta({ sociedad, tarjeta = "", periodo =
       origen: "tarjeta", created_at: new Date().toISOString(),
     });
   }
+  // 3) Lo que quedó sin consumir en `existentes` ya no está en el resumen (resumen corregido, o una
+  // línea que el parser leía mal y ahora lee bien) → se borra. En el caso normal son cero, así que
+  // el reemplazo caro deja de ocurrir. Se ADJUNTA primero lo nuevo: si el borrado se corta, lo peor
+  // que pasa es que sobre una fila de más (visible y borrable a mano), nunca que falte plata.
+  for (const filas of existentes.values()) sobran.push(...filas);
+
   let creados = 0;
   const CHUNK = 100;
   for (let i = 0; i < nuevas.length; i += CHUNK) {
     await post({ action: "add_batch", sheet: "nb_movimientos", rows: nuevas.slice(i, i + CHUNK) });
     creados += Math.min(CHUNK, nuevas.length - i);
   }
-  return { creados, borradas, yaAutorizadas };
+
+  let borradas = 0;
+  for (const m of sobran) {
+    try { await post({ action: "del", sheet: "nb_movimientos", id: m.id }); borradas++; }
+    catch (e) {
+      // "fila no encontrada" = ya no está, que es el estado buscado. Cualquier otro error (timeout
+      // del GAS) tampoco debe abortar: lo nuevo ya entró y abortar acá no lo desharía.
+      if (!/no encontrada|not found/i.test(e?.message || "")) break;
+    }
+  }
+  return { creados, borradas, yaAutorizadas, sinCambio, sobrantes: sobran.length - borradas };
 }
 
 // Consumos del resumen que faltan autorizar (bandeja del mundo Tarjeta).
@@ -1570,6 +1739,15 @@ export async function aceptarMovimiento(mov, prop = {}) {
     // escritura, cubre todos los llamadores (botón, aceptar masivo, futuros), no solo el gate de la UI.
     if (!String(destino).trim())
       throw new Error("Transferencia sin cuenta del otro lado: elegí la cuenta destino antes de aceptar.");
+    // Guarda: una transferencia mueve el MISMO nominal a la otra cuenta (la contrapartida se crea con
+    // -mov.monto), así que solo cierra entre cuentas de la misma moneda. Cross-moneda es una CONVERSIÓN:
+    // los montos difieren de cada lado y el balance por moneda no la neutraliza → va por Tesorería ›
+    // Cambio de moneda, que pide los dos montos reales. Sin este corte, una venta de USD 3,00 quedaba
+    // como +3 EUR (nominal copiado) en vez de los +2,52 EUR que entraron de verdad.
+    const monedaOrig = String(mov.moneda || "");
+    const monedaDest = String(prop.destino_moneda || mov.moneda || "");
+    if (monedaDest !== monedaOrig)
+      throw new Error(`Una transferencia no cambia de moneda (${monedaOrig} → ${monedaDest}). Si es una compra/venta de divisa, cargala en Tesorería › Cambio de moneda con los dos montos reales.`);
     const tipoMov  = interco ? "INTERCOMPANIA" : "TRANSFERENCIA";
     const sharedId = newId(interco ? "INTERCOMPANY" : "TRF");
     await post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
@@ -1633,15 +1811,14 @@ export async function aceptarMovimiento(mov, prop = {}) {
   const esEgreso = (Number(mov.monto) || 0) < 0;
   return post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
     tipo:               esEgreso ? "EGRESO_GASTO" : "INGRESO",   // unifica con el gasto directo manual
-    cuenta_contable:    String(cuentaId).replace(/^CUENTA_/, ""),   // NOMBRE para el P&L
+    cuenta_contable:    await nombreCuentaContable(cuentaId),   // NOMBRE para el P&L
     centro_costo:       prop.centro_costo || mov.centro_costo || "",
     contraparte_id:     prop.proveedor_id || "",
     contraparte_nombre: prop.proveedor_nombre || mov.contraparte_nombre || "",
     documento_id:       "CONTAB-" + mov.id,
-    // Período P&L ≠ fecha de caja (ej. nómina devengada el mes anterior al pago) → se empaca en
-    // `referencia` (sin columna nueva; movimientoToPnLRows en Reportes lo lee de ahí). Sin override,
-    // `referencia` queda como estaba (no se pisa la metadata de la regla que clasificó la línea).
-    ...(prop.periodo_contable ? { referencia: `${mov.referencia || ""};periodo=${prop.periodo_contable}` } : {}),
+    // El P&L contabiliza SIEMPRE en la fecha del movimiento (misma fecha que la caja/deuda): sin override de
+    // período. Antes existía `periodo_contable` (empacado en referencia) y separaba P&L de balance → rompía el
+    // cierre del PN (decisión 17/9/2026). El importador de resúmenes ya fecha las cuotas viejas en su período.
     ...firma(),
   }});
 }
@@ -1810,7 +1987,7 @@ export async function appendMovFranquicia({ id, sociedad, fecha, fr_tipo, franqu
 export async function imputarPagoFC(mov, { documento_id, cuenta_contable = "", proveedor_id = "", proveedor_nombre = "" }) {
   return post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
     tipo:               "PAGO",
-    cuenta_contable:    String(cuenta_contable || "").replace(/^CUENTA_/, ""),
+    cuenta_contable:    await nombreCuentaContable(cuenta_contable),
     centro_costo:       "",   // el centro vive en la FC (que puede tener varios); el pago no lo copia. Cash Flow lo deriva del comprobante linkeado.
     contraparte_id:     proveedor_id,
     contraparte_nombre: proveedor_nombre || mov.contraparte_nombre || "",
@@ -1829,9 +2006,10 @@ export async function imputarPagoFC(mov, { documento_id, cuenta_contable = "", p
 // retencion_centro: centro de costo para las retenciones (normalmente "HQ - Impuestos" → van al
 // P&L BIGG bajo Impuestos, no a la sede). El cobro (caja) usa centro_costo de la factura.
 export async function imputarCobroIngreso(mov, { documento_id, cuenta_contable = "", centro_costo = "", cliente_id = "", cliente_nombre = "", retenciones = [], retencion_centro = "" }) {
+  const nc = await resolverCuenta();   // sirve para el cobro y para cada retención
   await post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
     tipo:               "COBRO",
-    cuenta_contable:    String(cuenta_contable || "").replace(/^CUENTA_/, ""),
+    cuenta_contable:    nc(cuenta_contable),
     centro_costo:       "",   // el cobro no lleva centro (la venta puede tener varios); Cash Flow lo deriva de la FC. `centro_costo` se conserva como param solo para el fallback del centro de retenciones (abajo).
     contraparte_id:     cliente_id,
     contraparte_nombre: cliente_nombre || mov.contraparte_nombre || "",
@@ -1845,7 +2023,7 @@ export async function imputarCobroIngreso(mov, { documento_id, cuenta_contable =
     await post({ action: "add", sheet: "nb_movimientos", row: {
       id: newId("RET"), sociedad: mov.sociedad, fecha: mov.fecha,
       tipo: "COBRO", cuenta_bancaria: "", cuenta_destino: "",
-      cuenta_contable: String(r.cuenta).replace(/^CUENTA_/, ""),
+      cuenta_contable: nc(r.cuenta),
       centro_costo: retencion_centro || centro_costo, moneda: mov.moneda || "ARS",
       monto: ret, documento_id,
       concepto: `Retención s/ ${documento_id}`,
@@ -1889,12 +2067,13 @@ export async function borrarPagoImputado(mov) {
 // origen="retencion" (tipo COBRO, sin cuenta_bancaria) que netea la CxC por documento_id y entra al
 // P&L como costo. Misma forma de fila que imputarCobroIngreso, pero standalone (sin mov de banco).
 export async function appendRetenciones({ sociedad, documento_id, fecha, moneda = "ARS", cliente_id = "", cliente_nombre = "", retenciones = [] }) {
+  const nc = await resolverCuenta();
   const rows = (retenciones || [])
     .filter(r => Math.abs(Number(r?.monto) || 0) > 0.01 && r?.cuenta)
     .map(r => ({
       id: newId("RET"), sociedad, fecha,
       tipo: "COBRO", cuenta_bancaria: "", cuenta_destino: "",
-      cuenta_contable: String(r.cuenta).replace(/^CUENTA_/, ""),
+      cuenta_contable: nc(r.cuenta),
       centro_costo: r.centro || "", moneda,
       monto: Math.abs(Number(r.monto) || 0), documento_id,
       concepto: `Retención s/ ${documento_id}`,
@@ -2380,13 +2559,16 @@ export const deleteIntercompania = _deleteMovRows;
 // ── LECTURA intercompañía (el corazón del módulo — LECTURA, no escribe) ──────────
 // Trae TODO lo necesario para leer lo intercompany (todas las sociedades).
 export async function fetchIntercoData() {
-  const [movs, comps, centros, clientes, sociedades, legajos] = await Promise.all([
+  const [movs, comps, centros, clientes, sociedades, cuentasBancarias, cuentas, legajos, liqs] = await Promise.all([
     get("nb_movimientos", {}).catch(() => []),
     get("nb_comprobantes", {}).catch(() => []),
     get("nb_centros_costo", {}).catch(() => []),
     get("nb_clientes", {}).catch(() => []),
     get("nb_sociedades", {}).catch(() => []),
+    get("nb_cuentas_bancarias", {}).catch(() => []),   // para resolver cuenta_destino → nombre en el ledger interco
+    get("nb_cuentas", {}).catch(() => []),             // para resolver cuenta_contable (id CUENTA_/CTA-) → nombre
     fetchLegajos().catch(() => []),   // para derivar la interco de sueldos (legajo → sociedad empleadora)
+    fetchLiquidacionesCerradas().catch(() => []),   // devengado de sueldos → interco por DEVENGADO (fuente 6)
   ]);
   // Mapa legajo → sociedad empleadora: cuando la caja que paga un sueldo (mov.sociedad) ≠ la sociedad
   // del legajo, hubo fondeo cross-society (ej. Beta paga el efectivo de un coach de Segui). lecturaInterco lo lee.
@@ -2400,7 +2582,10 @@ export async function fetchIntercoData() {
     centros:    Array.isArray(centros) ? centros : [],
     clientes:   Array.isArray(clientes) ? clientes : [],
     sociedades: Array.isArray(sociedades) ? sociedades : [],
+    cuentasBancarias: Array.isArray(cuentasBancarias) ? cuentasBancarias : [],
+    cuentas:    Array.isArray(cuentas) ? cuentas : [],
     legajoSoc,
+    liqsSueldos: Array.isArray(liqs) ? liqs : [],   // liquidaciones CERRADAS (todas las sociedades)
   };
 }
 
@@ -2468,7 +2653,7 @@ export async function reconocerVentaInterco({ sociedad, ventaIdComp, vendedorId 
     id: `${id_comp}-L1`, id_comp, sociedad, fecha,
     subtipo,
     contraparte_id: vendedorId, contraparte_nombre: vendedorNombre,
-    cuenta_contable: String(cuenta_contable || "").replace(/^CUENTA_/, ""),
+    cuenta_contable: await nombreCuentaContable(cuenta_contable),
     cuenta_contable_id: String(cuenta_contable_id || ""),
     centro_costo, subtotal: sub, iva_rate: ivaR, iva_monto: ivaM, total: t,
     moneda, nro_comp: nroComp, nota: `interco_ref=${ventaIdComp}`,
@@ -2501,7 +2686,7 @@ export async function reconocerInterusoGestion(pend, { cuenta, centro = "" } = {
     id, sociedad: pend.sedeSociedad || "", fecha: fechaIso,
     tipo: esIngreso ? "INGRESO" : "EGRESO",
     cuenta_bancaria: "",                                                  // ← sin caja
-    cuenta_contable: String(cuenta || "").replace(/^CUENTA_/, ""),
+    cuenta_contable: await nombreCuentaContable(cuenta),
     centro_costo: centro || pend.sedeCentro || "",
     moneda: pend.moneda || "ARS",
     monto: esIngreso ? t : -t,
@@ -2532,7 +2717,69 @@ export async function revertirInterusoGestion(movId) {
 //      directos / conciliación contabilizada en nb_movimientos)
 //   2. Préstamos/transferencias del núcleo (pares INTERCOMPANIA).
 // Si `sociedad` viene → solo las posiciones de esa sociedad (mirada propia).
-export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades = [], legajoSoc = {} } = {}, { sociedad = null } = {}) {
+// ── Interco de SUELDOS por DEVENGADO (decisión de Martín 17/9/2026): el costo pertenece al CENTRO (empresa del
+// centro); el legajo solo dice en qué sociedad está dado de alta el empleado. Dos hechos dejan posición (quien
+// asume/pone la plata = acreedor), mismo criterio que la fuente 1a (comprobantes por fecha de devengado):
+//   (a) DEVENGADO: liquidación CERRADA con una forma cuya sociedad es A (efectivo/depósito → Beta; haberes → la del
+//       legajo; monotributo → la elegida) imputada a un centro cuya empresa es B ≠ A → A acreedor de B, fechado el
+//       último día del mes liquidado (la misma fecha con la que entra al P&L). Antes iba POR PAGADO y por sociedad
+//       del LEGAJO: dejaba un mes de timing entre P&L y ΔPN (el gasto en julio, la deuda en agosto) y perdía a los
+//       coaches de OTRA sociedad del núcleo con horas en una sede externa (Beta pagaba → núcleo↔núcleo → nada).
+//   (b) PAGO POR CUENTA AJENA: un mov de sueldo (origen sueldos, tipo SUELDO) pagado desde la caja de P para un
+//       componente cuyo devengado pertenece a D ≠ P → P acreedor de D (P canceló la deuda de D con el coach). Si D
+//       es la misma caja que paga (lo normal: Beta paga el efectivo que devengó Beta) no hay posición.
+//   núcleo↔núcleo nunca deja posición (Beta = pool del núcleo). Sin datos de anillo no se arriesgan posiciones.
+// Devuelve [{ A, B, fecha, moneda, monto(>0), tipo, concepto, prov, cuenta, centro, ref, refKind }].
+function _sueldosIntercoEventos({ liqsSueldos = [], movs = [], centros = [], sociedades = [], legajoSoc = {} } = {}) {
+  const nucleo = new Set((sociedades || []).filter(s => /n[úu]cleo/i.test(String(s.anillo || ""))).map(s => String(s.id).toLowerCase()));
+  if (!nucleo.size) return [];
+  const lc = x => String(x || "").trim().toLowerCase();
+  const empresaDe    = new Map((centros || []).map(c => [lc(c.id), lc(c.empresa)]));
+  const nombreCentro = new Map((centros || []).map(c => [lc(c.id), c.nombre || c.id]));
+  const norm = x => { const v = lc(x); return v === "b" ? "beta" : v; };   // alias beta↔b (ver sueldosApi.normSoc)
+  const out = [];
+  const push = (A, B, fecha, moneda, monto, meta) => {
+    A = norm(A); B = norm(B);
+    if (!A || !B || A === B || !(monto >= 0.01)) return;
+    if (nucleo.has(A) && nucleo.has(B)) return;
+    out.push({ A, B, fecha: String(fecha || ""), moneda: moneda || "ARS", monto, ...meta });
+  };
+  // (a) devengado por liquidación cerrada, imputado al centro (sede) de la liquidación
+  const monoSocDe = new Map();   // `${legajo}|${anio}-${mes}` → sociedad_monotributo (para resolver D en (b))
+  for (const liq of (liqsSueldos || [])) {
+    const mes = Number(liq.mes) || 0, anio = Number(liq.anio) || 0;
+    if (!mes || !anio) continue;
+    const ultimo = new Date(anio, mes, 0).getDate();
+    const fecha = `${anio}-${String(mes).padStart(2, "0")}-${String(ultimo).padStart(2, "0")}`;
+    if (liq.sociedad_monotributo) monoSocDe.set(`${liq.legajo_id}|${anio}-${mes}`, liq.sociedad_monotributo);
+    const B = empresaDe.get(lc(liq.sede_id)); if (!B) continue;   // sede sin empresa → no hay a quién cobrarle
+    const nombre = liq.legajo_nombre || liq.legajo_id || "";
+    for (const d of devengadoPorFormaYSociedad(liq))
+      push(d.sociedad, B, fecha, "ARS", Number(d.total) || 0, {
+        tipo: "Sueldo", concepto: `Sueldo devengado ${nombre} ${String(mes).padStart(2, "0")}/${anio}`.replace(/\s+/g, " ").trim(),
+        prov: nombre, cuenta: d.cuenta_contable || "Sueldos", centro: nombreCentro.get(lc(liq.sede_id)) || "", ref: liq.id || "", refKind: "liq",
+      });
+  }
+  // (b) pago desde la caja de una sociedad distinta a la del devengado de ese componente
+  for (const m of (movs || [])) {
+    if (m.origen !== "sueldos" || String(m.tipo || "").toUpperCase() !== "SUELDO" || esIgnorado(m)) continue;
+    const legSoc = legajoSoc[String(m.legajo_id || "")] || "";
+    const mono   = monoSocDe.get(`${m.legajo_id}|${Number(m.anio) || 0}-${Number(m.mes) || 0}`) || "";
+    const D = sociedadDeFormaPago(m.tipo_componente || "haberes", mono, legSoc);
+    push(m.sociedad, D, m.fecha, m.moneda, Math.abs(toNum(m.monto)), {
+      tipo: "Sueldo", concepto: `Sueldo ${m.legajo_nombre || ""} pagado por cuenta ajena`.replace(/\s+/g, " ").trim(),
+      prov: m.legajo_nombre || "", cuenta: "Sueldos", centro: nombreCentro.get(lc(m.centro_costo)) || "", ref: m.documento_id || m.id || "", refKind: "mov",
+    });
+  }
+  return out;
+}
+export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades = [], legajoSoc = {}, liqsSueldos = [] } = {}, { sociedad = null, corte = null } = {}) {
+  // As-of opcional: la posición interco a una fecha = solo los movimientos/comprobantes hasta el corte
+  // (aperturas incluidas, fechadas al go-live). Sin corte → todo (idéntico a hoy). Habilita Balance/EEPN.
+  if (corte) {
+    movs  = movs.filter(m => (m.fecha ?? "") <= corte);
+    comps = comps.filter(r => (r.fecha ?? "") <= corte);
+  }
   const empresaDe = new Map((centros || []).map(c => [String(c.id), c.empresa]));
   // Sociedades del núcleo (por anillo) → para decidir si un interuso de gestión cross-society deja
   // posición: núcleo↔núcleo NO (Hektor); hacia una fondeada/externa SÍ (Wellness).
@@ -2622,21 +2869,13 @@ export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades
     add(A, B, m.moneda || "ARS", +mm);
     add(B, A, m.moneda || "ARS", -mm);
   }
-  // 6. SUELDOS pagados por cuenta de otra sociedad (fondeo POR PAGADO, no devengado). La caja que
-  //    pagó (m.sociedad) frenteó el sueldo de un legajo cuya sociedad empleadora es otra → fondeo.
-  //    Ej.: Beta paga el efectivo de un coach de Segui → Beta acreedor / Segui deudor. Los haberes
-  //    tienen m.sociedad = la del legajo → A===B → sin posición (Segui pagó su propio blanco).
-  //    núcleo↔núcleo se saltea (efectivo de un coach del núcleo pagado con Beta = caja negra, no interco).
-  //    Sin datos de anillo no arriesgo posiciones espurias (mismo criterio que la fuente 5).
-  if (nucleo.size) for (const m of movs) {
-    if (m.origen !== "sueldos" || esIgnorado(m)) continue;
-    const A = String(m.sociedad || ""), B = String(legajoSoc[String(m.legajo_id || "")] || "");
-    if (!A || !B || A === B) continue;
-    if (nucleo.has(A) && nucleo.has(B)) continue;   // ambas del núcleo → sin posición
-    const monto = Math.abs(toNum(m.monto));
-    if (monto < 0.01) continue;
-    add(A, B, m.moneda || "ARS", +monto);   // A (la caja que pagó) acreedor
-    add(B, A, m.moneda || "ARS", -monto);   // B (la sociedad empleadora) deudor
+  // 6. SUELDOS por DEVENGADO (liquidación cerrada imputada al centro de otra empresa) + pagos por cuenta
+  //    ajena. Ver _sueldosIntercoEventos. Ej.: el efectivo de un coach en Rosedal devenga en Beta → Beta
+  //    acreedor / Segui deudor el último día del mes (misma fecha que el P&L). As-of: eventos hasta el corte.
+  for (const e of _sueldosIntercoEventos({ liqsSueldos, movs, centros, sociedades, legajoSoc })) {
+    if (corte && e.fecha > corte) continue;
+    add(e.A, e.B, e.moneda, +e.monto);   // A (quien asumió/pagó) acreedor
+    add(e.B, e.A, e.moneda, -e.monto);   // B (dueña del centro / del devengado) deudor
   }
   const soc = sociedad ? String(sociedad).toLowerCase() : null;
   const out = [];
@@ -2658,7 +2897,9 @@ export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades
 // núcleo→fondeada (excluye Segui = externa/anillo 3, y núcleo↔núcleo). Devuelve { [fondeadaId]: number[12] }
 // (positivo = invertido ese mes; negativo = te devolvieron). Σ meses = el `neto` de lecturaInterco para esa
 // posición. Read-only. Nota: por-moneda (sin FX); consolidación a una moneda = a futuro.
-export function fondeoFondeadasMensual({ movs = [], comps = [], centros = [], sociedades = [] } = {}, { year = null, moneda = "ARS", desde = null } = {}) {
+// `fx(monto,moneda,anio,mes)->USD` opcional: con fx CONVIERTE todas las monedas a USD (consolidado); sin fx
+// filtra por `moneda` (modo nativo, comportamiento previo). Sin fx, el fondeo en monedas ≠ moneda se descartaba.
+export function fondeoFondeadasMensual({ movs = [], comps = [], centros = [], sociedades = [] } = {}, { year = null, moneda = "ARS", desde = null, fx = null } = {}) {
   const empresaDe = new Map((centros || []).map(c => [String(c.id), String(c.empresa || "")]));
   const nucleo   = new Set((sociedades || []).filter(s => /n[úu]cleo/i.test(String(s.anillo || ""))).map(s => String(s.id)));
   const fondeada = new Set((sociedades || []).filter(s => /fondead/i.test(String(s.anillo || ""))).map(s => String(s.id)));
@@ -2667,15 +2908,17 @@ export function fondeoFondeadasMensual({ movs = [], comps = [], centros = [], so
   const rec = (A, B, fecha, mon, delta) => {
     A = String(A || ""); B = String(B || "");
     if (!nucleo.has(A) || !fondeada.has(B) || A === B) return;
-    if ((mon || "ARS") !== moneda) return;
+    if (!fx && (mon || "ARS") !== moneda) return;   // filtro por moneda solo en modo nativo; con fx se convierte
     const f = String(fecha || "");
     if (year && f.slice(0, 4) !== String(year)) return;
     // Es el FLUJO del mes (lo que puse ese mes), no el acumulado: la apertura (30/6, pre-go-live) es la
     // posición inicial, no un movimiento → se excluye lo anterior a `desde`.
     if (desde && f < desde) return;
     const m = parseInt(f.slice(5, 7), 10) - 1;
-    if (m < 0 || m > 11 || Math.abs(delta) < 0.01) return;
-    (out[B] ??= new Array(12).fill(0))[m] += delta;
+    if (m < 0 || m > 11) return;
+    const d = fx ? fx(delta, mon || "ARS", parseInt(f.slice(0, 4), 10), m + 1) : delta;   // consolida a USD si hay fx
+    if (Math.abs(d) < 0.01) return;
+    (out[B] ??= new Array(12).fill(0))[m] += d;
   };
   // 1a/1b. Fondeo vía gasto (A paga un gasto imputado a un CECO de B): comprobantes + gastos directos/CONTAB.
   for (const r of comps) {
@@ -2707,11 +2950,79 @@ export function fondeoFondeadasMensual({ movs = [], comps = [], centros = [], so
   return out;
 }
 
+// Interco del grupo consolidado, MENSUAL y por TIPO, "desde la vista del negocio" (Reportes, NO Tesorería).
+// Misma orientación anti-doble-conteo que fondeoFondeadasMensual (registra solo A∈núcleo → B∉núcleo, negocio=B,
+// + = el grupo puso plata en el negocio), pero: (a) generaliza B a CUALQUIER contraparte no-núcleo (fondeadas
+// España/Colombia + externas tipo Segui), (b) particiona por `tipo` (Pago/Transferencia/Interco parkeada/
+// Interuso gestión/Sueldo) como el ledger, (c) suma la fuente de SUELDOS (que fondeoFondeadasMensual no trae).
+// Ata al P&L: para una fondeada, Σ tipos (sin Sueldo) = fondeoFondeadasMensual de esa sociedad. USD: pasar `fx`.
+// Devuelve { negocios:[{ negocioId, negocioNombre, anillo, ladoNucleo, tipos:{[tipo]:number[12]}, totalMes }], tipos, totalMes }.
+export const INTERCO_TIPOS = ["Pago", "Transferencia", "Interco parkeada", "Interuso gestión", "Sueldo"];
+export function intercoConsolidadoMensual({ movs = [], comps = [], centros = [], sociedades = [], legajoSoc = {}, liqsSueldos = [] } = {}, { year = null, desde = null, fx = null } = {}) {
+  const empresaDe  = new Map((centros || []).map(c => [String(c.id), String(c.empresa || "")]));
+  const nucleo     = new Set((sociedades || []).filter(s => /n[úu]cleo/i.test(String(s.anillo || ""))).map(s => String(s.id)));
+  const socIds     = new Set((sociedades || []).map(s => String(s.id)));   // solo negocios = sociedad real
+  const nombreSoc  = new Map((sociedades || []).map(s => [String(s.id), s.nombre || s.id]));
+  const anilloSoc  = new Map((sociedades || []).map(s => [String(s.id), s.anillo || "Sin anillo"]));
+  const anilloDe   = id => anilloSoc.get(String(id)) || "Sin anillo";
+  const acc = {}, ladoNucleo = {};   // acc[negocioId][tipo] = number[12]
+  const rec = (A, B, fecha, mon, delta, tipo) => {
+    A = String(A || ""); B = String(B || "");
+    // solo núcleo → NO-núcleo, y B tiene que ser una sociedad real (descarta centros sin empresa mapeada, B vacío).
+    if (!nucleo.has(A) || nucleo.has(B) || !socIds.has(B) || A === B) return;
+    const f = String(fecha || "");
+    if (year && f.slice(0, 4) !== String(year)) return;
+    if (desde && f < desde) return;                            // apertura pre-go-live excluida
+    const m = parseInt(f.slice(5, 7), 10) - 1;
+    if (m < 0 || m > 11) return;
+    const d = fx ? fx(delta, mon || "ARS", parseInt(f.slice(0, 4), 10), m + 1) : delta;
+    if (Math.abs(d) < 0.01) return;
+    ((acc[B] ??= {})[tipo] ??= new Array(12).fill(0))[m] += d;
+    if (!ladoNucleo[B]) ladoNucleo[B] = A;                     // un lado núcleo, para el drill
+  };
+  // Fuentes = mismas que fondeoFondeadasMensual + sueldos, cada una con su tipo.
+  for (const r of comps) {
+    const sub = String(r.subtipo || "").toUpperCase();
+    if (sub !== "EGRESO" && sub !== "GASTO" && sub !== "EGRESO_FC") continue;
+    rec(r.sociedad, empresaDe.get(String(r.centro_costo || "")), r.fecha, r.moneda, Math.abs(toNum(r.total)), "Pago");
+  }
+  for (const m of movs) {
+    if (esIgnorado(m)) continue;
+    const tp = String(m.tipo || "").toUpperCase();
+    if (tp === "INGRESO" || tp === "COBRO") continue;
+    const esGasto = m.origen === "gasto_directo" || String(m.documento_id || "").startsWith("CONTAB-");
+    if (!esGasto) continue;
+    rec(m.sociedad, empresaDe.get(String(m.centro_costo || "")), m.fecha, m.moneda, Math.abs(toNum(m.monto)), "Pago");
+  }
+  for (const { salida, entrada } of _pairMovs(movs, "INTERCOMPANIA")) {
+    if (!salida || !entrada) continue;
+    rec(salida.sociedad,  entrada.sociedad, salida.fecha,  salida.moneda,  +Math.abs(toNum(salida.monto)),  "Transferencia");
+    rec(entrada.sociedad, salida.sociedad,  entrada.fecha, entrada.moneda, -Math.abs(toNum(entrada.monto)), "Transferencia");
+  }
+  for (const m of movs) {
+    if (esIgnorado(m)) continue;
+    if (m.origen === "interco_park")          rec(m.sociedad, m.contraparte_id, m.fecha, m.moneda, -toNum(m.monto), "Interco parkeada");
+    else if (m.origen === "interuso_gestion") rec(m.sociedad, m.contraparte_id, m.fecha, m.moneda, toNum(m.monto),  "Interuso gestión");
+  }
+  // Sueldos por DEVENGADO + pagos por cuenta ajena (misma fuente 6 que lecturaInterco/intercoLedger).
+  for (const e of _sueldosIntercoEventos({ liqsSueldos, movs, centros, sociedades, legajoSoc })) rec(e.A, e.B, e.fecha, e.moneda, e.monto, "Sueldo");
+  const totalMes = new Array(12).fill(0);
+  const negocios = Object.entries(acc).map(([id, tipos]) => {
+    const tot = new Array(12).fill(0);
+    for (const arr of Object.values(tipos)) arr.forEach((v, i) => { tot[i] += v; });
+    tot.forEach((v, i) => { totalMes[i] += v; });
+    return { negocioId: id, negocioNombre: nombreSoc.get(id) || id, anillo: anilloDe(id), ladoNucleo: ladoNucleo[id], tipos, totalMes: tot };
+  }).filter(n => n.totalMes.some(v => Math.abs(v) >= 0.01));
+  const abssum = a => a.reduce((s, v) => s + Math.abs(v), 0);
+  negocios.sort((a, b) => abssum(b.totalMes) - abssum(a.totalMes));
+  return { negocios, tipos: INTERCO_TIPOS, totalMes };
+}
+
 // Extracto (ledger) de la posición interco de UNA sociedad contra UNA contraparte+moneda: cada
 // movimiento por fecha con su +/− y saldo corriente, más el saldo de apertura. Mismas reglas y
 // convención de signo que lecturaInterco (quien pone la plata = acreedor) → el saldo final coincide
 // con el `neto` de esa posición. Read-only, no toca datos.
-export function intercoLedger({ movs = [], comps = [], centros = [], sociedades = [], legajoSoc = {} } = {}, { sociedad, contraparte, moneda = "ARS" } = {}) {
+export function intercoLedger({ movs = [], comps = [], centros = [], sociedades = [], cuentasBancarias = [], cuentas = [], legajoSoc = {}, liqsSueldos = [] } = {}, { sociedad, contraparte, moneda = "ARS" } = {}) {
   const S = String(sociedad || "").toLowerCase();
   const C = String(contraparte || "").toLowerCase();
   const empresaDe = new Map((centros || []).map(c => [String(c.id), c.empresa]));
@@ -2721,6 +3032,17 @@ export function intercoLedger({ movs = [], comps = [], centros = [], sociedades 
   const mine = (s, c, mon) => String(s || "").toLowerCase() === S && String(c || "").toLowerCase() === C && (mon || "ARS") === moneda;
   const cc = id => nombreCentro.get(String(id || "")) || "";
   const soc = id => nombreSoc.get(String(id || "")) || String(id || "");
+  const cbInfo = new Map((cuentasBancarias || []).map(c => [String(c.id), c]));
+  const cb = id => {   // cuenta bancaria/caja destino → "Nombre (Moneda)"
+    const c = cbInfo.get(String(id || "")); if (!c) return "";
+    const nom = c.nombre || c.id;
+    return c.moneda ? `${nom} (${c.moneda})` : nom;
+  };
+  // Cuenta contable: normaliza id (legacy `CUENTA_<nombre>` o nuevo `CTA-…`) → nombre legible.
+  // Algunos writers (sueldos históricos) guardaron el id crudo en cuenta_contable; esto lo resuelve al leer.
+  const nombreCuenta = new Map();
+  for (const c of (cuentas || [])) { if (c?.id) nombreCuenta.set(String(c.id), c.nombre || c.id); if (c?.nombre) nombreCuenta.set(String(c.nombre), c.nombre); }
+  const nc = x => nombreCuenta.get(String(x || "")) || String(x || "").replace(/^CUENTA_/, "");
   const entries = [];
   let opening = 0;
   // meta = { prov/tipo, cuenta, centro (nombre), ref (id para ubicarlo en la base) } — todo opcional.
@@ -2738,7 +3060,7 @@ export function intercoLedger({ movs = [], comps = [], centros = [], sociedades 
     const A = r.sociedad, m = Math.abs(toNum(r.total)); if (m < 0.01 || String(A) === String(B)) continue;
     if (nucleo.size && nucleo.has(String(A)) && nucleo.has(String(B))) continue;   // núcleo↔núcleo = gasto en el CECO, no interco
     const flujo = `Pago ${soc(A)} x ${soc(B)}`;   // A (pagador) pagó por B (dueño del centro)
-    const meta = { prov: r.proveedor || r.contraparte_nombre || r.contraparte || "", cuenta: r.cuenta_contable || "", centro: cc(r.centro_costo), ref: r.id_comp || r.id || "", docSoc: String(A), refKind: "comp" };
+    const meta = { tipo: "Pago", prov: r.proveedor || r.contraparte_nombre || r.contraparte || "", cuenta: nc(r.cuenta_contable), centro: cc(r.centro_costo), ref: r.id_comp || r.id || "", docSoc: String(A), refKind: "comp" };
     pair(A, B, r.moneda, r.fecha, flujo, m, meta);
   }
   // 1b. Fondeo vía gastos directos / conciliación contabilizada (nb_movimientos).
@@ -2750,15 +3072,16 @@ export function intercoLedger({ movs = [], comps = [], centros = [], sociedades 
     const A = m.sociedad, val = Math.abs(toNum(m.monto)); if (val < 0.01 || String(A) === String(B)) continue;
     if (nucleo.size && nucleo.has(String(A)) && nucleo.has(String(B))) continue;   // núcleo↔núcleo = gasto en el CECO, no interco
     const flujo = `Pago ${soc(A)} x ${soc(B)}`;   // A (pagador) pagó por B (dueño del centro)
-    const meta = { prov: m.contraparte_nombre || "", cuenta: m.cuenta_contable || "", centro: cc(m.centro_costo), ref: m.documento_id || m.id || "", docSoc: String(A), refKind: "mov" };
+    const meta = { tipo: "Pago", prov: m.contraparte_nombre || "", cuenta: nc(m.cuenta_contable), centro: cc(m.centro_costo), ref: m.documento_id || m.id || "", docSoc: String(A), refKind: "mov" };
     pair(A, B, m.moneda, m.fecha, flujo, val, meta);
   }
   // 2. Préstamos / transferencias del núcleo (pares INTERCOMPANIA).
   for (const { salida, entrada } of _pairMovs(movs, "INTERCOMPANIA")) {
     if (!salida || !entrada) continue;
     const ref = salida.documento_id || salida.id || "";
-    if (mine(salida.sociedad, entrada.sociedad, salida.moneda)) push(salida.fecha, salida.concepto || "Transferencia enviada", +Math.abs(toNum(salida.monto)), { tipo: "Transferencia", ref });
-    if (mine(entrada.sociedad, salida.sociedad, entrada.moneda)) push(entrada.fecha, entrada.concepto || "Transferencia recibida", -Math.abs(toNum(entrada.monto)), { tipo: "Transferencia", ref });
+    const dest = cb(salida.cuenta_destino) || cb(entrada.cuenta_bancaria);   // a qué cuenta llegó la plata
+    if (mine(salida.sociedad, entrada.sociedad, salida.moneda)) push(salida.fecha, salida.concepto || "Transferencia enviada", +Math.abs(toNum(salida.monto)), { tipo: "Transferencia", cuentaDest: dest, ref });
+    if (mine(entrada.sociedad, salida.sociedad, entrada.moneda)) push(entrada.fecha, entrada.concepto || "Transferencia recibida", -Math.abs(toNum(entrada.monto)), { tipo: "Transferencia", cuentaDest: dest, ref });
   }
   // 3. Saldos de APERTURA → saldo inicial (no es un movimiento del extracto).
   for (const m of movs) {
@@ -2771,7 +3094,7 @@ export function intercoLedger({ movs = [], comps = [], centros = [], sociedades 
   for (const m of movs) {
     if (m.origen !== "interco_park" || esIgnorado(m)) continue;
     const A = m.sociedad, B = m.contraparte_id, contrib = -toNum(m.monto); if (Math.abs(contrib) < 0.01) continue;
-    const meta = { tipo: "Interco parkeada", cuenta: m.cuenta_contable || "", centro: cc(m.centro_costo), ref: m.documento_id || m.id || "" };
+    const meta = { tipo: "Interco parkeada", cuenta: nc(m.cuenta_contable), cuentaDest: cb(m.cuenta_destino), centro: cc(m.centro_costo), ref: m.documento_id || m.id || "" };
     pair(A, B, m.moneda, m.fecha, m.concepto || "Interco parkeada", contrib, meta);
   }
   // 5. Interusos de gestión cross-society (no núcleo↔núcleo).
@@ -2780,17 +3103,13 @@ export function intercoLedger({ movs = [], comps = [], centros = [], sociedades 
     const A = String(m.sociedad || ""), B = String(m.contraparte_id || ""), mm = toNum(m.monto);
     if (!A || !B || A === B || Math.abs(mm) < 0.01) continue;
     if (!nucleo.size || (nucleo.has(A) && nucleo.has(B))) continue;
-    const meta = { tipo: "Interuso gestión", cuenta: m.cuenta_contable || "", centro: cc(m.centro_costo), ref: m.documento_id || m.id || "" };
+    const meta = { tipo: "Interuso gestión", cuenta: nc(m.cuenta_contable), centro: cc(m.centro_costo), ref: m.documento_id || m.id || "" };
     pair(A, B, m.moneda, m.fecha, m.concepto || "Interuso gestión", mm, meta);
   }
-  // 6. SUELDOS pagados por cuenta de otra sociedad (por pagado). Espeja la fuente 6 de lecturaInterco.
-  if (nucleo.size) for (const m of movs) {
-    if (m.origen !== "sueldos" || esIgnorado(m)) continue;
-    const A = String(m.sociedad || ""), B = String(legajoSoc[String(m.legajo_id || "")] || "");
-    if (!A || !B || A === B || (nucleo.has(A) && nucleo.has(B))) continue;
-    const monto = Math.abs(toNum(m.monto)); if (monto < 0.01) continue;
-    const meta = { tipo: "Sueldo", prov: m.legajo_nombre || "", cuenta: m.cuenta_contable || "Sueldos", centro: cc(m.centro_costo), ref: m.documento_id || m.id || "" };
-    pair(A, B, m.moneda, m.fecha, m.concepto || `Sueldo ${m.legajo_nombre || ""}`.trim(), monto, meta);
+  // 6. SUELDOS por DEVENGADO + pagos por cuenta ajena. Espeja la fuente 6 de lecturaInterco (_sueldosIntercoEventos).
+  for (const e of _sueldosIntercoEventos({ liqsSueldos, movs, centros, sociedades, legajoSoc })) {
+    const meta = { tipo: "Sueldo", prov: e.prov, cuenta: nc(e.cuenta) || "Sueldos", centro: e.centro, ref: e.ref, refKind: e.refKind };
+    pair(e.A, e.B, e.moneda, e.fecha, e.concepto, e.monto, meta);
   }
   const key = f => { const s = String(f || ""); if (/^\d{4}-/.test(s)) return s.slice(0, 10); const [d, mm, y] = s.split("/"); return y ? `${y}-${String(mm).padStart(2, "0")}-${String(d).padStart(2, "0")}` : s; };
   entries.sort((a, b) => key(a.fecha).localeCompare(key(b.fecha)));
@@ -2937,7 +3256,7 @@ function _finRowToCuota(r) {
 /** Agrupa las filas planas (una por cuota) en planes con su cronograma + derivados.
  *  `pagadoPorCuota` (opcional) = { "<plan_id>#<nro>": montoPagado } derivado de los movimientos
  *  (origen "cuota") → habilita PAGO PARCIAL: saldo por cuota = total − pagado, estado "parcial". */
-export function agruparPlanes(rows = [], pagadoPorCuota = {}) {
+export function agruparPlanes(rows = [], pagadoPorCuota = {}, pagosPorCuota = {}) {
   const map = new Map();
   for (const r of rows) {
     const key = r.plan_id;
@@ -2972,7 +3291,10 @@ export function agruparPlanes(rows = [], pagadoPorCuota = {}) {
     // "cancelada" (aunque no haya movimiento con ref) para no regresionar cierres viejos; sobre las
     // "pendiente" se aplica el pago parcial derivado de los movimientos.
     for (const c of p.cuotas) {
-      const pagado = pagadoPorCuota[`${p.plan_id}#${c.nro_cuota}`] || 0;
+      const cuotaKey = `${p.plan_id}#${c.nro_cuota}`;
+      const pagado = pagadoPorCuota[cuotaKey] || 0;
+      // Pagos individuales con fecha (para el saldo as-of por corte, ver finAsOf en tesoreriaDerive).
+      c.pagos = pagosPorCuota[cuotaKey] || [];
       c.pagado = pagado;
       if (c.estado === "pagada" || c.estado === "cancelada") { c.saldoCuota = 0; continue; }
       c.saldoCuota = Math.max(0, (Number(c.total) || 0) - pagado);
@@ -3006,7 +3328,10 @@ export async function fetchFinanciaciones(sociedad) {
     get("nb_financiaciones", sociedad ? { sociedad } : {}),
     get("nb_movimientos", sociedad ? { sociedad } : {}).catch(() => []),
   ]);
-  const pagadoPorCuota = {};
+  // Pagos por cuota CON FECHA (no solo el total): el saldo a una fecha pasada (as-of, ver finAsOf)
+  // necesita saber cuánto estaba pagado a ESE corte. Un pago parcial no setea fecha_pago en la cuota,
+  // así que sin esto su reducción "se filtraba" a meses anteriores al pago (deuda subvaluada al 31/mes).
+  const pagosPorCuota = {};
   for (const m of (Array.isArray(movs) ? movs : [])) {
     if (String(m.origen || "") !== "cuota") continue;
     const ref = String(m.origen_id || m.documento_id || "");
@@ -3014,9 +3339,14 @@ export async function fetchFinanciaciones(sociedad) {
     // La clave es `<plan_id>#<nro>` y plan_id ya trae "FIN-". Movimientos viejos quedaron con
     // el prefijo duplicado ("FIN-FIN-…"); lo colapsamos para que ambos formatos matcheen.
     const key = ref.startsWith("FIN-FIN-") ? ref.slice(4) : ref;
-    pagadoPorCuota[key] = (pagadoPorCuota[key] || 0) + Math.abs(Number(m.monto) || 0);
+    (pagosPorCuota[key] ||= []).push({ fecha: String(m.fecha || ""), monto: Math.abs(Number(m.monto) || 0) });
   }
-  return agruparPlanes(rows, pagadoPorCuota);
+  // Total pagado por cuota (estado corriente); la lista fechada va aparte para el saldo as-of.
+  const pagadoPorCuota = {};
+  for (const key of Object.keys(pagosPorCuota)) {
+    pagadoPorCuota[key] = pagosPorCuota[key].reduce((s, p) => s + p.monto, 0);
+  }
+  return agruparPlanes(rows, pagadoPorCuota, pagosPorCuota);
 }
 
 // Ledger (extracto) del PASIVO de financiaciones de un bucket (plan_afip / prestamo) en una moneda:
@@ -3125,9 +3455,21 @@ export function generarCuotas({ capital_original, n_cuotas, tasaMensual = 0, iva
  * (+capital) vía appendMovTesoreria — entra a Cash Flow/saldo pero NO al P&L (documento_id
  * = plan_id, no "CONTAB-"). Plan AFIP no tiene alta de caja (el capital es el impuesto).
  */
+export const FIN_APERTURA_FECHA = "2026-06-30";
 export async function appendFinanciacion({ tipo = "plan_afip", nro_plan = "", acreedor_id = "", acreedor_nombre = "", acreedor_cuit = "", sociedad, moneda = "ARS", fecha_consolidacion, es_apertura = false, comprobante_origen = "", cuenta_capital = "", centro_capital = "", cuenta_interes = "", centro_interes = "", cuenta_iva = "", centro_iva = "", cuenta_impuestos = "", centro_impuestos = "", cuenta_bancaria = "", nota = "", cuotas = [] }) {
   const plan_id    = newId("FIN");
   const created_at = new Date().toISOString();
+
+  // APERTURA (regla Martín 18/9/2026): un plan/préstamo "vivo al go-live" es pasivo de la APERTURA → el balance
+  // lo toma al 30/6 aunque AFIP lo haya consolidado después (deuda pre go-live, ej. IVA 04/05-2026 consolidado
+  // en jul/ago). Fechado en su consolidación real entraba al pasivo ese mes sin contrapartida y rompía el
+  // cierre P&L↔ΔPN. `fecha_consolidacion` es la fecha de alta del pasivo para derivarSaldos; la de AFIP queda
+  // en la nota. Las cuotas conservan sus vencimientos (el interés se devenga igual).
+  const fechaReal = String(fecha_consolidacion || "").slice(0, 10);
+  if (es_apertura && fechaReal > FIN_APERTURA_FECHA) {
+    nota = [nota, `consolidación real ${fechaReal}`].filter(Boolean).join(" · ");
+    fecha_consolidacion = FIN_APERTURA_FECHA;
+  }
 
   if (tipo === "prestamo" && !es_apertura && cuenta_bancaria) {
     const capital_total = cuotas.reduce((s, c) => s + (Number(c.capital) || 0), 0);

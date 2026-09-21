@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
-import { T, fmtMoney, fmtDate, PageHeader, Btn } from "./theme";
+import { T, fmtMoney, fmtDate, PageHeader, Btn, MoneyField } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
 import {
   fetchIngresosDirectos, deleteIngresoDirecto, appendIngresoDirecto, appendIngresosDirectos, updateIngresoDirecto,
@@ -205,7 +205,7 @@ function FormNuevoIngreso({ sociedad, cuentasBancarias, cuentas, centrosCosto, p
                     </td>
 
                     <td style={{ padding:"6px 8px" }}>
-                      <input type="number" value={r.subtotal} placeholder="0,00"
+                      <MoneyField value={r.subtotal} placeholder="0,00"
                         onChange={e => upd(r._id, "subtotal", e.target.value)}
                         style={{ ...ci, textAlign:"right", fontFamily:"var(--mono)" }} />
                     </td>

@@ -5,6 +5,7 @@
 
 import { stamp } from "./auth";
 import { bustToken, forzarRefresco } from "./cacheBust";
+import { fetchJsonWithRetry } from "./http";
 
 const BASE    = "/api/sueldos";
 const TOKEN   = import.meta.env.VITE_SHEETS_TOKEN ?? "";
@@ -27,7 +28,7 @@ function cacheGet(key) {
 
 // ── Helpers HTTP ──────────────────────────────────────────────────────────────
 
-async function get(sheet, params = {}, base = BASE, { retries = 2, retryDelayMs = 1200 } = {}) {
+async function get(sheet, params = {}, base = BASE, { retries = 3, retryDelayMs = 1200 } = {}) {
   // `_cb` (solo en la ventana de refresco) saltea la caché de borde del CDN — ver cacheBust.js.
   const cb = bustToken();
   const qs = new URLSearchParams({ resource: sheet, token: TOKEN, ...params, ...(cb ? { _cb: cb } : {}) }).toString();
@@ -39,21 +40,12 @@ async function get(sheet, params = {}, base = BASE, { retries = 2, retryDelayMs 
   // GAS devuelve 500 con HTML de forma intermitente (rate-limit / lock). Sin reintento,
   // un solo fallo tumba el Promise.all del que carga la pantalla → "no hay datos" engañoso.
   const run = async () => {
-    let lastErr;
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      if (attempt) await new Promise(r => setTimeout(r, retryDelayMs * attempt));
-      try {
-        const res  = await fetch(`${base}?${qs}`);
-        const text = await res.text();
-        let data;
-        try { data = JSON.parse(text); }
-        catch { throw new Error(`Error del servidor (${res.status}): ${text.slice(0, 120)}`); }
-        if (data?.error) throw new Error(data.error);
-        _cache.set(key, { data, ts: Date.now() });
-        return data;
-      } catch (e) { lastErr = e; }
-    }
-    throw lastErr;
+    const data = await fetchJsonWithRetry(key, {
+      retries, retryDelayMs,
+      parseErr: (status, text) => `Error del servidor (${status}): ${text.slice(0, 120)}`,
+    });
+    _cache.set(key, { data, ts: Date.now() });
+    return data;
   };
 
   const p = run().finally(() => _inflight.delete(key));
@@ -446,6 +438,53 @@ export function idLiqDe(legajo_id, mes, anio, sede_id = "") {
   return `LIQ-${legajo_id}-${sede_id || "0"}-${anio}${String(mes).padStart(2, "0")}`;
 }
 
+// ── Ids de LÍNEA semánticos (estables entre cierres) ─────────────────────────
+// Antes cada línea se numeraba por posición (`<id_liq>-L01`, `-L02`…): reabrir, tocar la receta y
+// re-cerrar renumeraba, y los pagos (nb_movimientos.forma_pago_id) quedaban apuntando a un id muerto
+// → tilde "parcial" con Pendiente 0. Ahora el id dice QUÉ es la línea, así se regenera IGUAL en
+// cada cierre, exista o no la fila en la hoja:
+//   concepto → `<id_liq>-C-<slug concepto>`     (…-C-sueldo-base, …-C-horas, …-C-redondeo)
+//   pago     → `<id_liq>-P-<forma>[-k]`          (…-P-haberes, …-P-deposito, …-P-deposito-2)
+//   novedad  → `<id_liq>-N-<id novedad NOV-…>`   (fallback …-N-<cuenta_contable_id>[-k])
+// `k` = ordinal dentro de la misma clave (solo desde la 2ª repetición). Los ids viejos `-L0n` siguen
+// existiendo en la hoja hasta que esa liquidación se re-cierre; nadie los parsea.
+export function slugConcepto(s) {
+  return String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "x";
+}
+function claveLinea(l) {
+  if (l.tipo === "pago")    return `P-${l.forma_pago || "x"}`;
+  if (l.tipo === "novedad") return /^NOV-/.test(String(l.nov_id || "")) ? `N-${l.nov_id}` : `N-${l.cuenta_contable_id || "x"}`;
+  return `C-${slugConcepto(l.concepto)}`;
+}
+// Asigna el id semántico a cada línea de una liquidación (respeta un `id` ya presente). Quita el
+// campo transitorio `nov_id` (viaja solo para armar el id; NO es columna de la hoja).
+export function asignarIdsLineas(id_liq, lineas = []) {
+  const seen = new Map();
+  return lineas.map(l => {
+    const { nov_id: _nov, ...resto } = l;
+    if (resto.id) return resto;
+    const base = claveLinea(l);
+    const k = (seen.get(base) || 0) + 1;
+    seen.set(base, k);
+    return { id: `${id_liq}-${base}${k >= 2 ? `-${k}` : ""}`, ...resto };
+  });
+}
+// Id de pago que va a tener cada línea de la RECETA HQ cuando se cierre — misma regla y MISMO filtro
+// que el cierre (solo importe > 0, ordinal por forma). Así un pago hecho ANTES de cerrar ya apunta
+// al id definitivo y sobrevive a cerrar/reabrir/re-cerrar. Devuelve Map<id de línea receta, pago_id>.
+export function pagoIdsDeReceta(id_liq, lineas = []) {
+  const seen = new Map(), out = new Map();
+  for (const l of lineas) {
+    if ((Number(l.importe) || 0) <= 0) continue;
+    const base = `P-${l.tipo || "x"}`;
+    const k = (seen.get(base) || 0) + 1;
+    seen.set(base, k);
+    out.set(String(l.id), `${id_liq}-${base}${k >= 2 ? `-${k}` : ""}`);
+  }
+  return out;
+}
+
 // Sociedad desde la que se paga una forma (al construir las líneas `pago`/`novedad`).
 export function sociedadDeFormaPago(forma, lineSoc, legajoSoc) {
   if (forma === "haberes")     return legajoSoc || "";
@@ -485,9 +524,7 @@ export async function delLiquidacionComp(id_liq) {
 export async function saveLiquidacionLines(id_liq, lineas) {
   await delLiquidacionComp(id_liq);
   const created_at = new Date().toISOString();
-  const rows = lineas.map((l, i) => ({
-    id: `${id_liq}-L${String(i + 1).padStart(2, "0")}`, id_liq, ...l, created_at,
-  }));
+  const rows = asignarIdsLineas(id_liq, lineas).map(l => ({ id_liq, ...l, created_at }));
   if (!rows.length) return [];
   // Alta en lote (1 request). Si el GAS no soporta add_batch, cae a alta secuencial.
   try {
@@ -498,10 +535,10 @@ export async function saveLiquidacionLines(id_liq, lineas) {
   return rows.map(r => r.id);
 }
 
-// Reescribe VARIAS liquidaciones en UN solo add_batch (en vez de uno por legajo → "línea por línea").
-// entries = [{ id_liq, lineas, replace }]. `replace` borra las líneas viejas de ese id_liq (solo hace
-// falta si ya estaba guardada; en un primer guardado va todo nuevo → 0 borrados → una sola escritura).
-// Ids determinísticos por id_liq (`<id_liq>-L01`…) → el borrado+add re-escribe sin duplicar.
+// Escribe VARIAS liquidaciones en UN solo add_batch (en vez de uno por legajo → "línea por línea").
+// entries = [{ id_liq, lineas, replace }]. `replace` borra antes las líneas viejas de ese id_liq (solo
+// hace falta si ya había filas en la hoja; lo normal es que no → 0 borrados → una sola escritura).
+// Ids semánticos por línea (asignarIdsLineas) → el mismo cierre siempre genera los mismos ids.
 export async function saveLiquidacionesLinesBatch(entries = []) {
   const created_at = new Date().toISOString();
   // Limpiar lo viejo SOLO de las que ya existían (secuencial: el borrado no se puede juntar sin tocar el GAS).
@@ -510,9 +547,7 @@ export async function saveLiquidacionesLinesBatch(entries = []) {
   }
   const rows = [];
   for (const e of entries) {
-    (e.lineas || []).forEach((l, i) => {
-      rows.push({ id: `${e.id_liq}-L${String(i + 1).padStart(2, "0")}`, id_liq: e.id_liq, ...l, created_at });
-    });
+    for (const l of asignarIdsLineas(e.id_liq, e.lineas || [])) rows.push({ id_liq: e.id_liq, ...l, created_at });
   }
   if (!rows.length) return { ok: true, n: 0 };
   try {
@@ -523,47 +558,13 @@ export async function saveLiquidacionesLinesBatch(entries = []) {
   return { ok: true, n: rows.length };
 }
 
-// Reabre una liquidación cerrada: conserva todas sus líneas (concepto/pago/novedad)
-// pero vuelve el estado a "borrador". Así la pantalla vuelve a leer las novedades
-// EN VIVO de su_novedades (en vez de las congeladas al cerrar) y se puede volver a
-// cerrar para materializar los montos actualizados. No-op si no hay líneas.
-export async function reabrirLiquidacion(id_liq) {
-  const rows = await get("su_liquidaciones", {});
-  const propias = (Array.isArray(rows) ? rows : []).filter(r => r.id_liq === id_liq);
-  if (!propias.length) return false;
-  const lineas = propias.map(({ id, id_liq: _idLiq, created_at, ...resto }) => ({ ...resto, estado: "borrador" }));
-  await saveLiquidacionLines(id_liq, lineas);
-  return true;
-}
-
-// Reabre VARIAS liquidaciones de una: 1 sola lectura + 1 solo alta en lote (en vez de
-// 1 lectura + 1 borrado + 1 alta POR liquidación, que con "Reabrir todas" tardaba minutos).
-// Los borrados quedan secuenciales (el GAS pierde escrituras concurrentes, ver saveLiquidacionLines),
-// pero pasa de 3×N requests a N+2.
+// Reabrir una liquidación = BORRAR sus líneas (delLiquidacionComp). La hoja guarda solo liquidaciones
+// CERRADAS; lo que no está cerrado se deriva en vivo (Eye / legajo / receta), sin estado "borrador"
+// persistido. Un solo hito: cerrar. Los pagos (nb_movimientos) no se tocan y se re-anclan por id
+// semántico o por forma al volver a cerrar. `reabrirLiquidaciones(ids)` = borrar cada id_liq.
 export async function reabrirLiquidaciones(ids = []) {
   const unique = [...new Set(ids)].filter(Boolean);
-  if (!unique.length) return { ok: true, n: 0 };
-  const rows = await get("su_liquidaciones", {});
-  const all = Array.isArray(rows) ? rows : [];
-  const created_at = new Date().toISOString();
-  const batchRows = [];
-  for (const id_liq of unique) {
-    const propias = all.filter(r => r.id_liq === id_liq);
-    if (!propias.length) continue;
-    await delLiquidacionComp(id_liq);
-    propias.forEach(({ id, id_liq: _idLiq, created_at: _ca, ...resto }, i) => {
-      batchRows.push({
-        id: `${id_liq}-L${String(i + 1).padStart(2, "0")}`, id_liq,
-        ...resto, estado: "borrador", created_at,
-      });
-    });
-  }
-  if (!batchRows.length) return { ok: true, n: 0 };
-  try {
-    await post({ action: "add_batch", sheet: "su_liquidaciones", rows: batchRows });
-  } catch {
-    for (const row of batchRows) await post({ action: "add", sheet: "su_liquidaciones", row });
-  }
+  for (const id_liq of unique) await delLiquidacionComp(id_liq);   // secuencial: GAS pierde escrituras concurrentes
   return { ok: true, n: unique.length };
 }
 
@@ -874,14 +875,19 @@ function _pagosDeMovs(rows, { mes, anio } = {}) {
     .map(parsePagoFromMov);
 }
 
+// `origen: "sueldos"` = filtro SERVER-SIDE: el GAS devuelve solo las ~400 filas de sueldo en vez de la
+// hoja nb_movimientos entera (~3k filas / 2,4 MB, engordada por las líneas de extracto de conciliación).
+// Una sola clave de caché (sin mes/anio) sirve a todos los meses; el corte por mes/anio queda en cliente.
+const PAGOS_SUELDO_Q = { origen: "sueldos" };
+
 export async function fetchPagos(mes, anio) {
-  const rows = await get("nb_movimientos", {}, BASE_NB);
+  const rows = await get("nb_movimientos", PAGOS_SUELDO_Q, BASE_NB);
   return _pagosDeMovs(rows, { mes, anio });
 }
 
 // Pagos de sueldo (para la cuenta por pagar de sueldos en el Balance). Sin `anio` → todos.
 export async function fetchPagosAnio(anio) {
-  const rows = await get("nb_movimientos", {}, BASE_NB);
+  const rows = await get("nb_movimientos", PAGOS_SUELDO_Q, BASE_NB);
   return _pagosDeMovs(rows, anio != null ? { anio } : {});
 }
 
@@ -907,7 +913,9 @@ export async function appendPago({
     fecha,
     tipo:            "SUELDO",
     cuenta_bancaria: cuenta_bancaria_id,
-    cuenta_contable: cuenta_contable_id,
+    // Convención del resto de la app: cuenta_contable guarda el NOMBRE (el P&L y los reportes agrupan
+    // por nombre). Antes copiaba el id crudo (CUENTA_Sueldos) → se veía en el ledger interco.
+    cuenta_contable: cuenta_contable_nombre || String(cuenta_contable_id || "").replace(/^CUENTA_/, ""),
     moneda:          "ARS",
     monto:           -Math.abs(monto),
     documento_id,
@@ -931,7 +939,7 @@ export async function appendPagos(items = []) {
     const {
       mes, anio, legajo_id, legajo_nombre, sociedad_id,
       tipo_componente, monto, fecha, cuenta_bancaria_id,
-      cuenta_contable_id = "", forma_pago_id = "", lote_pago = "",
+      cuenta_contable_id = "", cuenta_contable_nombre = "", forma_pago_id = "", lote_pago = "",
       centro_costo = "", concepto = "", nota = "", ambito = "",
     } = p;
     const nb_concepto = concepto || `Sueldo ${legajo_nombre} ${mes}/${anio} · ${tipo_componente}`;
@@ -942,7 +950,7 @@ export async function appendPagos(items = []) {
       fecha,
       tipo:            "SUELDO",
       cuenta_bancaria: cuenta_bancaria_id,
-      cuenta_contable: cuenta_contable_id,
+      cuenta_contable: cuenta_contable_nombre || String(cuenta_contable_id || "").replace(/^CUENTA_/, ""),
       moneda:          "ARS",
       monto:           -Math.abs(monto),
       documento_id,

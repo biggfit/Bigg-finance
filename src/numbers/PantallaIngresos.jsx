@@ -1,8 +1,8 @@
 import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
-import { T, ESTADO_INGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn } from "./theme";
+import { T, ESTADO_INGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn, MoneyField } from "./theme";
 import ConfirmModal from "./ConfirmModal";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
-import { fetchIngresos, appendIngreso, deleteIngreso, updateIngreso, appendCobro, fetchPagosCobros, calcSaldoPendiente, calcEstadoIngreso, fetchClientes, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, updateMovTesoreria, borrarPagoImputado, shortId, agruparAnticipos, cobrarContraAnticipo, appendRetenciones, appendCliente, appendCuenta } from "../lib/numbersApi";
+import { fetchIngresos, appendIngreso, deleteIngreso, updateIngreso, appendCobro, fetchPagosCobros, calcSaldoPendiente, calcSaldoNeto, calcEstadoIngreso, fetchClientes, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, updateMovTesoreria, borrarPagoImputado, shortId, agruparAnticipos, cobrarContraAnticipo, appendRetenciones, appendCliente, appendCuenta } from "../lib/numbersApi";
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 import { makeResolveCC, makeResolveCB, byNombre, makeCrearMaestro, stripForDuplicate } from "./formUtils";
 import NuevoIngresoModal from "./NuevoIngresoModal";
@@ -79,7 +79,7 @@ function RegistrarRetencionModal({ ingreso, saldoPendiente, cuentasContables = [
                     <option value="">— cuenta (IIBB, Ganancias, IVA…) —</option>
                     {cuentasOrd.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                   </select>
-                  <input type="number" value={l.monto} onChange={e => upd(i, "monto", e.target.value)} placeholder="monto"
+                  <MoneyField value={l.monto} onChange={e => upd(i, "monto", e.target.value)} placeholder="monto"
                     style={{ ...inp, width:120, textAlign:"right" }} />
                   {lineas.length > 1 && <button onClick={() => setLineas(ls => ls.filter((_, idx) => idx !== i))} title="Quitar"
                     style={{ border:"none", background:"transparent", color:T.muted, cursor:"pointer", fontSize:14 }}>✕</button>}
@@ -185,7 +185,7 @@ function EditarCobroModal({ cobro, sociedad, cuentasSoc, cuentasContables = [], 
             <div>
               <label style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase",
                 letterSpacing:".07em", display:"block", marginBottom:4 }}>Monto</label>
-              <input type="number" value={form.monto} onChange={e => set("monto", e.target.value)}
+              <MoneyField value={form.monto} onChange={e => set("monto", e.target.value)}
                 style={{ width:"100%", padding:"8px 10px", fontSize:13, borderRadius:8, boxSizing:"border-box",
                   border:`1px solid ${T.cardBorder}`, background:"#eceff3", color:T.text, fontFamily:"inherit" }} />
             </div>
@@ -638,8 +638,8 @@ function CtaCteModal({ cliente, documentos, onClose }) {
                       <td style={{ padding:"9px 14px", fontSize:13, fontFamily:"var(--mono)",
                         fontWeight:700, color:T.green, textAlign:"right" }}>{fmtMoney(cobrado, d.moneda)}</td>
                       <td style={{ padding:"9px 14px", fontSize:13, fontFamily:"var(--mono)",
-                        fontWeight:700, color: pendiente>0 ? T.orange : T.green, textAlign:"right" }}>
-                        {fmtMoney(pendiente, d.moneda)}
+                        fontWeight:700, color: pendiente>0 ? T.orange : (d.saldoNeto??0) < -0.005 ? T.blue : T.green, textAlign:"right" }}>
+                        {(d.saldoNeto??0) < -0.005 ? `-${fmtMoney(d.saldoNeto, d.moneda)}` : fmtMoney(pendiente, d.moneda)}
                       </td>
                       <td style={{ padding:"9px 14px" }}>
                         <Badge estado={d.estado} cfg={ESTADO_INGRESO} />
@@ -784,7 +784,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
       const enriched = docs.map(doc => {
         const docCobros = cobros.filter(c => c.documento_id === doc.id);
         const saldo     = calcSaldoPendiente(doc.total, docCobros);
-        return { ...doc, importe: Number(doc.total) || 0, saldoPendiente: saldo,
+        return { ...doc, importe: Number(doc.total) || 0, saldoPendiente: saldo, saldoNeto: calcSaldoNeto(doc.total, docCobros),
                  pagosVinculados: docCobros, estado: calcEstadoIngreso(saldo, doc.total, doc.vto) };
       });
       setIngresos(enriched);
@@ -1130,8 +1130,9 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
                     {fmtMoney(e.pagosVinculados?.reduce((s,p)=>s+(Number(p.monto)||0),0)??0, e.moneda)}
                   </td>
                   <td style={{ padding:"10px 14px", fontSize:13, fontFamily:"var(--mono)",
-                    fontWeight:700, color: (e.saldoPendiente??0)>0 ? T.orange : T.green, textAlign:"right", whiteSpace:"nowrap" }}>
-                    {fmtMoney(e.saldoPendiente??0, e.moneda)}
+                    fontWeight:700, color: (e.saldoPendiente??0)>0 ? T.orange : (e.saldoNeto??0) < -0.005 ? T.blue : T.green, textAlign:"right", whiteSpace:"nowrap" }}
+                    title={(e.saldoNeto??0) < -0.005 ? "Se pagó más que el comprobante: crédito a favor contra la contraparte (revisá los pagos vinculados)" : undefined}>
+                    {(e.saldoNeto??0) < -0.005 ? `-${fmtMoney(e.saldoNeto, e.moneda)}` : fmtMoney(e.saldoPendiente??0, e.moneda)}
                   </td>
                   <td style={{ padding:"10px 14px" }}>
                     {[...new Set((e.pagosVinculados??[]).map(p=>p.cuenta_bancaria).filter(Boolean))].map(id => (

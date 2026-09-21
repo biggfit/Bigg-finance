@@ -2268,9 +2268,10 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
     if (emitLockRef.current.has(lockKey)) return;
     emitLockRef.current.add(lockKey);
     try {
-      // pagoComp.amount es el TOTAL transferido → back-calcular neto e IVA
+      // _importe (preview de Pendientes) = lo que se factura: transferencia + saldo a favor que la
+      // sede ya traía, ajustable. Sin override, el total transferido. → back-calcular neto e IVA
       const applyIVA    = !!(COMPANIES[activeCompany]?.applyIVA);
-      const amountTotal = pagoComp.amount;
+      const amountTotal = Number(pagoComp._importe) > 0 ? Number(pagoComp._importe) : pagoComp.amount;
       const amountNeto  = applyIVA ? Math.round(amountTotal / 1.21 * 100) / 100 : amountTotal;
       const amountIVA   = applyIVA ? Math.round((amountTotal - amountNeto) * 100) / 100 : 0;
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { T, fmtMoney, fmtDate } from "./theme";
+import { T, fmtMoney, fmtDate, MoneyField } from "./theme";
 import {
   fetchEgresos, fetchIngresos, fetchPagosCobros,
   calcSaldoPendiente, calcEstadoEgreso, calcEstadoIngreso,
@@ -57,7 +57,7 @@ function MpField({ sociedad }) {
       <span style={{ fontSize:12, color:"#16a34a", fontWeight:700 }}>🏦 Mercado Pago</span>
       {editing ? (
         <div style={{ display:"flex", gap:6, alignItems:"center" }}>
-          <input autoFocus type="number" value={input}
+          <MoneyField autoFocus value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }}
             style={{ width:110, padding:"4px 8px", fontSize:12, fontFamily:T.mono,

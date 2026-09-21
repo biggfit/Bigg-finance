@@ -10,50 +10,6 @@
 // DEPLOY:
 //   Extensiones → Apps Script → Implementar → Nueva implementación (o editar existente)
 //   Tipo: Aplicación web · Ejecutar como: Yo · Acceso: Cualquier persona
-//
-// SHEETS EN LA PLANILLA (una por recurso):
-//
-//   ── NUEVO MODELO (activo) ──────────────────────────────────────────────────
-//   nb_comprobantes     → id | id_comp | sociedad | fecha | vto | subtipo | contraparte_id | contraparte_nombre | cuenta_contable | cuenta_contable_id | moneda | centro_costo | subtotal | iva_rate | iva_monto | total | nro_comp | nota | created_at
-//                          · id      = clave única de fila (ej: EG-2026-00001-L01)
-//                          · id_comp = id del documento (se repite si hay varias líneas de CC)
-//                          · subtipo = "EGRESO_FC" | "INGRESO_FC" | "GASTO"
-//                          · EGRESO_FC  = factura de proveedor con vencimiento
-//                          · INGRESO_FC = factura a cliente con vencimiento
-//                          · GASTO      = gasto directo (devengado = percibido, sin vto separado)
-//
-//   nb_movimientos      → id | sociedad | fecha | tipo | cuenta_bancaria | cuenta_destino | cuenta_contable | centro_costo | moneda | monto | documento_id | concepto | referencia | origen | created_at
-//                          · tipo         = "PAGO_FC" | "COBRO_FC" | "EGRESO_GASTO" | "TRANSFERENCIA"
-//                          · PAGO_FC      = pago parcial/total de EGRESO_FC (monto negativo)
-//                          · COBRO_FC     = cobro parcial/total de INGRESO_FC (monto positivo)
-//                          · EGRESO_GASTO = salida de caja vinculada a un GASTO (monto negativo)
-//                          · TRANSFERENCIA = movimiento entre cuentas propias
-//                          · monto        = firmado: PAGO_FC/EGRESO_GASTO negativos, COBRO_FC positivos
-//                          · documento_id = id_comp del comprobante vinculado (PAGO_FC, COBRO_FC, EGRESO_GASTO)
-//                          · origen       = "pago" | "cobro" | "gasto" | "manual"
-//
-//   ── TABLAS MAESTRAS (sin cambios) ─────────────────────────────────────────
-//   nb_proveedores      → id | nombre | cuit | condIVA | monedaDefault | cuentaDefault | ccDefault | nota | activo | created_at
-//   nb_clientes         → id | nombre | cuit | condIVA | monedaDefault | cuentaDefault | ccDefault | nota | activo | created_at
-//   nb_cuentas          → id | nombre | tipo | cuenta_pasivo | activo | created_at
-//   nb_cuentas_bancarias → id | sociedad | nombre | tipo | moneda | banco | cbu | nota | activo | created_at
-//   nb_centros_costo    → id | nombre | grupo | empresa | activo | created_at
-//   nb_sociedades       → id | nombre | pais | bandera | moneda | activo | created_at
-//
-//   ── TABLAS HISTÓRICAS (conservar, ya no se escriben) ──────────────────────
-//   nb_egresos          → id_comp | id_linea | sociedad | ...
-//   nb_ingresos         → id_comp | id_linea | sociedad | ...
-//   nb_pagos_cobros     → id | tipo | documento_id | sociedad | ...
-//   nb_mov_tesoreria    → id | sociedad | fecha | tipo | ...
-//
-// HANDLER GENÉRICO: no hay whitelist. Cualquier sheet "nb_*" es válida.
-// Para agregar una nueva entidad solo creá la solapa en el Sheet — sin tocar el script.
-//
-// NOTA sobre acciones:
-//   · edit/del   → buscan columna "id" (clave primaria por defecto)
-//   · del_comp   → elimina todas las filas donde id_comp = valor (cascade delete)
-//   · Para sheets con clave distinta, pasá id_field en el body del POST.
-// ─────────────────────────────────────────────────────────────────────────────
 
 const NUMBERS_SHEET_ID = "1IQ1YAJjCudmXBa1gmilbT9s1gUq3SNik8ubXbukUZYg";
 const NUMBERS_TOKEN    = "bigg-finance-2026-secreto";
@@ -64,6 +20,10 @@ function doGet(e) {
   if (e.parameter.token !== NUMBERS_TOKEN) return nbErr("unauthorized");
 
   const resource = e.parameter.resource;
+
+  // BATCH: varias hojas en UNA sola ejecución (ver handleMulti abajo)
+  if (resource === "__multi") return handleMulti(e);
+
   if (!resource || !resource.startsWith("nb_")) {
     return nbErr("resource inválido — debe empezar con 'nb_'");
   }
@@ -72,22 +32,50 @@ function doGet(e) {
   const sh = ss.getSheetByName(resource);
   if (!sh) return nbErr("Sheet desconocida: " + resource);
 
+  // Filtros = todos los parámetros de la query que no sean de control (token/resource/_cb/spec).
+  // Cada uno que coincida con una columna acota la lectura server-side (ej. ?origen=sueldos).
+  return nbJson(nbReadSheet_(sh, nbFiltros_(e.parameter)));
+}
+
+// Parámetros de la query que actúan como filtro de columna (excluye los de control).
+function nbFiltros_(params) {
+  const RESERVADOS = { token: 1, resource: 1, _cb: 1, spec: 1 };
+  const f = {};
+  Object.keys(params).forEach(k => { if (!RESERVADOS[k]) f[k] = params[k]; });
+  return f;
+}
+
+// Lee una hoja → filas-objeto (header-keyed). `filtros` = { columna: valor, ... }: cada par que
+// coincida con una columna existente y tenga valor no vacío acota las filas (AND). Antes solo
+// filtraba por `sociedad` y devolvía la hoja entera para todo lo demás: al crecer nb_movimientos
+// (~3k filas / 2,4 MB por las líneas de extracto), lecturas acotadas como los pagos de sueldo
+// (origen=sueldos → ~400 filas) se bajaban las 3k enteras. Comparación por String para que los
+// números de la hoja (mes/anio) matcheen contra el parámetro de texto.
+function nbReadSheet_(sh, filtros) {
   const data = sh.getDataRange().getValues();
-  if (data.length < 2) return nbJson([]);
+  if (data.length < 2) return [];
 
   const headers = data[0].map(h => String(h).trim());
   const rows    = data.slice(1);
 
-  // Filtro opcional por sociedad (GET ?sociedad=nako)
-  const sociedad = e.parameter.sociedad;
-  const socCol   = headers.indexOf("sociedad");
+  const pares = [];
+  if (filtros) {
+    Object.keys(filtros).forEach(k => {
+      const val = filtros[k];
+      if (val === undefined || val === null || val === "") return;
+      const col = headers.indexOf(k);
+      if (col >= 0) pares.push({ col: col, val: String(val) });
+    });
+  }
 
-  const result = rows
+  return rows
     .filter(row => {
       // Ignorar filas completamente vacías
       if (row.every(cell => cell === "" || cell === null || cell === undefined)) return false;
-      // Filtro por sociedad si se pidió y la columna existe
-      if (sociedad && socCol >= 0 && String(row[socCol]) !== sociedad) return false;
+      // Todos los filtros pedidos deben coincidir (AND)
+      for (let i = 0; i < pares.length; i++) {
+        if (String(row[pares[i].col]) !== pares[i].val) return false;
+      }
       return true;
     })
     .map(row => {
@@ -106,8 +94,30 @@ function doGet(e) {
       });
       return obj;
     });
+}
 
-  return nbJson(result);
+// ─── BATCH GET: varias hojas en una sola llamada ─────────────────────────────
+// GET ?resource=__multi&spec=<JSON>&token=TOKEN
+//   spec = [ { "r": "nb_movimientos", "s": "nako" }, { "r": "nb_cuentas" }, ... ]
+//   r = nombre de hoja (obligatorio, debe empezar con nb_) · s = sociedad (opcional, filtra esa hoja)
+// Devuelve { "nb_movimientos": [ {...}, ... ], "nb_cuentas": [ ... ], ... }
+// Reduce las ~11-19 llamadas de una pantalla (que el GAS serializa) a UNA.
+function handleMulti(e) {
+  let spec;
+  try { spec = JSON.parse(e.parameter.spec || "[]"); }
+  catch (err) { return nbErr("spec inválido"); }
+  if (!Array.isArray(spec)) return nbErr("spec debe ser un array");
+
+  const ss  = SpreadsheetApp.openById(NUMBERS_SHEET_ID);
+  const out = {};
+  for (let i = 0; i < spec.length; i++) {
+    const item = spec[i] || {};
+    const name = item.r;
+    if (!name || !String(name).startsWith("nb_")) continue;
+    const sh = ss.getSheetByName(name);
+    out[name] = sh ? nbReadSheet_(sh, { sociedad: item.s }) : [];
+  }
+  return nbJson(out);
 }
 
 // ─── POST ─────────────────────────────────────────────────────────────────────
@@ -121,16 +131,6 @@ function doPost(e) {
     return nbErr("sheet inválida — debe empezar con 'nb_'");
   }
 
-  // ── LOCK: serializa TODAS las escrituras del Numbers GAS ──────────────────
-  // Conciliación (Fede), Sueldos (Santi, vía BASE_NB) y Franquicias (Lucía)
-  // escriben nb_movimientos por ESTE mismo script → un lock acá los serializa.
-  // Sin esto, escrituras concurrentes se pisan (add_batch usa getLastRow+setValues)
-  // o borran la fila equivocada (del/del_comp por índice), en silencio.
-  const lock = LockService.getScriptLock();
-  try { lock.waitLock(30000); }          // espera su turno hasta 30s
-  catch (err) { return nbErr("ocupado — reintentá (lock no disponible en 30s)"); }
-
-  try {
   const ss = SpreadsheetApp.openById(NUMBERS_SHEET_ID);
   const sh = ss.getSheetByName(sheetName);
   if (!sh) return nbErr("Sheet desconocida: " + sheetName);
@@ -230,10 +230,6 @@ function doPost(e) {
   }
 
   return nbErr("acción desconocida: " + body.action);
-  } finally {
-    SpreadsheetApp.flush();   // confirma la escritura ANTES de soltar el lock
-    lock.releaseLock();
-  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

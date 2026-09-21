@@ -214,8 +214,10 @@ export default function App({ onVolverNumbers } = {}) {
     const key = String(frId);
     const comp = (compsRef.current[key] ?? []).find(c => c.id === String(compId));
     setComps(prev => ({ ...prev, [key]: (prev[key] ?? []).filter(c => c.id !== String(compId)) }));
-    // Movimientos financieros de franquicia viven en nb_movimientos → borrar del backend correcto.
-    if (comp?._numbers || ["PAGO", "PAGO_PAUTA", "PAGO_ENVIADO"].includes(comp?.type)) {
+    // Dónde vive la fila lo dice `_numbers` (la pone movimientoToCompRow al leer nb_movimientos),
+    // NO su tipo: los movimientos del cuaderno viejo también son PAGO* pero viven en `comprobantes`.
+    // Por tipo se iban a deleteMovTesoreria → "fila no encontrada" y reaparecían al recargar.
+    if (comp?._numbers) {
       deleteMovTesoreria(compId).catch(err => console.error('Numbers deleteMov:', err));
       return;
     }
@@ -234,8 +236,10 @@ export default function App({ onVolverNumbers } = {}) {
       ...prev,
       [key]: (prev[key] ?? []).map(c => c.id === String(compId) ? { ...c, ...patch } : c),
     }));
-    // Movimientos financieros viven en nb_movimientos → editar el backend correcto (traduce a sus columnas).
-    if (comp?._numbers || ["PAGO", "PAGO_PAUTA", "PAGO_ENVIADO"].includes(comp?.type)) {
+    // Mismo criterio que delComp/moveComp: manda `_numbers`, no el tipo. Un PAGO* del cuaderno viejo
+    // vive en `comprobantes` y va por updateComp; por tipo se iba a updateMovTesoreria, que lo rechaza
+    // con "fila no encontrada" mientras la UI optimista mostraba el cambio como aplicado.
+    if (comp?._numbers) {
       const m = { ...comp, ...patch };
       const signo = m.type === "PAGO_ENVIADO" ? -1 : 1;
       updateMovTesoreria(compId, {
