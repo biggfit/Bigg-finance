@@ -3772,7 +3772,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
 
   // Socios: cuenta corriente de socios (pantalla propia embebida como reporte). Página limpia + volver al menú.
   if (activeTab === "socios") return (
-    <div style={{ padding: "28px 32px", maxWidth: 1400 }} className="fade">
+    <div style={{ padding: "28px 32px" }} className="fade">
       <button onClick={() => setActiveTab(null)} style={{
         display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 16,
         background: "#f3f4f6", border: `1px solid ${T.cardBorder}`, borderRadius: 8,
@@ -3860,7 +3860,9 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   return (
     // --border (dark, del theme global del shell) → cardBorder claro: las tablas de reportes viven en
     // cards blancas; así la regla global `td/th{border:var(--border)}` no pinta líneas oscuras sobre blanco.
-    <div style={{ padding: "28px 32px", maxWidth: 1400, "--border": T.cardBorder }} className="fade">
+    // Sin tope de ancho: acá vive el P&L/Cash Flow/Balance, que son tablas de 12+ columnas. El tope (1400)
+    // quedó SOLO en el menú-landing, que son tarjetas de texto.
+    <div style={{ padding: "28px 32px", "--border": T.cardBorder }} className="fade">
 
       {/* Aviso SUAVE: fuentes secundarias todavía llegando (el batch principal ya está, pero histórico /
            franquicias / fondeo cargan aparte). No bloquea: avisa que algunas líneas pueden moverse. */}

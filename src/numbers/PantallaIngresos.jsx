@@ -1031,7 +1031,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
   );
 
   return (
-    <div style={{ padding:"28px 32px", maxWidth:1200 }} className="fade">
+    <div style={{ padding:"28px 32px" }} className="fade">
       <PageHeader
         title="Ingresos"
         subtitle="Facturas emitidas"

@@ -558,8 +558,9 @@ export function PaginaAging({ item, fechaCorte, headerColor, onBack }) {
                    color:T.text, whiteSpace:"nowrap" };
   const tdRed  = { ...tdS, color:"#dc2626", fontWeight:700 };
 
+  // Sin tope de ancho: es una grilla densa y cada píxel de más es una columna menos de scroll horizontal.
   return (
-    <div style={{ padding:"28px 32px", maxWidth:1100 }} className="fade">
+    <div style={{ padding:"28px 32px" }} className="fade">
       {/* Header con back */}
       <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:24 }}>
         <button onClick={onBack} style={{ background:"#f3f4f6", border:`1px solid ${T.cardBorder}`,
@@ -1906,7 +1907,7 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
   ];
 
   return (
-    <div style={{ padding: "28px 32px", maxWidth: 1300 }} className="fade tesoreria-screen">
+    <div style={{ padding: "28px 32px" }} className="fade tesoreria-screen">
       <style>{`
         .tesoreria-screen button:focus-visible {
           outline: 2px solid ${T.accent};

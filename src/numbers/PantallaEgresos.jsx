@@ -1108,7 +1108,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
   );
 
   return (
-    <div style={{ padding:"28px 32px", maxWidth:1200 }} className="fade">
+    <div style={{ padding:"28px 32px" }} className="fade">
       <PageHeader
         title="Compras"
         subtitle="Facturas recibidas de proveedores"
