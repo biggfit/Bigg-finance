@@ -787,6 +787,10 @@ export async function fetchMovTesoreria(sociedad) {
 // se saldan por franquiciado × empresa × moneda, independiente de en qué caja (sociedad) entró el
 // cobro (ej. una venta de BIGG Fit LLC cobrada en efectivo a la caja de Beta). El slice por sociedad
 // lo hace franquiciasSaldosCxC filtrando por empresa; necesita ver los cobros de todas las cajas.
+// NO pedir acá `{ origen: "franquicias" }` aunque el backend sepa filtrarlo (lo probamos: 139 filas / 103 KB
+// contra 3.539 / 2.688 KB). Sería otra CLAVE de caché, y hoy esta llamada comparte la clave `{}` con
+// fetchIntercoData —que necesita la tabla entera— en las dos pantallas que usan ambas (Conciliación y
+// Tesorería): el dedup de `get` las resuelve con UN request. Filtrar acá no ahorra ese request, agrega uno.
 export async function fetchMovFranquicias() {
   const rows = await get("nb_movimientos", {});
   return rows.filter(m => m.origen === "franquicias" && !esIgnorado(m));
