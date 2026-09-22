@@ -145,17 +145,23 @@ function movimientoToPnLRows(movs, sociedad, cuentaMap) {
 // distinta línea de tiempo (sin partida doble; la caja vive aparte en nb_movimientos):
 //   · Capital del plan AFIP = el impuesto → 1 fila en el mes de consolidación (salvo apertura,
 //     que ya está en Contagram). El capital de un préstamo NO entra (es deuda, no gasto).
+//     EXCEPCIÓN `capital_en_cuotas`: el capital se devenga en el VENCIMIENTO de cada cuota, como el interés.
+//     Caso: una rectificativa de meses ya cerrados que se reconoce para adelante en vez de hacer un pozo en
+//     el mes de consolidación. Ojo: el pasivo de esos planes también nace cuota a cuota
+//     (financiacionPasivoBuckets) — si se devengara el gasto de a poco pero la deuda entera de una, el PN
+//     caería sin que el P&L lo explique y se rompería el cierre contra la variación del PN.
 //   · Interés financiero + IVA + sellos de cada cuota → en el mes de su VENCIMIENTO (devengo
 //     mes a mes, pagada o no). El resarcitorio (recargo por mora) se contabiliza por lo que la CAJA
 //     pagó de más sobre el importe normal de la cuota: AFIP cobra el importe normal o el "tardío", y el
 //     débito del banco dice cuál. (Antes: por fecha_pago > vto → 15 cuotas con vto domingo 16/8/2026
 //     debitadas el martes 18/8 por el importe justo devengaban 66.269 de recargo que nadie cobró.)
-function financiacionToPnLRows(planes, sociedad) {
+export function financiacionToPnLRows(planes, sociedad) {
   const soc = (sociedad ?? "").toLowerCase();
   const out = [];
   for (const p of (planes ?? [])) {
     if (soc && (p.sociedad ?? "").toLowerCase() !== soc) continue;
-    if (p.tipo === "plan_afip" && !p.es_apertura && p.cuenta_capital) {
+    const capitalEsGasto = p.tipo === "plan_afip" && !p.es_apertura && p.cuenta_capital;
+    if (capitalEsGasto && !p.capital_en_cuotas) {
       const capTot = (p.cuotas ?? []).reduce((s, c) => s + (Number(c.capital) || 0), 0);
       if (capTot > 0) out.push({ fecha: p.fecha_consolidacion, sociedad: p.sociedad, centro_costo: p.centro_capital, cuenta_contable: p.cuenta_capital, moneda: p.moneda, total: capTot, _tipo: "Financiación", contraparte_nombre: p.acreedor_nombre ?? "" });
     }
@@ -163,6 +169,7 @@ function financiacionToPnLRows(planes, sociedad) {
     const push = (cuenta, centro, total, fecha) => { if (total > 0 && cuenta) out.push({ ...base, fecha, centro_costo: centro, cuenta_contable: cuenta, total }); };
     for (const c of (p.cuotas ?? [])) {
       if (c.estado === "cancelada") continue;
+      if (capitalEsGasto && p.capital_en_cuotas) push(p.cuenta_capital, p.centro_capital, c.capital, c.vto);
       push(p.cuenta_interes,   p.centro_interes,   c.interes,   c.vto);
       push(p.cuenta_iva,       p.centro_iva,       c.iva,       c.vto);
       push(p.cuenta_impuestos, p.centro_impuestos, c.impuestos, c.vto);

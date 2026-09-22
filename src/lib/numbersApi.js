@@ -3284,6 +3284,10 @@ export function agruparPlanes(rows = [], pagadoPorCuota = {}, pagosPorCuota = {}
         moneda:              r.moneda || "ARS",
         fecha_consolidacion: r.fecha_consolidacion ?? "",
         es_apertura:         String(r.es_apertura).toLowerCase() === "true",
+        // Plan cuyo CAPITAL se devenga cuota a cuota (en el vto de cada una) en vez de una sola vez en la
+        // consolidación. Caso: una rectificativa de meses ya cerrados que se reconoce para adelante. El pasivo
+        // acompaña ese ritmo (ver `saldo_devengado`), así el resultado sigue atando contra la variación del PN.
+        capital_en_cuotas:   String(r.capital_en_cuotas).toLowerCase() === "true",
         comprobante_origen:  r.comprobante_origen ?? "",
         cuenta_capital:      r.cuenta_capital ?? "",   centro_capital:   r.centro_capital ?? "",
         cuenta_interes:      r.cuenta_interes ?? "",   centro_interes:   r.centro_interes ?? "",
@@ -3315,6 +3319,9 @@ export function agruparPlanes(rows = [], pagadoPorCuota = {}, pagosPorCuota = {}
     // Capital remanente de una cuota (para el pasivo): pagada/cancelada → 0; parcial → proporcional al saldo.
     const capRem = c => (c.estado === "pagada" || c.estado === "cancelada") ? 0
       : (Number(c.total) > 0 ? c.capital * (c.saldoCuota / c.total) : (c.saldoCuota > 0.5 ? c.capital : 0));
+    // Se expone por cuota: el pasivo de un plan con `capital_en_cuotas` suma solo las YA VENCIDAS, y para eso
+    // necesita el remanente cuota por cuota (ver financiacionPasivoBuckets).
+    for (const c of p.cuotas) c.capital_remanente = capRem(c);
     const capital_total  = p.cuotas.reduce((s, c) => s + c.capital, 0);
     const saldo          = p.cuotas.reduce((s, c) => s + capRem(c), 0);
     const capital_pagado = capital_total - saldo;
@@ -3401,14 +3408,27 @@ export function financiacionLedger(planes = [], { tipo = null, moneda = "ARS" } 
  * Pasivo de financiaciones por bucket (planes AFIP → impuestos, créditos → financiero).
  * Fuente ÚNICA para el pasivo que muestran Reportes→Balance y Tesorería (mismo número en los dos).
  * Devuelve { impuestos|financiero: { tot:{ARS,USD,EUR}, docs:[{acreedor,nro_plan,prox_vto,saldo,moneda}] } }.
+ *
+ * `corte` (YYYY-MM-DD, por defecto hoy) solo importa para los planes con `capital_en_cuotas`: ahí la deuda
+ * NACE con el devengo, así que se cuenta únicamente el capital de las cuotas ya vencidas. El gasto y el pasivo
+ * aparecen el mismo mes y la variación del PN queda explicada por el P&L. En un plan normal la deuda nace
+ * entera al consolidar y `corte` no cambia nada.
+ *
+ * OJO: `corte` filtra por VENCIMIENTO, no re-deriva los pagos. El `capital_remanente` de cada cuota tiene que
+ * venir ya calculado a esa misma fecha, y de eso se ocupa el llamador (agruparPlanes lo deja "a hoy", que es lo
+ * correcto para el Balance; tesoreriaDerive/finAsOf lo recalcula al corte). Mezclar las dos referencias —un
+ * corte pasado con remanentes de hoy— da una cuota ya devengada con pasivo cero.
  */
-export function financiacionPasivoBuckets(planes, sociedad) {
-  const soc = String(sociedad ?? "").toLowerCase();
+export function financiacionPasivoBuckets(planes, sociedad, corte = "") {
+  const soc   = String(sociedad ?? "").toLowerCase();
+  const hasta = String(corte || new Date().toISOString().slice(0, 10));
   const mk  = () => ({ ARS: 0, USD: 0, EUR: 0 });
   const out = { impuestos: { tot: mk(), docs: [] }, financiero: { tot: mk(), docs: [] } };
   for (const p of (planes ?? [])) {
     if (soc && String(p.sociedad ?? "").toLowerCase() !== soc) continue;
-    const saldo = Number(p.saldo) || 0;
+    const saldo = p.capital_en_cuotas
+      ? (p.cuotas ?? []).reduce((s, c) => s + (String(c.vto ?? "") <= hasta ? (Number(c.capital_remanente) || 0) : 0), 0)
+      : (Number(p.saldo) || 0);
     if (saldo <= 0) continue;
     const k   = p.tipo === "prestamo" ? "financiero" : "impuestos";
     const mon = p.moneda || "ARS";
@@ -3467,7 +3487,7 @@ export function generarCuotas({ capital_original, n_cuotas, tasaMensual = 0, iva
  * = plan_id, no "CONTAB-"). Plan AFIP no tiene alta de caja (el capital es el impuesto).
  */
 export const FIN_APERTURA_FECHA = "2026-06-30";
-export async function appendFinanciacion({ tipo = "plan_afip", nro_plan = "", acreedor_id = "", acreedor_nombre = "", acreedor_cuit = "", sociedad, moneda = "ARS", fecha_consolidacion, es_apertura = false, comprobante_origen = "", cuenta_capital = "", centro_capital = "", cuenta_interes = "", centro_interes = "", cuenta_iva = "", centro_iva = "", cuenta_impuestos = "", centro_impuestos = "", cuenta_bancaria = "", nota = "", cuotas = [] }) {
+export async function appendFinanciacion({ tipo = "plan_afip", nro_plan = "", acreedor_id = "", acreedor_nombre = "", acreedor_cuit = "", sociedad, moneda = "ARS", fecha_consolidacion, es_apertura = false, capital_en_cuotas = false, comprobante_origen = "", cuenta_capital = "", centro_capital = "", cuenta_interes = "", centro_interes = "", cuenta_iva = "", centro_iva = "", cuenta_impuestos = "", centro_impuestos = "", cuenta_bancaria = "", nota = "", cuotas = [] }) {
   const plan_id    = newId("FIN");
   const created_at = new Date().toISOString();
 
@@ -3499,6 +3519,8 @@ export async function appendFinanciacion({ tipo = "plan_afip", nro_plan = "", ac
     acreedor_id, acreedor_nombre, acreedor_cuit,
     sociedad, moneda, fecha_consolidacion,
     es_apertura:    es_apertura ? "true" : "",
+    // Una apertura ya tiene su capital contabilizado afuera → nunca devenga, gane quien gane en el form.
+    capital_en_cuotas: (capital_en_cuotas && !es_apertura) ? "true" : "",
     comprobante_origen,
     cuenta_capital, centro_capital, cuenta_interes, centro_interes, cuenta_iva, centro_iva, cuenta_impuestos, centro_impuestos, cuenta_bancaria,
     nro_cuota:      Number(c.nro_cuota) || 0,

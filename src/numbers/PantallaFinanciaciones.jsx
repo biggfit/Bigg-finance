@@ -457,6 +457,7 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
       acreedor_id: "", acreedor_nombre: "", acreedor_cuit: "", nro_plan: "", moneda: "ARS",
       fecha_consolidacion: new Date().toISOString().slice(0, 10),
       es_apertura: false,
+      capital_en_cuotas: false,
       cuenta_capital: "",            centro_capital: ccImpuestos,   // vacía a propósito: el impuesto cambia por plan → se elige a mano
       cuenta_interes: DEF_INTERES,   centro_interes: ccFinancieros,
       cuenta_iva: DEF_IVA,           centro_iva: ccImpuestos,
@@ -527,6 +528,10 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
   const compRequerido = comp => comp.key === "capital"
     ? cfg.capitalEsGasto && compSum.capital > 0
     : compSum[comp.key] > 0;
+  // Aviso: con el capital devengado en cuotas, una cuota que vence antes del go-live no reconoce su capital
+  // en ningún mes (el P&L arranca el 1/7/2026).
+  const cuotasPreGoLive = h.capital_en_cuotas ? cuotas.filter(c => c.vto && c.vto < "2026-07-01").length : 0;
+
   const compsVisibles = COMPONENTES.filter(comp => !comp.soloPlan || cfg.capitalEsGasto);
   const faltanCuentas = compsVisibles.some(comp => compRequerido(comp) && !h[comp.cuentaK]);
   const cuotasOk = cuotas.length > 0 && cuotas.every(c => num(c.total) > 0 && c.vto);
@@ -548,7 +553,9 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
     <div className="fade" style={{ padding: "28px 32px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
         <PageHeader title={cfg.nuevoLabel}
-          subtitle={cfg.capitalEsGasto ? "El capital es el impuesto (gasto al consolidar); el interés se devenga mes a mes" : "El capital es deuda (no es gasto); solo el interés es resultado"} />
+          subtitle={!cfg.capitalEsGasto ? "El capital es deuda (no es gasto); solo el interés es resultado"
+            : h.capital_en_cuotas ? "El capital es el impuesto y se devenga en cada vencimiento, junto con el interés"
+            : "El capital es el impuesto (gasto al consolidar); el interés se devenga mes a mes"} />
         <button onClick={onCancel} style={{ background: "none", border: "none", color: T.muted, fontSize: 13, cursor: "pointer", fontFamily: T.font, whiteSpace: "nowrap", flexShrink: 0 }}>‹ Volver</button>
       </div>
 
@@ -582,12 +589,28 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
         </Field>
         <div style={{ gridColumn: "1 / -1" }}>
           <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: T.text, cursor: "pointer" }}>
-            <input type="checkbox" checked={h.es_apertura} onChange={e => set("es_apertura", e.target.checked)} />
+            {/* Tildar Apertura apaga el devengado en cuotas: son excluyentes y, si solo se ocultara el check,
+                el estado quedaría en true y el subtítulo prometería algo que el writer después ignora. */}
+            <input type="checkbox" checked={h.es_apertura}
+              onChange={e => setH(s => ({ ...s, es_apertura: e.target.checked, capital_en_cuotas: e.target.checked ? false : s.capital_en_cuotas }))} />
             Apertura (deuda anterior al go-live): el capital ya está contabilizado afuera → no impacta el P&L; solo carga el pasivo remanente + cuotas vigentes
           </label>
           {h.es_apertura && h.fecha_consolidacion > "2026-06-30" && (
             <div style={{ marginTop: 6, fontSize: 11, color: T.muted, lineHeight: 1.5 }}>
               El pasivo se fecha al <b>30/06/2026</b> (apertura), no al {h.fecha_consolidacion}: la fecha de consolidación real queda anotada en la nota y las cuotas conservan sus vencimientos.
+            </div>
+          )}
+          {/* Solo planes: en un préstamo el capital nunca es gasto. Y una apertura ya lo tiene contabilizado
+              afuera, así que las dos opciones son excluyentes. */}
+          {cfg.capitalEsGasto && !h.es_apertura && (
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: T.text, cursor: "pointer", marginTop: 10 }}>
+              <input type="checkbox" checked={h.capital_en_cuotas} onChange={e => set("capital_en_cuotas", e.target.checked)} />
+              Devengar el capital en cuotas: el gasto —y la deuda— nacen en el vencimiento de cada cuota, no todo en la consolidación (ej. una rectificativa de meses ya cerrados)
+            </label>
+          )}
+          {h.capital_en_cuotas && !h.es_apertura && cuotasPreGoLive > 0 && (
+            <div style={{ marginTop: 6, fontSize: 11, color: "#b45309", lineHeight: 1.5 }}>
+              ⚠ {cuotasPreGoLive} cuota{cuotasPreGoLive > 1 ? "s vencen" : " vence"} antes del 01/07/2026: el P&L arranca en el go-live, así que ese capital no se va a reconocer en ningún mes.
             </div>
           )}
         </div>
@@ -740,9 +763,9 @@ function DetalleFinanciacion({ plan, bancos, onBack, onChanged }) {
   return (
     <div className="fade" style={{ padding: "28px 32px" }}>
       {confirmUI}
-      <button onClick={onBack} style={{ background: "none", border: "none", color: T.muted, fontSize: 13, cursor: "pointer", marginBottom: 12, fontFamily: T.font }}>‹ Volver</button>
       <PageHeader title={plan.acreedor_nombre || "Financiación"}
-        subtitle={`${TIPOS[plan.tipo]?.label || ""} · Nº ${plan.nro_plan || "—"} · consolidado ${fmtDate(plan.fecha_consolidacion)}${plan.es_apertura ? " · apertura" : ""}${cuentaCapital ? ` · Capital → ${cuentaCapital}` : ""}`}
+        back={<button onClick={onBack} style={{ background: "none", border: "none", color: T.muted, fontSize: 13, cursor: "pointer", fontFamily: T.font, padding: 0 }}>‹ Volver</button>}
+        subtitle={`${TIPOS[plan.tipo]?.label || ""} · Nº ${plan.nro_plan || "—"} · consolidado ${fmtDate(plan.fecha_consolidacion)}${plan.es_apertura ? " · apertura" : ""}${plan.capital_en_cuotas ? " · capital devengado en cuotas" : ""}${cuentaCapital ? ` · Capital → ${cuentaCapital}` : ""}`}
         action={<div style={{ display: "flex", gap: 8 }}>
           <Btn variant="ghost" onClick={doCancelar} disabled={busy}>Cancelar cuotas</Btn>
           <Btn variant="danger" onClick={doEliminar} disabled={busy}>Eliminar</Btn>
@@ -760,6 +783,18 @@ function DetalleFinanciacion({ plan, bancos, onBack, onChanged }) {
         <CompactCard label="Saldo (pasivo)" value={fmtMoney(plan.saldo, plan.moneda)} color={plan.saldo > 0 ? T.red : T.green} />
         <CompactCard label="Cuotas" value={`${plan.n_pagadas}/${plan.n_cuotas}`} />
       </div>
+
+      {/* El Saldo de arriba es la deuda REAL con el acreedor (todo el capital que falta pagar). El Balance, en
+          cambio, solo toma lo ya devengado: en estos planes el gasto y la deuda nacen juntos en cada
+          vencimiento. Los dos números son correctos y responden preguntas distintas; se aclara acá para que la
+          diferencia no se lea como un error. */}
+      {plan.capital_en_cuotas && (
+        <div style={{ marginBottom: 18, padding: "10px 14px", background: "#eff6ff", border: "1px solid #bfdbfe",
+          borderRadius: T.radius, fontSize: 12, color: "#1e40af", lineHeight: 1.5 }}>
+          El capital de este plan se devenga <b>en cada vencimiento</b>, no en la consolidación. El saldo de
+          arriba es la deuda total con el acreedor; en el Balance vas a ver solo la parte ya vencida.
+        </div>
+      )}
 
       <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, overflow: "auto", boxShadow: T.shadow }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>

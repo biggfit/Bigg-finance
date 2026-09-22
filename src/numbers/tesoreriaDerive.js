@@ -305,30 +305,41 @@ export function derivarSaldos({
     // sus cuotas — una cuota pagada DESPUÉS del corte todavía debía su capital a esa fecha (se "reabre").
     // (`financiaciones` ya viene agrupado por plan con .cuotas; el saldo del plano es lo que lee el bucket.)
     // Sin corte → las filas originales (idéntico a hoy).
+    // Además del saldo del plano, se recalcula `capital_remanente` POR CUOTA al corte: es lo que mira
+    // financiacionPasivoBuckets para los planes con `capital_en_cuotas` (solo pesa lo ya vencido).
+    // Capital que una cuota todavía debía AL CORTE.
+    // Pagado HASTA el corte, por FECHA de cada pago parcial. Un parcial no setea `fecha_pago` en la cuota →
+    // antes su reducción se aplicaba en todos los cortes (deuda subvaluada al 31 de meses ANTERIORES al pago).
+    // Con `c.pagos` fechado (ver agruparPlanes/fetchFinanciaciones) el remanente al corte es exacto: préstamos
+    // a empleados que se pagan de a poco quedan bien mes a mes.
+    const capRemAsOf = (c) => {
+      const capital = Number(c.capital) || 0;
+      const total   = Number(c.total) > 0 ? Number(c.total) : capital;
+      let pagadoAsOf;
+      if (Array.isArray(c.pagos) && c.pagos.length) {
+        pagadoAsOf = c.pagos.reduce((a, p) => (String(p.fecha ?? "") <= corte ? a + (Number(p.monto) || 0) : a), 0);
+      } else if (c.estado === "pagada" || c.estado === "cancelada") {
+        // Cierre manual sin movimiento de pago (legacy): usar fecha_pago; sin fecha → saldada al corte.
+        pagadoAsOf = (!c.fecha_pago || String(c.fecha_pago) <= corte) ? total : 0;
+      } else {
+        pagadoAsOf = 0;   // sin pagos → capital entero adeudado
+      }
+      const remanenteTotal = Math.max(0, total - pagadoAsOf);
+      return total > 0 ? capital * (remanenteTotal / total) : (remanenteTotal > 0.5 ? capital : 0);
+    };
+    // El filtro por consolidación existe porque la deuda de un plan normal no existía antes de armarlo. Con
+    // `capital_en_cuotas` la deuda nace en cada VENCIMIENTO, no al consolidar: el filtro sobra (el bucket ya
+    // corta por vto) y encima muerde si alguna cuota vence antes de la consolidación — el P&L devengaría esa
+    // cuota mientras el as-of descarta el plan entero.
     const finAsOf = corte
       ? financiaciones
-          .filter(f => (f.fecha_consolidacion ?? "") <= corte)
-          .map(f => ({ ...f, saldo: (f.cuotas ?? []).reduce((s, c) => {
-            const capital = Number(c.capital) || 0;
-            const total   = Number(c.total) > 0 ? Number(c.total) : capital;
-            // Pagado HASTA el corte, por FECHA de cada pago parcial. Un parcial no setea `fecha_pago` en la
-            // cuota → antes su reducción se aplicaba en todos los cortes (deuda subvaluada al 31 de meses
-            // ANTERIORES al pago). Con `c.pagos` fechado (ver agruparPlanes/fetchFinanciaciones) el remanente
-            // al corte es exacto: préstamos a empleados que se pagan de a poco quedan bien mes a mes.
-            let pagadoAsOf;
-            if (Array.isArray(c.pagos) && c.pagos.length) {
-              pagadoAsOf = c.pagos.reduce((a, p) => (String(p.fecha ?? "") <= corte ? a + (Number(p.monto) || 0) : a), 0);
-            } else if (c.estado === "pagada" || c.estado === "cancelada") {
-              // Cierre manual sin movimiento de pago (legacy): usar fecha_pago; sin fecha → saldada al corte.
-              pagadoAsOf = (!c.fecha_pago || String(c.fecha_pago) <= corte) ? total : 0;
-            } else {
-              pagadoAsOf = 0;   // sin pagos → capital entero adeudado
-            }
-            const remanenteTotal = Math.max(0, total - pagadoAsOf);
-            return s + (total > 0 ? capital * (remanenteTotal / total) : (remanenteTotal > 0.5 ? capital : 0));
-          }, 0) }))
+          .filter(f => f.capital_en_cuotas || (f.fecha_consolidacion ?? "") <= corte)
+          .map(f => {
+            const cuotas = (f.cuotas ?? []).map(c => ({ ...c, capital_remanente: capRemAsOf(c) }));
+            return { ...f, cuotas, saldo: cuotas.reduce((s, c) => s + c.capital_remanente, 0) };
+          })
       : financiaciones;
-    const b = financiacionPasivoBuckets(finAsOf, sociedad);
+    const b = financiacionPasivoBuckets(finAsOf, sociedad, corte);
     const items = [];
     const armar = (bucket, label, tipo) => {
       for (const mon of ["ARS", "USD", "EUR"]) {
