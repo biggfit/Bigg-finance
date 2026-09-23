@@ -110,7 +110,10 @@ export function buildPuente({
       else ex("E2c_contab_otra_soc_sin_interco", "P&L: movimiento contabilizado por OTRA sociedad al perímetro sin posición interco", -val, fRow(row));
       continue;
     }
-    if (row._tipo === "Financiación") { ex("E9a_financiacion", "P&L: devengado de financiación (interés/IVA por vto; capital plan) — revisar contra pasivo", -val, fRow(row)); continue; }
+    // Financiación: capital → pasivo al consolidar (o al vto con capital_en_cuotas); interés/IVA/imp. → desde el
+    // 23/9/2026 el pasivo también los lleva cuando la cuota venció y no se pagó (financiacionPasivoBuckets), y el
+    // recargo por mora se devenga el día que se paga → todo tiene contrapartida en el balance: informativo.
+    if (row._tipo === "Financiación") { info("pnl_financiacion", val, fRow(row)); continue; }
     if (row._tipo === "Retención" || row._tipo === "Interuso gestión") { if (propia) info(`pnl_${row._tipo}`, val, fRow(row)); else ex("E2x_otro_tipo_otra_soc", `P&L: ${row._tipo} de OTRA sociedad en el perímetro`, -val, fRow(row)); continue; }
     if (row._historico) continue;
     // comprobante
@@ -174,8 +177,9 @@ export function buildPuente({
       const tot = cuota ? (toNum(cuota.total) || toNum(cuota.capital)) : 0;
       const fracNoCap = cuota && tot > 0 ? Math.max(0, 1 - (toNum(cuota.capital) || 0) / tot) : 0;
       if (!cuota) ex("E9b_pago_cuota_sin_plan", "Caja: pago de cuota cuyo plan/cuota no se encontró", monto, fMov(mv));
-      else if (fracNoCap > 0.0001) ex("E9b_pago_cuota_no_capital", "Caja: parte no-capital de la cuota (interés/IVA/imp. devengan al vto en P&L)", monto * fracNoCap, fMov(mv, { fracNoCap }));
-      else info("mov_cuota_capital", monto, fMov(mv));
+      // Pago de cuota: baja capital + interés vencido del pasivo (ambos ya estaban) y el exceso es recargo devengado
+      // ese día en el P&L → neutro para el puente (antes la parte no-capital era explicador: el pasivo no la tenía).
+      else info("mov_cuota_pagada", monto, fMov(mv, { fracNoCap }));
       continue;
     }
     if (mv.origen === "anticipo_alta" || mv.origen === "anticipo_consumo") { info("mov_anticipo", monto, fMov(mv)); continue; }

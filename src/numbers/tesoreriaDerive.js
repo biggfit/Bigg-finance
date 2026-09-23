@@ -312,7 +312,10 @@ export function derivarSaldos({
     // antes su reducción se aplicaba en todos los cortes (deuda subvaluada al 31 de meses ANTERIORES al pago).
     // Con `c.pagos` fechado (ver agruparPlanes/fetchFinanciaciones) el remanente al corte es exacto: préstamos
     // a empleados que se pagan de a poco quedan bien mes a mes.
-    const capRemAsOf = (c) => {
+    // Devuelve { capital_remanente, saldo_remanente } al corte. `saldo_remanente` (total de la cuota aún adeudado)
+    // lo usa financiacionPasivoBuckets para sumar la parte NO-capital (interés/IVA/imp.) de las cuotas vencidas
+    // e impagas: deuda que el P&L ya devengó al vencimiento.
+    const remAsOf = (c) => {
       const capital = Number(c.capital) || 0;
       const total   = Number(c.total) > 0 ? Number(c.total) : capital;
       let pagadoAsOf;
@@ -325,7 +328,8 @@ export function derivarSaldos({
         pagadoAsOf = 0;   // sin pagos → capital entero adeudado
       }
       const remanenteTotal = Math.max(0, total - pagadoAsOf);
-      return total > 0 ? capital * (remanenteTotal / total) : (remanenteTotal > 0.5 ? capital : 0);
+      const capital_remanente = total > 0 ? capital * (remanenteTotal / total) : (remanenteTotal > 0.5 ? capital : 0);
+      return { capital_remanente, saldo_remanente: remanenteTotal };
     };
     // El filtro por consolidación existe porque la deuda de un plan normal no existía antes de armarlo. Con
     // `capital_en_cuotas` la deuda nace en cada VENCIMIENTO, no al consolidar: el filtro sobra (el bucket ya
@@ -335,7 +339,7 @@ export function derivarSaldos({
       ? financiaciones
           .filter(f => f.capital_en_cuotas || (f.fecha_consolidacion ?? "") <= corte)
           .map(f => {
-            const cuotas = (f.cuotas ?? []).map(c => ({ ...c, capital_remanente: capRemAsOf(c) }));
+            const cuotas = (f.cuotas ?? []).map(c => ({ ...c, ...remAsOf(c) }));
             return { ...f, cuotas, saldo: cuotas.reduce((s, c) => s + c.capital_remanente, 0) };
           })
       : financiaciones;

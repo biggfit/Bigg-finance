@@ -3328,8 +3328,9 @@ export function agruparPlanes(rows = [], pagadoPorCuota = {}, pagosPorCuota = {}
     const capRem = c => (c.estado === "pagada" || c.estado === "cancelada") ? 0
       : (Number(c.total) > 0 ? c.capital * (c.saldoCuota / c.total) : (c.saldoCuota > 0.5 ? c.capital : 0));
     // Se expone por cuota: el pasivo de un plan con `capital_en_cuotas` suma solo las YA VENCIDAS, y para eso
-    // necesita el remanente cuota por cuota (ver financiacionPasivoBuckets).
-    for (const c of p.cuotas) c.capital_remanente = capRem(c);
+    // necesita el remanente cuota por cuota (ver financiacionPasivoBuckets). `saldo_remanente` (= saldoCuota, a hoy)
+    // es el total aún adeudado de la cuota: su parte no-capital entra al pasivo cuando la cuota ya venció.
+    for (const c of p.cuotas) { c.capital_remanente = capRem(c); c.saldo_remanente = Number(c.saldoCuota) || 0; }
     const capital_total  = p.cuotas.reduce((s, c) => s + c.capital, 0);
     const saldo          = p.cuotas.reduce((s, c) => s + capRem(c), 0);
     const capital_pagado = capital_total - saldo;
@@ -3400,8 +3401,12 @@ export function financiacionLedger(planes = [], { tipo = null, moneda = "ARS" } 
           sub: `capital ${fmtN(c.capital)} · interés ${fmtN(c.interes)}` });
       } else {
         const dev = c.vto && String(c.vto) <= hoy;       // vencida = ya devengada (P&L por vto)
-        entries.push({ fecha: c.vto, delta: 0, pend: true,
-          concepto: `${acr} · Cuota ${c.nro_cuota}/${N} ${dev ? "devengada · pendiente de pago" : "programada"}`,
+        // Vencida e impaga: al capital (ya en la apertura) se le suma la parte no-capital de la cuota
+        // (interés/IVA/imp.), que desde el vencimiento también se adeuda → el ledger cierra con el mismo
+        // saldo que financiacionPasivoBuckets.
+        const noCap = dev ? Math.max(0, (Number(c.total) || 0) - (Number(c.capital) || 0)) : 0;
+        entries.push({ fecha: c.vto, delta: noCap, pend: true,
+          concepto: `${acr} · Cuota ${c.nro_cuota}/${N} ${dev ? "devengada · pendiente de pago (+ interés adeudado)" : "programada"}`,
           sub: `capital ${fmtN(c.capital)} · interés ${fmtN(c.interes)}` });
       }
     }
@@ -3422,10 +3427,16 @@ export function financiacionLedger(planes = [], { tipo = null, moneda = "ARS" } 
  * aparecen el mismo mes y la variación del PN queda explicada por el P&L. En un plan normal la deuda nace
  * entera al consolidar y `corte` no cambia nada.
  *
- * OJO: `corte` filtra por VENCIMIENTO, no re-deriva los pagos. El `capital_remanente` de cada cuota tiene que
- * venir ya calculado a esa misma fecha, y de eso se ocupa el llamador (agruparPlanes lo deja "a hoy", que es lo
- * correcto para el Balance; tesoreriaDerive/finAsOf lo recalcula al corte). Mezclar las dos referencias —un
- * corte pasado con remanentes de hoy— da una cuota ya devengada con pasivo cero.
+ * OJO: `corte` filtra por VENCIMIENTO, no re-deriva los pagos. El `capital_remanente` (y `saldo_remanente`) de
+ * cada cuota tiene que venir ya calculado a esa misma fecha, y de eso se ocupa el llamador (agruparPlanes lo deja
+ * "a hoy", que es lo correcto para el Balance; tesoreriaDerive/finAsOf lo recalcula al corte). Mezclar las dos
+ * referencias —un corte pasado con remanentes de hoy— da una cuota ya devengada con pasivo cero.
+ *
+ * Cuota VENCIDA e IMPAGA (23/9/2026, decisión Martín): además del capital, se debe su interés (+ IVA/impuestos de
+ * la cuota), que el P&L ya devengó al vencimiento. Se suma la parte NO-capital que todavía se adeuda de cada cuota
+ * con vto ≤ corte (= saldo remanente de la cuota − capital remanente). Así el gasto y la deuda nacen el mismo día
+ * y el puente P&L↔ΔPN cierra aunque la cuota se pague tarde (antes: interés Eventos 459 sin pasivo al 31/8).
+ * Las cuotas FUTURAS siguen solo con capital: su interés no es deuda (cancelar anticipado lo evita).
  */
 export function financiacionPasivoBuckets(planes, sociedad, corte = "") {
   const soc   = String(sociedad ?? "").toLowerCase();
@@ -3434,14 +3445,23 @@ export function financiacionPasivoBuckets(planes, sociedad, corte = "") {
   const out = { impuestos: { tot: mk(), docs: [] }, financiero: { tot: mk(), docs: [] } };
   for (const p of (planes ?? [])) {
     if (soc && String(p.sociedad ?? "").toLowerCase() !== soc) continue;
-    const saldo = p.capital_en_cuotas
-      ? (p.cuotas ?? []).reduce((s, c) => s + (String(c.vto ?? "") <= hasta ? (Number(c.capital_remanente) || 0) : 0), 0)
+    const cuotas = p.cuotas ?? [];
+    const capital = p.capital_en_cuotas
+      ? cuotas.reduce((s, c) => s + (String(c.vto ?? "") <= hasta ? (Number(c.capital_remanente) || 0) : 0), 0)
       : (Number(p.saldo) || 0);
+    // Interés/IVA/impuestos de cuotas ya vencidas y no pagadas (parte no-capital que sigue adeudada).
+    const vencidoNoCapital = cuotas.reduce((s, c) => {
+      if (String(c.vto ?? "") > hasta || c.estado === "cancelada") return s;
+      const rem = Number(c.saldo_remanente ?? c.saldoCuota) || 0;
+      return s + Math.max(0, rem - (Number(c.capital_remanente) || 0));
+    }, 0);
+    const saldo = Math.round((capital + vencidoNoCapital) * 100) / 100;
     if (saldo <= 0) continue;
     const k   = p.tipo === "prestamo" ? "financiero" : "impuestos";
     const mon = p.moneda || "ARS";
     if (mon in out[k].tot) out[k].tot[mon] += saldo;
-    out[k].docs.push({ acreedor: p.acreedor_nombre, nro_plan: p.nro_plan, prox_vto: p.prox_vto, saldo, moneda: mon });
+    out[k].docs.push({ acreedor: p.acreedor_nombre, nro_plan: p.nro_plan, prox_vto: p.prox_vto, saldo, moneda: mon,
+      capital: Math.round(capital * 100) / 100, vencido_no_capital: Math.round(vencidoNoCapital * 100) / 100 });
   }
   return out;
 }
