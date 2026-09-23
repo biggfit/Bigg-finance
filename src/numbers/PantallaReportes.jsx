@@ -1547,7 +1547,11 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
       // sede/WRE/gerenciamiento reportan su IVA por su propio motor, no acá. Se clasifica por el signo con
       // que la línea entra al Resultado del Grupo: revenue (+) → débito ventas, costo (−) → crédito compras.
       // Así Σ(débito) − Σ(crédito) = impacto de HQ en el resultado, y el puente cierra por construcción.
-      if (sinIva && HQ_IVA_BUCKETS.has(gkey)) {
+      // Las fees de operación (BIGG_FEE_CUENTAS) caen en `hq` pero el holding las OMITE de Ingresos HQ: su
+      // resultado y su IVA entran por su propio negocio (feeGer / WRE, con su ivaDeb). Acumular su IVA también
+      // acá lo contaba DOS veces → Sin IVA daba 276 USD (jul) / 245 (ago 2026) arriba de Con IVA.
+      const esFeeOmitida = gkey === "hq" && BIGG_FEE_CUENTAS.includes(rowKey);
+      if (sinIva && HQ_IVA_BUCKETS.has(gkey) && !esFeeOmitida) {
         const contribSign = gkey === "hq" ? (neg ? -1 : 1) : gkey === "gpv" ? (neg ? 1 : -1) : (credito ? 1 : -1);
         (contribSign > 0 ? ivaDeb : ivaCred)[m] += Number(row.iva_monto) || 0;
       }
