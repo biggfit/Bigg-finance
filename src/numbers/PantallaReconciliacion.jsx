@@ -850,7 +850,8 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       for (const c of (p.cuotas || [])) {
         if (c.estado !== "pendiente") continue;
         out.push({ plan_id: p.plan_id, nro_plan: p.nro_plan, acreedor_cuit: p.acreedor_cuit, acreedor_nombre: p.acreedor_nombre,
-          nro_cuota: c.nro_cuota, row_id: c.rowId, total: c.total, total_tardio: c.total_tardio, vto: c.vto, moneda: p.moneda });
+          nro_cuota: c.nro_cuota, row_id: c.rowId, total: c.total, total_tardio: c.total_tardio, vto: c.vto, moneda: p.moneda,
+          pagado: Number(c.pagado) || 0 });   // pagos parciales previos → el recargo se calcula sobre el total pagado
       }
     }
     return out;
@@ -1194,7 +1195,8 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     if (cs.es && cs.cuotaSel) {
       const cuota = cuotasPendientes.find(c => String(c.row_id) === String(cs.cuotaSel));
       if (cuota) {
-        await imputarCuota(mov, { plan_id: cuota.plan_id, nro_cuota: cuota.nro_cuota, row_id: cuota.row_id });
+        await imputarCuota(mov, { plan_id: cuota.plan_id, nro_cuota: cuota.nro_cuota, row_id: cuota.row_id,
+          total: cuota.total, pagado_previo: cuota.pagado });   // → escribe recargo_pagado (lo debitado de más)
         // Reflejar localmente: la cuota pasa a pagada (sale de cuotasPendientes / no se re-sugiere).
         setFinanciaciones(prev => prev.map(p => p.plan_id === cuota.plan_id
           ? { ...p, cuotas: p.cuotas.map(x => String(x.rowId) === String(cuota.row_id) ? { ...x, estado: "pagada" } : x) }

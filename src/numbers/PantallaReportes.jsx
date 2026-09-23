@@ -175,11 +175,16 @@ export function financiacionToPnLRows(planes, sociedad) {
       push(p.cuenta_interes,   p.centro_interes,   c.interes,   c.vto);
       push(p.cuenta_iva,       p.centro_iva,       c.iva,       c.vto);
       push(p.cuenta_impuestos, p.centro_impuestos, c.impuestos, c.vto);
-      // Recargo real = pagado − importe normal de la cuota (si se pagó de más). Sin pago en caja no hay recargo.
+      // Recargo por mora: DATO escrito en la cuota al saldarla (`recargo_pagado`, 23/9/2026) → fecha_pago.
+      // Fallback (cuotas saldadas antes de esa fecha, sin el dato): pagado − importe normal de la cuota, derivado
+      // de los movimientos. Sin pago en caja no hay recargo.
+      const guardado = Number(c.recargo_pagado) || 0;
       const pagadoCuota = Number(c.pagado) || 0;
-      const recargo = pagadoCuota > 0 ? Math.round((pagadoCuota - (Number(c.total) || 0)) * 100) / 100 : 0;
+      const derivado = pagadoCuota > 0 ? Math.round((pagadoCuota - (Number(c.total) || 0)) * 100) / 100 : 0;
+      const recargo = guardado > 0.5 ? guardado : derivado;
       if (recargo > 0.5) {
-        const fechaRec = (c.pagos ?? []).map(x => x.fecha).sort().pop() || c.fecha_pago || c.vto;
+        const fechaRec = (guardado > 0.5 && c.fecha_pago) ? c.fecha_pago
+          : ((c.pagos ?? []).map(x => x.fecha).sort().pop() || c.fecha_pago || c.vto);
         push(p.cuenta_interes, p.centro_interes, recargo, fechaRec);   // resarcitorio efectivamente cobrado
       }
     }

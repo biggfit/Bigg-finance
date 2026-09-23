@@ -800,8 +800,8 @@ function DetalleFinanciacion({ plan, bancos, onBack, onChanged }) {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr style={{ background: T.tableHead, color: T.tableHeadText }}>
-              {["#", "Vto", "Capital", "Interés", "IVA", "Impuestos", "Total", "Estado", ""].map((hh, i) => (
-                <th key={i} style={{ padding: "8px 10px", textAlign: i >= 2 && i <= 6 ? "right" : "left", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{hh}</th>
+              {["#", "Vto", "Capital", "Interés", "IVA", "Impuestos", "Total", "Recargo", "Estado", ""].map((hh, i) => (
+                <th key={i} style={{ padding: "8px 10px", textAlign: i >= 2 && i <= 7 ? "right" : "left", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{hh}</th>
               ))}
             </tr>
           </thead>
@@ -819,6 +819,11 @@ function DetalleFinanciacion({ plan, bancos, onBack, onChanged }) {
                   {c.pagado > 0.5 && (c.saldoCuota ?? 0) > 0.5 && (
                     <div style={{ fontSize: 10, color: T.dim, fontWeight: 400 }}>resta {fmtMoney(c.saldoCuota, plan.moneda)}</div>
                   )}
+                </td>
+                {/* Recargo por mora efectivamente pagado (lo debitado de más sobre el total): dato de la cuota, va al P&L como interés con fecha de pago. */}
+                <td style={{ padding: "7px 10px", textAlign: "right", fontFamily: T.mono, color: c.recargo_pagado > 0.5 ? "#b45309" : T.dim }}
+                  title={c.recargo_pagado > 0.5 ? `Pagado ${fmtMoney((Number(c.total) || 0) + c.recargo_pagado, plan.moneda)} el ${fmtDate(c.fecha_pago)}` : undefined}>
+                  {c.recargo_pagado > 0.5 ? fmtMoney(c.recargo_pagado, plan.moneda) : "—"}
                 </td>
                 <td style={{ padding: "7px 10px" }}><Badge estado={c.estado} cfg={ESTADO_CUOTA} /></td>
                 <td style={{ padding: "7px 10px", textAlign: "right" }}>
@@ -866,7 +871,9 @@ function PagoCuotaModal({ cuota, plan, bancos, busy, onCancel, onConfirm }) {
             <div style={{ fontSize: 11, color: "#a16207", marginTop: 6 }}>Pago parcial — queda pendiente {fmtMoney(saldo - montoNum, plan.moneda)}.</div>
           )}
           {excede && (
-            <div style={{ fontSize: 11, color: T.red, marginTop: 6 }}>El monto supera el saldo ({fmtMoney(saldo, plan.moneda)}).</div>
+            <div style={{ fontSize: 11, color: "#b45309", marginTop: 6 }}>
+              Supera el saldo en {fmtMoney(montoNum - saldo, plan.moneda)}: se registra como <b>recargo por mora</b> (resarcitorio) de la cuota y va al P&amp;L como interés con la fecha de pago.
+            </div>
           )}
         </div>
         <div style={{ marginTop: 12 }}>
@@ -884,7 +891,7 @@ function PagoCuotaModal({ cuota, plan, bancos, busy, onCancel, onConfirm }) {
         </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 18 }}>
           <Btn variant="ghost" onClick={onCancel}>Cancelar</Btn>
-          <Btn variant="accent" onClick={() => onConfirm(fecha, banco, montoNum, nota.trim())} disabled={busy || !banco || montoNum <= 0 || excede}>{busy ? "…" : "Confirmar pago"}</Btn>
+          <Btn variant="accent" onClick={() => onConfirm(fecha, banco, montoNum, nota.trim())} disabled={busy || !banco || montoNum <= 0}>{busy ? "…" : "Confirmar pago"}</Btn>
         </div>
       </div>
     </div>

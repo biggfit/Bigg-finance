@@ -3261,8 +3261,16 @@ function _finRowToCuota(r) {
     estado:         r.estado || "pendiente",
     movimiento_id:  r.movimiento_id ?? "",
     fecha_pago:     r.fecha_pago ?? "",
+    // Recargo por mora EFECTIVAMENTE pagado (pagado − total de la cuota), escrito por el writer del pago cuando
+    // la cuota queda saldada (23/9/2026). Es el dato que el P&L toma como resarcitorio, con fecha_pago. Antes
+    // se recalculaba al vuelo desde los movimientos en cada lectura y no quedaba en ningún lado.
+    recargo_pagado: toNum(r.recargo_pagado),
   };
 }
+
+/** Recargo por mora de una cuota saldada = lo pagado en total − el importe normal de la cuota (≥ 0, 2 dec). */
+export const recargoCuota = (pagadoTotal, totalCuota) =>
+  Math.max(0, Math.round(((Number(pagadoTotal) || 0) - (Number(totalCuota) || 0)) * 100) / 100);
 
 /** Agrupa las filas planas (una por cuota) en planes con su cronograma + derivados.
  *  `pagadoPorCuota` (opcional) = { "<plan_id>#<nro>": montoPagado } derivado de los movimientos
@@ -3547,17 +3555,19 @@ export async function appendFinanciacion({ tipo = "plan_afip", nro_plan = "", ac
  * Imputa una línea del extracto a una cuota: la convierte en PAGO (documento_id
  * FIN-<plan_id>#<nro>, no-CONTAB- → excluida del P&L) y marca la cuota pagada. El capital
  * baja el pasivo; interés/IVA/impuestos ya se devengaron mes a mes vía el cronograma.
- * El resarcitorio (si pagó tardío) lo deriva el adapter por fecha_pago > vto.
+ * El resarcitorio (recargo por mora) es lo que el banco debitó de más sobre el importe normal de la cuota:
+ * queda ESCRITO en la cuota (`recargo_pagado`) y el P&L lo toma de ahí con fecha_pago. Para calcularlo hacen
+ * falta `total` de la cuota y `pagado_previo` (pagos parciales anteriores); si no vienen, no se escribe.
  */
-export async function imputarCuota(mov, { plan_id, nro_cuota, row_id, concepto = "" }) {
+export async function imputarCuota(mov, { plan_id, nro_cuota, row_id, concepto = "", total = null, pagado_previo = 0 }) {
   await post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
     tipo: "PAGO", origen: "cuota",
     documento_id: `${plan_id}#${nro_cuota}`,
     concepto: concepto || mov.concepto || `Cuota ${nro_cuota} ${plan_id}`,
   }});
-  await post({ action: "edit", sheet: "nb_financiaciones", id: row_id, patch: {
-    estado: "pagada", movimiento_id: mov.id, fecha_pago: mov.fecha,
-  }});
+  const patch = { estado: "pagada", movimiento_id: mov.id, fecha_pago: mov.fecha };
+  if (total != null) patch.recargo_pagado = recargoCuota((Number(pagado_previo) || 0) + Math.abs(Number(mov.monto) || 0), total);
+  await post({ action: "edit", sheet: "nb_financiaciones", id: row_id, patch });
 }
 
 /**
@@ -3585,8 +3595,14 @@ export async function pagarCuota({ plan, cuota, fecha, cuenta_bancaria, monto, n
   });
   // Marca "pagada" SOLO si este pago cubre el saldo restante. Si es parcial, la cuota queda pendiente y
   // agruparPlanes deriva "parcial" + el saldo remanente de los movimientos (no se pisa el estado).
-  if (pagar >= saldoCuota - 0.5)
-    await post({ action: "edit", sheet: "nb_financiaciones", id: cuota.rowId, patch: { estado: "pagada", fecha_pago: fecha } });
+  // Al saldarla queda escrito el RECARGO pagado (lo pagado en total − el importe normal): ej. un VEP fuera de
+  // término trae el resarcitorio de AFIP, que no está en el cronograma y solo se conoce al pagar.
+  if (pagar >= saldoCuota - 0.5) {
+    const total = Number(cuota.total) || 0;
+    const pagadoTotal = (total - saldoCuota) + pagar;   // pagos parciales previos + este
+    await post({ action: "edit", sheet: "nb_financiaciones", id: cuota.rowId,
+      patch: { estado: "pagada", fecha_pago: fecha, recargo_pagado: recargoCuota(pagadoTotal, total) } });
+  }
 }
 
 /** Aplica un patch a TODAS las filas de un plan (campos de plan repetidos). */
