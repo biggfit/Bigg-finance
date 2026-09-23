@@ -21,8 +21,10 @@ export const makeCrearMaestro = (appendFn, fetchFn, setFn) => async (form) => {
 
 // Prepara un documento (factura) para DUPLICAR: saca id/fechas/nº comprobante/estado/pagos y marca
 // _duplicate → el form lo abre precargado como NUEVO. Conocimiento de la forma de la factura en un lugar.
+// OJO fechaFiscal: se limpia junto con fecha. Si sobrevive, el form la marca "tocada" (difiere de la
+// emisión en blanco) y queda congelada en el período de IVA viejo, sin seguir a la nueva emisión.
 export const stripForDuplicate = (doc) => {
-  const { id, fecha, vto, nroComp, estado, saldoPendiente, pagosVinculados, _isEdit, ...rest } = doc;
+  const { id, fecha, fechaFiscal, vto, nroComp, estado, saldoPendiente, pagosVinculados, _isEdit, ...rest } = doc;
   return { ...rest, _duplicate: true };
 };
 
