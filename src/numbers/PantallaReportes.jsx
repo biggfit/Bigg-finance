@@ -62,7 +62,9 @@ function buildPnL(inRows, egRows, cuentaMap, ccFilter, year, moneda) {
       const cat    = normCat(cuentaMap.get(nombre)?.categoria_pnl);
       const bucket = cats[cat] ?? cats.sin_categoria;
       if (!bucket[nombre]) bucket[nombre] = new Array(12).fill(0);
-      bucket[nombre][m] += Number(row.total) || 0;
+      // Ingreso (movimiento _tipo "Ingreso", total +) en una categoría de costo → crédito (−). Ver buildPnLBigg.
+      const signo = (row._tipo === "Ingreso" && cat !== "ventas") ? -1 : 1;
+      bucket[nombre][m] += (Number(row.total) || 0) * signo;
     }
   };
   add(inRows);
@@ -616,7 +618,9 @@ function buildPnLSede(inRows, egRows, ccFilter, year, moneda, sinIva = false) {
       // Un COMPROBANTE cuyo subtipo no coincide con la naturaleza del grupo es CONTRA: un EGRESO (factura de
       // compra) en una cuenta de INGRESO (ej. Interusos) RESTA; un INGRESO en una cuenta de costo, resta. Así
       // el interuso netea (+ cobrado / − pagado, clearing de la sede). Los movimientos (sin subtipo) mantienen
-      // su signo — ya vienen firmados desde movimientoToPnLRows.
+      // su signo — ya vienen firmados desde movimientoToPnLRows (un reintegro en cuenta de costo llega negativo;
+      // un ingreso financiero, ej. Intereses Ganados, llega positivo y cae en Sin clasificar, de donde la cola
+      // "Resultado Financiero" de fondeadas/Rosedal lo toma con signo natural: + ganancia). NO re-firmar acá.
       const st = String(row.subtipo || "").toUpperCase();
       const esEg = st === "EGRESO", esIn = st === "INGRESO", enIng = SEDE_ING_KEYS.has(gkey);
       const contra = !!gkey && ((esEg && enIng) || (esIn && !enIng));
@@ -1486,6 +1490,10 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
       const catRaw  = (meta?.categoria_pnl ?? "").toLowerCase();               // crudo, para financieros/impuestos
       const catSede = (meta?.categoria_pnl_sede ?? "").trim().toLowerCase();   // "ventas" | "otros ingresos" | "costo por venta"
       let gkey = null, rowKey = cuenta, val = montoPnL(row, sinIva), neg = false;
+      // Filas que viajan por egRows pero YA vienen firmadas como resultado por su adaptador (mismo set que
+      // EG_QUE_SUMA del Devengado): movimiento-ingreso (_tipo "Ingreso", ej. Intereses Ganados +) e interuso de
+      // gestión (pata 2 del asiento de sede propia, + ingreso / − cargo). No se re-firman como "costo".
+      const yaFirmado = forcedSide !== "ingreso" && (row._tipo === "Ingreso" || row._tipo === "Interuso gestión");
       if (normCat(cc?.categoria_pnl) === "capex") {
         // Centro tagueado capex (ej. "HQ - Capex"): compra de operaciones → sección propia DEBAJO del
         // Resultado del Grupo, fuera de OPEX/sede. Lo decide el CENTRO (no la cuenta), y gana sobre todo.
@@ -1506,7 +1514,9 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
       } else if (ING_CONTRA_HQ.has(cuenta)) {
         gkey = "hq";                                      // netea en Ingresos
         rowKey = ING_CONTRA_HQ.get(cuenta) || cuenta;     // MISMA fila que su ingreso par → una sola línea neta
-        if (forcedSide !== "ingreso") { val = -val; neg = true; }   // el costo (egreso) RESTA al ingreso
+        // El costo (egreso) RESTA al ingreso. Una fila ya firmada (interuso de gestión) pasa tal cual: hasta el
+        // 22/9/2026 se le daba vuelta el signo → Coorporativos jul 2026 quedaba 583.646 abajo del Devengado.
+        if (forcedSide !== "ingreso" && !yaFirmado) { val = -val; neg = true; }
       } else if (catPnl === "costo_venta") {
         gkey = "gpv";                                     // COSTO por venta → Gastos por Ventas: Interusos, Fee Fact.
         if (forcedSide === "ingreso") { val = -val; neg = true; }   // lado ingreso de una cuenta intermediada = contra → neto en gpv
@@ -1523,6 +1533,13 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
         gkey = "ghq";                                     // Gastos HQ (operativos): filas = CENTRO
         rowKey = cc?.nombre ?? cuenta;
       }
+      // Un INGRESO que viaja por egRows (movimiento conciliado con cuenta de costo/financiera, ej. "Intereses
+      // Ganados" tipo INGRESO: movimientoToPnLRows lo marca _tipo "Ingreso" con total +) y cae en un bucket de
+      // COSTO entra como CRÉDITO (−): en esos buckets positivo = resta al resultado. Sin esto el interés ganado
+      // se RESTABA (y se mostraba entre paréntesis) en vez de sumar — 22/9/2026, jul −2.236.180 / ago −1.227.484
+      // en el Resultado del Grupo. El histórico ya venía con signo negativo para estas cuentas → no se toca.
+      let credito = false;
+      if (yaFirmado && BIGG_BUCKETS_COSTO.has(gkey)) { val = -val; credito = true; }
       const bucket = gkey ? grupos[gkey] : sinClasificar;
       if (!bucket[rowKey]) bucket[rowKey] = new Array(12).fill(0);
       bucket[rowKey][m] += val;
@@ -1531,7 +1548,7 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
       // que la línea entra al Resultado del Grupo: revenue (+) → débito ventas, costo (−) → crédito compras.
       // Así Σ(débito) − Σ(crédito) = impacto de HQ en el resultado, y el puente cierra por construcción.
       if (sinIva && HQ_IVA_BUCKETS.has(gkey)) {
-        const contribSign = gkey === "hq" ? (neg ? -1 : 1) : gkey === "gpv" ? (neg ? 1 : -1) : -1;
+        const contribSign = gkey === "hq" ? (neg ? -1 : 1) : gkey === "gpv" ? (neg ? 1 : -1) : (credito ? 1 : -1);
         (contribSign > 0 ? ivaDeb : ivaCred)[m] += Number(row.iva_monto) || 0;
       }
     }
@@ -1542,6 +1559,8 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
 
 // Buckets HQ que el holding consolida línea por línea (para acumular su IVA acá; sede/WRE/ger lo hacen aparte).
 const HQ_IVA_BUCKETS = new Set(["hq", "gpv", "ghq", "fin", "imp"]);
+// Buckets donde POSITIVO = costo (restan al resultado). Un ingreso que cae acá debe entrar negativo (crédito).
+const BIGG_BUCKETS_COSTO = new Set(["gpv", "gsp", "ghq", "fin", "imp", "capex"]);
 
 // Orden de los centros dentro de "Gastos HQ" (display).
 const BIGG_ORDEN_GHQ = ["HQ - Sport", "HQ - Tecnologia", "HQ - Ventas y Operaciones", "11 - Huergo",
@@ -3685,7 +3704,9 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       const prev = pnl.grupos.capex[k] || new Array(12).fill(0);
       pnl.grupos.capex[k] = prev.map((v, i) => v + (arr[i] || 0));
     }
-    return { pnl, sub: computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }) };
+    return { pnl, sub: computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }),
+      // DEV-ONLY (check "P&L BIGG vs Devengado" en consola): piezas del holding para descomponer la diferencia.
+      _dbg: import.meta.env.DEV ? { sAR, sBNnet, arIVASedes, feeGer, resWRE, arNucleoCCs, bnCcId } : undefined };
   };
   const biggCur  = useMemo(() => (isBigg || isVentasHQ) ? holdingDe(year)     : null,   // eslint-disable-line react-hooks/exhaustive-deps
     [isBigg, isVentasHQ, inBigg, egBigg, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva, intercoData, fxConv]);
@@ -3693,6 +3714,8 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     [isBigg, isVentasHQ, inBigg, egBigg, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva, intercoData, fxConv]);
   const pnlBigg     = biggCur?.pnl  || null;
   const subBigg     = biggCur?.sub  || null;
+  // DEV-ONLY: check "P&L BIGG vs Devengado" desde consola (ver memoria puente). Descartable.
+  if (import.meta.env.DEV && biggCur) window.__bigg = { pnl: pnlBigg, sub: subBigg, year, moneda: monedaPL, sinIva, ...(biggCur._dbg || {}) };
   const pnlBiggPrev = biggPrev?.pnl || null;
   const subBiggPrev = biggPrev?.sub || null;
 
