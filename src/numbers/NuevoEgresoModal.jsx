@@ -13,6 +13,8 @@ import {
 import { ProveedorModal, CuentaModal } from "./PantallaMaestros";
 import { useLineas } from "./useLineas";
 import { checkDuplicateComp } from "../lib/numbersApi";
+import ConfirmModal from "./ConfirmModal";
+import { PIDE_NRO_COMP, AVISO_SIN_NRO } from "./avisoNroComp";
 
 const EGRESO_SECONDARY_OUTLINE = "#0e7490";
 
@@ -127,13 +129,24 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
       return false;
     }
   };
+  // Guarda "sin N° de comprobante" (ver avisoNroComp): si falta el número, en vez de guardar abre el
+  // cartel y deja pendiente la acción que el usuario apretó — al confirmar se ejecuta esa misma.
+  // Corre DESPUÉS del chequeo de duplicados, que sin número no hace nada (checkDuplicateComp
+  // devuelve null con `nro` vacío), así que las dos guardas no se pisan.
+  const [sinNroPend, setSinNroPend] = useState(null);
+  const guardarAhora = (extra) => runSaveThenMaybeClose(onSave, buildPayload(extra), asPage, onClose);
+  const guardarOAvisar = (extra) => {
+    if (PIDE_NRO_COMP(sociedad) && !nroComp.trim()) { setSinNroPend(extra); return; }
+    guardarAhora(extra);
+  };
+
   const handleSave = async () => {
     if (!(await guardConDuplicado())) return;
-    runSaveThenMaybeClose(onSave, buildPayload(), asPage, onClose);
+    guardarOAvisar({});
   };
   const handleSaveAndPay = async () => {
     if (!(await guardConDuplicado())) return;
-    runSaveThenMaybeClose(onSave, buildPayload({ _saveAndPay: true }), asPage, onClose);
+    guardarOAvisar({ _saveAndPay: true });
   };
 
   const prov = proveedores.find(p => p.id === provId);
@@ -272,6 +285,9 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
         <CuentaModal onClose={() => setCrearCuentaOpen(false)}
           onSave={async (form) => { const id = await onCrearCuenta?.(form); if (id) setCuentaId(id); }} />
       )}
+      <ConfirmModal open={!!sinNroPend} {...AVISO_SIN_NRO}
+        onCancel={() => setSinNroPend(null)}
+        onConfirm={() => { const extra = sinNroPend; setSinNroPend(null); guardarAhora(extra); }} />
     </>
   );
 }

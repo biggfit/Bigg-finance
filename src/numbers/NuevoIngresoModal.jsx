@@ -13,6 +13,8 @@ import {
 } from "./formUtils";
 import { ClienteModal, CuentaModal } from "./PantallaMaestros";
 import { useLineas } from "./useLineas";
+import ConfirmModal from "./ConfirmModal";
+import { PIDE_NRO_COMP, AVISO_SIN_NRO } from "./avisoNroComp";
 
 export default function NuevoIngresoModal({ onClose, onSave, sociedad, clientes = [], cuentas = [], centrosCosto, initialData, asPage = false, onCrearCliente, onCrearCuenta }) {
   const [crearCliOpen, setCrearCliOpen] = useState(false);
@@ -108,15 +110,26 @@ export default function NuevoIngresoModal({ onClose, onSave, sociedad, clientes 
     };
   };
 
+  // Guarda "sin N° de comprobante" (ver avisoNroComp): si falta el número, en vez de guardar abre el
+  // cartel y deja pendiente la acción que el usuario apretó — al confirmar se ejecuta esa misma.
+  // Corre DESPUÉS del chequeo de duplicados, que sin número no hace nada (checkDuplicateComp
+  // devuelve null con `nro` vacío), así que las dos guardas no se pisan.
+  const [sinNroPend, setSinNroPend] = useState(null);
+  const guardarAhora = (extra) => runSaveThenMaybeClose(onSave, buildPayload(extra), asPage, onClose);
+  const guardarOAvisar = (extra) => {
+    if (PIDE_NRO_COMP(sociedad) && !nroComp.trim()) { setSinNroPend(extra); return; }
+    guardarAhora(extra);
+  };
+
   const handleSave = async () => {
     const dup = await checkDuplicateComp(sociedad, "INGRESO", nroComp, cliId, isEdit ? initialData.id : null);
     if (dup) { setDupError(dup); return; }
-    runSaveThenMaybeClose(onSave, buildPayload(), asPage, onClose);
+    guardarOAvisar({});
   };
   const handleSaveAndCobrar = async () => {
     const dup = await checkDuplicateComp(sociedad, "INGRESO", nroComp, cliId, isEdit ? initialData.id : null);
     if (dup) { setDupError(dup); return; }
-    runSaveThenMaybeClose(onSave, buildPayload({ _saveAndCobrar: true }), asPage, onClose);
+    guardarOAvisar({ _saveAndCobrar: true });
   };
 
   const cli = clientes.find(c => c.id === cliId);
@@ -258,6 +271,9 @@ export default function NuevoIngresoModal({ onClose, onSave, sociedad, clientes 
         <CuentaModal onClose={() => setCrearCuentaOpen(false)}
           onSave={async (form) => { const id = await onCrearCuenta?.(form); if (id) setCuentaId(id); }} />
       )}
+      <ConfirmModal open={!!sinNroPend} {...AVISO_SIN_NRO}
+        onCancel={() => setSinNroPend(null)}
+        onConfirm={() => { const extra = sinNroPend; setSinNroPend(null); guardarAhora(extra); }} />
     </>
   );
 }
