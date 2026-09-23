@@ -1,19 +1,29 @@
 // api/bigg-eye-cdp.js — Vercel Serverless Function
 //
-// Obtiene en una sola respuesta:
-//   - cdp_count      : socios convertidos por coach (type=Members en BIGG Eye)
-//   - one_shot_count : altas sin clase de prueba, por vendedor (report_id=20, cdp='One Shot')
+// Incentivos de venta por persona y sede para Liquidación Sedes ("Cargar CDP"):
+//   - cdp_coach      : altas con clase de prueba, al COACH que dio la CDP
+//   - cdp_front      : altas con clase de prueba, al VENDEDOR que cerró
+//   - one_shot_count : altas sin clase de prueba, al VENDEDOR que cerró
 //
-// Arquitectura: cache manual primero → REST fallback (ambas fuentes en paralelo).
+// Fuente única: report 20 "Nuevas cuentas" (= reporte de altas de BIGG Eye), una fila
+// por alta, filtrado por FECHA DE CONVERSIÓN (conversion_date). Regla de negocio
+// (Martín, 23/9/2026): la CDP se paga en el mes en que se convierte la venta; pasado el
+// último día del mes el número no se mueve. Antes se usaba el report 9 "Clases de
+// prueba", que vive en el mes de la CLASE y cambiaba retroactivamente con compras
+// posteriores. El coach viene en `coach_cdp` (agregado por BI el 23/9; alias `coach_name`).
+//
+// Arquitectura: cache manual primero → REST fallback.
 //
 // Query params:
 //   month        — mes 1-12
 //   year         — año (ej: 2026)
 //   pais         — código de país ("AR" | "ES" | "CL"). Opcional.
 //   location_ids — IDs Bigg Eye separados por coma (desde nb_centros_costo.bigg_eye_id)
+//   fresh        — "1": saltea la cache y baja en vivo
+//   sin_rematriculados — "1": excluye altas type=re-registration (por defecto se cuentan)
 //
 // Devuelve:
-//   { items: [{ coach_name, location_id, location_name, cdp_count, one_shot_count }], _source }
+//   { items: [{ coach_name, location_id, location_name, cdp_coach, cdp_front, one_shot_count }], _source }
 
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
@@ -57,26 +67,6 @@ const SEDES_POR_PAIS = {
   ],
 };
 
-async function fetchJsonDebug(url) {
-  const res = await fetch(url, {
-    headers: { Accept: "application/json", Authorization: `Bearer ${TOKEN}` },
-  });
-  const text = await res.text();
-  let data = null;
-  try { data = JSON.parse(text); } catch {}
-  return { ok: res.ok, status: res.status, data, raw: text.slice(0, 500) };
-}
-
-// Fetch REST report_json/<id>/ por sede — la ruta que SÍ funciona con el token
-// (el worker MCP quedó obsoleto/roto). Devuelve array de filas.
-async function fetchReportJson(id, locId, start, end) {
-  const url = `${BIGG_EYE_API}/report_json/${id}/?location_id=${locId}&start_date=${start}&end_date=${end}`;
-  const res = await fetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${TOKEN}` } });
-  if (!res.ok) return [];
-  const data = await res.json().catch(() => null);
-  return Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : []);
-}
-
 function extractRows(data) {
   if (Array.isArray(data))          return data;
   if (Array.isArray(data?.data))    return data.data;
@@ -85,12 +75,14 @@ function extractRows(data) {
   return [];
 }
 
-function parseCount(r, ...keys) {
-  for (const k of keys) {
-    const v = Number(r[k]);
-    if (!isNaN(v) && v > 0) return v;
-  }
-  return 0;
+// Fetch REST report_json/<id>/ por sede — la ruta que funciona con el token.
+// start/end inclusivos (YYYY-MM-DD). Devuelve array de filas.
+async function fetchReportJson(id, locId, start, end) {
+  const url = `${BIGG_EYE_API}/report_json/${id}/?location_id=${locId}&start_date=${start}&end_date=${end}`;
+  const res = await fetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${TOKEN}` } });
+  if (!res.ok) return [];
+  const data = await res.json().catch(() => null);
+  return extractRows(data);
 }
 
 function isTestEntry(r) {
@@ -98,51 +90,13 @@ function isTestEntry(r) {
   return name.includes("test") || name.includes("testeo");
 }
 
-// Extrae array JSON de respuesta SSE o JSON plano (igual que bigg-eye-horas).
-function parseJsonOrSse(text) {
-  const tryExtract = (obj) => {
-    const t = obj?.result?.content?.[0]?.text;
-    if (t) { try { return JSON.parse(t); } catch { return null; } }
-    if (Array.isArray(obj?.result)) return obj.result;
-    return null;
-  };
-  if (text.trimStart().startsWith("data:")) {
-    for (const line of text.split("\n")) {
-      if (!line.startsWith("data:")) continue;
-      try { const r = tryExtract(JSON.parse(line.slice(5).trim())); if (r) return r; } catch {}
-    }
-    return null;
-  }
-  try { return tryExtract(JSON.parse(text)); } catch { return null; }
-}
-
-// Trae un report vía el MCP server de Cloudflare Workers (el REST /report del token está roto).
-async function fetchViaWorkerMcp(report_id, location_id, start, end) {
-  const MCP_URL = "https://bigg-eye-mcp-server.mmiauro.workers.dev/mcp";
-  const args = { report_id, start_date: start, end_date: end };
-  if (location_id != null) args.location_id = location_id;
-  const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call",
-    params: { name: "get_report", arguments: args } });
-  for (const authHeader of [null, `Bearer ${TOKEN}`]) {
-    try {
-      const headers = { "Content-Type": "application/json", "Accept": "application/json, text/event-stream" };
-      if (authHeader) headers["Authorization"] = authHeader;
-      const res  = await fetch(MCP_URL, { method: "POST", headers, body });
-      const rows = parseJsonOrSse(await res.text());
-      if (Array.isArray(rows) && rows.length > 0) return rows;
-    } catch {}
-  }
-  return null;
-}
-
 // ── Merge helper ──────────────────────────────────────────────────────────────
-// Devuelve un Map keyed por `"nombre:location_id"` con { coach_name, location_id,
-// location_name, cdp_count, one_shot_count }. Permite que el mismo nombre aparezca
-// como coach (cdp) y como vendedor (one_shot) en la misma sede — se acumulan.
-function buildItemMap(sedesById) {
+// Map keyed por `"nombre:location_id"` con { coach_name, location_id, location_name,
+// cdp_coach, cdp_front, one_shot_count }. La misma persona puede sumar como coach
+// (cdp_coach) y como vendedor (cdp_front / one_shot) en la misma sede — se acumulan.
+// cdp_coach y cdp_front se mantienen SEPARADOS porque pagan a distinta tarifa.
+function buildItemMap() {
   const map = new Map();
-  // cdp_coach = CDP conducidas como coach (Fuente A); cdp_front = CDP cerradas como
-  // vendedor/encargado (Fuente B). Se mantienen SEPARADAS porque pagan a distinta tarifa.
   const upsert = (name, locId, locName, { cdp_coach = 0, cdp_front = 0, one_shot = 0 }) => {
     const key = `${name}:${locId}`;
     const existing = map.get(key);
@@ -224,57 +178,47 @@ export default async function handler(req, res) {
     return;
   }
 
-  // ── 1. REST API fallback — ambas fuentes en paralelo ────────────────────────
+  // ── 1. REST — report 20 por sede, mes calendario completo ───────────────────
+  // Rango INCLUSIVO del 1° al último día del mes (antes se cortaba en el 1° del mes
+  // siguiente inclusive y el día 1 se contaba dos veces).
   const start   = `${yr}-${pad(mo)}-01`;
-  const nextM   = mo === 12 ? 1 : mo + 1;
-  const nextY   = mo === 12 ? yr + 1 : yr;
-  const end     = `${nextY}-${pad(nextM)}-01`;  // 1er día del mes siguiente (igual que la UI Eye)
+  const lastDay = new Date(Date.UTC(yr, mo, 0)).getUTCDate();
+  const end     = `${yr}-${pad(mo)}-${pad(lastDay)}`;
+  const sinRematriculados = req.query.sin_rematriculados === "1" || req.query.sin_rematriculados === "true";
 
-  // Fuente CDP: report 9 "Clases de prueba" (= la UI "Socios con Clase de Prueba").
-  // Por cada socio que ASISTIÓ y CONVIRTIÓ: cdp_coach al coach (coach_cdp) y
-  // cdp_front al vendedor que cerró (seller). One-shots: report 20 (cdp='One Shot').
-  // Se traen por el MCP de Cloudflare Workers (el REST /report del token está roto).
   try {
-    // Un request POR SEDE por reporte vía report_json (REST que anda con el token).
-    const pull = async (report_id) => {
-      const per = await Promise.all(
-        sedesTarget.map(s => fetchReportJson(report_id, s.id, start, end).catch(() => []))
-      );
-      return per.flat();
-    };
-    const [cdpRows, oneShotRows] = await Promise.all([pull(9), pull(20)]);
-    const cdpResult     = { data: cdpRows || [],     status: 200, raw: "" };
-    const oneShotResult = { data: oneShotRows || [], status: 200, raw: "" };
+    const per = await Promise.all(
+      sedesTarget.map(s => fetchReportJson(20, s.id, start, end).catch(() => []))
+    );
+    const rows = per.flat();
 
-    const { map, upsert } = buildItemMap(sedesById);
+    const { map, upsert } = buildItemMap();
+    const sinCoach = [];
+    const otrosCdp = new Set();
 
-    // CDP convertidas (report 9): coach (coach_cdp) + vendedor (seller), solo convertidos.
-    // Dedup por socio: si tomó varias clases de prueba, cuenta 1 vez (= "Socios con CDP").
-    const seenMember = new Set();
-    for (const r of extractRows(cdpResult.data)) {
-      const locId = Number(r.location_id);
-      if (!sedesTargetIds.has(locId)) continue;
-      const convertido = r.first_buy != null || r.member_id != null;
-      if (!r.has_attended || !convertido) continue;
-      const memberKey = `${r.member_id ?? r.prospect_id}:${locId}`;
-      if (seenMember.has(memberKey)) continue;
-      seenMember.add(memberKey);
-      const locName = sedesById[locId]?.nombre ?? r.location_name ?? String(locId);
-      const coach  = String(r.coach_cdp ?? "").trim();
-      const seller = String(r.seller ?? "").trim();
-      if (coach)  upsert(coach,  locId, locName, { cdp_coach: 1 });
-      if (seller) upsert(seller, locId, locName, { cdp_front: 1 });
-    }
-
-    // One Shot (report 20): altas sin CDP, por vendedor.
-    for (const r of extractRows(oneShotResult.data)) {
+    for (const r of rows) {
       const locId = Number(r.location_id);
       if (!sedesTargetIds.has(locId)) continue;
       if (isTestEntry(r)) continue;
-      if (r.cdp !== "One Shot") continue;
-      const name = String(r.seller_name ?? "").trim();
-      if (!name) continue;
-      upsert(name, locId, sedesById[locId]?.nombre ?? String(locId), { one_shot: 1 });
+      if (sinRematriculados && r.type === "re-registration") continue;
+
+      const locName = sedesById[locId]?.nombre ?? String(locId);
+      const seller  = String(r.seller_name ?? "").trim();
+      const cdp     = String(r.cdp ?? "").trim();
+
+      if (cdp === "One Shot") {
+        // Alta sin clase de prueba: solo al vendedor. (Los re-matriculados traen un
+        // coach_cdp = coach asignado del socio viejo; NO es una CDP, se ignora.)
+        if (seller) upsert(seller, locId, locName, { one_shot: 1 });
+      } else if (cdp === "Trial Class") {
+        // Alta con clase de prueba: front al vendedor que cerró + coach que dio la CDP.
+        const coach = String(r.coach_cdp ?? r.coach_name ?? "").trim();
+        if (seller) upsert(seller, locId, locName, { cdp_front: 1 });
+        if (coach)  upsert(coach,  locId, locName, { cdp_coach: 1 });
+        else        sinCoach.push(`${r.member_name ?? r.customer_id} (${locName})`);
+      } else {
+        otrosCdp.add(cdp || "(vacío)");
+      }
     }
 
     const items = Array.from(map.values())
@@ -287,12 +231,16 @@ export default async function handler(req, res) {
       return;
     }
 
-    const cdpCount = extractRows(cdpResult.data).length;
+    const debug = {};
+    if (rows.length === 0)  debug.aviso           = "report 20 en vivo devolvió 0 filas";
+    if (sinCoach.length)    debug.sin_coach       = sinCoach;
+    if (otrosCdp.size)      debug.cdp_desconocido = [...otrosCdp];
+
     res.statusCode = 200;
     res.end(JSON.stringify({
       items,
-      _source: `report 9 por sede en vivo (${cdpCount} filas) + report 20 (one-shot)`,
-      ...(cdpCount === 0 && { _debug: "report 9 en vivo devolvió 0 filas" }),
+      _source: `report 20 (altas) por fecha de conversión ${start}..${end} (${rows.length} filas)`,
+      ...(Object.keys(debug).length && { _debug: debug }),
     }));
   } catch (err) {
     res.statusCode = 500;
