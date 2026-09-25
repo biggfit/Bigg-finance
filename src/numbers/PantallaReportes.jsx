@@ -14,6 +14,7 @@ import TabIntercoConsolidado from "./reportes/TabIntercoConsolidado";
 import TabSaldosInterco from "./reportes/TabSaldosInterco";
 import TabCxPProveedores from "./reportes/TabCxPProveedores";
 import TabCxCClientes from "./reportes/TabCxCClientes";
+import TabDetallePagosCobros from "./reportes/TabDetallePagosCobros";
 import PantallaSocios from "./PantallaSocios";
 
 export const MESES    = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
@@ -528,7 +529,7 @@ const DISTRIB_ROSEDAL = {
 // Go-live: el P&L arranca el 1/7/2026. Todo lo anterior es migración de saldos iniciales de Contagram
 // (metida en cualquier cuenta/centro) y NO es resultado del período → se excluye de TODOS los P&L. Los
 // saldos iniciales de verdad viven como filas SALDO_INICIAL en nb_movimientos (Balance/Tesorería, nunca P&L).
-const PNL_INICIO = "2026-07-01";
+export const PNL_INICIO = "2026-07-01";
 // Mes en curso "YYYY-MM": corte para el aviso de TC faltante (mes pasado sin TC = hueco; en curso = esperado).
 const _mesActualYM = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; })();
 
@@ -2425,6 +2426,7 @@ const TABS = [
   // ── Detalle operativo (funcionando): el único lugar donde se ve la contabilidad de TODAS las sociedades ──
   { id: "inf_egresos",  label: "Egresos en detalle",  icon: "🔎", ico: "out", desc: "Listar y filtrar compras por cuenta · centro · proveedor · moneda · período." },
   { id: "inf_ingresos", label: "Ingresos en detalle", icon: "🔎", ico: "in", desc: "Listar y filtrar ventas/ingresos por cuenta · centro · cliente · moneda · período." },
+  { id: "inf_pagos",    label: "Pagos y cobros en detalle", icon: "🏧", ico: "flow", desc: "Todo lo que pasó por cada caja o banco, con la factura que cancela al lado. Filtrable por cuenta bancaria y cuenta contable; el Excel suma CUIT, código del estudio y saldo del extracto para que la contadora pueda imputar." },
 
   { id: "er_soc",       label: "Estado de Resultados por sociedad", icon: "📄", ico: "doc", wip: true, desc: "P&L de la entidad legal seleccionada (por sociedad)." },
 
@@ -2451,7 +2453,8 @@ const TABS = [
 const LENTES = [
   { id: "operar",     label: "Operar el día a día",      hint: "La contabilidad de todas las sociedades, en un solo lugar", hero: true,
     // Orden FIJO en 3 columnas × 2 filas (Martín 19/9): Egresos / Cuentas a pagar / Tesorería arriba; Ingresos / Cuentas a cobrar / Cash Flow abajo.
-    tabs: ["inf_egresos", "cxp_prov", "consolidado", "inf_ingresos", "cxc_cli", "cf"] },
+    // Debajo del hero, como fila: Pagos y cobros (Martín 25/9, para el estudio contable de España).
+    tabs: ["inf_egresos", "cxp_prov", "consolidado", "inf_ingresos", "cxc_cli", "cf", "inf_pagos"] },
   { id: "resultados", label: "¿Cómo nos fue?",            hint: "Resultados del grupo y de cada negocio",
     tabs: ["pl_bigg", "pl_sede", "op_espana", "op_colombia", "op_rosedal", "op_huergo", "an_ventas", "op_puertos", "an_margenes", "consol_grupo"] },
   { id: "plata",      label: "La plata entre sociedades", hint: "Quién le debe a quién y qué fondeó el grupo",
@@ -2460,6 +2463,14 @@ const LENTES = [
     // Trilogía de cierre: Balance/EEPN (afuera de Tesorería desde 19/9, pedido Martín) + devengado que ata contra el PN.
     tabs: ["balance_pn", "devengado", "an_gastos_cc", "er_soc"] },
 ];
+
+// Reportes que arman su propia barra de filtros (con su rango de fechas, que es más fino que el selector de
+// Año de la barra común). Si un reporte está acá y NO trae barra propia, se queda sin filtros; si falta acá,
+// le aparece un "Año" que su vista ignora — que es lo que pasaba con Pagos y cobros.
+const TABS_CON_BARRA_PROPIA = new Set([
+  "consolidado", "balance_pn", "cf", "cxp_prov", "cxc_cli",
+  "inf_egresos", "inf_ingresos", "inf_pagos", "devengado",
+]);
 
 // Íconos de un solo trazo (24×24, stroke = currentColor). Reemplazan a los emojis del menú: se ven igual en todas
 // las máquinas y van en flúo sobre el tile oscuro (marca). El emoji queda como fallback si una tab no declara `ico`.
@@ -2660,13 +2671,13 @@ export function MultiSelect({ label, options = null, groups = null, selected, on
 }
 
 // ─── Filtro de fecha con presets (como Contagram) → devuelve rango {desde,hasta} ISO ──
-const DATE_PRESETS = [
+export const DATE_PRESETS = [
   { id: "todos", label: "Todo" }, { id: "hoy", label: "Hoy" }, { id: "ayer", label: "Ayer" },
   { id: "semana", label: "Últimos 7 días" }, { id: "dias30", label: "Últimos 30 días" },
   { id: "mes", label: "Mes actual" }, { id: "mes_ant", label: "Mes anterior" },
   { id: "anio", label: "Año actual" }, { id: "rango", label: "Desde – Hasta" },
 ];
-function rangoDePreset(id, desde, hasta) {
+export function rangoDePreset(id, desde, hasta) {
   const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const t = new Date(); t.setHours(0, 0, 0, 0);
   const mk = (a, b) => ({ desde: a ? iso(a) : "", hasta: b ? iso(b) : "" });
@@ -4001,8 +4012,8 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
           padding: "8px 14px", fontSize: 12, color: "#3730a3", fontWeight: 600 }}>{fotoMsg}</div>
       )}
 
-      {/* ── Toolbar / Filters (Consolidado y los detalles traen su propia barra; los WIP no llevan) ── */}
-      {activeTab !== "consolidado" && activeTab !== "balance_pn" && activeTab !== "cf" && activeTab !== "cxp_prov" && activeTab !== "cxc_cli" && !curTab?.wip && activeTab !== "inf_egresos" && activeTab !== "inf_ingresos" && activeTab !== "devengado" && !((activeTab === "interco_matriz" || activeTab === "interco") && intercoDrilling) && (
+      {/* ── Toolbar / Filters — solo para los reportes que NO traen la suya ── */}
+      {!TABS_CON_BARRA_PROPIA.has(activeTab) && !curTab?.wip && !((activeTab === "interco_matriz" || activeTab === "interco") && intercoDrilling) && (
       <div style={{
         display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap", alignItems: "flex-end",
         background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
@@ -4336,6 +4347,12 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       )}
       {activeTab === "inf_ingresos" && (
         <TabDetalleComprobantes rows={ingDetalle} movs={rawMovs} tipo="INGRESO" ccs={ccs} sociedades={sociedades} />
+      )}
+      {/* Pagos y cobros: mira nb_movimientos (la caja), no el devengado. `comps` son las LÍNEAS de los
+          comprobantes, de donde sale la factura que cada movimiento cancela. */}
+      {activeTab === "inf_pagos" && (
+        <TabDetallePagosCobros movs={rawMovs} comps={[...rawEg, ...rawIn]}
+          cuentasBancarias={cuentasBancarias} sociedades={sociedades} />
       )}
 
       {/* ── Reportes en construcción (esqueleto navegable, sin cálculo todavía) ── */}
