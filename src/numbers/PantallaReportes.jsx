@@ -2822,13 +2822,24 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
         ?? porNombre.get(String(r.contraparte_nombre ?? "").trim().toLowerCase());
       const codEstudio = r => deMaestro(r)?.cod ?? "";
       const cuit       = r => deMaestro(r)?.cuit ?? "";
+      // Retención (IRPF) practicada sobre la factura: vive en nb_movimientos (origen "retencion_practicada",
+      // `documento_id` = id_comp), no en el comprobante. Hoy no hay ninguna cargada en España → la columna
+      // sale vacía y se llena sola a medida que se registren.
+      const irpfPorComp = {};
+      for (const m of movs) {
+        if (m.origen !== "retencion_practicada" || !m.documento_id) continue;
+        const k = String(m.documento_id);
+        irpfPorComp[k] = (irpfPorComp[k] || 0) + Math.abs(Number(m.monto) || 0);
+      }
+      const irpfMonto = r => irpfPorComp[String(r.id_comp ?? "")] ?? "";
+
       await exportarDetalleExcel({
         tipo, modo, rows: filt, totales: porMon, rango: { desde, hasta }, contraLabel,
         campo: {
           tipo: tipoDeFila,
           sociedad: r => socMap.get(String(r.sociedad)) || r.sociedad || "",
           centro:   r => ccMap.get(ccKey(r.centro_costo)) || r.centro_costo || "",
-          codEstudio, cuit,
+          codEstudio, cuit, irpfMonto,
         },
       });
     } catch (e) {
