@@ -1671,8 +1671,10 @@ export function buildPnLBiggFilas({ pnl, sub, pnlPrev, subPrev, year, vista = "e
       filas.push({ kind: "cuenta", toggleKey: "sec_sedes", label: "Sedes Propias Argentina", cur: sar, prev: P.sar, pol: 1 });
       if (!isCol("sec_sedes")) {
         const sumList = (list) => MESES.map((_, m) => (list || []).reduce((a, s) => a + (Number(s.arr?.[m]) || 0), 0));
-        // Reconciliación (cesión Barrio Norte 49% + ajuste IVA aranceles) → se pliega dentro de la fila de BN,
-        // que queda NETA de la cesión (se queda con el 51%). Así las sedes cierran EXACTO con el total del holding.
+        // Reconciliación contra el total del holding (`sar`) = la cesión de Barrio Norte 49% (sobre su resultado NETO
+        // de IVA) → se pliega en la fila de BN, que queda neta de la cesión. Σ filas anidadas = `sar` exacto.
+        // (Hasta el 25/9/2026 acá también entraba el IVA de aranceles MP "devuelto" a las sedes → la fila decía
+        // "(51%)" y no era 51% de nada. Esa regla del holding se sacó: ver holdingDe.)
         const recCur  = MESES.map((_, m) => (Number(sar[m]) || 0)    - sumList(sedesApertura.cur)[m]);
         const recPrev = MESES.map((_, m) => (Number(P.sar?.[m]) || 0) - sumList(sedesApertura.prev)[m]);
         for (const s of (sedesApertura.cur || [])) {
@@ -1682,7 +1684,7 @@ export function buildPnLBiggFilas({ pnl, sub, pnlPrev, subPrev, year, vista = "e
             curArr  = MESES.map((_, m) => (Number(s.arr?.[m]) || 0)   + recCur[m]);
             prevArr = MESES.map((_, m) => (Number(prevArr?.[m]) || 0) + recPrev[m]);
           }
-          filas.push({ kind: "cuenta", nested: true, label: s.isBN ? `${s.label} (51%)` : s.label, cur: curArr, prev: prevArr, pol: 1 });
+          filas.push({ kind: "cuenta", nested: true, label: s.isBN ? `${s.label} (neto de cesión 49%)` : s.label, cur: curArr, prev: prevArr, pol: 1 });
         }
       }
     } else {
@@ -3674,25 +3676,14 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     // DIVIDENDOS BN y no se infla en la vista Con IVA (antes cedía 0,49 × resultado bruto → sobrestimaba ~1,7M/mes).
     const sAR = computeSubtotalsSede(buildPnLSede(inR, egR, arNucleoCCs, yr, moneda, sinIvaArg));
     const sBNnet = bnCcId ? computeSubtotalsSede(buildPnLSede(inR, egR, [bnCcId], yr, moneda, true)) : null;
-    // IVA de aranceles de sedes AR (total − neto): el histórico no trae iva_monto, así que la sede computa aranceles
-    // BRUTO. Ese IVA es un costo que NO va a la sede (los socios se liquidan neto → sus saldos ya cierran): se
-    // DEVUELVE al resultado de sede (queda neto) y se reconoce como costo en HQ (abajo). No toca el dato de sede.
-    const arIVASedes = new Array(12).fill(0);
-    const sumaArIVA = (r) => {
-      if (!/aranceles/i.test(String(r.cuenta_contable || ""))) return;
-      if (!r.fecha || (r.fecha < PNL_INICIO && !r._historico) || r.fecha.slice(0, 4) !== String(yr)) return;
-      if ((r.moneda ?? "ARS") !== moneda) return;
-      if (!ccEnFiltro(arNucleoCCs, r.centro_costo)) return;
-      const m = parseInt(r.fecha.slice(5, 7), 10) - 1;
-      const t = Number(r.total) || 0, n = Number(r.neto);
-      // iva_monto no viene en el histórico y `neto` se pierde en el pipeline → derivo el IVA (21%) del total.
-      const iva = Number(r.iva_monto) || (Number.isFinite(n) && n ? t - n : t * 0.21 / 1.21);
-      if (m >= 0 && m < 12 && Number.isFinite(iva)) arIVASedes[m] += iva;
-    };
-    for (const r of inR) sumaArIVA(r);
-    for (const r of egR) sumaArIVA(r);
+    // Sedes Propias = la suma de los P&L de cada sede tal cual se ven, menos la cesión. Hasta el 25/9/2026 el
+    // holding además le DEVOLVÍA al resultado de sedes el IVA de los aranceles de Mercado Pago (`arIVASedes`,
+    // "crédito fiscal recuperable"). Sobraba: en la vista Con IVA los costos van brutos y la línea "IVA" de abajo es
+    // la DDJJ mensual, que ya viene neta de TODO el crédito fiscal (incluido el de las facturas de MP); ese era el
+    // único IVA de compra que no contaba como costo → Resultado del Grupo inflado ~1,07M ARS jul / 1,16M ago 2026
+    // (≈700/755 USD), y ~540-690 USD/mes en el histórico (donde se estimaba al 21% del bruto). Sacada con OK Martín.
     const resSedesAR = {
-      res:    sAR.resFinal.map((v, m) => v - CESION.pct * (Number(sBNnet?.resFinal?.[m]) || 0) + arIVASedes[m]),
+      res:    sAR.resFinal.map((v, m) => v - CESION.pct * (Number(sBNnet?.resFinal?.[m]) || 0)),
       ivaDeb: sAR.ivaDeb, ivaCred: sAR.ivaCred,
     };
     // Gerenciamiento (Rosedal) = fee Ñako→Segui (cuenta "Fee de Gestion y Adm" exacta, núcleo; venta → IVA débito).
@@ -3712,8 +3703,6 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     // HQ + fondeo de las fondeadas (anillo 2) dentro de Inversiones/Capex. En modo consolidado se traduce a USD
     // con fx (antes filtraba por moneda y descartaba el fondeo en ARS/EUR → subcontaba la línea Fondeo).
     const pnl = buildPnLBigg(inR, egR, ccMap, cuentaMap, nucleoEmpresas, yr, moneda, sinIvaArg);
-    // Nota: el IVA de aranceles de sedes (arIVASedes) YA se devolvió al resultado de sede arriba (queda neta). NO
-    // se reconoce como gasto en HQ: es crédito fiscal recuperable, no un costo del P&L → sale del resultado.
     const fondeo = fondeoFondeadasMensual(intercoData, { year: yr, moneda, desde: PNL_INICIO, fx });
     const nomSoc = new Map((intercoData?.sociedades || []).map(s => [String(s.id), s.nombre || s.id]));
     for (const [fid, arr] of Object.entries(fondeo)) {
@@ -3726,7 +3715,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     }
     return { pnl, sub: computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }),
       // DEV-ONLY (check "P&L BIGG vs Devengado" en consola): piezas del holding para descomponer la diferencia.
-      _dbg: import.meta.env.DEV ? { sAR, sBNnet, arIVASedes, feeGer, resWRE, arNucleoCCs, bnCcId } : undefined };
+      _dbg: import.meta.env.DEV ? { sAR, sBNnet, feeGer, resWRE, arNucleoCCs, bnCcId } : undefined };
   };
   const biggCur  = useMemo(() => (isBigg || isVentasHQ) ? holdingDe(year)     : null,   // eslint-disable-line react-hooks/exhaustive-deps
     [isBigg, isVentasHQ, inBigg, egBigg, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva, intercoData, fxConv]);
