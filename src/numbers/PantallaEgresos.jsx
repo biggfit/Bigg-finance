@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import { T, ESTADO_EGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn, MoneyField } from "./theme";
 import ConfirmModal from "./ConfirmModal";
-import { TIPO_CUENTA } from "../data/tesoreriaData";
+import { TIPO_CUENTA, paisDeSociedad } from "../data/tesoreriaData";
 import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcSaldoNeto, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, updateMovTesoreria, borrarPagoImputado, shortId, appendProveedor, appendCuenta, aplicarRetencionPracticada, RETDEP_TAG } from "../lib/numbersApi";
 
 // Una factura admite UNA sola retención practicada: se detecta por sus líneas de neteo
@@ -25,13 +25,37 @@ function CCDisplay({ lineas, resolveCC }) {
 // AgregarPagoModal se movió a ./pagos/AgregarPagoModal (reusado también por el reporte CxP por proveedor).
 
 // ─── Modal: Aplicar Retención (practicada) ────────────────────────────────────
-// Sobre una factura de compra YA cargada: retenemos impuestos (Ganancias/IVA/IIBB) y los depositamos
-// a AFIP por VEP. Baja el saldo al proveedor y crea el "por pagar a AFIP" con el vencimiento del VEP.
-function RegistrarRetencionPracticadaModal({ egreso, saldoPendiente, cuentas = [], proveedores = [], onClose, onSave }) {
+// Sobre una factura de compra YA cargada: le retenemos un impuesto al proveedor y se lo depositamos al
+// fisco. Baja el saldo al proveedor y crea el "por pagar" al organismo. Dos circuitos según el país de la
+// sociedad, misma mecánica (ver aplicarRetencionPracticada):
+//   · AR — Ganancias/IVA/IIBB, se depositan por VEP: el N° de VEP es obligatorio y va al comprobante.
+//   · ES — IRPF a profesionales: NO hay VEP (se declara con el modelo 111 trimestral), así que ese campo
+//     desaparece y el vencimiento se precarga con el del modelo del trimestre de la factura.
+function RegistrarRetencionPracticadaModal({ egreso, sociedad, saldoPendiente, cuentas = [], proveedores = [], onClose, onSave }) {
   const cuentasOrd = useMemo(() => [...cuentas].sort((a, b) => String(a.nombre ?? "").localeCompare(String(b.nombre ?? ""))), [cuentas]);
   const cuentaMap  = useMemo(() => new Map(cuentas.map(c => [String(c.id), c])), [cuentas]);
-  // Proveedor AFIP: se detecta por nombre; si no existe uno, el usuario lo elige del maestro.
-  const afipDetectado = useMemo(() => proveedores.find(p => /afip|arca|a\.?f\.?i\.?p/i.test(p.nombre ?? "")) || null, [proveedores]);
+  const esES = paisDeSociedad(sociedad) === "ES";
+  // Organismo: se detecta por nombre según el país; si no aparece, el usuario lo elige del maestro.
+  const reOrganismo = esES ? /hacienda|aeat/i : /afip|arca|a\.?f\.?i\.?p/i;
+  const afipDetectado = useMemo(() => proveedores.find(p => reOrganismo.test(p.nombre ?? "")) || null, [proveedores, esES]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Base imponible de la factura: el IRPF se calcula sobre ella, NO sobre el total con IVA. Si las líneas
+  // no traen subtotal (caso raro), se cae al importe para no dejar el % sin base.
+  const baseImponible = useMemo(() => {
+    const sub = (egreso.lineas ?? []).reduce((a, l) => a + (Number(l.subtotal) || 0), 0);
+    return sub > 0 ? sub : (Number(egreso.importe) || 0);
+  }, [egreso]);
+  // La retención pertenece al MISMO período que la factura, y el que manda es el fiscal: es el que rige la
+  // declaración (el modelo 111 se liquida por trimestre fiscal, no por fecha de emisión ni por el día en que
+  // uno carga el asiento). De acá salen las dos fechas del modal.
+  const fechaFiscalFC = egreso.fechaFiscal || egreso.fecha || "";
+  // Vencimiento del modelo 111 de ese trimestre: el 20 del mes siguiente al cierre.
+  const vtoModelo111 = useMemo(() => {
+    const f = new Date(`${fechaFiscalFC || new Date().toISOString().slice(0, 10)}T00:00:00`);
+    if (Number.isNaN(f.getTime())) return "";
+    const finTrim = Math.floor(f.getMonth() / 3) * 3 + 3;          // 3, 6, 9 o 12 (0-based → mes siguiente)
+    const y = f.getFullYear() + (finTrim > 11 ? 1 : 0);
+    return `${y}-${String((finTrim % 12) + 1).padStart(2, "0")}-20`;
+  }, [fechaFiscalFC]);
   // Centro del por-pagar AFIP = el de la factura (trazabilidad: la deuda nació de esa operación).
   // Es cosmético para el P&L: el pasivo AFIP se excluye por su tag [RETDEP], no afecta el resultado.
   const centroFactura = egreso.lineas?.find(l => l.cc)?.cc || egreso.cc || "";
@@ -39,8 +63,13 @@ function RegistrarRetencionPracticadaModal({ egreso, saldoPendiente, cuentas = [
   const [fecha, setFecha]     = useState(new Date().toISOString().slice(0, 10));
   const [vep, setVep]         = useState("");
   const [vto, setVto]         = useState("");
+  // En España el vencimiento es el del modelo 111 y no lo tiene que tipear nadie; sigue editable.
+  useEffect(() => { if (esES && !vto && vtoModelo111) setVto(vtoModelo111); }, [esES, vto, vtoModelo111]);
+  // Idem la fecha del asiento: en AR se retiene y se paga el VEP el mismo día, así que "hoy" es lo correcto;
+  // en ES la retención es del período de la factura, aunque se cargue meses después.
+  useEffect(() => { if (esES && fechaFiscalFC) setFecha(fechaFiscalFC); }, [esES, fechaFiscalFC]);
   const [afipId, setAfipId]   = useState("");
-  const [lineas, setLineas]   = useState([{ cuenta: "", monto: "" }]);
+  const [lineas, setLineas]   = useState([{ cuenta: "", monto: "", pct: "" }]);
   const afipProvId = afipId || afipDetectado?.id || "";
   const afipProv   = proveedores.find(p => String(p.id) === String(afipProvId));
 
@@ -48,8 +77,14 @@ function RegistrarRetencionPracticadaModal({ egreso, saldoPendiente, cuentas = [
   const total  = lineas.reduce((s, l) => s + (Number(l.monto) || 0), 0);
   const excede = total > saldo + 0.01;
   const alProveedor = Math.max(0, saldo - total);
-  const canSave = fecha && vto && vep.trim() && afipProvId && lineas.some(l => l.cuenta && Number(l.monto) > 0) && !excede;
+  const canSave = fecha && vto && (esES || vep.trim()) && afipProvId && lineas.some(l => l.cuenta && Number(l.monto) > 0) && !excede;
   const upd = (i, k, v) => setLineas(ls => ls.map((l, idx) => idx === i ? { ...l, [k]: v } : l));
+  // Tipear el % completa el importe sobre la base imponible (y al revés, tipear el importe borra el %:
+  // pasa a ser un monto a mano y mostrar un porcentaje que no lo generó sería mentir).
+  const updPct = (i, v) => setLineas(ls => ls.map((l, idx) => idx !== i ? l : {
+    ...l, pct: v, monto: (v !== "" && Number(v) > 0 && baseImponible > 0)
+      ? String(Math.round(baseImponible * (Number(v) / 100) * 100) / 100) : l.monto,
+  }));
 
   const inp = { width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`, borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text, fontFamily:T.font, outline:"none", boxSizing:"border-box" };
   const lbl = { fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:5 };
@@ -77,16 +112,21 @@ function RegistrarRetencionPracticadaModal({ egreso, saldoPendiente, cuentas = [
               {lineas.map((l, i) => (
                 <div key={i} style={{ display:"flex", gap:8, alignItems:"center" }}>
                   <select value={l.cuenta} onChange={e => upd(i, "cuenta", e.target.value)} style={{ ...inp, flex:1 }}>
-                    <option value="">— cuenta (Ganancias, IVA, IIBB…) —</option>
+                    <option value="">— cuenta ({esES ? "IRPF" : "Ganancias, IVA, IIBB"}…) —</option>
                     {cuentasOrd.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                   </select>
+                  {esES && (
+                    <input value={l.pct} onChange={e => updPct(i, e.target.value)} placeholder="%" inputMode="decimal"
+                      title={`% sobre la base imponible (${fmtMoney(baseImponible, egreso.moneda)})`}
+                      style={{ ...inp, width:62, textAlign:"right" }} />
+                  )}
                   <MoneyField value={l.monto} onChange={e => upd(i, "monto", e.target.value)} placeholder="monto"
                     style={{ ...inp, width:120, textAlign:"right" }} />
                   {lineas.length > 1 && <button onClick={() => setLineas(ls => ls.filter((_, idx) => idx !== i))} title="Quitar"
                     style={{ border:"none", background:"transparent", color:T.muted, cursor:"pointer", fontSize:14 }}>✕</button>}
                 </div>
               ))}
-              <button onClick={() => setLineas(ls => [...ls, { cuenta:"", monto:"" }])}
+              <button onClick={() => setLineas(ls => [...ls, { cuenta:"", monto:"", pct:"" }])}
                 style={{ alignSelf:"flex-start", fontSize:12, border:"none", background:"transparent", color:"#7c3aed", cursor:"pointer", fontWeight:700 }}>+ otra retención</button>
             </div>
             <div style={{ fontSize:11, marginTop:6, fontWeight:700, color: excede ? "#dc2626" : T.muted }}>
@@ -94,14 +134,16 @@ function RegistrarRetencionPracticadaModal({ egreso, saldoPendiente, cuentas = [
             </div>
           </div>
 
-          {/* VEP: número + vencimiento + fecha */}
-          <div style={{ display:"grid", gridTemplateColumns:"1.3fr 1fr 1fr", gap:12 }}>
+          {/* Depósito al fisco: VEP (solo AR) + vencimiento + fecha */}
+          <div style={{ display:"grid", gridTemplateColumns: esES ? "1fr 1fr" : "1.3fr 1fr 1fr", gap:12 }}>
+            {!esES && (
+              <div>
+                <label style={lbl}>N° VEP <span style={{ color:T.red }}>*</span></label>
+                <input value={vep} onChange={e => setVep(e.target.value)} placeholder="1661738826" style={inp} />
+              </div>
+            )}
             <div>
-              <label style={lbl}>N° VEP <span style={{ color:T.red }}>*</span></label>
-              <input value={vep} onChange={e => setVep(e.target.value)} placeholder="1661738826" style={inp} />
-            </div>
-            <div>
-              <label style={lbl}>Vto. VEP <span style={{ color:T.red }}>*</span></label>
+              <label style={lbl}>{esES ? "Vto. modelo 111" : "Vto. VEP"} <span style={{ color:T.red }}>*</span></label>
               <input type="date" value={vto} onChange={e => setVto(e.target.value)} style={inp} />
             </div>
             <div>
@@ -112,14 +154,14 @@ function RegistrarRetencionPracticadaModal({ egreso, saldoPendiente, cuentas = [
 
           {/* Proveedor AFIP (destino del VEP) */}
           <div>
-            <label style={lbl}>Organismo (destino del VEP) <span style={{ color:T.red }}>*</span></label>
+            <label style={lbl}>{esES ? "Organismo (modelo 111)" : "Organismo (destino del VEP)"} <span style={{ color:T.red }}>*</span></label>
             <select value={afipProvId} onChange={e => setAfipId(e.target.value)} style={inp}>
-              <option value="">— elegí el proveedor AFIP/ARCA —</option>
+              <option value="">{esES ? "— elegí Hacienda —" : "— elegí el proveedor AFIP/ARCA —"}</option>
               {[...proveedores].sort((a, b) => String(a.nombre ?? "").localeCompare(String(b.nombre ?? ""))).map(p => (
                 <option key={p.id} value={p.id}>{p.nombre}</option>
               ))}
             </select>
-            {!afipProvId && <div style={{ fontSize:11, color:"#dc2626", marginTop:4 }}>No hay un proveedor AFIP/ARCA cargado — creá uno en Maestros o elegí el que corresponda.</div>}
+            {!afipProvId && <div style={{ fontSize:11, color:"#dc2626", marginTop:4 }}>No hay un proveedor {esES ? "Hacienda" : "AFIP/ARCA"} cargado — creá uno en Maestros o elegí el que corresponda.</div>}
           </div>
 
           {/* Resumen del reparto */}
@@ -128,7 +170,7 @@ function RegistrarRetencionPracticadaModal({ egreso, saldoPendiente, cuentas = [
               <span>Queda a pagar al proveedor:</span><b>{fmtMoney(alProveedor, egreso.moneda)}</b>
             </div>
             <div style={{ display:"flex", justifyContent:"space-between", color:"#6d28d9" }}>
-              <span>A depositar a AFIP (VEP):</span><b>{fmtMoney(total, egreso.moneda)}</b>
+              <span>{esES ? "A depositar a Hacienda (modelo 111):" : "A depositar a AFIP (VEP):"}</span><b>{fmtMoney(total, egreso.moneda)}</b>
             </div>
           </div>
 
@@ -138,8 +180,11 @@ function RegistrarRetencionPracticadaModal({ egreso, saldoPendiente, cuentas = [
                 factura_id: egreso.id, factura_nro: egreso.nroComp || "", fecha, moneda: egreso.moneda,
                 proveedor_id: egreso.proveedorId || "", proveedor_nombre: egreso.proveedor || "",
                 retenciones: lineas.filter(l => l.cuenta && Number(l.monto) > 0)
-                  .map(l => ({ cuenta: l.cuenta, cuentaNombre: cuentaMap.get(String(l.cuenta))?.nombre || "", monto: Number(l.monto) })),
-                afip: { proveedorId: afipProvId, proveedor: afipProv?.nombre || "AFIP", vep: vep.trim(), vto, centro: centroFactura },
+                  .map(l => ({ cuenta: l.cuenta, cuentaNombre: cuentaMap.get(String(l.cuenta))?.nombre || "",
+                    monto: Number(l.monto), pct: Number(l.pct) > 0 ? Number(l.pct) : undefined })),
+                afip: { proveedorId: afipProvId, proveedor: afipProv?.nombre || (esES ? "Hacienda" : "AFIP"),
+                  vep: esES ? "" : vep.trim(), vto, centro: centroFactura,
+                  ...(esES ? { ref: "Modelo 111" } : {}) },
               }); }}
               style={{ background: canSave ? "#7c3aed" : "#9ca3af", border:"none", borderRadius:8, padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff", cursor: canSave ? "pointer" : "default", fontFamily:T.font }}>Guardar ✓</button>
           </div>
@@ -1067,7 +1112,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
           onIrACaja={onIrACaja}
         />
         {showPago    && <AgregarPagoModal egreso={showPago} saldoPendiente={showPago.saldoPendiente ?? showPago.importe} cuentas={cuentasSoc} onClose={() => setShowPago(null)} onSave={handlePago} />}
-        {showRetencion && <RegistrarRetencionPracticadaModal egreso={showRetencion} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentas={cuentas} proveedores={proveedores} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
+        {showRetencion && <RegistrarRetencionPracticadaModal egreso={showRetencion} sociedad={sociedad} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentas={cuentas} proveedores={proveedores} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
         {editingPago && <EditarPagoModal  pago={editingPago} sociedad={sociedad} cuentasSoc={cuentasSoc} onClose={() => setEditingPago(null)} onSaved={() => { setEditingPago(null); cargarEgresos(); }} />}
         <ConfirmModal open={!!confirmDelDoc} title="¿Eliminar este egreso?" message={confirmDelDoc?.msg}
           confirmLabel="Sí, eliminar" busy={borrando} onConfirm={doEliminar} onCancel={() => setConfirmDelDoc(null)} />
@@ -1239,7 +1284,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
       {/* Modales */}
       {showEditar  && <NuevoEgresoModal  sociedad={sociedad} proveedores={proveedores} cuentas={cuentas} centrosCosto={centrosCosto} initialData={showEditar} onClose={() => setShowEditar(null)} onSave={handleSave} onCrearProveedor={crearProveedor} onCrearCuenta={crearCuenta} />}
       {showPago    && <AgregarPagoModal  egreso={showPago} saldoPendiente={showPago.saldoPendiente ?? showPago.importe} cuentas={cuentasSoc} onClose={() => setShowPago(null)} onSave={handlePago} />}
-      {showRetencion && <RegistrarRetencionPracticadaModal egreso={showRetencion} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentas={cuentas} proveedores={proveedores} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
+      {showRetencion && <RegistrarRetencionPracticadaModal egreso={showRetencion} sociedad={sociedad} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentas={cuentas} proveedores={proveedores} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
       {editingPago && <EditarPagoModal   pago={editingPago} sociedad={sociedad} cuentasSoc={cuentasSoc} onClose={() => setEditingPago(null)} onSaved={() => { setEditingPago(null); cargarEgresos(); }} />}
       {showCtaCte  && <CtaCteModal       proveedor={showCtaCte.proveedor} documentos={showCtaCte.docs} onClose={() => setShowCtaCte(null)} />}
       {showMigrar  && <MigrarSociedadModal egreso={showMigrar} sociedades={sociedades} actual={sociedad} onClose={() => setShowMigrar(null)} onConfirm={handleMigrar} />}

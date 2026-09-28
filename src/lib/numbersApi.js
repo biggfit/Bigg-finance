@@ -2091,18 +2091,34 @@ export async function appendRetenciones({ sociedad, documento_id, fecha, moneda 
 
 // ── Retenciones PRACTICADAS sobre una factura de COMPRA (somos agentes de retención) ──
 // El caso inverso a la retención sufrida: cuando le pagamos a un proveedor le retenemos un impuesto
-// (Ganancias/IVA/IIBB) y se lo depositamos a AFIP por VEP. Contablemente NO es un gasto nuestro — el
-// gasto ya devengó completo en la factura de compra; la retención sólo RECLASIFICA el pasivo: baja lo
-// que le debemos al proveedor y crea un "por pagar" a AFIP. Por eso NINGUNA de las dos patas toca el
-// P&L ni la caja (no hay banco). Consolidado POR VEP: N retenciones de una acción → un comprobante AFIP.
+// y se lo depositamos al fisco. Dos circuitos, misma mecánica:
+//   · ARGENTINA — Ganancias/IVA/IIBB, se deposita por VEP en el mismo acto: `afip.vep` va al nro_comp.
+//   · ESPAÑA — IRPF a profesionales; NO hay VEP: lo retenido se declara y paga con el modelo 111
+//     trimestral, así que el comprobante queda sin nro_comp y se pasa `afip.ref = "Modelo 111"`.
+// El acreedor lo elige el llamador (AFIP / Hacienda España): la función no sabe de países.
+//
+// Contablemente NO es un gasto nuestro: el gasto ya devengó completo en la factura de compra, y la
+// retención sólo RECLASIFICA el pasivo — baja lo que le debemos al proveedor y crea un "por pagar" al
+// fisco. Por eso NINGUNA de las dos patas toca el P&L ni la caja (no hay banco). Un comprobante por
+// acción: N retenciones sobre una misma factura → un solo comprobante al fisco.
 //   · Pata proveedor: N filas nb_movimientos tipo=PAGO, SIN cuenta_bancaria (no es caja),
 //     documento_id = la factura → bajan su saldo (calcSaldoPendiente cuenta todo PAGO). origen=
 //     "retencion_practicada" (NO "retencion"): así movimientoToPnLRows las SALTEA y no las cuenta como costo.
-//   · Pata AFIP: UN comprobante EGRESO (nb_comprobantes) a nombre de AFIP, nro_comp=VEP, vto=venc. del VEP,
-//     tag RETDEP_TAG en la nota → aparece en "A Pagar"/CxP y se cancela al pagar el VEP; el P&L lo excluye por el tag.
-// Orden: primero el "por pagar" AFIP, después el neteo del proveedor. Si el 2º POST falla, el pasivo
-// queda SOBREvaluado (proveedor entero + AFIP) y VISIBLE — nunca subvaluado (plata que se esfuma).
-// retenciones: [{ cuenta, cuentaNombre, monto }]   afip: { proveedorId, proveedor, vep, vto, centro }
+//   · Pata fisco: UN comprobante EGRESO (nb_comprobantes) a nombre del organismo, nro_comp=VEP (vacío en
+//     España, que no tiene) y vto = el del VEP o el del modelo 111,
+//     tag RETDEP_TAG en la nota → aparece en "A Pagar"/CxP y se cancela al pagar (VEP o modelo 111).
+//     OJO — que el P&L lo EXCLUYA por el tag no es cosmético: es lo que hace cerrar el balance. Esta pata
+//     crea pasivo SIN gasto (el gasto ya devengó entero en la factura de compra), así que el pasivo que se
+//     le saca al proveedor reaparece acá y `Activo − Pasivo = PN` sigue valiendo. Si alguien "simplifica"
+//     esto borrando la pata acreedora, el pasivo baja sin contrapartida y el PN queda corto por lo retenido.
+// Orden: primero el "por pagar" al fisco, después el neteo del proveedor. Si el 2º POST falla, el pasivo
+// queda SOBREvaluado (proveedor entero + fisco) y VISIBLE — nunca subvaluado (plata que se esfuma).
+// Son DOS escrituras (dos hojas ⇒ dos requests: el GAS recibe una hoja por request) y no hay transacción;
+// es la única operación del sistema así. Ver el tema de atomicidad anotado para la migración a base real.
+// retenciones: [{ cuenta, cuentaNombre, monto, pct? }] — pct es solo para la etiqueta ("Ret. IRPF 15% s/ FC-1");
+//   no se guarda en columna propia: el importe es el dato y el % es contexto.
+// afip: { proveedorId, proveedor, vep, vto, centro, ref? } — ref = cómo se deposita ("Modelo 111"); si no
+//   viene se deriva del VEP, así el circuito argentino escribe exactamente lo mismo que antes.
 export const RETDEP_TAG = "[RETDEP]";
 export async function aplicarRetencionPracticada({
   sociedad, factura_id, factura_nro = "", fecha, moneda = "ARS",
@@ -2114,7 +2130,9 @@ export async function aplicarRetencionPracticada({
   const created_at = new Date().toISOString();
   const vep = afip.vep || "";
   const refFC = factura_nro || factura_id;
-  const lbl = (r) => `Ret. ${r.cuentaNombre || ""} s/ ${refFC}`.replace(/\s+/g, " ").trim();
+  // Cómo se deposita lo retenido. AR no pasa `ref` → se deriva del VEP y el texto queda igual al de antes.
+  const refDeposito = afip.ref || (vep ? `VEP ${vep}` : "");
+  const lbl = (r) => `Ret. ${r.cuentaNombre || ""}${r.pct ? ` ${r.pct}%` : ""} s/ ${refFC}`.replace(/\s+/g, " ").trim();
 
   // 1) Pata AFIP — comprobante EGRESO consolidado por VEP (una línea por retención).
   const id_comp = newId("EG");
@@ -2131,7 +2149,7 @@ export async function aplicarRetencionPracticada({
       moneda, centro_costo: afip.centro || "",
       subtotal: monto, iva_rate: 0, iva_monto: 0, total: monto,
       nro_comp: vep,
-      nota: `${RETDEP_TAG} ${lbl(r)}${vep ? ` · VEP ${vep}` : ""}`.trim(),
+      nota: `${RETDEP_TAG} ${lbl(r)}${refDeposito ? ` · ${refDeposito}` : ""}`.trim(),
       created_at,
     };
   });
@@ -2147,7 +2165,7 @@ export async function aplicarRetencionPracticada({
     concepto: lbl(r),
     contraparte_id: proveedor_id, contraparte_nombre: proveedor_nombre || "",
     origen: "retencion_practicada",
-    nota: `${RETDEP_TAG}${vep ? ` VEP ${vep}` : ""}`.trim(),
+    nota: `${RETDEP_TAG}${refDeposito ? ` ${refDeposito}` : ""}`.trim(),
     created_at,
   }));
   await post({ action: "add_batch", sheet: "nb_movimientos", rows: netRows });
