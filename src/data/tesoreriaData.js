@@ -108,6 +108,52 @@ export const ivaOptsDeSociedad = (id) =>
   [...ivaListaDeSociedad(id)].sort((a, b) => a - b).map(v => ({ value: v, label: `${v}%` }));
 export const ivaDefaultDeSociedad = (id) => ivaListaDeSociedad(id)[0];
 
+// Régimen de retenciones PRACTICADAS por país (somos agentes de retención). Mismo criterio que
+// IVA_POR_PAIS: lo que cambia entre países es DATO, no ramas en la pantalla. El modal de Egresos lee de
+// acá y no sabe qué es un VEP ni qué es el modelo 111.
+//
+// Lo que varía de verdad entre circuitos es CUÁNDO se deposita lo retenido:
+//   · AR — se deposita por VEP en el mismo acto, así que el VEP identifica la deuda (va al nro_comp),
+//     es obligatorio, y la fecha del asiento es la de hoy.
+//   · ES — el IRPF se declara y paga con el modelo 111 TRIMESTRAL, así que no hay número por operación:
+//     el comprobante va sin nro_comp, y el asiento pertenece al período FISCAL de la factura aunque se
+//     cargue meses después.
+// CO y US todavía no tienen régimen propio: caen en el argentino, que es lo que hacían antes de que esto
+// existiera. Cuando Tigre Loco empiece a retener (RteFte/RteICA), es agregar su fila acá —no tocar el modal.
+// OJO con el vencimiento: se calcula por slice del ISO, sin construir Date, igual que balanceUtils, para
+// que el huso horario no corra el día.
+const RETENCION_POR_PAIS = {
+  AR: {
+    organismoRe: /afip|arca|a\.?f\.?i\.?p/i, organismoNombre: "AFIP",
+    nroLabel: "N° VEP", nroPlaceholder: "1661738826", nroRequerido: true,
+    vtoLabel: "Vto. VEP", vtoSugerido: () => "",
+    organismoLabel: "Organismo (destino del VEP)", organismoPlaceholder: "— elegí el proveedor AFIP/ARCA —",
+    depositoLabel: "A depositar a AFIP (VEP):",
+    cuentasHint: "Ganancias, IVA, IIBB", pidePct: false,
+    fechaAsiento: "hoy",
+    ref: (nro) => (nro ? `VEP ${nro}` : ""),
+  },
+  ES: {
+    organismoRe: /hacienda|aeat/i, organismoNombre: "Hacienda",
+    nroLabel: "", nroPlaceholder: "", nroRequerido: false,
+    vtoLabel: "Vto. modelo 111",
+    // El 20 del mes siguiente al cierre del trimestre de la fecha fiscal.
+    vtoSugerido: (iso) => {
+      if (!/^\d{4}-\d{2}-\d{2}/.test(String(iso || ""))) return "";
+      const y = +iso.slice(0, 4), m = +iso.slice(5, 7);          // m: 1-12
+      const finTrim = Math.ceil(m / 3) * 3;                      // 3, 6, 9 o 12
+      const mesVto = finTrim === 12 ? 1 : finTrim + 1;
+      return `${finTrim === 12 ? y + 1 : y}-${String(mesVto).padStart(2, "0")}-20`;
+    },
+    organismoLabel: "Organismo (modelo 111)", organismoPlaceholder: "— elegí Hacienda —",
+    depositoLabel: "A depositar a Hacienda (modelo 111):",
+    cuentasHint: "IRPF", pidePct: true,
+    fechaAsiento: "fiscal",
+    ref: () => "Modelo 111",
+  },
+};
+export const regimenRetencionDeSociedad = (id) => RETENCION_POR_PAIS[paisDeSociedad(id)] ?? RETENCION_POR_PAIS.AR;
+
 export const MONEDA_OPTS = [
   { value: "ARS", label: "$ ARS", labelLargo: "ARS — Pesos" },
   { value: "USD", label: "U$D",   labelLargo: "USD — Dólares" },

@@ -1,15 +1,15 @@
 import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import { T, ESTADO_EGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn, MoneyField } from "./theme";
 import ConfirmModal from "./ConfirmModal";
-import { TIPO_CUENTA, paisDeSociedad } from "../data/tesoreriaData";
-import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcSaldoNeto, calcEstadoEgreso, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, updateMovTesoreria, borrarPagoImputado, shortId, appendProveedor, appendCuenta, aplicarRetencionPracticada, RETDEP_TAG } from "../lib/numbersApi";
+import { TIPO_CUENTA, regimenRetencionDeSociedad } from "../data/tesoreriaData";
+import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcSaldoNeto, calcEstadoEgreso, round2, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, updateMovTesoreria, borrarPagoImputado, shortId, appendProveedor, appendCuenta, aplicarRetencionPracticada, RETDEP_TAG } from "../lib/numbersApi";
 
 // Una factura admite UNA sola retención practicada: se detecta por sus líneas de neteo
 // (tipo=PAGO origen="retencion_practicada" / tag RETDEP) ya vinculadas al comprobante.
 const tieneRetPracticada = (e) => (e?.pagosVinculados ?? []).some(
   p => p.origen === "retencion_practicada" || String(p.nota || "").includes(RETDEP_TAG));
-import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
-import { makeResolveCC, makeResolveCB, inputStyle, CCSelectOptions, makeCrearMaestro, stripForDuplicate } from "./formUtils";
+import { CENTROS_COSTO as CENTROS_COSTO_STATIC, todayISO } from "../data/numbersData";
+import { makeResolveCC, makeResolveCB, inputStyle, CCSelectOptions, makeCrearMaestro, stripForDuplicate, calcLineasTotals } from "./formUtils";
 import NuevoEgresoModal from "./NuevoEgresoModal";
 import FiltroFecha, { useFiltroFecha } from "./FiltroFecha";
 import AgregarPagoModal from "./pagos/AgregarPagoModal";
@@ -26,64 +26,55 @@ function CCDisplay({ lineas, resolveCC }) {
 
 // ─── Modal: Aplicar Retención (practicada) ────────────────────────────────────
 // Sobre una factura de compra YA cargada: le retenemos un impuesto al proveedor y se lo depositamos al
-// fisco. Baja el saldo al proveedor y crea el "por pagar" al organismo. Dos circuitos según el país de la
-// sociedad, misma mecánica (ver aplicarRetencionPracticada):
-//   · AR — Ganancias/IVA/IIBB, se depositan por VEP: el N° de VEP es obligatorio y va al comprobante.
-//   · ES — IRPF a profesionales: NO hay VEP (se declara con el modelo 111 trimestral), así que ese campo
-//     desaparece y el vencimiento se precarga con el del modelo del trimestre de la factura.
+// fisco. Baja el saldo al proveedor y crea el "por pagar" al organismo (ver aplicarRetencionPracticada).
+// Lo que cambia entre países —si hay número de depósito, cómo se llama, cuándo vence, qué organismo—
+// es DATO: sale de RETENCION_POR_PAIS en tesoreriaData. Acá no se nombra ni el VEP ni el modelo 111.
 function RegistrarRetencionPracticadaModal({ egreso, sociedad, saldoPendiente, cuentas = [], proveedores = [], onClose, onSave }) {
   const cuentasOrd = useMemo(() => [...cuentas].sort((a, b) => String(a.nombre ?? "").localeCompare(String(b.nombre ?? ""))), [cuentas]);
   const cuentaMap  = useMemo(() => new Map(cuentas.map(c => [String(c.id), c])), [cuentas]);
-  const esES = paisDeSociedad(sociedad) === "ES";
-  // Organismo: se detecta por nombre según el país; si no aparece, el usuario lo elige del maestro.
-  const reOrganismo = esES ? /hacienda|aeat/i : /afip|arca|a\.?f\.?i\.?p/i;
-  const afipDetectado = useMemo(() => proveedores.find(p => reOrganismo.test(p.nombre ?? "")) || null, [proveedores, esES]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Base imponible de la factura: el IRPF se calcula sobre ella, NO sobre el total con IVA. Si las líneas
-  // no traen subtotal (caso raro), se cae al importe para no dejar el % sin base.
-  const baseImponible = useMemo(() => {
-    const sub = (egreso.lineas ?? []).reduce((a, l) => a + (Number(l.subtotal) || 0), 0);
-    return sub > 0 ? sub : (Number(egreso.importe) || 0);
-  }, [egreso]);
+  // El select de organismo lista TODOS los proveedores (~220): memoizado como cuentasOrd, si no se reordena
+  // en cada tecla del modal.
+  const proveedoresOrd = useMemo(() => [...proveedores].sort((a, b) => String(a.nombre ?? "").localeCompare(String(b.nombre ?? ""))), [proveedores]);
+  const reg = regimenRetencionDeSociedad(sociedad);
+  // Organismo: se detecta por nombre según el régimen; si no aparece, el usuario lo elige del maestro.
+  const organismoDetectado = useMemo(() => proveedores.find(p => reg.organismoRe.test(p.nombre ?? "")) || null, [proveedores, reg]);
+  // Base imponible de la factura: la retención se calcula sobre ella, NO sobre el total con IVA. Se usa el
+  // mismo helper que el alta de facturas, que redondea POR LÍNEA — si no, este neto y el del detalle pueden
+  // diferir en el último centavo sobre las mismas líneas. Sin subtotales (caso raro) cae al importe.
+  const baseImponible = useMemo(
+    () => calcLineasTotals(egreso.lineas ?? []).totalSub || Number(egreso.importe) || 0, [egreso]);
   // La retención pertenece al MISMO período que la factura, y el que manda es el fiscal: es el que rige la
-  // declaración (el modelo 111 se liquida por trimestre fiscal, no por fecha de emisión ni por el día en que
-  // uno carga el asiento). De acá salen las dos fechas del modal.
+  // declaración (se liquida por trimestre fiscal, no por fecha de emisión ni por el día en que uno carga el
+  // asiento). De acá salen las dos fechas del modal.
   const fechaFiscalFC = egreso.fechaFiscal || egreso.fecha || "";
-  // Vencimiento del modelo 111 de ese trimestre: el 20 del mes siguiente al cierre.
-  const vtoModelo111 = useMemo(() => {
-    const f = new Date(`${fechaFiscalFC || new Date().toISOString().slice(0, 10)}T00:00:00`);
-    if (Number.isNaN(f.getTime())) return "";
-    const finTrim = Math.floor(f.getMonth() / 3) * 3 + 3;          // 3, 6, 9 o 12 (0-based → mes siguiente)
-    const y = f.getFullYear() + (finTrim > 11 ? 1 : 0);
-    return `${y}-${String((finTrim % 12) + 1).padStart(2, "0")}-20`;
-  }, [fechaFiscalFC]);
-  // Centro del por-pagar AFIP = el de la factura (trazabilidad: la deuda nació de esa operación).
-  // Es cosmético para el P&L: el pasivo AFIP se excluye por su tag [RETDEP], no afecta el resultado.
+  // Centro del por-pagar al fisco = el de la factura (trazabilidad: la deuda nació de esa operación).
+  // Es cosmético para el P&L: ese pasivo se excluye por su tag [RETDEP], no afecta el resultado.
   const centroFactura = egreso.lineas?.find(l => l.cc)?.cc || egreso.cc || "";
 
-  const [fecha, setFecha]     = useState(new Date().toISOString().slice(0, 10));
+  // Estado inicial, no efectos: el modal se monta de cero en cada apertura, así que el valor ya se conoce
+  // en el primer render. Con useEffect el campo pintaba "hoy" y saltaba a la fecha fiscal después del paint,
+  // y el vencimiento se rellenaba solo apenas el usuario intentaba vaciarlo.
+  const [fecha, setFecha]     = useState(() => (reg.fechaAsiento === "fiscal" && fechaFiscalFC) || todayISO());
   const [vep, setVep]         = useState("");
-  const [vto, setVto]         = useState("");
-  // En España el vencimiento es el del modelo 111 y no lo tiene que tipear nadie; sigue editable.
-  useEffect(() => { if (esES && !vto && vtoModelo111) setVto(vtoModelo111); }, [esES, vto, vtoModelo111]);
-  // Idem la fecha del asiento: en AR se retiene y se paga el VEP el mismo día, así que "hoy" es lo correcto;
-  // en ES la retención es del período de la factura, aunque se cargue meses después.
-  useEffect(() => { if (esES && fechaFiscalFC) setFecha(fechaFiscalFC); }, [esES, fechaFiscalFC]);
-  const [afipId, setAfipId]   = useState("");
+  const [vto, setVto]         = useState(() => reg.vtoSugerido(fechaFiscalFC));
+  const [organismoId, setOrganismoId] = useState("");
   const [lineas, setLineas]   = useState([{ cuenta: "", monto: "", pct: "" }]);
-  const afipProvId = afipId || afipDetectado?.id || "";
-  const afipProv   = proveedores.find(p => String(p.id) === String(afipProvId));
+  const organismoProvId = organismoId || organismoDetectado?.id || "";
+  const organismoProv   = proveedores.find(p => String(p.id) === String(organismoProvId));
 
   const saldo  = saldoPendiente ?? egreso.importe ?? 0;
   const total  = lineas.reduce((s, l) => s + (Number(l.monto) || 0), 0);
   const excede = total > saldo + 0.01;
   const alProveedor = Math.max(0, saldo - total);
-  const canSave = fecha && vto && (esES || vep.trim()) && afipProvId && lineas.some(l => l.cuenta && Number(l.monto) > 0) && !excede;
-  const upd = (i, k, v) => setLineas(ls => ls.map((l, idx) => idx === i ? { ...l, [k]: v } : l));
-  // Tipear el % completa el importe sobre la base imponible (y al revés, tipear el importe borra el %:
-  // pasa a ser un monto a mano y mostrar un porcentaje que no lo generó sería mentir).
+  const canSave = fecha && vto && (!reg.nroRequerido || vep.trim()) && organismoProvId && lineas.some(l => l.cuenta && Number(l.monto) > 0) && !excede;
+  // Tipear el importe a mano BORRA el %: el % viaja a la etiqueta del asiento ("Ret. IRPF 15% s/ FC-1"),
+  // así que dejarlo puesto sobre un importe que no lo generó escribiría un porcentaje falso en el libro.
+  const upd = (i, k, v) => setLineas(ls => ls.map((l, idx) => idx !== i ? l
+    : { ...l, [k]: v, ...(k === "monto" ? { pct: "" } : {}) }));
+  // Y al revés: tipear el % completa el importe sobre la base imponible.
   const updPct = (i, v) => setLineas(ls => ls.map((l, idx) => idx !== i ? l : {
-    ...l, pct: v, monto: (v !== "" && Number(v) > 0 && baseImponible > 0)
-      ? String(Math.round(baseImponible * (Number(v) / 100) * 100) / 100) : l.monto,
+    ...l, pct: v,
+    monto: Number(v) > 0 && baseImponible > 0 ? String(round2(baseImponible * Number(v) / 100)) : l.monto,
   }));
 
   const inp = { width:"100%", background:"#eceff3", border:`1px solid ${T.cardBorder}`, borderRadius:8, padding:"8px 12px", fontSize:13, color:T.text, fontFamily:T.font, outline:"none", boxSizing:"border-box" };
@@ -112,10 +103,10 @@ function RegistrarRetencionPracticadaModal({ egreso, sociedad, saldoPendiente, c
               {lineas.map((l, i) => (
                 <div key={i} style={{ display:"flex", gap:8, alignItems:"center" }}>
                   <select value={l.cuenta} onChange={e => upd(i, "cuenta", e.target.value)} style={{ ...inp, flex:1 }}>
-                    <option value="">— cuenta ({esES ? "IRPF" : "Ganancias, IVA, IIBB"}…) —</option>
+                    <option value="">— cuenta ({reg.cuentasHint}…) —</option>
                     {cuentasOrd.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                   </select>
-                  {esES && (
+                  {reg.pidePct && (
                     <input value={l.pct} onChange={e => updPct(i, e.target.value)} placeholder="%" inputMode="decimal"
                       title={`% sobre la base imponible (${fmtMoney(baseImponible, egreso.moneda)})`}
                       style={{ ...inp, width:62, textAlign:"right" }} />
@@ -134,16 +125,16 @@ function RegistrarRetencionPracticadaModal({ egreso, sociedad, saldoPendiente, c
             </div>
           </div>
 
-          {/* Depósito al fisco: VEP (solo AR) + vencimiento + fecha */}
-          <div style={{ display:"grid", gridTemplateColumns: esES ? "1fr 1fr" : "1.3fr 1fr 1fr", gap:12 }}>
-            {!esES && (
+          {/* Depósito al fisco: número (solo donde el régimen lo pide) + vencimiento + fecha */}
+          <div style={{ display:"grid", gridTemplateColumns: reg.nroRequerido ? "1.3fr 1fr 1fr" : "1fr 1fr", gap:12 }}>
+            {reg.nroRequerido && (
               <div>
-                <label style={lbl}>N° VEP <span style={{ color:T.red }}>*</span></label>
-                <input value={vep} onChange={e => setVep(e.target.value)} placeholder="1661738826" style={inp} />
+                <label style={lbl}>{reg.nroLabel} <span style={{ color:T.red }}>*</span></label>
+                <input value={vep} onChange={e => setVep(e.target.value)} placeholder={reg.nroPlaceholder} style={inp} />
               </div>
             )}
             <div>
-              <label style={lbl}>{esES ? "Vto. modelo 111" : "Vto. VEP"} <span style={{ color:T.red }}>*</span></label>
+              <label style={lbl}>{reg.vtoLabel} <span style={{ color:T.red }}>*</span></label>
               <input type="date" value={vto} onChange={e => setVto(e.target.value)} style={inp} />
             </div>
             <div>
@@ -152,16 +143,14 @@ function RegistrarRetencionPracticadaModal({ egreso, sociedad, saldoPendiente, c
             </div>
           </div>
 
-          {/* Proveedor AFIP (destino del VEP) */}
+          {/* Organismo al que se deposita lo retenido */}
           <div>
-            <label style={lbl}>{esES ? "Organismo (modelo 111)" : "Organismo (destino del VEP)"} <span style={{ color:T.red }}>*</span></label>
-            <select value={afipProvId} onChange={e => setAfipId(e.target.value)} style={inp}>
-              <option value="">{esES ? "— elegí Hacienda —" : "— elegí el proveedor AFIP/ARCA —"}</option>
-              {[...proveedores].sort((a, b) => String(a.nombre ?? "").localeCompare(String(b.nombre ?? ""))).map(p => (
-                <option key={p.id} value={p.id}>{p.nombre}</option>
-              ))}
+            <label style={lbl}>{reg.organismoLabel} <span style={{ color:T.red }}>*</span></label>
+            <select value={organismoProvId} onChange={e => setOrganismoId(e.target.value)} style={inp}>
+              <option value="">{reg.organismoPlaceholder}</option>
+              {proveedoresOrd.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
             </select>
-            {!afipProvId && <div style={{ fontSize:11, color:"#dc2626", marginTop:4 }}>No hay un proveedor {esES ? "Hacienda" : "AFIP/ARCA"} cargado — creá uno en Maestros o elegí el que corresponda.</div>}
+            {!organismoProvId && <div style={{ fontSize:11, color:"#dc2626", marginTop:4 }}>No hay un proveedor {reg.organismoNombre} cargado — creá uno en Maestros o elegí el que corresponda.</div>}
           </div>
 
           {/* Resumen del reparto */}
@@ -170,7 +159,7 @@ function RegistrarRetencionPracticadaModal({ egreso, sociedad, saldoPendiente, c
               <span>Queda a pagar al proveedor:</span><b>{fmtMoney(alProveedor, egreso.moneda)}</b>
             </div>
             <div style={{ display:"flex", justifyContent:"space-between", color:"#6d28d9" }}>
-              <span>{esES ? "A depositar a Hacienda (modelo 111):" : "A depositar a AFIP (VEP):"}</span><b>{fmtMoney(total, egreso.moneda)}</b>
+              <span>{reg.depositoLabel}</span><b>{fmtMoney(total, egreso.moneda)}</b>
             </div>
           </div>
 
@@ -182,9 +171,9 @@ function RegistrarRetencionPracticadaModal({ egreso, sociedad, saldoPendiente, c
                 retenciones: lineas.filter(l => l.cuenta && Number(l.monto) > 0)
                   .map(l => ({ cuenta: l.cuenta, cuentaNombre: cuentaMap.get(String(l.cuenta))?.nombre || "",
                     monto: Number(l.monto), pct: Number(l.pct) > 0 ? Number(l.pct) : undefined })),
-                afip: { proveedorId: afipProvId, proveedor: afipProv?.nombre || (esES ? "Hacienda" : "AFIP"),
-                  vep: esES ? "" : vep.trim(), vto, centro: centroFactura,
-                  ...(esES ? { ref: "Modelo 111" } : {}) },
+                fisco: { proveedorId: organismoProvId, proveedor: organismoProv?.nombre || reg.organismoNombre,
+                  vep: reg.nroRequerido ? vep.trim() : "", vto, centro: centroFactura,
+                  ref: reg.ref(vep.trim()) },
               }); }}
               style={{ background: canSave ? "#7c3aed" : "#9ca3af", border:"none", borderRadius:8, padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff", cursor: canSave ? "pointer" : "default", fontFamily:T.font }}>Guardar ✓</button>
           </div>

@@ -2117,36 +2117,36 @@ export async function appendRetenciones({ sociedad, documento_id, fecha, moneda 
 // es la única operación del sistema así. Ver el tema de atomicidad anotado para la migración a base real.
 // retenciones: [{ cuenta, cuentaNombre, monto, pct? }] — pct es solo para la etiqueta ("Ret. IRPF 15% s/ FC-1");
 //   no se guarda en columna propia: el importe es el dato y el % es contexto.
-// afip: { proveedorId, proveedor, vep, vto, centro, ref? } — ref = cómo se deposita ("Modelo 111"); si no
-//   viene se deriva del VEP, así el circuito argentino escribe exactamente lo mismo que antes.
+// fisco: { proveedorId, proveedor, vep, vto, centro, ref } — vep va al nro_comp (vacío donde el régimen no
+//   tiene número) y ref es cómo se deposita ("VEP 1661738826", "Modelo 111"), que el llamador arma con el
+//   régimen del país. Acá no se deriva de nada: esta función no sabe de países.
 export const RETDEP_TAG = "[RETDEP]";
 export async function aplicarRetencionPracticada({
   sociedad, factura_id, factura_nro = "", fecha, moneda = "ARS",
-  proveedor_id = "", proveedor_nombre = "", retenciones = [], afip = {},
+  proveedor_id = "", proveedor_nombre = "", retenciones = [], fisco = {},
 }) {
   const rets = (retenciones || []).filter(r => Math.abs(Number(r?.monto) || 0) > 0.01 && r?.cuenta);
   if (!rets.length) throw new Error("No hay retenciones para aplicar.");
   if (!factura_id) throw new Error("Falta la factura sobre la que se aplican las retenciones.");
   const created_at = new Date().toISOString();
-  const vep = afip.vep || "";
+  const vep = fisco.vep || "";
   const refFC = factura_nro || factura_id;
-  // Cómo se deposita lo retenido. AR no pasa `ref` → se deriva del VEP y el texto queda igual al de antes.
-  const refDeposito = afip.ref || (vep ? `VEP ${vep}` : "");
+  const refDeposito = fisco.ref || "";
   const lbl = (r) => `Ret. ${r.cuentaNombre || ""}${r.pct ? ` ${r.pct}%` : ""} s/ ${refFC}`.replace(/\s+/g, " ").trim();
 
-  // 1) Pata AFIP — comprobante EGRESO consolidado por VEP (una línea por retención).
+  // 1) Pata fisco — UN comprobante EGRESO por acción (una línea por retención).
   const id_comp = newId("EG");
   const compRows = rets.map((r, i) => {
     const monto = round2(Math.abs(Number(r.monto) || 0));
     return {
       id: `${id_comp}-L${pad(i + 1)}`, id_comp, sociedad, fecha,
-      vto: afip.vto || "",
+      vto: fisco.vto || "",
       subtipo: "EGRESO",
-      contraparte_id: afip.proveedorId || "",
-      contraparte_nombre: afip.proveedor || "AFIP",
+      contraparte_id: fisco.proveedorId || "",
+      contraparte_nombre: fisco.proveedor || "",
       cuenta_contable: r.cuentaNombre || "",
       cuenta_contable_id: r.cuenta || "",
-      moneda, centro_costo: afip.centro || "",
+      moneda, centro_costo: fisco.centro || "",
       subtotal: monto, iva_rate: 0, iva_monto: 0, total: monto,
       nro_comp: vep,
       nota: `${RETDEP_TAG} ${lbl(r)}${refDeposito ? ` · ${refDeposito}` : ""}`.trim(),
