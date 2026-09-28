@@ -396,7 +396,7 @@ const SEDE_GRUPOS = [
   { key: "int_bigg",  label: "Interusos red BIGG",       color: SEDE_HDR, cuentas: ["Interusos", "Interusos Genericos"] },
   { key: "int_corp",  label: "Interusos corporativos",   color: SEDE_HDR, cuentas: ["Coorporativos", "Interusos Gympass"] },
   { key: "cvar",      label: "Costos Variables",         color: SEDE_HDR, cuentas: ["Fee Facturación", "Fee Facturacion", "Fees Stripe", "Aranceles y Otros Financieros", "IIBB", "Imp. Cred. y Deb.", "Aranceles / Pasarela de Pagos", "Gastos Financieros"] },
-  { key: "gp_pers",   label: "Personal",                 color: SEDE_HDR, cuentas: ["Sueldos", "Incentivos", "Comisiones", "Cargas Sociales", "Otros Gastos Salariales", "Aguinaldos", "Costos Salariales", "Otros gastos Salariales"] },
+  { key: "gp_pers",   label: "Personal",                 color: SEDE_HDR, cuentas: ["Sueldos", "Incentivos", "Comisiones", "Cargas Sociales", "Otros Gastos Salariales", "Aguinaldos", "Costos Salariales", "IRPF", "Otros gastos Salariales"] },
   { key: "gp_ocup",   label: "Ocupación",                color: SEDE_HDR, cuentas: ["Alquiler", "Expensas", "ABL", "Servicios"] },
   { key: "gp_mkt",    label: "Mkt y Pauta",              color: SEDE_HDR, cuentas: ["Acciones de Mkt", "Pauta"] },
   { key: "gp_otros",  label: "Otros Gastos de la Sede",  color: SEDE_HDR, cuentas: ["Honorarios Profesionales", "Equipamiento y Mantenimiento", "Limpieza", "Otros Gastos del Centro", "Gastos Menores de Caja", "Gastos sin Asignar"] },
@@ -407,9 +407,10 @@ const SEDE_GRUPOS = [
 // detalle por cuenta de la estructura → no pueden quedar desalineados.
 const SEDE_OPEX_GRUPOS = ["gp_pers", "gp_ocup", "gp_mkt", "gp_otros"];
 const _nkSede = s => (s ?? "").trim().toLowerCase();
-// Cuentas que se OCULTAN si están vacías (todo el año en cero). Ing.Stripe / Ing. Datafono son naturales de
-// España → en el resto de las sedes vienen en 0 y ensucian; en España, donde sí hay dato, se muestran solas.
-const SEDE_OCULTAR_SI_VACIA = new Set([_nkSede("Ing.Stripe"), _nkSede("Ing. Datafono"),
+// Cuentas que se OCULTAN si están vacías (todo el año en cero). Ing.Stripe / Ing. Datafono / IRPF son
+// naturales de España → en el resto de las sedes vienen en 0 y ensucian; en España, donde sí hay dato, se
+// muestran solas.
+const SEDE_OCULTAR_SI_VACIA = new Set([_nkSede("Ing.Stripe"), _nkSede("Ing. Datafono"), _nkSede("IRPF"),
   _nkSede("Ventas Mercado Pago"), _nkSede("Depositos"), _nkSede("Ventas en Efectivo")]);
 const SEDE_CUENTA_A_GRUPO = (() => {
   const m = new Map();
