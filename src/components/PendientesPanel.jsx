@@ -458,12 +458,28 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
   // manda como `_importe`; antes emitía solo por el pago y el caso 2 se facturaba de menos.
   const coberturaPorPago = useMemo(() => {
     const out = {};
+    // El saldo a favor es UNO por sede, no uno por pago. Deshaciendo solo el pago propio, dos
+    // cobros sin facturar del mismo mes se veían como "saldo a favor" el uno al otro y la
+    // cobertura salía duplicada (Pocitos, agosto 2026: dos de 1.000.000 proponían 2.000.000
+    // cada uno, 4.000.000 en total sobre 2.000.000 cobrados). Se deshacen TODOS los pagos
+    // pendientes de la sede para aislar su saldo propio, y ese pozo se asigna al más viejo: el
+    // total facturable queda bien y el reparto se ajusta a mano en la preview si hace falta.
+    const grupos = new Map();
     for (const { fr, comp } of pagosSinFactura) {
-      const pago  = comp.amount ?? 0;
-      const saldo = computeSaldo(fr.id, comp.year, comp.month, comps, saldoInicial, null, compCurrency(comp), activeCompany);
-      const saldoSinPago = saldo + pago;                                  // deshace el crédito del pago
-      const aFavorPrevio = saldoSinPago < 0 ? -saldoSinPago : 0;
-      out[comp.id] = { cobertura: pago + aFavorPrevio, extra: aFavorPrevio };
+      const k = `${fr.id}|${compCurrency(comp)}`;
+      if (!grupos.has(k)) grupos.set(k, { fr, pagos: [] });
+      grupos.get(k).pagos.push(comp);
+    }
+    for (const { fr, pagos } of grupos.values()) {
+      const orden  = [...pagos].sort((x, y) => cmpDate(x.date, y.date));
+      const ultimo = orden[orden.length - 1];
+      const suma   = orden.reduce((acc, c) => acc + (c.amount ?? 0), 0);
+      const saldo  = computeSaldo(fr.id, ultimo.year, ultimo.month, comps, saldoInicial, null, compCurrency(ultimo), activeCompany);
+      let pozo = Math.max(0, -(saldo + suma));   // saldo a favor que NO viene de estos cobros
+      for (const comp of orden) {
+        const extra = pozo; pozo = 0;
+        out[comp.id] = { cobertura: (comp.amount ?? 0) + extra, extra };
+      }
     }
     return out;
   }, [pagosSinFactura, comps, saldoInicial, activeCompany]);
