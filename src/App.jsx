@@ -8,8 +8,9 @@ import { fetchAll,
          fetchRecordatorios, saveRecordatorio,
          tryDecrementInvoiceSeq } from "./lib/sheetsApi";
 import { fetchMovTesoreria, appendMovFranquicia, deleteMovTesoreria, updateMovTesoreria,
-         fetchTiposCambio } from "./lib/numbersApi";   // fuente financiera única (nb_movimientos) + maestro de TC (nb_tipos_cambio)
+         fetchTiposCambio, fetchCuentasBancarias, fetchClientes } from "./lib/numbersApi";   // fuente financiera única (nb_movimientos) + maestro de TC (nb_tipos_cambio)
 import { enriquecerCompsConMovs } from "./lib/franquiciasAdapter";
+import { armarCuentaCorriente, exportarCuentaCorrienteExcel } from "./lib/exportCuentaCorrienteExcel";
 import { CURRENCIES, MONTHS, AVAILABLE_YEARS, computeSaldo, computeSaldoPrevMes, downloadCSV } from "./lib/helpers";
 import "./lib/styles";
 import FrDetail from "./components/FrDetail";
@@ -57,6 +58,12 @@ export default function App({ onVolverNumbers } = {}) {
     try { return JSON.parse(localStorage.getItem("recordatorios") ?? "{}"); } catch { return {}; }
   });
   const [tiposCambio,  setTiposCambio]  = useState({});
+  // Movimientos crudos de nb_movimientos por id: la fila de la CC no guarda la cuenta bancaria ni el concepto,
+  // y el Excel para el estudio los necesita. Solo lectura, no se usa para ningún saldo.
+  const movsNumbersRef = useRef(new Map());
+  const [menuExport, setMenuExport] = useState(false);
+  const [bajandoXls, setBajandoXls] = useState(false);
+  const menuExportRef = useRef(null);
   const [sheetsReady,  setSheetsReady] = useState(false);
   const [loadError,    setLoadError]   = useState(null);
   const [modalFrId,  setModalFrId] = useState(null);   // null = closed, number = franchise id
@@ -322,6 +329,52 @@ export default function App({ onVolverNumbers } = {}) {
     downloadCSV(rows, `BIGG_${MONTHS[month]}_${year}.csv`);
   }, [tab, detailFilteredRows, filteredFr, year, month, comps, saldoInicial]);
 
+  // Excel de la cuenta corriente de la sociedad activa, para el estudio (ver exportCuentaCorrienteExcel.js).
+  // Toma los filtros de la barra (período o historial, moneda, franquicias del buscador). El maestro de
+  // cuentas bancarias y el de clientes (cód. de estudio) se piden recién acá, para no sumarle carga al inicio.
+  const handleExportExcel = useCallback(async () => {
+    setMenuExport(false);
+    setBajandoXls(true);
+    try {
+      const [cuentas, clientes] = await Promise.all([
+        fetchCuentasBancarias().catch(() => []), fetchClientes().catch(() => []),
+      ]);
+      const cuentaNombre = new Map((Array.isArray(cuentas) ? cuentas : []).map(c => [String(c.id), c.nombre || c.banco || String(c.id)]));
+      const codPorNombre = new Map();
+      for (const cl of (Array.isArray(clientes) ? clientes : [])) {
+        const cod = String(cl.cod_estudio ?? "").trim();
+        if (cod) codPorNombre.set(String(cl.nombre ?? "").trim().toLowerCase(), cod);
+      }
+      // Las mismas monedas que cicla el selector MONEDA de la barra (no las de Maestros, que pueden ser menos).
+      const monedas = filterCur === "ALL" ? (COMPANIES[activeCompany]?.currencies ?? CURRENCIES) : [filterCur];
+      const data = armarCuentaCorriente({
+        franchises: filteredFr, comps, saldoInicial, empresa: activeCompany, monedas, month, year, showAll,
+        resolver: {
+          cuentaBancaria: c => {
+            const id = movsNumbersRef.current.get(String(c.id))?.cuenta_bancaria ?? c.cuenta_bancaria;
+            return id ? (cuentaNombre.get(String(id)) ?? String(id)) : "";
+          },
+          concepto: c => movsNumbersRef.current.get(String(c.id))?.concepto || "",
+          codEstudio: fr => codPorNombre.get(String(fr.name ?? "").trim().toLowerCase())
+                         ?? codPorNombre.get(String(fr.razonSocial ?? "").trim().toLowerCase()) ?? "",
+        },
+      });
+      if (!data.movimientos.length) { alert("No hay movimientos para esta sociedad con los filtros elegidos."); return; }
+      await exportarCuentaCorrienteExcel({ data, empresa: activeCompany, month, year, showAll });
+    } catch (e) {
+      alert("No se pudo generar el Excel: " + (e?.message || e));
+    } finally {
+      setBajandoXls(false);
+    }
+  }, [filterCur, activeCompany, filteredFr, comps, saldoInicial, month, year, showAll]);
+
+  useEffect(() => {
+    if (!menuExport) return;
+    const h = e => { if (menuExportRef.current && !menuExportRef.current.contains(e.target)) setMenuExport(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [menuExport]);
+
   useEffect(() => { localStorage.setItem("recordatorios", JSON.stringify(recordatorios)); }, [recordatorios]);
   useEffect(() => { localStorage.setItem("activeCompany", activeCompany ?? ""); }, [activeCompany]);
 
@@ -351,6 +404,7 @@ export default function App({ onVolverNumbers } = {}) {
     Promise.all([fetchAll(), fetchMovTesoreria().catch(() => []), fetchTiposCambio().catch(() => ({}))])
       .then(([{ comps: compsRaw, saldos, franchises, franchisor: rawFranchisor, recordatorios }, movsNumbers, tc]) => {
         const comps = enriquecerCompsConMovs(compsRaw, movsNumbers);
+        movsNumbersRef.current = new Map((movsNumbers ?? []).map(m => [String(m.id), m]));
         setComps(comps);
         setSaldoInicial(saldos);
         setFranchises(franchises);
@@ -571,7 +625,38 @@ export default function App({ onVolverNumbers } = {}) {
               {tab === "contabilidad" && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
                   <FrSearch franchises={activeFr} selected={selectedFrIds} onChange={setSelectedFrIds} />
-                  <button className="ghost" style={{ fontSize: 10 }} onClick={handleExportCSV}>↓ CSV</button>
+                  {/* Menú ⋮ — mismo patrón que Reportes de Numbers: Excel para el estudio + el CSV de siempre */}
+                  <div ref={menuExportRef} style={{ position: "relative" }}>
+                    <button className="ghost" title="Descargar" aria-haspopup="menu" aria-expanded={menuExport}
+                      onClick={() => setMenuExport(o => !o)}
+                      style={{ fontSize: 16, padding: "3px 11px", lineHeight: 1, background: menuExport ? "rgba(255,255,255,.06)" : undefined }}>⋮</button>
+                    {menuExport && (
+                      <div role="menu" style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, minWidth: 300, zIndex: 200,
+                        background: "var(--bg2)", border: "1px solid var(--border2)", borderRadius: 10, padding: 6,
+                        boxShadow: "0 8px 32px rgba(0,0,0,.6)" }}>
+                        <div style={{ fontSize: 10, fontWeight: 800, color: "var(--muted)", letterSpacing: ".08em", padding: "6px 11px 4px" }}>DESCARGAR</div>
+                        {[
+                          { key: "xls", icon: "⬇", titulo: bajandoXls ? "Generando…" : "Cuenta corriente para el estudio (Excel)",
+                            desc: `${activeCompany}: facturas, cobros y pagos con el saldo de cada franquiciado`, onClick: handleExportExcel, disabled: bajandoXls },
+                          { key: "csv", icon: "↓", titulo: "CSV de la tabla", desc: "Lo que se ve en pantalla, como antes",
+                            onClick: () => { setMenuExport(false); handleExportCSV(); }, disabled: false },
+                        ].map(op => (
+                          <button key={op.key} type="button" role="menuitem" onClick={op.onClick} disabled={op.disabled}
+                            style={{ display: "flex", alignItems: "flex-start", gap: 9, width: "100%", textAlign: "left", background: "transparent",
+                              border: "none", borderRadius: 7, padding: "8px 11px", fontFamily: "var(--font)",
+                              color: op.disabled ? "var(--dim)" : "var(--text)", cursor: op.disabled ? "not-allowed" : "pointer" }}
+                            onMouseEnter={e => { if (!op.disabled) e.currentTarget.style.background = "rgba(255,255,255,.05)"; }}
+                            onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
+                            <span aria-hidden style={{ fontSize: 14, lineHeight: 1.3, color: "var(--accent)" }}>{op.icon}</span>
+                            <span>
+                              <span style={{ display: "block", fontSize: 13, fontWeight: 600 }}>{op.titulo}</span>
+                              <span style={{ display: "block", fontSize: 11, color: "var(--muted)", marginTop: 1 }}>{op.desc}</span>
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
