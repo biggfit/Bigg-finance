@@ -191,10 +191,13 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
 
   const ncIncomplete = ncRefModal?.some(r => !r.refInvoice.trim()) ?? false;
 
-  // 1. Comprobantes AR+ARS sin facturanteId ni invoice
+  // 1. Comprobantes sin facturanteId ni invoice que los emite una sociedad argentina en pesos.
+  // El filtro va por la EMISORA, no por el país de la sede: una sede del exterior a la que ÑAKO
+  // le factura en pesos (Pocitos) también necesita ARCA, y mirando el país quedaba fuera de esta
+  // lista — nadie le reclamaba el comprobante.
   const sinAfipAll = useMemo(() => {
     return franchises
-      .filter(f => f.activa !== false && f.country === "Argentina")
+      .filter(f => f.activa !== false)
       .flatMap(fr => {
         const frComps = comps[fr.id] ?? [];
         return frComps
@@ -202,6 +205,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
             const doc = String(c.type ?? "").split("|")[0];
             return (doc === "FACTURA" || doc === "NC") &&
                    compCurrency(c) === "ARS" &&
+                   COMPANIES[compEmpresa(c)]?.side === "ar" &&
                    !c.facturanteId && !c.invoice &&
                    (!activeCompany || compEmpresa(c) === activeCompany);
           })
@@ -209,10 +213,10 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
       });
   }, [franchises, comps, activeCompany]);
 
-  // 1b. Comprobantes AR+ARS con facturanteId pero sin invoice (número AFIP no obtenido)
+  // 1b. Con facturanteId pero sin invoice (número AFIP no obtenido). Mismo criterio: por emisora.
   const sinNumeroAfip = useMemo(() => {
     return franchises
-      .filter(f => f.activa !== false && f.country === "Argentina")
+      .filter(f => f.activa !== false)
       .flatMap(fr => {
         const frComps = comps[fr.id] ?? [];
         return frComps
@@ -220,6 +224,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
             const doc = String(c.type ?? "").split("|")[0];
             return (doc === "FACTURA" || doc === "NC") &&
                    compCurrency(c) === "ARS" &&
+                   COMPANIES[compEmpresa(c)]?.side === "ar" &&
                    c.facturanteId && !c.invoice &&
                    (!activeCompany || compEmpresa(c) === activeCompany);
           })

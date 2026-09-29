@@ -56,6 +56,9 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
   const allowedCurrencies = getCompanyCurrencies(activeCompany, franchisor);
   const applyIVA = !!(COMPANIES[activeCompany]?.applyIVA);
   const isAR     = selectedFr?.country === "Argentina";
+  // A ARCA se va por QUIÉN emite, no por el país de la sede: ÑAKO le factura la pauta en pesos a
+  // sedes del exterior (Pocitos) y ese comprobante también es fiscal argentino.
+  const emiteAR  = COMPANIES[activeCompany]?.side === "ar";
   const isSedePropia = selectedFr?.esSedePropia === true;   // interusos = asiento de gestión (no fiscal, no CxC/CxP)
 
   const initCur = () => {
@@ -131,7 +134,7 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
 
   // ── flags de emisión ──
   // Sede propia: interuso NO fiscal → nunca ARCA (además el type de gestión no es FACTURA/NC).
-  const usaFacturante = mode === "comprobante" && isAR && currency === "ARS" && (doc === "FACTURA" || doc === "NC") && !isSedePropia;
+  const usaFacturante = mode === "comprobante" && emiteAR && currency === "ARS" && (doc === "FACTURA" || doc === "NC") && !isSedePropia;
   const refFAComp     = doc === "NC" ? (comps[String(selectedFr?.id)] ?? []).find(c => c.id === refCompId) : null;
   const ncSinRef      = usaFacturante && doc === "NC" && !refFAComp?.invoice;
 
@@ -203,7 +206,7 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
     }
 
     // PDF automático
-    if (isAR && enriched.facturanteId) {
+    if (enriched.facturanteId) {
       const filename = `Factura_${enriched.invoice ?? enriched.facturanteId}_${selectedFr?.name}.pdf`;
       downloadFacturantePdfBlob(enriched.facturanteId)
         .then(blob => {
@@ -410,7 +413,7 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
             ))}
 
             {/* Selector FA de referencia para NC AR */}
-            {isAR && currency === "ARS" && doc === "NC" && (() => {
+            {usaFacturante && doc === "NC" && (() => {
               const allFAs = (comps[String(selectedFr?.id)] ?? [])
                 .filter(c => c.type?.startsWith("FACTURA") && c.invoice)
                 .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));

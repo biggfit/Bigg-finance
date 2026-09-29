@@ -2292,7 +2292,13 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
         ref: conceptoFinal, nota: conceptoFinal,
         contado: true,
       };
-      if (fr.country === "Argentina" && factComp.currency === "ARS") {
+      // A ARCA se va por QUIÉN emite y en qué moneda, NO por el país de la sede: la pauta de una
+      // sede del exterior la factura igual ÑAKO, en pesos y contra un CUIT argentino, así que
+      // necesita comprobante de ARCA. Mirando el país, Pocitos (Uruguay) caía al correlativo
+      // interno y acumuló 5 facturas por 4.806.000 con número "USA-24-00XX" y sin facturanteId,
+      // invisibles además para el panel de pendientes de AFIP.
+      const emiteAR = COMPANIES[activeCompany]?.side === "ar";
+      if (emiteAR && factComp.currency === "ARS") {
         const result = await emitirComprobante({
           franchisor: franchisor?.ar ?? franchisor,
           franchise:  fr,
@@ -2300,7 +2306,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
         });
         factComp.invoice      = invoiceFromResult(result);
         factComp.facturanteId = String(result.idComprobante);
-      } else if (fr.country !== "Argentina") {
+      } else if (!emiteAR) {
         const invoicePrefix = getInvoicePrefix(activeCompany);
         const res = await getNextInvoiceNum(fr.id, invoicePrefix);
         factComp.invoice = res.label;
