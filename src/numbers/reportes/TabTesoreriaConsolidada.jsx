@@ -18,9 +18,10 @@ import { buildDevengado } from "./TabDevengado";   // resultado por mes (misma f
 import { TabSaldos, TabMovimientos, PaginaAging, PaginaIntercoLedger } from "../PantallaTesoreria";
 import { buildPuente, printPuente } from "./puenteDerive";   // DEV-ONLY diagnóstico (descartable)
 import { GO_LIVE_APERTURA, MESES_CORTOS as _MESES, sumSaldo, esCorriente, fmtBal, crearTraductor, AvisosTC, ordenarDetalle,
-  hoyISO as _hoyISO, finMesAnterior as _finMesAnterior, esFinDeMes as _esFinDeMes } from "./balanceUtils";
+  hoyISO as _hoyISO, finMesAnterior as _finMesAnterior, esFinDeMes as _esFinDeMes, finMesAnteriorReal as _finMesAnteriorReal } from "./balanceUtils";
 import { computeCashFlow } from "./cashflowDerive";
 import { CashFlowDirectoView, ResultadoACajaView } from "./CashFlowViews";
+import { PosicionFinancieraView } from "./PosicionFinancieraView";
 
 // Fusiona los items de Activo/Pasivo de varias sociedades por label+moneda (suma saldo, une docs).
 function mergeItems(arrays) {
@@ -42,19 +43,24 @@ function mergeItems(arrays) {
 //  · "Balance y Evolución del PN" (control y cierre) = balance + evpn: ¿cuánto vale la empresa y por qué cambió?
 // Comparten motor, carga y filtros; por eso es un solo componente y no dos.
 //  · "Cash Flow" (operar) = cf + flujo: ¿por qué se movió la caja? y ¿cómo el resultado se volvió caja? (19/9 noche)
-const VISTAS_TODAS = ["saldos", "balance", "evpn", "movimientos", "cf", "flujo"];
+//  · "Posición financiera" (reporte propio, Martín 24/9) = posicion: disponible − deuda financiera = posición financiera
+//    neta; + CxC − CxP = posición neta (≡ PN). Abre en el último cierre de mes.
+const VISTAS_TODAS = ["saldos", "balance", "evpn", "movimientos", "cf", "flujo", "posicion"];
 
 // `socInicial`: "nucleo" → arranca con las sociedades del núcleo tildadas (el Cash Flow se mira así); null → todas.
 // `monedaInicial`: moneda con la que abre ("ALL" = consolidado USD). El Cash Flow abre en ARS (Martín 19/9: la historia
 // de la caja del núcleo —la operación consume pesos y se sostiene vendiendo USD— solo se ve en la moneda nativa).
-export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null, vistas = null, socInicial = null, monedaInicial = "ALL" } = {}) {
+// `fechaInicial`: fecha de corte con la que abre ("" = hoy). `contentRef`: ref del padre que envuelve SOLO el contenido de
+// la vista (para la foto "Copiar imagen", sin toolbar ni pestañas). `onMeta`: avisa al padre vista/fecha/moneda (caption).
+export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null, vistas = null, socInicial = null, monedaInicial = "ALL",
+  fechaInicial = "", contentRef = null, onMeta = null } = {}) {
   const vistasOn = Array.isArray(vistas) && vistas.length ? vistas : VISTAS_TODAS;
   const [sociedades, setSociedades] = useState([]);
   const [socSel,     setSocSel]     = useState([]);   // [] = todas
   const [socOpen,    setSocOpen]    = useState(false);
   const [activeTab,  setActiveTab]  = useState(vistasOn[0]);
   const [filtroMoneda, setFiltroMoneda] = useState(monedaInicial || "ALL");
-  const [fechaCorte,   setFechaCorte]   = useState("");
+  const [fechaCorte,   setFechaCorte]   = useState(fechaInicial || "");
   const [filtroCuenta, setFiltroCuenta] = useState(null);
   const [filtroRef,    setFiltroRef]    = useState(null);   // "ir al movimiento" desde el extracto interco
   const [drillDownItem, setDrillDownItem] = useState(null);
@@ -179,10 +185,22 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
   const sociedadesMap = useMemo(() => sociedadNombreMap(sociedades), [sociedades]);
 
 
+  // ── Caché de derivarSaldos por (sociedad, fecha): la derivación de UNA sociedad no depende del set elegido ni de las
+  //    otras fechas → togglear sociedades, cambiar moneda o de vista no recalcula lo ya derivado; Saldos, Balance, EEPN
+  //    y Posición financiera comparten la misma derivación. Se vacía al cambiar los datos. Regla: NADIE muta lo
+  //    cacheado (mergeItems copia los items; el sufijo _soc copia las cuentas). ──
+  const derivCache = useMemo(() => new Map(), [data, sociedadesMap]);
+  const derivarSocAsOf = useCallback((socId, fecha) => {
+    const k = `${socId}||${fecha || ""}`;
+    let r = derivCache.get(k);
+    if (!r) { r = derivarSaldos({ ...data, sociedad: socId, fechaCorte: fecha, sociedadesMap }); derivCache.set(k, r); }
+    return r;
+  }, [derivCache, data, sociedadesMap]);
+
   // ── Derivar por sociedad y consolidar ──
   const { cuentas, aCobrar, aPagar, interco, intercoAct, intercoPas, movimientos } = useMemo(() => {
     const idsSel = new Set(socsIncluidas.map(s => (s.id ?? "").toLowerCase()));
-    const perSoc = socsIncluidas.map(s => derivarSaldos({ ...data, sociedad: s.id, fechaCorte, sociedadesMap }));
+    const perSoc = socsIncluidas.map(s => derivarSocAsOf(s.id, fechaCorte));
     // Interco NETEADO a nivel consolidado (núcleo↔núcleo interno se elimina; el resto se muestra).
     const ic = intercoData
       ? intercoConsolidado(intercoData, socsIncluidas.map(s => s.id), sociedades, fechaCorte)
@@ -198,7 +216,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
       intercoAct: ic.activo, intercoPas: ic.pasivo,   // separados → para el Balance (Activo/Pasivo)
       movimientos: data.movimientos.filter(m => idsSel.has((m.sociedad ?? "").toLowerCase())),
     };
-  }, [data, socsIncluidas, fechaCorte, intercoData, sociedades, sociedadesMap]);
+  }, [data, socsIncluidas, fechaCorte, intercoData, sociedades, derivarSocAsOf]);
 
   const monedas = useMemo(() => [...new Set(cuentas.map(c => c.moneda))], [cuentas]);
   // DEV-ONLY (diagnóstico puente P&L→ΔPN, descartable — sacar antes de commitear)
@@ -208,17 +226,23 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
   //    líneas (caja/bancos/CxC · corriente/otros/PN), para ver cómo se mueve cada cuenta hasta el PN. ──
   // Balance derivado A UNA FECHA (as-of) para el set de sociedades elegido: lo usan el Balance (corte, cierre
   // anterior, apertura) y el EEPN (fin de cada mes). Interco consolidado también as-of.
+  // Devuelve además `porSociedad` (Map id → derivación de esa sociedad) → la Posición financiera abre por sociedad.
   const deriveAsOf = useCallback((fecha) => {
     const idsSel = socsIncluidas.map(s => s.id);
-    const perSoc = socsIncluidas.map(s => derivarSaldos({ ...data, sociedad: s.id, fechaCorte: fecha, sociedadesMap }));
+    const porSociedad = new Map(socsIncluidas.map(s => [s.id, derivarSocAsOf(s.id, fecha)]));
+    const perSoc = [...porSociedad.values()];
     const ic = intercoData ? intercoConsolidado(intercoData, idsSel, sociedades, fecha) : { activo: [], pasivo: [] };
     return {
       cuentas: perSoc.flatMap(r => r.cuentas),
       aCobrar: mergeItems(perSoc.map(r => r.aCobrar)),
       aPagar:  mergeItems(perSoc.map(r => r.aPagar)),
       intercoAct: ic.activo, intercoPas: ic.pasivo,
+      porSociedad,
     };
-  }, [data, socsIncluidas, intercoData, sociedades, sociedadesMap]);
+  }, [derivarSocAsOf, socsIncluidas, intercoData, sociedades]);
+
+  // Avisar al padre qué se está mirando (caption de la foto "Copiar imagen").
+  useEffect(() => { onMeta?.({ vista: activeTab, fecha: fechaCorte || _hoyISO(), moneda: filtroMoneda }); }, [onMeta, activeTab, fechaCorte, filtroMoneda]);
 
   const eepn = useMemo(() => {
     if (activeTab !== "evpn" && activeTab !== "flujo") return null;   // "flujo" (Resultado → Caja) usa los mismos cierres
@@ -302,12 +326,16 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
     { id: "movimientos", label: `Movimientos${movimientos.length ? ` (${movimientos.length})` : ""}` },
     { id: "cf",    label: "Por qué se movió la caja" },
     { id: "flujo", label: "Del resultado a la caja" },
+    { id: "posicion", label: "Posición financiera" },
   ].filter(t => vistasOn.includes(t.id));
   const nSel = socSel.length === 0 ? sociedades.length : socSel.length;
+  const ultimoCierre = _finMesAnteriorReal(_hoyISO());
 
   return (
     <div className="fade">
-      {/* ── Selector de vista — en la primera línea (a la altura del título), a la derecha ── */}
+      {/* ── Selector de vista — en la primera línea (a la altura del título), a la derecha. Con una sola vista no hay
+           nada que elegir → no se pinta (y no tapa el "← Reportes" en pantallas angostas). ── */}
+      {TABS.length > 1 && (
       <div style={{ display: "flex", justifyContent: "flex-end", marginTop: -57, marginBottom: 22 }}>
         <div role="tablist" aria-label="Vista consolidada"
           style={{ display: "inline-flex", gap: 2, background: "#f3f4f6", borderRadius: 10, padding: 3 }}>
@@ -325,6 +353,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
           })}
         </div>
       </div>
+      )}
 
       {/* ── Toolbar: sociedades + moneda + fecha ── */}
       <div style={{ display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap", alignItems: "center",
@@ -423,11 +452,23 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
             </button>
             <input ref={dateRef} type="date" value={fechaCorte} onChange={e => setFechaCorte(e.target.value)}
               style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 0, height: 0 }} />
-            {fechaCorte && (
+            {fechaCorte && activeTab !== "posicion" && (
               <button type="button" onClick={() => setFechaCorte("")} title="Quitar fecha"
                 style={{ background: "transparent", border: "none", color: T.muted, fontSize: 16,
                   cursor: "pointer", lineHeight: 1, padding: 4 }}>✕</button>
             )}
+            {/* Posición financiera: atajos "Último cierre" (foto firme) / "Hoy" (provisoria: MP del mes sin asentar). */}
+            {activeTab === "posicion" && [["cierre", "Último cierre", ultimoCierre], ["hoy", "Hoy", ""]].map(([k, label, val]) => {
+              const on = (fechaCorte || "") === val;
+              return (
+                <button key={k} type="button" onClick={() => setFechaCorte(val)} style={{
+                  background: on ? T.accentDark : "#eceff3", color: on ? T.accent : T.muted,
+                  border: `1px solid ${on ? T.accentDark : T.cardBorder}`, borderRadius: 999,
+                  padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: T.font }}>
+                  {label}
+                </button>
+              );
+            })}
           </div>
           </>
         )}
@@ -468,6 +509,12 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
           padding: "18px 22px", color: "#991b1b", fontSize: 13 }}>{error}</div>
       )}
 
+      {/* Contenido de la vista (lo que entra en la foto "Copiar imagen": sin toolbar ni pestañas). */}
+      <div ref={contentRef}>
+      {!loading && !error && activeTab === "posicion" && (
+        <PosicionFinancieraView deriveAsOf={deriveAsOf} filtroMoneda={filtroMoneda} fechaCorte={fechaCorte}
+          tiposCambio={tiposCambio} socsIncluidas={socsIncluidas} sociedades={sociedades} esTodas={socSel.length === 0} />
+      )}
       {!loading && !error && activeTab === "saldos" && (
         <TabSaldos cuentas={cuentas} aCobrar={aCobrar} aPagar={aPagar} interco={interco}
           filtroMoneda={filtroMoneda} onCuentaClick={c => { setFiltroCuenta(c.id); setActiveTab("movimientos"); }}
@@ -492,6 +539,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
         <TabMovimientos movimientos={movimientos} cuentas={cuentas} filtroCuenta={filtroCuenta} filtroRef={filtroRef}
           onLimpiarFiltro={() => { setFiltroCuenta(null); setFiltroRef(null); }} centrosCosto={data.centrosCosto} />
       )}
+      </div>
     </div>
   );
 }

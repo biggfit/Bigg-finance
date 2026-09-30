@@ -381,7 +381,7 @@ export function derivarSaldos({
         contraparte: m.concepto || (Number(m.monto) < 0 ? "Consumo" : "Pago"),
         vto: m.fecha, saldo: -(Number(m.monto) || 0), moneda: c.moneda,
       }));
-      return { label: c.nombre, moneda: c.moneda, saldo: -(Number(c.saldo) || 0), docs, headerColor: "#dc2626" };
+      return { label: c.nombre, moneda: c.moneda, saldo: -(Number(c.saldo) || 0), docs, headerColor: "#dc2626", esTarjeta: true };
     });
 
   // ── Saldo A FAVOR de tarjetas (saldo positivo: se pagó de más / crédito del banco) → ACTIVO ──
@@ -396,7 +396,7 @@ export function derivarSaldos({
         contraparte: m.concepto || (Number(m.monto) < 0 ? "Consumo" : "Pago"),
         vto: m.fecha, saldo: (Number(m.monto) || 0), moneda: c.moneda,
       }));
-      return { label: `Saldo a favor · ${c.nombre}`, moneda: c.moneda, saldo: (Number(c.saldo) || 0), docs, headerColor: "#16a34a" };
+      return { label: `Saldo a favor · ${c.nombre}`, moneda: c.moneda, saldo: (Number(c.saldo) || 0), docs, headerColor: "#16a34a", esTarjeta: true };
     });
   if (tarjetasActivo.length) { aCobrar.push(...tarjetasActivo); aCobrar.sort(franqFirst); }
   if (pagosACuentaAct.length) { aCobrar.push(...pagosACuentaAct); aCobrar.sort(franqFirst); }

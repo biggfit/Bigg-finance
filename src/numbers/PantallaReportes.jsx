@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, useRef, Fragment } from "react";
-import { T, PageHeader } from "./theme";
+import { T, PageHeader, fmtDate } from "./theme";
 import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco, fondeoFondeadasMensual, intercoConsolidadoMensual, calcSaldoPendiente, primeCache, fetchTiposCambio, tcDelMes, montoAUSD, montoAMoneda, fetchPnLHistorico, fetchProveedores, fetchClientes, RETDEP_TAG } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, pendienteSueldosPorLegajo, adelantoSueldosPorLegajo } from "../lib/sueldosApi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
@@ -9,6 +9,7 @@ import { exportarPackReportes } from "./exportReportes";
 import { exportarDetalleExcel } from "./reportes/exportDetalleComprobantes";
 import { copiarReporteComoImagen, clonarParaFoto, medirContenido } from "./fotoReporte";
 import TabTesoreriaConsolidada from "./reportes/TabTesoreriaConsolidada";
+import { finMesAnteriorReal, hoyISO } from "./reportes/balanceUtils";   // Posición financiera abre en el último cierre de mes
 import TabDevengado from "./reportes/TabDevengado";
 import TabIntercoConsolidado from "./reportes/TabIntercoConsolidado";
 import TabSaldosInterco from "./reportes/TabSaldosInterco";
@@ -2457,6 +2458,7 @@ const TABS = [
   { id: "consol_grupo", label: "Consolidado de grupo", icon: "🌐", ico: "globe", wip: true, desc: "P&L y patrimonio del grupo: propias full (neto de IVA) + fee/share de administradas + impuestos del anillo al final." },
 
   { id: "an_ventas",    label: "Composición de ingresos", icon: "📈", ico: "pie", desc: "Igual que el P&L BIGG hasta Total Ingresos: cada negocio (Sedes AR con apertura por sede / Rosedal / Huergo) y las líneas de HQ." },
+  { id: "posicion_fin", label: "Posición financiera", icon: "🎯", ico: "target", desc: "El número del board: disponible − deuda financiera = posición financiera neta; + a cobrar − a pagar = posición neta (ata con el PN). Al último cierre, consolidado en USD y por sociedad." },
   { id: "an_margenes",  label: "Márgenes por negocio", icon: "🧩", ico: "puzzle", wip: true, desc: "Cuánto aporta cada negocio al Margen Bruto del grupo." },
   { id: "an_gastos_cc", label: "Gastos por centro de costo", icon: "🧾", ico: "tag", wip: true, desc: "Apertura del gasto por centro de costo y, dentro, por cuenta contable." },
 
@@ -2471,8 +2473,9 @@ const TABS = [
 const LENTES = [
   { id: "operar",     label: "Operar el día a día",      hint: "La contabilidad de todas las sociedades, en un solo lugar", hero: true,
     // Orden FIJO en 3 columnas × 2 filas (Martín 19/9): Egresos / Cuentas a pagar / Tesorería arriba; Ingresos / Cuentas a cobrar / Cash Flow abajo.
-    // Debajo del hero, como fila: Pagos y cobros (Martín 25/9, para el estudio contable de España).
-    tabs: ["inf_egresos", "cxp_prov", "consolidado", "inf_ingresos", "cxc_cli", "cf", "inf_pagos"] },
+    // Debajo del hero, como filas: Posición financiera (Martín 24/9) y Pagos y cobros (Martín 25/9, para el
+    // estudio contable de España). El hero no se toca.
+    tabs: ["inf_egresos", "cxp_prov", "consolidado", "inf_ingresos", "cxc_cli", "cf", "posicion_fin", "inf_pagos"] },
   { id: "resultados", label: "¿Cómo nos fue?",            hint: "Resultados del grupo y de cada negocio",
     tabs: ["pl_bigg", "pl_sede", "op_espana", "op_colombia", "op_rosedal", "op_huergo", "an_ventas", "op_puertos", "an_margenes", "consol_grupo"] },
   { id: "plata",      label: "La plata entre sociedades", hint: "Quién le debe a quién y qué fondeó el grupo",
@@ -2486,7 +2489,7 @@ const LENTES = [
 // Año de la barra común). Si un reporte está acá y NO trae barra propia, se queda sin filtros; si falta acá,
 // le aparece un "Año" que su vista ignora — que es lo que pasaba con Pagos y cobros.
 const TABS_CON_BARRA_PROPIA = new Set([
-  "consolidado", "balance_pn", "cf", "cxp_prov", "cxc_cli",
+  "consolidado", "balance_pn", "cf", "posicion_fin", "cxp_prov", "cxc_cli",
   "inf_egresos", "inf_ingresos", "inf_pagos", "devengado",
 ]);
 
@@ -2533,6 +2536,7 @@ const _hover = (on) => (e) => {
   e.currentTarget.style.transform = on ? "translateY(-1px)" : "none";
 };
 
+  target:    ["M12 3a9 9 0 100 18 9 9 0 000-18z", "M12 7.5a4.5 4.5 0 100 9 4.5 4.5 0 000-9z", "M12 11a1 1 0 100 2 1 1 0 000-2z"],
 // Tarjeta GRANDE (grupo "Operar el día a día"): tile 44 + título + descripción a dos líneas.
 function ReportCardHero({ t, onClick }) {
   return (
@@ -3106,6 +3110,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   }, [loadKey]);
   // Fuentes secundarias que cargan FUERA del batch principal (fire-and-forget, para no colgar el reporte si su
   // backend tarda): histórico, franquicias (Ingresos HQ) y fondeo/interco (Capex). `loading` se apaga con el
+  const [posMeta,        setPosMeta]        = useState(null);   // Posición financiera: { fecha, moneda } → caption de la foto
   // batch → estas siguen llegando después. Marcamos cada una "settled" (ok o falla) para un aviso suave: mientras
   // falte alguna, el P&L puede mostrar líneas incompletas y avisamos, sin bloquear.
   const [secReady, setSecReady] = useState({ hist: false, franq: false, interco: false });
@@ -3957,7 +3962,9 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const vistaFotoLabel = vistaPnl === "evolucion" ? "Evolución mensual"
     : vistaPnl === "mensual" ? `Mensual · ${MESES[mesSel]}`
     : `YTD a ${MESES[mesSel]}`;
-  const fotoCaption = `${curTab?.label ?? "Reporte"}  ·  ${year}  ·  ${vistaFotoLabel}  ·  ${monedaFotoLabel}  ·  ${sinIva ? "Sin IVA" : "Con IVA"}`;
+  const fotoCaption = activeTab === "posicion_fin"
+    ? `Posición financiera  ·  al ${fmtDate(posMeta?.fecha || hoyISO())}  ·  ${!posMeta?.moneda || posMeta.moneda === "ALL" ? "USD consolidado" : posMeta.moneda}`
+    : `${curTab?.label ?? "Reporte"}  ·  ${year}  ·  ${vistaFotoLabel}  ·  ${monedaFotoLabel}  ·  ${sinIva ? "Sin IVA" : "Con IVA"}`;
 
   // Copiar el reporte visible como imagen (para pegar en PowerPoint). Feedback efímero.
   const copiarFoto = async () => {
@@ -4011,7 +4018,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       {activeTab !== "cxp_prov" && activeTab !== "cxc_cli" && !((activeTab === "interco_matriz" || activeTab === "interco") && intercoDrilling) && (
       <PageHeader
         title={curTab?.label ?? "Reporte"}
-        subtitle={(isPnlTiempo || isBigg || isVentasHQ || activeTab === "cxp_prov" || activeTab === "cxc_cli" || activeTab === "consolidado" || activeTab === "balance_pn" || activeTab === "cf") ? undefined : (activeTab === "interco_matriz" || activeTab === "interco") ? curTab?.desc : curLente?.label}
+        subtitle={(isPnlTiempo || isBigg || isVentasHQ || activeTab === "cxp_prov" || activeTab === "cxc_cli" || activeTab === "consolidado" || activeTab === "balance_pn" || activeTab === "cf" || activeTab === "posicion_fin") ? undefined : (activeTab === "interco_matriz" || activeTab === "interco") ? curTab?.desc : curLente?.label}
         back={
           <button onClick={() => setActiveTab(null)} style={{
             display: "inline-flex", alignItems: "center", gap: 6,
@@ -4034,8 +4041,8 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
               }
               setVistaPnl(v);
             }} />}
-            {/* Menú ⋮: Bajar a Excel / Ampliar (foto) / Copiar imagen (para PowerPoint). Solo en reportes con tabla P&L. */}
-            {(isPnlTiempo || isBigg || isVentasHQ) && (
+            {/* Menú ⋮: Bajar a Excel / Ampliar (foto) / Copiar imagen (para PowerPoint). Reportes con tabla P&L + Posición financiera (solo foto). */}
+            {(isPnlTiempo || isBigg || isVentasHQ || activeTab === "posicion_fin") && (
               <div ref={actMenuRef} style={{ position: "relative" }}>
                 <button onClick={() => setShowActMenu(o => !o)} title="Acciones" style={{
                   display: "inline-flex", alignItems: "center", justifyContent: "center",
@@ -4433,4 +4440,11 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
 
     </div>
   );
+      {/* Posición financiera: mismo motor que Tesorería consolidada, una sola vista, abre en el último cierre de mes.
+          El contenido va en reportRef → menú ⋮ Ampliar / Copiar imagen. */}
+      {activeTab === "posicion_fin" && (
+        <TabTesoreriaConsolidada vistas={["posicion"]} fechaInicial={finMesAnteriorReal(hoyISO())}
+          contentRef={reportRef} onMeta={setPosMeta}
+          pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
+      )}
 }
