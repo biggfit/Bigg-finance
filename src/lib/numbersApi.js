@@ -3046,7 +3046,7 @@ export function intercoLedger({ movs = [], comps = [], centros = [], sociedades 
     const meta = { tipo: "Sueldo", prov: e.prov, cuenta: nc(e.cuenta) || "Sueldos", centro: e.centro, ref: e.ref, refKind: e.refKind };
     pair(e.A, e.B, e.moneda, e.fecha, e.concepto, e.monto, meta);
   }
-  const key = f => { const s = String(f || ""); if (/^\d{4}-/.test(s)) return s.slice(0, 10); const [d, mm, y] = s.split("/"); return y ? `${y}-${String(mm).padStart(2, "0")}-${String(d).padStart(2, "0")}` : s; };
+  const key = f => String(f || "").slice(0, 10);   // fechas ISO (como en lecturaInterco); sin hora para no reordenar el mismo día
   entries.sort((a, b) => key(a.fecha).localeCompare(key(b.fecha)));
   let run = opening;
   for (const e of entries) { run += e.delta; e.saldo = run; }
@@ -3184,6 +3184,27 @@ function _finRowToCuota(r) {
 const recargoCuota = (pagadoTotal, totalCuota) =>
   Math.max(0, Math.round(((Number(pagadoTotal) || 0) - (Number(totalCuota) || 0)) * 100) / 100);
 
+/** Cuánto se debe todavía de UNA cuota: { capital_remanente, saldo_remanente }.
+ *  Sin `corte` → a hoy: lo que ya dice la cuota (estado pagada/cancelada = 0; si no, total − pagado).
+ *  Con `corte` (YYYY-MM-DD) → a esa fecha: se cuentan solo los pagos fechados hasta el corte (`c.pagos`, ver
+ *  fetchFinanciaciones). Una cuota cerrada a mano sin movimiento (legacy) usa `fecha_pago`; sin fecha → saldada.
+ *  El capital remanente es proporcional al saldo (un pago parcial baja capital e interés a prorrata).
+ *  Es LA regla del pasivo de planes: la usan agruparPlanes (hoy), tesoreriaDerive (as-of) y financiacionLedger
+ *  (extracto) → encabezado y "Ver movimientos" cierran por construcción. */
+export function remanenteCuota(c, corte = null) {
+  const capital = Number(c.capital) || 0;
+  const total   = Number(c.total) > 0 ? Number(c.total) : capital;
+  const cerrada = c.estado === "pagada" || c.estado === "cancelada";
+  let pagado;
+  if (!corte)                                        pagado = cerrada ? total : (Number(c.pagado) || 0);
+  else if (Array.isArray(c.pagos) && c.pagos.length) pagado = c.pagos.reduce((a, p) => (String(p.fecha ?? "") <= corte ? a + (Number(p.monto) || 0) : a), 0);
+  else if (cerrada)                                  pagado = (!c.fecha_pago || String(c.fecha_pago) <= corte) ? total : 0;
+  else                                               pagado = 0;
+  const saldo = Math.max(0, total - pagado);
+  const capital_remanente = total > 0 ? capital * (saldo / total) : (saldo > 0.5 ? capital : 0);
+  return { capital_remanente, saldo_remanente: saldo };
+}
+
 /** Agrupa las filas planas (una por cuota) en planes con su cronograma + derivados.
  *  `pagadoPorCuota` (opcional) = { "<plan_id>#<nro>": montoPagado } derivado de los movimientos
  *  (origen "cuota") → habilita PAGO PARCIAL: saldo por cuota = total − pagado, estado "parcial". */
@@ -3236,15 +3257,12 @@ export function agruparPlanes(rows = [], pagadoPorCuota = {}, pagosPorCuota = {}
       if (c.saldoCuota <= 0.5)    c.estado = "pagada";
       else if (pagado > 0.5)      c.estado = "parcial";
     }
-    // Capital remanente de una cuota (para el pasivo): pagada/cancelada → 0; parcial → proporcional al saldo.
-    const capRem = c => (c.estado === "pagada" || c.estado === "cancelada") ? 0
-      : (Number(c.total) > 0 ? c.capital * (c.saldoCuota / c.total) : (c.saldoCuota > 0.5 ? c.capital : 0));
-    // Se expone por cuota: el pasivo de un plan con `capital_en_cuotas` suma solo las YA VENCIDAS, y para eso
-    // necesita el remanente cuota por cuota (ver financiacionPasivoBuckets). `saldo_remanente` (= saldoCuota, a hoy)
-    // es el total aún adeudado de la cuota: su parte no-capital entra al pasivo cuando la cuota ya venció.
-    for (const c of p.cuotas) { c.capital_remanente = capRem(c); c.saldo_remanente = Number(c.saldoCuota) || 0; }
+    // Remanente por cuota A HOY (remanenteCuota, la misma regla que al corte). Se expone porque el pasivo de un
+    // plan con `capital_en_cuotas` suma solo las YA VENCIDAS (financiacionPasivoBuckets) y `saldo_remanente`
+    // aporta la parte no-capital (interés/IVA/imp.) de las vencidas impagas.
+    for (const c of p.cuotas) Object.assign(c, remanenteCuota(c));
     const capital_total  = p.cuotas.reduce((s, c) => s + c.capital, 0);
-    const saldo          = p.cuotas.reduce((s, c) => s + capRem(c), 0);
+    const saldo          = p.cuotas.reduce((s, c) => s + c.capital_remanente, 0);
     const capital_pagado = capital_total - saldo;
     const pagadas        = p.cuotas.filter(c => c.estado === "pagada");
     const prox           = p.cuotas.find(c => c.saldoCuota > 0.5 && c.estado !== "cancelada");
@@ -3288,17 +3306,23 @@ export async function fetchFinanciaciones(sociedad) {
   return agruparPlanes(rows, pagadoPorCuota, pagosPorCuota);
 }
 
-// Ledger (extracto) del PASIVO de financiaciones de un bucket (plan_afip / prestamo) en una moneda:
-// el saldo es el capital adeudado. Apertura = capital original (o remanente al go-live en aperturas);
-// cada cuota PAGADA lo baja (−capital) por su fecha de pago; las PENDIENTES se muestran como evento
-// (delta 0, el capital ya estaba en la apertura) para ver si la cuota del mes se devengó/está por pagar.
-// `final` = capital pendiente (coincide con el saldo del bucket). Espeja el shape de intercoLedger.
-export function financiacionLedger(planes = [], { tipo = null, moneda = "ARS" } = {}) {
-  const hoy = new Date().toISOString().slice(0, 10);
+// Ledger (extracto) del PASIVO de financiaciones de un bucket (plan_afip / prestamo) en una moneda, A UNA FECHA
+// (`corte`, default hoy). El saldo es lo adeudado: capital + parte no-capital de las cuotas ya vencidas e impagas.
+//   · Apertura = capital de los planes ya consolidados al corte (un plan normal debe todo al consolidar).
+//   · Plan con `capital_en_cuotas`: su capital NACE en cada vencimiento (+capital, "devengada").
+//   · Cada pago fechado ≤ corte baja el capital a prorrata (un parcial baja capital e interés en proporción).
+//   · Cuota vencida e impaga: suma su parte no-capital aún adeudada (el P&L ya la devengó al vencimiento).
+//   · Cuota futura: evento informativo (delta 0, `pend`) para ver qué viene.
+// Misma regla que financiacionPasivoBuckets (remanenteCuota + mismo filtro de planes) → `final` = el saldo del
+// encabezado, también con fecha de corte. Hasta el 1/10/2026 decidía por `estado` y sin corte: un plan de capital
+// en cuotas entraba entero y un parcial no bajaba nada → el extracto de Ñako mostraba 38M ARS de más.
+export function financiacionLedger(planes = [], { tipo = null, moneda = "ARS", corte = "" } = {}) {
+  const hasta = String(corte || new Date().toISOString().slice(0, 10));
   const fmtN = v => (Number(v) || 0).toLocaleString("es-AR", { maximumFractionDigits: 2 });
   const sel = (planes || []).filter(p =>
     (p.moneda || "ARS") === moneda &&
-    (tipo == null || (tipo === "plan_afip" ? p.tipo === "plan_afip" : p.tipo !== "plan_afip")));
+    (tipo == null || (tipo === "plan_afip" ? p.tipo === "plan_afip" : p.tipo !== "plan_afip")) &&
+    (p.capital_en_cuotas || String(p.fecha_consolidacion ?? "") <= hasta));   // mismo as-of que tesoreriaDerive
   let opening = 0;
   const entries = [];
   for (const p of sel) {
@@ -3306,20 +3330,33 @@ export function financiacionLedger(planes = [], { tipo = null, moneda = "ARS" } 
     const N = p.n_cuotas || (p.cuotas || []).length;
     for (const c of (p.cuotas || [])) {
       if (c.estado === "cancelada") continue;
-      opening += c.capital;                              // capital no cancelado = deuda de apertura
-      if (c.estado === "pagada") {
-        entries.push({ fecha: c.fecha_pago || c.vto, delta: -c.capital,
-          concepto: `${acr} · Cuota ${c.nro_cuota}/${N} pagada`,
-          sub: `capital ${fmtN(c.capital)} · interés ${fmtN(c.interes)}` });
+      const capital = Number(c.capital) || 0, total = Number(c.total) > 0 ? Number(c.total) : capital;
+      const vencida = !!c.vto && String(c.vto) <= hasta;
+      const sub = `capital ${fmtN(capital)} · interés ${fmtN(c.interes)}`;
+      const nombre = `${acr} · Cuota ${c.nro_cuota}/${N}`;
+      // Capital: en la apertura (plan normal) o al vencimiento (capital en cuotas, solo si ya venció).
+      if (!p.capital_en_cuotas) opening += capital;
+      else if (vencida) entries.push({ fecha: c.vto, delta: capital, concepto: `${nombre} devengada (capital)`, sub });
+      else { entries.push({ fecha: c.vto, delta: 0, pend: true, concepto: `${nombre} programada`, sub }); continue; }
+      // Pagos hasta el corte, cada uno baja capital a prorrata. Cierre manual sin movimiento (legacy): un solo evento.
+      const pagos = Array.isArray(c.pagos) && c.pagos.length ? c.pagos
+        : ((c.estado === "pagada") && (!c.fecha_pago || String(c.fecha_pago) <= hasta) ? [{ fecha: c.fecha_pago || c.vto, monto: total }] : []);
+      let pagado = 0;
+      for (const pg of pagos) {
+        if (String(pg.fecha ?? "") > hasta) continue;
+        const m = Number(pg.monto) || 0; pagado += m;
+        const parcial = m + 0.5 < total;
+        entries.push({ fecha: pg.fecha || c.vto, delta: -(total > 0 ? capital * (m / total) : capital),
+          concepto: `${nombre} ${parcial ? "pago parcial" : "pagada"}`, sub: parcial ? `${sub} · pagado ${fmtN(m)} de ${fmtN(total)}` : sub });
+      }
+      const { capital_remanente, saldo_remanente } = remanenteCuota(c, hasta);
+      if (saldo_remanente <= 0.5) continue;
+      if (vencida) {
+        // Vencida e impaga: se adeuda también la parte no-capital que resta (interés/IVA/imp.), ya devengada.
+        entries.push({ fecha: c.vto, delta: Math.max(0, saldo_remanente - capital_remanente), pend: true,
+          concepto: `${nombre} ${pagado > 0.5 ? "pago parcial · " : ""}devengada · pendiente de pago (+ interés adeudado)`, sub });
       } else {
-        const dev = c.vto && String(c.vto) <= hoy;       // vencida = ya devengada (P&L por vto)
-        // Vencida e impaga: al capital (ya en la apertura) se le suma la parte no-capital de la cuota
-        // (interés/IVA/imp.), que desde el vencimiento también se adeuda → el ledger cierra con el mismo
-        // saldo que financiacionPasivoBuckets.
-        const noCap = dev ? Math.max(0, (Number(c.total) || 0) - (Number(c.capital) || 0)) : 0;
-        entries.push({ fecha: c.vto, delta: noCap, pend: true,
-          concepto: `${acr} · Cuota ${c.nro_cuota}/${N} ${dev ? "devengada · pendiente de pago (+ interés adeudado)" : "programada"}`,
-          sub: `capital ${fmtN(c.capital)} · interés ${fmtN(c.interes)}` });
+        entries.push({ fecha: c.vto, delta: 0, pend: true, concepto: `${nombre} programada`, sub });
       }
     }
   }

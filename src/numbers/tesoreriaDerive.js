@@ -5,7 +5,7 @@
 // de Reportes (loop por sociedad sobre datasets de todas). Sin React, sin I/O.
 import {
   calcSaldoNeto, esCuentaCredito, esIgnorado,
-  financiacionPasivoBuckets, financiacionLedger, agruparAnticipos, anticipoPasivo, sociosSaldos, lecturaInterco,
+  financiacionPasivoBuckets, financiacionLedger, remanenteCuota, agruparAnticipos, anticipoPasivo, sociosSaldos, lecturaInterco,
 } from "../lib/numbersApi";
 import { parsePagoFromMov, normSoc, pendienteSueldosPorLegajo, adelantoSueldosPorLegajo } from "../lib/sueldosApi";
 import { franquiciasSaldosCxC } from "../lib/franquiciasAdapter";
@@ -164,13 +164,16 @@ export function derivarSaldos({
   const docCC = (c) => ({ fecha: c.fecha, cuenta: c.cuenta || "—", nroComp: c.nroComp || c.nro_comp || "", vto: c.vto, moneda: c.moneda ?? "ARS" });
 
   // ── A cobrar (comprobantes de ingreso pendientes) ──
+  // Índice documento_id → pagos/cobros (una pasada; antes cada factura recorría la lista entera).
+  const porDoc = (arr) => { const m = new Map(); for (const p of arr) { const k = p.documento_id; if (!m.has(k)) m.set(k, []); m.get(k).push(p); } return m; };
   const cobros = pagosCobros.filter(p => p.tipo === "COBRO" && (!corte || (p.fecha ?? "") <= corte));
+  const cobrosDoc = porDoc(cobros);
   const grpCob = {};
   const ledCob = {};   // ledger por grupo (label||moneda): TODAS las facturas + sus cobros
   for (const ing of ingresos) {
     if ((ing.sociedad ?? "").toLowerCase() !== _soc) continue;
     if (corte && (ing.fecha ?? "") > corte) continue;
-    const pagosDoc = cobros.filter(c => c.documento_id === ing.id);
+    const pagosDoc = cobrosDoc.get(ing.id) || [];
     const fCentro  = fracCentro(ing);
     if (fCentro === 0) continue;                                   // comprobante fuera de los centros elegidos
     const neto     = calcSaldoNeto(ing.importe, pagosDoc);
@@ -200,7 +203,7 @@ export function derivarSaldos({
   if (corte) for (const ing of ingresos) {
     if ((ing.sociedad ?? "").toLowerCase() !== _soc || (ing.fecha ?? "") <= corte) continue;
     const fCentro = fracCentro(ing); if (fCentro === 0) continue;
-    const cobrado = cobros.filter(c => c.documento_id === ing.id).reduce((s, c) => s + Math.abs(Number(c.monto) || 0), 0);
+    const cobrado = (cobrosDoc.get(ing.id) || []).reduce((s, c) => s + Math.abs(Number(c.monto) || 0), 0);
     acumACuenta(cobrosACuenta, ing.moneda ?? "ARS", cobrado * fCentro, ing.cliente || ing.proveedor || "Sin nombre", ing.vto, ing.clienteId, "pagar", docCC(ing));
   }
   const aCobrarComp = Object.values(grpCob).sort((a, b) => b.saldo - a.saldo);
@@ -251,13 +254,14 @@ export function derivarSaldos({
 
   // ── A pagar (comprobantes de egreso pendientes) ──
   const pagos = pagosCobros.filter(p => (p.tipo === "PAGO" || p.tipo === "EGRESO_GASTO") && (!corte || (p.fecha ?? "") <= corte));
+  const pagosDocIdx = porDoc(pagos);
   const pasivoLabel = { proveedores: "Proveedores", sueldos: "Sueldos", impuestos: "Impuestos", financiero: "Financiero", ventas: "Ventas" };
   const grpPag = {};
   const ledPag = {};   // ledger por grupo (label||moneda): TODAS las facturas + sus pagos
   for (const eg of egresos) {
     if ((eg.sociedad ?? "").toLowerCase() !== _soc) continue;
     if (corte && (eg.fecha ?? "") > corte) continue;
-    const pagosDoc = pagos.filter(p => p.documento_id === eg.id);
+    const pagosDoc = pagosDocIdx.get(eg.id) || [];
     const fCentro  = fracCentro(eg);
     if (fCentro === 0) continue;                                   // comprobante fuera de los centros elegidos
     const neto     = calcSaldoNeto(eg.importe, pagosDoc);
@@ -289,7 +293,7 @@ export function derivarSaldos({
   if (corte) for (const eg of egresos) {
     if ((eg.sociedad ?? "").toLowerCase() !== _soc || (eg.fecha ?? "") <= corte) continue;
     const fCentro = fracCentro(eg); if (fCentro === 0) continue;
-    const pagado = pagos.filter(p => p.documento_id === eg.id).reduce((s, p) => s + Math.abs(Number(p.monto) || 0), 0);
+    const pagado = (pagosDocIdx.get(eg.id) || []).reduce((s, p) => s + Math.abs(Number(p.monto) || 0), 0);
     acumACuenta(pagosACuenta, eg.moneda ?? "ARS", pagado * fCentro, eg.proveedor || "Sin proveedor", eg.vto, eg.proveedorId, "cobrar", docCC(eg));
   }
   const itemsACuenta = (store, label, headerColor) => Object.entries(store).filter(([, e]) => e.saldo > 0.005)
@@ -301,36 +305,10 @@ export function derivarSaldos({
 
   // ── Pasivo de financiaciones (planes AFIP + créditos) ──
   const finPasivo = (() => {
-    // As-of: excluye planes consolidados después del corte y recalcula el `saldo` del plan al corte desde
-    // sus cuotas — una cuota pagada DESPUÉS del corte todavía debía su capital a esa fecha (se "reabre").
-    // (`financiaciones` ya viene agrupado por plan con .cuotas; el saldo del plano es lo que lee el bucket.)
-    // Sin corte → las filas originales (idéntico a hoy).
-    // Además del saldo del plano, se recalcula `capital_remanente` POR CUOTA al corte: es lo que mira
-    // financiacionPasivoBuckets para los planes con `capital_en_cuotas` (solo pesa lo ya vencido).
-    // Capital que una cuota todavía debía AL CORTE.
-    // Pagado HASTA el corte, por FECHA de cada pago parcial. Un parcial no setea `fecha_pago` en la cuota →
-    // antes su reducción se aplicaba en todos los cortes (deuda subvaluada al 31 de meses ANTERIORES al pago).
-    // Con `c.pagos` fechado (ver agruparPlanes/fetchFinanciaciones) el remanente al corte es exacto: préstamos
-    // a empleados que se pagan de a poco quedan bien mes a mes.
-    // Devuelve { capital_remanente, saldo_remanente } al corte. `saldo_remanente` (total de la cuota aún adeudado)
-    // lo usa financiacionPasivoBuckets para sumar la parte NO-capital (interés/IVA/imp.) de las cuotas vencidas
-    // e impagas: deuda que el P&L ya devengó al vencimiento.
-    const remAsOf = (c) => {
-      const capital = Number(c.capital) || 0;
-      const total   = Number(c.total) > 0 ? Number(c.total) : capital;
-      let pagadoAsOf;
-      if (Array.isArray(c.pagos) && c.pagos.length) {
-        pagadoAsOf = c.pagos.reduce((a, p) => (String(p.fecha ?? "") <= corte ? a + (Number(p.monto) || 0) : a), 0);
-      } else if (c.estado === "pagada" || c.estado === "cancelada") {
-        // Cierre manual sin movimiento de pago (legacy): usar fecha_pago; sin fecha → saldada al corte.
-        pagadoAsOf = (!c.fecha_pago || String(c.fecha_pago) <= corte) ? total : 0;
-      } else {
-        pagadoAsOf = 0;   // sin pagos → capital entero adeudado
-      }
-      const remanenteTotal = Math.max(0, total - pagadoAsOf);
-      const capital_remanente = total > 0 ? capital * (remanenteTotal / total) : (remanenteTotal > 0.5 ? capital : 0);
-      return { capital_remanente, saldo_remanente: remanenteTotal };
-    };
+    // As-of: excluye planes consolidados después del corte y recalcula, por cuota, cuánto se debía A ESA FECHA
+    // (remanenteCuota con corte: pagos fechados hasta el corte; una cuota pagada DESPUÉS del corte se "reabre").
+    // Es lo que mira financiacionPasivoBuckets (capital_remanente / saldo_remanente). Sin corte → las filas
+    // originales, que ya vienen calculadas a hoy por agruparPlanes con la misma regla.
     // El filtro por consolidación existe porque la deuda de un plan normal no existía antes de armarlo. Con
     // `capital_en_cuotas` la deuda nace en cada VENCIMIENTO, no al consolidar: el filtro sobra (el bucket ya
     // corta por vto) y encima muerde si alguna cuota vence antes de la consolidación — el P&L devengaría esa
@@ -339,7 +317,7 @@ export function derivarSaldos({
       ? financiaciones
           .filter(f => f.capital_en_cuotas || (f.fecha_consolidacion ?? "") <= corte)
           .map(f => {
-            const cuotas = (f.cuotas ?? []).map(c => ({ ...c, ...remAsOf(c) }));
+            const cuotas = (f.cuotas ?? []).map(c => ({ ...c, ...remanenteCuota(c, corte) }));
             return { ...f, cuotas, saldo: cuotas.reduce((s, c) => s + c.capital_remanente, 0) };
           })
       : financiaciones;
@@ -350,8 +328,8 @@ export function derivarSaldos({
         if (bucket.tot[mon] <= 0) continue;
         const docs = bucket.docs.filter(d => d.moneda === mon)
           .map(d => ({ contraparte: `${d.acreedor || "—"}${d.nro_plan ? " · " + d.nro_plan : ""}`, vto: d.prox_vto, saldo: d.saldo, moneda: mon }));
-        // ledger = extracto del pasivo (apertura + cuotas pagadas/devengadas con saldo corriente)
-        const ledger = financiacionLedger(financiaciones, { tipo, moneda: mon });
+        // ledger = extracto del pasivo al corte (misma regla que el bucket → su `final` es este mismo saldo)
+        const ledger = financiacionLedger(financiaciones, { tipo, moneda: mon, corte });
         items.push({ label, moneda: mon, saldo: bucket.tot[mon], docs, ledger, headerColor: "#dc2626" });
       }
     };
