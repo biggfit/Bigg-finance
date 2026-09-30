@@ -154,18 +154,20 @@ const PNL_INICIO = "2026-07-01";
 // El "qué cuenta va en cada línea" vive acá a propósito: es el P&L de management de la sede,
 // curado. Cuentas fuera de este mapeo con movimientos → bloque "Sin clasificar" al pie
 // (control de fugas: líneas mapeadas + sin clasificar = todo, nada se esconde).
+// Los nombres son los del maestro nb_cuentas (1/10/2026: el histórico de España/Colombia se unificó sobre
+// él y salieron de acá 13 nombres sin cuenta ni filas).
 // Paleta sobria: los subgrupos van todos en gris pizarra neutro; el color con significado
 // (verde/rojo) se reserva para las líneas de resultado. Las bandas de sección aportan la estructura.
 const SEDE_HDR = "#475569";   // slate — encabezados de subgrupo y montos de cuenta
 const SEDE_GRUPOS = [
-  { key: "vta_cf",    label: "Ventas consumidor final",  color: SEDE_HDR, cuentas: ["Ventas Mercado Pago", "Ing.Stripe", "Ing. Datafono", "Ing. via Banco", "Ing. Efectivo", "Depositos", "Ventas en Efectivo", "Otros Ingresos", "Ventas", "Efectivo", "Devolucion"] },
-  { key: "int_bigg",  label: "Interusos red BIGG",       color: SEDE_HDR, cuentas: ["Interusos", "Interusos Genericos"] },
-  { key: "int_corp",  label: "Interusos corporativos",   color: SEDE_HDR, cuentas: ["Coorporativos", "Interusos Gympass"] },
-  { key: "cvar",      label: "Costos Variables",         color: SEDE_HDR, cuentas: ["Fee Facturación", "Fee Facturacion", "Fees Stripe", "Aranceles y Otros Financieros", "IIBB", "Imp. Cred. y Deb.", "Aranceles / Pasarela de Pagos", "Gastos Financieros"] },
-  { key: "gp_pers",   label: "Personal",                 color: SEDE_HDR, cuentas: ["Sueldos", "Incentivos", "Comisiones", "Cargas Sociales", "Otros Gastos Salariales", "Aguinaldos", "Costos Salariales", "IRPF", "Otros gastos Salariales"] },
+  { key: "vta_cf",    label: "Ventas consumidor final",  color: SEDE_HDR, cuentas: ["Ventas Mercado Pago", "Ing.Stripe", "Ing. Datafono", "Depositos", "Ventas en Efectivo", "Otros Ingresos"] },
+  { key: "int_bigg",  label: "Interusos red BIGG",       color: SEDE_HDR, cuentas: ["Interusos"] },
+  { key: "int_corp",  label: "Interusos corporativos",   color: SEDE_HDR, cuentas: ["Coorporativos"] },
+  { key: "cvar",      label: "Costos Variables",         color: SEDE_HDR, cuentas: ["Fee Facturación", "Aranceles y Otros Financieros", "IIBB", "Imp. Cred. y Deb.", "Gastos Financieros"] },
+  { key: "gp_pers",   label: "Personal",                 color: SEDE_HDR, cuentas: ["Sueldos", "Incentivos", "Comisiones", "Otros Gastos Salariales", "Aguinaldos", "Costos Salariales", "IRPF"] },
   { key: "gp_ocup",   label: "Ocupación",                color: SEDE_HDR, cuentas: ["Alquiler", "Expensas", "ABL", "Servicios"] },
   { key: "gp_mkt",    label: "Mkt y Pauta",              color: SEDE_HDR, cuentas: ["Acciones de Mkt", "Pauta"] },
-  { key: "gp_otros",  label: "Otros Gastos de la Sede",  color: SEDE_HDR, cuentas: ["Honorarios Profesionales", "Equipamiento y Mantenimiento", "Limpieza", "Otros Gastos del Centro", "Gastos Menores de Caja", "Gastos sin Asignar"] },
+  { key: "gp_otros",  label: "Otros Gastos de la Sede",  color: SEDE_HDR, cuentas: ["Honorarios Profesionales", "Equipamiento y Mantenimiento", "Limpieza", "Otros Gastos del Centro", "Gastos Menores de Caja"] },
   { key: "com_res",   label: "Comisión por resultados",  color: SEDE_HDR, cuentas: ["Comision S/Resultado"] },
   { key: "inv_no_op", label: "Inversiones no operativas", color: SEDE_HDR, cuentas: ["Inversiones / Gastos no Operativos"] },
 ];
@@ -496,7 +498,7 @@ const BIGG_BUCKETS_COSTO = new Set(["gpv", "ghq", "fin", "imp", "capex"]);
 const BIGG_ORDEN_GHQ = ["HQ - Sport", "HQ - Tecnologia", "HQ - Ventas y Operaciones",
   "HQ - Marketing", "HQ - BI", "HQ - Design", "HQ - Gerencia General", "HQ - Administracion",
   "HQ - Recursos Humanos", "HQ - Infraestructura IT"];
-const BIGG_ORDEN_GPV = ["Interusos", "Acciones de Mkt", "Coorporativos (Gympass)", "Fee Facturación"];
+const BIGG_ORDEN_GPV = ["Interusos", "Acciones de Mkt", "Fee Facturación"];
 // Comparador de cuentas: por `order` (índice explícito) y luego alfabético; sin `order`, alfabético.
 const ordCmp = (order) => ([a], [b]) => {
   if (order) { const ia = order.indexOf(a), ib = order.indexOf(b);
@@ -510,7 +512,7 @@ const ordCmp = (order) => ([a], [b]) => {
 // Mapa: cuenta contra → fila de ingreso donde netea.
 const ING_CONTRA_HQ = new Map([["Interusos", "Coorporativos"], ["Pauta", "Pauta"]]);
 const BIGG_ORDEN_FIN = ["Intereses Ganados", "Perdidas Financieras"];
-const BIGG_ORDEN_IMP = ["Plan Facilidades AFIP", "IVA", "IVA Inversiones", "IVA Compra", "Ganancias", "Otros Impuestos"];
+const BIGG_ORDEN_IMP = ["Plan Facilidades AFIP", "IVA", "IVA Compra", "Ganancias", "Otros Impuestos"];
 
 // Cuentas de fee (gerenciamiento/WRE) que NO van en "Ingresos HQ" (ya son líneas de operación → no duplicar).
 const BIGG_FEE_CUENTAS = ["Fee de Gestion y Adm", "Fee de Gestion y Adm (Huergo)"];
