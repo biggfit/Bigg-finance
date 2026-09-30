@@ -1,8 +1,8 @@
-import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { T, ESTADO_EGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn, MoneyField } from "./theme";
 import ConfirmModal from "./ConfirmModal";
-import { TIPO_CUENTA, regimenRetencionDeSociedad } from "../data/tesoreriaData";
-import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcSaldoNeto, calcEstadoEgreso, round2, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, updateMovTesoreria, borrarPagoImputado, shortId, appendProveedor, appendCuenta, aplicarRetencionPracticada, RETDEP_TAG } from "../lib/numbersApi";
+import { regimenRetencionDeSociedad } from "../data/tesoreriaData";
+import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcSaldoNeto, calcEstadoEgreso, round2, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, borrarPagoImputado, shortId, appendProveedor, appendCuenta, aplicarRetencionPracticada, RETDEP_TAG } from "../lib/numbersApi";
 
 // Una factura admite UNA sola retención practicada: se detecta por sus líneas de neteo
 // (tipo=PAGO origen="retencion_practicada" / tag RETDEP) ya vinculadas al comprobante.
@@ -13,14 +13,7 @@ import { makeResolveCC, makeResolveCB, inputStyle, makeCrearMaestro, stripForDup
 import NuevoEgresoModal from "./NuevoEgresoModal";
 import FiltroFecha, { useFiltroFecha } from "./FiltroFecha";
 import AgregarPagoModal from "./pagos/AgregarPagoModal";
-
-function CCDisplay({ lineas, resolveCC }) {
-  const ids = [...new Set((lineas ?? []).map(l => l.cc).filter(Boolean))];
-  if (ids.length === 0) return <span style={{ color:T.dim, fontSize:11 }}>—</span>;
-  const names = ids.map(id => resolveCC(id));
-  if (ids.length === 1) return <span style={{ fontSize:11, background:"#f3f4f6", color:T.muted, borderRadius:6, padding:"2px 8px", fontWeight:600 }}>{names[0]}</span>;
-  return <span title={names.join("\n")} style={{ fontSize:11, background:"#f3f4f6", color:T.muted, borderRadius:6, padding:"2px 8px", fontWeight:600, cursor:"help" }}>Múltiple ({ids.length})</span>;
-}
+import { CCDisplay, RowMenu, matchBusqueda, EditarPagoCobroModal } from "./comprobantesUi";
 
 // AgregarPagoModal se movió a ./pagos/AgregarPagoModal (reusado también por el reporte CxP por proveedor).
 
@@ -177,145 +170,6 @@ function RegistrarRetencionPracticadaModal({ egreso, sociedad, saldoPendiente, c
               }); }}
               style={{ background: canSave ? "#7c3aed" : "#9ca3af", border:"none", borderRadius:8, padding:"9px 20px", fontSize:13, fontWeight:700, color:"#fff", cursor: canSave ? "pointer" : "default", fontFamily:T.font }}>Guardar ✓</button>
           </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Modal: Editar Pago ───────────────────────────────────────────────────────
-function EditarPagoModal({ pago, cuentasSoc, onClose, onSaved }) {
-  const [form, setForm] = useState({
-    fecha:          pago.fecha ?? new Date().toISOString().slice(0, 10),
-    monto:          String(Math.abs(Number(pago.monto) || 0)),
-    cuenta_bancaria: pago.cuenta_bancaria ?? "",
-    nota:           pago.nota ?? "",
-  });
-  const [saving,   setSaving]   = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [confirmDel, setConfirmDel] = useState(false);   // confirmación inline (no dependemos de window.confirm, que Chrome puede bloquear)
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const canSave = form.fecha && form.monto && Number(form.monto) > 0;
-
-  const _savingRef = useRef(false);
-  const handleGuardar = async () => {
-    if (_savingRef.current) return;
-    _savingRef.current = true;
-    setSaving(true);
-    try {
-      const monto = Number(form.monto);
-      await updateMovTesoreria(pago.id, { fecha: form.fecha, monto: -monto, cuenta_bancaria: form.cuenta_bancaria, nota: form.nota });
-      onSaved();
-    } catch (e) { alert("Error: " + e.message); }
-    finally { _savingRef.current = false; setSaving(false); }
-  };
-
-  // Un pago que vino del motor de conciliación (origen="extracto") ES la línea del banco: no se
-  // borra (destruiría el movimiento real) → se desimputa y vuelve a la conciliación. El manual sí se borra.
-  const delMotor = pago.origen === "extracto";
-  const handleBorrar = async () => {
-    setDeleting(true);
-    try {
-      await borrarPagoImputado(pago);
-      onSaved();
-    } catch (e) { alert("Error al eliminar: " + e.message); }
-    finally { setDeleting(false); }
-  };
-
-  const cuentasOpts = cuentasSoc
-    .filter(c => c.moneda === pago.moneda)
-    .map(c => ({ value: c.id, label: `${TIPO_CUENTA[(c.tipo ?? "").toLowerCase()]?.icon ?? "💳"} ${c.nombre}` }));
-
-  return (
-    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.55)", zIndex:600,
-      display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
-      onClick={onClose}>
-      <div className="fade" style={{ background:T.card, borderRadius:10, width:440, maxWidth:"97vw",
-        boxShadow:"0 20px 60px rgba(0,0,0,.35)", overflow:"hidden" }}
-        onClick={e => e.stopPropagation()}>
-
-        {/* Header */}
-        <div style={{ background:"#0e7490", padding:"13px 20px",
-          display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-          <span style={{ fontSize:15, fontWeight:800, color:"#fff" }}>Editar Pago</span>
-          <button onClick={onClose} style={{ background:"transparent", border:"none",
-            color:"rgba(255,255,255,.7)", fontSize:20, cursor:"pointer", lineHeight:1 }}>✕</button>
-        </div>
-
-        {/* Body */}
-        <div style={{ padding:"20px 22px", display:"flex", flexDirection:"column", gap:14 }}>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-            <div>
-              <label style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase",
-                letterSpacing:".07em", display:"block", marginBottom:4 }}>Fecha</label>
-              <input type="date" value={form.fecha} onChange={e => set("fecha", e.target.value)}
-                style={{ width:"100%", padding:"8px 10px", fontSize:13, borderRadius:8, boxSizing:"border-box",
-                  border:`1px solid ${T.cardBorder}`, background:"#eceff3", color:T.text, fontFamily:"inherit" }} />
-            </div>
-            <div>
-              <label style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase",
-                letterSpacing:".07em", display:"block", marginBottom:4 }}>Monto</label>
-              <MoneyField value={form.monto} onChange={e => set("monto", e.target.value)}
-                style={{ width:"100%", padding:"8px 10px", fontSize:13, borderRadius:8, boxSizing:"border-box",
-                  border:`1px solid ${T.cardBorder}`, background:"#eceff3", color:T.text, fontFamily:"inherit" }} />
-            </div>
-          </div>
-          <div>
-            <label style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase",
-              letterSpacing:".07em", display:"block", marginBottom:4 }}>Medio de pago</label>
-            <select value={form.cuenta_bancaria} onChange={e => set("cuenta_bancaria", e.target.value)}
-              style={{ width:"100%", padding:"8px 10px", fontSize:13, borderRadius:8,
-                border:`1px solid ${T.cardBorder}`, background:"#eceff3", color:T.text, fontFamily:"inherit" }}>
-              <option value="">— Seleccionar —</option>
-              {cuentasOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </div>
-          <div>
-            <label style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase",
-              letterSpacing:".07em", display:"block", marginBottom:4 }}>Nota</label>
-            <textarea value={form.nota} onChange={e => set("nota", e.target.value)} rows={3}
-              style={{ width:"100%", padding:"8px 10px", fontSize:13, borderRadius:8, boxSizing:"border-box",
-                border:`1px solid ${T.cardBorder}`, background:"#eceff3", color:T.text,
-                fontFamily:"inherit", resize:"vertical" }} />
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div style={{ padding:"12px 22px 18px", display:"flex", gap:8, alignItems:"center" }}>
-          {!confirmDel ? (
-            <button onClick={() => setConfirmDel(true)} disabled={deleting}
-              style={{ padding:"9px 16px", borderRadius:8, border:"none", cursor:"pointer",
-                background:"#dc2626", color:"#fff", fontWeight:700, fontSize:13, fontFamily:"inherit",
-                display:"flex", alignItems:"center", gap:6 }}>
-              {delMotor ? "↩︎ Quitar de la factura" : "🗑 Borrar"}
-            </button>
-          ) : (
-            <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-              <span style={{ fontSize:12, color:T.muted, fontWeight:700, maxWidth:190 }}>
-                {delMotor ? "Vuelve a conciliación (no se borra del banco). ¿Seguro?" : "¿Eliminar este pago?"}
-              </span>
-              <button onClick={handleBorrar} disabled={deleting}
-                style={{ padding:"9px 14px", borderRadius:8, border:"none", cursor:"pointer",
-                  background:"#dc2626", color:"#fff", fontWeight:700, fontSize:13, fontFamily:"inherit" }}>
-                {deleting ? (delMotor ? "Desimputando…" : "Eliminando…") : (delMotor ? "Sí, quitar" : "Sí, borrar")}
-              </button>
-              <button onClick={() => setConfirmDel(false)} disabled={deleting}
-                style={{ padding:"9px 12px", borderRadius:8, border:`1px solid ${T.cardBorder}`,
-                  cursor:"pointer", background:"#f3f4f6", color:T.muted, fontWeight:700, fontSize:13, fontFamily:"inherit" }}>No</button>
-            </div>
-          )}
-          <div style={{ flex:1 }} />
-          <button onClick={onClose}
-            style={{ padding:"9px 18px", borderRadius:8, border:`1px solid ${T.cardBorder}`,
-              cursor:"pointer", background:"#f3f4f6", color:T.muted, fontWeight:700,
-              fontSize:13, fontFamily:"inherit" }}>Cancelar</button>
-          <button onClick={handleGuardar} disabled={!canSave || saving}
-            style={{ padding:"9px 18px", borderRadius:8, border:"none",
-              cursor: canSave ? "pointer" : "default", fontWeight:700, fontSize:13,
-              fontFamily:"inherit", background: canSave ? "#16a34a" : "#9ca3af", color:"#fff",
-              display:"flex", alignItems:"center", gap:6 }}>
-            💾 {saving ? "Guardando…" : "Guardar"}
-          </button>
         </div>
       </div>
     </div>
@@ -714,88 +568,6 @@ function CtaCteModal({ proveedor, documentos, onClose }) {
   );
 }
 
-// ─── Dropdown de acciones por fila ────────────────────────────────────────────
-function RowMenu({ egreso, onPago, onRetencion, onDetalle, onEditar, onDuplicar, onCtaCte, onMigrar, onEliminar }) {
-  const [open, setOpen] = useState(false);
-  const [pos,  setPos]  = useState({ top:0, left:0 });
-  const btnRef = useRef(null);
-  const menuRef = useRef(null);
-
-  const handleToggle = () => {
-    if (!open && btnRef.current) {
-      const r = btnRef.current.getBoundingClientRect();
-      setPos({ top: r.bottom + 4, left: r.left });
-    }
-    setOpen(o => !o);
-  };
-
-  // Si el menú se sale por abajo del viewport (última fila), lo abrimos hacia arriba.
-  useLayoutEffect(() => {
-    if (!open || !menuRef.current || !btnRef.current) return;
-    const menu = menuRef.current.getBoundingClientRect();
-    if (menu.bottom > window.innerHeight - 8) {
-      const b = btnRef.current.getBoundingClientRect();
-      setPos({ top: b.top - menu.height - 4, left: b.left });
-    }
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = e => {
-      if (menuRef.current && !menuRef.current.contains(e.target) &&
-          btnRef.current  && !btnRef.current.contains(e.target)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  const item = (label, onClick, color) => (
-    <button onClick={() => { onClick(); setOpen(false); }} style={{
-      display:"block", width:"100%", textAlign:"left", padding:"8px 14px",
-      background:"transparent", border:"none", fontSize:13, color: color ?? T.text,
-      cursor:"pointer", fontFamily:T.font,
-    }}
-    onMouseEnter={e => e.currentTarget.style.background="#f3f4f6"}
-    onMouseLeave={e => e.currentTarget.style.background="transparent"}>
-      {label}
-    </button>
-  );
-
-  const divider = <div style={{ height:1, background:T.cardBorder, margin:"3px 0" }} />;
-
-  return (
-    <>
-      <button ref={btnRef} onClick={handleToggle} style={{
-        background: open ? "#e5e7eb" : "#f3f4f6",
-        border:`1px solid ${T.cardBorder}`, borderRadius:6,
-        padding:"3px 8px", cursor:"pointer", fontSize:12, color:T.muted,
-        fontFamily:T.font, lineHeight:1,
-      }}>▾</button>
-
-      {open && (
-        <div ref={menuRef} style={{
-          position:"fixed", top:pos.top, left:pos.left, zIndex:9999,
-          background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:8,
-          boxShadow:"0 8px 24px rgba(0,0,0,.15)", minWidth:170, overflow:"hidden",
-        }}>
-          {item("Ver Detalle",   onDetalle)}
-          {item("Editar",        onEditar)}
-          {item("Duplicar",      onDuplicar)}
-          {onMigrar && item("Cambiar de sociedad", onMigrar)}
-          {divider}
-          {item("Agregar Pago",  onPago, "#0e7490")}
-          {onRetencion && item("Aplicar Retención", onRetencion, "#7c3aed")}
-          {item("Cta. Cte.",     onCtaCte)}
-          {divider}
-          {item("Eliminar",      onEliminar, T.red)}
-        </div>
-      )}
-    </>
-  );
-}
-
 // ─── Modal: Cambiar de sociedad ───────────────────────────────────────────────
 function MigrarSociedadModal({ egreso, sociedades, actual, onClose, onConfirm }) {
   const [destino, setDestino] = useState("");
@@ -902,19 +674,13 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
 
   const rows = useMemo(() => egresos.filter(e => {
     const matchEstado = filtroEstado === "todos" || e.estado === filtroEstado;
-    const q = busqueda.toLowerCase();
-    const matchQ = !q || (e.proveedor ?? "").toLowerCase().includes(q) || (e.cuenta ?? "").toLowerCase().includes(q) || (e.cc ?? "").toLowerCase().includes(q)
-      || String(e.nota ?? "").toLowerCase().includes(q) || String(e.nroComp ?? "").toLowerCase().includes(q);
-    return matchEstado && matchQ && filtroFecha.inRange(e.fecha);
+    return matchEstado && matchBusqueda(e, busqueda, "proveedor") && filtroFecha.inRange(e.fecha);
   }).sort((a, b) => String(b.fecha ?? "").localeCompare(String(a.fecha ?? ""))), [busqueda, filtroEstado, egresos, filtroFecha.inRange]);
 
   const totalesPorMoneda = useMemo(() => {
     // Los totales acompañan la BÚSQUEDA (proveedor/cuenta/CC) pero NO las pestañas de estado
     // (esas tarjetas SON el desglose por estado). Así, al buscar un proveedor, muestran su total.
-    const q = busqueda.toLowerCase();
-    const matchQ = e => !q || (e.proveedor ?? "").toLowerCase().includes(q) || (e.cuenta ?? "").toLowerCase().includes(q) || (e.cc ?? "").toLowerCase().includes(q)
-      || String(e.nota ?? "").toLowerCase().includes(q) || String(e.nroComp ?? "").toLowerCase().includes(q);
-    const enPeriodo = egresos.filter(e => filtroFecha.inRange(e.fecha) && matchQ(e));
+    const enPeriodo = egresos.filter(e => filtroFecha.inRange(e.fecha) && matchBusqueda(e, busqueda, "proveedor"));
     const monedas = [...new Set(enPeriodo.map(e => e.moneda))].filter(Boolean).sort();
     return monedas.map(moneda => {
       const docs = enPeriodo.filter(e => e.moneda === moneda);
@@ -1094,7 +860,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
         />
         {showPago    && <AgregarPagoModal egreso={showPago} saldoPendiente={showPago.saldoPendiente ?? showPago.importe} cuentas={cuentasSoc} onClose={() => setShowPago(null)} onSave={handlePago} />}
         {showRetencion && <RegistrarRetencionPracticadaModal egreso={showRetencion} sociedad={sociedad} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentas={cuentas} proveedores={proveedores} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
-        {editingPago && <EditarPagoModal  pago={editingPago} cuentasSoc={cuentasSoc} onClose={() => setEditingPago(null)} onSaved={() => { setEditingPago(null); cargarEgresos(); }} />}
+        {editingPago && <EditarPagoCobroModal modo="pago" mov={editingPago} cuentasSoc={cuentasSoc} onClose={() => setEditingPago(null)} onSaved={() => { setEditingPago(null); cargarEgresos(); }} />}
         <ConfirmModal open={!!confirmDelDoc} title="¿Eliminar este egreso?" message={confirmDelDoc?.msg}
           confirmLabel="Sí, eliminar" busy={borrando} onConfirm={doEliminar} onCancel={() => setConfirmDelDoc(null)} />
       </>
@@ -1204,20 +970,22 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
 
                   {/* Acciones */}
                   <td style={{ padding:"8px 6px 8px 10px", verticalAlign:"middle" }}>
-                    <RowMenu
-                      egreso={e}
-                      onPago={()     => setShowPago(e)}
-                      onRetencion={(e.saldoPendiente ?? e.importe ?? 0) > 0 && !tieneRetPracticada(e) ? () => setShowRetencion(e) : undefined}
-                      onDetalle={()  => setShowDetalle(e)}
-                      onEditar={()   => setShowEditar(e)}
-                      onDuplicar={() => duplicarEgreso(e)}
-                      onCtaCte={()   => setShowCtaCte({ proveedor: e.proveedor, docs: egresos.filter(x => x.proveedor === e.proveedor) })}
-                      onMigrar={()   => {
+                    <RowMenu items={[
+                      { label:"Ver Detalle", onClick:() => setShowDetalle(e) },
+                      { label:"Editar",      onClick:() => setShowEditar(e) },
+                      { label:"Duplicar",    onClick:() => duplicarEgreso(e) },
+                      { label:"Cambiar de sociedad", onClick:() => {
                         if (e.pagosVinculados?.length > 0) { alert("Esta compra tiene pagos registrados. Eliminá los pagos antes de cambiarla de sociedad."); return; }
                         setShowMigrar(e);
-                      }}
-                      onEliminar={() => handleEliminar(e.id)}
-                    />
+                      } },
+                      "divider",
+                      { label:"Agregar Pago", onClick:() => setShowPago(e), color:"#0e7490" },
+                      (e.saldoPendiente ?? e.importe ?? 0) > 0 && !tieneRetPracticada(e)
+                        && { label:"Aplicar Retención", onClick:() => setShowRetencion(e), color:"#7c3aed" },
+                      { label:"Cta. Cte.",    onClick:() => setShowCtaCte({ proveedor: e.proveedor, docs: egresos.filter(x => x.proveedor === e.proveedor) }) },
+                      "divider",
+                      { label:"Eliminar",     onClick:() => handleEliminar(e.id), color:T.red },
+                    ]} />
                   </td>
 
                   <td style={{ padding:"10px 14px", fontSize:11, color:T.muted, fontFamily:"var(--mono)" }}>{shortId(e.id)}</td>
@@ -1266,7 +1034,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
       {showEditar  && <NuevoEgresoModal  sociedad={sociedad} proveedores={proveedores} cuentas={cuentas} centrosCosto={centrosCosto} initialData={showEditar} onClose={() => setShowEditar(null)} onSave={handleSave} onCrearProveedor={crearProveedor} onCrearCuenta={crearCuenta} />}
       {showPago    && <AgregarPagoModal  egreso={showPago} saldoPendiente={showPago.saldoPendiente ?? showPago.importe} cuentas={cuentasSoc} onClose={() => setShowPago(null)} onSave={handlePago} />}
       {showRetencion && <RegistrarRetencionPracticadaModal egreso={showRetencion} sociedad={sociedad} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentas={cuentas} proveedores={proveedores} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
-      {editingPago && <EditarPagoModal   pago={editingPago} cuentasSoc={cuentasSoc} onClose={() => setEditingPago(null)} onSaved={() => { setEditingPago(null); cargarEgresos(); }} />}
+      {editingPago && <EditarPagoCobroModal modo="pago" mov={editingPago} cuentasSoc={cuentasSoc} onClose={() => setEditingPago(null)} onSaved={() => { setEditingPago(null); cargarEgresos(); }} />}
       {showCtaCte  && <CtaCteModal       proveedor={showCtaCte.proveedor} documentos={showCtaCte.docs} onClose={() => setShowCtaCte(null)} />}
       {showMigrar  && <MigrarSociedadModal egreso={showMigrar} sociedades={sociedades} actual={sociedad} onClose={() => setShowMigrar(null)} onConfirm={handleMigrar} />}
       <ConfirmModal open={!!confirmDelDoc} title="¿Eliminar este egreso?" message={confirmDelDoc?.msg}

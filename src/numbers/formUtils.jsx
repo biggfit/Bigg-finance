@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useCallback, useState } from "react";
 import { T, MoneyField, useCaretMask } from "./theme";
 import { newLinea } from "./useLineas";
+import { todayISO } from "../data/numbersData";
+import { nroCompDeSociedad } from "../data/tesoreriaData";
+import { checkDuplicateComp, round2 } from "../lib/numbersApi";
 
 // ─── Normalizador ─────────────────────────────────────────────────────────────
 export const norm = s => (s ?? "").trim().toLowerCase();
@@ -123,7 +126,6 @@ export const makeResolveCB = (list) => (id) =>
 
 // ─── Totales de líneas ────────────────────────────────────────────────────────
 export function calcLineasTotals(lineas) {
-  const round2 = n => Math.round((Number(n) || 0) * 100) / 100;   // a centavos, sin residuos de milésimas
   let totalSub = 0, totalIva = 0;
   lineas.forEach(l => {
     const sub = round2(Number(l.subtotal) || 0);
@@ -814,4 +816,65 @@ export function InvoiceFormFooter({
       </button>
     </div>
   );
+}
+
+// ─── Formularios de factura (Compras / Ventas): lo que los dos tenían copiado ─────────────────
+
+// Fecha de emisión + fecha fiscal (la que rige el período de IVA, distinta del devengo del P&L).
+// La fiscal arranca igual a la emisión y la SIGUE hasta que el usuario la edite a mano. Al EDITAR, si la
+// fiscal guardada difiere de la emisión, arranca "tocada" para no re-sincronizarla al cambiar la fecha.
+export function useFechaFiscal(initialData) {
+  const [fecha, setFechaRaw] = useState(initialData?.fecha ?? todayISO());
+  const [fechaFiscal, setFechaFiscalRaw] = useState(initialData?.fechaFiscal || initialData?.fecha || todayISO());
+  const [touched, setTouched] = useState(!!(initialData?.fechaFiscal && initialData.fechaFiscal !== initialData.fecha));
+  const setFecha = (v) => { setFechaRaw(v); if (!touched) setFechaFiscalRaw(v); };
+  const setFechaFiscal = (v) => { setFechaFiscalRaw(v); setTouched(true); };
+  return { fecha, setFecha, fechaFiscal, setFechaFiscal };
+}
+
+// Campo "N° comprobante": máscara AFIP o campo libre según el país de la sociedad (nroCompDeSociedad), y
+// el cartel de duplicado debajo cuando `dupError` viene con valor (`dupMensaje` es el texto de cada lado).
+export function NroCompField({ sociedad, value, onChange, dupError, dupMensaje, placeholderLibre }) {
+  const mask  = useNroCompMask(value, onChange);
+  const libre = !nroCompDeSociedad(sociedad).mascara;
+  const style = { ...inputStyle, ...(dupError ? { borderColor: "#dc2626", background: "#fef2f2" } : {}) };
+  return (
+    <SoftField label="N° comprobante">
+      {libre
+        ? <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholderLibre} style={style} />
+        : <input ref={mask.ref} value={value} onChange={mask.onChange} placeholder="FC-A 0001-00001234" style={style} />}
+      {dupError && (
+        <div style={{ marginTop: 5, fontSize: 11, color: "#dc2626", fontWeight: 700,
+          background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 6,
+          padding: "5px 10px", lineHeight: 1.4 }}>
+          {dupMensaje}
+        </div>
+      )}
+    </SoftField>
+  );
+}
+
+// Chequeo de comprobante duplicado (mismo N° para la misma contraparte en la sociedad) al Guardar.
+// La POLÍTICA es de cada pantalla y acá no se unifica:
+//   · bloquea:false (Compras) — la 1ª vez avisa; si el usuario vuelve a Guardar sin cambiar N°/contraparte,
+//     se carga igual (un proveedor puede facturar dos veces el mismo N° por error suyo, o querer cargarla).
+//   · bloquea:true (Ventas) — no deja guardar mientras haya duplicado.
+// El aviso vive atado al N° y la contraparte que lo generaron: cambiar cualquiera de los dos lo limpia
+// (antes se limpiaba con un setState dentro de un useMemo). Si la consulta falla, avisa y no guarda.
+// `chequear()` devuelve true si se puede seguir con el guardado.
+export function useDupGuard({ sociedad, tipo, nroComp, partyId, excludeId, bloquea }) {
+  const [dup, setDup] = useState(null);   // { msg, nro, party }
+  const dupError = dup && dup.nro === nroComp && dup.party === partyId ? dup.msg : null;
+  const chequear = async () => {
+    if (dupError && !bloquea) return true;   // ya avisado → dejar guardar
+    try {
+      const d = await checkDuplicateComp(sociedad, tipo, nroComp, partyId, excludeId);
+      if (d) { setDup({ msg: d, nro: nroComp, party: partyId }); return false; }
+      return true;
+    } catch (e) {
+      alert("No se pudo verificar duplicados: " + e.message);
+      return false;
+    }
+  };
+  return { dupError, chequear };
 }

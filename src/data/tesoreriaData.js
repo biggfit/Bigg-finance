@@ -90,6 +90,18 @@ export const MONEDA_SYM = {
 export const monedaDeSociedad = (id) => SOCIEDADES.find(s => s.id === id)?.moneda ?? "ARS";
 export const paisDeSociedad   = (id) => SOCIEDADES.find(s => s.id === id)?.pais   ?? "AR";
 
+// N° de comprobante por país. Mismo criterio que IVA_POR_PAIS: lo que cambia entre países es DATO.
+//   · mascara: el campo asiste con la máscara AFIP "FC-A 0001-00001234" (AR); en España la numeración no
+//     tiene estructura fija → campo libre.
+//   · avisarSinNro: al guardar sin número se avisa (no bloquea). Solo España: su reporte va a una contadora
+//     externa que cruza cada comprobante contra el libro de IVA por su número.
+// CO y US caen en el argentino, igual que antes de que esto existiera.
+const NRO_COMP_POR_PAIS = {
+  AR: { mascara: true,  avisarSinNro: false },
+  ES: { mascara: false, avisarSinNro: true  },
+};
+export const nroCompDeSociedad = (id) => NRO_COMP_POR_PAIS[paisDeSociedad(id)] ?? NRO_COMP_POR_PAIS.AR;
+
 // Alicuotas de IVA por pais de la sociedad. El circuito de factura estaba cableado a Argentina
 // (opciones 0/10.5/21/27 y default 21), asi que en Tigre Loco no se podia cargar el IVA colombiano
 // —no existia el 19%— y a Bigg Fit LLC, que no lleva IVA, le aparecia 21% preseleccionado.

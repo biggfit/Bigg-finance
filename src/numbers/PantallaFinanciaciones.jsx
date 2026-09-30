@@ -4,7 +4,7 @@ import {
   fetchFinanciaciones, appendFinanciacion, generarCuotas,
   pagarCuota, cancelarFinanciacion, deleteFinanciacion,
   fetchCuentas, fetchCentrosCosto, fetchCuentasBancarias, fetchProveedores,
-  fetchAnticipos, appendAnticipo, deleteAnticipo, fetchClientes, fetchIngresos, shortId,
+  fetchAnticipos, appendAnticipo, deleteAnticipo, fetchClientes, fetchIngresos, shortId, round2,
 } from "../lib/numbersApi";
 import { parsePlanPdf } from "./parsers/planPdf";
 import { useConfirm } from "./useConfirm";
@@ -898,4 +898,3 @@ function PagoCuotaModal({ cuota, plan, bancos, busy, onCancel, onConfirm }) {
   );
 }
 
-const round2 = n => Math.round((Number(n) || 0) * 100) / 100;

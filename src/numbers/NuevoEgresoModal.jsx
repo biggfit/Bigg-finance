@@ -1,20 +1,18 @@
 import { useState, useMemo } from "react";
 import { T } from "./theme";
 import { todayISO, addDays, fmtNum } from "../data/numbersData";
-import { MONEDA_OPTS, monedaDeSociedad, paisDeSociedad, ivaOptsDeSociedad, ivaDefaultDeSociedad } from "../data/tesoreriaData";
+import { MONEDA_OPTS, monedaDeSociedad, ivaOptsDeSociedad, ivaDefaultDeSociedad } from "../data/tesoreriaData";
 import {
   inputStyle, dateStyle, lookupId, makeCCResolver,
   calcLineasTotals, SoftField, FacturaFormFocusRing, FACTURA_FORM_CLASS,
   InvoiceLineasTable, InvoiceNotaYTotales, InvoiceFormFooter,
   useCcGroups, initialFacturaLineas, facturaCanSave, runSaveThenMaybeClose,
   useDeferredEntityLookup, makeFacturaPartyChangeHandler, FACTURA_TOP_FIELDS_GRID,
-  FacturaMaestroCuentaFields, FacturaFormChrome, useNroCompMask,
+  FacturaMaestroCuentaFields, FacturaFormChrome, useFechaFiscal, NroCompField, useDupGuard,
 } from "./formUtils";
 import { ProveedorModal, CuentaModal } from "./PantallaMaestros";
 import { useLineas } from "./useLineas";
-import { checkDuplicateComp } from "../lib/numbersApi";
-import ConfirmModal from "./ConfirmModal";
-import { PIDE_NRO_COMP, AVISO_SIN_NRO } from "./avisoNroComp";
+import { useGuardaSinNro } from "./avisoNroComp";
 
 const EGRESO_SECONDARY_OUTLINE = "#0e7490";
 
@@ -46,17 +44,9 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
   const [provId, setProvId] = useState(initProvId);
   const [cuentaId, setCuentaId] = useState(initCuentaId);
   const [moneda, setMoneda] = useState(initialData?.moneda ?? monedaDeSociedad(sociedad));
-  const [fecha, setFecha] = useState(initialData?.fecha ?? todayISO());
-  // Fecha fiscal = fecha que rige el período de IVA (distinta del devengo del P&L). Default = fecha; sigue a
-  // la fecha de emisión hasta que el usuario la edite a mano (fechaFiscalTouched). Al EDITAR, si la fiscal
-  // guardada difiere de la emisión, arranca "tocada" para no re-sincronizarla al cambiar la fecha.
-  const [fechaFiscal, setFechaFiscal] = useState(initialData?.fechaFiscal || initialData?.fecha || todayISO());
-  const [fechaFiscalTouched, setFechaFiscalTouched] = useState(!!(initialData?.fechaFiscal && initialData.fechaFiscal !== initialData.fecha));
+  const { fecha, setFecha, fechaFiscal, setFechaFiscal } = useFechaFiscal(initialData);   // la fiscal sigue a la emisión hasta que se toque
   const [vto, setVto] = useState(initialData?.vto ?? addDays(todayISO(), 30));
   const [nroComp, setNroComp] = useState(initialData?.nroComp ?? "");
-  const nroMask = useNroCompMask(nroComp, setNroComp);
-  // España (país ES): la nomenclatura de factura no tiene estructura fija → campo libre, sin la máscara AR.
-  const nroLibre = paisDeSociedad(sociedad) === "ES";
   const [nota, setNota] = useState(initialData?.nota ?? "");
   const { lineas, setLineas, updLinea, addLinea, delLinea } = useLineas(initLineas, ivaDefault);
 
@@ -85,9 +75,10 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
   const { totalSub, totalIva, totalFinal } = useMemo(() => calcLineasTotals(lineas), [lineas]);
   const canSave = facturaCanSave({ partyId: provId, cuentaId, fecha, lineas });
 
-  const [dupError, setDupError] = useState(null);
-  // Limpiar error de duplicado cuando cambian los campos clave
-  useMemo(() => setDupError(null), [nroComp, provId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { dupError, chequear: guardConDuplicado } = useDupGuard({
+    sociedad, tipo: "EGRESO", nroComp, partyId: provId, excludeId: isEdit ? initialData.id : null,
+    bloquea: false,   // Compras: avisa y, si se vuelve a Guardar, carga igual (ver useDupGuard)
+  });
 
   const buildPayload = (extra = {}) => {
     const prov = proveedores.find(p => p.id === provId);
@@ -115,30 +106,8 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
     };
   };
 
-  // Duplicado = ADVERTENCIA, no bloqueo: la 1ª vez muestra el aviso; si el usuario vuelve a
-  // Guardar (sin cambiar N°/proveedor, que limpian el aviso) se carga igual. Un mismo proveedor
-  // puede facturar dos veces el mismo N° por error suyo, o querer cargarla a propósito.
-  const guardConDuplicado = async () => {
-    if (dupError) return true;   // ya avisado → dejar guardar
-    try {
-      const dup = await checkDuplicateComp(sociedad, "EGRESO", nroComp, provId, isEdit ? initialData.id : null);
-      if (dup) { setDupError(dup); return false; }
-      return true;
-    } catch (e) {
-      alert("No se pudo verificar duplicados: " + e.message);
-      return false;
-    }
-  };
-  // Guarda "sin N° de comprobante" (ver avisoNroComp): si falta el número, en vez de guardar abre el
-  // cartel y deja pendiente la acción que el usuario apretó — al confirmar se ejecuta esa misma.
-  // Corre DESPUÉS del chequeo de duplicados, que sin número no hace nada (checkDuplicateComp
-  // devuelve null con `nro` vacío), así que las dos guardas no se pisan.
-  const [sinNroPend, setSinNroPend] = useState(null);
   const guardarAhora = (extra) => runSaveThenMaybeClose(onSave, buildPayload(extra), asPage, onClose);
-  const guardarOAvisar = (extra) => {
-    if (PIDE_NRO_COMP(sociedad) && !nroComp.trim()) { setSinNroPend(extra); return; }
-    guardarAhora(extra);
-  };
+  const { guardarOAvisar, avisoSinNro } = useGuardaSinNro(sociedad, nroComp, guardarAhora);   // aviso "sin N°" (Wellness)
 
   const handleSave = async () => {
     if (!(await guardConDuplicado())) return;
@@ -171,7 +140,7 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
         />
         <SoftField label="Fecha de emisión" required>
           <input type="date" value={fecha}
-            onChange={e => { const v = e.target.value; setFecha(v); if (!fechaFiscalTouched) setFechaFiscal(v); }}
+            onChange={e => setFecha(e.target.value)}
             style={dateStyle} />
         </SoftField>
         <SoftField label="Vencimiento de pago">
@@ -184,29 +153,15 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
         </SoftField>
         <SoftField label="Fecha fiscal">
           <input type="date" value={fechaFiscal}
-            onChange={e => { setFechaFiscal(e.target.value); setFechaFiscalTouched(true); }} style={dateStyle} />
+            onChange={e => setFechaFiscal(e.target.value)} style={dateStyle} />
           <div style={{ fontSize: 11, color: T.blue, marginTop: 4, lineHeight: 1.35 }}>
             Período de IVA · default = fecha de emisión
           </div>
         </SoftField>
-        <SoftField label="N° comprobante">
-          {nroLibre
-            ? <input value={nroComp} onChange={e => setNroComp(e.target.value)}
-                placeholder="N° de factura del proveedor"
-                style={{ ...inputStyle, ...(dupError ? { borderColor: "#dc2626", background: "#fef2f2" } : {}) }} />
-            : <input ref={nroMask.ref} value={nroComp}
-                onChange={nroMask.onChange}
-                placeholder="FC-A 0001-00001234"
-                style={{ ...inputStyle, ...(dupError ? { borderColor: "#dc2626", background: "#fef2f2" } : {}) }} />}
-          {dupError && (
-            <div style={{ marginTop: 5, fontSize: 11, color: "#dc2626", fontWeight: 700,
-              background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 6,
-              padding: "5px 10px", lineHeight: 1.4 }}>
-              ⚠️ Ya existe una FC con este número para este proveedor ({dupError}).
-              Si es correcto, tocá Guardar de nuevo para cargarla igual; si no, cambiá el N°.
-            </div>
-          )}
-        </SoftField>
+        <NroCompField sociedad={sociedad} value={nroComp} onChange={setNroComp} dupError={dupError}
+          placeholderLibre="N° de factura del proveedor"
+          dupMensaje={<>⚠️ Ya existe una FC con este número para este proveedor ({dupError}).
+            Si es correcto, tocá Guardar de nuevo para cargarla igual; si no, cambiá el N°.</>} />
       </div>
 
       <InvoiceLineasTable
@@ -285,9 +240,7 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
         <CuentaModal onClose={() => setCrearCuentaOpen(false)}
           onSave={async (form) => { const id = await onCrearCuenta?.(form); if (id) setCuentaId(id); }} />
       )}
-      <ConfirmModal open={!!sinNroPend} {...AVISO_SIN_NRO}
-        onCancel={() => setSinNroPend(null)}
-        onConfirm={() => { const extra = sinNroPend; setSinNroPend(null); guardarAhora(extra); }} />
+      {avisoSinNro}
     </>
   );
 }
