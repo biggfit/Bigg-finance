@@ -6,6 +6,7 @@ import {
   fmtMiles, limpiarMonto,
 } from "../lib/sueldosApi";
 import { useRowChecks } from "../lib/useRowChecks";
+import { HeaderCheckTodas } from "./sueldosUi";
 
 // Orden del picker de legajos (pedido del usuario): encargado/vendedor → coach → limpieza → HQ.
 // Incluye TODOS los legajos activos (un HQ que presta servicios en una sede se elige acá).
@@ -336,10 +337,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
                 ))}
                 <th style={{ ...thStyle, width: 40 }}></th>
                 <th style={{ ...thStyle, width: 40, textAlign: "center" }}>
-                  <input type="checkbox" checked={todosMarcados}
-                    onChange={() => setManyChecked(idsConDatos, !todosMarcados)}
-                    title="Marcar/desmarcar todas como revisadas"
-                    style={{ cursor: "pointer", accentColor: T.green }} />
+                  <HeaderCheckTodas checked={todosMarcados} onToggle={() => setManyChecked(idsConDatos, !todosMarcados)} accent={T.green} />
                 </th>
               </tr>
             </thead>

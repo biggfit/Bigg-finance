@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { fetchLiquidacionesCerradas, fetchPagosAnio, pendienteSueldosPorLegajo } from "../lib/sueldosApi";
+import { fmtPesos } from "./sueldosUi";
 
 const T = {
   card:   "#ffffff",
@@ -14,7 +15,7 @@ const T = {
 };
 
 const MESES_ABR = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
-const fmt = (n) => "$ " + Math.round(Number(n) || 0).toLocaleString("es-AR");
+const fmt = (n) => fmtPesos(n, { espacio: true });
 const periodKey   = (mes, anio) => anio * 100 + mes;
 const periodLabel = (mes, anio) => `${MESES_ABR[mes - 1]} ${anio}`;
 

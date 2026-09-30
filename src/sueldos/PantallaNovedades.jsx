@@ -6,6 +6,7 @@ import {
   fmtMiles, limpiarMonto,
 } from "../lib/sueldosApi";
 import { useRowChecks } from "../lib/useRowChecks";
+import { fmtEntero, HeaderCheckTodas } from "./sueldosUi";
 
 const T = {
   bg:     "#f8fafc",
@@ -279,7 +280,7 @@ export default function PantallaNovedades({ pais = "" }) {
     const cta = resolveCuenta(row).cuenta_contable_nombre;
     return prevMap.get(`${row.legajo_id}|${norm(cta)}`) || 0;
   };
-  const fmtAr   = (n) => (Number(n) || 0).toLocaleString("es-AR");
+  const fmtAr   = fmtEntero;
   const fmt     = (n) => `$${fmtAr(n)}`;
   const fmtDiff = (n) => `${n < 0 ? "−" : n > 0 ? "+" : ""}$${fmtAr(Math.abs(n))}`;
   const diffCol = (n) => (n > 0 ? T.green : n < 0 ? T.red : T.dim);
@@ -383,10 +384,7 @@ export default function PantallaNovedades({ pais = "" }) {
                 <th style={thStyle}>Nota</th>
                 <th style={{ ...thStyle, width: 40 }}></th>
                 <th style={{ ...thStyle, width: 40, textAlign: "center" }}>
-                  <input type="checkbox" checked={todosMarcados}
-                    onChange={() => setManyChecked(idsConDatos, !todosMarcados)}
-                    title="Marcar/desmarcar todas como revisadas"
-                    style={{ cursor: "pointer", accentColor: T.green }} />
+                  <HeaderCheckTodas checked={todosMarcados} onToggle={() => setManyChecked(idsConDatos, !todosMarcados)} accent={T.green} />
                 </th>
               </tr>
             </thead>

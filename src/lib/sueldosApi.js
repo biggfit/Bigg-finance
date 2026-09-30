@@ -515,22 +515,6 @@ export async function delLiquidacionComp(id_liq) {
   }
 }
 
-// Reescribe una liquidación como N líneas (delete-all-then-re-add, secuencial:
-// GAS pierde escrituras concurrentes). Devuelve los ids de línea en orden.
-export async function saveLiquidacionLines(id_liq, lineas) {
-  await delLiquidacionComp(id_liq);
-  const created_at = new Date().toISOString();
-  const rows = asignarIdsLineas(id_liq, lineas).map(l => ({ id_liq, ...l, created_at }));
-  if (!rows.length) return [];
-  // Alta en lote (1 request). Si el GAS no soporta add_batch, cae a alta secuencial.
-  try {
-    await post({ action: "add_batch", sheet: "su_liquidaciones", rows });
-  } catch {
-    for (const row of rows) await post({ action: "add", sheet: "su_liquidaciones", row });
-  }
-  return rows.map(r => r.id);
-}
-
 // Escribe VARIAS liquidaciones en UN solo add_batch (en vez de uno por legajo → "línea por línea").
 // entries = [{ id_liq, lineas, replace }]. `replace` borra antes las líneas viejas de ese id_liq (solo
 // hace falta si ya había filas en la hoja; lo normal es que no → 0 borrados → una sola escritura).
@@ -1296,9 +1280,3 @@ export async function fetchLiquidacionesSedes(mes, anio, pais) {
   return out;
 }
 
-// `id` acá es en realidad el id_liq (liqFromLineas lo expone como `.id` para no romper
-// el resto de la pantalla): hay que borrar TODAS sus líneas, no una fila suelta por id
-// exacto (ese id nunca existe físicamente → "Registro no encontrado" y el borrado no hacía nada).
-export async function deleteLiquidacionSede(id) {
-  await delLiquidacionComp(id);
-}

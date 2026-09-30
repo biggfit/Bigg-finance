@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import { useConfirm } from "../numbers/useConfirm";
 import {
   fetchLegajos, fetchCategorias, fetchObjetivos,
-  fetchLiquidacionesSedes, deleteLiquidacionSede,
+  fetchLiquidacionesSedes, delLiquidacionComp,
   fetchCentrosCostoNumbers, fetchSociedadesNumbers, fetchCuentasBancariasNumbers,
   fetchPagos, appendPago, appendPagos, deletePago, nuevoLote, updateLegajo, fetchHorasDesdeEye, fetchCdpDesdeEye,
   fetchNovedades,
@@ -12,6 +12,7 @@ import {
   idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionesLinesBatch, isCerrada,
   estadoPago, remanentePago, PAGO_EPS, reabrirLiquidaciones,
 } from "../lib/sueldosApi";
+import { fmtPesos, useMesMarcado, BotonMesMarcado } from "./sueldosUi";
 
 const T = {
   bg:     "#f8fafc",
@@ -184,10 +185,7 @@ function HeaderFilter({ label, align = "left", minWidth, mode = "multi", options
 // Helper: toggle de un valor dentro de un Set en estado.
 const toggleEnSet = (setter) => (val) => setter(prev => { const n = new Set(prev); n.has(val) ? n.delete(val) : n.add(val); return n; });
 
-function fmtMoney(n) {
-  if (!n && n !== 0) return "—";
-  return "$" + Math.round(n).toLocaleString("es-AR");
-}
+const fmtMoney = (n) => fmtPesos(n, { guion: "vacio" });
 
 function sortRows(arr, key, dir) {
   if (!key) return arr;
@@ -307,6 +305,18 @@ function wordOverlapM(a, b) {
   return [...wa].filter(w => wb.has(w)).length;
 }
 
+// Mejor candidato de una lista ya normalizada ([{ leg, norm }]) para un nombre normalizado. Requiere nombre
+// COMPLETO (exacto=4, contención=2, o ≥2 palabras=1.5). Un solo nombre de pila en común (score 0.8) NO
+// alcanza: varios "Facundo …" se fusionaban mal.
+function mejorLegajo(normList, normName) {
+  let best = null, bestScore = 0;
+  for (const { leg, norm } of normList) {
+    const ns = nameScoreM(norm, normName);
+    if (ns > bestScore) { bestScore = ns; best = leg; }
+  }
+  return bestScore >= 1.5 ? best : null;
+}
+
 function nameScoreM(normA, normB) {
   if (normA === normB) return 4;
   if (normA.includes(normB) || normB.includes(normA)) return 2;
@@ -362,20 +372,8 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   const lastDraftRef = useRef(null);  // último JSON escrito a localStorage (no-op guard)
   const originalRows = useRef({});  // rowKey → sueldo_base snapshot (baseline % aumento)
 
-  // "Mes cerrado" personal — independiente del estado real de la liquidación (podés marcarlo sin
-  // haber cerrado nada, o dejar sin marcar un mes ya cerrado si volviste a tocarlo). Solo un
-  // recordatorio visual fuerte para no confundirse de mes; vive en este navegador (localStorage),
-  // no en el backend — no es un dato de negocio, es un tilde personal.
-  const [marcados, setMarcados] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("sedesMesesMarcados") || "{}"); } catch { return {}; }
-  });
-  const marcadoKey = `${pais}:${anio}-${mes}`;
-  const marcado = !!marcados[marcadoKey];
-  const toggleMarcado = () => setMarcados(prev => {
-    const next = { ...prev, [marcadoKey]: !prev[marcadoKey] };
-    try { localStorage.setItem("sedesMesesMarcados", JSON.stringify(next)); } catch { /* storage lleno o no disponible */ }
-    return next;
-  });
+  // "Mes finalizado" personal (tilde en este navegador, no es dato de negocio): ver useMesMarcado.
+  const { marcado, toggleMarcado } = useMesMarcado("sedesMesesMarcados", `${pais}:${anio}-${mes}`);
 
   // Wizard state
   const [actualizarLegs, setActualizarLegs] = useState(false);
@@ -622,26 +620,10 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     };
     // Normaliza los nombres de legajos una sola vez (no por cada item de Eye).
     const normLegajos = legajos.map(leg => ({ leg, norm: normNombreM(leg.nombre) }));
-    const matchLegajo = (normName) => {
-      let best = null, bestScore = 0;
-      for (const { leg, norm } of normLegajos) {
-        const ns = nameScoreM(norm, normName);
-        if (ns > bestScore) { bestScore = ns; best = leg; }
-      }
-      // Requiere nombre COMPLETO (exacto=4, contención=2, o ≥2 palabras=1.5). Un solo
-      // nombre de pila en común (score 0.8) NO alcanza: varios "Facundo …" se fusionaban mal.
-      return bestScore >= 1.5 ? best : null;
-    };
+    const matchLegajo = (normName) => mejorLegajo(normLegajos, normName);
     // Match contra legajos DADOS DE BAJA (para reconocer check-ins de ex/suplentes que volvieron).
     const normInactivos = legajosInactivos.map(leg => ({ leg, norm: normNombreM(leg.nombre) }));
-    const matchInactivo = (normName) => {
-      let best = null, bestScore = 0;
-      for (const { leg, norm } of normInactivos) {
-        const ns = nameScoreM(norm, normName);
-        if (ns > bestScore) { bestScore = ns; best = leg; }
-      }
-      return bestScore >= 1.5 ? best : null;
-    };
+    const matchInactivo = (normName) => mejorLegajo(normInactivos, normName);
 
     const byKey = new Map();
     const matchedLegIds = new Set();
@@ -993,7 +975,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       return;
     }
     if (row?.id) {
-      await deleteLiquidacionSede(row.id);
+      await delLiquidacionComp(row.id);   // row.id es el id_liq: borra todas sus líneas
       setLiqsSaved(prev => prev.filter(r => r.id !== row.id));
     }
     if (manualRows.some(r => r._id === _id)) {
@@ -1233,15 +1215,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
             style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 5, padding: "4px 9px", cursor: "pointer", fontSize: 13, color: T.muted }}>›</button>
         </div>
 
-        <button onClick={toggleMarcado}
-          title={marcado ? "Marcado por vos como finalizado — click para desmarcar (no afecta la liquidación real)" : "Marcar este mes como finalizado (tilde personal, no afecta la liquidación)"}
-          style={{
-            background: marcado ? "#334155" : "#fff", color: marcado ? "#fff" : T.muted,
-            border: `1px solid ${marcado ? "#334155" : T.border}`, borderRadius: 7,
-            padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font,
-          }}>
-          {marcado ? "✅ Finalizado" : "☐ En proceso"}
-        </button>
+        <BotonMesMarcado marcado={marcado} onToggle={toggleMarcado} T={T} />
 
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
           {categorias.length === 0 && (

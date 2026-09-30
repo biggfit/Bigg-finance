@@ -4,6 +4,7 @@ import {
   appendCargaSocial, fetchCargasSociales,
 } from "../lib/numbersApi";
 import { baseHaberesPorCentro, fmtMiles, limpiarMonto } from "../lib/sueldosApi";
+import { fmtPesos } from "./sueldosUi";
 
 const T = {
   bg: "#f8fafc", card: "#ffffff", border: "#e2e8f0", text: "#1e293b",
@@ -15,7 +16,7 @@ const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
                 "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 
 const fmtFecha = (s) => { const m = String(s ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1]}` : (s || ""); };
-const fmtMoney = (n) => "$" + Math.round(Number(n) || 0).toLocaleString("es-AR");
+const fmtMoney = (n) => fmtPesos(n);
 const fmtMoney2 = (n) => "$" + (Number(n) || 0).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const hoy     = new Date();

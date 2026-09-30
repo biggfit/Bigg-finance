@@ -3,6 +3,11 @@ import {
   fetchObjetivos, saveObjetivos,
   fetchCentrosCostoNumbers, fetchSociedadesNumbers,
 } from "../lib/sueldosApi";
+import { useRowChecks, migrarMarcasAgrupadas } from "../lib/useRowChecks";
+import { HeaderCheckTodas } from "./sueldosUi";
+
+// Tildes guardados con el formato viejo (un objeto para todos los meses) → formato de useRowChecks.
+migrarMarcasAgrupadas("sedesObjetivosRevisadas");
 
 const T = {
   bg:     "#f8fafc",
@@ -44,29 +49,13 @@ export default function PantallaObjetivos({ pais = "" }) {
   const savingRef = useRef(false);
 
   // Tilde personal por fila ("ya cargué / revisé este dato"): vive en este navegador
-  // (localStorage), no afecta los objetivos guardados.
-  const [revisadas, setRevisadas] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("sedesObjetivosRevisadas") || "{}"); } catch { return {}; }
-  });
-  const revisadaKey = (r) => `${pais}:${anio}-${mes}:${r.sede_id || r.sede_nombre}`;
-  const isRevisada = (r) => !!revisadas[revisadaKey(r)];
-  const toggleRevisada = (r) => setRevisadas(prev => {
-    const key = revisadaKey(r);
-    const next = { ...prev, [key]: !prev[key] };
-    try { localStorage.setItem("sedesObjetivosRevisadas", JSON.stringify(next)); } catch { /* storage lleno o no disponible */ }
-    return next;
-  });
-  const marcarLoteRevisadas = (marcar) => setRevisadas(prev => {
-    const next = { ...prev };
-    for (const r of objetivos) {
-      if (!r.sede_id && !r.sede_nombre) continue;
-      if (marcar) next[revisadaKey(r)] = true;
-      else delete next[revisadaKey(r)];
-    }
-    try { localStorage.setItem("sedesObjetivosRevisadas", JSON.stringify(next)); } catch { /* storage lleno o no disponible */ }
-    return next;
-  });
+  // (localStorage, useRowChecks), no afecta los objetivos guardados. Una clave por país y mes.
+  const { checked: revisadas, toggle, setMany } = useRowChecks(`sedesObjetivosRevisadas:${pais}:${anio}-${mes}`);
+  const idRevisada = (r) => String(r.sede_id || r.sede_nombre);
+  const isRevisada = (r) => revisadas.has(idRevisada(r));
+  const toggleRevisada = (r) => toggle(idRevisada(r));
   const conSede = objetivos.filter(r => r.sede_id || r.sede_nombre);
+  const marcarLoteRevisadas = (marcar) => setMany(conSede.map(idRevisada), marcar);
   const todasRevisadas = conSede.length > 0 && conSede.every(r => isRevisada(r));
 
   const load = useCallback(async (m, a, p) => {
@@ -193,10 +182,7 @@ export default function PantallaObjetivos({ pais = "" }) {
                 <th style={thStyle}>Sede</th>
                 <th style={{ ...thStyle, width: 140 }}>% Staff</th>
                 <th style={{ ...thStyle, width: 36, textAlign: "center" }}>
-                  <input type="checkbox" checked={todasRevisadas}
-                    onChange={() => marcarLoteRevisadas(!todasRevisadas)}
-                    title="Marcar/desmarcar todas como revisadas"
-                    style={{ cursor: "pointer", accentColor: "#16a34a" }} />
+                  <HeaderCheckTodas checked={todasRevisadas} onToggle={() => marcarLoteRevisadas(!todasRevisadas)} />
                 </th>
                 <th style={{ ...thStyle, width: 40 }}></th>
               </tr>

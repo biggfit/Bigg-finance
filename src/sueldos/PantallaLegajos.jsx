@@ -5,6 +5,7 @@ import {
   fetchSociedadesNumbers, fetchCentrosCostoNumbers,
 } from "../lib/sueldosApi";
 import { useRowChecks } from "../lib/useRowChecks";
+import { fmtPesos, HeaderCheckTodas } from "./sueldosUi";
 import { useConfirm } from "../numbers/useConfirm";
 
 const T = {
@@ -37,11 +38,7 @@ const FORM_VACIO = {
   formas_pago: [],
 };
 
-function fmtMoney(n) {
-  const v = Number(n) || 0;
-  if (!v) return "—";
-  return "$" + Math.round(v).toLocaleString("es-AR");
-}
+const fmtMoney = (n) => fmtPesos(n, { guion: "cero" });   // Legajos muestra "—" también para 0
 
 // Edición inline en la tabla (Haberes / Sueldo total / CBU) — compactos, sin label (van bajo el header de columna).
 const inlineMoneyStyle = {
@@ -728,10 +725,7 @@ function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
                       <th key={i} style={fpTh}>{h}</th>
                     ))}
                     <th style={{ ...fpTh, textAlign: "center" }}>
-                      <input type="checkbox" checked={fpTodasMarcadas}
-                        onChange={() => fpSetManyChecked(fpIds, !fpTodasMarcadas)}
-                        title="Marcar/desmarcar todas como revisadas"
-                        style={{ cursor: "pointer", accentColor: T.green }} />
+                      <HeaderCheckTodas checked={fpTodasMarcadas} onToggle={() => fpSetManyChecked(fpIds, !fpTodasMarcadas)} accent={T.green} />
                     </th>
                   </tr>
                 </thead>

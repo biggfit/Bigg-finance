@@ -3,6 +3,8 @@ import {
   fetchCategorias, saveCategorias,
   fetchAllConceptos,
 } from "../lib/sueldosApi";
+import { useRowChecks, migrarMarcasAgrupadas } from "../lib/useRowChecks";
+import { fmtEntero, HeaderCheckTodas } from "./sueldosUi";
 
 const T = {
   bg:     "#f8fafc",
@@ -42,7 +44,9 @@ function newRow(overrides = {}) {
 }
 
 const normC = (s) => String(s || "").trim().toUpperCase();
-const fmtMonto = (n) => (Number(n) || 0).toLocaleString("es-AR");
+const fmtMonto = fmtEntero;
+// Tildes guardados con el formato viejo (un objeto para todos los meses) → formato de useRowChecks.
+migrarMarcasAgrupadas("sedesCategoriasRevisadas");
 
 const iStyle = {
   border: `1px solid ${T.border}`, borderRadius: 5, padding: "5px 8px",
@@ -64,29 +68,12 @@ export default function PantallaCategorias({ pais = "" }) {
   const savingRef = useRef(false);
 
   // Tilde personal por fila ("ya cargué / revisé este dato"): vive en este navegador
-  // (localStorage), no afecta las tarifas guardadas.
-  const [revisadas, setRevisadas] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("sedesCategoriasRevisadas") || "{}"); } catch { return {}; }
-  });
-  const revisadaKey = (concepto) => `${pais}:${anio}-${mes}:${normC(concepto)}`;
-  const isRevisada = (concepto) => !!revisadas[revisadaKey(concepto)];
-  const toggleRevisada = (concepto) => setRevisadas(prev => {
-    const key = revisadaKey(concepto);
-    const next = { ...prev, [key]: !prev[key] };
-    try { localStorage.setItem("sedesCategoriasRevisadas", JSON.stringify(next)); } catch { /* storage lleno o no disponible */ }
-    return next;
-  });
-  const marcarLoteRevisadas = (marcar) => setRevisadas(prev => {
-    const next = { ...prev };
-    for (const r of tarifas) {
-      if (!r.concepto) continue;
-      if (marcar) next[revisadaKey(r.concepto)] = true;
-      else delete next[revisadaKey(r.concepto)];
-    }
-    try { localStorage.setItem("sedesCategoriasRevisadas", JSON.stringify(next)); } catch { /* storage lleno o no disponible */ }
-    return next;
-  });
+  // (localStorage, useRowChecks), no afecta las tarifas guardadas. Una clave por país y mes.
+  const { checked: revisadas, toggle, setMany } = useRowChecks(`sedesCategoriasRevisadas:${pais}:${anio}-${mes}`);
+  const isRevisada = (concepto) => revisadas.has(normC(concepto));
+  const toggleRevisada = (concepto) => toggle(normC(concepto));
   const conConcepto = tarifas.filter(r => r.concepto);
+  const marcarLoteRevisadas = (marcar) => setMany(conConcepto.map(r => normC(r.concepto)), marcar);
   const todasRevisadas = conConcepto.length > 0 && conConcepto.every(r => isRevisada(r.concepto));
 
   const load = useCallback(async (m, a, p) => {
@@ -250,10 +237,7 @@ export default function PantallaCategorias({ pais = "" }) {
                   </th>
                   <th style={{ ...thStyle, width: 140, textAlign: "right" }}>Valor $</th>
                   <th style={{ ...thStyle, width: 36, textAlign: "center" }}>
-                    <input type="checkbox" checked={todasRevisadas}
-                      onChange={() => marcarLoteRevisadas(!todasRevisadas)}
-                      title="Marcar/desmarcar todas como revisadas"
-                      style={{ cursor: "pointer", accentColor: T.green }} />
+                    <HeaderCheckTodas checked={todasRevisadas} onToggle={() => marcarLoteRevisadas(!todasRevisadas)} accent={T.green} />
                   </th>
                   <th style={{ ...thStyle, width: 40 }}></th>
                 </tr>

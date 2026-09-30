@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import html2canvas from "html2canvas";
+import { fmtPesos, fmtEntero } from "./sueldosUi";
 import { fetchLiquidaciones, fetchCategorias, fetchPagos, fetchLegajos, fetchNovedades, desglosarLiquidacion, isCerrada, ROLES_SEDES, ROLES_HQ, updatePagoNota } from "../lib/sueldosApi";
 
 const T = {
@@ -49,8 +50,8 @@ const chunkPares = (arr) => arr.reduce((acc, x, i) => {
   return acc;
 }, []);
 
-const fmt = (n) => "$ " + Math.round(Number(n) || 0).toLocaleString("es-AR");
-const fmtNum = (n) => (Number(n) || 0).toLocaleString("es-AR");
+const fmt = (n) => fmtPesos(n, { espacio: true });
+const fmtNum = fmtEntero;
 const fmtFecha = (s) => {
   if (!s) return "—";
   // Parseo de string (no new Date): "2026-07-27" con new Date() se interpreta UTC y en AR (UTC-3)

@@ -5,9 +5,10 @@ import {
   fetchPagos, appendPago, deletePago, nuevoLote, fetchNovedades, updateNovedad, ROLES_HQ,
   FP_TIPOS, FP_TIPO_LABEL, FP_TIPO_COLOR,
   fetchSociedadesNumbers, fetchCuentasBancariasNumbers, fetchCuentasContablesNumbers,
-  idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionLines, delLiquidacionComp, isCerrada, pagoIdsDeReceta,
+  idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionesLinesBatch, delLiquidacionComp, isCerrada, pagoIdsDeReceta,
   estadoPago, remanentePago, PAGO_EPS,
 } from "../lib/sueldosApi";
+import { fmtPesos, useMesMarcado, BotonMesMarcado } from "./sueldosUi";
 
 // ── Estilos compartidos ───────────────────────────────────────────────────────
 
@@ -43,7 +44,7 @@ const conceptoPago = (it, liq, mes, anio) => it.kind === "novedad"
 // novedades no llevan nota interna → su descripción ya viaja en el concepto).
 const notaPago = (it) => it.kind === "novedad" ? "" : (it.ref.nota || "");
 
-const fmtMoney = n => (!n && n !== 0) ? "—" : "$" + Math.round(n).toLocaleString("es-AR");
+const fmtMoney = n => fmtPesos(n, { guion: "vacio" });
 // Aumentos por %: el sueldo nuevo se redondea HACIA ARRIBA a múltiplos de $1.000 (regla Martín 18/9; antes 500 al más cercano).
 const redondear = n => Math.ceil(n / 1000) * 1000;
 const hoy     = new Date();
@@ -215,20 +216,8 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
   const [showPago,         setShowPago]         = useState(null);
   const [showCerrar,       setShowCerrar]       = useState(false);
 
-  // "Mes cerrado" personal — independiente del estado real de la liquidación (podés marcarlo sin
-  // haber cerrado nada, o dejar sin marcar un mes ya cerrado si volviste a tocarlo). Solo un
-  // recordatorio visual fuerte para no confundirse de mes; vive en este navegador (localStorage),
-  // no en el backend — no es un dato de negocio, es un tilde personal.
-  const [marcados, setMarcados] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("hqMesesMarcados") || "{}"); } catch { return {}; }
-  });
-  const marcadoKey = `${pais}:${anio}-${mes}`;
-  const marcado = !!marcados[marcadoKey];
-  const toggleMarcado = () => setMarcados(prev => {
-    const next = { ...prev, [marcadoKey]: !prev[marcadoKey] };
-    try { localStorage.setItem("hqMesesMarcados", JSON.stringify(next)); } catch { /* storage lleno o no disponible */ }
-    return next;
-  });
+  // "Mes finalizado" personal (tilde en este navegador, no es dato de negocio): ver useMesMarcado.
+  const { marcado, toggleMarcado } = useMesMarcado("hqMesesMarcados", `${pais}:${anio}-${mes}`);
 
   // Los borradores del wizard (Paso 1 sueldos, Paso 2 formas de pago) son del MES en pantalla: al cambiar
   // de período se descartan. Si quedaban, el mes nuevo se veía con los montos del anterior → tildes
@@ -328,6 +317,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
     if (!seleccion.length) return;
     setSaving(true);
     try {
+      const entries = [];
       for (const liq of seleccion) {
         const total = getDraftTotal(liq);
         const h = {
@@ -369,8 +359,12 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
         }
         // Los ids de línea son semánticos (…-C-sueldo-base, …-P-deposito, …-N-NOV-…): el mismo cierre
         // genera siempre los mismos ids, así los pagos hechos antes (pago_id) siguen anclados.
-        await saveLiquidacionLines(idLiqDe(liq.legajo_id, mes, anio, liq.sede_id), lineas);
+        // `replace`: se borra antes lo que hubiera de ese legajo (como siempre); cada legajo conserva su
+        // id_liq propio dentro del lote, así reabrir uno sigue tocando solo ese.
+        entries.push({ id_liq: idLiqDe(liq.legajo_id, mes, anio, liq.sede_id), lineas, replace: true });
       }
+      // Un solo add_batch para todos los legajos seleccionados (igual que Sedes), en vez de uno por legajo.
+      await saveLiquidacionesLinesBatch(entries);
       await refreshLiqs();
       setShowCerrar(false);
     } catch (e) {
@@ -648,15 +642,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
         </select>
         <input type="number" value={anio} onChange={e => setAnio(Number(e.target.value))}
           style={{ border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 10px", fontSize: 13, width: 80, fontFamily: T.font }} />
-        <button onClick={toggleMarcado}
-          title={marcado ? "Marcado por vos como finalizado — click para desmarcar (no afecta la liquidación real)" : "Marcar este mes como finalizado (tilde personal, no afecta la liquidación)"}
-          style={{
-            background: marcado ? "#334155" : "#fff", color: marcado ? "#fff" : T.muted,
-            border: `1px solid ${marcado ? "#334155" : T.border}`, borderRadius: 7,
-            padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font,
-          }}>
-          {marcado ? "✅ Finalizado" : "☐ En proceso"}
-        </button>
+        <BotonMesMarcado marcado={marcado} onToggle={toggleMarcado} T={T} />
         <button onClick={() => setShowCerrar(true)} disabled={saving || !liqs.length || !cerrablesCount}
           title={cerrablesCount ? (cerrablesCount === 1 ? "1 liquidación sin cerrar" : `${cerrablesCount} liquidaciones sin cerrar`) : undefined}
           style={{ marginLeft: "auto", ...BTN_PRIMARY(saving || !liqs.length || !cerrablesCount) }}>
@@ -1584,12 +1570,8 @@ function exportarMonotributoEfectivo(liqs, mes, anio) {
   const filas = [];
   for (const liq of liqs) {
     for (const [tipo, label] of FORMAS) {
-      const ls   = (liq.lineas || []).filter(l => l.tipo === tipo && Number(l.importe) > 0);
-      const novs = (liq.novedades || []).filter(n => n.forma_pago === tipo && Number(n.monto) > 0);
+      const { ls, novs, total, pagado } = totalYPagadoPorTipo(liq, tipo);
       if (!ls.length && !novs.length) continue;
-      const total  = ls.reduce((s, l) => s + Number(l.importe), 0) + novs.reduce((s, n) => s + Math.abs(Number(n.monto)), 0);
-      const pagado = sumPagosSinDuplicar(ls.map(l => getPagosLinea(liq, l)))
-                   + sumPagosSinDuplicar(novs.map(n => getPagosNovedad(liq, n)));
       const estado = { none: "PENDIENTE", partial: "PARCIAL", full: "PAGADO" }[estadoPago(total, pagado)];
       const base   = ls.find(l => l.cbu || l.cuenta) || ls[0] || {};
       const incluye = [...new Set([
@@ -1619,7 +1601,18 @@ const idsDe = (x) => new Set([x?.id, x?.pago_id].filter(Boolean).map(String));
 // primero a la NOVEDAD de igual forma e importe (una novedad pagada suelta, p. ej. Monotributo por
 // efectivo), el resto a las líneas de sueldo del mismo tipo (getPagosLinea). `liq.pagos` ya viene
 // acotado a legajo+mes+ámbito → no se roban pagos entre liquidaciones.
+// Se calcula UNA vez por objeto liq (WeakMap): getPagosLinea/getPagosNovedad lo piden por cada línea y por
+// cada render; el objeto liq se regenera cuando cambian pagos/líneas (memo liqsView), así la caché se
+// invalida sola.
+const _huerfanosCache = new WeakMap();
 function huerfanosDe(liq) {
+  const hit = _huerfanosCache.get(liq);
+  if (hit) return hit;
+  const r = _huerfanosCalc(liq);
+  _huerfanosCache.set(liq, r);
+  return r;
+}
+function _huerfanosCalc(liq) {
   const pagos = liq.pagos || [];
   const idsPropios = new Set([
     ...(liq.lineas || []).flatMap(l => [l.id, l.pago_id]),
@@ -1637,6 +1630,18 @@ function huerfanosDe(liq) {
   // Un pago con id de novedad cuya novedad ya no existe NO va a una línea de sueldo.
   const sueldo = orf.filter(p => !used.has(p) && !esPagoDeNovedad(p.forma_pago_id));
   return { novedad, sueldo };
+}
+
+// Total e importe pagado de una forma de pago dentro de una liquidación (líneas de sueldo + novedades que
+// salen por esa forma). Lo usan el estado por columna del Paso 3 y el Excel de Monotributo/Efectivo.
+// `soloPositivos`: el Excel ignora líneas/novedades sin importe; el estado por columna las cuenta todas.
+function totalYPagadoPorTipo(liq, tipo, { soloPositivos = true } = {}) {
+  const ls   = (liq.lineas || []).filter(l => l.tipo === tipo && (!soloPositivos || Number(l.importe) > 0));
+  const novs = (liq.novedades || []).filter(n => n.forma_pago === tipo && (!soloPositivos || Number(n.monto) > 0));
+  const total  = ls.reduce((s, l) => s + (Number(l.importe) || 0), 0) + novs.reduce((s, n) => s + Math.abs(Number(n.monto) || 0), 0);
+  const pagado = sumPagosSinDuplicar(ls.map(l => getPagosLinea(liq, l)))
+               + sumPagosSinDuplicar(novs.map(n => getPagosNovedad(liq, n)));
+  return { ls, novs, total, pagado };
 }
 
 // Pagos asociados a una línea = los que apuntan a su id/pago_id (byId) + los HUÉRFANOS de su tipo.
@@ -1841,13 +1846,8 @@ function PasoPagos({ mes, anio, cargandoPagos = false, liqStaff, liqOwners, liqE
               // Parcial-aware: suma pagos vs total, no solo "¿tiene algún pago?".
               const abs = (ps) => ps.reduce((a, p) => a + Math.abs(Number(p.monto) || 0), 0);
               const colState = (col) => {
-                const ls   = liq.lineas.filter(l => l.tipo === col);
-                const novs = (liq.novedades || []).filter(n => n.forma_pago === col);
+                const { ls, novs, total, pagado } = totalYPagadoPorTipo(liq, col, { soloPositivos: false });
                 if (!ls.length && !novs.length) return null;
-                const total  = ls.reduce((s, l) => s + (Number(l.importe) || 0), 0)
-                             + novs.reduce((s, n) => s + Math.abs(Number(n.monto) || 0), 0);
-                const pagado = sumPagosSinDuplicar(ls.map(l => getPagosLinea(liq, l)))
-                             + sumPagosSinDuplicar(novs.map(n => getPagosNovedad(liq, n)));
                 return estadoPago(total, pagado);
               };
               const colStates  = Object.fromEntries(COLS.map(c => [c.id, colState(c.id)]));
