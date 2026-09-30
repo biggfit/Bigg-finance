@@ -641,8 +641,9 @@ function buildPnLSede(inRows, egRows, ccFilter, year, moneda, sinIva = false) {
 }
 
 const sumGrupoSede = (g) => MESES.map((_, m) => Object.values(g).reduce((s, arr) => s + (arr[m] || 0), 0));
-// "Ventas" de la sede para el prorrateo de estructura (decisión: SOLO ventas — Stripe/Datafono/vía Banco/
-// Efectivo — sin interusos ni Otros Ingresos). Suma el grupo vta_cf excluyendo "Otros Ingresos".
+// "Ventas" de la sede (decisión: SOLO ventas — Stripe/Datafono/vía Banco/Efectivo — sin interusos ni Otros
+// Ingresos). Suma el grupo vta_cf excluyendo "Otros Ingresos". Define si una sede está ACTIVA en el mes
+// (ventas > 0) para el reparto de la estructura en partes iguales (España).
 const VENTAS_EXCL_PRORR = new Set([_nkSede("Otros Ingresos")]);
 const sumVentasSede = (pnl) => MESES.map((_, m) =>
   Object.entries(pnl.grupos.vta_cf).reduce((s, [n, arr]) =>
@@ -980,7 +981,7 @@ export function buildPnLSedeFilas(props, isCol) {
           netoLabel = "Resultado Neto", nombreCuenta = (x) => x, hayHistorico = false, mesMax = null,
           cesionResFinal = null, cesionRetiros = null, comBaseResOp = null,
           estructuraCuota = null, estructuraEnOpex = false, estructuraLabel = "Estructura Wellness",
-          estructuraDetalle = null } = props;
+          estructuraDetalle = null, estructuraImpuestos = null } = props;
   const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths: _amRaw } = sub;
   const activeMonths = mesesVisibles(_amRaw, year, hayHistorico, mesMax);
 
@@ -1006,15 +1007,29 @@ export function buildPnLSedeFilas(props, isCol) {
   const resFinalBase = (estruc && !estructuraEnOpex)
     ? resFinal.map((v, m) => (Number(v) || 0) - (Number(estruc[m]) || 0)) : resFinal;
   const resFinalEff = provMes ? resFinalBase.map((v, m) => (Number(v) || 0) - provMes[m]) : resFinalBase;
+  // Cola de IMPUESTOS del centro de estructura, prorrateada al scope (España con una sede sola): el IVA de la
+  // sociedad se carga en 16-Wellness, que queda fuera del scope → llega acá ya repartido (`estructuraImpuestos`)
+  // y se FUSIONA en "Sin clasificar" para que computeImpuestos lo tome como una cuenta más. Con Wellness en el
+  // scope ("Todas") no se pasa nada: su IVA ya está en pnl.sinClasificar.
+  const mergeSinClas = (base, extra) => {
+    if (!extra) return base;
+    const out = { ...base };
+    for (const [k, arr] of Object.entries(extra)) {
+      const key = Object.keys(out).find(x => _nkSede(x) === _nkSede(k)) || k;
+      out[key] = MESES.map((_, m) => (Number(out[key]?.[m]) || 0) + (Number(arr[m]) || 0));
+    }
+    return out;
+  };
+  const sinClasEff = (estruc && !estructuraEnOpex) ? mergeSinClas(pnl.sinClasificar, estructuraImpuestos) : pnl.sinClasificar;
 
   // Cesión de utilidades (cola de apropiación, solo cuando el scope es la sede con cesión, ej. Barrio Norte).
   // Los retiros son la cuenta "Inversores" de sinClasificar → se saca de ahí para no mostrarla dos veces.
-  const cesKey = cesion && Object.keys(pnl.sinClasificar).find(k => _nkSede(k) === _nkSede(CESION_CUENTA));
-  const cesData = cesion ? computeCesion(cesionResFinal || resFinalEff, cesionRetiros || (cesKey ? pnl.sinClasificar[cesKey] : []), cesion, year) : null;
+  const cesKey = cesion && Object.keys(sinClasEff).find(k => _nkSede(k) === _nkSede(CESION_CUENTA));
+  const cesData = cesion ? computeCesion(cesionResFinal || resFinalEff, cesionRetiros || (cesKey ? sinClasEff[cesKey] : []), cesion, year) : null;
 
   // Impuestos (Fondeadas/Rosedal): cola debajo del Resultado Operativo/Final. Las cuentas se sacan de
   // "Sin clasificar" (no duplicar) → ver computeImpuestos.
-  const impData = impuestos ? computeImpuestos(pnl.sinClasificar, impuestos, resFinalEff) : null;
+  const impData = impuestos ? computeImpuestos(sinClasEff, impuestos, resFinalEff) : null;
   // Fee IVA VIVO (Rosedal): el IVA del fee a Ñako (21%) se suma a la línea "IVA Compra" como crédito fiscal
   // (costo del mes; se recupera el mes siguiente). Es un derivado, no una cuenta → se inyecta acá.
   if (impData && feeIvaVivo && feeIvaVivo.some(v => Math.abs(v) > 0.5)) {
@@ -1030,13 +1045,13 @@ export function buildPnLSedeFilas(props, isCol) {
   // muestra en su cola cuando el scope la tiene (Barrio Norte / Rosedal). En cualquier otro scope (ej. las 5
   // sedes juntas) NO es una cuenta "sin clasificar" real → se oculta SIEMPRE del diagnóstico. Es un match por
   // nombre exacto a esa única cuenta: cualquier otra cuenta genuinamente sin clasificar sigue con su alerta.
-  const invKey = Object.keys(pnl.sinClasificar).find(k => _nkSede(k) === _nkSede(CESION_CUENTA));
+  const invKey = Object.keys(sinClasEff).find(k => _nkSede(k) === _nkSede(CESION_CUENTA));
   // Cuenta de estructura (Colombia: "Estructura Tigre Loco") → se muestra como su propia línea, no en Sin clasificar.
-  const estrKey = estructuraCuota ? Object.keys(pnl.sinClasificar).find(k => _nkSede(k) === _nkSede(estructuraLabel)) : null;
+  const estrKey = estructuraCuota ? Object.keys(sinClasEff).find(k => _nkSede(k) === _nkSede(estructuraLabel)) : null;
   const hidden = new Set([cesKey, invKey, estrKey, ...(impData?.keys || []), ...(finData?.keys || [])].filter(Boolean));
   const sinClasView = hidden.size
-    ? Object.fromEntries(Object.entries(pnl.sinClasificar).filter(([k]) => !hidden.has(k)))
-    : pnl.sinClasificar;
+    ? Object.fromEntries(Object.entries(sinClasEff).filter(([k]) => !hidden.has(k)))
+    : sinClasEff;
   const sinCls = Object.keys(sinClasView).length > 0;
 
   const cols = vista === "evolucion" ? colsEvolucion(activeMonths) : colsSedeVista(vista, mes, year);
@@ -3588,7 +3603,10 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   // La "Estructura Wellness" es SOLO el OPEX del centro (Sueldos/Alquiler/etc. de la estructura); sus ventas
   // y costos variables (Otros Ingresos, Fees) quedan en el consolidado. En "Todas las Sedes" el centro está
   // en el scope → su OPEX ya viaja dentro de Total Gastos Operativos y solo se SEPARA visualmente. En una
-  // sede sola (Wellness fuera del scope), esa estructura se PRORRATEA por ventas y se suma como costo.
+  // sede sola (Wellness fuera del scope), esa estructura se reparte en PARTES IGUALES entre las sedes ACTIVAS
+  // del mes (ventas > 0) y se suma como costo — decisión Martín 29/9/2026, como en su Excel (antes: por ventas).
+  // Su cola de IMPUESTOS (el IVA de la sociedad vive en este centro) se prorratea aparte, por POSICIÓN de IVA
+  // (ver `factorIvaEstructura` más abajo); el Resultado Financiero del centro no se prorratea (solo en "Todas").
   const estructuraPnl = useMemo(() => (   // P&L del centro de estructura solo (para el total y su detalle)
     estructuraCCId ? buildPnLSede(inFx, egFx, [estructuraCCId], year, monedaPL, sinIva) : null
   ), [estructuraCCId, inFx, egFx, year, monedaPL, sinIva]);
@@ -3596,24 +3614,69 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     estructuraPnl ? computeSubtotalsSede(estructuraPnl).totGastosOp : null
   ), [estructuraPnl]);
   const wellnessEnScope = !!estructuraCCId && resolvedCCSede.some(id => ccKey(id) === ccKey(estructuraCCId));
-  // Ventas de TODAS las sedes reales (denominador del prorrateo) — sin el centro de estructura.
-  const ventasTotalesSedes = useMemo(() => {
-    if (!estructuraCCId) return null;
-    return sumVentasSede(buildPnLSede(inFx, egFx, sedeCCsSel.map(c => c.id), year, monedaPL, sinIva));
-  }, [estructuraCCId, inFx, egFx, sedeCCsSel, year, monedaPL, sinIva]);
+  // Por SEDE REAL (sin el centro de estructura), mes a mes, con un build Sin IVA por sede:
+  //   · activa: 1 si tuvo ventas en el mes (grupo Ventas sin Otros Ingresos, ver VENTAS_EXCL_PRORR), si no 0.
+  //   · ivaPos: posición de IVA = débito de ventas − crédito de gastos, piso 0 (crédito fiscal no "cobra").
+  const statsSedes = (yr) => {
+    const out = {};
+    for (const c of sedeCCsSel) {
+      const p = buildPnLSede(inFx, egFx, [c.id], yr, monedaPL, true);
+      const v = sumVentasSede(p);
+      out[c.id] = {
+        activa: MESES.map((_, m) => (Number(v[m]) || 0) > 0 ? 1 : 0),
+        ivaPos: MESES.map((_, m) => Math.max(0, (Number(p.ivaDeb[m]) || 0) - (Number(p.ivaCred[m]) || 0))),
+      };
+    }
+    return out;
+  };
+  const statsPorSede = useMemo(() => estructuraCCId ? statsSedes(year) : null,
+    [estructuraCCId, sedeCCsSel, inFx, egFx, year, monedaPL]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // Parte del scope según un campo de las stats: Σ scope / Σ todas, mes a mes; null en el mes si nadie suma.
+  const factorScope = (stats, campo) => {
+    const enScope = new Set(resolvedCCSede.map(ccKey));
+    return MESES.map((_, m) => {
+      let num = 0, den = 0;
+      for (const [id, s] of Object.entries(stats)) { const v = s[campo][m]; den += v; if (enScope.has(ccKey(id))) num += v; }
+      return den > 0 ? num / den : null;
+    });
+  };
+  // Factor de la ESTRUCTURA (OPEX) para el scope: partes iguales entre sedes activas = activas en scope /
+  // activas totales. Sede sin ventas en el mes → 0. Null (Wellness en scope) = no se reparte.
+  const factorEstructura = useMemo(() => {
+    if (!statsPorSede || wellnessEnScope) return null;
+    return factorScope(statsPorSede, "activa").map(f => f ?? 0);
+  }, [statsPorSede, wellnessEnScope, resolvedCCSede]);   // eslint-disable-line react-hooks/exhaustive-deps
   // Monto de estructura que le corresponde al SCOPE actual. Con Wellness en el scope ("Todas") = su OPEX
-  // completo (ya está adentro → la tabla lo separa). Con una sede sola = OPEX × (ventas del scope / ventas
-  // de todas las sedes); sede sin ventas → 0.
+  // completo (ya está adentro → la tabla lo separa). Con una sede sola = OPEX × factorEstructura.
   const estructuraCuota = useMemo(() => {
     if (!estructuraOpexFull) return null;
-    if (wellnessEnScope) return estructuraOpexFull;
-    if (!ventasTotalesSedes) return null;
-    const ventasScope = sumVentasSede(pnlSede);
-    return MESES.map((_, m) => {
-      const den = Number(ventasTotalesSedes[m]) || 0;
-      return den ? estructuraOpexFull[m] * (Number(ventasScope[m]) || 0) / den : 0;
-    });
-  }, [estructuraOpexFull, wellnessEnScope, ventasTotalesSedes, pnlSede]);
+    if (wellnessEnScope || !factorEstructura) return estructuraOpexFull;
+    return MESES.map((_, m) => (Number(estructuraOpexFull[m]) || 0) * factorEstructura[m]);
+  }, [estructuraOpexFull, wellnessEnScope, factorEstructura]);
+  // ── Cola de IMPUESTOS del centro de estructura (España): el IVA de la sociedad (Modelo 303, aplazamientos)
+  // se carga en 16-Wellness. Con Wellness en el scope ("Todas") ya está en pnlSede.sinClasificar. Con una sede
+  // sola se PRORRATEA por POSICIÓN DE IVA (decisión Martín 29/9/2026): cada sede se lleva del pago la parte de
+  // su IVA neto del mes (débito de ventas − crédito de gastos), no en partes iguales como el OPEX. Posición
+  // negativa (sede con crédito fiscal) cuenta 0. Mes sin posición cargada en ninguna sede → cae al factor de
+  // estructura (partes iguales). Σ sedes = "Todas" mes a mes. El Resultado Financiero NO se prorratea.
+  const factorIvaEstructura = useMemo(() => {   // [12] en 0..1: parte del IVA de la sociedad que toca al scope
+    if (!statsPorSede || wellnessEnScope || !factorEstructura) return null;
+    return factorScope(statsPorSede, "ivaPos").map((f, m) => f ?? factorEstructura[m]);
+  }, [statsPorSede, wellnessEnScope, factorEstructura, resolvedCCSede]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // Cuentas de impuestos del centro de estructura × factor → { cuenta: [12] } para fusionar en Sin clasificar.
+  const prorratearImpuestos = (sinClas, factor) => {
+    if (!sinClas || !factor) return null;
+    const out = {};
+    for (const [k, arr] of Object.entries(sinClas)) {
+      if (!IMPUESTOS_FOND.some(mm => _nkSede(k).includes(_nkSede(mm)))) continue;
+      out[k] = MESES.map((_, m) => (Number(arr[m]) || 0) * factor[m]);
+    }
+    return Object.keys(out).length ? out : null;
+  };
+  const estructuraImpuestos = useMemo(
+    () => (estructuraPnl && factorIvaEstructura) ? prorratearImpuestos(estructuraPnl.sinClasificar, factorIvaEstructura) : null,
+    [estructuraPnl, factorIvaEstructura]   // eslint-disable-line react-hooks/exhaustive-deps
+  );
   // Colombia: valores de la cuenta "Estructura Tigre Loco" (viven en Sin clasificar del centro consolidado).
   const estructuraCuentaVals = useMemo(() => {
     if (!estructuraCuentaName) return null;
@@ -3622,7 +3685,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   }, [estructuraCuentaName, pnlSede]);
   // Detalle por cuenta de la estructura, para desplegar la línea. Son las mismas cuentas que forman
   // `estructuraOpexFull` (los 4 grupos de Gastos Operativos del centro), escaladas por el MISMO factor que la
-  // cuota → con una sede sola (prorrateo por ventas) las cuentas siguen sumando exactamente la línea.
+  // cuota → con una sede sola (partes iguales entre activas) las cuentas siguen sumando exactamente la línea.
   const estructuraDetalle = useMemo(() => {
     if (!estructuraPnl || !estructuraOpexFull || !estructuraCuota) return null;
     const factor = MESES.map((_, m) => {
@@ -3860,7 +3923,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       pnl: pnlSede, sub: subSede, pnlPrev: pnlSedePrev, subPrev: subSedePrev, year,
       nombreCuenta, cesion: cesionSede, cesionResFinal: subSedeNet?.resFinal, cesionRetiros: cesionRetirosCI,
       comBaseResOp, estructuraCuota: estructuraCuotaEff, estructuraEnOpex: estructuraEnOpexEff, estructuraLabel: estructuraLabelEff,
-      estructuraDetalle,
+      estructuraDetalle, estructuraImpuestos,
       impuestos: isFond ? IMPUESTOS_FOND : null, financieros: isFond ? FINANCIEROS_FOND : null,
       distribucion: activeTab === "op_rosedal" ? distribRosedalFx : null,
       retirosVivos: activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null,
@@ -4233,7 +4296,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} nombreCuenta={nombreCuenta}
           cesion={cesionSede} cesionResFinal={subSedeNet?.resFinal} cesionRetiros={cesionRetirosCI}
           comBaseResOp={comBaseResOp} estructuraCuota={estructuraCuotaEff} estructuraEnOpex={estructuraEnOpexEff} estructuraLabel={estructuraLabelEff}
-          estructuraDetalle={estructuraDetalle}
+          estructuraDetalle={estructuraDetalle} estructuraImpuestos={estructuraImpuestos}
           impuestos={isFond ? IMPUESTOS_FOND : null} financieros={isFond ? FINANCIEROS_FOND : null}
           distribucion={activeTab === "op_rosedal" ? distribRosedalFx : null}
           retirosVivos={activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null}
