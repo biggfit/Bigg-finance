@@ -12,6 +12,7 @@ import {
   esCuentaCredito,
 } from "../../lib/numbersApi";
 import { fetchLiquidacionesCerradas } from "../../lib/sueldosApi";
+import { tolerante } from "../../lib/http";
 import { fetchAll } from "../../lib/sheetsApi";        // Franquicias (read-only)
 import { derivarSaldos, franqFirst, intercoConsolidado, sociedadNombreMap } from "../tesoreriaDerive";
 import { buildDevengado } from "./TabDevengado";   // resultado por mes (misma función que el reporte Devengado) → conciliación del PN
@@ -100,7 +101,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
       setLoading(true); setError(null); setCargaFallida([]); setSecPend({ franq: true, interco: true });
       // Tolerante: si una fuente falla, las demás siguen; la falla queda anotada para avisar (no se traga).
       const fallas = [];
-      const tol = (label, p) => p.catch(() => { fallas.push(label); return []; });
+      const tol = tolerante(fallas);
       try {
         // Liquidaciones vive en el backend de Sueldos → en paralelo al batch de Numbers.
         const liqsP = tol("liquidaciones de sueldos", fetchLiquidacionesCerradas());

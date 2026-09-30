@@ -2,14 +2,15 @@
 // pantalla (las produce buildPnLSedeFilas en PantallaReportes) → la planilla sale idéntica al reporte, con
 // los mismos colores/jerarquía: bandas de sección oscuras, resultados en verde, distribución en violeta,
 // "sin clasificar" en ámbar, subtotales en negrita. El llamador arma las filas por vista y nos las pasa.
-import ExcelJS from "exceljs";
+import { solid, thin, nuevoWorkbook, addTitulo, addEncabezado, setAnchos, descargarWorkbook } from "./reportes/xlsxUtils";
 
 const FMT_NUM = "#,##0;(#,##0)";   // enteros; negativos entre paréntesis (costos)
 const FMT_PCT = "0.0%";
 
-// Paleta (ARGB, con alpha FF). Espeja el tema de la pantalla.
+// Paleta (ARGB, con alpha FF). Espeja el tema de la pantalla. (Título, meta, texto del header y grilla
+// son los de xlsxUtils, compartidos con los otros exportadores.)
 const C = {
-  headerBg: "FF1E2937", headerFg: "FFFFFFFF",
+  headerBg: "FF1E2937",
   bandaBg: "FF1F2937", bandaFg: "FFBEF264",          // sección (Ingresos / Gastos Op / Impuestos…)
   violetBg: "FFEDE9FE", violetFg: "FF6D28D9",         // distribución
   amberBg: "FFFFFBEB", amberFg: "FFB45309",           // sin clasificar
@@ -17,7 +18,7 @@ const C = {
   subStrongBg: "FFCBD5E1", subBg: "FFF3F4F6",         // subtotales
   resultBg: "FFBBF7D0", resultFg: "FF065F46",         // resultados (Margen/Resultado/FCF)
   cesionBg: "FFFAF5FF", cesionFg: "FF6D28D9",         // filas de cuenta corriente
-  cuentaFg: "FF0F172A", metaFg: "FF64748B", grid: "FFE2E8F0",
+  cuentaFg: "FF0F172A",
 };
 
 // Valor numérico de una celda (fila × columna), con el MISMO signo que muestra la pantalla: los costos
@@ -36,9 +37,6 @@ function cellVal(fila, col, lastM) {
   v = Number(v) || 0;
   return fila.kind === "cesion" ? v : (fila.pol < 0 ? -v : v);
 }
-
-const solid = argb => ({ type: "pattern", pattern: "solid", fgColor: { argb } });
-const thin  = { style: "thin", color: { argb: C.grid } };
 
 // Estilo (fill + font) de una fila según su tipo. Devuelve null para filas de cuenta normales (sin fill).
 function estiloFila(f) {
@@ -62,33 +60,14 @@ function construirHoja(wb, { sheetName, cols, filas, lastM, titulo, meta }) {
   // resumen (grupo/subtotal/banda) queda ARRIBA del grupo (summaryBelow: false) y lleva el [+] para desplegar.
   ws.properties.outlineLevelRow = 1;
   ws.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-  const nCols = cols.length + 1;
+  // Columnas de la hoja: "Cuenta" + una por columna del reporte (estas van a la derecha, numéricas).
+  const COLS = [{ h: "Cuenta", w: 38 }, ...cols.map(c => ({ h: c.header, w: 15, num: true }))];
+  const nCols = COLS.length;
 
-  // Título + meta
-  if (titulo) {
-    ws.addRow([titulo]);
-    ws.mergeCells(1, 1, 1, nCols);
-    ws.getCell(1, 1).font = { bold: true, size: 14, color: { argb: C.cuentaFg } };
-  }
-  for (const m of (meta || [])) {
-    const r = ws.addRow([m]); ws.mergeCells(r.number, 1, r.number, nCols);
-    ws.getCell(r.number, 1).font = { italic: true, size: 10, color: { argb: C.metaFg } };
-  }
-  ws.addRow([]);
+  addTitulo(ws, titulo, meta, nCols);
+  addEncabezado(ws, COLS, { headerBg: C.headerBg, xSplit: 1 });
 
-  // Encabezado de columnas
-  const head = ws.addRow(["Cuenta", ...cols.map(c => c.header)]);
-  const headRow = head.number;
-  head.eachCell((cell, col) => {
-    cell.fill = solid(C.headerBg);
-    cell.font = { bold: true, color: { argb: C.headerFg } };
-    cell.alignment = { horizontal: col === 1 ? "left" : "right", vertical: "middle" };
-    cell.border = { bottom: thin };
-  });
-  head.height = 20;
-  ws.views = [{ state: "frozen", xSplit: 1, ySplit: headRow }];
-
-  // Filas
+  // Filas (propias: bandas mergeadas, fill/font por tipo de fila, esquema colapsable)
   for (const f of filas) {
     if (f.kind === "spacer") { ws.addRow([]); continue; }
     if (f.kind === "banda")  {
@@ -114,20 +93,12 @@ function construirHoja(wb, { sheetName, cols, filas, lastM, titulo, meta }) {
     if (f.kind === "cuenta") { r.outlineLevel = 1; r.hidden = true; }
   }
 
-  // Anchos
-  ws.getColumn(1).width = 38;
-  for (let c = 2; c <= nCols; c++) ws.getColumn(c).width = 15;
+  setAnchos(ws, COLS);
 }
 
 // Descarga un workbook (una hoja por vista) con diseño. `hojas` = [{ sheetName, cols, filas, lastM, titulo, meta }].
 export async function exportarPackReportes({ archivo, hojas }) {
-  const wb = new ExcelJS.Workbook();
-  wb.creator = "BIGG Numbers";
+  const wb = nuevoWorkbook();
   for (const h of hojas) construirHoja(wb, h);
-  const buf = await wb.xlsx.writeBuffer();
-  const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = archivo; document.body.appendChild(a); a.click();
-  a.remove(); URL.revokeObjectURL(url);
+  await descargarWorkbook(wb, archivo);
 }

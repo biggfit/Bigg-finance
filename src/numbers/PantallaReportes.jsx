@@ -1,7 +1,8 @@
-import { useState, useMemo, useCallback, useEffect, useRef, Fragment } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { T, PageHeader, fmtDate } from "./theme";
-import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, esIgnorado, esCuentaCredito, fetchFinanciaciones, financiacionPasivoBuckets, agruparAnticipos, anticipoPasivo, fetchSocios, fetchSociosCC, sociosSaldos, fetchIntercoData, lecturaInterco, fondeoFondeadasMensual, intercoConsolidadoMensual, calcSaldoPendiente, primeCache, fetchTiposCambio, tcDelMes, montoAUSD, montoAMoneda, fetchPnLHistorico, fetchProveedores, fetchClientes, RETDEP_TAG } from "../lib/numbersApi";
-import { fetchLiquidacionesCerradas, liquidacionToPnLRows, fetchPagosAnio, pendienteSueldosPorLegajo, adelantoSueldosPorLegajo } from "../lib/sueldosApi";
+import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, fetchFinanciaciones, fetchIntercoData, fondeoFondeadasMensual, intercoConsolidadoMensual, calcSaldoPendiente, primeCache, fetchTiposCambio, tcDelMes, montoAUSD, montoAMoneda, fetchPnLHistorico, fetchProveedores, fetchClientes, RETDEP_TAG } from "../lib/numbersApi";
+import { fetchLiquidacionesCerradas, liquidacionToPnLRows } from "../lib/sueldosApi";
+import { tolerante } from "../lib/http";
 import { MONEDA_SYM } from "../data/tesoreriaData";
 import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
 import { franquiciasIngresoPnLRows } from "../lib/franquiciasAdapter";
@@ -49,36 +50,6 @@ const ccEnFiltro = (ccFilter, cc) => {
   const k = ccKey(cc);
   return Array.isArray(ccFilter) ? ccFilter.some(f => ccKey(f) === k) : ccKey(ccFilter) === k;
 };
-
-// ─── Pivot P&L estructurado ───────────────────────────────────────────────────
-function buildPnL(inRows, egRows, cuentaMap, ccFilter, year, moneda) {
-  const cats = { ventas:{}, costo_venta:{}, gastos_operativos:{}, gastos_financieros:{}, impuestos:{}, sin_categoria:{} };
-  const add = (rows) => {
-    for (const row of rows) {
-      if (!row.fecha || row.fecha.slice(0,4) !== String(year)) continue;
-      if ((row.moneda ?? "ARS") !== moneda) continue;
-      if (ccFilter !== "todos" && !ccEnFiltro(ccFilter, row.centro_costo)) continue;
-      const m = parseInt(row.fecha.slice(5,7), 10) - 1;
-      if (m < 0 || m > 11) continue;
-      const nombre = (row.cuenta_contable ?? "").trim() || "Sin cuenta";
-      const cat    = normCat(cuentaMap.get(nombre)?.categoria_pnl);
-      const bucket = cats[cat] ?? cats.sin_categoria;
-      if (!bucket[nombre]) bucket[nombre] = new Array(12).fill(0);
-      // Ingreso (movimiento _tipo "Ingreso", total +) en una categoría de costo → crédito (−). Ver buildPnLBigg.
-      const signo = (row._tipo === "Ingreso" && cat !== "ventas") ? -1 : 1;
-      bucket[nombre][m] += (Number(row.total) || 0) * signo;
-    }
-  };
-  add(inRows);
-  add(egRows);
-  for (const [nombre, cuenta] of cuentaMap) {
-    const cat = normCat(cuenta.categoria_pnl);
-    if (!cat) continue;
-    const bucket = cats[cat] ?? cats.sin_categoria;
-    if (!bucket[nombre]) bucket[nombre] = new Array(12).fill(0);
-  }
-  return cats;
-}
 
 // Adapter: nb_movimientos imputados que SON el hecho económico (gasto contado /
 // conciliación contabilizada) → mismo formato que las filas de nb_comprobantes.
@@ -194,31 +165,6 @@ export function financiacionToPnLRows(planes, sociedad) {
   return out;
 }
 
-const sumCat = (catObj) =>
-  MESES.map((_, m) => Object.values(catObj).reduce((s, arr) => s + (arr[m] || 0), 0));
-
-function computeSubtotals(pnl) {
-  const ventasTot   = sumCat(pnl.ventas);
-  const costoTot    = sumCat(pnl.costo_venta);
-  const opexTot     = sumCat(pnl.gastos_operativos);
-  const finTot      = sumCat(pnl.gastos_financieros);
-  const impTot      = sumCat(pnl.impuestos);
-  const margenBruto = MESES.map((_,m) => ventasTot[m]  - costoTot[m]);
-  const resOp       = MESES.map((_,m) => margenBruto[m] - opexTot[m]);
-  const resAntesImp = MESES.map((_,m) => resOp[m]       - finTot[m]);
-  const resNeto     = MESES.map((_,m) => resAntesImp[m] - impTot[m]);
-  const months = new Set();
-  Object.values(pnl).forEach(cat =>
-    Object.values(cat).forEach(arr => arr.forEach((v,i) => { if (v) months.add(i); }))
-  );
-  const curMonth = new Date().getMonth();
-  for (let i = 0; i <= curMonth; i++) months.add(i);
-  return { ventasTot, costoTot, opexTot, finTot, impTot,
-           margenBruto, resOp, resAntesImp, resNeto,
-           activeMonths: [...months].sort((a,b) => a-b) };
-}
-
-const rowSum = arr => (arr || []).reduce((s, v) => s + v, 0);
 export const fmtN   = n => !n ? "—" : Math.round(Math.abs(n)).toLocaleString("es-AR");
 export const fmtSigned = n => !n ? "—" : (n < 0 ? "−" : "") + fmtN(n);   // conserva el signo (fmtN es absoluto)
 // Convención contable. neg=false (ingresos/resultados): positivo normal, negativo (pérdida) entre
@@ -263,125 +209,6 @@ function Spinner({ size = 32, color = T.accentDark }) {
         animation: "rpt-spin .7s linear infinite",
       }} />
     </>
-  );
-}
-
-// ─── Row components ───────────────────────────────────────────────────────────
-function SectionRow({ label, span, values, activeMonths, expanded, onToggle }) {
-  const clickable = !!onToggle;
-  return (
-    <tr style={{ background: T.accentDark, cursor: clickable ? "pointer" : "default" }}
-      onClick={onToggle}>
-      <td style={{ padding: "8px 16px", fontSize: 11, fontWeight: 800,
-        color: T.accent, letterSpacing: ".1em", textTransform: "uppercase", userSelect: "none",
-        ...stickyCol, background: T.accentDark }}>
-        {clickable && <span style={{ marginRight: 6, fontSize: 9, opacity: .6 }}>{expanded ? "▼" : "▶"}</span>}
-        {label}
-      </td>
-      {values && activeMonths.map(m => (
-        <td key={m} style={{ padding: "8px 12px", fontSize: 11, textAlign: "right",
-          fontFamily: "var(--mono)", fontWeight: 800, color: T.accent, whiteSpace: "nowrap" }}>
-          {values[m] ? fmtN(values[m]) : ""}
-        </td>
-      ))}
-      {values && (
-        <td style={{ padding: "8px 14px", fontSize: 11, textAlign: "right", fontFamily: "var(--mono)",
-          fontWeight: 900, color: T.accent, whiteSpace: "nowrap",
-          borderLeft: "1px solid rgba(255,255,255,.12)" }}>
-          {rowSum(values) ? fmtN(rowSum(values)) : ""}
-        </td>
-      )}
-      {!values && <td colSpan={span - 1} />}
-    </tr>
-  );
-}
-
-function DataRow({ label, values, activeMonths, color, neg = false }) {
-  const total = rowSum(values);
-  return (
-    <tr style={{ borderBottom: `1px solid ${T.cardBorder}`, background: T.card }}
-      onMouseEnter={e => { e.currentTarget.style.background = "#f0f9ff"; e.currentTarget.firstChild.style.background = "#f0f9ff"; }}
-      onMouseLeave={e => { e.currentTarget.style.background = T.card; e.currentTarget.firstChild.style.background = T.card; }}>
-      {/* fondo explícito (no "inherit"): evita que la celda sticky no repinte y "aparezca" al hover */}
-      {/* Repetir el borde inferior en la celda sticky: su background repinta y taparía la línea del <tr>. */}
-      <td style={{ padding: "7px 16px 7px 44px", fontSize: 13, color: T.text, whiteSpace: "nowrap",
-        borderBottom: `1px solid ${T.cardBorder}`,
-        ...stickyCol, background: T.card }}>{label}</td>
-      {activeMonths.map(m => (
-        <td key={m} style={{ padding: "7px 12px", fontSize: 13, textAlign: "right",
-          fontFamily: "var(--mono)", color: values[m] ? (color ?? T.text) : T.dim,
-          whiteSpace: "nowrap" }}>
-          {fmtPar(values[m], neg)}
-        </td>
-      ))}
-      <td style={{ padding: "7px 14px", fontSize: 13, textAlign: "right", fontFamily: "var(--mono)",
-        fontWeight: 800, color: color ?? T.text, whiteSpace: "nowrap",
-        borderLeft: `1px solid ${T.cardBorder}` }}>
-        {fmtPar(total, neg)}
-      </td>
-    </tr>
-  );
-}
-
-// totalOverride: para filas de SALDO (running balance), la columna TOTAL no debe sumar los meses (no tiene
-// sentido). Se pasa el saldo final; `null` deja el TOTAL en blanco. undefined → suma normal (subtotales de flujo).
-function SubtotalRow({ label, values, activeMonths, color, strong, neg = false, noBottom = false, totalOverride }) {
-  const total = totalOverride !== undefined ? totalOverride : rowSum(values);
-  const bg = strong ? "#cbd5e1" : "#f3f4f6";
-  // Bordes SOLO en las celdas (no en el <tr>): con border-collapse + celda sticky, duplicar el borde
-  // en el <tr> y en la celda genera costura/doblado al colapsar. Fuente única = la celda.
-  // noBottom: el divisor de abajo lo posee la fila siguiente (su borderTop) → evita que el borde
-  // inferior propio compita con el de la fila de abajo (la sticky no colapsa y quedaría despareja).
-  const bord = { borderTop: `${strong ? 3 : 2}px solid ${color ?? T.cardBorder}`,
-                 borderBottom: noBottom ? "none" : `2px solid ${T.cardBorder}` };
-  return (
-    <tr style={{ background: bg }}>
-      <td style={{ padding: "12px 16px", fontSize: strong ? 15 : 14, fontWeight: 900,
-        color: color ?? T.text, letterSpacing: ".02em", ...bord,
-        ...stickyCol, background: bg }}>{label}</td>
-      {activeMonths.map(m => (
-        <td key={m} style={{ padding: "12px 12px", fontSize: 14, textAlign: "right",
-          fontFamily: "var(--mono)", fontWeight: 900, color: color ?? T.text,
-          whiteSpace: "nowrap", ...bord }}>
-          {fmtPar(values[m], neg)}
-        </td>
-      ))}
-      <td style={{ padding: "12px 14px", fontSize: 15, textAlign: "right", fontFamily: "var(--mono)",
-        fontWeight: 900, color: color ?? T.text, whiteSpace: "nowrap",
-        borderLeft: `1px solid ${T.cardBorder}`, ...bord }}>
-        {total === null ? "" : fmtPar(total, neg)}
-      </td>
-    </tr>
-  );
-}
-
-function ResultadoRow({ label, values, activeMonths, strong, noBottom = false }) {
-  const total = rowSum(values);
-  const color = total >= 0 ? T.green : T.red;
-  const bg = strong ? (total >= 0 ? "#bbf7d0" : "#fecaca") : (total >= 0 ? "#f0fdf4" : "#fff1f2");
-  // Bordes SOLO en las celdas (no en el <tr>): evita costura/doblado en la sticky al colapsar.
-  // noBottom: la fila siguiente posee el divisor (su borderTop) → sin borde inferior propio que compita.
-  const bord = { borderTop: `${strong ? 3 : 2}px solid ${color}`,
-                 borderBottom: (strong && !noBottom) ? `2px solid ${color}` : "none" };
-  return (
-    <tr style={{ background: bg }}>
-      <td style={{ padding: "12px 16px", fontSize: strong ? 15 : 14, fontWeight: 900,
-        color, letterSpacing: ".02em", ...bord,
-        ...stickyCol, background: bg }}>{label}</td>
-      {activeMonths.map(m => (
-        <td key={m} style={{ padding: "12px 12px", fontSize: 14, textAlign: "right",
-          fontFamily: "var(--mono)", fontWeight: 900,
-          color: values[m] > 0 ? T.green : values[m] < 0 ? T.red : T.dim,
-          whiteSpace: "nowrap", ...bord }}>
-          {fmtPar(values[m])}
-        </td>
-      ))}
-      <td style={{ padding: "12px 14px", fontSize: 15, textAlign: "right", fontFamily: "var(--mono)",
-        fontWeight: 900, color, whiteSpace: "nowrap",
-        borderLeft: `1px solid ${T.cardBorder}`, ...bord }}>
-        {fmtPar(total)}
-      </td>
-    </tr>
   );
 }
 
@@ -1572,8 +1399,6 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
         if (forcedSide === "ingreso") { val = -val; neg = true; }   // lado ingreso de una cuenta intermediada = contra → neto en gpv
       } else if (forcedSide === "ingreso" || catPnl === "ventas") {
         if (fam) { gkey = FAM_A_ING[fam]; if (gkey === "wre") rowKey = cc?.nombre ?? cuenta; }   // VENTA → Ingresos HQ/ger/wre
-      } else if (GPV_COSTO_EGRESO.has(cuenta)) {
-        gkey = "gpv";                                     // cuenta intermediada: la venta es ingreso HQ, la COMPRA (egreso) = costo por venta (Pauta)
       } else if (catRaw.includes("financ")) {
         gkey = "fin";                                     // Financieros: filas = CUENTA (Intereses Ganados / Pérdidas Fin.)
       } else if (catRaw.includes("impuesto") || BIGG_ORDEN_IMP.includes(cuenta)) {
@@ -1621,8 +1446,12 @@ const BIGG_ORDEN_GHQ = ["HQ - Sport", "HQ - Tecnologia", "HQ - Ventas y Operacio
   "HQ - Marketing", "HQ - BI", "HQ - Design", "HQ - Gerencia General", "HQ - Administracion",
   "HQ - Recursos Humanos", "HQ - Infraestructura IT"];
 const BIGG_ORDEN_GPV = ["Interusos", "Acciones de Mkt", "Coorporativos (Gympass)", "Fee Facturación"];
-// Cuentas intermediadas: su VENTA es ingreso HQ, pero su COMPRA (egreso) es costo por venta (pega en margen).
-const GPV_COSTO_EGRESO = new Set([]);
+// Comparador de cuentas: por `order` (índice explícito) y luego alfabético; sin `order`, alfabético.
+const ordCmp = (order) => ([a], [b]) => {
+  if (order) { const ia = order.indexOf(a), ib = order.indexOf(b);
+    return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib) || a.localeCompare(b); }
+  return a.localeCompare(b);
+};
 // Ingreso intermediado que netea DENTRO de Ingresos (no en Gastos por Ventas): su costo entra como
 // contra (−) EN LA MISMA FILA que su ingreso par → una sola línea neta. Ej.: "Interusos" (costo) se
 // suma a la fila "Coorporativos" → Coorporativos − Interusos. "Pauta" es igual: la venta a franquiciados
@@ -1857,603 +1686,11 @@ function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolu
   );
 }
 
-// ─── PnLTable ─────────────────────────────────────────────────────────────────
-function PnLTable({ pnl, sub, year, moneda, label }) {
-  const { ventasTot, costoTot, opexTot, finTot, impTot,
-          margenBruto, resOp, resAntesImp, resNeto, activeMonths } = sub;
-  const ncols = activeMonths.length + 2;
-
-  if (activeMonths.length === 0) return (
-    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
-      padding: "60px 24px", textAlign: "center", boxShadow: T.shadow }}>
-      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke={T.dim} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginBottom: 10 }}>
-        <path d="M3 3v18h18"/><path d="M7 16l4-8 4 4 5-6"/>
-      </svg>
-      <div style={{ fontSize: 14, color: T.muted }}>
-        Sin datos para {year} en {moneda}{label ? ` · ${label}` : ""}.
-      </div>
-      <div style={{ fontSize: 12, color: T.dim, marginTop: 6 }}>
-        Asegurate de asignar la Categoría P&L a cada cuenta en Maestros → Plan de Cuentas.
-      </div>
-    </div>
-  );
-
-  return (
-    <>
-    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
-      boxShadow: T.shadow, overflowX: "auto", position: "relative" }}>
-      <table style={{ width: "100%", minWidth: 280 + activeMonths.length * 110, borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th style={{ ...thStyle, textAlign: "left", minWidth: 240,
-              ...stickyCol, background: T.tableHead, zIndex: 4 }}>Cuenta</th>
-            {activeMonths.map(m => <th key={m} style={thStyle}>{MESES[m]}</th>)}
-            <th style={{ ...thStyle, borderLeft: "1px solid rgba(255,255,255,.12)" }}>TOTAL</th>
-          </tr>
-        </thead>
-        <tbody>
-          <PnlSection label="Ventas" accounts={pnl.ventas}
-            activeMonths={activeMonths} color={T.green} ncols={ncols} />
-          <SubtotalRow label="Total Ventas" values={ventasTot}
-            activeMonths={activeMonths} color={T.green} />
-
-          <PnlSection label="Costo por Venta" accounts={pnl.costo_venta}
-            activeMonths={activeMonths} color="#f97316" ncols={ncols} />
-          <ResultadoRow label="Margen Bruto" values={margenBruto} activeMonths={activeMonths} />
-
-          <PnlSection label="Gastos Operativos" accounts={pnl.gastos_operativos}
-            activeMonths={activeMonths} color={T.red} ncols={ncols} />
-          <ResultadoRow label="Resultado Operativo" values={resOp} activeMonths={activeMonths} />
-
-          <PnlSection label="Gastos Financieros" accounts={pnl.gastos_financieros}
-            activeMonths={activeMonths} color="#8b5cf6" ncols={ncols} />
-          <ResultadoRow label="Resultado antes de Impuestos" values={resAntesImp} activeMonths={activeMonths} />
-
-          <PnlSection label="Impuestos" accounts={pnl.impuestos}
-            activeMonths={activeMonths} color="#64748b" ncols={ncols} />
-          <ResultadoRow label="Resultado Neto" values={resNeto} activeMonths={activeMonths} />
-        </tbody>
-      </table>
-    </div>
-    {pnl.sin_categoria && Object.keys(pnl.sin_categoria).length > 0 && (
-      <div style={{ marginTop: 16, background: T.card, border: `1px solid #fcd34d`,
-        borderRadius: T.radius, boxShadow: T.shadow, overflowX: "auto" }}>
-        <table style={{ width: "100%", minWidth: 280 + activeMonths.length * 110, borderCollapse: "collapse" }}>
-          <tbody>
-            <PnlSection label="Sin Categoría P&L" accounts={pnl.sin_categoria}
-              activeMonths={activeMonths} color="#f59e0b" ncols={ncols} />
-          </tbody>
-        </table>
-      </div>
-    )}
-    </>
-  );
-}
-
-// ─── PnlSection ───────────────────────────────────────────────────────────────
-// Comparador de cuentas: por `order` (índice explícito) y luego alfabético; sin `order`, alfabético.
-const ordCmp = (order) => ([a], [b]) => {
-  if (order) { const ia = order.indexOf(a), ib = order.indexOf(b);
-    return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib) || a.localeCompare(b); }
-  return a.localeCompare(b);
-};
-
-function PnlSection({ label, accounts, activeMonths, color, ncols, sub, order, expanded: expandedProp, onToggle, neg = false }) {
-  const [expandedState, setExpandedState] = useState(true);
-  // Controlado si viene onToggle (lo maneja el toggle maestro); si no, estado interno (como antes).
-  const controlled = onToggle !== undefined;
-  const expanded = controlled ? expandedProp : expandedState;
-  const toggle = controlled ? onToggle : () => setExpandedState(e => !e);
-  // `order` (opcional) = orden explícito de cuentas; sin él, alfabético (comportamiento previo).
-  const rows = Object.entries(accounts).sort(ordCmp(order));
-  const subTotals = MESES.map((_,m) => rows.reduce((s,[,v]) => s + (v[m] || 0), 0));
-  return (
-    <>
-      {!sub && (
-        <SectionRow label={label} values={subTotals} activeMonths={activeMonths}
-          expanded={expanded} onToggle={toggle} />
-      )}
-      {sub && (
-        <SubSectionRow label={label} values={subTotals} activeMonths={activeMonths}
-          color={color} expanded={expanded} onToggle={toggle} neg={neg} />
-      )}
-      {expanded && rows.map(([nombre, vals]) => (
-        <DataRow key={nombre} label={nombre} values={vals} activeMonths={activeMonths} color={color} neg={neg} />
-      ))}
-    </>
-  );
-}
-
-function SubSectionRow({ label, values, activeMonths, color, expanded, onToggle, neg = false }) {
-  const total = rowSum(values);
-  const bg = "#f1f5f9";
-  // Bordes SOLO en las celdas (no en el <tr>): evita costura/doblado en la sticky al colapsar.
-  const bord = { borderTop: `2px solid ${color ?? T.cardBorder}`, borderBottom: `1px solid ${T.cardBorder}` };
-  return (
-    <tr style={{ background: bg, cursor: "pointer" }}
-      onClick={onToggle}>
-      <td style={{ padding: "7px 16px", fontSize: 12, fontWeight: 800,
-        color: color ?? T.muted, letterSpacing: ".06em", textTransform: "uppercase", ...bord,
-        userSelect: "none", ...stickyCol, background: bg }}>
-        <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{expanded ? "▼" : "▶"}</span>
-        {label}
-      </td>
-      {activeMonths.map(m => (
-        <td key={m} style={{ padding: "7px 12px", fontSize: 12, textAlign: "right",
-          fontFamily: "var(--mono)", fontWeight: 800, color: color ?? T.muted, whiteSpace: "nowrap", ...bord }}>
-          {fmtPar(values[m], neg)}
-        </td>
-      ))}
-      <td style={{ padding: "7px 14px", fontSize: 12, textAlign: "right", fontFamily: "var(--mono)",
-        fontWeight: 900, color: color ?? T.muted, whiteSpace: "nowrap",
-        borderLeft: `1px solid ${T.cardBorder}`, ...bord }}>
-        {fmtPar(total, neg)}
-      </td>
-    </tr>
-  );
-}
-
-
-// ─── Tab Balance / Posición Financiera ───────────────────────────────────────
-const MON_COLS = [
-  { key: "ARS", label: "$ ARS" },
-  { key: "USD", label: "U$D" },
-  { key: "EUR", label: "€ EUR" },
-];
-
-function BSecRow({ label, expanded, onToggle }) {
-  const clickable = !!onToggle;
-  return (
-    <tr style={{ background: T.accentDark, cursor: clickable ? "pointer" : "default" }}
-      onClick={onToggle}>
-      <td colSpan={MON_COLS.length + 1} style={{ padding: "8px 16px", fontSize: 11,
-        fontWeight: 800, color: T.accent, letterSpacing: ".1em", textTransform: "uppercase",
-        userSelect: "none" }}>
-        {clickable && <span style={{ marginRight: 6, fontSize: 9, opacity: .6 }}>{expanded ? "▼" : "▶"}</span>}
-        {label}
-      </td>
-    </tr>
-  );
-}
-function BGrpRow({ label, expanded, onToggle }) {
-  const clickable = !!onToggle;
-  return (
-    <tr style={{ background: "#f8fafc", borderTop: `1px solid ${T.cardBorder}`,
-      cursor: clickable ? "pointer" : "default" }}
-      onClick={onToggle}>
-      <td colSpan={MON_COLS.length + 1} style={{ padding: "6px 16px", fontSize: 11,
-        fontWeight: 700, color: T.muted, letterSpacing: ".06em", textTransform: "uppercase",
-        userSelect: "none" }}>
-        {clickable && <span style={{ marginRight: 5, fontSize: 9, opacity: .7 }}>{expanded ? "▼" : "▶"}</span>}
-        {label}
-      </td>
-    </tr>
-  );
-}
-function BDRow({ label, vals, indent = false }) {
-  return (
-    <tr style={{ borderBottom: `1px solid ${T.cardBorder}` }}
-      onMouseEnter={e => e.currentTarget.style.background = "#f0f9ff"}
-      onMouseLeave={e => e.currentTarget.style.background = ""}>
-      <td style={{ padding: `7px ${indent ? 28 : 16}px`, fontSize: 13, color: T.text,
-        whiteSpace: "nowrap", maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis" }}>
-        {label}
-      </td>
-      {MON_COLS.map(({ key }) => {
-        const v = vals[key] ?? 0;
-        return (
-          <td key={key} style={{ padding: "7px 16px", textAlign: "right",
-            fontFamily: "var(--mono)", fontSize: 13, whiteSpace: "nowrap",
-            color: v < 0 ? T.red : v > 0 ? T.text : T.dim }}>
-            {v ? (v < 0 ? "−" : "") + Math.round(Math.abs(v)).toLocaleString("es-AR") : "—"}
-          </td>
-        );
-      })}
-    </tr>
-  );
-}
-function BSubRow({ label, vals, color }) {
-  return (
-    <tr style={{ background: "#f3f4f6", borderTop: `2px solid ${color ?? T.cardBorder}`,
-      borderBottom: `2px solid ${T.cardBorder}` }}>
-      <td style={{ padding: "10px 16px", fontSize: 14, fontWeight: 900, color: color ?? T.text }}>
-        {label}
-      </td>
-      {MON_COLS.map(({ key }) => {
-        const v = vals[key] ?? 0;
-        return (
-          <td key={key} style={{ padding: "10px 16px", textAlign: "right",
-            fontFamily: "var(--mono)", fontSize: 14, fontWeight: 900, whiteSpace: "nowrap",
-            color: v < 0 ? T.red : color ?? T.text }}>
-            {v ? (v < 0 ? "−" : "") + Math.round(Math.abs(v)).toLocaleString("es-AR") : "—"}
-          </td>
-        );
-      })}
-    </tr>
-  );
-}
-function BResRow({ label, vals }) {
-  const color = (vals.USD ?? 0) >= 0 ? T.green : T.red;
-  return (
-    <tr style={{ background: color === T.green ? "#f0fdf4" : "#fff1f2",
-      borderTop: `2px solid ${color}` }}>
-      <td style={{ padding: "12px 16px", fontSize: 14, fontWeight: 900, color }}>
-        {label}
-      </td>
-      {MON_COLS.map(({ key }) => {
-        const v = vals[key] ?? 0;
-        return (
-          <td key={key} style={{ padding: "12px 16px", textAlign: "right",
-            fontFamily: "var(--mono)", fontSize: 14, fontWeight: 900, whiteSpace: "nowrap",
-            color: v > 0 ? T.green : v < 0 ? T.red : T.dim }}>
-            {v ? (v < 0 ? "−" : "") + Math.round(Math.abs(v)).toLocaleString("es-AR") : "—"}
-          </td>
-        );
-      })}
-    </tr>
-  );
-}
-
-const sumMon = (rows, getMoneda, getMonto) => {
-  const t = { ARS: 0, USD: 0, EUR: 0 };
-  for (const r of rows) {
-    const mon = getMoneda(r);
-    if (mon in t) t[mon] += getMonto(r);
-  }
-  return t;
-};
-const addVals = (a, b) => ({ ARS: a.ARS + b.ARS, USD: a.USD + b.USD, EUR: a.EUR + b.EUR });
-const subVals = (a, b) => ({ ARS: a.ARS - b.ARS, USD: a.USD - b.USD, EUR: a.EUR - b.EUR });
-const ZERO    = { ARS: 0, USD: 0, EUR: 0 };
-
-const SALARY_BUCKET_LABEL = { haberes: "Haberes", deposito: "Depósito", monotributo: "Trf. monotributo", efectivo: "Efectivo" };
-
-// CxC / CxP del Balance = saldo PENDIENTE por comprobante. Los comprobantes NO tienen campo `estado`
-// (el estado de pago se deriva); por eso NO se filtra por r.estado (que era siempre undefined → sumaba
-// todo lo histórico). Se agrupa por id_comp (una FC = varias líneas), se restan los pagos (COBRO/PAGO por
-// documento_id), y se suma el saldo remanente. Scope por sociedad, igual que cajas/bancos. Devuelve por moneda.
-function saldoPendientePorComp(lineas, movs, subtipo, pagoTipo, sociedad) {
-  const comp = {};   // id_comp → { total, moneda }
-  for (const r of lineas) {
-    if ((r.subtipo ?? "").toUpperCase() !== subtipo) continue;
-    if (sociedad && (r.sociedad ?? "").toLowerCase() !== sociedad.toLowerCase()) continue;
-    const k = r.id_comp || r.id;
-    if (!comp[k]) comp[k] = { total: 0, moneda: r.moneda ?? "ARS" };
-    comp[k].total += Number(r.total) || 0;
-  }
-  const pagado = {};   // documento_id → Σ |monto| de los pagos
-  for (const m of movs) {
-    if (m.tipo === pagoTipo && m.documento_id) pagado[m.documento_id] = (pagado[m.documento_id] || 0) + Math.abs(Number(m.monto) || 0);
-  }
-  const out = { ...ZERO };
-  for (const k in comp) {
-    const saldo = calcSaldoPendiente(comp[k].total, [{ monto: pagado[k] || 0 }]);
-    if (saldo > 0.5 && comp[k].moneda in out) out[comp[k].moneda] += saldo;
-  }
-  return out;
-}
-
-// Pasivo de financiaciones por bucket (impuestos/financiero). Usa el helper compartido de
-// numbersApi → mismo número que Tesorería (una sola fuente de la clasificación).
-function financiacionPasivoRows(planes, sociedad) {
-  const b = financiacionPasivoBuckets(planes, sociedad);
-  return { impuestos: b.impuestos.tot, financiero: b.financiero.tot };
-}
-
-function TabBalance({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, liqsCerradas = [], pagosSueldos = [], rawFin = [], socios = [], sociosCC = [] }) {
-  const [activoOpen,  setActivoOpen]  = useState(true);
-  const [pasivoOpen,  setPasivoOpen]  = useState(true);
-  const [cajaOpen,    setCajaOpen]    = useState(true);
-  const [bancosOpen,  setBancosOpen]  = useState(true);
-  const [cxcOpen,     setCxcOpen]     = useState(true);
-  const [cxpOpen,     setCxpOpen]     = useState(true);
-  const [cxpSldOpen,  setCxpSldOpen]  = useState(true);
-
-  const saldos = useMemo(() => {
-    const map = {};
-    for (const m of rawMovs) {
-      const cb  = m.cuenta_bancaria ?? "";
-      const mon = m.moneda ?? "ARS";
-      if (!cb || !(mon in ZERO)) continue;
-      if (!map[cb]) map[cb] = { ...ZERO };
-      map[cb][mon] += Number(m.monto) || 0;
-    }
-    return map;
-  }, [rawMovs]);
-
-  const cuentasSoc = useMemo(() =>
-    cuentasBancarias.filter(c => !sociedad ||
-      (c.sociedad ?? "").toLowerCase() === sociedad.toLowerCase()),
-    [cuentasBancarias, sociedad]);
-
-  const cajas    = useMemo(() => cuentasSoc.filter(c => (c.tipo ?? "").toLowerCase() === "caja"),  [cuentasSoc]);
-  const tarjetas = useMemo(() => cuentasSoc.filter(esCuentaCredito), [cuentasSoc]);
-  const bancos   = useMemo(() => cuentasSoc.filter(c => (c.tipo ?? "").toLowerCase() !== "caja" && !esCuentaCredito(c)), [cuentasSoc]);
-
-  const getBal = (id) => saldos[id] ?? { ...ZERO };
-  const sumGrp = (grp) => grp.reduce((t, c) => addVals(t, getBal(c.id)), { ...ZERO });
-
-  const cajaTot  = useMemo(() => sumGrp(cajas),  [cajas, saldos]);
-  const bancoTot = useMemo(() => sumGrp(bancos), [bancos, saldos]);
-  // Deuda de tarjetas: saldo de las cuentas-tarjeta (negativo) → al pasivo como magnitud positiva.
-  const tarjetaDeuda = useMemo(() => subVals({ ...ZERO }, sumGrp(tarjetas)), [tarjetas, saldos]);
-  const hayTarjeta = (tarjetaDeuda.ARS + tarjetaDeuda.USD + tarjetaDeuda.EUR) !== 0;
-
-  const cxcTot = useMemo(() => saldoPendientePorComp(rawIn, rawMovs, "INGRESO", "COBRO", sociedad), [rawIn, rawMovs, sociedad]);
-  const cxpTot = useMemo(() => saldoPendientePorComp(rawEg, rawMovs, "EGRESO", "PAGO", sociedad), [rawEg, rawMovs, sociedad]);
-
-  // Sueldos POR LEGAJO (mismo criterio que Tesorería): neto devengado(cerradas) − pagado(nb_movimientos
-  // origen sueldos). Positivo → PASIVO (deuda). Negativo → ACTIVO "adelanto" (pago sin liquidación
-  // cerrada aún) → mantiene el PN correcto hasta que se cierre la liquidación y se compensen. Por legajo
-  // —NO por bucket— para no netear la deuda de un empleado con el adelanto de otro. Solo ARS.
-  const sueldoSoc = (sociedad ?? "").toLowerCase();
-  const sueldosLegajoRows = (fn) => fn(liqsCerradas, pagosSueldos)
-    .map(leg => ({ label: leg.legajo, ars: leg.items.reduce((t, it) =>
-      t + ((!sueldoSoc || (it.sociedad ?? "").toLowerCase() === sueldoSoc) ? it.monto : 0), 0) }))
-    .filter(r => r.ars > 0.5);
-  const cxpSueldosRows      = useMemo(() => sueldosLegajoRows(pendienteSueldosPorLegajo), [liqsCerradas, pagosSueldos, sueldoSoc]);
-  const adelantoSueldosRows = useMemo(() => sueldosLegajoRows(adelantoSueldosPorLegajo),  [liqsCerradas, pagosSueldos, sueldoSoc]);
-  const cxpSueldosTot      = { ...ZERO, ARS: cxpSueldosRows.reduce((s, r) => s + r.ars, 0) };
-  const adelantoSueldosTot = { ...ZERO, ARS: adelantoSueldosRows.reduce((s, r) => s + r.ars, 0) };
-  const hayAdelSld = adelantoSueldosTot.ARS > 0;
-
-  // Pasivo de financiaciones (planes AFIP → impuestos, créditos → financiero)
-  const [finOpen, setFinOpen] = useState(true);
-  const finPasivo    = useMemo(() => financiacionPasivoRows(rawFin, sociedad), [rawFin, sociedad]);
-  const finPasivoTot = useMemo(() => addVals(finPasivo.impuestos, finPasivo.financiero), [finPasivo]);
-  const hayFin = (finPasivoTot.ARS + finPasivoTot.USD + finPasivoTot.EUR) > 0;
-
-  // Pasivo de anticipos de clientes (ingresos diferidos), derivado de los movimientos
-  const antPasivo    = useMemo(() => anticipoPasivo(agruparAnticipos(rawMovs), sociedad).tot, [rawMovs, sociedad]);
-  const hayAnt = (antPasivo.ARS + antPasivo.USD + antPasivo.EUR) > 0;
-
-  // Socios: slice de esta sociedad (activo = nos deben / pasivo = les debemos). Balance puro,
-  // ya devengado fuera del P&L. Los movs de caja de socios viven en rawMovs (origen="socios").
-  const sociosSld = useMemo(() => sociosSaldos(socios, sociosCC, rawMovs, { sociedad }), [socios, sociosCC, rawMovs, sociedad]);
-  const sociosActivoTot = useMemo(() => sumMon(sociosSld.activo, r => r.moneda, r => r.saldo), [sociosSld]);
-  const sociosPasivoTot = useMemo(() => sumMon(sociosSld.pasivo, r => r.moneda, r => r.saldo), [sociosSld]);
-  const haySocA = (sociosActivoTot.ARS + sociosActivoTot.USD + sociosActivoTot.EUR) > 0;
-  const haySocP = (sociosPasivoTot.ARS + sociosPasivoTot.USD + sociosPasivoTot.EUR) > 0;
-
-  const activoTot  = addVals(addVals(addVals(addVals(cajaTot, bancoTot), cxcTot), sociosActivoTot), adelantoSueldosTot);
-  const pasivoTot  = addVals(addVals(addVals(addVals(addVals(cxpTot, cxpSueldosTot), finPasivoTot), antPasivo), tarjetaDeuda), sociosPasivoTot);
-  const pnTot      = subVals(activoTot, pasivoTot);
-
-  return (
-    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
-      boxShadow: T.shadow, overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 500 }}>
-        <thead>
-          <tr>
-            <th style={{ ...thStyle, textAlign: "left", minWidth: 300 }}>Concepto</th>
-            {MON_COLS.map(({ key, label }) => <th key={key} style={thStyle}>{label}</th>)}
-          </tr>
-        </thead>
-        <tbody>
-          <BSecRow label="Activo" expanded={activoOpen} onToggle={() => setActivoOpen(o => !o)} />
-          {activoOpen && <>
-            <BGrpRow label="Caja / Efectivo" expanded={cajaOpen} onToggle={() => setCajaOpen(o => !o)} />
-            {cajaOpen && cajas.map(c => <BDRow key={c.id} label={c.nombre} vals={getBal(c.id)} indent />)}
-            {cajaOpen && cajas.length === 0 && <BDRow label="(sin cuentas de caja)" vals={ZERO} indent />}
-            <BSubRow label="Total Caja" vals={cajaTot} color={T.green} />
-
-            <BGrpRow label="Bancos" expanded={bancosOpen} onToggle={() => setBancosOpen(o => !o)} />
-            {bancosOpen && bancos.map(c => <BDRow key={c.id} label={c.nombre} vals={getBal(c.id)} indent />)}
-            {bancosOpen && bancos.length === 0 && <BDRow label="(sin cuentas de banco)" vals={ZERO} indent />}
-            <BSubRow label="Total Bancos" vals={bancoTot} color={T.green} />
-
-            <BGrpRow label="Cuentas a Cobrar" expanded={cxcOpen} onToggle={() => setCxcOpen(o => !o)} />
-            {cxcOpen && <BDRow label="Facturas pendientes de cobro" vals={cxcTot} indent />}
-            <BSubRow label="Total Cuentas a Cobrar" vals={cxcTot} color={T.green} />
-
-            {haySocA && <>
-              <BGrpRow label="Socios (nos deben)" expanded onToggle={() => {}} />
-              <BDRow label="Préstamos / adelantos a socios" vals={sociosActivoTot} indent />
-              <BSubRow label="Total Socios" vals={sociosActivoTot} color={T.green} />
-            </>}
-
-            {hayAdelSld && <>
-              <BGrpRow label="Adelantos a empleados" expanded onToggle={() => {}} />
-              {adelantoSueldosRows.map(r => <BDRow key={r.label} label={r.label} vals={{ ...ZERO, ARS: r.ars }} indent />)}
-              <BSubRow label="Total Adelantos a empleados" vals={adelantoSueldosTot} color={T.green} />
-            </>}
-          </>}
-          <BResRow label="TOTAL ACTIVO" vals={activoTot} />
-
-          <BSecRow label="Pasivo" expanded={pasivoOpen} onToggle={() => setPasivoOpen(o => !o)} />
-          {pasivoOpen && <>
-            <BGrpRow label="Cuentas a Pagar" expanded={cxpOpen} onToggle={() => setCxpOpen(o => !o)} />
-            {cxpOpen && <BDRow label="Facturas pendientes de pago" vals={cxpTot} indent />}
-            <BSubRow label="Total Cuentas a Pagar" vals={cxpTot} color={T.red} />
-
-            <BGrpRow label="Cuentas a Pagar — Sueldos" expanded={cxpSldOpen} onToggle={() => setCxpSldOpen(o => !o)} />
-            {cxpSldOpen && cxpSueldosRows.map(r => (
-              <BDRow key={r.label} label={r.label} vals={{ ...ZERO, ARS: r.ars }} indent />
-            ))}
-            {cxpSldOpen && cxpSueldosRows.length === 0 && <BDRow label="(sin saldo de sueldos)" vals={ZERO} indent />}
-            <BSubRow label="Total Cuentas a Pagar — Sueldos" vals={cxpSueldosTot} color={T.red} />
-
-            {hayFin && <>
-              <BGrpRow label="Financiaciones (planes y créditos)" expanded={finOpen} onToggle={() => setFinOpen(o => !o)} />
-              {finOpen && (finPasivo.impuestos.ARS + finPasivo.impuestos.USD + finPasivo.impuestos.EUR) > 0 && <BDRow label="Planes de pago (impuestos)" vals={finPasivo.impuestos} indent />}
-              {finOpen && (finPasivo.financiero.ARS + finPasivo.financiero.USD + finPasivo.financiero.EUR) > 0 && <BDRow label="Créditos / préstamos" vals={finPasivo.financiero} indent />}
-              <BSubRow label="Total Financiaciones" vals={finPasivoTot} color={T.red} />
-            </>}
-
-            {hayAnt && <>
-              <BGrpRow label="Anticipos de clientes (ingresos diferidos)" expanded onToggle={() => {}} />
-              <BDRow label="Saldo de anticipos sin facturar" vals={antPasivo} indent />
-              <BSubRow label="Total Anticipos" vals={antPasivo} color={T.red} />
-            </>}
-
-            {hayTarjeta && <>
-              <BGrpRow label="Tarjetas de crédito" expanded onToggle={() => {}} />
-              <BDRow label="Saldo a pagar de tarjetas" vals={tarjetaDeuda} indent />
-              <BSubRow label="Total Tarjetas" vals={tarjetaDeuda} color={T.red} />
-            </>}
-
-            {haySocP && <>
-              <BGrpRow label="Socios (les debemos)" expanded onToggle={() => {}} />
-              <BDRow label="Dividendos a pagar / aportes de socios" vals={sociosPasivoTot} indent />
-              <BSubRow label="Total Socios" vals={sociosPasivoTot} color={T.red} />
-            </>}
-          </>}
-          <BResRow label="TOTAL PASIVO" vals={pasivoTot} />
-
-          <BResRow label="PATRIMONIO NETO = Activo − Pasivo" vals={pnTot} />
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 // ─── Cash Flow: vive en reportes/cashflowDerive.js + reportes/CashFlowViews.jsx y se muestra dentro de
 // TabTesoreriaConsolidada (vistas "cf" y "flujo"), con las mismas cajas, sociedades y moneda que el Balance (19/9/2026).
 // Orden de anillos en el filtro de sociedades (los que no matcheen van al final, alfabético).
 const CF_ANILLO_ORDEN = ["cleo", "fond", "extern"];
 const anilloRank = (a) => { const x = String(a || "").toLowerCase(); const i = CF_ANILLO_ORDEN.findIndex(k => x.includes(k)); return i === -1 ? 99 : i; };
-
-// ─── Tab Evolución Patrimonio Neto ────────────────────────────────────────────
-function TabEvolucionPN({ rawMovs, cuentasBancarias, rawIn, rawEg, sociedad, year }) {
-  const [activoOpen, setActivoOpen] = useState({ ARS: true, USD: true, EUR: true });
-  const [pasivoOpen, setPasivoOpen] = useState({ ARS: true, USD: true, EUR: true });
-  const toggleActivo = (mon) => setActivoOpen(o => ({ ...o, [mon]: !o[mon] }));
-  const togglePasivo = (mon) => setPasivoOpen(o => ({ ...o, [mon]: !o[mon] }));
-
-  const saldosMensuales = useMemo(() => {
-    const map = {};
-    const movs = [...rawMovs].sort((a, b) => (a.fecha ?? "").localeCompare(b.fecha ?? ""));
-    const running = {};
-    for (const m of movs) {
-      if (!m.fecha) continue;
-      const mes = parseInt(m.fecha.slice(5, 7), 10) - 1;
-      const yr  = parseInt(m.fecha.slice(0, 4), 10);
-      if (yr > year) break;
-      const cb  = m.cuenta_bancaria ?? "";
-      const mon = m.moneda ?? "ARS";
-      if (!cb) continue;
-      const key = `${cb}__${mon}`;
-      running[key] = (running[key] ?? 0) + (Number(m.monto) || 0);
-      if (yr === year) {
-        if (!map[cb]) map[cb] = Array.from({ length: 12 }, () => ({ ARS: 0, USD: 0, EUR: 0 }));
-        map[cb][mes][mon] = running[key];
-      }
-    }
-    for (const cid of Object.keys(map)) {
-      for (let m = 1; m < 12; m++) {
-        for (const mon of ["ARS", "USD", "EUR"]) {
-          if (map[cid][m][mon] === 0 && map[cid][m - 1][mon] !== 0) {
-            map[cid][m][mon] = map[cid][m - 1][mon];
-          }
-        }
-      }
-    }
-    return map;
-  }, [rawMovs, year]);
-
-  const cuentasSoc = useMemo(() =>
-    cuentasBancarias.filter(c => !sociedad ||
-      (c.sociedad ?? "").toLowerCase() === sociedad.toLowerCase()),
-    [cuentasBancarias, sociedad]);
-
-  const cajas  = useMemo(() => cuentasSoc.filter(c => (c.tipo ?? "").toLowerCase() === "caja"),  [cuentasSoc]);
-  const bancos = useMemo(() => cuentasSoc.filter(c => (c.tipo ?? "").toLowerCase() !== "caja"), [cuentasSoc]);
-
-  const grpMes = (grp, mon) =>
-    MESES.map((_, m) => grp.reduce((s, c) => s + ((saldosMensuales[c.id]?.[m]?.[mon]) ?? 0), 0));
-
-  const cxcMes = useMemo(() => {
-    const t = { ARS: new Array(12).fill(0), USD: new Array(12).fill(0), EUR: new Array(12).fill(0) };
-    for (const r of rawIn) {
-      if ((r.subtipo ?? "").toUpperCase() !== "INGRESO") continue;
-      if (r.estado === "cobrado") continue;
-      if (!r.fecha || r.fecha.slice(0, 4) !== String(year)) continue;
-      const m = parseInt(r.fecha.slice(5, 7), 10) - 1;
-      const mon = r.moneda ?? "ARS";
-      if (m >= 0 && m <= 11 && mon in t) t[mon][m] += Number(r.total) || 0;
-    }
-    return t;
-  }, [rawIn, year]);
-
-  const cxpMes = useMemo(() => {
-    const t = { ARS: new Array(12).fill(0), USD: new Array(12).fill(0), EUR: new Array(12).fill(0) };
-    for (const r of rawEg) {
-      if ((r.subtipo ?? "").toUpperCase() !== "EGRESO") continue;
-      if (r.estado === "pagado") continue;
-      if (!r.fecha || r.fecha.slice(0, 4) !== String(year)) continue;
-      const m = parseInt(r.fecha.slice(5, 7), 10) - 1;
-      const mon = r.moneda ?? "ARS";
-      if (m >= 0 && m <= 11 && mon in t) t[mon][m] += Number(r.total) || 0;
-    }
-    return t;
-  }, [rawEg, year]);
-
-  const curMonth = new Date().getMonth();
-  const activeMonths = MESES.map((_, i) => i).filter(i => i <= curMonth);
-
-  const ncols = activeMonths.length + 2;
-
-  const sections = useMemo(() =>
-    MON_COLS.map(({ key: mon }) => {
-      const cajaTot  = grpMes(cajas,  mon);
-      const bancoTot = grpMes(bancos, mon);
-      const cxc      = cxcMes[mon];
-      const cxp      = cxpMes[mon];
-      const activo   = MESES.map((_, m) => cajaTot[m] + bancoTot[m] + cxc[m]);
-      const pn       = MESES.map((_, m) => activo[m] - cxp[m]);
-      return { mon, cajaTot, bancoTot, cxc, cxp, activo, pasivo: cxp, pn };
-    }),
-    [cajas, bancos, cxcMes, cxpMes, saldosMensuales] // eslint-disable-line
-  );
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-      {sections.map(({ mon, cajaTot, bancoTot, cxc, cxp, activo, pasivo, pn }) => {
-        const hasData = activeMonths.some(m => activo[m] !== 0 || pasivo[m] !== 0);
-        if (!hasData) return null;
-        return (
-          <div key={mon}>
-            <div style={{ fontSize: 11, fontWeight: 800, color: T.muted, textTransform: "uppercase",
-              letterSpacing: ".1em", marginBottom: 8 }}>
-              {MONEDA_SYM[mon] ?? mon} {mon}
-            </div>
-            <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
-              boxShadow: T.shadow, overflowX: "auto" }}>
-              <table style={{ width: "100%", minWidth: 280 + activeMonths.length * 100, borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    <th style={{ ...thStyle, textAlign: "left", minWidth: 220 }}>Concepto</th>
-                    {activeMonths.map(m => <th key={m} style={thStyle}>{MESES[m]}</th>)}
-                    <th style={{ ...thStyle, borderLeft: "1px solid rgba(255,255,255,.12)" }}>TOTAL</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <SectionRow label="Activo" span={ncols}
-                    expanded={activoOpen[mon]} onToggle={() => toggleActivo(mon)} />
-                  {activoOpen[mon] && <>
-                    <DataRow label="Caja / Efectivo"   values={cajaTot}  activeMonths={activeMonths} color={T.green} />
-                    <DataRow label="Bancos"             values={bancoTot} activeMonths={activeMonths} color={T.green} />
-                    <DataRow label="Cuentas a Cobrar"   values={cxc}      activeMonths={activeMonths} color={T.green} />
-                  </>}
-                  <SubtotalRow label="Total Activo"     values={activo}   activeMonths={activeMonths} color={T.green} />
-
-                  <SectionRow label="Pasivo" span={ncols}
-                    expanded={pasivoOpen[mon]} onToggle={() => togglePasivo(mon)} />
-                  {pasivoOpen[mon] && (
-                    <DataRow label="Cuentas a Pagar"    values={cxp}      activeMonths={activeMonths} color={T.red} />
-                  )}
-                  <SubtotalRow label="Total Pasivo"     values={pasivo}   activeMonths={activeMonths} color={T.red} />
-
-                  <ResultadoRow label="Patrimonio Neto" values={pn}       activeMonths={activeMonths} />
-                </tbody>
-              </table>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 // ─── Tab config ───────────────────────────────────────────────────────────────
 const TABS = [
@@ -3105,7 +2342,7 @@ function ExportModal({ open, onClose, onConfirm, defaultMes, hayAnioAnterior }) 
 }
 
 // ─── Pantalla principal ───────────────────────────────────────────────────────
-export default function PantallaReportes({ sociedad = "nako", onVerComprobante }) {
+export default function PantallaReportes({ onVerComprobante }) {
   const [activeTab,      setActiveTab]      = useState(null);   // null = menú-landing de reportes
   const [vistaPnl,       setVistaPnl]       = useState("evolucion");   // P&L Sedes: evolucion | mensual | ytd
   const [sinIva,         setSinIva]         = useState(() => { try { return localStorage.getItem("pnlSinIva") === "1"; } catch { return false; } });   // toggle Con/Sin IVA (recordado)
@@ -3163,10 +2400,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const [cuentas,   setCuentas]   = useState([]);
   const [ccs,       setCcs]       = useState([]);
   const [liqsCerradas, setLiqsCerradas] = useState([]);  // su_liquidaciones cerradas (devengado sueldos)
-  const [pagosSueldos, setPagosSueldos] = useState([]);  // pagos de sueldo (nb_movimientos origen sueldos)
   const [rawFin,    setRawFin]    = useState([]);        // financiaciones (planes AFIP + créditos)
-  const [socios,    setSocios]    = useState([]);        // maestro de socios (group-level)
-  const [sociosCC,  setSociosCC]  = useState([]);        // cuenta corriente de socios no-cash (dividendos + apertura)
   const [rawFranq,  setRawFranq]  = useState({});        // comprobantes de Franquicias (read-only)
   const [intercoData,  setIntercoData]  = useState({ movs: [], comps: [], centros: [] });  // fuentes interco (read-only, todas las sociedades)
   const [sociedades,   setSociedades]   = useState([]);  // maestro sociedades (id→nombre/anillo)
@@ -3201,11 +2435,10 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       setLoading(true); setError(null); setCargaFallida([]);
       setSecReady(s => ({ ...s, franq: false, interco: false }));   // se re-piden en esta carga (hist no)
       try {
-        // Sueldos (liquidaciones + pagos) vive en otro backend → se dispara en paralelo al batch de Numbers.
+        // Sueldos (liquidaciones cerradas) vive en otro backend → se dispara en paralelo al batch de Numbers.
         // Envuelto para saber si cargó (tras reintentos): si falla, el P&L queda sin sueldos → avisamos.
         const liqsP  = fetchLiquidacionesCerradas().then(v => ({ ok: true, v })).catch(() => ({ ok: false, v: [] }));
-        const pagosP = fetchPagosAnio().then(v => ({ ok: true, v })).catch(() => ({ ok: false, v: [] }));
-        // Batch: 8 hojas group-wide de Numbers en UNA llamada → los fetch de abajo salen de caché.
+        // Batch: 6 hojas group-wide de Numbers en UNA llamada → los fetch de abajo salen de caché.
         await primeCache([
           { resource: "nb_comprobantes" },
           { resource: "nb_movimientos" },
@@ -3213,14 +2446,12 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
           { resource: "nb_centros_costo" },
           { resource: "nb_cuentas" },
           { resource: "nb_financiaciones" },
-          { resource: "nb_socios" },
-          { resource: "nb_socios_cc" },
         ]);
         // Tolerante: si una hoja falla, las demás siguen; pero la falla queda anotada para el aviso "no cargó X"
         // (antes `.catch(() => [])` y el P&L salía sin comprobantes o sin movimientos, en silencio).
         const fallas = [];
-        const tol = (label, p) => p.catch(() => { fallas.push(label); return []; });
-        const [eg, ing, movs, cbs, ccList, ctaList, fin, socs, socsCC] = await Promise.all([
+        const tol = tolerante(fallas);
+        const [eg, ing, movs, cbs, ccList, ctaList, fin] = await Promise.all([
           // P&L Sedes/BIGG son group-level (todas las sociedades). Cash Flow (por sociedad) filtra client-side.
           tol("comprobantes de egreso",  fetchLineasEnriquecidas(null, ["EGRESO", "GASTO"])),
           tol("comprobantes de ingreso", fetchLineasEnriquecidas(null, "INGRESO")),
@@ -3229,13 +2460,11 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
           tol("centros de costo",        fetchCentrosCosto()),
           tol("plan de cuentas",         fetchCuentas()),
           tol("financiaciones",          fetchFinanciaciones()),
-          tol("socios",                  fetchSocios()),
-          tol("cuenta corriente de socios", fetchSociosCC()),
         ]);
-        const [liqsR, pagosR] = [await liqsP, await pagosP];
-        const liqsC = liqsR.v, pagosS = pagosR.v;
+        const liqsR = await liqsP;
+        const liqsC = liqsR.v;
         if (cancelled) return;
-        if (!liqsR.ok || !pagosR.ok) fallas.push("sueldos");
+        if (!liqsR.ok) fallas.push("sueldos");
         if (fallas.length) setCargaFallida(f => [...f, ...fallas]);
         setRawEg(eg);
         setRawIn(ing);
@@ -3244,10 +2473,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
         setCcs(Array.isArray(ccList) ? ccList : []);
         setCuentas(Array.isArray(ctaList) ? ctaList : []);
         setLiqsCerradas(Array.isArray(liqsC) ? liqsC : []);
-        setPagosSueldos(Array.isArray(pagosS) ? pagosS : []);
         setRawFin(Array.isArray(fin) ? fin : []);
-        setSocios(Array.isArray(socs) ? socs : []);
-        setSociosCC(Array.isArray(socsCC) ? socsCC : []);
         // Franquicias (read-only) — fuera del Promise.all para NO bloquear Reportes si ese backend tarda.
         fetchComps().then(c => { if (!cancelled && c && typeof c === "object") setRawFranq(c); })
           .catch(() => { if (!cancelled) setCargaFallida(f => [...f, "franquicias"]); })
@@ -3270,8 +2496,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     };
     run();
     return () => { cancelled = true; };
-    // Sin `sociedad`: la carga es group-level (todas las sociedades). El re-scope por
-    // sociedad de la lente "Por sociedad" es client-side (rawMovsSoc), no re-fetchea.
+    // La carga es group-level (todas las sociedades); ningún reporte re-fetchea por sociedad.
   }, [loadKey]);
 
   const curTab   = TABS.find(t => t.id === activeTab);
@@ -3324,12 +2549,6 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     return (x) => byId.get(x) || x;
   }, [cuentas]);
 
-  // rawMovs se carga group-level (todas las sociedades) para el P&L Sedes/BIGG.
-  // La lente "Por sociedad" (Cash Flow / Balance / Evolución PN) filtra a la sociedad activa client-side.
-  const rawMovsSoc = useMemo(() => {
-    const soc = (sociedad ?? "").toLowerCase();
-    return soc ? rawMovs.filter(m => (m.sociedad ?? "").toLowerCase() === soc) : rawMovs;
-  }, [rawMovs, sociedad]);
 
   // Núcleo (anillo 1) = sociedades cuyo `anillo` contiene "cleo" (Núcleo, con o sin acento).
   const nucleoEmpresas = useMemo(() => new Set(
@@ -3435,8 +2654,6 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const salaryRows = useMemo(() => liqsCerradas.flatMap(liquidacionToPnLRows).map(r => ({ ...r, _tipo: "Sueldo", contraparte_nombre: r.legajo_nombre ?? r.contraparte_nombre ?? "" })), [liqsCerradas]);
 
   const gastoMovRows = useMemo(() => movimientoToPnLRows(rawMovs, "", cuentaMap), [rawMovs, cuentaMap]);
-  // Cuentas-tarjeta (crédito): sus movimientos no son caja → se excluyen del Cash Flow (la salida real es el pago de la tarjeta).
-  const tarjetaIds = useMemo(() => new Set(cuentasBancarias.filter(esCuentaCredito).map(c => c.id)), [cuentasBancarias]);
 
   // Financiaciones: capital del impuesto (plan AFIP) + interés/IVA/impuestos por cuota (mes a mes).
   const finRows = useMemo(() => financiacionToPnLRows(rawFin, ""), [rawFin]);
@@ -4402,32 +3619,6 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       {activeTab === "cf" && (
         <TabTesoreriaConsolidada vistas={["cf", "flujo"]} socInicial="nucleo" monedaInicial="ARS"
           pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
-      )}
-
-      {activeTab === "balance" && (
-        <TabBalance
-          rawMovs={rawMovsSoc}
-          cuentasBancarias={cuentasBancarias}
-          rawIn={rawIn}
-          rawEg={rawEg}
-          sociedad={sociedad}
-          liqsCerradas={liqsCerradas}
-          pagosSueldos={pagosSueldos}
-          rawFin={rawFin}
-          socios={socios}
-          sociosCC={sociosCC}
-        />
-      )}
-
-      {activeTab === "evpn" && (
-        <TabEvolucionPN
-          rawMovs={rawMovsSoc}
-          cuentasBancarias={cuentasBancarias}
-          rawIn={rawIn}
-          rawEg={rawEg}
-          sociedad={sociedad}
-          year={year}
-        />
       )}
 
       {activeTab === "interco" && (

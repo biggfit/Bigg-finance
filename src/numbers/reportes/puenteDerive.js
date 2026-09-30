@@ -5,7 +5,7 @@
 // Convención: e = aporte al gap, gap = (ΔPN − Δcambio) − Resultado; residual = gap − Σe (debe ≈ 0).
 // NO es UI. Se expone en dev por window.__buildPuente (ver TabTesoreriaConsolidada) y se corre en consola.
 import { derivarSaldos, intercoConsolidado, sociedadNombreMap } from "../tesoreriaDerive";
-import { intercoLedger, toNum } from "../../lib/numbersApi";
+import { intercoLedger, toNum, nucleoSet, empresaDeCentro } from "../../lib/numbersApi";
 import { normSoc } from "../../lib/sueldosApi";
 import { buildDevengado, pnAmount } from "./TabDevengado";
 
@@ -46,8 +46,9 @@ export function buildPuente({
   const S = new Set((socIds || []).map(lc));
   const socsIncl = (sociedades || []).filter(s => S.has(lc(s.id)));
   const sociedadesMap = sociedadNombreMap(sociedades);
-  const nucleo = new Set((sociedades || []).filter(s => /n[úu]cleo/i.test(String(s.anillo || ""))).map(s => lc(s.id)));
-  const empresaDe = id => lc((data.centrosCosto || []).find(c => lc(c.id) === lc(id))?.empresa);
+  const nucleo = nucleoSet(sociedades, { lower: true });
+  const mapaEmpresa = empresaDeCentro(data.centrosCosto, { lower: true });
+  const empresaDe = id => mapaEmpresa.get(lc(id)) ?? "";
   const aplicaInterco1 = (A, B) => { A = lc(A); B = lc(B); return !!A && !!B && A !== B && !(nucleo.has(A) && nucleo.has(B)); };
   const ant = finDeMes(year, m - 1), fin = finDeMes(year, m);
   const enMes = f => { f = String(f ?? ""); return f > ant && f <= fin; };

@@ -13,21 +13,7 @@
 //
 // El llamador resuelve los campos derivados (nombres de sociedad/cuenta bancaria, cód. de estudio, factura
 // aplicada) porque los mapas viven en la pantalla; acá solo se serializa.
-import ExcelJS from "exceljs";
-
-const FMT_MONEY = "#,##0.00;(#,##0.00)";
-const FMT_DATE  = "dd/mm/yyyy";
-
-const solid = argb => ({ type: "pattern", pattern: "solid", fgColor: { argb } });
-const thin  = { style: "thin", color: { argb: "FFE2E8F0" } };
-
-// "YYYY-MM-DD" → Date a medianoche UTC. Tiene que ser UTC y no local: ExcelJS serializa el INSTANTE, así que
-// una medianoche local se guarda corrida por el huso y el serial cae en el día anterior (verificado en una
-// máquina en UTC+2: 17/09 salía 16/09 22:00). Con Date.UTC el día es el correcto en cualquier zona horaria.
-function isoADate(iso) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ""));
-  return m ? new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))) : null;
-}
+import { FMT_MONEY, FMT_DATE, isoADate, nuevoWorkbook, addTitulo, addTabla, descargarWorkbook } from "./xlsxUtils";
 
 // Vacío —no 0— cuando el dato no existe: un 0 en "Total de la factura" se leería como "la factura era de
 // cero", y lo que pasa es que ese movimiento no tiene factura (un cobro directo, una transferencia).
@@ -77,51 +63,18 @@ function columnas(campo) {
 export async function exportarPagosCobrosExcel({ rows = [], campo = {}, totales = {}, rango = {} }) {
   const COLS = columnas(campo);
 
-  const wb = new ExcelJS.Workbook();
-  wb.creator = "BIGG Numbers";
+  const wb = nuevoWorkbook();
   const ws = wb.addWorksheet("Pagos y cobros");
-
-  ws.addRow(["Pagos y cobros (detalle)"]); ws.mergeCells(1, 1, 1, COLS.length);
-  ws.getCell(1, 1).font = { bold: true, size: 14, color: { argb: "FF0F172A" } };
 
   const periodo = rango.desde || rango.hasta
     ? `${rango.desde ? rango.desde.split("-").reverse().join("/") : "inicio"} → ${rango.hasta ? rango.hasta.split("-").reverse().join("/") : "hoy"}`
     : "todo el período";
   const totTxt = Object.entries(totales).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
     .map(([mo, v]) => `${mo} ${v.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`).join(" · ");
-  const rm = ws.addRow([`${periodo} · ${rows.length} movimiento${rows.length === 1 ? "" : "s"}${totTxt ? ` · neto ${totTxt}` : ""}`]);
-  ws.mergeCells(rm.number, 1, rm.number, COLS.length);
-  ws.getCell(rm.number, 1).font = { italic: true, size: 10, color: { argb: "FF64748B" } };
-  ws.addRow([]);
+  addTitulo(ws, "Pagos y cobros (detalle)",
+    [`${periodo} · ${rows.length} movimiento${rows.length === 1 ? "" : "s"}${totTxt ? ` · neto ${totTxt}` : ""}`], COLS.length);
 
-  const head = ws.addRow(COLS.map(c => c.h));
-  head.eachCell((cell, col) => {
-    cell.fill = solid("FF0E7490");
-    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
-    cell.alignment = { horizontal: COLS[col - 1].num ? "right" : "left", vertical: "middle" };
-    cell.border = { bottom: thin };
-  });
-  head.height = 20;
-  ws.views = [{ state: "frozen", ySplit: head.number }];
-  ws.autoFilter = { from: { row: head.number, column: 1 }, to: { row: head.number, column: COLS.length } };
+  addTabla(ws, COLS, rows, { headerBg: "FF0E7490", autoFilter: true });
 
-  for (const r of rows) {
-    const row = ws.addRow(COLS.map(c => c.get(r) ?? ""));
-    row.eachCell({ includeEmpty: true }, (cell, col) => {
-      const c = COLS[col - 1];
-      cell.border = { bottom: thin };
-      cell.alignment = { horizontal: c.num ? "right" : "left" };
-      if (c.fmt) cell.numFmt = c.fmt;
-    });
-  }
-
-  COLS.forEach((c, i) => { ws.getColumn(i + 1).width = c.w; });
-
-  const buf = await wb.xlsx.writeBuffer();
-  const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `Pagos_y_cobros_${new Date().toISOString().slice(0, 10)}.xlsx`;
-  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  await descargarWorkbook(wb, `Pagos_y_cobros_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }

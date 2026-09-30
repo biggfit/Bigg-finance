@@ -4,7 +4,7 @@
 // movimientos que la componen, en el formato del ledger de Tesorería.
 import { Fragment, useEffect, useState } from "react";
 import { T } from "../theme";
-import { intercoLedger } from "../../lib/numbersApi";
+import { intercoLedger, nucleoSet } from "../../lib/numbersApi";
 import IntercoLedgerTable, { chipDe, fmtUSD } from "./IntercoLedgerTable";
 
 const MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
@@ -32,7 +32,7 @@ export default function TabIntercoConsolidado({ data, sociedades = [], year, mat
 
   // ── Drill: movimientos de una celda (negocio × tipo × mes) ────────────────────
   if (drill) {
-    const nucleoIds = sociedades.filter(s => /n[úu]cleo/i.test(String(s.anillo || ""))).map(s => String(s.id));
+    const nucleoIds = [...nucleoSet(sociedades)];
     const entries = [];
     for (const nid of nucleoIds) for (const mon of MONS_DRILL) {
       const led = intercoLedger(data, { sociedad: nid, contraparte: drill.negocioId, moneda: mon });

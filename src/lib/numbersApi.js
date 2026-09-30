@@ -2472,6 +2472,18 @@ export async function parkearIntercoManual({ sociedad, fecha, cuenta_bancaria, m
 // (cuenta_bancaria y cuenta_contable vacías). monto firmado desde la tenedora
 // (+ = nos deben / − = les debemos). Las levanta lecturaInterco (fuente 3, abajo).
 
+// Sociedades del NÚCLEO (por anillo) y mapa centro de costo → empresa dueña. Son la base de toda lectura
+// intercompañía; estaban re-derivados en cada función con normalizaciones distintas. `lower`: ids en minúsculas
+// (para las lecturas que comparan contra ids normalizados); sin `lower`, los ids tal cual (como en movs/comps).
+export function nucleoSet(sociedades, { lower = false } = {}) {
+  const f = lower ? (x => String(x || "").trim().toLowerCase()) : (x => String(x));
+  return new Set((sociedades || []).filter(s => /n[úu]cleo/i.test(String(s.anillo || ""))).map(s => f(s.id)));
+}
+export function empresaDeCentro(centros, { lower = false } = {}) {
+  const f = lower ? (x => String(x || "").trim().toLowerCase()) : (x => String(x || ""));
+  return new Map((centros || []).map(c => [lower ? f(c.id) : String(c.id), f(c.empresa)]));
+}
+
 // ── LECTURA intercompañía (el corazón del módulo — LECTURA, no escribe) ──────────
 // Trae TODO lo necesario para leer lo intercompany (todas las sociedades).
 // Cada fuente es tolerante (si una falla, las demás siguen) pero la falla NO se traga en silencio: queda
@@ -2654,10 +2666,10 @@ export async function revertirInterusoGestion(movId) {
 //   núcleo↔núcleo nunca deja posición (Beta = pool del núcleo). Sin datos de anillo no se arriesgan posiciones.
 // Devuelve [{ A, B, fecha, moneda, monto(>0), tipo, concepto, prov, cuenta, centro, ref, refKind }].
 function _sueldosIntercoEventos({ liqsSueldos = [], movs = [], centros = [], sociedades = [], legajoSoc = {} } = {}) {
-  const nucleo = new Set((sociedades || []).filter(s => /n[úu]cleo/i.test(String(s.anillo || ""))).map(s => String(s.id).toLowerCase()));
+  const nucleo = nucleoSet(sociedades, { lower: true });
   if (!nucleo.size) return [];
   const lc = x => String(x || "").trim().toLowerCase();
-  const empresaDe    = new Map((centros || []).map(c => [lc(c.id), lc(c.empresa)]));
+  const empresaDe    = empresaDeCentro(centros, { lower: true });
   const nombreCentro = new Map((centros || []).map(c => [lc(c.id), c.nombre || c.id]));
   const norm = x => { const v = lc(x); return v === "b" ? "beta" : v; };   // alias beta↔b (ver sueldosApi.normSoc)
   const out = [];
@@ -2703,10 +2715,10 @@ export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades
     movs  = movs.filter(m => (m.fecha ?? "") <= corte);
     comps = comps.filter(r => (r.fecha ?? "") <= corte);
   }
-  const empresaDe = new Map((centros || []).map(c => [String(c.id), c.empresa]));
+  const empresaDe = empresaDeCentro(centros);
   // Sociedades del núcleo (por anillo) → para decidir si un interuso de gestión cross-society deja
   // posición: núcleo↔núcleo NO (Hektor); hacia una fondeada/externa SÍ (Wellness).
-  const nucleo = new Set((sociedades || []).filter(s => /n[úu]cleo/i.test(String(s.anillo || ""))).map(s => String(s.id)));
+  const nucleo = nucleoSet(sociedades);
   const acc = {};  // acc[sociedad][contraparte][moneda] = neto
   const accIni = {};  // solo el componente de APERTURA (saldo inicial), misma clave
   const add = (s, c, moneda, delta) => {
@@ -2823,8 +2835,8 @@ export function lecturaInterco({ movs = [], comps = [], centros = [], sociedades
 // `fx(monto,moneda,anio,mes)->USD` opcional: con fx CONVIERTE todas las monedas a USD (consolidado); sin fx
 // filtra por `moneda` (modo nativo, comportamiento previo). Sin fx, el fondeo en monedas ≠ moneda se descartaba.
 export function fondeoFondeadasMensual({ movs = [], comps = [], centros = [], sociedades = [] } = {}, { year = null, moneda = "ARS", desde = null, fx = null } = {}) {
-  const empresaDe = new Map((centros || []).map(c => [String(c.id), String(c.empresa || "")]));
-  const nucleo   = new Set((sociedades || []).filter(s => /n[úu]cleo/i.test(String(s.anillo || ""))).map(s => String(s.id)));
+  const empresaDe = empresaDeCentro(centros);
+  const nucleo   = nucleoSet(sociedades);
   const fondeada = new Set((sociedades || []).filter(s => /fondead/i.test(String(s.anillo || ""))).map(s => String(s.id)));
   const out = {};
   // Registra un aporte del núcleo A hacia la fondeada B (add(A,B,delta) de lecturaInterco), bucketeado por mes.
@@ -2882,8 +2894,8 @@ export function fondeoFondeadasMensual({ movs = [], comps = [], centros = [], so
 // Devuelve { negocios:[{ negocioId, negocioNombre, anillo, ladoNucleo, tipos:{[tipo]:number[12]}, totalMes }], tipos, totalMes }.
 export const INTERCO_TIPOS = ["Pago", "Transferencia", "Interco parkeada", "Interuso gestión", "Sueldo"];
 export function intercoConsolidadoMensual({ movs = [], comps = [], centros = [], sociedades = [], legajoSoc = {}, liqsSueldos = [] } = {}, { year = null, desde = null, fx = null } = {}) {
-  const empresaDe  = new Map((centros || []).map(c => [String(c.id), String(c.empresa || "")]));
-  const nucleo     = new Set((sociedades || []).filter(s => /n[úu]cleo/i.test(String(s.anillo || ""))).map(s => String(s.id)));
+  const empresaDe  = empresaDeCentro(centros);
+  const nucleo     = nucleoSet(sociedades);
   const socIds     = new Set((sociedades || []).map(s => String(s.id)));   // solo negocios = sociedad real
   const nombreSoc  = new Map((sociedades || []).map(s => [String(s.id), s.nombre || s.id]));
   const anilloSoc  = new Map((sociedades || []).map(s => [String(s.id), s.anillo || "Sin anillo"]));
@@ -2948,10 +2960,10 @@ export function intercoConsolidadoMensual({ movs = [], comps = [], centros = [],
 export function intercoLedger({ movs = [], comps = [], centros = [], sociedades = [], cuentasBancarias = [], cuentas = [], legajoSoc = {}, liqsSueldos = [] } = {}, { sociedad, contraparte, moneda = "ARS" } = {}) {
   const S = String(sociedad || "").toLowerCase();
   const C = String(contraparte || "").toLowerCase();
-  const empresaDe = new Map((centros || []).map(c => [String(c.id), c.empresa]));
+  const empresaDe = empresaDeCentro(centros);
   const nombreCentro = new Map((centros || []).map(c => [String(c.id), c.nombre]));
   const nombreSoc = new Map((sociedades || []).map(s => [String(s.id), s.nombre || s.id]));
-  const nucleo = new Set((sociedades || []).filter(s => /n[úu]cleo/i.test(String(s.anillo || ""))).map(s => String(s.id)));
+  const nucleo = nucleoSet(sociedades);
   const mine = (s, c, mon) => String(s || "").toLowerCase() === S && String(c || "").toLowerCase() === C && (mon || "ARS") === moneda;
   const cc = id => nombreCentro.get(String(id || "")) || "";
   const soc = id => nombreSoc.get(String(id || "")) || String(id || "");
