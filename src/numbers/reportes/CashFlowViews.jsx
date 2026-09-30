@@ -8,7 +8,7 @@
 // Rediseño 19/9/2026 pedido por Martín ("necesito entender si tengo caja positiva o negativa y por qué").
 import { useState, useMemo, Fragment } from "react";
 import { T } from "../theme";
-import { buildDevengado } from "./TabDevengado";
+import { resultadoDevengadoMensual } from "./TabDevengado";
 import { MESES_CORTOS, sumSaldo, fmtBal, crearTraductor, AvisosTC, ordenarDetalle } from "./balanceUtils";
 import { CF_ACT, CF_CONCEPTO_ORDEN } from "./cashflowDerive";
 
@@ -171,14 +171,9 @@ export function ResultadoACajaView({ eepn, consolidado, mon, tiposCambio = null,
     const cash = m => suma(bd(m).cuentas, m, c => (c.tipo || "") !== "tarjeta");
     const dCaja = m => cash(m) - cash(m - 1);
     // Resultado devengado del mes: misma función y perímetro (socSet) que el Devengado y el Balance.
-    const res = new Array(12).fill(0);
-    if (pnl && year === 2026) {
-      const monedasPnL = consolidado ? [...new Set([...(pnl.inRows || []), ...(pnl.egRows || [])].map(r => r.moneda || "ARS"))] : [mon];
-      for (const mo of monedasPnL) {
-        const dev = buildDevengado(pnl.inRows || [], pnl.egRows || [], { cuentaMap: pnl.cuentaMap, ccMap: pnl.ccMap, year, moneda: mo, socSet, ccSet: null, sinIva: false });
-        for (const m of meses) { const v = dev.resultado[m] || 0; res[m] += consolidado ? aUSD(v, mo, `${year}-${String(m + 1).padStart(2, "0")}-01`) : v; }
-      }
-    }
+    const res = (pnl && year === 2026)
+      ? resultadoDevengadoMensual(pnl, { year, consolidado, mon, socSet, tiposCambio, desde: GO, hasta: upto })
+      : new Array(12).fill(0);
     // Cambio de moneda del mes (origen "cambio"): nativo = la pata de esta moneda; consolidado = las dos patas al TC.
     const cambio = new Array(12).fill(0);
     for (const mv of movimientos || []) {

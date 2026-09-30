@@ -15,7 +15,7 @@ import { fetchLiquidacionesCerradas } from "../../lib/sueldosApi";
 import { tolerante } from "../../lib/http";
 import { fetchAll } from "../../lib/sheetsApi";        // Franquicias (read-only)
 import { derivarSaldos, franqFirst, intercoConsolidado, sociedadNombreMap } from "../tesoreriaDerive";
-import { buildDevengado } from "./TabDevengado";   // resultado por mes (misma función que el reporte Devengado) → conciliación del PN
+import { resultadoDevengadoMensual } from "./TabDevengado";   // resultado por mes (misma función que el reporte Devengado) → conciliación del PN
 import { TabSaldos, TabMovimientos, PaginaAging, PaginaIntercoLedger } from "../PantallaTesoreria";
 import { buildPuente, printPuente } from "./puenteDerive";   // DEV-ONLY diagnóstico (descartable)
 import { GO_LIVE_APERTURA, MESES_CORTOS as _MESES, sumSaldo, esCorriente, fmtBal, crearTraductor, AvisosTC, ordenarDetalle,
@@ -711,18 +711,10 @@ function BalanceView({ deriveAsOf, filtroMoneda, fechaCorte, tiposCambio = null,
   const socSet = useMemo(() => new Set(socsIncluidas.map(s => String(s.id).toLowerCase())), [socsIncluidas]);
   const resultadoAcum = useMemo(() => {
     if (!pnl || yCorte !== 2026) return null;
-    const monedasPnL = consolidado ? [...new Set([...(pnl.inRows || []), ...(pnl.egRows || [])].map(r => r.moneda || "ARS"))] : [mon];
-    let tot = 0; const porMes = new Array(12).fill(0);
-    for (const mo of monedasPnL) {
-      const dev = buildDevengado(pnl.inRows || [], pnl.egRows || [], { cuentaMap: pnl.cuentaMap, ccMap: pnl.ccMap, year: yCorte, moneda: mo, socSet, ccSet: null, sinIva: false });
-      for (let m = 6; m <= mCorte; m++) {   // julio (go-live) … mes del corte
-        const v = dev.resultado[m] || 0;
-        const vv = consolidado ? aUSD(v, mo, `${yCorte}-${String(m + 1).padStart(2, "0")}-01`) : v;
-        porMes[m] += vv; tot += vv;
-      }
-    }
-    return { tot, porMes };
-  }, [pnl, yCorte, mCorte, consolidado, mon, socSet, tiposCambio]);   // eslint-disable-line react-hooks/exhaustive-deps
+    // julio (go-live) … mes del corte
+    const porMes = resultadoDevengadoMensual(pnl, { year: yCorte, consolidado, mon, socSet, tiposCambio, hasta: mCorte });
+    return { tot: porMes.reduce((s, v) => s + v, 0), porMes };
+  }, [pnl, yCorte, mCorte, consolidado, mon, socSet, tiposCambio]);
   // Cambio de moneda: plata movida entre cajas de distinta moneda (origen "cambio"). En una moneda sola es la
   // pata que se ve; consolidado en USD, la diferencia entre las dos patas al TC del mes (costo de cambio).
   const cambioAcum = (() => {

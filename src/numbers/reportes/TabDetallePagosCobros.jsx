@@ -19,7 +19,8 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { T } from "../theme";
 import { MONEDA_SYM } from "../../data/tesoreriaData";
 import { fetchProveedores, fetchClientes, esIgnorado } from "../../lib/numbersApi";
-import { fmtN, fmtSigned, selStyle, MultiSelect, DATE_PRESETS, rangoDePreset, PNL_INICIO } from "../PantallaReportes";
+import { fmtN, fmtSigned, selStyle, MultiSelect, DATE_PRESETS, rangoDePreset } from "./reportesUi";
+import { PNL_INICIO } from "./pnlDerive";
 import { exportarPagosCobrosExcel } from "./exportPagosCobros";
 
 // Movimientos que SON plata moviéndose por una caja. Quedan afuera los asientos que viven en nb_movimientos

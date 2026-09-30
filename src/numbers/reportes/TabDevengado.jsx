@@ -1,7 +1,9 @@
 import { useMemo, useState, useEffect } from "react";
 import { T } from "../theme";
 import { MONEDA_SYM } from "../../data/tesoreriaData";
-import { normCat, ccKey, MultiSelect, selStyle, MESES, fmtSigned } from "../PantallaReportes";
+import { normCat, ccKey, MESES } from "./pnlDerive";
+import { MultiSelect, selStyle, fmtSigned } from "./reportesUi";
+import { crearTraductor } from "./balanceUtils";
 
 // ─── Reporte de DEVENGADO CRUDO (diagnóstico) ─────────────────────────────────
 // Objetivo: ver el devengado lo más simple posible (cuenta × mes) para cruzarlo
@@ -60,6 +62,24 @@ export function pnAmount(row, ladoIngreso, sinIva) {
 // analizamos línea por línea → el devengado crudo arranca acá (mismo corte que el P&L).
 const GO_LIVE = "2026-07-01";
 const GO_LIVE_ANIO = 2026, GO_LIVE_MES = 6;   // julio (0-based)
+
+// Resultado devengado POR MES (misma función y perímetro `socSet` que este reporte), nativo en `mon` o consolidado
+// en USD sumando cada moneda del P&L al TC del 1° del mes (`tiposCambio`). Lo usan el Balance ("De dónde viene el PN") y
+// el Cash Flow indirecto ("Del resultado a la caja"): un solo loop, no dos copias. Meses fuera de [desde, hasta] = 0.
+export function resultadoDevengadoMensual(pnl, { year, consolidado, mon, socSet, tiposCambio = null, desde = GO_LIVE_MES, hasta = 11 }) {
+  const porMes = new Array(12).fill(0);
+  if (!pnl) return porMes;
+  const { aUSD } = crearTraductor(tiposCambio);
+  const monedas = consolidado ? [...new Set([...(pnl.inRows || []), ...(pnl.egRows || [])].map(r => r.moneda || "ARS"))] : [mon];
+  for (const mo of monedas) {
+    const dev = buildDevengado(pnl.inRows || [], pnl.egRows || [], { cuentaMap: pnl.cuentaMap, ccMap: pnl.ccMap, year, moneda: mo, socSet, ccSet: null, sinIva: false });
+    for (let m = desde; m <= hasta; m++) {
+      const v = dev.resultado[m] || 0;
+      porMes[m] += consolidado ? aUSD(v, mo, `${year}-${String(m + 1).padStart(2, "0")}-01`) : v;
+    }
+  }
+  return porMes;
+}
 
 // Resuelve la CUENTA real de una fila. Prioridad: el id que trae el comprobante (`cuenta_contable_id`);
 // si no, por nombre en el maestro. Cuando un mismo NOMBRE tiene varias cuentas (colisión: "Pauta" y

@@ -7,9 +7,7 @@
 // Lo consumen la vista directa ("Por qué se movió la caja") y la indirecta ("Del resultado a la caja") que usa
 // `flujoNeto` como control cruzado contra la variación de saldos del Balance.
 import { esIgnorado } from "../../lib/numbersApi";
-
-const ccKey = s => String(s ?? "").trim().toLowerCase();
-const normCat = raw => String(raw ?? "").trim().toLowerCase().replace(/\s+/g, "_");
+import { ccKey, normCat } from "./pnlDerive";   // mismas claves de centro/categoría que el P&L
 
 export const CF_ACT = [
   { key: "operativo",    label: "Operación (cobros y pagos del negocio)" },
@@ -71,7 +69,7 @@ export function clasificarFlujo(m, { ccMap, perimetro, docCentro, docCuenta, cue
   const ctaCat = normCat(cta?.categoria_pnl);
   if (tipo === "SUELDO" || origen === "sueldos" || doc.startsWith("LIQ-") || RE_SUELDO.test(ctaNombre))
     return { act: "operativo", concepto: "Sueldos" };
-  if (!entra && (ctaCat === "impuestos" || ctaCat === "impuesto" || RE_IMPUESTO.test(ctaNombre)))
+  if (!entra && (ctaCat === "impuestos" || RE_IMPUESTO.test(ctaNombre)))
     return { act: "operativo", concepto: "Impuestos y cargas sociales" };
   // Cobros / pagos por negocio: HQ = todo lo que NO es sede (sueldos HQ ya salieron arriba).
   if (grupo === "hq")
