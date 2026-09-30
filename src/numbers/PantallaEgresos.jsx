@@ -9,7 +9,7 @@ import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComproban
 const tieneRetPracticada = (e) => (e?.pagosVinculados ?? []).some(
   p => p.origen === "retencion_practicada" || String(p.nota || "").includes(RETDEP_TAG));
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC, todayISO } from "../data/numbersData";
-import { makeResolveCC, makeResolveCB, inputStyle, CCSelectOptions, makeCrearMaestro, stripForDuplicate, calcLineasTotals } from "./formUtils";
+import { makeResolveCC, makeResolveCB, inputStyle, makeCrearMaestro, stripForDuplicate, calcLineasTotals } from "./formUtils";
 import NuevoEgresoModal from "./NuevoEgresoModal";
 import FiltroFecha, { useFiltroFecha } from "./FiltroFecha";
 import AgregarPagoModal from "./pagos/AgregarPagoModal";
@@ -184,7 +184,7 @@ function RegistrarRetencionPracticadaModal({ egreso, sociedad, saldoPendiente, c
 }
 
 // ─── Modal: Editar Pago ───────────────────────────────────────────────────────
-function EditarPagoModal({ pago, sociedad, cuentasSoc, onClose, onSaved }) {
+function EditarPagoModal({ pago, cuentasSoc, onClose, onSaved }) {
   const [form, setForm] = useState({
     fecha:          pago.fecha ?? new Date().toISOString().slice(0, 10),
     monto:          String(Math.abs(Number(pago.monto) || 0)),
@@ -613,9 +613,6 @@ function CtaCteModal({ proveedor, documentos, onClose }) {
   const totalPagado    = documentos.reduce((s, d) => s + (d.importe - (d.saldoPendiente ?? d.importe)), 0);
   const totalPendiente = documentos.reduce((s, d) => s + (d.saldoPendiente ?? 0), 0);
 
-  // Group by moneda
-  const monedas = [...new Set(documentos.map(d => d.moneda))].filter(Boolean);
-
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.5)", zIndex:500,
       display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
@@ -870,14 +867,9 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
     setLoading(true);
     setError(null);
     try {
-      // Reintento ante hipo transitorio del GAS: sin esto, un fallo en la re-lectura post-guardado
-      // dejaba la lista VIEJA (parecía que la edición "no se guardó" cuando en la base sí estaba).
-      let docs, pagos, lastErr;
-      for (let a = 0; a < 3; a++) {
-        try { [docs, pagos] = await Promise.all([fetchEgresos(sociedad), fetchPagosCobros(sociedad)]); lastErr = null; break; }
-        catch (e) { lastErr = e; if (a < 2) await new Promise(r => setTimeout(r, 800 * (a + 1))); }
-      }
-      if (lastErr) throw lastErr;
+      // El reintento ante hipos transitorios del GAS (que dejaban la lista VIEJA tras guardar) lo hace
+      // get() en la capa de datos, 3 intentos con backoff; acá no se duplica.
+      const [docs, pagos] = await Promise.all([fetchEgresos(sociedad), fetchPagosCobros(sociedad)]);
       // Enriquecer cada documento con saldo y estado derivado
       const pagosDocs = pagos.filter(p => p.tipo === "PAGO" || p.tipo === "EGRESO_GASTO");
       const enriched  = docs.map(doc => {
@@ -1102,7 +1094,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
         />
         {showPago    && <AgregarPagoModal egreso={showPago} saldoPendiente={showPago.saldoPendiente ?? showPago.importe} cuentas={cuentasSoc} onClose={() => setShowPago(null)} onSave={handlePago} />}
         {showRetencion && <RegistrarRetencionPracticadaModal egreso={showRetencion} sociedad={sociedad} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentas={cuentas} proveedores={proveedores} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
-        {editingPago && <EditarPagoModal  pago={editingPago} sociedad={sociedad} cuentasSoc={cuentasSoc} onClose={() => setEditingPago(null)} onSaved={() => { setEditingPago(null); cargarEgresos(); }} />}
+        {editingPago && <EditarPagoModal  pago={editingPago} cuentasSoc={cuentasSoc} onClose={() => setEditingPago(null)} onSaved={() => { setEditingPago(null); cargarEgresos(); }} />}
         <ConfirmModal open={!!confirmDelDoc} title="¿Eliminar este egreso?" message={confirmDelDoc?.msg}
           confirmLabel="Sí, eliminar" busy={borrando} onConfirm={doEliminar} onCancel={() => setConfirmDelDoc(null)} />
       </>
@@ -1274,7 +1266,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
       {showEditar  && <NuevoEgresoModal  sociedad={sociedad} proveedores={proveedores} cuentas={cuentas} centrosCosto={centrosCosto} initialData={showEditar} onClose={() => setShowEditar(null)} onSave={handleSave} onCrearProveedor={crearProveedor} onCrearCuenta={crearCuenta} />}
       {showPago    && <AgregarPagoModal  egreso={showPago} saldoPendiente={showPago.saldoPendiente ?? showPago.importe} cuentas={cuentasSoc} onClose={() => setShowPago(null)} onSave={handlePago} />}
       {showRetencion && <RegistrarRetencionPracticadaModal egreso={showRetencion} sociedad={sociedad} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentas={cuentas} proveedores={proveedores} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
-      {editingPago && <EditarPagoModal   pago={editingPago} sociedad={sociedad} cuentasSoc={cuentasSoc} onClose={() => setEditingPago(null)} onSaved={() => { setEditingPago(null); cargarEgresos(); }} />}
+      {editingPago && <EditarPagoModal   pago={editingPago} cuentasSoc={cuentasSoc} onClose={() => setEditingPago(null)} onSaved={() => { setEditingPago(null); cargarEgresos(); }} />}
       {showCtaCte  && <CtaCteModal       proveedor={showCtaCte.proveedor} documentos={showCtaCte.docs} onClose={() => setShowCtaCte(null)} />}
       {showMigrar  && <MigrarSociedadModal egreso={showMigrar} sociedades={sociedades} actual={sociedad} onClose={() => setShowMigrar(null)} onConfirm={handleMigrar} />}
       <ConfirmModal open={!!confirmDelDoc} title="¿Eliminar este egreso?" message={confirmDelDoc?.msg}

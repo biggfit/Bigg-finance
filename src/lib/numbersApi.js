@@ -5,6 +5,7 @@
 
 import { stamp, firma } from "./auth";
 import { bustToken, forzarRefresco } from "./cacheBust";
+import { fetchJsonWithRetry, tolerante } from "./http";
 import { fetchLegajos, fetchLiquidacionesCerradas, devengadoPorFormaYSociedad, sociedadDeFormaPago } from "./sueldosApi";   // solo lectura (interco de sueldos por devengado)
 
 const CONFIGURED = !!import.meta.env.VITE_NUMBERS_API_URL;
@@ -44,33 +45,20 @@ async function get(resource, params = {}) {
   // match y pide fresco al origen. Fuera de la ventana no va, así el equipo comparte la caché de borde.
   const cb  = bustToken();
   const qs  = new URLSearchParams({ resource, token: TOKEN, ...params, ...(cb ? { _cb: cb } : {}) }).toString();
-  const key = qs;
+  return _readCached(qs, ttlDe(resource));
+}
 
+// Lectura cacheada + deduplicada + con reintento. get() y getMulti() solo difieren en cómo arman la query
+// y en el TTL; la clave de caché es la query completa (incluido `_cb`). Reintento: 3 intentos, 600/1200 ms.
+function _readCached(qs, ttl) {
+  const key = qs;
   // Devolver cache si es fresco (TTL según sea maestro o transaccional)
   const cached = _cache.get(key);
-  if (cached && Date.now() - cached.ts < ttlDe(resource)) return cached.data;
-
+  if (cached && Date.now() - cached.ts < ttl) return Promise.resolve(cached.data);
   // Deduplicar: si ya hay un request en vuelo para la misma key, reutilizar
   if (_inflight.has(key)) return _inflight.get(key);
-
-  const req = (async () => {
-    let lastErr;
-    for (let i = 0; i < 3; i++) {
-      try {
-        const res = await fetch(`${BASE}?${qs}`, { cache: "no-store" });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-        _cache.set(key, { data, ts: Date.now() });
-        return data;
-      } catch (e) {
-        lastErr = e;
-        if (i < 2) await new Promise(r => setTimeout(r, (i + 1) * 600));
-      }
-    }
-    throw lastErr;
-  })();
-
+  const req = fetchJsonWithRetry(`${BASE}?${qs}`, { retries: 2, retryDelayMs: 600, requireOk: true, init: { cache: "no-store" } })
+    .then(data => { _cache.set(key, { data, ts: Date.now() }); return data; });
   _inflight.set(key, req);
   // La cadena de limpieza no debe generar un unhandled-rejection propio si `req` rechaza (el error real
   // se propaga por el `req` devuelto, que el caller sí maneja).
@@ -83,11 +71,8 @@ async function get(resource, params = {}) {
 // navegador); leer stale acá podría concluir "la fila no entró" y re-agregarla → duplicado.
 // La usa TODA lectura cuyo resultado decide si se escribe (dedup de ingestas), no solo el reintento.
 async function _fetchRowsRaw(sheet, params = {}) {
-  const qs  = new URLSearchParams({ resource: sheet, token: TOKEN, ...params, _nocache: `${Date.now()}.${Math.random()}` }).toString();
-  const res = await fetch(`${BASE}?${qs}`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  if (data.error) throw new Error(data.error);
+  const qs   = new URLSearchParams({ resource: sheet, token: TOKEN, ...params, _nocache: `${Date.now()}.${Math.random()}` }).toString();
+  const data = await fetchJsonWithRetry(`${BASE}?${qs}`, { retries: 0, requireOk: true, init: { cache: "no-store" } });
   return Array.isArray(data) ? data : (data.rows || data.data || []);
 }
 
@@ -156,39 +141,12 @@ async function post(body) {
 // Trae VARIAS hojas del GAS en UNA sola llamada (el backend serializa los requests a ~3-4s c/u,
 // así una pantalla de ~10 fetch pasaba de ~8 round-trips a 1). specs = [{ resource, sociedad? }].
 // Devuelve { <resource>: filas[] }. Cachea/deduplica y respeta la ventana de refresco (_cb) igual que get().
-export async function getMulti(specs = []) {
+async function getMulti(specs = []) {
   if (!CONFIGURED) throw new Error("VITE_NUMBERS_API_URL no configurada");
   const spec = specs.map(x => (x.sociedad ? { r: x.resource, s: x.sociedad } : { r: x.resource }));
   const cb   = bustToken();
   const qs   = new URLSearchParams({ resource: "__multi", spec: JSON.stringify(spec), token: TOKEN, ...(cb ? { _cb: cb } : {}) }).toString();
-  const key  = qs;
-
-  const cached = _cache.get(key);
-  if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.data;
-  if (_inflight.has(key)) return _inflight.get(key);
-
-  const req = (async () => {
-    let lastErr;
-    for (let i = 0; i < 3; i++) {
-      try {
-        const res = await fetch(`${BASE}?${qs}`, { cache: "no-store" });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-        _cache.set(key, { data, ts: Date.now() });
-        return data;
-      } catch (e) {
-        lastErr = e;
-        if (i < 2) await new Promise(r => setTimeout(r, (i + 1) * 600));
-      }
-    }
-    throw lastErr;
-  })();
-  _inflight.set(key, req);
-  // La cadena de limpieza no debe generar un unhandled-rejection propio si `req` rechaza (el error real
-  // se propaga por el `req` devuelto, que el caller sí maneja).
-  req.finally(() => _inflight.delete(key)).catch(() => {});
-  return req;
+  return _readCached(qs, CACHE_TTL);
 }
 
 // Precalienta la caché individual con UN solo batch: los get(resource, {sociedad?}) que dispare la
@@ -566,10 +524,6 @@ async function _patchBorrador(id_comp, patch) {
 /** Ignorar un borrador (queda EGRESO_IGNORADO: invisible al ledger, pero el id COR- recuerda que ya se vio). */
 export const ignorarBorrador  = (id_comp, motivo = "") =>
   _patchBorrador(id_comp, { subtipo: "EGRESO_IGNORADO", nota: motivo ? `ign=${motivo}` : "" });
-
-/** Restaurar un borrador ignorado → vuelve a la bandeja. */
-export const restaurarBorrador = (id_comp) =>
-  _patchBorrador(id_comp, { subtipo: "EGRESO_BORRADOR" });
 
 // ─── INGRESOS ────────────────────────────────────────────────────────────────
 
@@ -1012,11 +966,6 @@ export async function deleteCuentaBancaria(id) {
   return post({ action: "del", sheet: "nb_cuentas_bancarias", id });
 }
 
-export async function fetchAllSaldosIniciales() {
-  const movs = await get("nb_movimientos", {});
-  return (movs ?? []).filter(m => m.tipo === "SALDO_INICIAL");
-}
-
 export async function fetchSaldoInicialMovimiento(cuentaId) {
   const movs = await get("nb_movimientos", {});
   return (movs ?? []).find(m => m.tipo === "SALDO_INICIAL" && m.cuenta_bancaria === cuentaId) ?? null;
@@ -1025,10 +974,6 @@ export async function fetchSaldoInicialMovimiento(cuentaId) {
 export async function updateSaldoInicial(rowId, monto, fecha) {
   const patch = fecha ? { monto, fecha } : { monto };
   return post({ action: "edit", sheet: "nb_movimientos", id: rowId, patch });
-}
-
-export async function deleteSaldoInicial(rowId) {
-  return post({ action: "del", sheet: "nb_movimientos", id: rowId });
 }
 
 export async function appendSaldoInicial({ sociedad, cuentaId, moneda, monto, fecha }) {
@@ -1267,21 +1212,6 @@ export async function saveTipoCambio(yearMonth, tc = {}) {
     return post({ action: "edit", sheet: "nb_tipos_cambio", id_field: "yearMonth", id: ym, patch });
   }
   return post({ action: "add", sheet: "nb_tipos_cambio", row: { yearMonth: ym, ...patch } });
-}
-
-/**
- * Tasa moneda→USD del mes: cuántas unidades de `moneda` equivalen a 1 USD.
- * USD → 1. Sin dato → null (el llamador decide si eso es un error o un cero).
- * Para pasar un importe a USD: monto / tcRate(...).
- */
-export function tcRate(tiposCambio, yearMonth, moneda) {
-  const cur = String(moneda ?? "").toUpperCase();
-  if (cur === "USD") return 1;
-  const field = TC_FIELD[cur];
-  if (!field) return null;                               // moneda que el maestro no cubre
-  const tc = tiposCambio?.[normYearMonth(yearMonth)];
-  const v  = Number(tc?.[field]);
-  return v > 0 ? v : null;
 }
 
 // ─── REGLAS DE BANCO (motor de conciliación) ─────────────────────────────────
@@ -1576,13 +1506,6 @@ export function ultimaCargaExtractoPorCuenta(movs = []) {
     if (!out[cta] || f > out[cta]) out[cta] = f;
   }
   return out;
-}
-
-// Última carga de extracto por cuenta de una sociedad. Reusa el fetch cacheado de nb_movimientos
-// (el mismo que ya trae fetchMovimientosPendientes), así que en Conciliación no cuesta un request extra.
-export async function fetchUltimaCargaExtracto(sociedad) {
-  const rows = await get("nb_movimientos", { sociedad });
-  return ultimaCargaExtractoPorCuenta(rows);
 }
 
 // ── RESUMEN DE TARJETA → bandeja (mundo Tarjeta de Conciliaciones) ───────────────
@@ -2045,7 +1968,7 @@ export async function imputarCobroIngreso(mov, { documento_id, cuenta_contable =
 // deja intactos origen="extracto", extracto_saldo (dedup) y la propuesta del parser en `referencia` →
 // la línea reaparece sola en el motor de conciliación con su nro. de operación, y la FC vuelve a "a pagar".
 // Solo para pagos/cobros con origen="extracto"; los manuales (origen="pago"/"cobro") se borran con del.
-export async function desimputarPago(mov) {
+async function desimputarPago(mov) {
   return post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
     tipo:               (Number(mov.monto) || 0) > 0 ? "INGRESO" : "EGRESO",   // igual criterio que la ingesta (por signo)
     documento_id:       "",   // se despega de la FC → vuelve a la cola del motor
@@ -2396,7 +2319,7 @@ function _agruparPorComp(rows, subtipo) {
 // ── Helpers para movimientos en par (CAMBIO / INTERCOMPANIA) ─────────────────
 
 // Agrupa movimientos por documento_id, identifica la salida (monto<0) y entrada (monto>0)
-// y ordena por fecha desc. Usado por fetchCambios y fetchIntercompania.
+// y ordena por fecha desc. Usado por fetchCambios.
 function _pairMovs(movs, tipo) {
   const filtered = movs.filter(m => m.tipo === tipo);
   const groups   = new Map();
@@ -2484,33 +2407,6 @@ export const deleteCambio = _deleteMovRows;
 
 // ── Intercompañía ─────────────────────────────────────────────────────────────
 
-// Interco de UNA sola pata (apertura o parkeo): no son transferencias de dos patas; viven solo en el
-// mapa de posiciones (lecturaInterco). Se excluyen del pareo de INTERCOMPANIA.
-const esIntercoUnaPata = m => m.origen === "interco_apertura" || m.origen === "interco_park";
-
-export async function fetchIntercompania() {
-  const movs = (await get("nb_movimientos", {})).filter(m => !esIntercoUnaPata(m));
-  return _pairMovs(movs, "INTERCOMPANIA").map(({ salida, entrada, _ids }) => {
-    const notaRaw = salida?.concepto ?? "";
-    return {
-      id:            salida?.documento_id ?? salida?.id,
-      fecha:         salida?.fecha ?? "",
-      socOrigen:     salida?.sociedad ?? "",
-      ctaOrigen:     salida?.cuenta_bancaria ?? "",
-      monedaOrigen:  salida?.moneda ?? "",
-      montoOrigen:   Math.abs(Number(salida?.monto) || 0),
-      socDestino:    entrada?.sociedad ?? "",
-      ctaDestino:    entrada?.cuenta_bancaria ?? "",
-      monedaDestino: entrada?.moneda ?? "",
-      montoDestino:  Number(entrada?.monto) || 0,
-      tc:            salida?.referencia ?? "",
-      tipo_op:       notaRaw.startsWith("Fondeo:") ? "fondeo" : "prestamo",
-      nota:          notaRaw.replace(/^(Préstamo|Fondeo):[^·]+(·\s*)?/, ""),
-      _ids,
-    };
-  });
-}
-
 export async function appendIntercompania({ fecha, socOrigen, ctaOrigen, monedaOrigen, montoOrigen, socDestino, ctaDestino, monedaDestino, montoDestino, nota = "" }) {
   const id         = newId("INTERCOMPANY");
   const tc         = montoOrigen > 0 ? (montoDestino / montoOrigen).toFixed(6) : "1";
@@ -2571,8 +2467,6 @@ export async function parkearIntercoManual({ sociedad, fecha, cuenta_bancaria, m
   return { ok:true, id };
 }
 
-export const deleteIntercompania = _deleteMovRows;
-
 // Saldos de APERTURA interco (go-live): filas `origen="interco_apertura"` en nb_movimientos,
 // cargadas una vez a mano/por script y editables desde la hoja. Sin caja ni P&L
 // (cuenta_bancaria y cuenta_contable vacías). monto firmado desde la tenedora
@@ -2586,7 +2480,7 @@ export const deleteIntercompania = _deleteMovRows;
 // equivocado sin ninguna señal (21/9/2026: gap fantasma de +5,87M en el puente por `movs` vacío).
 export async function fetchIntercoData() {
   const faltantes = [];
-  const tol = (label, p) => p.catch(() => { faltantes.push(label); return []; });
+  const tol = tolerante(faltantes);
   const [movs, comps, centros, clientes, sociedades, cuentasBancarias, cuentas, legajos, liqs] = await Promise.all([
     tol("movimientos",        get("nb_movimientos", {})),
     tol("comprobantes",       get("nb_comprobantes", {})),
@@ -3196,18 +3090,6 @@ export async function checkDuplicateComp(sociedad, subtipo, nroComp, contraparte
   return null;
 }
 
-// ── Reconciliación bancaria ───────────────────────────────────────────────────
-
-/** Marca un movimiento como conciliado con una referencia del extracto bancario */
-export async function marcarConciliado(id, extractoRef = "") {
-  return post({ action: "edit", sheet: "nb_movimientos", id, patch: { conciliado: "true", extracto_ref: extractoRef } });
-}
-
-/** Desmarca un movimiento como conciliado */
-export async function desmarcarConciliado(id) {
-  return post({ action: "edit", sheet: "nb_movimientos", id, patch: { conciliado: "", extracto_ref: "" } });
-}
-
 // ── Cierres de período ────────────────────────────────────────────────────────
 //
 // Schema nb_cierres:
@@ -3287,7 +3169,7 @@ function _finRowToCuota(r) {
 }
 
 /** Recargo por mora de una cuota saldada = lo pagado en total − el importe normal de la cuota (≥ 0, 2 dec). */
-export const recargoCuota = (pagadoTotal, totalCuota) =>
+const recargoCuota = (pagadoTotal, totalCuota) =>
   Math.max(0, Math.round(((Number(pagadoTotal) || 0) - (Number(totalCuota) || 0)) * 100) / 100);
 
 /** Agrupa las filas planas (una por cuota) en planes con su cronograma + derivados.
@@ -3608,18 +3490,6 @@ export async function imputarCuota(mov, { plan_id, nro_cuota, row_id, concepto =
   await post({ action: "edit", sheet: "nb_financiaciones", id: row_id, patch });
 }
 
-/**
- * Vincula el crédito del desembolso de un préstamo (línea del extracto) a la financiación.
- * Es caja (Cash Flow/saldo) pero NO P&L (documento_id = plan_id, no "CONTAB-").
- */
-export async function registrarAltaPrestamo(mov, { plan_id, concepto = "" }) {
-  return post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: {
-    tipo: "INGRESO", origen: "financiacion_alta",
-    documento_id: plan_id,
-    concepto: concepto || mov.concepto || `Alta préstamo ${plan_id}`,
-  }});
-}
-
 /** Paga una cuota manualmente (sin línea de banco): registra el egreso de caja y marca pagada. */
 export async function pagarCuota({ plan, cuota, fecha, cuenta_bancaria, monto, nota = "" }) {
   // Saldo restante de la cuota (soporta pagos parciales previos). Si no viene `monto`, paga el saldo entero.
@@ -3641,13 +3511,6 @@ export async function pagarCuota({ plan, cuota, fecha, cuenta_bancaria, monto, n
     await post({ action: "edit", sheet: "nb_financiaciones", id: cuota.rowId,
       patch: { estado: "pagada", fecha_pago: fecha, recargo_pagado: recargoCuota(pagadoTotal, total) } });
   }
-}
-
-/** Aplica un patch a TODAS las filas de un plan (campos de plan repetidos). */
-export async function updateFinanciacion(plan_id, patch) {
-  const rows = await get("nb_financiaciones", {});
-  const ids  = rows.filter(r => r.plan_id === plan_id).map(r => r.id);
-  for (const id of ids) await post({ action: "edit", sheet: "nb_financiaciones", id, patch });
 }
 
 /** Cancela las cuotas pendientes de un plan (precancelación); el pasivo baja a 0. */
@@ -3688,15 +3551,6 @@ export const SOCIO_SIGNO_CAJA = { prestamo: +1, devolucion: -1, aporte: -1, divi
 
 export async function fetchSocios() {
   return get("nb_socios");
-}
-export async function appendSocio(socio) {
-  return post({ action: "add", sheet: "nb_socios", row: { id: newId("SOC"), ...socio, activo: true, created_at: new Date().toISOString() } });
-}
-export async function updateSocio(id, patch) {
-  return post({ action: "edit", sheet: "nb_socios", id, patch });
-}
-export async function deleteSocio(id) {
-  return post({ action: "del", sheet: "nb_socios", id });
 }
 
 /** Filas no-cash del CC de socios (dividendos declarados + aperturas). */

@@ -239,8 +239,8 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
     setLoading(true);
     setPagosListos(false);   // nuevo mes/año: los pagos se re-piden en la 2ª ola; avisar hasta que lleguen
 
-    // ── OLA 2 arrancada YA, en paralelo con el roster (no después). `fetchPagos` lee la hoja entera
-    // nb_movimientos (~3k filas / 2,4 MB) y es lo más lento; si esperáramos a que termine la OLA 1
+    // ── OLA 2 arrancada YA, en paralelo con el roster (no después). `fetchPagos` (nb_movimientos filtrada
+    // por origen=sueldos en el servidor) es lo más lento de la carga; si esperáramos a que termine la OLA 1
     // para recién pedirla, se serializa y el Paso 3 tarda el doble. Disparándola acá se solapa con
     // los legajos/liquidaciones → los pagos llegan lo antes posible. No bloquea: se consume abajo.
     const ola2 = Promise.allSettled([
@@ -436,7 +436,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
       const novsBase = isCerrada(liq?.estado) ? (liq.novedades || []) : masterNovs;
       // Alias de pago por novedad = su propio id + los ids del maestro su_novedades con la MISMA
       // cuenta contable. Los pagos hechos ANTES de cerrar apuntan al id maestro (NOV-…), que al
-      // congelar la novedad se reemplaza por el id de línea (…-L0x) → sin esto, ese pago queda
+      // congelar la novedad se reemplaza por el id de línea (…-N-<id>) → sin esto, ese pago queda
       // huérfano y la novedad se ve impaga aunque esté saldada. Se adjunta solo a la PRIMERA
       // novedad de cada cuenta (si hubiera varias del mismo tipo) para no duplicar; el total igual
       // se deduplica en sumPagosSinDuplicar.
@@ -787,16 +787,6 @@ function SortTH({ col, sortCol, sortDir, onSort, children, style = {} }) {
       </span>
     </th>
   );
-}
-
-// ── Badge de rol ─────────────────────────────────────────────────────────────
-
-function RolBadge({ rol }) {
-  if (rol === "HQ_OWNER")
-    return <span style={{ fontSize: 10, background: "#f3e8ff", color: T.purple,  padding: "2px 6px", borderRadius: 3, fontWeight: 600, whiteSpace: "nowrap" }}>Owner</span>;
-  if (rol === "HQ_EXT")
-    return <span style={{ fontSize: 10, background: "#ccfbf1", color: "#0d9488", padding: "2px 6px", borderRadius: 3, fontWeight: 600, whiteSpace: "nowrap" }}>Ext</span>;
-  return null;
 }
 
 function EstadoBadge({ estado }) {

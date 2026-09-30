@@ -1196,11 +1196,14 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
     return m;
   }, [centrosCosto]);
 
-  const rows = (filtroRef
+  // Memo: de acá cuelgan sorted → saldoByRow → buscado → ordenado; sin memo, cada render re-ordenaba
+  // toda la tabla y recalculaba el saldo corriente.
+  const rows = useMemo(() => (filtroRef
     ? movimientos.filter(m => String(m.documento_id || "") === filtroRef || String(m.id || "") === filtroRef)
     : filtroCuenta
     ? movimientos.filter(m => m.cuenta_bancaria === filtroCuenta)
-    : movimientos).filter(m => !esIgnorado(m));   // ocultar las líneas descartadas del ledger
+    : movimientos).filter(m => !esIgnorado(m)),   // ocultar las líneas descartadas del ledger
+  [movimientos, filtroRef, filtroCuenta]);
 
   // Orden: fecha descendente; a igual fecha, el último cargado primero (el orden de `rows` = orden
   // de la hoja = orden de alta, así que desempatamos por índice descendente).
@@ -1262,30 +1265,29 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
   // fecha descendente (igual que antes). Accede al valor comparable de cada columna por fila.
   const [sortKey, setSortKey] = useState("fecha");
   const [sortDir, setSortDir] = useState("desc");
-  const sortValue = (m, key) => {
-    switch (key) {
-      case "tipo":     return (TIPO_CFG[m.tipo]?.label ?? m.tipo ?? "");
-      case "fecha":    return m.fecha ?? "";
-      case "cuenta":   return cuentaMap[m.cuenta_bancaria] ?? m.cuenta_bancaria ?? "";
-      case "concepto": return m.concepto ?? "";
-      case "ctaCont":  return String(m.cuenta_contable || m.cuenta || "").replace(/^CUENTA_/, "");
-      case "centro":   return m.centro_costo ? (ccMap[m.centro_costo] ?? m.centro_costo) : "";
-      case "moneda":   return m.moneda ?? "";
-      case "importe":  return Number(m.monto) || 0;
-      case "saldo":    return saldoByRow.get(m) ?? 0;
-      case "registro": return m.registrado_por ?? "";
-      default:         return "";
-    }
-  };
   const ordenado = useMemo(() => {
+    const sortValue = (m, key) => {
+      switch (key) {
+        case "tipo":     return (TIPO_CFG[m.tipo]?.label ?? m.tipo ?? "");
+        case "fecha":    return m.fecha ?? "";
+        case "cuenta":   return cuentaMap[m.cuenta_bancaria] ?? m.cuenta_bancaria ?? "";
+        case "concepto": return m.concepto ?? "";
+        case "ctaCont":  return String(m.cuenta_contable || m.cuenta || "").replace(/^CUENTA_/, "");
+        case "centro":   return m.centro_costo ? (ccMap[m.centro_costo] ?? m.centro_costo) : "";
+        case "moneda":   return m.moneda ?? "";
+        case "importe":  return Number(m.monto) || 0;
+        case "saldo":    return saldoByRow.get(m) ?? 0;
+        case "registro": return m.registrado_por ?? "";
+        default:         return "";
+      }
+    };
     const dir = sortDir === "asc" ? 1 : -1;
     return [...buscado].sort((a, b) => {
       const va = sortValue(a, sortKey), vb = sortValue(b, sortKey);
       if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
       return String(va).localeCompare(String(vb)) * dir;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buscado, sortKey, sortDir]);
+  }, [buscado, sortKey, sortDir, cuentaMap, ccMap, saldoByRow]);
   const toggleSort = (key) => {
     if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
     else { setSortKey(key); setSortDir(key === "fecha" ? "desc" : "asc"); }

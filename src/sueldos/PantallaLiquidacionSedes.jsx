@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
 import { useConfirm } from "../numbers/useConfirm";
 import {
@@ -37,6 +37,16 @@ const ANO_DEF = hoy.getMonth() === 0 ? hoy.getFullYear() - 1 : hoy.getFullYear()
 const ROLES_FIJOS = [...ROLES_FRONT, ...ROLES_LIMP];
 const ROLES_SEDES_ALL = [...ROLES_COACHES, ...ROLES_FIJOS];
 // Columnas de horas que bajan de Eye (cualquiera con valor mantiene la fila en Paso Horas).
+// Sede canónica: matchea por id; si no, por nombre parcial (Eye guarda "Recoleta" vs "01 - Recoleta").
+const normSedeDe = (sedesArr) => (sedeId, sedeName) => {
+  const byId = sedesArr.find(s => s.id === sedeId);
+  if (byId) return byId.nombre;
+  const byName = sedesArr.find(s =>
+    s.nombre.toLowerCase().includes((sedeName ?? "").toLowerCase()) ||
+    (sedeName ?? "").toLowerCase().includes(s.nombre.toLowerCase().replace(/^\d+\s*-\s*/, "")));
+  return byName?.nombre ?? sedeName ?? "";
+};
+
 const HORA_FIELDS = ["horas", "horas_feriados", "horas_domingos", "horas_yoga", "horas_running"];
 
 // Forma de pago de una novedad → bucket escalar de Sedes (haberes / transferencia[=monotributo] /
@@ -383,15 +393,6 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   const load = useCallback(async (m, a, p) => {
     if (!p) return;
     setLoading(true);
-    // Sede canónica: matchea por id; si no, por nombre parcial (Eye guarda "Recoleta" vs "01 - Recoleta").
-    const mkNorm = (sedesArr) => (sedeId, sedeName) => {
-      const byId = sedesArr.find(s => s.id === sedeId);
-      if (byId) return byId.nombre;
-      const byName = sedesArr.find(s =>
-        s.nombre.toLowerCase().includes((sedeName ?? "").toLowerCase()) ||
-        (sedeName ?? "").toLowerCase().includes(s.nombre.toLowerCase().replace(/^\d+\s*-\s*/, "")));
-      return byName?.nombre ?? sedeName ?? "";
-    };
     let socIds = [], legIds = new Set();
     try {
       // ── OLA 1: lo esencial para mostrar el Paso 1 (roster + país + sedes + tarifas + estado guardado).
@@ -413,7 +414,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       setLegajosInactivos(legs.filter(l => !l.activo && (!l.pais || l.pais === p)));
       setSedes(sedesArr);
       setCategorias(cats);
-      const norm = mkNorm(sedesArr);
+      const norm = normSedeDe(sedesArr);
       setLiqsSaved(liqs.map(r => ({ ...r, sede_nombre: norm(r.sede_id, r.sede_nombre) })));
       setLiqsFetchOk(w1[2].status === "fulfilled");   // solo confiamos en "qué hay en el sheet" si la lectura resolvió
       legIds = new Set(liqs.map(l => l.legajo_id));
@@ -446,15 +447,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     ]);
     setLiqsFetchOk(liqsRes.ok);
     const liqs = liqsRes.v;
-    const byId = new Map(sedes.map(s => [s.id, s]));
-    const norm = (sedeId, sedeName) => {
-      const hit = byId.get(sedeId);
-      if (hit) return hit.nombre;
-      const byName = sedes.find(s =>
-        s.nombre.toLowerCase().includes((sedeName ?? "").toLowerCase()) ||
-        (sedeName ?? "").toLowerCase().includes(s.nombre.toLowerCase().replace(/^\d+\s*-\s*/, "")));
-      return byName?.nombre ?? sedeName ?? "";
-    };
+    const norm = normSedeDe(sedes);
     setLiqsSaved(liqs.map(r => ({ ...r, sede_nombre: norm(r.sede_id, r.sede_nombre) })));
     const legIds = new Set(liqs.map(l => l.legajo_id));
     setPagos(pags.filter(pg => pg.ambito === "sedes" || (!pg.ambito && legIds.has(pg.legajo_id))));
@@ -1677,7 +1670,6 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByR
 
   const [sortKey,    setSortKey]    = useState(null);   // null = orden por sede → rol
   const [sortDir,    setSortDir]    = useState("asc");
-  const [openDet,    setOpenDet]    = useState(null);   // _id del coach con el detalle de Eye abierto
   const [eyeLoading, setEyeLoading] = useState(false);
 
   const toggleSort = (key) => {
@@ -1976,14 +1968,7 @@ function PasoIncentivos({ rows, legajos, sedes, mes, anio, pais, novsByRowKey, u
         }
 
         if (bestRow && bestScore >= 1.5) {
-          // Split coach/front. Cache viejo solo trae cdp_count (mergeado): se asigna por
-          // el rol de la fila (coach → coach, resto → front) hasta regenerar el cache.
-          let cCoach = item.cdp_coach, cFront = item.cdp_front;
-          if (cCoach == null && cFront == null) {
-            const merged = item.cdp_count ?? 0;
-            if (ROLES_COACHES.includes(bestRow.rol)) { cCoach = merged; cFront = 0; }
-            else { cCoach = 0; cFront = merged; }
-          }
+          const cCoach = item.cdp_coach, cFront = item.cdp_front;
           const prev = cdpMap.get(bestRow._id) ?? { q_cdp_coach: 0, q_cdp_front: 0, q_one_shot: 0 };
           cdpMap.set(bestRow._id, {
             q_cdp_coach: prev.q_cdp_coach + (cCoach ?? 0),

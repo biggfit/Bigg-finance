@@ -426,10 +426,6 @@ function parseLiquidacionesRows(rows) {
   return out;
 }
 
-export async function deleteLiquidacion(id) {
-  await post({ action: "del", sheet: "su_liquidaciones", id });
-}
-
 // ── Escritura por líneas (refactor su_liquidaciones) ──────────────────────────
 
 // id de grupo determinístico (idempotente al re-cerrar). Incluye sede para que los
@@ -1024,7 +1020,7 @@ export async function fetchHorasDesdeEye(mes, anio, pais = "", locationIds = [],
 
 /**
  * Trae las conversiones CDP y one-shots por coach desde Bigg Eye.
- * Devuelve { items: [{ coach_name, location_id, location_name, cdp_count, one_shot_count }] }
+ * Devuelve { items: [{ coach_name, location_id, location_name, cdp_coach, cdp_front, one_shot_count }] }
  */
 export async function fetchCdpDesdeEye(mes, anio, pais = "", locationIds = [], fresh = false) {
   const qs = new URLSearchParams({ month: mes, year: anio, ...(pais ? { pais } : {}) });
@@ -1305,21 +1301,4 @@ export async function fetchLiquidacionesSedes(mes, anio, pais) {
 // exacto (ese id nunca existe físicamente → "Registro no encontrado" y el borrado no hacía nada).
 export async function deleteLiquidacionSede(id) {
   await delLiquidacionComp(id);
-}
-
-/** Calcula el total bruto de una liquidación de sedes sumando todos los conceptos. */
-export function calcTotalBruto(liq) {
-  return (
-    (liq.sueldo_base        || 0) +
-    (liq.horas_total        || 0) +
-    (liq.cdp_total          || 0) +
-    (liq.one_shot_total     || 0) +
-    (liq.objetivos_total    || 0) +
-    (liq.feriados_total     || 0) +
-    (liq.programacion_total || 0) +
-    (liq.bonos_total        || 0) +
-    (liq.total_novedades_extra || 0) +
-    (liq.total_rendiciones  || 0) -
-    (liq.total_anticipos    || 0)
-  );
 }

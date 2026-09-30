@@ -109,7 +109,7 @@ function RegistrarRetencionModal({ ingreso, saldoPendiente, cuentasContables = [
 }
 
 // ─── Modal: Editar Cobro ──────────────────────────────────────────────────────
-function EditarCobroModal({ cobro, sociedad, cuentasSoc, cuentasContables = [], centros = [], onClose, onSaved }) {
+function EditarCobroModal({ cobro, cuentasSoc, cuentasContables = [], centros = [], onClose, onSaved }) {
   const esRet = cobro.origen === "retencion";   // una retención se edita por cuenta+centro, no por medio de cobro
   const cuentasOrd = useMemo(() => [...cuentasContables].sort(byNombre), [cuentasContables]);
   const [form, setForm] = useState({
@@ -991,7 +991,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
         />
         {showCobro    && <RegistrarCobroModal ingreso={showCobro} saldoPendiente={showCobro.saldoPendiente ?? showCobro.importe} cuentas={cuentasSoc} anticipos={anticipos.filter(a => String(a.cliente_id) === String(showCobro.clienteId))} onClose={() => setShowCobro(null)} onSave={handleCobro} />}
         {showRetencion && <RegistrarRetencionModal ingreso={showRetencion} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentasContables={cuentas} centros={centrosCosto} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
-        {editingCobro && <EditarCobroModal    cobro={editingCobro} sociedad={sociedad} cuentasSoc={cuentasSoc} cuentasContables={cuentas} centros={centrosCosto} onClose={() => setEditingCobro(null)} onSaved={() => { setEditingCobro(null); cargarIngresos(); }} />}
+        {editingCobro && <EditarCobroModal    cobro={editingCobro} cuentasSoc={cuentasSoc} cuentasContables={cuentas} centros={centrosCosto} onClose={() => setEditingCobro(null)} onSaved={() => { setEditingCobro(null); cargarIngresos(); }} />}
         <ConfirmModal open={!!confirmDelDoc} title="¿Eliminar este ingreso?" message={confirmDelDoc?.msg}
           confirmLabel="Sí, eliminar" busy={borrando} onConfirm={doEliminar} onCancel={() => setConfirmDelDoc(null)} />
       </>
@@ -1155,7 +1155,7 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
       {showEditar  && <NuevoIngresoModal   sociedad={sociedad} clientes={clientes} cuentas={cuentas} centrosCosto={centrosCosto} initialData={showEditar} onClose={() => setShowEditar(null)} onSave={handleSave} onCrearCliente={crearCliente} onCrearCuenta={crearCuenta} />}
       {showCobro   && <RegistrarCobroModal ingreso={showCobro} saldoPendiente={showCobro.saldoPendiente ?? showCobro.importe} cuentas={cuentasSoc} anticipos={anticipos.filter(a => String(a.cliente_id) === String(showCobro.clienteId))} onClose={() => setShowCobro(null)} onSave={handleCobro} />}
       {showRetencion && <RegistrarRetencionModal ingreso={showRetencion} saldoPendiente={showRetencion.saldoPendiente ?? showRetencion.importe} cuentasContables={cuentas} centros={centrosCosto} onClose={() => setShowRetencion(null)} onSave={handleRetencion} />}
-      {editingCobro && <EditarCobroModal  cobro={editingCobro} sociedad={sociedad} cuentasSoc={cuentasSoc} cuentasContables={cuentas} centros={centrosCosto} onClose={() => setEditingCobro(null)} onSaved={() => { setEditingCobro(null); cargarIngresos(); }} />}
+      {editingCobro && <EditarCobroModal  cobro={editingCobro} cuentasSoc={cuentasSoc} cuentasContables={cuentas} centros={centrosCosto} onClose={() => setEditingCobro(null)} onSaved={() => { setEditingCobro(null); cargarIngresos(); }} />}
       {showCtaCte  && <CtaCteModal         cliente={showCtaCte.cliente} documentos={showCtaCte.docs} onClose={() => setShowCtaCte(null)} />}
       <ConfirmModal open={!!confirmDelDoc} title="¿Eliminar este ingreso?" message={confirmDelDoc?.msg}
         confirmLabel="Sí, eliminar" busy={borrando} onConfirm={doEliminar} onCancel={() => setConfirmDelDoc(null)} />

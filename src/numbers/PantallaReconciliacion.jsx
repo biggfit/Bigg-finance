@@ -702,12 +702,6 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       .map(eg => ({ ...eg, saldo: calcSaldoPendiente(eg.importe ?? eg.total, pagosFC.filter(p => p.documento_id === eg.id)) }))
       .filter(eg => eg.saldo > 0.01 && (eg.moneda || "ARS") === monedaCuenta);
   }, [egresos, pagosCobros, monedaCuenta]);
-  // Proveedores que tienen al menos una factura pendiente (para la 1ª caja del modo FC).
-  const provConPendientes = useMemo(() => {
-    const m = new Map();
-    facturasPendientes.forEach(f => { if (!m.has(String(f.proveedorId))) m.set(String(f.proveedorId), f.proveedor || "Sin proveedor"); });
-    return [...m.entries()].map(([id, nombre]) => ({ id, nombre })).sort((a, b) => a.nombre.localeCompare(b.nombre));
-  }, [facturasPendientes]);
   // Opciones del selector de proveedor en modo FC: TODOS los activos (para que el
   // reconocido aparezca y se preseleccione aunque todavía no tenga factura cargada).
   const provOpciones = useMemo(
@@ -1547,9 +1541,8 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const saldoCuentaTab = useMemo(
     () => movsCuentaTab.reduce((s, m) => s + (Number(m.monto) || 0), 0),
     [movsCuentaTab]);
-  const diasUltimaCarga = ultimaCarga[cuentaTab]
-    ? Math.floor((Date.now() - new Date(ultimaCarga[cuentaTab] + "T00:00:00").getTime()) / 86400000) : null;
-  const chequeoSaldoHabilitado = diasUltimaCarga !== null && diasUltimaCarga <= 1;
+  // Solo con extracto cargado hoy o ayer tiene sentido comparar contra lo que muestra el banco.
+  const chequeoSaldoHabilitado = (estadoUltimaCarga(ultimaCarga[cuentaTab]).dias ?? Infinity) <= 1;
 
   // Busca, entre TODOS los movimientos de la cuenta, un par con el mismo importe (con signo) y fechas
   // dentro de 10 días — la firma de "esto se cargó dos veces" — priorizando el par cuyo importe explica
