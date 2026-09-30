@@ -645,6 +645,17 @@ const sumGrupoSede = (g) => MESES.map((_, m) => Object.values(g).reduce((s, arr)
 // "Ventas" de la sede (decisión: SOLO ventas — Stripe/Datafono/vía Banco/Efectivo — sin interusos ni Otros
 // Ingresos). Suma el grupo vta_cf excluyendo "Otros Ingresos". Define si una sede está ACTIVA en el mes
 // (ventas > 0) para el reparto de la estructura en partes iguales (España).
+// Rellena los meses `null` de un factor mensual (nadie activo ese mes): con el primer mes siguiente que sí tenga
+// valor (costo de apertura → a las sedes que abren); si no hay hacia adelante, con el último anterior (cierre);
+// si no hay ninguno en el año, con `sinDato` (partes iguales entre todas las sedes).
+function rellenarMesesSinActivas(factores, sinDato) {
+  const out = [...factores];
+  let ultimo = null;
+  for (let m = 11; m >= 0; m--) { if (out[m] != null) ultimo = out[m]; else if (ultimo != null) out[m] = ultimo; }   // hacia adelante
+  ultimo = null;
+  for (let m = 0; m < 12; m++)  { if (out[m] != null) ultimo = out[m]; else out[m] = ultimo ?? sinDato; }              // hacia atrás / sin dato
+  return out;
+}
 const VENTAS_EXCL_PRORR = new Set([_nkSede("Otros Ingresos")]);
 const sumVentasSede = (pnl) => MESES.map((_, m) =>
   Object.entries(pnl.grupos.vta_cf).reduce((s, [n, arr]) =>
@@ -3665,12 +3676,22 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   };
   // Factor de la ESTRUCTURA (OPEX) para el scope: partes iguales entre sedes activas = activas en scope /
   // activas totales. Sede sin ventas en el mes → 0. Null (Wellness en scope) = no se reparte.
+  // Mes SIN ninguna sede activa (Chamberí: la estructura ya tenía costo antes de que abriera la primera sede;
+  // decisión Martín 30/9/2026): ese OPEX es costo de apertura → se reparte como el primer mes siguiente con
+  // ventas. Si no hay ninguno hacia adelante (cierre), como el último mes activo hacia atrás. Si el año entero
+  // está sin actividad, partes iguales entre todas las sedes del país. Así Σ sedes = "Todas" en todos los meses.
+  const factorConApertura = (stats) => {
+    const enScope = new Set(resolvedCCSede.map(ccKey));
+    const ids = Object.keys(stats);
+    const igual = ids.length ? ids.filter(id => enScope.has(ccKey(id))).length / ids.length : 0;
+    return rellenarMesesSinActivas(factorScope(stats, "activa"), igual);
+  };
   const factorEstructura = useMemo(() => {
     if (!statsPorSede || wellnessEnScope) return null;
-    return factorScope(statsPorSede, "activa").map(f => f ?? 0);
+    return factorConApertura(statsPorSede);
   }, [statsPorSede, wellnessEnScope, resolvedCCSede]);   // eslint-disable-line react-hooks/exhaustive-deps
   const factorEstructuraPrev = useMemo(() => (
-    statsPorSedePrev ? factorScope(statsPorSedePrev, "activa").map(f => f ?? 0) : null
+    statsPorSedePrev ? factorConApertura(statsPorSedePrev) : null
   ), [statsPorSedePrev, resolvedCCSede]);   // eslint-disable-line react-hooks/exhaustive-deps
   // Monto de estructura que le corresponde al SCOPE actual. Con Wellness en el scope ("Todas") = su OPEX
   // completo (ya está adentro → la tabla lo separa). Con una sede sola = OPEX × factorEstructura.
