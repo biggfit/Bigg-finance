@@ -1422,16 +1422,12 @@ function PnLTableHuergo({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evo
         <tbody>
           {filas.map((f, idx) => {
             if (f.kind === "banda") return <BandaRow key={idx} label={f.label} span={cols.length + 1} expanded onToggle={undefined} />;
+            // Fila plana: Huergo no tiene grupos desplegables ni sedes anidadas (eso es de la tabla de Sedes).
             if (f.kind === "cuenta") {
-              const clickable = !!f.toggleKey;
-              const cbg = f.nested ? "#eef1f5" : T.card;                              // filas de sede: fondo un toque más oscuro
-              const pad = f.nested ? "6px 14px 6px 48px" : "6px 14px 6px 32px";        // sangría extra si es sede anidada
               return (
-                <tr key={idx} onClick={clickable ? () => toggle(f.toggleKey) : undefined}
-                  style={{ borderBottom: `1px solid ${T.cardBorder}`, background: cbg, cursor: clickable ? "pointer" : "default" }}>
-                  <td style={{ padding: pad, fontSize: 13, color: T.text, whiteSpace: "nowrap",
-                    borderBottom: `1px solid ${T.cardBorder}`, userSelect: clickable ? "none" : undefined, ...stickyCol, background: cbg }}>
-                    {clickable && <span style={{ display: "inline-block", width: 18, marginLeft: -18, fontSize: 9, opacity: .7 }}>{isCol(f.toggleKey) ? "▶" : "▼"}</span>}{f.label}</td>
+                <tr key={idx} style={{ borderBottom: `1px solid ${T.cardBorder}`, background: T.card }}>
+                  <td style={{ padding: "6px 14px 6px 32px", fontSize: 13, color: T.text, whiteSpace: "nowrap",
+                    borderBottom: `1px solid ${T.cardBorder}`, ...stickyCol, background: T.card }}>{f.label}</td>
                   {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "6px 12px", fs: 13, fw: 400, color: SEDE_HDR })}
                 </tr>
               );
