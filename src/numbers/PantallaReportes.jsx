@@ -982,7 +982,8 @@ export function buildPnLSedeFilas(props, isCol) {
           netoLabel = "Resultado Neto", nombreCuenta = (x) => x, hayHistorico = false, mesMax = null,
           cesionResFinal = null, cesionRetiros = null, comBaseResOp = null,
           estructuraCuota = null, estructuraEnOpex = false, estructuraLabel = "Estructura Wellness",
-          estructuraDetalle = null, estructuraImpuestos = null } = props;
+          estructuraDetalle = null, estructuraCuotaPrev = null,
+          estructuraImpuestos = null, estructuraImpuestosPrev = null } = props;
   const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths: _amRaw } = sub;
   const activeMonths = mesesVisibles(_amRaw, year, hayHistorico, mesMax);
 
@@ -1042,6 +1043,21 @@ export function buildPnLSedeFilas(props, isCol) {
   // Resultado financiero (Fondeadas/Rosedal): intereses ganados − pérdidas, debajo de impuestos.
   const finData = financieros ? computeImpuestos(pnl.sinClasificar, financieros, resFinalEff) : null;
 
+  // ── AÑO ANTERIOR de la cola (Fondeadas): mismas cuentas de impuestos/financieros y la estructura, leídas del
+  // P&L previo, para que Mensual/YTD comparen Estructura, Impuestos y Resultado Final contra el año pasado (antes
+  // iban fijos en cero → "—"). Sin dato previo (histórico sin esas cuentas) quedan en cero, como hasta ahora.
+  const sinPrevRaw = pnlPrev?.sinClasificar || {};
+  const sinPrev  = (estruc && !estructuraEnOpex) ? mergeSinClas(sinPrevRaw, estructuraImpuestosPrev) : sinPrevRaw;
+  const impPrev  = impuestos   ? computeImpuestos(sinPrev, impuestos,   ZERO12) : null;
+  const finPrev  = financieros ? computeImpuestos(sinPrev, financieros, ZERO12) : null;
+  const estrKeyPrev = estruc ? Object.keys(sinPrev).find(k => _nkSede(k) === _nkSede(estructuraLabel)) : null;
+  const estrucPrev  = estruc ? (estructuraCuotaPrev || (estrKeyPrev ? sinPrev[estrKeyPrev] : null)) : null;
+  const opexPrevView = (estruc && estructuraEnOpex && estrucPrev)
+    ? subPrev.totGastosOp.map((v, m) => (Number(v) || 0) - (Number(estrucPrev[m]) || 0)) : subPrev.totGastosOp;
+  const resOpPrevEff = (estruc && !estructuraEnOpex && estrucPrev)
+    ? subPrev.resOp.map((v, m) => (Number(v) || 0) - (Number(estrucPrev[m]) || 0)) : subPrev.resOp;
+  const prevDe = (data, name) => data?.byAcc.find(a => _nkSede(a.name) === _nkSede(name))?.cur || ZERO12;
+
   // "Inversores" es la cuenta de retiros de cesión/distribución (reparto del resultado, NO gasto del P&L): se
   // muestra en su cola cuando el scope la tiene (Barrio Norte / Rosedal). En cualquier otro scope (ej. las 5
   // sedes juntas) NO es una cuenta "sin clasificar" real → se oculta SIEMPRE del diagnóstico. Es un match por
@@ -1095,18 +1111,18 @@ export function buildPnLSedeFilas(props, isCol) {
     filas.push({ kind: "result", label: "Margen de Contribución", cur: margenContrib, prev: subPrev.margenContrib, pol: 1 });
     filas.push({ kind: "banda", key: "sec_gop", label: "Gastos Operativos" });
     if (!isCol("sec_gop")) { pushGrupo("gp_pers", -1); pushGrupo("gp_ocup", -1); pushGrupo("gp_mkt", -1); pushGrupo("gp_otros", -1); }
-    filas.push({ kind: "subtotal", label: "Total Gastos Operativos", cur: sedeOpexView, prev: subPrev.totGastosOp, pol: -1 });
+    filas.push({ kind: "subtotal", label: "Total Gastos Operativos", cur: sedeOpexView, prev: opexPrevView, pol: -1 });
     // Estructura (Wellness): costo debajo de Total Gastos Operativos (como en el Excel). OPEX positivo → (x).
     // Con detalle por cuenta (España: la estructura es un CENTRO) la línea se despliega como un grupo más, para
     // poder auditar qué hay adentro. Colombia es una CUENTA única → sin detalle, la fila queda plana.
     if (estruc) {
       const detEstruc = estructuraDetalle?.length ? estructuraDetalle : null;
-      filas.push({ kind: "cuenta", label: estructuraLabel, cur: estruc, prev: ZERO12, pol: -1,
+      filas.push({ kind: "cuenta", label: estructuraLabel, cur: estruc, prev: estrucPrev || ZERO12, pol: -1,
                    ...(detEstruc ? { toggleKey: "estruc" } : {}) });
       if (detEstruc && !isCol("estruc")) for (const d of detEstruc)
         filas.push({ kind: "cuenta", label: d.label, cur: d.cur, prev: ZERO12, pol: -1, nested: true });
     }
-    filas.push({ kind: "result", label: "Resultado Operativo", cur: resOpEff, prev: subPrev.resOp, pol: 1 });
+    filas.push({ kind: "result", label: "Resultado Operativo", cur: resOpEff, prev: resOpPrevEff, pol: 1 });
 
     let fcfArr = resFinalEff;   // FCF (o Resultado Final sin cola) → base de la ganancia viva de la distribución
     if (impData || finData) {
@@ -1114,14 +1130,15 @@ export function buildPnLSedeFilas(props, isCol) {
       // → Free Cash Flow. El FCF es el mismo valor de siempre; solo cambia dónde caen las líneas.
       if (finData) {
         filas.push({ kind: "banda", label: "Resultado Financiero" });
-        for (const a of finData.byAcc) filas.push({ kind: "cuenta", label: a.name, cur: a.cur, prev: ZERO12, pol: 1 });
+        for (const a of finData.byAcc) filas.push({ kind: "cuenta", label: a.name, cur: a.cur, prev: prevDe(finPrev, a.name), pol: 1 });
       }
       if (impData) {
         filas.push({ kind: "banda", label: "Impuestos" });
-        for (const a of impData.byAcc) filas.push({ kind: "cuenta", label: a.name, cur: a.cur, prev: ZERO12, pol: -1 });
+        for (const a of impData.byAcc) filas.push({ kind: "cuenta", label: a.name, cur: a.cur, prev: prevDe(impPrev, a.name), pol: -1 });
       }
       const resFin = resOpEff.map((v, m) => (Number(v) || 0) + (finData?.total[m] || 0) - (impData?.total[m] || 0));
-      filas.push({ kind: "result", label: "Resultado Final", cur: resFin, prev: ZERO12, pol: 1 });
+      const resFinPrev = resOpPrevEff.map((v, m) => (Number(v) || 0) + (finPrev?.total[m] || 0) - (impPrev?.total[m] || 0));
+      filas.push({ kind: "result", label: "Resultado Final", cur: resFin, prev: resFinPrev, pol: 1 });
       // Comisión/Inversiones solo si tienen dato (España no las usa → no ensuciar). Si ambas vacías y no hay
       // distribución (Rosedal), el Resultado Final YA es el final → no repetir una línea "Neto" idéntica.
       const comConDato = !!provMes || !esVacio12(sub.st.com_res);
@@ -1129,8 +1146,11 @@ export function buildPnLSedeFilas(props, isCol) {
       if (comConDato) pushComRes();
       if (invConDato) pushGrupo("inv_no_op", -1);
       fcfArr = resFin.map((v, m) => v - (sub.st.com_res?.[m] || 0) - (sub.st.inv_no_op?.[m] || 0) - (provMes ? provMes[m] : 0));
-      if (comConDato || invConDato || distribucion)
-        filas.push({ kind: "result", label: netoLabel, cur: fcfArr, prev: ZERO12, pol: 1 });
+      if (comConDato || invConDato || distribucion) {
+        const stP0 = k => (subPrev?.st?.[k]) || ZERO12;
+        const fcfPrev = resFinPrev.map((v, m) => v - (Number(stP0("com_res")[m]) || 0) - (Number(stP0("inv_no_op")[m]) || 0));
+        filas.push({ kind: "result", label: netoLabel, cur: fcfArr, prev: fcfPrev, pol: 1 });
+      }
     } else {
       // Vista estándar (P&L Sedes): Comisión/Inversiones → Resultado Final (sin cola). Bandas vacías se ocultan.
       if (provMes || !esVacio12(sub.st.com_res)) pushComRes();
@@ -2438,6 +2458,7 @@ const TABS = [
   { id: "interco_matriz", label: "Fondeo por negocio", icon: "🧮", ico: "grid", desc: "Fondeo del grupo a cada negocio (CAPEX), consolidado en USD · meses × negocio/tipo. Click en una celda = los movimientos que la componen. Ata al Fondeo del P&L." },
   { id: "consolidado", label: "Tesorería consolidada", icon: "🏦", ico: "bank", desc: "Cuánta plata hay hoy y dónde: saldos de cajas y bancos, cuentas a cobrar/pagar y movimientos de todas las sociedades." },
   { id: "balance_pn",  label: "Balance y Evolución del PN", icon: "⚖️", ico: "scale", desc: "Cuánto vale cada sociedad (o el grupo en USD) a una fecha y por qué cambió mes a mes: apertura + resultado + cambio de moneda = Patrimonio Neto." },
+  { id: "posicion_fin", label: "Posición financiera", icon: "🎯", ico: "target", desc: "El número del board: disponible − deuda financiera = posición financiera neta; + a cobrar − a pagar = posición neta (ata con el PN). Al último cierre, consolidado en USD y por sociedad." },
   { id: "cxp_prov", label: "Cuentas a pagar por proveedor", icon: "📋", ico: "invoice", desc: "Cuentas por pagar consolidadas por proveedor (todas las sociedades), con antigüedad." },
   { id: "cxc_cli", label: "Cuentas a cobrar por cliente", icon: "📥", ico: "receipt", desc: "Cuentas por cobrar consolidadas por cliente (todas las sociedades), con antigüedad." },
   { id: "socios",  label: "Socios", icon: "◎", ico: "people", desc: "Cuenta corriente de socios: dividendos, aportes y préstamos (balance, no P&L)." },
@@ -2458,7 +2479,6 @@ const TABS = [
   { id: "consol_grupo", label: "Consolidado de grupo", icon: "🌐", ico: "globe", wip: true, desc: "P&L y patrimonio del grupo: propias full (neto de IVA) + fee/share de administradas + impuestos del anillo al final." },
 
   { id: "an_ventas",    label: "Composición de ingresos", icon: "📈", ico: "pie", desc: "Igual que el P&L BIGG hasta Total Ingresos: cada negocio (Sedes AR con apertura por sede / Rosedal / Huergo) y las líneas de HQ." },
-  { id: "posicion_fin", label: "Posición financiera", icon: "🎯", ico: "target", desc: "El número del board: disponible − deuda financiera = posición financiera neta; + a cobrar − a pagar = posición neta (ata con el PN). Al último cierre, consolidado en USD y por sociedad." },
   { id: "an_margenes",  label: "Márgenes por negocio", icon: "🧩", ico: "puzzle", wip: true, desc: "Cuánto aporta cada negocio al Margen Bruto del grupo." },
   { id: "an_gastos_cc", label: "Gastos por centro de costo", icon: "🧾", ico: "tag", wip: true, desc: "Apertura del gasto por centro de costo y, dentro, por cuenta contable." },
 
@@ -2516,6 +2536,7 @@ const ICONO_PATHS = {
   anchor:    ["M12 3a2 2 0 100 4 2 2 0 000-4z", "M12 7v14", "M4 13a8 8 0 0016 0", "M2 13h4", "M18 13h4"],
   handshake: ["M3 10l4-4 4 3-3 3", "M21 10l-4-4-4 3 3 3", "M7 12l5 5 5-5", "M12 17v3"],
   scale:     ["M12 3v18", "M8 21h8", "M4 7h16", "M6 7l-3 7a3 3 0 006 0z", "M18 7l-3 7a3 3 0 006 0z"],
+  target:    ["M12 3a9 9 0 100 18 9 9 0 000-18z", "M12 7.5a4.5 4.5 0 100 9 4.5 4.5 0 000-9z", "M12 11a1 1 0 100 2 1 1 0 000-2z"],
 };
 function Icono({ name, emoji, size = 20, color = T.accent }) {
   const paths = ICONO_PATHS[name];
@@ -2536,7 +2557,6 @@ const _hover = (on) => (e) => {
   e.currentTarget.style.transform = on ? "translateY(-1px)" : "none";
 };
 
-  target:    ["M12 3a9 9 0 100 18 9 9 0 000-18z", "M12 7.5a4.5 4.5 0 100 9 4.5 4.5 0 000-9z", "M12 11a1 1 0 100 2 1 1 0 000-2z"],
 // Tarjeta GRANDE (grupo "Operar el día a día"): tile 44 + título + descripción a dos líneas.
 function ReportCardHero({ t, onClick }) {
   return (
@@ -3090,6 +3110,7 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   const [fotoOpen,       setFotoOpen]       = useState(false);  // overlay "Ampliar" (reporte a pantalla completa)
   const [graficoOpen,    setGraficoOpen]    = useState(false);  // overlay gráfico de composición (Composición de Ingresos)
   const [fotoMsg,        setFotoMsg]        = useState(null);   // feedback del "Copiar imagen" ("copiado"/error)
+  const [posMeta,        setPosMeta]        = useState(null);   // Posición financiera: { fecha, moneda } → caption de la foto
   const actMenuRef = useRef(null);   // menú ⋮ (outside-click)
   const reportRef  = useRef(null);   // contenedor de la tabla del reporte (fuente de la "foto")
   const [year,           setYear]           = useState(CUR_YEAR);
@@ -3110,7 +3131,6 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   }, [loadKey]);
   // Fuentes secundarias que cargan FUERA del batch principal (fire-and-forget, para no colgar el reporte si su
   // backend tarda): histórico, franquicias (Ingresos HQ) y fondeo/interco (Capex). `loading` se apaga con el
-  const [posMeta,        setPosMeta]        = useState(null);   // Posición financiera: { fecha, moneda } → caption de la foto
   // batch → estas siguen llegando después. Marcamos cada una "settled" (ok o falla) para un aviso suave: mientras
   // falte alguna, el P&L puede mostrar líneas incompletas y avisamos, sin bloquear.
   const [secReady, setSecReady] = useState({ hist: false, franq: false, interco: false });
@@ -3636,6 +3656,8 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
   };
   const statsPorSede = useMemo(() => estructuraCCId ? statsSedes(year) : null,
     [estructuraCCId, sedeCCsSel, inFx, egFx, year, monedaPL]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const statsPorSedePrev = useMemo(() => (estructuraCCId && !wellnessEnScope) ? statsSedes(year - 1) : null,
+    [estructuraCCId, wellnessEnScope, sedeCCsSel, inFx, egFx, year, monedaPL]);   // eslint-disable-line react-hooks/exhaustive-deps
   // Parte del scope según un campo de las stats: Σ scope / Σ todas, mes a mes; null en el mes si nadie suma.
   const factorScope = (stats, campo) => {
     const enScope = new Set(resolvedCCSede.map(ccKey));
@@ -3651,6 +3673,9 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     if (!statsPorSede || wellnessEnScope) return null;
     return factorScope(statsPorSede, "activa").map(f => f ?? 0);
   }, [statsPorSede, wellnessEnScope, resolvedCCSede]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const factorEstructuraPrev = useMemo(() => (
+    statsPorSedePrev ? factorScope(statsPorSedePrev, "activa").map(f => f ?? 0) : null
+  ), [statsPorSedePrev, resolvedCCSede]);   // eslint-disable-line react-hooks/exhaustive-deps
   // Monto de estructura que le corresponde al SCOPE actual. Con Wellness en el scope ("Todas") = su OPEX
   // completo (ya está adentro → la tabla lo separa). Con una sede sola = OPEX × factorEstructura.
   const estructuraCuota = useMemo(() => {
@@ -3658,30 +3683,6 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
     if (wellnessEnScope || !factorEstructura) return estructuraOpexFull;
     return MESES.map((_, m) => (Number(estructuraOpexFull[m]) || 0) * factorEstructura[m]);
   }, [estructuraOpexFull, wellnessEnScope, factorEstructura]);
-  // ── Cola de IMPUESTOS del centro de estructura (España): el IVA de la sociedad (Modelo 303, aplazamientos)
-  // se carga en 16-Wellness. Con Wellness en el scope ("Todas") ya está en pnlSede.sinClasificar. Con una sede
-  // sola se PRORRATEA por POSICIÓN DE IVA (decisión Martín 29/9/2026): cada sede se lleva del pago la parte de
-  // su IVA neto del mes (débito de ventas − crédito de gastos), no en partes iguales como el OPEX. Posición
-  // negativa (sede con crédito fiscal) cuenta 0. Mes sin posición cargada en ninguna sede → cae al factor de
-  // estructura (partes iguales). Σ sedes = "Todas" mes a mes. El Resultado Financiero NO se prorratea.
-  const factorIvaEstructura = useMemo(() => {   // [12] en 0..1: parte del IVA de la sociedad que toca al scope
-    if (!statsPorSede || wellnessEnScope || !factorEstructura) return null;
-    return factorScope(statsPorSede, "ivaPos").map((f, m) => f ?? factorEstructura[m]);
-  }, [statsPorSede, wellnessEnScope, factorEstructura, resolvedCCSede]);   // eslint-disable-line react-hooks/exhaustive-deps
-  // Cuentas de impuestos del centro de estructura × factor → { cuenta: [12] } para fusionar en Sin clasificar.
-  const prorratearImpuestos = (sinClas, factor) => {
-    if (!sinClas || !factor) return null;
-    const out = {};
-    for (const [k, arr] of Object.entries(sinClas)) {
-      if (!IMPUESTOS_FOND.some(mm => _nkSede(k).includes(_nkSede(mm)))) continue;
-      out[k] = MESES.map((_, m) => (Number(arr[m]) || 0) * factor[m]);
-    }
-    return Object.keys(out).length ? out : null;
-  };
-  const estructuraImpuestos = useMemo(
-    () => (estructuraPnl && factorIvaEstructura) ? prorratearImpuestos(estructuraPnl.sinClasificar, factorIvaEstructura) : null,
-    [estructuraPnl, factorIvaEstructura]   // eslint-disable-line react-hooks/exhaustive-deps
-  );
   // Colombia: valores de la cuenta "Estructura Tigre Loco" (viven en Sin clasificar del centro consolidado).
   const estructuraCuentaVals = useMemo(() => {
     if (!estructuraCuentaName) return null;
@@ -3705,9 +3706,52 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       }
     return out.length ? out : null;
   }, [estructuraPnl, estructuraOpexFull, estructuraCuota]);
+  // AÑO ANTERIOR (comparativas Mensual/YTD): P&L del centro en year-1 y la misma cuota de estructura, completa
+  // con Wellness en scope o en partes iguales entre las sedes activas de year-1. Colombia (cuenta) se resuelve
+  // adentro de la tabla desde el P&L previo, no acá.
+  const estructuraPnlPrev = useMemo(() => (
+    estructuraCCId ? buildPnLSede(inFx, egFx, [estructuraCCId], year - 1, monedaPL, sinIva) : null
+  ), [estructuraCCId, inFx, egFx, year, monedaPL, sinIva]);
+  const estructuraCuotaPrev = useMemo(() => {
+    if (!estructuraPnlPrev) return null;
+    const full = computeSubtotalsSede(estructuraPnlPrev).totGastosOp;
+    if (wellnessEnScope || !factorEstructuraPrev) return full;
+    return MESES.map((_, m) => (Number(full[m]) || 0) * factorEstructuraPrev[m]);
+  }, [estructuraPnlPrev, wellnessEnScope, factorEstructuraPrev]);
+  // ── Cola de IMPUESTOS del centro de estructura (España): el IVA de la sociedad (Modelo 303, aplazamientos)
+  // se carga en 16-Wellness. Con Wellness en el scope ("Todas") ya está en pnlSede.sinClasificar. Con una sede
+  // sola se PRORRATEA por POSICIÓN DE IVA (decisión Martín 29/9/2026): cada sede se lleva del pago la parte de
+  // su IVA neto del mes (débito de ventas − crédito de gastos), no por ventas como el OPEX. Posición negativa
+  // (sede con crédito fiscal) cuenta 0. Mes sin posición cargada en ninguna sede → cae al factor de estructura
+  // (partes iguales). Σ sedes = "Todas" mes a mes. El Resultado Financiero NO se prorratea: queda a nivel sociedad.
+  const factorIvaEstructura = useMemo(() => {   // [12] en 0..1: parte del IVA de la sociedad que toca al scope
+    if (!statsPorSede || wellnessEnScope || !factorEstructura) return null;
+    return factorScope(statsPorSede, "ivaPos").map((f, m) => f ?? factorEstructura[m]);
+  }, [statsPorSede, wellnessEnScope, factorEstructura, resolvedCCSede]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // Cuentas de impuestos del centro de estructura × factor → { cuenta: [12] } para fusionar en Sin clasificar.
+  const prorratearImpuestos = (sinClas, factor) => {
+    if (!sinClas || !factor) return null;
+    const out = {};
+    for (const [k, arr] of Object.entries(sinClas)) {
+      if (!IMPUESTOS_FOND.some(mm => _nkSede(k).includes(_nkSede(mm)))) continue;
+      out[k] = MESES.map((_, m) => (Number(arr[m]) || 0) * factor[m]);
+    }
+    return Object.keys(out).length ? out : null;
+  };
+  const estructuraImpuestos = useMemo(
+    () => (estructuraPnl && factorIvaEstructura) ? prorratearImpuestos(estructuraPnl.sinClasificar, factorIvaEstructura) : null,
+    [estructuraPnl, factorIvaEstructura]   // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  // Año anterior: mismo reparto con las posiciones de IVA de year-1 (comparativas Mensual/YTD).
+  const estructuraImpuestosPrev = useMemo(() => {
+    if (!estructuraPnlPrev || !statsPorSedePrev || !factorEstructuraPrev) return null;
+    const factor = factorScope(statsPorSedePrev, "ivaPos").map((f, m) => f ?? factorEstructuraPrev[m]);
+    return prorratearImpuestos(estructuraPnlPrev.sinClasificar, factor);
+  }, [estructuraPnlPrev, statsPorSedePrev, factorEstructuraPrev, resolvedCCSede]);   // eslint-disable-line react-hooks/exhaustive-deps
   // Estructura efectiva a pasar a la tabla: centro (España, ya está dentro de Gastos Op → estructuraEnOpex)
   // o cuenta (Colombia, fuera de Gastos Op → resta al Resultado Operativo). Label según la lente.
   const estructuraCuotaEff  = estructuraCuota ?? estructuraCuentaVals;
+  const estructuraCuotaPrevEff = estructuraCuota ? estructuraCuotaPrev : null;
   const estructuraEnOpexEff = estructuraCuota ? wellnessEnScope : false;
   const estructuraLabelEff  = estructuraCuentaName || "Estructura Wellness";
 
@@ -3928,7 +3972,8 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
       pnl: pnlSede, sub: subSede, pnlPrev: pnlSedePrev, subPrev: subSedePrev, year,
       nombreCuenta, cesion: cesionSede, cesionResFinal: subSedeNet?.resFinal, cesionRetiros: cesionRetirosCI,
       comBaseResOp, estructuraCuota: estructuraCuotaEff, estructuraEnOpex: estructuraEnOpexEff, estructuraLabel: estructuraLabelEff,
-      estructuraDetalle, estructuraImpuestos,
+      estructuraDetalle, estructuraCuotaPrev: estructuraCuotaPrevEff,
+      estructuraImpuestos, estructuraImpuestosPrev,
       impuestos: isFond ? IMPUESTOS_FOND : null, financieros: isFond ? FINANCIEROS_FOND : null,
       distribucion: activeTab === "op_rosedal" ? distribRosedalFx : null,
       retirosVivos: activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null,
@@ -4303,7 +4348,8 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} nombreCuenta={nombreCuenta}
           cesion={cesionSede} cesionResFinal={subSedeNet?.resFinal} cesionRetiros={cesionRetirosCI}
           comBaseResOp={comBaseResOp} estructuraCuota={estructuraCuotaEff} estructuraEnOpex={estructuraEnOpexEff} estructuraLabel={estructuraLabelEff}
-          estructuraDetalle={estructuraDetalle} estructuraImpuestos={estructuraImpuestos}
+          estructuraDetalle={estructuraDetalle} estructuraCuotaPrev={estructuraCuotaPrevEff}
+          estructuraImpuestos={estructuraImpuestos} estructuraImpuestosPrev={estructuraImpuestosPrev}
           impuestos={isFond ? IMPUESTOS_FOND : null} financieros={isFond ? FINANCIEROS_FOND : null}
           distribucion={activeTab === "op_rosedal" ? distribRosedalFx : null}
           retirosVivos={activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null}
@@ -4394,6 +4440,13 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
         <TabTesoreriaConsolidada vistas={["balance", "evpn"]}
           pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
       )}
+      {/* Posición financiera: mismo motor que Tesorería consolidada, una sola vista, abre en el último cierre de mes.
+          El contenido va en reportRef → menú ⋮ Ampliar / Copiar imagen. */}
+      {activeTab === "posicion_fin" && (
+        <TabTesoreriaConsolidada vistas={["posicion"]} fechaInicial={finMesAnteriorReal(hoyISO())}
+          contentRef={reportRef} onMeta={setPosMeta}
+          pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
+      )}
 
       {activeTab === "devengado" && (
         <TabDevengado
@@ -4440,11 +4493,4 @@ export default function PantallaReportes({ sociedad = "nako", onVerComprobante }
 
     </div>
   );
-      {/* Posición financiera: mismo motor que Tesorería consolidada, una sola vista, abre en el último cierre de mes.
-          El contenido va en reportRef → menú ⋮ Ampliar / Copiar imagen. */}
-      {activeTab === "posicion_fin" && (
-        <TabTesoreriaConsolidada vistas={["posicion"]} fechaInicial={finMesAnteriorReal(hoyISO())}
-          contentRef={reportRef} onMeta={setPosMeta}
-          pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
-      )}
 }
