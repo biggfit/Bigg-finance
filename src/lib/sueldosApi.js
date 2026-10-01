@@ -809,7 +809,14 @@ export async function updateNovedad(id, data) {
 }
 
 export async function deleteNovedad(id) {
-  await post({ action: "del", sheet: "su_novedades", id });
+  // Idempotente: si GAS borró pero respondió HTML, el reintento de post() da "Registro no
+  // encontrado" — la fila ya no está, que es justo lo que se pidió. Antes cortaba el guardado
+  // a mitad de camino y el resto de las bajas no se hacía.
+  try {
+    await post({ action: "del", sheet: "su_novedades", id });
+  } catch (e) {
+    if (!/no encontrado/i.test(e?.message || "")) throw e;
+  }
 }
 
 // ── PAGOS ─────────────────────────────────────────────────────────────────────

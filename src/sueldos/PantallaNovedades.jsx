@@ -262,7 +262,11 @@ export default function PantallaNovedades({ pais = "" }) {
 
       // Bajas: ids cargados que ya no están entre las filas con id
       const keepIds = new Set(validas.filter(r => r.id).map(r => r.id));
-      for (const n of loaded) if (!keepIds.has(n.id)) ops.push(() => deleteNovedad(n.id));
+      // Al borrar, sacarla del snapshot: un "Guardar" reintentado no la vuelve a pedir.
+      for (const n of loaded) if (!keepIds.has(n.id)) ops.push(async () => {
+        await deleteNovedad(n.id);
+        setLoaded(prev => prev.filter(x => x.id !== n.id));
+      });
 
       // Secuencial: el GAS pierde escrituras concurrentes (appendRow se pisa → se "borraba" una fila).
       for (const op of ops) await op();
