@@ -1414,8 +1414,7 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                   </span>
                 </div>
               )}
-              {pagosSinFactura.map(({ fr, comp, falta }, i) => {
-                const parcial = falta != null && falta < (comp.amount ?? 0) - 0.01;
+              {pagosSinFactura.map(({ fr, comp }, i) => {
                 return (
                 <div key={i}>
                   <div style={{ display: "flex", alignItems: "center", gap: 12, background: "var(--bg2)", borderRadius: 7, padding: "8px 12px", opacity: pagoBatchRunning ? 0.6 : 1 }}>
@@ -1472,13 +1471,6 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
                       </span>
                     );
                   })()}
-                  {parcial && (
-                    <span className="pill mono"
-                      title={`De este cobro ya hay factura de pauta por ${fmt((comp.amount ?? 0) - falta, compCurrency(comp))}. Falta facturar el resto.`}
-                      style={{ color: "var(--orange)", background: "rgba(251,146,60,.1)", fontSize: 9, whiteSpace: "nowrap", cursor: "help" }}>
-                      FALTA {fmt(falta, compCurrency(comp))}
-                    </span>
-                  )}
                   <span className="pill" style={{ color: "var(--gold)", background: "rgba(222,251,151,.1)", fontSize: 9 }}>PAGO A CTA</span>
                   <button
                     className="ghost"
