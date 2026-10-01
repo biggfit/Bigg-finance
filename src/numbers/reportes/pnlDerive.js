@@ -379,8 +379,8 @@ const BIGG_GRUPOS = [
 // Orden de las cuentas dentro de cada subgrupo (display; las que no figuran van al final, alfabéticas).
 // Hardcodeado a propósito: es presentación, bajo riesgo (un nombre que no matchea solo se ordena último).
 const BIGG_ORDEN = [
-  "Access Fees", "Regalias s/Ventas", "Equipamientos", "Coorporativos (Gympass)",
-  "Coorporativos", "APP (Gympass)", "Sponsor", "Pauta", "CRM", "Otros Ingresos",
+  "Access Fees", "Regalias s/Ventas", "CRM", "Equipamientos", "Coorporativos (Gympass)",
+  "Coorporativos", "APP (Gympass)", "Sponsor", "Pauta", "Otros Ingresos",
 ];
 
 // Familia del centro (dimensión que separa los subgrupos). Devuelve null si no clasifica.
