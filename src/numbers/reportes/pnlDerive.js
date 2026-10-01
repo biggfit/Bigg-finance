@@ -166,7 +166,9 @@ const SEDE_GRUPOS = [
   { key: "cvar",      label: "Costos Variables",         color: SEDE_HDR, cuentas: ["Fee Facturación", "Aranceles y Otros Financieros", "IIBB", "Imp. Cred. y Deb.", "Gastos Financieros"] },
   { key: "gp_pers",   label: "Personal",                 color: SEDE_HDR, cuentas: ["Sueldos", "Incentivos", "Comisiones", "Otros Gastos Salariales", "Aguinaldos", "Costos Salariales", "IRPF"] },
   { key: "gp_ocup",   label: "Ocupación",                color: SEDE_HDR, cuentas: ["Alquiler", "Expensas", "ABL", "Servicios"] },
-  { key: "gp_mkt",    label: "Mkt y Pauta",              color: SEDE_HDR, cuentas: ["Acciones de Mkt", "Pauta"] },
+  // "CRM" (1/10/2026): servicio WhatsApp del CRM que HQ le cobra a la sede propia (asiento de gestión). Va en
+  // Mkt y Pauta por ahora, como herramienta comercial; Martín lo revisa más adelante.
+  { key: "gp_mkt",    label: "Mkt y Pauta",              color: SEDE_HDR, cuentas: ["Acciones de Mkt", "Pauta", "CRM"] },
   { key: "gp_otros",  label: "Otros Gastos de la Sede",  color: SEDE_HDR, cuentas: ["Honorarios Profesionales", "Equipamiento y Mantenimiento", "Limpieza", "Otros Gastos del Centro", "Gastos Menores de Caja"] },
   { key: "com_res",   label: "Comisión por resultados",  color: SEDE_HDR, cuentas: ["Comision S/Resultado"] },
   { key: "inv_no_op", label: "Inversiones no operativas", color: SEDE_HDR, cuentas: ["Inversiones / Gastos no Operativos"] },
@@ -378,7 +380,7 @@ const BIGG_GRUPOS = [
 // Hardcodeado a propósito: es presentación, bajo riesgo (un nombre que no matchea solo se ordena último).
 const BIGG_ORDEN = [
   "Access Fees", "Regalias s/Ventas", "Equipamientos", "Coorporativos (Gympass)",
-  "Coorporativos", "APP (Gympass)", "Sponsor", "Pauta", "Otros Ingresos",
+  "Coorporativos", "APP (Gympass)", "Sponsor", "Pauta", "CRM", "Otros Ingresos",
 ];
 
 // Familia del centro (dimensión que separa los subgrupos). Devuelve null si no clasifica.
@@ -509,8 +511,11 @@ const ordCmp = (order) => ([a], [b]) => {
 // contra (−) EN LA MISMA FILA que su ingreso par → una sola línea neta. Ej.: "Interusos" (costo) se
 // suma a la fila "Coorporativos" → Coorporativos − Interusos. "Pauta" es igual: la venta a franquiciados
 // (ingreso) netea la compra a JMC/Meta/Google (egreso) en la fila "Pauta". Margen y resultados NO cambian.
+// "CRM" (1/10/2026) idem: lo que se les factura a las sedes por el WhatsApp del CRM (ingreso, desde
+// Franquicias) netea lo que BIGG le paga a Meta por ese servicio (egreso en la cuenta "CRM" de gasto)
+// → la fila "CRM" muestra solo el markup.
 // Mapa: cuenta contra → fila de ingreso donde netea.
-const ING_CONTRA_HQ = new Map([["Interusos", "Coorporativos"], ["Pauta", "Pauta"]]);
+const ING_CONTRA_HQ = new Map([["Interusos", "Coorporativos"], ["Pauta", "Pauta"], ["CRM", "CRM"]]);
 const BIGG_ORDEN_FIN = ["Intereses Ganados", "Perdidas Financieras"];
 const BIGG_ORDEN_IMP = ["Plan Facilidades AFIP", "IVA", "IVA Compra", "Ganancias", "Otros Impuestos"];
 

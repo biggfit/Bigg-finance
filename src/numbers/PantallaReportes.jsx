@@ -265,7 +265,7 @@ function GraficoComposicion({ sub, year, caption, hayHistorico, mesMax, onClose 
     oper: MESES.map((_, m) => (Number(sub.fg?.[m]) || 0) + (Number(sub.wre?.[m]) || 0)),
     reg: g("Regalias s/Ventas"), corp: g("Coorporativos"), lic: g("Access Fees"),
     app: g("APP (Gympass)"), spon: g("Sponsor"),
-    otros: MESES.map((_, m) => (Number(g("Pauta")[m]) || 0) + (Number(g("Otros Ingresos")[m]) || 0)),
+    otros: MESES.map((_, m) => (Number(g("Pauta")[m]) || 0) + (Number(g("CRM")[m]) || 0) + (Number(g("Otros Ingresos")[m]) || 0)),
   };
   // Total (positivo) de ingresos de un mes. Descarta el mes en curso incompleto (total muy chico vs el pico),
   // que si no llenaría el 100% con una sola banda y distorsiona la lectura.

@@ -450,7 +450,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   // Cuenta sugerida SOLO para gestión (la insinúa la nota: red bigg → Interusos / gympass → Coorporativos).
   // Interco real (factura/NC de Segui, etc.) no tiene sugerencia → arranca vacía y la elegís.
   const planCuentaNombres = useMemo(() => new Set((planCuentas || []).map(c => c.nombre)), [planCuentas]);
-  const gestCuentaDef = (p) => (p.tratamiento === "gestion" && planCuentaNombres.has(cuentaGestionPorNota(p?.nota))) ? cuentaGestionPorNota(p?.nota) : "";
+  // Un doc de gestión con concepto "CRM" (servicio WhatsApp del CRM que HQ le cobra a la sede) sugiere la
+  // cuenta "CRM" directamente; el resto sigue por la nota (red bigg → Interusos / gympass → Coorporativos).
+  const gestCuentaDef = (p) => {
+    if (p.tratamiento !== "gestion") return "";
+    const sug = String(p?.concepto || "").trim().toUpperCase() === "CRM" ? "CRM" : cuentaGestionPorNota(p?.nota);
+    return planCuentaNombres.has(sug) ? sug : "";
+  };
   const gestVal = (p, field) => {
     const e = gestEdits[p.id_comp] || {};
     if (e[field] !== undefined) return e[field];
@@ -1738,9 +1744,21 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           {gest && <span style={{ color: T.dim, fontSize: 11 }}> · de {p.vendedorNombre}</span>}
                         </td>
                         <td style={{ padding: "4px 14px", whiteSpace: "nowrap" }}>
+                          {/* Agrupado por naturaleza (Ingresos / Egresos) y sin nombres repetidos dentro de cada grupo: el
+                              reconocimiento guarda el NOMBRE de la cuenta, así que dos cuentas homónimas (ej. "CRM" venta y
+                              "CRM" gasto) son la misma elección; lo que importa es ver de qué lado está la que se elige. */}
                           <select value={cuentaVal} onChange={e => setGestVal(p.id_comp, "cuenta", e.target.value)} style={fld(!!cuentaVal, 170)}>
                             <option value="">— cuenta —</option>
-                            {planCuentasOrd.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
+                            {(() => {
+                              const esIng = (c) => { const t = (c.tipo ?? "").toLowerCase(); return t === "venta" || t === "ventas" || t === "ingreso" || t === "ingresos"; };
+                              const unicos = (arr) => { const seen = new Set(); return arr.filter(c => { const k = String(c.nombre).trim().toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; }); };
+                              const ing = unicos(planCuentasOrd.filter(esIng)), egr = unicos(planCuentasOrd.filter(c => !esIng(c)));
+                              const opt = (c) => <option key={c.id} value={c.nombre}>{c.nombre}</option>;
+                              return <>
+                                {egr.length > 0 && <optgroup label="Egresos">{egr.map(opt)}</optgroup>}
+                                {ing.length > 0 && <optgroup label="Ingresos">{ing.map(opt)}</optgroup>}
+                              </>;
+                            })()}
                           </select>
                         </td>
                         <td style={{ padding: "4px 14px", whiteSpace: "nowrap" }}>
