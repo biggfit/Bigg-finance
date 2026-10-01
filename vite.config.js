@@ -261,6 +261,8 @@ export default defineConfig({
               ? 'api/bigg-eye-horas.js'
               : req.url.startsWith('/api/bigg-eye-cdp')
               ? 'api/bigg-eye-cdp.js'
+              : req.url.startsWith('/api/bigg-eye-whatsapp')
+              ? 'api/bigg-eye-whatsapp.js'
               : 'api/bigg-eye.js';
             // Ruta absoluta + timestamp → fuerza reimport en cada request,
             // así los cambios en /api/*.js se reflejan sin reiniciar el servidor.

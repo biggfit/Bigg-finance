@@ -21,7 +21,9 @@ const EMPRESA_SOCIEDAD = Object.fromEntries(Object.entries(SOCIEDAD_EMPRESA).map
 // Sufijo del tipo de comprobante (franquicias) → cuenta contable en el chart consolidado de Numbers.
 // Confirmado con el usuario (13/7): FEE es "Regalias s/Ventas"; PAUTA es "Acciones de Mkt" (BIGG le
 // vende pauta a los franquiciados); INTERUSOS es costo que pega en margen; SPONSORS/OTROS directo.
-const FRANQ_CUENTA = { FEE: "Regalias s/Ventas", INTERUSOS: "Interusos", PAUTA: "Pauta", SPONSORS: "Sponsor", SPONSOR: "Sponsor", OTROS: "Otros Ingresos" };
+// CRM (1/10): servicios del CRM cobrados aparte del fee (WhatsApp) → cuenta "CRM" de Ingresos HQ, que
+// netea contra el costo pagado a Meta (misma cuenta, lado gasto) vía ING_CONTRA_HQ en pnlDerive.
+const FRANQ_CUENTA = { FEE: "Regalias s/Ventas", INTERUSOS: "Interusos", PAUTA: "Pauta", SPONSORS: "Sponsor", SPONSOR: "Sponsor", CRM: "CRM", OTROS: "Otros Ingresos" };
 const MONEDAS = ["ARS", "USD", "EUR"];
 // IVA por sociedad EMISORA (los importes de franquicia vienen CON IVA cuando corresponde): Ñako y
 // Gestión Deportiva y Wellness al 21%; BIGG FIT LLC sin IVA. Lineal por emisor. Habilita la vista

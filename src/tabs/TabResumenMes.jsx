@@ -42,13 +42,14 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
         const interusos     = netoCuenta("INTERUSOS");
         const pauta         = netoCuenta("PAUTA");
         const sponsors      = netoCuenta("SPONSORS");
+        const crm           = netoCuenta("CRM");
         const otrosIngresos = netoCuenta("OTROS");
         const pagos         = fc.filter(c => c.type === "PAGO").reduce((a, c) => a + c.amount, 0);
         const pagosACuenta  = fc.filter(c => c.type === "PAGO_PAUTA").reduce((a, c) => a + c.amount, 0);
         const enviados      = fc.filter(c => c.type === "PAGO_ENVIADO").reduce((a, c) => a + c.amount, 0);
         const pautaPendiente = computePautaPendiente(fr.id, comps, year, month, null, cur, activeCompany);
 
-        return { fr, sp, sa, fee, interusos, pauta, sponsors, otrosIngresos, pagos, pagosACuenta, enviados, pautaPendiente };
+        return { fr, sp, sa, fee, interusos, pauta, sponsors, crm, otrosIngresos, pagos, pagosACuenta, enviados, pautaPendiente };
       });
 
       const sum = fn => perFr.reduce((a, d) => a + fn(d), 0);
@@ -60,6 +61,7 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
         interusos:     { facts: sum(d => d.interusos.facts),     ncs: sum(d => d.interusos.ncs),     neto: sum(d => d.interusos.neto)     },
         pauta:         { facts: sum(d => d.pauta.facts),         ncs: sum(d => d.pauta.ncs),         neto: sum(d => d.pauta.neto)         },
         sponsors:      { facts: sum(d => d.sponsors.facts),      ncs: sum(d => d.sponsors.ncs),      neto: sum(d => d.sponsors.neto)      },
+        crm:           { facts: sum(d => d.crm.facts),           ncs: sum(d => d.crm.ncs),           neto: sum(d => d.crm.neto)           },
         otrosIngresos: { facts: sum(d => d.otrosIngresos.facts), ncs: sum(d => d.otrosIngresos.ncs), neto: sum(d => d.otrosIngresos.neto) },
         totPagos:        sum(d => d.pagos),
         totPagosACuenta: sum(d => d.pagosACuenta),
@@ -95,7 +97,7 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
   return (
     <div className="fade">
       <div style={{ display: "grid", gridTemplateColumns: `repeat(${tarjetas.length || 1}, minmax(0, 1fr))`, gap: 16, alignItems: "stretch" }}>
-        {tarjetas.map(({ cur, totSP, totSA, fee, interusos, pauta, sponsors, otrosIngresos, totPagos, totPagosACuenta, totEnv, nDeben, cobrarReal, pautaPendRows, totDeben, totPautaPend }) => {
+        {tarjetas.map(({ cur, totSP, totSA, fee, interusos, pauta, sponsors, crm, otrosIngresos, totPagos, totPagosACuenta, totEnv, nDeben, cobrarReal, pautaPendRows, totDeben, totPautaPend }) => {
           const accentC = cur === "ARS" ? "var(--gold)" : cur === "USD" ? "var(--green)" : "var(--cyan)";
           const totDebo = Math.abs(cobrarReal.reduce((a,d)=>a+d.sa,0));
           return (
@@ -113,6 +115,7 @@ const TabResumenMes = memo(function TabResumenMes({ allFranchises, month, year, 
               <CuentaRow label="Interusos"      data={interusos}     cur={cur} cuenta="INTERUSOS"     />
               <CuentaRow label="Pauta"          data={pauta}         cur={cur} cuenta="PAUTA"         />
               <CuentaRow label="Sponsors"       data={sponsors}      cur={cur} cuenta="SPONSORS"      />
+              <CuentaRow label="CRM"            data={crm}           cur={cur} cuenta="CRM"           />
               <CuentaRow label="Otros"          data={otrosIngresos} cur={cur} cuenta="OTROS"/>
 
               {/* Movimientos financieros */}

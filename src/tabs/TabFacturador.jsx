@@ -8,29 +8,19 @@ import PendientesPanel from "../components/PendientesPanel";
 import { buildFacturaPDF, downloadTextAsPDF } from "../lib/pdf";
 import { downloadInvoicePdf, downloadBatchInvoicePdf } from "../lib/invoicePdf";
 import { emitirComprobante, formatInvoiceLabel, invoiceFromResult, fetchAfipNumero, downloadFacturantePdfBlob, afipSaveFailedMsg } from "../lib/facturanteApi";
-import { getNextInvoiceNum, fetchComps } from "../lib/sheetsApi";
+import { getNextInvoiceNum } from "../lib/sheetsApi";
 import { fetchCuentasBancarias } from "../lib/numbersApi";       // cuentas de Numbers (destino de la plata)
 import { SOCIEDAD_EMPRESA } from "../lib/franquiciasAdapter";
+// Helpers compartidos entre los lotes (fee desde CRM y CRM WhatsApp): sociedad/moneda por país, TC de
+// Maestros, importes formateados y el ciclo emitir → guardar → confirmar dudosos (emitirLote).
+import { formatCurrencyInput, parseCurrencyInput, round2, getInvoicePrefix, getCountryCur, getTcRate,
+         empresaEmisoraPorPais, monedaFacturacionPorPais, emitirLote, subtituloCrmWhatsapp } from "./facturadorBatch";
+import ModoCrmWhatsapp from "./ModoCrmWhatsapp";
 
 // ─── TAB: EMISIÓN DE COMPROBANTES ────────────────────────────────────────────
-const EMIT_MODE  = { SELECT: "select", MANUAL: "manual", CRM: "crm", EXCEL: "excel" };
+const EMIT_MODE  = { SELECT: "select", MANUAL: "manual", CRM: "crm", EXCEL: "excel", CRM_WA: "crm_wa" };
 const FACT_STAGE = { IDLE: "idle", PREVIEW: "preview", PROCESSING: "processing", DONE: "done" };
 
-// ── helpers para importe formateado ────────────────────────────────────────
-function formatCurrencyInput(raw, cur) {
-  // raw es string con lo que el usuario tipea, devuelve string formateado
-  const digits = raw.replace(/[^\d,]/g, "");
-  const [intPart, decPart] = digits.split(",");
-  const intFormatted = (intPart ?? "").replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-  if (digits.includes(",")) return `${intFormatted},${(decPart ?? "").slice(0, 2)}`;
-  return intFormatted;
-}
-function parseCurrencyInput(formatted) {
-  // "1.234.567,89" → 1234567.89
-  if (!formatted) return 0;
-  const clean = formatted.replace(/\./g, "").replace(",", ".");
-  return parseFloat(clean) || 0;
-}
 // dmy "DD/MM/AAAA" ↔ ISO "AAAA-MM-DD" para input type=date
 function dmyToInputDate(dmy) {
   if (!dmy || !dmy.includes("/")) return "";
@@ -45,9 +35,6 @@ function inputDateToDmy(iso) {
 
 // Tipos que son movimientos financieros (solo afectan CC, sin documento)
 const TIPOS_MOVIMIENTO  = ["PAGO","PAGO_PAUTA","PAGO_ENVIADO"];
-
-const getInvoicePrefix = (activeCompany) =>
-  COMPANIES[activeCompany]?.side === "es" ? "ESP" : "USA";
 
 // ── Modo Manual ─────────────────────────────────────────────────────────────
 // ── Wizard emisión manual ────────────────────────────────────────────────────
@@ -861,30 +848,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
 
 
 // ── Modo CRM ────────────────────────────────────────────────────────────────
-// TC por país: moneda local → USD. Estas son las monedas locales de los países LATAM
-const COUNTRY_CURRENCY = {
-  // Sin valores por defecto a propósito: el TC sale de Maestros o no se factura. Un default
-  // hardcodeado acá es un TC viejo esperando a que alguien facture con él sin darse cuenta.
-  "Paraguay":   { code: "PYG", label: "Guaraní",    sym: "₲",   tcField: "pygUSD" },
-  "Chile":      { code: "CLP", label: "Peso CLP",   sym: "CL$", tcField: "clpUSD" },
-  "Perú":       { code: "PEN", label: "Sol",        sym: "S/",  tcField: "penUSD" },
-  "Panamá":     { code: "USD", label: "USD",        sym: "U$D", tcField: null     },
-  "España":     { code: "EUR", label: "Euro",       sym: "€",   tcField: "eurUSD" },
-  "Portugal":   { code: "EUR", label: "Euro",       sym: "€",   tcField: "eurUSD" },
-  "Uruguay":    { code: "UYU", label: "Peso UYU",   sym: "U$",  tcField: "uyuUSD" },
-  "Argentina":  { code: "ARS", label: "Peso ARS",   sym: "$",   tcField: null     },
-};
-function getCountryCur(country) {
-  return COUNTRY_CURRENCY[country] ?? { code: "USD", label: "USD", sym: "U$D", tcField: null };
-}
-/** Devuelve la tasa local→USD guardada en tiposCambio para el mes dado, o null si falta */
-function getTcRate(country, tiposCambio, year, month) {
-  const cc = getCountryCur(country);
-  if (!cc.tcField) return null; // USD/ARS no necesitan TC
-  const key = `${year}-${String(month + 1).padStart(2, "0")}`;
-  const tc  = tiposCambio[key];
-  return tc?.[cc.tcField] > 0 ? tc[cc.tcField] : null;
-}
+// COUNTRY_CURRENCY / getCountryCur / getTcRate viven en ./facturadorBatch (compartidos con CRM WhatsApp).
 
 function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchisor, tiposCambio = {}, setBatchProg = () => {} }) {
   const { franchises, activeCompany } = useStore();
@@ -894,10 +858,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
   // El fee se factura siempre según el país de la sede (AR → ÑAKO, resto → BIGG FIT LLC
   // o la sociedad de España si es país EUR) — NUNCA según las monedas habilitadas de la
   // sede (esas son para comprobantes manuales tipo Pauta, no para el batch de fee/CRM).
-  const feeCompanyFor = (fr) => {
-    if (fr.country === "Argentina") return "ÑAKO SRL";
-    return getCountryCur(fr.country).code === "EUR" ? "Gestión Deportiva y Wellness SL" : "BIGG FIT LLC";
-  };
+  const feeCompanyFor = (fr) => empresaEmisoraPorPais(fr.country);
   const frForCompany = useMemo(() =>
     activeFr.filter(f => feeCompanyFor(f) === activeCompany),
   [activeFr, activeCompany]);
@@ -1077,30 +1038,25 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
     [rows, filters]
   );
 
+  // Arma los comprobantes de fee y delega emisión + guardado + confirmación de dudosos en emitirLote
+  // (facturadorBatch.js, compartido con el lote de CRM WhatsApp). Los estados del log no cambian.
   const handleConfirm = async (skipFacturante = false) => {
-    const log = [];
-    const dudosos = [];   // escrituras sin confirmación — se resuelven releyendo al final del lote
-    const total = toProcess.length;
-    setBatchProg({ current: 0, total, name: "" });
-    for (let idx = 0; idx < toProcess.length; idx++) {
-      const r  = toProcess[idx];
+    const items = [];
+    for (const r of toProcess) {
       const fr = activeFr.find(f => f.id === r.frId);
       if (!fr) continue;
       // Última línea de defensa antes de emitir ante ARCA: una sede propia / sin fee no se factura
       // por más que haya llegado hasta acá (selección manual, fila vieja en estado, etc.).
       if (fr.paysFee === false || fr.esSedePropia === true) continue;
-      setBatchProg({ current: idx + 1, total, name: r.frName });
       const fee = rowFee(r);
       const dto = dtoDisplay(r);
       const isAR = fr.country === "Argentina";
-      const billingCur = isAR ? "ARS"
-        : getCountryCur(r.country).code === "EUR" ? "EUR"
-        : "USD";
-      const feeNeto  = Math.max(0, Math.round(fee * 100) / 100);
+      const billingCur = monedaFacturacionPorPais(r.country);
+      const feeNeto  = Math.max(0, round2(fee));
       const applyIVA = isAR && !!(COMPANIES[activeCompany]?.applyIVA);
-      const feeIVA   = applyIVA ? Math.round(feeNeto * 0.21 * 100) / 100 : 0;
+      const feeIVA   = applyIVA ? round2(feeNeto * 0.21) : 0;
       const feeTotal = feeNeto + feeIVA;
-      let comp = {
+      const comp = {
         id: uid(), type: makeType("FACTURA","FEE"), date: crmDate,
         amount:     feeTotal,
         amountNeto: applyIVA ? feeNeto : undefined,
@@ -1111,62 +1067,9 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
         currency: billingCur,
         empresa: activeCompany,
       };
-      let facturanteStatus = "omitido";
-      if (!skipFacturante && isAR && activeCompany === "ÑAKO SRL") {
-        try {
-          const result = await emitirComprobante({
-            franchisor: franchisor?.ar ?? franchisor,
-            franchise:  fr,
-            comp:       { ...comp, applyIVA: !!(COMPANIES[activeCompany]?.applyIVA) },
-          });
-          comp = { ...comp, invoice: invoiceFromResult(result), facturanteId: String(result.idComprobante) };
-          facturanteStatus = result.afipNumero ? "ok" : "sin_numero_afip";
-        } catch (err) {
-          facturanteStatus = `ERROR: ${err.message}`;
-          console.error("[CRM Facturante]", fr.name, err.message);
-        }
-      } else if (!skipFacturante && !isAR) {
-        try {
-          const invoicePrefix = getInvoicePrefix(activeCompany);
-          const res = await getNextInvoiceNum(r.frId, invoicePrefix);
-          comp = { ...comp, invoice: res.label };
-          facturanteStatus = "invoice_ok";
-        } catch (e) {
-          facturanteStatus = `sin_invoice: ${e.message}`;
-        }
-      }
-      const saveResult = await onAddComp(r.frId, comp);
-      const entry = { frName: r.frName, fee, country: r.country, dto, facturanteStatus, invoice: comp.invoice ?? null };
-      // Una escritura rechazada NO significa que la fila no se haya guardado: el POST puede llegar
-      // al Apps Script, escribirse, y perderse la respuesta (timeout del proxy). Se anota como
-      // dudosa y se confirma al final releyendo la hoja — dar por fallida una que sí entró es lo
-      // que lleva a cargarla a mano y terminar con la factura duplicada.
-      if (saveResult?.ok === false && comp.facturanteId) {
-        entry.facturanteStatus = "verificando…";
-        dudosos.push({ entry, facturanteId: String(comp.facturanteId) });
-      }
-      log.push(entry);
+      items.push({ fr, comp, meta: { frName: r.frName, fee, country: r.country, dto } });
     }
-
-    if (dudosos.length > 0) {
-      try {
-        const frescos = await fetchComps();
-        const guardados = new Set(
-          Object.values(frescos).flat().map(c => String(c.facturanteId ?? "")).filter(Boolean));
-        for (const { entry, facturanteId } of dudosos) {
-          entry.facturanteStatus = guardados.has(facturanteId)
-            ? `guardado (se perdió la respuesta, ID=${facturanteId})`
-            : `GUARDADO_FALLIDO (AFIP OK, ID=${facturanteId}) — cargar a mano en el sistema`;
-        }
-      } catch {
-        // Sin relectura no se puede afirmar ninguna de las dos cosas: se pide revisar antes de cargar.
-        for (const { entry, facturanteId } of dudosos) {
-          entry.facturanteStatus = `VERIFICAR (AFIP OK, ID=${facturanteId}) — no se pudo releer la hoja; buscá la factura en la sede antes de cargarla a mano`;
-        }
-      }
-    }
-
-    setBatchProg(null);
+    const log = await emitirLote({ items, franchisor, activeCompany, onAddComp, skipFacturante, setBatchProg });
     setProcessed(log);
     setStage("done");
   };
@@ -1377,8 +1280,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
         // Agrupar filteredRows por moneda de facturación final
         const groups = {};
         filteredRows.forEach(r => {
-          const isAR = r.country === "Argentina";
-          const billingCur = isAR ? "ARS" : getCountryCur(r.country).code === "EUR" ? "EUR" : "USD";
+          const billingCur = monedaFacturacionPorPais(r.country);
           if (!groups[billingCur]) groups[billingCur] = [];
           groups[billingCur].push(r);
         });
@@ -1557,7 +1459,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
 
 
 // ── Excel import helpers (nueva lógica: cuenta + signo determina tipo) ──────
-const CUENTAS_COMP    = new Set(["FEE","PAUTA","INTERUSOS","SPONSORS","OTROS"]);
+const CUENTAS_COMP    = new Set(CUENTAS);   // misma lista que el resto de la app (incluye CRM)
 const CUENTAS_MOV     = new Set(["PAGO","PAGO_PAUTA","PAGO_ENVIADO"]);
 const VALID_CURRENCIES = new Set(CURRENCIES); // module-scope — reused across calls
 
@@ -1860,7 +1762,8 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
       ["PAUTA           →  Contribución a fondo de publicidad"],
       ["INTERUSOS       →  Uso de espacios o servicios compartidos"],
       ["SPONSORS        →  Ingresos por sponsoreo"],
-      ["OTROS  →  Otros (cualquier otro concepto de facturación)"],
+      ["CRM             →  Servicios del CRM BIGG Eye (ej. WhatsApp), aparte del fee"],
+      ["OTROS           →  Otros (cualquier otro concepto de facturación)"],
       [""],
       ["CÓMO SE DEDUCE EL TIPO DE DOCUMENTO"],
       ["──────────────────────────────────────────────────────────────────────"],
@@ -1965,7 +1868,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
             <span style={{ color: "var(--text)", fontWeight: 700 }}>Importe positivo</span> → Factura &nbsp;·&nbsp; <span style={{ color: "var(--text)", fontWeight: 700 }}>Importe negativo</span> → Nota de Crédito &nbsp;·&nbsp; <span style={{ color: "var(--blue)", fontWeight: 700 }}>Tipo FC_RECIBIDA</span> → FC Recibida
           </div>
           <div style={{ fontSize: 11, color: "var(--muted)" }}>
-            Cuentas: {["FEE","PAUTA","INTERUSOS","SPONSORS","OTROS"].map((c,i) => <span key={c}><span style={{ fontFamily: "monospace", color: "var(--text)" }}>{CUENTA_LABEL[c] ?? c}</span>{i < 4 ? " · " : ""}</span>)}
+            Cuentas: {CUENTAS.map((c,i) => <span key={c}><span style={{ fontFamily: "monospace", color: "var(--text)" }}>{CUENTA_LABEL[c] ?? c}</span>{i < CUENTAS.length - 1 ? " · " : ""}</span>)}
           </div>
           <div style={{ fontSize: 11, color: "var(--muted)" }}>
             Movimientos: {["PAGO","PAGO_PAUTA","PAGO_ENVIADO"].map((c,i) => <span key={c}><span style={{ fontFamily: "monospace", color: "var(--green)" }}>{c}</span>{i < 2 ? " · " : ""}</span>)}
@@ -2332,6 +2235,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
     [EMIT_MODE.MANUAL]: "Comprobante manual",
     [EMIT_MODE.CRM]:    "Desde CRM — ventas del mes",
     [EMIT_MODE.EXCEL]:  "Importar desde Excel",
+    [EMIT_MODE.CRM_WA]: "CRM WhatsApp — servicio del mes",
   };
 
   return (
@@ -2347,7 +2251,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
           <div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 24 }}>
             Seleccioná cómo querés cargar los datos para este lote.
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, maxWidth: 920 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, maxWidth: 1200 }}>
             {[
               {
                 mode: EMIT_MODE.MANUAL,
@@ -2376,6 +2280,15 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
                 bg: "rgba(16,217,122,.06)",
                 border: "rgba(16,217,122,.2)",
               },
+              {
+                mode: EMIT_MODE.CRM_WA,
+                icon: "💬",
+                title: "CRM WhatsApp",
+                desc: "Facturá a cada sede el servicio mensual de WhatsApp del CRM. Costo en USD → moneda de la sociedad, mismas reglas que el fee.",
+                color: "var(--cyan)",
+                bg: "rgba(34,211,238,.06)",
+                border: "rgba(34,211,238,.2)",
+              },
               // El extracto Galicia se importa SIEMPRE desde Numbers Conciliación (evita cargar
               // el mismo cobro por dos lados). Acceso retirado de Franquicias.
             ].map(opt => (
@@ -2400,7 +2313,14 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
               <button className="ghost" style={{ fontSize: 11 }} onClick={reset}>← Volver</button>
               <div style={{ width: 1, height: 16, background: "var(--border2)" }} />
               <span style={{ fontWeight: 800, fontSize: 15 }}>{modeTitle[mode]}</span>
-              <span style={{ fontSize: 11, color: "var(--muted)" }}>{MONTHS[month]} {year}</span>
+              {/* Los lotes (fee y CRM WhatsApp) eligen su período adentro: mostrar acá el de la barra
+                  confundía (decía "Octubre" mientras el lote facturaba septiembre). */}
+              {mode !== EMIT_MODE.CRM && mode !== EMIT_MODE.CRM_WA && (
+                <span style={{ fontSize: 11, color: "var(--muted)" }}>{MONTHS[month]} {year}</span>
+              )}
+              {mode === EMIT_MODE.CRM_WA && (
+                <span style={{ fontSize: 11, color: "var(--muted)" }}>{subtituloCrmWhatsapp(activeCompany)}</span>
+              )}
             </div>
           )}
           {mode === EMIT_MODE.MANUAL && (
@@ -2413,6 +2333,10 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
           )}
           {mode === EMIT_MODE.EXCEL && (
             <ModoExcel month={month} year={year} onAddComp={addCompWithEmpresa} onDone={reset} franchisor={franchisor} />
+          )}
+          {mode === EMIT_MODE.CRM_WA && (
+            /* key={activeCompany}: cambiar de sociedad remonta el lote con las sedes y la moneda de la nueva */
+            <ModoCrmWhatsapp key={activeCompany} month={month} year={year} onAddComp={addCompWithEmpresa} onDone={reset} franchisor={franchisor} tiposCambio={tiposCambio} setBatchProg={setBatchProg} />
           )}
         </div>
       )}

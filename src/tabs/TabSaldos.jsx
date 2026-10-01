@@ -56,13 +56,14 @@ function useFrData(franchises, month, year, filterCurrency = null) {
     const interusos     = netoCuenta("INTERUSOS");
     const pauta         = netoCuenta("PAUTA");
     const sponsors      = netoCuenta("SPONSORS");
+    const crm           = netoCuenta("CRM");
     const otrosIngresos = netoCuenta("OTROS");
     const pagos         = fc.filter(c => c.type === "PAGO").reduce((a, c) => a + c.amount, 0);
     const pagosACuenta  = fc.filter(c => c.type === "PAGO_PAUTA").reduce((a, c) => a + c.amount, 0);
     const enviados      = fc.filter(c => c.type === "PAGO_ENVIADO").reduce((a, c) => a + c.amount, 0);
     // Pauta pendiente: cobros a cuenta acumulados históricamente sin factura emitida
     const pautaPendiente = computePautaPendiente(fr.id, comps, year, month, null, filterCurrency, activeCompany);
-    return { fr, sp, sa, fee, interusos, pauta, sponsors, otrosIngresos, pagos, pagosACuenta, enviados, pautaPendiente };
+    return { fr, sp, sa, fee, interusos, pauta, sponsors, crm, otrosIngresos, pagos, pagosACuenta, enviados, pautaPendiente };
   }), [franchises, comps, saldoInicial, month, year, filterCurrency, activeCompany]);
 }
 
