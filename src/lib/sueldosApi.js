@@ -792,7 +792,15 @@ export async function fetchNovedades(mes, anio) {
 
 export async function appendNovedad(data) {
   const id = newId("NOV");
-  await post({ action: "add", sheet: "su_novedades", row: { id, ...data, created_at: new Date().toISOString() } });
+  // Sin reintento ciego: GAS a veces responde HTML (500/timeout) DESPUÉS de haber escrito la fila,
+  // y reintentar el mismo "add" la duplicaba (misma id ×3). Ante el error, verificar si llegó.
+  try {
+    await post({ action: "add", sheet: "su_novedades", row: { id, ...data, created_at: new Date().toISOString() } }, BASE, { retries: 0 });
+  } catch (e) {
+    forzarRefresco();   // la verificación tiene que leer del origen, no del borde
+    const rows = await get("su_novedades", { mes: data.mes, anio: data.anio }).catch(() => []);
+    if (!(Array.isArray(rows) && rows.some(r => r.id === id))) throw e;
+  }
   return id;
 }
 

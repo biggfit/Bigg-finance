@@ -130,7 +130,10 @@ export default function PantallaNovedades({ pais = "" }) {
         fetchCuentasContablesNumbers(),
       ]);
       // Solo novedades de HQ (sin sede). Las de Sedes (con sede_id) viven en su propia pantalla.
-      const extras = novs.filter(n => n.tipo === "extra" && !n.sede_id);
+      // Dedup por id: un "add" reintentado dejaba la misma fila 2-3 veces en la hoja → claves React
+      // repetidas (filas fantasma que "saltan" de solapa) y totales inflados.
+      const vistos = new Set();
+      const extras = novs.filter(n => n.tipo === "extra" && !n.sede_id && !vistos.has(n.id) && vistos.add(n.id));
       setRows(extras.map(n => ({ ...novToRow(n), concepto: conceptoDeNovedad(n) })));
       setLoaded(extras);
       // Monto del mes anterior por legajo+cuenta → alimenta la columna comparativa.
@@ -243,7 +246,14 @@ export default function PantallaNovedades({ pais = "" }) {
           cuenta_contable_nombre: cc.cuenta_contable_nombre,
         };
         if (!r.id) {
-          ops.push(() => appendNovedad(payload));
+          ops.push(async () => {
+            const id = await appendNovedad(payload);
+            // Fijar el id YA: si una op posterior falla y se reintenta "Guardar", esta fila no se
+            // vuelve a dar de alta (antes se duplicaba). El tilde pasa del id temporal al real.
+            setRows(prev => prev.map(x => x._id === r._id ? { ...x, id } : x));
+            setLoaded(prev => [...prev, { id, ...payload }]);
+            if (checked.has(r._id)) { setManyChecked([r._id], false); setManyChecked([id], true); }
+          });
         } else {
           const orig = loadedById.get(r.id);
           if (!orig || rowSig(r) !== rowSig(novToRow(orig))) ops.push(() => updateNovedad(r.id, payload));
