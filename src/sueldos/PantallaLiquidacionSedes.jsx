@@ -2218,6 +2218,21 @@ function exportarHaberes(empls, mes, anio) {
   descargarExcelGalicia(filas, `Haberes_Sedes_${String(mes).padStart(2,"0")}_${anio}.xlsx`);
 }
 
+// Archivo de control aparte (no se sube al banco): mismas filas y orden que exportarHaberes,
+// con el nombre de cada CBU. El de Galicia queda intacto para que el banco lo tome.
+function exportarControlHaberes(empls, mes, anio) {
+  const filas = empls
+    .filter(e => (e.monto_haberes || 0) > 0 && e.cbu)
+    .map(e => [e.legajo_nombre || "", (e.sedes || []).join(", "), e.sociedad_nombre || "", e.cbu, e.monto_haberes]);
+  if (!filas.length) { alert("No hay empleados con Haberes y CBU cargado."); return; }
+  const total = filas.reduce((a, f) => a + (Number(f[4]) || 0), 0);
+  const ws = XLSX.utils.aoa_to_sheet([["Nombre", "Sede", "Sociedad", "CBU", "Monto"], ...filas, [], ["TOTAL", "", "", "", total]]);
+  ws["!cols"] = [{ wch: 30 }, { wch: 22 }, { wch: 22 }, { wch: 28 }, { wch: 14 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Control");
+  XLSX.writeFile(wb, `Control_Haberes_Sedes_${String(mes).padStart(2,"0")}_${anio}.xlsx`);
+}
+
 // Efectivo + Monotributo (plata en mano / monotributistas): una fila por empleado × forma.
 function exportarEfectivoSedes(empls, mes, anio) {
   const ESTADO_LBL = { none: "PENDIENTE", partial: "PARCIAL", full: "PAGADO" };
@@ -2526,6 +2541,9 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, on
       <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "16px 0", borderTop: `1px solid ${T.border}`, marginTop: 8 }}>
         <button style={BTN_EXPORT("#16a34a")} onClick={() => exportarHaberes(empls, mes, anio)}>
           📥 Excel Haberes (banco)
+        </button>
+        <button style={BTN_EXPORT("#475569")} onClick={() => exportarControlHaberes(empls, mes, anio)}>
+          📋 Control Haberes
         </button>
         <button style={BTN_EXPORT("#ca8a04")} onClick={() => exportarEfectivoSedes(empls, mes, anio)}>
           📥 Excel Monotributo + Efectivo
