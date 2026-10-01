@@ -1146,7 +1146,14 @@ export const TC_FIELD = {
 };
 
 // Campos del maestro, en el orden en que se muestran/guardan.
-export const TC_FIELDS = Object.values(TC_FIELD).filter(Boolean);
+// Campos que SON una moneda del grupo: los usa tcRate para convertir.
+export const TC_CURRENCY_FIELDS = Object.values(TC_FIELD).filter(Boolean);
+// Tasas de referencia que NO son una moneda nueva: el oficial es otra cotización del mismo
+// par ARS/USD. Se guarda al cierre para tener contra qué comparar el MEP (al 30/09/2026:
+// MEP 1.557 vs oficial 1.545), pero no entra en ninguna conversión — tcRate sigue usando
+// arsUSD. Si algún día hay que convertir al oficial, va a ser una decisión explícita.
+export const TC_REFERENCIA_FIELDS = ["arsUSDOficial"];
+export const TC_FIELDS = [...TC_CURRENCY_FIELDS, ...TC_REFERENCIA_FIELDS];
 
 // El yearMonth vive como TEXTO en la hoja ("2026-07"). Si alguien pisa el formato de la
 // columna, Sheets lo interpreta como fecha y el handler genérico lo devuelve "2026-07-01"
@@ -1198,6 +1205,19 @@ export async function saveTipoCambio(yearMonth, tc = {}) {
   // stale, un mes que ya existe se agregaría de nuevo y quedarían dos filas del mismo mes.
   const rows = await _fetchRowsRaw("nb_tipos_cambio");
   const existente = rows.find(r => normYearMonth(r.yearMonth) === ym);
+
+  // El GAS escribe recorriendo los headers de la HOJA: un campo cuya columna no existe se
+  // descarta sin avisar y el valor se pierde en silencio. Si estamos mandando un valor para
+  // una columna que no está, cortamos con el nombre del header que falta.
+  const sinColumna = rows.length
+    ? Object.keys(patch).filter(f => patch[f] !== "" && !(f in rows[0]))
+    : [];
+  if (sinColumna.length) {
+    throw new Error(
+      `nb_tipos_cambio no tiene la(s) columna(s): ${sinColumna.join(", ")}. ` +
+      `Agregá ese header en la fila 1 de la hoja y volvé a guardar.`
+    );
+  }
 
   if (existente) {
     // El GAS matchea la fila con String(celda) === String(id). Si la celda dejó de ser texto,

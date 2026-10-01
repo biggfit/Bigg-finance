@@ -7,14 +7,15 @@
 // Convención de valor: unidades de moneda local por 1 USD (arsUSD 1560 = 1560 ARS/U$D).
 import { useState, useEffect, useMemo, useRef } from "react";
 import { T, Btn, MoneyField } from "./theme";
-import { fetchTiposCambio, saveTipoCambio, TC_FIELDS } from "../lib/numbersApi";
+import { fetchTiposCambio, saveTipoCambio, TC_FIELDS, TC_CURRENCY_FIELDS } from "../lib/numbersApi";
 
 const MESES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
 
 // Grilla de carga. El orden de acá es el que ve el usuario; el de la hoja no importa
 // (todo se lee/escribe por nombre de header).
 const CAMPOS = [
-  { key:"arsUSD", label:"ARS / U$D (MEP)", placeholder:"ej. 1560" },
+  { key:"arsUSD",        label:"ARS / U$D (MEP)",     placeholder:"ej. 1560" },
+  { key:"arsUSDOficial", label:"ARS / U$D (oficial)", placeholder:"ej. 1545" },
   { key:"eurUSD", label:"€ / U$D",   placeholder:"ej. 1.15" },
   { key:"copUSD", label:"COP / U$D", placeholder:"ej. 3450" },
   { key:"uyuUSD", label:"UYU / U$D", placeholder:"ej. 40"   },
@@ -24,7 +25,9 @@ const CAMPOS = [
 ];
 
 const ymDe    = (year, monthIdx) => `${year}-${String(monthIdx + 1).padStart(2, "0")}`;
-const cargados = (tc) => TC_FIELDS.filter(f => Number(tc?.[f]) > 0).length;
+// El contador del header cuenta MONEDAS: el oficial es una referencia del mismo par, no una
+// moneda más, así que no infla el "7/7" ni marca el mes como incompleto si falta.
+const cargados = (tc) => TC_CURRENCY_FIELDS.filter(f => Number(tc?.[f]) > 0).length;
 
 export default function TabTiposCambio() {
   const [tiposCambio, setTiposCambio] = useState({});
@@ -118,9 +121,11 @@ export default function TabTiposCambio() {
         ? hoy.toISOString().slice(0, 10)
         : new Date(year, month + 1, 0).toISOString().slice(0, 10);
 
-      const [mepRes, eurRes, clpRes, dolarapiRes, curApiRes] = await Promise.allSettled([
+      const [mepRes, oficialRes, eurRes, clpRes, dolarapiRes, curApiRes] = await Promise.allSettled([
         // ARS MEP (dólar bolsa) — historial completo, se filtra por mes
         fetch("https://api.argentinadatos.com/v1/cotizaciones/dolares/bolsa").then(r => r.json()),
+        // ARS oficial — misma fuente y misma convención, para tener la referencia del cierre
+        fetch("https://api.argentinadatos.com/v1/cotizaciones/dolares/oficial").then(r => r.json()),
         // EUR/USD — histórico diario (BCE vía frankfurter)
         esFuturo ? Promise.resolve(null)
                  : fetch(`https://api.frankfurter.dev/v1/${startDate}..${endDate}?from=USD&to=EUR`).then(r => r.json()),
@@ -153,6 +158,14 @@ export default function TabTiposCambio() {
         const b = await fetch("https://dolarapi.com/v1/dolares/bolsa").then(r => r.json()).catch(() => null);
         if (b?.venta) { arsUSD = Math.round(b.venta); arsLabel = "MEP cotización de hoy"; }
       }
+
+      // ARS oficial (mismo criterio que el MEP: último día hábil del mes, punta vendedora)
+      let arsUSDOficial, oficialLabel = "sin dato";
+      if (oficialRes.status === "fulfilled" && Array.isArray(oficialRes.value)) {
+        const rec = ultimoDelMes(oficialRes.value.filter(r => r.venta > 0));
+        if (rec) { arsUSDOficial = Math.round(rec.venta); oficialLabel = `ult. día hábil (${rec.fecha.slice(0, 10)})`; }
+      }
+      if (!arsUSDOficial && usdOficial) { arsUSDOficial = Math.round(usdOficial); oficialLabel = "cotización de hoy"; }
 
       // EUR/USD (frankfurter da EUR por USD → invertir)
       let eurUSD, eurLabel = "sin dato";
@@ -189,7 +202,7 @@ export default function TabTiposCambio() {
       let penUSD, penLabel = "sin dato";
       if (curData?.pen > 0) { penUSD = curData.pen.toFixed(4); penLabel = curLabel; }
 
-      const traidas = { arsUSD, eurUSD, copUSD, uyuUSD, pygUSD, clpUSD, penUSD };
+      const traidas = { arsUSD, arsUSDOficial, eurUSD, copUSD, uyuUSD, pygUSD, clpUSD, penUSD };
       const conDato = Object.entries(traidas).filter(([, v]) => parseFloat(v) > 0);
       if (!conDato.length) { avisar("Ninguna API devolvió datos para ese mes", "err"); return; }
 
@@ -201,7 +214,7 @@ export default function TabTiposCambio() {
 
       const faltan = TC_FIELDS.filter(f => !(parseFloat(traidas[f]) > 0));
       avisar(
-        `✓ ${MESES[month]} ${year} — ARS ${arsLabel} · EUR ${eurLabel} · COP ${copLabel} · UYU ${uyuLabel} · ` +
+        `✓ ${MESES[month]} ${year} — ARS MEP ${arsLabel} · ARS oficial ${oficialLabel} · EUR ${eurLabel} · COP ${copLabel} · UYU ${uyuLabel} · ` +
         `PYG ${pygLabel} · CLP ${clpLabel} · PEN ${penLabel}` +
         (faltan.length ? ` — sin dato: ${faltan.join(", ")} (quedaron como estaban)` : ""),
         faltan.length ? "warn" : "ok"
