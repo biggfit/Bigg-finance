@@ -1427,13 +1427,13 @@ function lineasGalicia(liqs, tipo) {
       if (l.tipo !== tipo) continue;
       const cbu = (l.cbu || (tipo === "haberes" ? liq.cbu : "")).trim();
       if (!cbu || !(Number(l.importe) > 0)) continue;
-      filas.push({ cbu, importe: Number(l.importe), nombre: liq.legajo_nombre, nota: l.nota || "" });
+      filas.push({ cbu, importe: Number(l.importe), nombre: liq.legajo_nombre, sede: liq.sede_nombre || "", sociedad: liq.sociedad_nombre || "", nota: l.nota || "" });
     }
     for (const n of liq.novedades || []) {
       if (n.forma_pago !== tipo) continue;
       const cbu = (liq.cbu || "").trim();
       if (!cbu || !(Number(n.monto) > 0)) continue;
-      filas.push({ cbu, importe: Number(n.monto), nombre: liq.legajo_nombre, nota: n.cuenta_contable_nombre || n.descripcion || "" });
+      filas.push({ cbu, importe: Number(n.monto), nombre: liq.legajo_nombre, sede: liq.sede_nombre || "", sociedad: liq.sociedad_nombre || "", nota: n.cuenta_contable_nombre || n.descripcion || "" });
     }
   }
   return filas;
@@ -1445,6 +1445,19 @@ function exportarHaberes(liqs, mes, anio) {
     .map(f => [f.cbu, f.importe, "acreditamiento de haberes", desc, "", ""]);
   if (!filas.length) { alert("No hay líneas de Haberes con CBU cargado."); return; }
   descargarExcelGalicia(filas, `Haberes_HQ_${String(mes).padStart(2,"0")}_${anio}.xlsx`);
+}
+
+// Archivo de control aparte (no se sube al banco): mismas filas y orden que exportarHaberes,
+// con el nombre de cada CBU. El de Galicia queda intacto para que el banco lo tome.
+function exportarControlHaberes(liqs, mes, anio) {
+  const filas = lineasGalicia(liqs, "haberes").map(f => [f.nombre || "", f.sede, f.sociedad, f.cbu, f.importe]);
+  if (!filas.length) { alert("No hay líneas de Haberes con CBU cargado."); return; }
+  const total = filas.reduce((a, f) => a + (Number(f[4]) || 0), 0);
+  descargarExcelHoja({
+    headers: ["Nombre", "Sede", "Sociedad", "CBU", "Monto"], anchos: [30, 22, 22, 28, 14], hoja: "Control",
+    filas: [...filas, [], ["TOTAL", "", "", "", total]],
+    nombreArchivo: `Control_Haberes_HQ_${String(mes).padStart(2,"0")}_${anio}.xlsx`,
+  });
 }
 
 // ── Export detallado (Depósito / Trf. financiera) ────────────────────────────
@@ -1908,6 +1921,9 @@ function PasoPagos({ mes, anio, cargandoPagos = false, liqStaff, liqOwners, liqE
       <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "16px 0", borderTop: `1px solid ${T.border}`, marginTop: 8 }}>
         <button style={BTN_EXPORT("#16a34a")} onClick={() => exportarHaberes(todos, mes, anio)}>
           📥 Excel Haberes (banco)
+        </button>
+        <button style={BTN_EXPORT("#475569")} onClick={() => exportarControlHaberes(todos, mes, anio)}>
+          📋 Control Haberes
         </button>
         <button style={BTN_EXPORT("#0369a1")} onClick={() => exportarDeposito(todos, mes, anio)}>
           📥 Excel Depósito
