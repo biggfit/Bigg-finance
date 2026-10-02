@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
-  fetchNovedades, appendNovedad, updateNovedad, deleteNovedad,
+  fetchNovedades, appendNovedadesBatch, updateNovedad, deleteNovedad,
   fetchLegajos, fetchCuentasContablesNumbers,
   FP_TIPOS, FP_TIPO_LABEL, ROLES_HQ,
   fmtMiles, limpiarMonto,
@@ -130,10 +130,8 @@ export default function PantallaNovedades({ pais = "" }) {
         fetchCuentasContablesNumbers(),
       ]);
       // Solo novedades de HQ (sin sede). Las de Sedes (con sede_id) viven en su propia pantalla.
-      // Dedup por id: un "add" reintentado dejaba la misma fila 2-3 veces en la hoja → claves React
-      // repetidas (filas fantasma que "saltan" de solapa) y totales inflados.
-      const vistos = new Set();
-      const extras = novs.filter(n => n.tipo === "extra" && !n.sede_id && !vistos.has(n.id) && vistos.add(n.id));
+      // (El dedup por id lo hace fetchNovedades, para que todas las pantallas vean lo mismo.)
+      const extras = novs.filter(n => n.tipo === "extra" && !n.sede_id);
       setRows(extras.map(n => ({ ...novToRow(n), concepto: conceptoDeNovedad(n) })));
       setLoaded(extras);
       // Monto del mes anterior por legajo+cuenta → alimenta la columna comparativa.
@@ -231,7 +229,8 @@ export default function PantallaNovedades({ pais = "" }) {
       const validas = rows.filter(r => r.legajo_id);   // sin legajo no se persiste
       const loadedById = new Map(loaded.map(n => [n.id, n]));
 
-      // Altas + ediciones
+      // Altas: todas en UN lote (una request en vez de N). Ediciones y bajas: solo las que cambiaron.
+      const nuevas = [];
       const ops = [];
       for (const r of validas) {
         const cc = resolveCuenta(r);
@@ -246,14 +245,7 @@ export default function PantallaNovedades({ pais = "" }) {
           cuenta_contable_nombre: cc.cuenta_contable_nombre,
         };
         if (!r.id) {
-          ops.push(async () => {
-            const id = await appendNovedad(payload);
-            // Fijar el id YA: si una op posterior falla y se reintenta "Guardar", esta fila no se
-            // vuelve a dar de alta (antes se duplicaba). El tilde pasa del id temporal al real.
-            setRows(prev => prev.map(x => x._id === r._id ? { ...x, id } : x));
-            setLoaded(prev => [...prev, { id, ...payload }]);
-            if (checked.has(r._id)) { setManyChecked([r._id], false); setManyChecked([id], true); }
-          });
+          nuevas.push({ tmpId: r._id, payload });
         } else {
           const orig = loadedById.get(r.id);
           if (!orig || rowSig(r) !== rowSig(novToRow(orig))) ops.push(() => updateNovedad(r.id, payload));
@@ -268,6 +260,19 @@ export default function PantallaNovedades({ pais = "" }) {
         setLoaded(prev => prev.filter(x => x.id !== n.id));
       });
 
+      if (nuevas.length) {
+        const ids = await appendNovedadesBatch(nuevas.map(n => n.payload));
+        // Fijar los ids YA: si una op posterior falla y se reintenta "Guardar", estas filas no se
+        // vuelven a dar de alta (antes se duplicaban). El tilde pasa del id temporal al real.
+        const idPorTmp = new Map(nuevas.map((n, i) => [n.tmpId, ids[i]]));
+        setRows(prev => prev.map(x => idPorTmp.has(x._id) ? { ...x, id: idPorTmp.get(x._id) } : x));
+        setLoaded(prev => [...prev, ...nuevas.map((n, i) => ({ id: ids[i], ...n.payload }))]);
+        const tildadas = nuevas.filter(n => checked.has(n.tmpId));
+        if (tildadas.length) {
+          setManyChecked(tildadas.map(n => n.tmpId), false);
+          setManyChecked(tildadas.map(n => idPorTmp.get(n.tmpId)), true);
+        }
+      }
       // Secuencial: el GAS pierde escrituras concurrentes (appendRow se pisa → se "borraba" una fila).
       for (const op of ops) await op();
       await load(mes, anio, pais);

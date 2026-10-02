@@ -53,6 +53,17 @@ async function get(sheet, params = {}, base = BASE, { retries = 3, retryDelayMs 
   return p;
 }
 
+// Lee una hoja completa SIN la caché local ni la de borde (para verificar, en un reintento de
+// escritura, si la escritura anterior ya había entrado).
+async function readFresh(sheet, base = BASE) {
+  for (const k of _cache.keys()) if (k.includes(`resource=${sheet}`)) _cache.delete(k);
+  forzarRefresco();
+  const rows = await get(sheet, {}, base, { retries: 1, retryDelayMs: 1200 });
+  return Array.isArray(rows) ? rows : [];
+}
+
+const esperar = (ms) => new Promise(r => setTimeout(r, ms));
+
 async function post(payload, base = BASE, { retries = 2, retryDelayMs = 1200 } = {}) {
   const sheet = payload.sheet ?? payload.resource ?? "";
   for (const k of _cache.keys()) {
@@ -62,28 +73,58 @@ async function post(payload, base = BASE, { retries = 2, retryDelayMs = 1200 } =
   // Sello de autoría: firma cada asiento nuevo con el usuario logueado (ver auth.js).
   stamp(payload);
 
-  for (let attempt = 0; ; attempt++) {
-    const res  = await fetch(base, {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ ...payload, token: TOKEN }),
-    });
-    const text = await res.text();
-    let data;
-    try { data = JSON.parse(text); }
-    catch {
-      // GAS returned HTML (500 / quota error) — retry if attempts remain
-      if (attempt < retries) {
-        await new Promise(r => setTimeout(r, retryDelayMs * (attempt + 1)));
-        continue;
+  // Reintento IDEMPOTENTE (mismo criterio que numbersApi). El GAS a veces ESCRIBE y responde HTML
+  // (500/timeout); reintentar a ciegas duplicaba la fila (Ignacio ×3 en Monotributo, 1/10/2026).
+  // Antes de re-mandar un add/add_batch se lee la hoja: si los ids ya están, la escritura entró y se
+  // da por hecha. Un rechazo lógico del backend (data.error) no se reintenta: es definitivo. Excepción:
+  // un "del" cuya fila ya no existe se toma como hecho (el borrado anterior entró y la respuesta se perdió).
+  const esAdd  = payload.action === "add" || payload.action === "add_batch";
+  const addIds = payload.action === "add"       ? [payload.row?.id].filter(Boolean)
+               : payload.action === "add_batch" ? (payload.rows || []).map(r => r?.id).filter(Boolean)
+               : [];
+  const totalRows = payload.action === "add" ? 1 : (payload.rows || []).length;
+
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (attempt > 0) {
+      await esperar(retryDelayMs * attempt);
+      if (esAdd) {
+        // Solo se puede verificar con id explícito en TODAS las filas; si no, no se arriesga un duplicado.
+        if (!addIds.length || addIds.length !== totalRows) throw lastErr;
+        let existentes;
+        try { existentes = new Set((await readFresh(sheet, base)).map(r => String(r.id))); }
+        catch { throw lastErr; }   // ante la duda, no arriesgar un duplicado
+        const faltan = addIds.filter(id => !existentes.has(String(id)));
+        if (!faltan.length) { forzarRefresco(); return { ok: true, deduped: true }; }
+        // Lote parcialmente escrito: no se puede re-mandar solo lo que falta sin duplicar lo que entró.
+        if (faltan.length !== addIds.length) throw lastErr;
       }
-      throw new Error(`Error del servidor (${res.status}): ${text.slice(0, 120)}`);
     }
-    if (data?.error) throw new Error(data.error);
-    // Ventana de refresco: tras escribir, este navegador salta el borde unos segundos → ve su cambio.
-    forzarRefresco();
-    return data;
+    try {
+      const res  = await fetch(base, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ ...payload, token: TOKEN }),
+      });
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); }
+      catch { throw new Error(`Error del servidor (${res.status}): ${text.slice(0, 120)}`); }   // HTML → transporte
+      if (data?.error) {
+        if (payload.action === "del" && /no encontrad/i.test(data.error)) { forzarRefresco(); return { ok: true, deduped: true }; }
+        const e = new Error(data.error); e._serverReject = true; throw e;
+      }
+      // Ventana de refresco: tras escribir, este navegador salta el borde unos segundos → ve su cambio.
+      forzarRefresco();
+      return data;
+    } catch (e) {
+      lastErr = e;
+      if (e._serverReject) throw e;   // rechazo del backend → reintentar no cambia nada
+    }
   }
+  // Se agotaron los reintentos sin saber si entró: lo próximo que se lea sale del origen.
+  forzarRefresco();
+  throw lastErr;
 }
 
 function newId(prefix = "SU") {
@@ -532,7 +573,10 @@ export async function saveLiquidacionesLinesBatch(entries = []) {
   if (!rows.length) return { ok: true, n: 0 };
   try {
     await post({ action: "add_batch", sheet: "su_liquidaciones", rows });
-  } catch {
+  } catch (e) {
+    // Solo si el GAS RECHAZÓ la acción se cae a fila por fila. Un fallo de transporte NO: post ya
+    // verificó por id y no sabemos qué entró; re-mandar fila por fila duplicaría el cierre.
+    if (!e?._serverReject) throw e;
     for (const row of rows) await post({ action: "add", sheet: "su_liquidaciones", row });
   }
   return { ok: true, n: rows.length };
@@ -772,7 +816,10 @@ export function adelantoSueldosPorLegajo(liqsCerradas, pagos, opts = {}) {
 
 export async function fetchNovedades(mes, anio) {
   const rows = await get("su_novedades", { mes, anio });
-  return (Array.isArray(rows) ? rows : []).map(r => ({
+  // Dedup por id acá, para que TODAS las pantallas (Novedades, Liquidación HQ/Sedes, Resumen) vean lo
+  // mismo si alguna vez queda una fila repetida en la hoja (reintento viejo).
+  const vistos = new Set();
+  return (Array.isArray(rows) ? rows : []).filter(r => !r.id || (!vistos.has(r.id) && vistos.add(r.id))).map(r => ({
     id:                      r.id,
     mes:                     r.mes,
     anio:                    r.anio,
@@ -790,33 +837,38 @@ export async function fetchNovedades(mes, anio) {
   }));
 }
 
+// El reintento de post() ya es idempotente (verifica por id antes de re-mandar) → sin lógica extra acá.
 export async function appendNovedad(data) {
   const id = newId("NOV");
-  // Sin reintento ciego: GAS a veces responde HTML (500/timeout) DESPUÉS de haber escrito la fila,
-  // y reintentar el mismo "add" la duplicaba (misma id ×3). Ante el error, verificar si llegó.
-  try {
-    await post({ action: "add", sheet: "su_novedades", row: { id, ...data, created_at: new Date().toISOString() } }, BASE, { retries: 0 });
-  } catch (e) {
-    forzarRefresco();   // la verificación tiene que leer del origen, no del borde
-    const rows = await get("su_novedades", { mes: data.mes, anio: data.anio }).catch(() => []);
-    if (!(Array.isArray(rows) && rows.some(r => r.id === id))) throw e;
-  }
+  await post({ action: "add", sheet: "su_novedades", row: { id, ...data, created_at: new Date().toISOString() } });
   return id;
+}
+
+// Da de alta VARIAS novedades en UN solo add_batch: una request en vez de N (23 altas pasaban de más
+// de un minuto a ~4 s) y una sola oportunidad de que el GAS responda mal. Devuelve los ids en el mismo
+// orden. Si el GAS RECHAZA la acción cae a fila por fila; un fallo de transporte no (post ya verificó
+// por id y no sabemos qué entró).
+export async function appendNovedadesBatch(datas = []) {
+  if (!datas.length) return [];
+  const created_at = new Date().toISOString();
+  const rows = datas.map(d => ({ id: newId("NOV"), ...d, created_at }));
+  try {
+    await post({ action: "add_batch", sheet: "su_novedades", rows });
+  } catch (e) {
+    if (!e?._serverReject) throw e;
+    for (const row of rows) await post({ action: "add", sheet: "su_novedades", row });
+  }
+  return rows.map(r => r.id);
 }
 
 export async function updateNovedad(id, data) {
   await post({ action: "upd", sheet: "su_novedades", id, row: data });
 }
 
+// Idempotente vía post(): "no encontrado" cuenta como borrada (el borrado anterior entró y la
+// respuesta se perdió). Antes ese error cortaba el guardado a mitad de camino.
 export async function deleteNovedad(id) {
-  // Idempotente: si GAS borró pero respondió HTML, el reintento de post() da "Registro no
-  // encontrado" — la fila ya no está, que es justo lo que se pidió. Antes cortaba el guardado
-  // a mitad de camino y el resto de las bajas no se hacía.
-  try {
-    await post({ action: "del", sheet: "su_novedades", id });
-  } catch (e) {
-    if (!/no encontrado/i.test(e?.message || "")) throw e;
-  }
+  await post({ action: "del", sheet: "su_novedades", id });
 }
 
 // ── PAGOS ─────────────────────────────────────────────────────────────────────
@@ -1192,20 +1244,58 @@ export async function fetchAllConceptos(pais) {
   return [...new Set(filtered.map(r => r.concepto).filter(Boolean))].sort();
 }
 
-export async function saveCategorias(mes, anio, pais, rows) {
-  const existing = await fetchCategorias(mes, anio, pais);
+// ── Guardado por DIFERENCIA (Categorías y Objetivos) ──────────────────────────
+// Antes: borrar TODO el mes fila por fila y volver a dar de alta TODO fila por fila → 2N requests por
+// un solo monto cambiado, y si cortaba en el medio quedaban las tarifas BORRADAS y las nuevas sin
+// escribir. Ahora la fila de un concepto/sede es siempre la misma (id estable país+año+mes+clave): se
+// edita solo si cambió, se agrega solo la nueva (todas en UN add_batch) y se borra solo la que ya no
+// está. Las filas viejas con id de timestamp se matchean por clave y conservan su id.
+const claveNorm = (s) => String(s ?? "").trim().toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
+const slugId    = (s) => claveNorm(s).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+const pad2      = (n) => String(n).padStart(2, "0");
+
+// existing: filas de la hoja del período; deseadas: [{ clave, id, row (para add), patch (para upd),
+// cambio(prev) → bool }]. Ejecuta: upd de las que cambiaron, del de las que sobran, add_batch de las nuevas.
+async function guardarPorDiferencia(sheet, existing, deseadas, claveDe) {
+  const porClave = new Map();
+  const sobran = [];
   for (const r of existing) {
-    await post({ action: "del", sheet: "su_categorias", id: r.id });
+    const k = claveDe(r);
+    if (porClave.has(k)) sobran.push(r); else porClave.set(k, r);   // duplicado viejo → se borra
   }
-  for (const r of rows) {
-    if (!r.concepto.trim()) continue;
-    await post({ action: "add", sheet: "su_categorias", row: {
-      id: newId("CAT"), mes, anio, pais,
-      concepto: r.concepto.trim(),
-      monto: Number(r.monto) || 0,
-      created_at: new Date().toISOString(),
-    }});
+  const altas = [], vistas = new Set();
+  for (const d of deseadas) {
+    if (!d.clave || vistas.has(d.clave)) continue;
+    vistas.add(d.clave);
+    const prev = porClave.get(d.clave);
+    if (!prev) altas.push(d.row);
+    else if (d.cambio(prev)) await post({ action: "upd", sheet, id: prev.id, row: d.patch });
   }
+  for (const [k, r] of porClave) if (!vistas.has(k)) sobran.push(r);
+  for (const r of sobran) await post({ action: "del", sheet, id: r.id });
+  if (!altas.length) return;
+  try {
+    await post({ action: "add_batch", sheet, rows: altas });
+  } catch (e) {
+    if (!e?._serverReject) throw e;   // transporte: post ya verificó por id, no re-mandar fila por fila
+    for (const row of altas) await post({ action: "add", sheet, row });
+  }
+}
+
+export async function saveCategorias(mes, anio, pais, rows) {
+  const existing   = await fetchCategorias(mes, anio, pais);
+  const created_at = new Date().toISOString();
+  const deseadas = rows.map(r => {
+    const concepto = String(r.concepto ?? "").trim();
+    const monto    = Number(r.monto) || 0;
+    return {
+      clave:  claveNorm(concepto),
+      row:    { id: `CAT-${pais}-${anio}-${pad2(mes)}-${slugId(concepto)}`, mes, anio, pais, concepto, monto, created_at },
+      patch:  { monto },
+      cambio: (prev) => Number(prev.monto) !== monto,
+    };
+  });
+  await guardarPorDiferencia("su_categorias", existing, deseadas, r => claveNorm(r.concepto));
 }
 
 // ── Objetivos ─────────────────────────────────────────────────────────────────
@@ -1223,20 +1313,20 @@ export async function fetchObjetivos(mes, anio, pais) {
 }
 
 export async function saveObjetivos(mes, anio, pais, rows) {
-  const existing = await fetchObjetivos(mes, anio, pais);
-  for (const r of existing) {
-    await post({ action: "del", sheet: "su_objetivos", id: r.id });
-  }
-  for (const r of rows) {
-    if (!r.sede_id) continue;
-    await post({ action: "add", sheet: "su_objetivos", row: {
-      id: newId("OBJ"), mes, anio, pais,
-      sede_id:     r.sede_id,
-      sede_nombre: r.sede_nombre,
-      porcentaje:  Number(r.porcentaje) || 0,
-      created_at:  new Date().toISOString(),
-    }});
-  }
+  const existing   = await fetchObjetivos(mes, anio, pais);
+  const created_at = new Date().toISOString();
+  const deseadas = rows.map(r => {
+    const sede_id     = String(r.sede_id ?? "").trim();
+    const sede_nombre = r.sede_nombre ?? "";
+    const porcentaje  = Number(r.porcentaje) || 0;
+    return {
+      clave:  claveNorm(sede_id),
+      row:    { id: `OBJ-${pais}-${anio}-${pad2(mes)}-${slugId(sede_id)}`, mes, anio, pais, sede_id, sede_nombre, porcentaje, created_at },
+      patch:  { sede_nombre, porcentaje },
+      cambio: (prev) => Number(prev.porcentaje) !== porcentaje || (prev.sede_nombre ?? "") !== sede_nombre,
+    };
+  });
+  await guardarPorDiferencia("su_objetivos", existing, deseadas, r => claveNorm(r.sede_id));
 }
 
 // ── Liquidación Sedes (reutiliza su_liquidaciones, filtra por pais + ROLES_SEDES) ──

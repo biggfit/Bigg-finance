@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
-  fetchNovedades, appendNovedad, updateNovedad, deleteNovedad,
+  fetchNovedades, appendNovedadesBatch, updateNovedad, deleteNovedad,
   fetchLegajos, fetchCentrosCostoNumbers, fetchCuentasContablesNumbers,
   FP_TIPOS, FP_TIPO_LABEL, ROLES_FRONT, ROLES_COACHES, ROLES_LIMP, ROLES_HQ,
   fmtMiles, limpiarMonto,
@@ -201,6 +201,8 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
       const validas = conDatos;   // todas completas (validado arriba)
       const loadedById = new Map(loaded.map(n => [n.id, n]));
 
+      // Altas: todas en UN lote (una request en vez de N). Ediciones y bajas: solo las que cambiaron.
+      const nuevas = [];
       const ops = [];
       for (const r of validas) {
         const payload = {
@@ -215,15 +217,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
           cuenta_contable_nombre: r.cuenta_contable_nombre,
         };
         if (!r.id) {
-          // Fila nueva: el tilde verde (si ya se había marcado) quedó guardado en localStorage bajo
-          // el _id temporal (Date.now()+random). Al crearse en el backend nace un id real distinto,
-          // y el reload de abajo reconstruye las filas con ese id → sin esto, el tilde se "perdía" en
-          // el primer guardado (la fila quedaba sin marcar hasta que la tildaras de nuevo).
-          const wasChecked = checked.has(r._id);
-          ops.push(async () => {
-            const nuevoId = await appendNovedad(payload);
-            if (wasChecked) setManyChecked([nuevoId], true);
-          });
+          nuevas.push({ tmpId: r._id, payload });
         } else {
           const orig = loadedById.get(r.id);
           if (!orig || rowSig(r) !== rowSig(novToRow(orig))) ops.push(() => updateNovedad(r.id, payload));
@@ -232,8 +226,26 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
 
       // Bajas: ids cargados que ya no están entre las filas con id
       const keepIds = new Set(validas.filter(r => r.id).map(r => r.id));
-      for (const n of loaded) if (!keepIds.has(n.id)) ops.push(() => deleteNovedad(n.id));
+      // Al borrar, sacarla del snapshot: un "Guardar" reintentado no la vuelve a pedir.
+      for (const n of loaded) if (!keepIds.has(n.id)) ops.push(async () => {
+        await deleteNovedad(n.id);
+        setLoaded(prev => prev.filter(x => x.id !== n.id));
+      });
 
+      if (nuevas.length) {
+        const ids = await appendNovedadesBatch(nuevas.map(n => n.payload));
+        // Fijar los ids YA: si una op posterior falla y se reintenta "Guardar", estas filas no se
+        // vuelven a dar de alta. El tilde verde (guardado en localStorage bajo el _id temporal) pasa
+        // al id real; sin esto se "perdía" en el primer guardado.
+        const idPorTmp = new Map(nuevas.map((n, i) => [n.tmpId, ids[i]]));
+        setRows(prev => prev.map(x => idPorTmp.has(x._id) ? { ...x, id: idPorTmp.get(x._id) } : x));
+        setLoaded(prev => [...prev, ...nuevas.map((n, i) => ({ id: ids[i], ...n.payload }))]);
+        const tildadas = nuevas.filter(n => checked.has(n.tmpId));
+        if (tildadas.length) {
+          setManyChecked(tildadas.map(n => n.tmpId), false);
+          setManyChecked(tildadas.map(n => idPorTmp.get(n.tmpId)), true);
+        }
+      }
       // Secuencial: el GAS pierde escrituras concurrentes (appendRow se pisa → se "borraba" la última).
       for (const op of ops) await op();
       await load(mes, anio, pais);
