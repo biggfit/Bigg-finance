@@ -255,13 +255,20 @@ function FormNuevoIngreso({ sociedad, cuentasBancarias, cuentas, centrosCosto, p
 
         {/* Agregar fila — solo en modo creación */}
         {!editIngreso && (
-          <div style={{ padding:"8px 12px", borderTop:`1px dashed ${T.cardBorder}` }}>
+          <div style={{ padding:"8px 12px", borderTop:`1px dashed ${T.cardBorder}`, display:"flex", gap:8 }}>
             <button onClick={() => setRows(rs => [...rs, newRow()])}
               style={{ background:"transparent", border:`1.5px dashed ${T.cardBorder}`,
                 borderRadius:6, padding:"5px 14px", fontSize:12, color:T.muted,
                 cursor:"pointer", fontFamily:T.font, fontWeight:600,
                 display:"flex", alignItems:"center", gap:6 }}>
               + Agregar fila
+            </button>
+            <button onClick={() => setRows(rs => [...rs, { ...rs[rs.length - 1], _id: Date.now() + Math.random() }])}
+              style={{ background:"transparent", border:`1.5px dashed ${T.cardBorder}`,
+                borderRadius:6, padding:"5px 14px", fontSize:12, color:T.muted,
+                cursor:"pointer", fontFamily:T.font, fontWeight:600,
+                display:"flex", alignItems:"center", gap:6 }}>
+              ⧉ Duplicar última fila
             </button>
           </div>
         )}
