@@ -100,7 +100,7 @@ function buildEncabezadoSinIVAXml(tipoStr, franchisor, comp, contado, fechaVtoPa
   return `<a:Encabezado>
         <b:Bienes>2</b:Bienes>
         <b:CondicionVenta>${condVenta}</b:CondicionVenta>
-        <b:EnviarComprobante>true</b:EnviarComprobante>
+        <b:EnviarComprobante>false</b:EnviarComprobante>
         <b:FechaHora>${fecha}</b:FechaHora>
         <b:FechaServDesde>${periodo.desde}</b:FechaServDesde>
         <b:FechaServHasta>${periodo.hasta}</b:FechaServHasta>
@@ -150,7 +150,7 @@ function buildEncabezadoConIVAFullXml(tipoStr, franchisor, comp, refAfip, refDat
         ${asociado}
         <b:Bienes>2</b:Bienes>
         <b:CondicionVenta>${condVenta}</b:CondicionVenta>
-        <b:EnviarComprobante>true</b:EnviarComprobante>
+        <b:EnviarComprobante>false</b:EnviarComprobante>
         <b:FechaHora>${fecha}</b:FechaHora>
         <b:FechaServDesde>${periodo.desde}</b:FechaServDesde>
         <b:FechaServHasta>${periodo.hasta}</b:FechaServHasta>
@@ -294,7 +294,9 @@ async function getUrlPdf(idComprobante) {
 }
 
 // Estados con CAE válido emitido por AFIP (procesamiento terminado).
-// PROCESADO = CAE obtenido y mail entregado. SIN ENVIO = CAE obtenido pero mail rebotó (fiscalmente válido).
+// Con EnviarComprobante en false el estado normal pasa a ser SIN ENVIO: Facturante no intenta
+// mandar nada. PROCESADO queda para los que sí se enviaron (los viejos, o un reenvío manual).
+// Los dos tienen CAE y son fiscalmente válidos — por eso los dos cierran el polling del número.
 const ESTADO_FINAL = new Set(['PROCESADO', 'SIN ENVIO', 'SIN ENVÍO']);
 
 /**
