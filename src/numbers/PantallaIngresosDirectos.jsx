@@ -6,7 +6,7 @@ import {
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto, fetchProveedores,
 } from "../lib/numbersApi";
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
-import { makeResolveCC, makeResolveCB } from "./formUtils.jsx";
+import { makeResolveCC, makeResolveCB, ccActivos } from "./formUtils.jsx";
 import { useConfirm } from "./useConfirm";
 import FiltroFecha, { useFiltroFecha } from "./FiltroFecha";
 
@@ -200,7 +200,7 @@ function FormNuevoIngreso({ sociedad, cuentasBancarias, cuentas, centrosCosto, p
                       <select value={r.cc}
                         onChange={e => upd(r._id, "cc", e.target.value)} style={ci}>
                         <option value="">— Sin CC —</option>
-                        {centrosCosto.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                        {ccActivos(centrosCosto, r.cc).map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                       </select>
                     </td>
 

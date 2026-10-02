@@ -5,6 +5,7 @@ import {
   TIPO_CUENTA, MONEDA_SYM,
 } from "../data/tesoreriaData";
 import { CENTROS_COSTO } from "../data/numbersData";
+import { ccActivos } from "./formUtils";
 import {
   fetchMovTesoreria, fetchMovFranquicias, appendMovTesoreria, appendTransferencia, updateTransferencia, updatePagoTarjeta, deleteMovTesoreria, updateMovTesoreria, borrarPagoImputado,
   fetchEgresos, fetchIngresos, fetchPagosCobros,
@@ -371,7 +372,7 @@ function GastoDirectoModal({ sociedad, cuentasBancarias, cuentasContables = [], 
               onChange={e => set("cc", e.target.value)}
               style={{ ...fi, cursor:"pointer" }}>
               <option value="">— Sin CC —</option>
-              {centrosCosto.map(c => (
+              {ccActivos(centrosCosto, form.cc).map(c => (
                 <option key={c.id} value={c.id}>{c.nombre}</option>
               ))}
             </select>
@@ -492,7 +493,7 @@ function EditarMovModal({ mov, cuentasBancarias, cuentasContables = [], centrosC
               <Select label="Cuenta contable" value={form.cuenta_contable} onChange={v => set("cuenta_contable", v)}
                 options={[{ value:"", label:"— Seleccioná —" }, ...cuentasContables.map(c => ({ value:c.nombre, label:c.nombre }))]} />
               <Select label="Centro de costo" value={form.centro_costo} onChange={v => set("centro_costo", v)}
-                options={[{ value:"", label:"— Seleccioná —" }, ...centrosCosto.map(c => ({ value:c.id, label:c.nombre }))]} />
+                options={[{ value:"", label:"— Seleccioná —" }, ...ccActivos(centrosCosto, form.centro_costo).map(c => ({ value:c.id, label:c.nombre }))]} />
             </>
           )}
           <Input label="Concepto" value={form.concepto} onChange={v => set("concepto", v)} />

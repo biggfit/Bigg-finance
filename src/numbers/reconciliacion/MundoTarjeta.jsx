@@ -7,6 +7,7 @@ import {
 } from "../../lib/numbersApi";
 import { fetchLegajos } from "../../lib/sueldosApi";
 import { parseResumenes } from "../parsers/resumenTarjeta";
+import { ccActivos } from "../formUtils";
 
 // ── Helpers de prefill (mismo criterio que la pantalla Resumen TC) ──────────────
 const num = v => Number(v) || 0;
@@ -344,7 +345,7 @@ export default function MundoTarjeta({ sociedad }) {
   const totD = gruposTit.reduce((s, g) => s + g.d, 0);
 
   const listasCount = pendFiltrados.filter(completa).length;
-  const centroOpts = useMemo(() => centros.slice().sort((a, b) => String(a.nombre).localeCompare(String(b.nombre))), [centros]);
+  const centroOpts = useMemo(() => ccActivos(centros).sort((a, b) => String(a.nombre).localeCompare(String(b.nombre))), [centros]);
 
   return (
     <div className="fade" style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>

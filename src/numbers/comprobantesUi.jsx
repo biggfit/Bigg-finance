@@ -5,7 +5,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import { T, MoneyField } from "./theme";
 import { TIPO_CUENTA } from "../data/tesoreriaData";
 import { updateMovTesoreria, borrarPagoImputado } from "../lib/numbersApi";
-import { byNombre } from "./formUtils";
+import { byNombre, ccActivos } from "./formUtils";
 
 // ─── Centros de costo de un comprobante, en una celda ─────────────────────────
 export function CCDisplay({ lineas, resolveCC }) {
@@ -204,7 +204,7 @@ export function EditarPagoCobroModal({ modo, mov, cuentasSoc, cuentasContables =
                 <label style={LBL}>Centro de costo</label>
                 <select value={form.centro_costo} onChange={e => set("centro_costo", e.target.value)} style={INP}>
                   <option value="">— centro —</option>
-                  {centros.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                  {ccActivos(centros, form.centro_costo).map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                 </select>
               </div>
             </div>

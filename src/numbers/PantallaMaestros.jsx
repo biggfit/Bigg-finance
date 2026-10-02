@@ -15,6 +15,7 @@ import {
 import { CUENTAS as CUENTAS_STATIC, CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
 import TabTiposCambio from "./TabTiposCambio";
 import { useConfirm } from "./useConfirm";
+import { ccActivos } from "./formUtils";
 
 // ─── Chip de tipo ─────────────────────────────────────────────────────────────
 function TipoChip({ tipo }) {
@@ -173,10 +174,10 @@ export function ProveedorModal({ initial, onClose, onSave, cuentas = [], centros
               <ModalField label="Centro de costo default">
                 <select value={form.ccDefault ?? ""} onChange={e=>set("ccDefault",e.target.value)} style={MODAL_INP}>
                   <option value="">— Ninguno —</option>
-                  {centrosCosto.filter(c=>c.grupo==="HQ").map(c=>(
+                  {ccActivos(centrosCosto, form.ccDefault).filter(c=>c.grupo==="HQ").map(c=>(
                     <option key={c.id} value={c.id}>HQ · {c.nombre}</option>
                   ))}
-                  {centrosCosto.filter(c=>c.grupo==="operaciones").map(c=>(
+                  {ccActivos(centrosCosto, form.ccDefault).filter(c=>c.grupo==="operaciones").map(c=>(
                     <option key={c.id} value={c.id}>Sede · {c.nombre}</option>
                   ))}
                 </select>
@@ -298,10 +299,10 @@ export function ClienteModal({ initial, onClose, onSave, cuentas = [], centrosCo
               <ModalField label="Centro de costo default">
                 <select value={form.ccDefault ?? ""} onChange={e=>set("ccDefault",e.target.value)} style={MODAL_INP}>
                   <option value="">— Ninguno —</option>
-                  {centrosCosto.filter(c=>c.grupo==="HQ").map(c=>(
+                  {ccActivos(centrosCosto, form.ccDefault).filter(c=>c.grupo==="HQ").map(c=>(
                     <option key={c.id} value={c.id}>HQ · {c.nombre}</option>
                   ))}
-                  {centrosCosto.filter(c=>c.grupo==="operaciones").map(c=>(
+                  {ccActivos(centrosCosto, form.ccDefault).filter(c=>c.grupo==="operaciones").map(c=>(
                     <option key={c.id} value={c.id}>Sede · {c.nombre}</option>
                   ))}
                 </select>

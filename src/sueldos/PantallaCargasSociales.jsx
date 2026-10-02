@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import { ccActivos } from "../numbers/formUtils";
 import {
   fetchSociedades, fetchProveedores, fetchCuentas, fetchCentrosCosto,
   appendCargaSocial, fetchCargasSociales,
@@ -168,7 +169,7 @@ function FormCargaSocial({ mes, anio, masters, ccNombre, onClose, onSaved }) {
   const sumLineas = r2(lineas.reduce((s, l) => s + (Number(l.monto) || 0), 0));
   const cuadra = tot > 0 && Math.abs(sumLineas - tot) < 0.005;   // al centavo
   const ccsUsados = new Set(lineas.map(l => String(l.cc)));
-  const ccsDisponibles = masters.ccs.filter(c => !ccsUsados.has(String(c.id)));
+  const ccsDisponibles = ccActivos(masters.ccs).filter(c => !ccsUsados.has(String(c.id)));
 
   // v llega ya limpio (limpiarMonto: dígitos + "." decimal). Se guarda el STRING para poder tipear
   // decimales sin que la coma se corte; se convierte a Number recién al sumar/guardar.

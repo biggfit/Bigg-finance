@@ -8,6 +8,7 @@ import {
 } from "../lib/numbersApi";
 import { parsePlanPdf } from "./parsers/planPdf";
 import { useConfirm } from "./useConfirm";
+import { ccActivos } from "./formUtils";
 
 // ─── Config por tipo (planes AFIP vs créditos comparten todo, cambian labels/default) ──
 const TIPOS = {
@@ -647,7 +648,7 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
               </select>
               <select value={h[comp.centroK]} onChange={e => set(comp.centroK, e.target.value)} style={inputStyle}>
                 <option value="">— sin centro —</option>
-                {centros.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                {ccActivos(centros, h[comp.centroK]).map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
               </select>
             </Fragment>
           );

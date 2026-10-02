@@ -136,10 +136,22 @@ export function calcLineasTotals(lineas) {
   return { totalSub, totalIva, totalFinal: round2(totalSub + totalIva) };
 }
 
+/** Centros de costo ofrecibles en un select: excluye los inactivos del maestro (activo=false; del
+ *  Sheet llega como texto "FALSE"), ej. el ceco "10 - HQ". `keepId` conserva el centro ya guardado
+ *  en el registro que se está editando aunque esté inactivo, para que el select no lo muestre en
+ *  blanco. Las listas completas siguen cargándose igual: resolveCC y los mapas de nombre necesitan
+ *  al inactivo para mostrar el histórico que ya tiene imputado. */
+export function ccActivos(lista, keepId = "") {
+  const keep = String(keepId ?? "").trim();
+  return (lista || []).filter(c =>
+    String(c.activo).trim().toLowerCase() !== "false" || (keep && String(c.id) === keep)
+  );
+}
+
 /** Agrupa centros de costo como en facturas ingreso/egreso; `rest` en O(n).
  *  Excluye centros inactivos (activo=false, ej. el ceco "10 - HQ") → no se ofrecen en ningún select. */
 export function groupCentrosCosto(CC_LIST) {
-  CC_LIST = (CC_LIST || []).filter(c => String(c.activo).trim().toLowerCase() !== "false");
+  CC_LIST = ccActivos(CC_LIST);
   const hq = CC_LIST.filter(c => ["hq", "marca", "hq - marca"].includes(norm(c.grupo ?? "")));
   const ops = CC_LIST.filter(c => ["operaciones", "ops", "sedes"].includes(norm(c.grupo ?? "")));
   const hqSet = new Set(hq);

@@ -9,7 +9,7 @@ import {
   fetchEgresos, fetchMovTesoreria, toNum,
 } from "../../lib/numbersApi";
 import NuevoEgresoModal from "../NuevoEgresoModal";
-import { formatNroComp } from "../formUtils";
+import { formatNroComp, ccActivos } from "../formUtils";
 import { useConfirm } from "../useConfirm";
 
 const arr = x => Array.isArray(x) ? x : [];
@@ -224,7 +224,7 @@ export default function TabCorreo({ onPend } = {}) {
                       <select value={e.centro} onChange={ev => setEd(row.id, { centro: ev.target.value })}
                         style={{ ...sel, borderColor: e.centro ? T.cardBorder : "#f59e0b", background: e.centro ? "#fff" : "#fffbeb" }}>
                         <option value="">⚠ centro</option>
-                        {centros.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                        {ccActivos(centros, e.centro).map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                       </select>
                     </td>
                     <td style={num(false)}>{fmtMoney(linea.subtotal ?? row.total, row.moneda || "ARS")}</td>

@@ -3,7 +3,7 @@ import { T, ESTADO_INGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, B
 import ConfirmModal from "./ConfirmModal";
 import { fetchIngresos, appendIngreso, deleteIngreso, updateIngreso, appendCobro, fetchPagosCobros, calcSaldoPendiente, calcSaldoNeto, calcEstadoIngreso, fetchClientes, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, borrarPagoImputado, shortId, agruparAnticipos, cobrarContraAnticipo, appendRetenciones, appendCliente, appendCuenta } from "../lib/numbersApi";
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC } from "../data/numbersData";
-import { makeResolveCC, makeResolveCB, byNombre, makeCrearMaestro, stripForDuplicate } from "./formUtils";
+import { makeResolveCC, makeResolveCB, byNombre, makeCrearMaestro, stripForDuplicate, ccActivos } from "./formUtils";
 import NuevoIngresoModal from "./NuevoIngresoModal";
 import FiltroFecha, { useFiltroFecha } from "./FiltroFecha";
 import RegistrarCobroModal from "./pagos/RegistrarCobroModal";
@@ -57,7 +57,7 @@ function RegistrarRetencionModal({ ingreso, saldoPendiente, cuentasContables = [
               <label style={{ fontSize:12, color:T.muted, fontWeight:600, display:"block", marginBottom:5 }}>Centro de costo <span style={{ color:T.red }}>*</span></label>
               <select value={centroSel} onChange={e => setCentro(e.target.value)} style={inp}>
                 <option value="">— centro —</option>
-                {centros.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                {ccActivos(centros, centroSel).map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
               </select>
             </div>
           </div>

@@ -1153,6 +1153,7 @@ export async function fetchCentrosCostoNumbers() {
     sociedad:      r.sociedad ?? "",
     pais:          r.pais ?? "",
     bigg_eye_id:   r.bigg_eye_id ? Number(r.bigg_eye_id) : null,
+    activo:        r.activo ?? true,   // los selectores de Sueldos excluyen inactivos (ej. "10 - HQ")
   }));
 }
 

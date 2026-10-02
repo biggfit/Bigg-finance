@@ -7,6 +7,7 @@ import {
 import { useRowChecks } from "../lib/useRowChecks";
 import { fmtPesos, HeaderCheckTodas } from "./sueldosUi";
 import { useConfirm } from "../numbers/useConfirm";
+import { ccActivos } from "../numbers/formUtils";
 
 const T = {
   bg:     "#f8fafc",
@@ -275,7 +276,7 @@ export default function PantallaLegajos({ pais = "" }) {
           onChange={e => setFiltroSede(e.target.value)}
           style={{ border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 10px", fontSize: 13, fontFamily: T.font }}>
           <option value="todos">Todos los centros</option>
-          {centrosCosto.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+          {ccActivos(centrosCosto, filtroSede).map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
         </select>
         <select
           value={filtroRol}
@@ -473,11 +474,12 @@ function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
 
   // Centros de costo filtrados por la sociedad seleccionada
   const ccFiltrados = useMemo(() => {
-    if (!form.sociedad_id) return centrosCosto;
-    return centrosCosto.filter(c =>
+    const activos = ccActivos(centrosCosto, form.sede_id);   // sin inactivos (ej. "10 - HQ"), salvo el ya cargado
+    if (!form.sociedad_id) return activos;
+    return activos.filter(c =>
       !c.sociedad || c.sociedad === form.sociedad_id || c.sociedad === form.sociedad_nombre
     );
-  }, [centrosCosto, form.sociedad_id, form.sociedad_nombre]);
+  }, [centrosCosto, form.sede_id, form.sociedad_id, form.sociedad_nombre]);
 
   const handleSave = async () => {
     if (savingRef.current) return;
