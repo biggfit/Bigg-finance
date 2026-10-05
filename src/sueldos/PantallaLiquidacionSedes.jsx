@@ -1673,9 +1673,15 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByR
   // Re-sincronizar: vuelve a traer las horas de BIGG Eye y re-deriva el roster
   // (horas + filas sin legajo). El cruce vive en `rosterBase`, no acá.
   const handleCargarEye = async () => {
+    const eyeIds = sedes.filter(s => s.bigg_eye_id).map(s => s.bigg_eye_id);
+    // Sin sedes (falló la carga de centros de costo) el endpoint cae a su lista fija (sin las
+    // sedes nuevas, ej. Huergo) y las filas quedan con el id crudo de Eye como sede → no sincronizar.
+    if (eyeIds.length === 0) {
+      alert("No se cargaron las sedes (centros de costo). Recargá la pantalla y volvé a sincronizar.");
+      return;
+    }
     setEyeLoading(true);
     try {
-      const eyeIds = sedes.filter(s => s.bigg_eye_id).map(s => s.bigg_eye_id);
       const eyeData = await fetchHorasDesdeEye(mes, anio, pais, eyeIds, true);  // fresh: baja en vivo, saltea cache
       onResyncEye(eyeData);
     } catch (e) {
@@ -1915,10 +1921,14 @@ function PasoIncentivos({ rows, legajos, sedes, mes, anio, pais, novsByRowKey, u
   };
 
   const handleCargarCdp = async () => {
+    const eyeIds = sedes.filter(s => s.bigg_eye_id).map(s => s.bigg_eye_id);
+    if (eyeIds.length === 0) {   // ver handleCargarEye
+      alert("No se cargaron las sedes (centros de costo). Recargá la pantalla y volvé a sincronizar.");
+      return;
+    }
     setCdpLoading(true);
     setCdpResult(null);
     try {
-      const eyeIds = sedes.filter(s => s.bigg_eye_id).map(s => s.bigg_eye_id);
       const cdpData = await fetchCdpDesdeEye(mes, anio, pais, eyeIds, true);  // fresh: baja en vivo, saltea cache
       const items = cdpData.items ?? [];
 

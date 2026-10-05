@@ -42,6 +42,7 @@ const SEDES_POR_PAIS = {
     { id: 42, nombre: "Palermo Rosedal"   },
     { id:  2, nombre: "Palermo Chico"     },
     { id: 32, nombre: "Botánico"          },
+    { id: 82, nombre: "Huergo"            },
   ],
   ES: [
     { id: 50, nombre: "Chamberí" },
