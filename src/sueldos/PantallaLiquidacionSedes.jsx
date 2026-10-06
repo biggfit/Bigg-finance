@@ -66,8 +66,12 @@ const rowKeyDe = (legajo_id, sede_id) => `${legajo_id || ""}__${sede_id || ""}`;
 //  - Encargado y Ventas (front): SOLO sueldo básico. El feriado del front viene como novedad (texto
 //    libre), no como campo de la fila → se EXCLUYE a propósito (cruzarlo sería frágil, decisión del usuario).
 //  - Yoga, Huergo A/B y Limpieza: EXENTOS de la comisión grupal (base 0).
+//  - Rol de otro ámbito (HQ, etc.) que dio clases en la sede: como coach (igual que su tarifa de hora,
+//    ver tarifaHoraRow). La fila guarda el rol del LEGAJO: Facundo Fernandez (HQ) en Recoleta sep-2026
+//    quedaba sin la grupal que en ago-2026 cobró como COACH.
 function baseGrupalDe(rol, { horasMonto, feriadosMonto, domingosMonto, asignado, sueldoBase }) {
-  if (rol === "COACH_SENIOR" || rol === "COACH") return horasMonto + feriadosMonto + domingosMonto + asignado;
+  if (rol === "COACH_SENIOR" || rol === "COACH" || !ROLES_SEDES_ALL.includes(rol))
+    return horasMonto + feriadosMonto + domingosMonto + asignado;
   if (rol === "ENCARGADO" || rol === "VENTAS")   return sueldoBase;
   return 0;   // Yoga, Huergo A/B, Limpieza
 }
