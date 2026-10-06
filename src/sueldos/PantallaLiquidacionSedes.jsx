@@ -1243,6 +1243,21 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         </div>
       </div>
 
+      {/* Sin la lectura de cerradas, todas las filas se ven "abiertas" con montos en vivo y botón Pagar:
+          avisar fuerte para que nadie pague ni cierre sobre eso (ver handleConfirmarFormaPago). */}
+      {!loading && !liqsFetchOk && (
+        <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 8, background: "#fee2e2",
+          border: "1px solid #fca5a5", color: "#b91c1c", fontSize: 13, fontWeight: 600,
+          display: "flex", alignItems: "center", gap: 10 }}>
+          ⚠️ No pude leer las liquidaciones cerradas de {MESES[mes - 1]} {anio}: todo se ve abierto, pero puede no estarlo. No pagues ni cierres hasta recargar.
+          <button onClick={() => refreshLiqs()}
+            style={{ marginLeft: "auto", background: "#b91c1c", color: "#fff", border: "none", borderRadius: 6,
+              padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>
+            Reintentar
+          </button>
+        </div>
+      )}
+
       {rows.length === 0 ? (
         <div style={{ border: `1px dashed ${T.border}`, borderRadius: 8, padding: 40, textAlign: "center", color: T.muted, fontSize: 13 }}>
           No hay actividad ni legajos de Sedes para {MESES[mes - 1]} {anio}. Verificá los check-ins de BIGG Eye y los legajos activos del país.

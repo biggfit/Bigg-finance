@@ -602,6 +602,18 @@ export const isCerrada = (estado) => {
   return s === "cerrada" || s === "cerrado";
 };
 
+// Ámbito ("hq" | "sedes" | null) de una liquidación guardada. Manda QUIÉN la cerró (HQ "cerrada",
+// Sedes "cerrado"), no el rol: una fila de Sedes guarda el rol del LEGAJO, que puede ser HQ (un HQ
+// que dio clases — Facundo Fernandez, sep-2026, Recoleta quedó con rol HQ y se leía como HQ).
+// Sin estado de cierre (legacy) cae al rol.
+export const ambitoLiq = (l) => {
+  const s = String(l?.estado ?? "").toLowerCase();
+  if (s === "cerrada") return "hq";
+  if (s === "cerrado") return "sedes";
+  const rol = normalizarRol(l?.rol ?? "");
+  return ROLES_HQ.includes(rol) ? "hq" : ROLES_SEDES.includes(rol) ? "sedes" : null;
+};
+
 // Sociedad desde la que se paga cada forma (congelada al cerrar):
 //   haberes → sociedad del legajo; monotributo → la elegida al cerrar (fallback legajo);
 //   efectivo → "beta" (caja B).
@@ -775,7 +787,7 @@ function _netoSueldos(liqsCerradas, pagos, { pais } = {}) {
   };
   for (const liq of liqs) {
     const mes = Number(liq.mes) || 0, anio = Number(liq.anio) || 0;
-    const ambito = ROLES_HQ.includes(liq.rol) ? "hq" : "sedes";
+    const ambito = ambitoLiq(liq) || "sedes";
     const legajo = liq.legajo_nombre || liq.legajo_id || "Sin nombre";
     for (const d of devengadoPorFormaYSociedad(liq))
       ensure(liq.legajo_id, legajo, mes, anio, normSoc(d.sociedad), ambito).monto += Number(d.total) || 0;
@@ -1381,7 +1393,8 @@ export async function fetchLiquidacionesSedes(mes, anio, pais) {
   // Nuevo (líneas): agrupar por id_liq, proyectar y mapear a la forma Sedes.
   for (const [idLiq, ls] of _agruparPorLiq(arr.filter(r => r.id_liq && enPeriodo(r)))) {
     const liq = liqFromLineas(idLiq, ls);
-    if (allRoles.includes(liq.rol)) out.push(mapRowToSedes(liq));
+    // Por ámbito (quién la cerró), no por rol: una fila de Sedes con rol de legajo HQ también va acá.
+    if (ambitoLiq(liq) === "sedes") out.push(mapRowToSedes(liq));
   }
   return out;
 }

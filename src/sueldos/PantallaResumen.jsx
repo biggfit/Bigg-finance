@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import html2canvas from "html2canvas";
 import { fmtPesos, fmtEntero } from "./sueldosUi";
-import { fetchLiquidaciones, fetchCategorias, fetchPagos, fetchLegajos, fetchNovedades, desglosarLiquidacion, isCerrada, ROLES_SEDES, ROLES_HQ, updatePagoNota } from "../lib/sueldosApi";
+import { fetchLiquidaciones, fetchCategorias, fetchPagos, fetchLegajos, fetchNovedades, desglosarLiquidacion, isCerrada, ambitoLiq, updatePagoNota } from "../lib/sueldosApi";
 
 const T = {
   bg:     "#f8fafc",
@@ -98,15 +98,15 @@ export default function PantallaResumen({ pais = "AR" }) {
 
   useEffect(() => { load(); }, [load]);
 
-  // Agrupar por LEGAJO las liquidaciones del mes de la VISTA actual: HQ (rol HQ*) o Sedes (rol
-  // coach/front/limpieza; los coaches tienen una fila por sede). Un empleado que liquida por los dos
-  // mundos (ej. Facundo Fernandez: sueldo HQ + horas en sedes) tiene recibos SEPARADOS: aparece en las
-  // dos vistas y cada una muestra solo su sueldo y sus pagos.
+  // Agrupar por LEGAJO las liquidaciones del mes de la VISTA actual: HQ o Sedes (los coaches tienen una
+  // fila por sede). Un empleado que liquida por los dos mundos (ej. Facundo Fernandez: sueldo HQ + horas
+  // en sedes) tiene recibos SEPARADOS: aparece en las dos vistas y cada una muestra solo su sueldo y sus
+  // pagos. El lado sale de ambitoLiq (quién la cerró, no el rol: Facundo, sep-2026, tiene Recoleta
+  // guardada con rol HQ).
   const empleados = useMemo(() => {
     const map = new Map();
     for (const l of liqs) {
-      const enVista = vista === "hq" ? ROLES_HQ.includes(l.rol) : ROLES_SEDES.includes(l.rol);
-      if (!enVista) continue;
+      if (ambitoLiq(l) !== vista) continue;
       if (l.pais && l.pais !== pais) continue;
       const key = l.legajo_id || l.legajo_nombre;
       if (!key) continue;

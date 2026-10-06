@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "rea
 import * as XLSX from "xlsx";
 import {
   fetchLegajos, fetchLiquidaciones, updateLegajo,
-  fetchPagos, appendPago, deletePago, nuevoLote, fetchNovedades, updateNovedad, ROLES_HQ,
+  fetchPagos, appendPago, deletePago, nuevoLote, fetchNovedades, updateNovedad, ROLES_HQ, ambitoLiq,
   FP_TIPOS, FP_TIPO_LABEL, FP_TIPO_COLOR,
   fetchSociedadesNumbers, fetchCuentasBancariasNumbers, fetchCuentasContablesNumbers,
   idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionesLinesBatch, delLiquidacionComp, isCerrada, pagoIdsDeReceta,
@@ -259,7 +259,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
       if (descartados.length)
         console.warn("[HQ] Legajos activos descartados por rol desconocido:", descartados.map(l => `${l.nombre} → "${l.rol}"`));
       setLegajos(legsHQ);
-      setLiquidaciones(liqs.filter(l => ROLES_HQ.includes(l.rol)));
+      setLiquidaciones(liqs.filter(l => ambitoLiq(l) === "hq"));
     } finally { setLoading(false); }   // el roster ya puede mostrarse; lo demás llega en segundo plano.
 
     // ── OLA 2: consumir lo que ya venía cargando en paralelo (pagos/novedades/sociedades).
@@ -286,7 +286,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
       fetchLiquidaciones(mes, anio).catch(() => null),
       fetchPagos(mes, anio).catch(() => null),
     ]);
-    if (liqs) setLiquidaciones(liqs.filter(l => ROLES_HQ.includes(l.rol)));
+    if (liqs) setLiquidaciones(liqs.filter(l => ambitoLiq(l) === "hq"));
     if (pags) setPagos(pags.filter(p => p.ambito !== "sedes"));
   }, [mes, anio]);
 
