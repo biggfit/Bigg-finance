@@ -582,6 +582,20 @@ export async function saveLiquidacionesLinesBatch(entries = []) {
   return { ok: true, n: rows.length };
 }
 
+// id_liq que YA están en la hoja para el período, leídos del ORIGEN (sin caché local ni de borde).
+// Red del cierre: si la pantalla leyó mal las cerradas (lectura vacía/vieja), todo se ve abierto y el
+// cierre re-escribía a todos (Sedes sep-2026, 6/10: 56 liquidaciones triplicadas). Si la lectura no
+// es una lista válida, tira → el cierre no escribe nada.
+export async function idsLiqEnHoja(mes, anio) {
+  for (const k of _cache.keys()) if (k.includes("resource=su_liquidaciones")) _cache.delete(k);
+  forzarRefresco();
+  const rows = await get("su_liquidaciones", { mes, anio }, BASE, { retries: 2, retryDelayMs: 1200 });
+  if (!Array.isArray(rows)) throw new Error("respuesta inválida al leer su_liquidaciones");
+  return new Set(rows
+    .filter(r => r.id_liq && Number(r.mes) === Number(mes) && Number(r.anio) === Number(anio))
+    .map(r => String(r.id_liq)));
+}
+
 // Reabrir una liquidación = BORRAR sus líneas (delLiquidacionComp). La hoja guarda solo liquidaciones
 // CERRADAS; lo que no está cerrado se deriva en vivo (Eye / legajo / receta), sin estado "borrador"
 // persistido. Un solo hito: cerrar. Los pagos (nb_movimientos) no se tocan y se re-anclan por id

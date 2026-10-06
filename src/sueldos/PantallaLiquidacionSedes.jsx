@@ -10,7 +10,7 @@ import {
   ROLES_COACHES, ROLES_FRONT, ROLES_LIMP, ROL_CONCEPTO,
   FP_TIPO_LABEL, FP_TIPO_COLOR, esTransferencia,
   idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionesLinesBatch, isCerrada,
-  estadoPago, remanentePago, PAGO_EPS, reabrirLiquidaciones,
+  estadoPago, remanentePago, PAGO_EPS, reabrirLiquidaciones, idsLiqEnHoja,
 } from "../lib/sueldosApi";
 import { fmtPesos, useMesMarcado, BotonMesMarcado } from "./sueldosUi";
 
@@ -1086,6 +1086,21 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     savingRef.current = true;
     setSaving(true);
     try {
+      // Red contra lecturas viejas/vacías: re-leer la hoja del ORIGEN justo antes de escribir. Si algún
+      // legajo que acá se ve abierto ya tiene liquidación en la hoja, la pantalla está desactualizada →
+      // no escribir NADA (sino re-escribe y duplica a todos, como el 6/10 en sep-2026).
+      let enHoja;
+      try { enHoja = await idsLiqEnHoja(mes, anio); }
+      catch (e) {
+        alert("No pude verificar en la hoja qué liquidaciones ya están cerradas (" + e.message + "). No cierro para no duplicar; recargá y volvé a intentar.");
+        return;
+      }
+      const legajosEnHoja = new Set([...enHoja].map(id => rowsAbiertas.find(r => idLiqDe(r.legajo_id, mes, anio, r.sede_id) === id)?.legajo_id).filter(Boolean));
+      if (legajosEnHoja.size) {
+        const nombres = [...new Set(rowsAbiertas.filter(r => legajosEnHoja.has(r.legajo_id)).map(r => r.legajo_nombre))];
+        alert(`La pantalla está desactualizada: ${nombres.length} legajo(s) que acá se ven abiertos ya están cerrados en la hoja (${nombres.slice(0, 5).join(", ")}${nombres.length > 5 ? "…" : ""}). No cierro nada. Recargá la pantalla (F5) y volvé a intentar.`);
+        return;
+      }
       // Cada fila (legajo×sede) = un id_liq. La forma de pago es por EMPLEADO; se prorratea
       // entre las sedes del empleado según el total de cada una (cada id_liq queda balanceado
       // y el devengado se imputa al centro de costo donde se ganó). Secuencial: GAS pierde
