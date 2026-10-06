@@ -81,6 +81,8 @@ function devCacheClear() { devCache.clear(); devCacheBytes = 0; }
 
 // ¿Esta lectura puede salir de caché? GET sin el cache-bust del front.
 const devCacheable = (req, target) => req.method !== 'POST' && !target.includes('_cb=');
+// `_cb` no se reenvía al GAS de Sueldos: toma todo parámetro como filtro de columna y devolvía [] (ver api/sueldos.js).
+const sinCb = (url) => url.replace(/([?&])_cb=[^&]*(&?)/, (m, p, amp) => (amp ? p : '')).replace(/[?&]$/, '');
 
 // Nombre legible para el log: "nb_movimientos", "__multi(nb_cuentas+3)" o la query cruda.
 function etiquetaRecurso(qs) {
@@ -212,7 +214,7 @@ export default defineConfig({
             } else {
               const cacheable = devCacheable(req, target);
               if (cacheable && serveFromDevCache(target, res, etiquetaRecurso(qs))) return;
-              proxyToSheets(target, 'GET', null, res, cacheable ? target : null);
+              proxyToSheets(sinCb(target), 'GET', null, res, cacheable ? target : null);
             }
           });
         }

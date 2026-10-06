@@ -66,7 +66,12 @@ export default function handler(req, res) {
   }
 
   // Preservar la query string (resource=...&token=...) al redirigir
-  const qs     = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  // `_cb` (ventana de refresco, ver src/lib/cacheBust.js) solo sirve para que el borde de Vercel no
+  // matchee la caché: NO se reenvía al Apps Script — el GAS de Sueldos toma todo parámetro como filtro
+  // de columna y con `_cb` devolvía [] (pantallas "todo abierto" y cierres que re-escribían a todos).
+  const raw    = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  const u      = new URL(req.url, 'http://x');
+  const qs     = u.searchParams.has('_cb') ? (u.searchParams.delete('_cb'), u.search) : raw;
   const target = NUMBERS_URL + qs;
 
   if (req.method === 'POST') {
