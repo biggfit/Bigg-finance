@@ -213,7 +213,7 @@ export function ClienteModal({ initial, onClose, onSave, cuentas = [], centrosCo
   const [form, setForm] = useState(initial ?? {
     nombre:"", cuit:"", condIVA:"Responsable Inscripto",
     monedaDefault:"ARS", cuentaDefault:"", ccDefault:"",
-    formaPago:"libre", diasPago:"", nota:"",
+    formaPago:"libre", diasPago:"", nota:"", domicilio:"",
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const cuentasIngreso = useMemo(() => cuentas.filter(c => { const t = (c.tipo ?? "").toLowerCase(); return t === "venta" || t === "ventas" || t === "ingreso" || t === "ingresos"; }), [cuentas]);
@@ -266,6 +266,12 @@ export function ClienteModal({ initial, onClose, onSave, cuentas = [], centrosCo
                 </select>
               </ModalField>
             </div>
+            {/* Domicilio fiscal: va al libro de Facturas Emitidas del estudio (columna "Domicilio", 8/10/2026).
+                Se guarda en la columna `domicilio` de nb_clientes — la hoja tiene que tener ese encabezado. */}
+            <ModalField label="Domicilio fiscal">
+              <input value={form.domicilio ?? ""} onChange={e=>set("domicilio",e.target.value)}
+                placeholder="Calle 123, Ciudad (CP), País" style={MODAL_INP} />
+            </ModalField>
           </div>
 
           <div style={{ ...MODAL_SECTION_CARD, border:"1.5px solid #bbf7d0" }}>

@@ -93,10 +93,18 @@ export function franquiciasPendientesInterco(compsByFr, franchises, miCuit, miSo
 
 // Facturación a franquiciados → filas P&L de ingreso. Solo FACTURA|* (+) y NC|* (−);
 // ignora FC_RECIBIDA y los financieros (doc null). Sociedad por empresa emisora; centro = HQ Ventas.
-export function franquiciasIngresoPnLRows(compsByFr, sociedad, ventasCcId) {
+//
+// `franchises` (opcional, el maestro de Franquicias) completa lo que el estudio contable necesita del libro de
+// Facturas Emitidas (Afianza, 8/10/2026): razón social y NIF del franquiciado, N° de factura (ESP-47-0024),
+// fecha real de emisión, neto e IVA reales del comprobante (no derivados por tasa) y la alícuota. Sin el
+// maestro, las filas salen como antes (cliente y NIF vacíos). Nada de esto cambia el P&L: el mes es el mismo
+// (c.month sale de fecha_emision) y el total también.
+export function franquiciasIngresoPnLRows(compsByFr, sociedad, ventasCcId, franchises = []) {
   const soc = (sociedad ?? "").toLowerCase();
+  const frPorId = new Map((franchises ?? []).map(f => [String(f.id), f]));
   const out = [];
-  for (const list of Object.values(compsByFr ?? {})) {
+  for (const [frId, list] of Object.entries(compsByFr ?? {})) {
+    const fr = frPorId.get(String(frId));
     for (const c of (list ?? [])) {
       const def = defComp(c.type);   // incluye gestión (GFAC/GNC) → pata 1 del asiento de gestión (P&L del emisor)
       if (!def || (def.doc !== "FACTURA" && def.doc !== "NC")) continue;
@@ -105,11 +113,35 @@ export function franquiciasIngresoPnLRows(compsByFr, sociedad, ventasCcId) {
       const monto = Math.abs(Number(c.amount) || 0);
       if (!monto) continue;
       const cuenta = FRANQ_CUENTA[String(def.cuenta || "OTROS").toUpperCase()] || "Otros Ingresos";
-      const fecha  = (c.year != null && c.month != null) ? `${c.year}-${String(c.month + 1).padStart(2, "0")}-15` : "";
+      // Fecha real de emisión cuando la hay (mismo mes que c.month); si no, el 15 del mes como siempre.
+      const emision = String(c.fecha_emision ?? "").slice(0, 10);
+      const fecha  = /^\d{4}-\d{2}-\d{2}$/.test(emision) ? emision
+        : (c.year != null && c.month != null) ? `${c.year}-${String(c.month + 1).padStart(2, "0")}-15` : "";
       const total  = monto * def.sign;
       const rate   = FRANQ_IVA_RATE[cSoc] ?? 0;                 // importe CON IVA (según emisor) → separar neto/IVA
-      const iva    = rate ? total - total / (1 + rate) : 0;    // parte de IVA (mantiene el signo de FACTURA/NC)
-      out.push({ fecha, sociedad: cSoc, centro_costo: ventasCcId, cuenta_contable: cuenta, moneda: compCurrency(c), total, subtotal: total - iva, iva_monto: iva });
+      // Neto e IVA: los del comprobante si los trae (Franquicias los guarda al emitir); si no, por tasa lineal.
+      const netoC  = Math.abs(Number(c.amountNeto) || 0), ivaC = Math.abs(Number(c.amountIVA) || 0);
+      const iva    = netoC && Math.abs(netoC + ivaC - monto) < 0.05 ? ivaC * def.sign
+                   : (rate ? total - total / (1 + rate) : 0);    // parte de IVA (mantiene el signo de FACTURA/NC)
+      // Alícuota: la del emisor salvo que el comprobante diga otra cosa. Se compara con tolerancia de 1 punto
+      // porque neto e IVA van al céntimo y en importes chicos no dan exacto (NC de 7,79 + 1,64 → 21,05%, que
+      // salía "21,1" en el libro del estudio, 8/10/2026).
+      const calc = netoC ? (ivaC / netoC) * 100 : rate * 100;
+      const iva_rate = Math.abs(calc - rate * 100) <= 1 ? rate * 100 : Math.round(calc * 10) / 10;
+      const docTxt = def.doc === "NC" ? "NC" : "Factura";
+      out.push({
+        fecha, fecha_fiscal: fecha, sociedad: cSoc, centro_costo: ventasCcId, cuenta_contable: cuenta,
+        moneda: compCurrency(c), total, subtotal: total - iva, iva_monto: iva, iva_rate,
+        nro_comp: c.invoice || "",
+        _key: `FR-${c.id}`,                                      // agrupa la factura en el Excel sin ser un id_comp
+        contraparte_id: `FR-${frId}`,
+        contraparte_nombre: fr?.razonSocial || fr?.name || "",
+        _cuit: fr?.cuit || "", _domicilio: fr?.domicilio || fr?.billingAddress || "",
+        // GFAC/GNC de una sede propia: asiento de gestión, no una factura a un tercero. El P&L lo usa igual;
+        // el libro de Facturas Emitidas del estudio lo deja afuera (Martín, 8/10/2026).
+        _gestion: !!def.gestion,
+        nota: `${docTxt} ${cuenta}${fr?.name ? ` · ${fr.name}` : ""}`,
+      });
     }
   }
   return out;

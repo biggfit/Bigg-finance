@@ -42,30 +42,44 @@ function toNum(v) {
 // Las nóminas y la TGSS se cargan como compra a propósito (para diferir el pago del devengamiento y poder
 // repartirlas entre varios centros), así que esto es un filtro del REPORTE, no un cambio en cómo se carga:
 // las cuatro siguen enteras en el P&L, en Tesorería y en el modo por centro de costo.
-const CUENTAS_FUERA_DEL_ESTUDIO = new Set(["Sueldos", "Costos Salariales", "IVA", "IRPF"]);
+// Lado INGRESO (Facturas Emitidas):
+//   · Ventas en Efectivo — cobros de caja de las sedes sin factura emitida; el libro del estudio es solo de
+//     facturas (Martín, 8/10/2026). Siguen enteras en el P&L.
+// La lista se DECLARA en el subtítulo del Excel y en el menú de descarga, para que nadie busque lo que no está.
+export const CUENTAS_FUERA_DEL_ESTUDIO = {
+  EGRESO:  ["Sueldos", "Costos Salariales", "IVA", "IRPF"],
+  INGRESO: ["Ventas en Efectivo"],
+};
+const fueraDe = tipo => new Set(CUENTAS_FUERA_DEL_ESTUDIO[tipo] || CUENTAS_FUERA_DEL_ESTUDIO.EGRESO);
 
 // Una fila por comprobante: suma las líneas que pasaron el filtro (no el total original del comprobante — si
 // filtraste por centro, lo que baja es lo que estás mirando). Las filas que NO son comprobantes (sueldos,
 // financiaciones, histórico) no tienen id_comp: quedan una por registro, porque no hay factura que agrupar y
 // descartarlas escondería gasto real.
+//
+// Los importes se suman CON SIGNO (8/10/2026). Antes todo pasaba por Math.abs y una devolución de Stripe, una
+// nota de crédito o la NC de gestión a un franquiciado salían positivas y SUMABAN al total de facturas. Para el
+// estudio son facturas rectificativas: base, cuota y total en negativo, y restan del libro. Las filas de
+// comprobantes y del P&L ya vienen firmadas (venta +, devolución −, gasto +, reintegro −).
 function agruparPorFactura(rows) {
   const m = new Map();
   rows.forEach((r, i) => {
-    const k = r.id_comp ? `C:${r.id_comp}` : `X:${r.id ?? i}`;
+    // `_key`: una factura de Franquicias (vive en otra app, no tiene id_comp) también se agrupa por documento.
+    const k = r.id_comp ? `C:${r.id_comp}` : r._key ? `K:${r._key}` : `X:${r.id ?? i}`;
     if (!m.has(k)) m.set(k, { ...r, _total: 0, _subtotal: null, _iva: null, _porTasa: {} });
     const acc = m.get(k);
-    acc._total += Math.abs(Number(r.total) || 0);
+    acc._total += Number(r.total) || 0;
     // Subtotal e IVA se acumulan solo si la línea los trae: así una factura queda con su neto y su IVA, y un
     // sueldo (que no tiene ni uno ni otro) queda en null → celda vacía, no un 0 que se leería como "IVA cero".
-    if (r.subtotal   != null && r.subtotal   !== "") acc._subtotal = (acc._subtotal || 0) + Math.abs(Number(r.subtotal) || 0);
-    if (r.iva_monto  != null && r.iva_monto  !== "") acc._iva      = (acc._iva      || 0) + Math.abs(Number(r.iva_monto) || 0);
+    if (r.subtotal   != null && r.subtotal   !== "") acc._subtotal = (acc._subtotal || 0) + (Number(r.subtotal) || 0);
+    if (r.iva_monto  != null && r.iva_monto  !== "") acc._iva      = (acc._iva      || 0) + (Number(r.iva_monto) || 0);
     // Base y cuota POR ALÍCUOTA: una factura puede llevar varios tipos de IVA (la alícuota es de la LÍNEA,
     // no del encabezado) y la contadora necesita verlos abiertos. Solo para las líneas que traen base.
     if (r.subtotal != null && r.subtotal !== "") {
       const t = toNum(r.iva_rate);
       const e = (acc._porTasa[t] ??= { base: 0, cuota: 0 });
-      e.base  += Math.abs(Number(r.subtotal) || 0);
-      e.cuota += Math.abs(Number(r.iva_monto) || 0);
+      e.base  += Number(r.subtotal)  || 0;
+      e.cuota += Number(r.iva_monto) || 0;
     }
   });
   return [...m.values()];
@@ -121,8 +135,11 @@ function totalesPorTasa(filas) {
 function montoCol(r, kAgg, kRaw) {
   if (kAgg in r) return r[kAgg] == null ? "" : r[kAgg];
   const v = r[kRaw];
-  return (v == null || v === "") ? "" : Math.abs(Number(v) || 0);
+  return (v == null || v === "") ? "" : (Number(v) || 0);   // con signo: una NC o devolución baja negativa
 }
+
+// Total de la factura neto de su retención (ver columna "Total Fra."). Redondeado a 2 como todo lo sumado.
+const totalNetoRet = (r, campo) => r2((r._total ?? (Number(r.total) || 0)) - (Number(campo.irpfMonto?.(r)) || 0));
 
 function columnas(modo, contraLabel, campo) {
   // ── Modo factura: es el archivo que recibe el estudio contable, así que sigue el orden y el vocabulario de
@@ -141,16 +158,23 @@ function columnas(modo, contraLabel, campo) {
     { h: "Concepto",       w: 38, get: r => r.nota || r.cuenta_contable || "" },
     { h: "N.I.F.",         w: 16, get: r => campo.cuit?.(r) ?? "" },
     { h: "Expedidor",      w: 34, get: r => r.contraparte_nombre || "" },
+    // Domicilio fiscal del cliente, solo en Facturas Emitidas (el estudio lo pidió el 8/10/2026). Sale del
+    // maestro de clientes (columna `domicilio`) o del de Franquicias; el llamador lo pasa solo para INGRESO.
+    ...(campo.domicilio ? [{ h: "Domicilio", w: 36, get: r => campo.domicilio(r) ?? "" }] : []),
     { h: "Base Imponible", w: 15, get: r => r._base  === "" ? "" : r._base,  fmt: FMT_MONEY, num: true },
     { h: "%IVA",           w: 8,  get: r => r._tasa  === "" ? "" : r._tasa,  num: true },
     { h: "Cuota",          w: 14, get: r => r._cuota === "" ? "" : r._cuota, fmt: FMT_MONEY, num: true },
-    // Retención (IRPF): sale de la retención practicada sobre la factura (nb_movimientos, origen
-    // "retencion_practicada"), que el llamador resuelve por documento_id. Hoy no hay ninguna cargada en
-    // España → sale vacía; se llena sola a medida que se registren.
+    // Retención: en Facturas Recibidas, la que PRACTICAMOS sobre la factura del proveedor (origen
+    // "retencion_practicada"); en Facturas Emitidas, la que nos PRACTICÓ el cliente (origen "retencion",
+    // ej. Revolut 19% a cuenta del IS sobre el alquiler del cajero). Las dos viven en nb_movimientos con
+    // documento_id = id_comp y el llamador las resuelve. La retención sufrida NO es una fila del libro: es
+    // una columna de su factura (así lo pidió el estudio, 7/10/2026).
     { h: "Retención",      w: 13, get: r => r._primera ? (campo.irpfMonto?.(r) ?? "") : "", fmt: FMT_MONEY, num: true },
     // Total de la FACTURA, solo en su primer renglón: así la columna suma el importe real de las facturas y
     // no cuenta dos veces las que llevan dos tipos de IVA. Es la convención de la plantilla del estudio.
-    { h: "Total Fra.",     w: 16, get: r => r._primera ? (r._total ?? Math.abs(Number(r.total) || 0)) : "", fmt: FMT_MONEY, num: true },
+    // NETO de retención (base + cuota − retención): es lo que dice el "TOTAL" de la factura y lo que se cobra
+    // o paga. Revolut F260310: 900 + 189 − 171 = 918 (Martín, 8/10/2026). Vale igual para una recibida con IRPF.
+    { h: "Total Fra.",     w: 16, get: r => r._primera ? totalNetoRet(r, campo) : "", fmt: FMT_MONEY, num: true },
 
     // ── Dos columnas nuestras, después de las suyas: las dos son para el estudio, no para nosotros ──
     // El "tipo de gasto" que pidió la contadora. Es la cuenta del ENCABEZADO (una sola por factura).
@@ -207,8 +231,16 @@ export async function exportarDetalleExcel({ tipo = "EGRESO", modo = "ceco", row
 
   // El modo factura es el que va al estudio contable → se le sacan las cuentas que la contadora no quiere.
   // El modo ceco (management) baja todo.
-  const fuera = modo === "factura" ? rows.filter(r => CUENTAS_FUERA_DEL_ESTUDIO.has(String(r.cuenta_contable || ""))) : [];
-  const dentro = fuera.length ? rows.filter(r => !CUENTAS_FUERA_DEL_ESTUDIO.has(String(r.cuenta_contable || ""))) : rows;
+  const fueraSet = fueraDe(tipo);
+  const fuera = modo === "factura" ? rows.filter(r => fueraSet.has(String(r.cuenta_contable || ""))) : [];
+  // En el libro del estudio la retención sufrida es una COLUMNA de la factura emitida (campo.irpfMonto), no un
+  // renglón: sin este filtro las 4 retenciones de Revolut salían como "facturas" de 171 con cuenta Ganancias y
+  // se sumaban al Total Facturas. En el modo por centro siguen apareciendo (es lo que se ve en pantalla).
+  // Tampoco van los asientos de gestión de sedes propias (`_gestion`, GFAC/GNC de Franquicias): son interusos
+  // internos sin NIF, no facturas a terceros.
+  const dentro = rows.filter(r =>
+    !(fuera.length && fueraSet.has(String(r.cuenta_contable || ""))) &&
+    !(modo === "factura" && (r._tipo === "Retención" || r._gestion)));
 
   const comps = modo === "factura" ? agruparPorFactura(dentro) : dentro;
   const datos = modo === "factura" ? abrirPorTasa(comps) : comps;
@@ -239,13 +271,20 @@ export async function exportarDetalleExcel({ tipo = "EGRESO", modo = "ceco", row
   // realmente baja — si no, el encabezado diría un número que las filas no suman.
   // Se suma sobre COMPS, no sobre los renglones: una factura con dos tipos de IVA ocupa dos filas y las dos
   // arrastran el total del comprobante — sumar los renglones la contaría dos veces.
-  const totVis = excl
-    ? comps.reduce((a, r) => { const k = r.moneda || "ARS"; a[k] = (a[k] || 0) + (r._total ?? Math.abs(Number(r.total) || 0)); return a; }, {})
+  // En el modo factura SIEMPRE se recalcula con signo (las devoluciones restan); el total de pantalla es en
+  // valor absoluto y no coincidiría con lo que suma la columna.
+  const totVis = modo === "factura"
+    ? comps.reduce((a, r) => { const k = r.moneda || "ARS"; a[k] = (a[k] || 0) + totalNetoRet({ ...r, _primera: true }, campo); return a; }, {})
     : totales;
   const totTxt = Object.entries(totVis).sort((a, b) => b[1] - a[1])
     .map(([mo, v]) => `${mo} ${fmt2(v)}`).join(" · ");
-  const exclTxt = excl
-    ? ` — excluidos ${excl.comps} ${excl.comps === 1 ? "comprobante" : "comprobantes"} (${fmt2(excl.total)}): ${excl.cuentas.join(", ")}`
+  // La regla se declara SIEMPRE en el modo factura (aunque esta vez no haya tocado ninguna fila), y si tocó,
+  // cuántos comprobantes y por cuánto.
+  const nGestion = modo === "factura" ? rows.filter(r => r._gestion).length : 0;
+  const exclTxt = modo === "factura"
+    ? ` — fuera del libro por diseño: ${[...fueraSet].join(", ")}` +
+      (excl ? ` (esta vez ${excl.comps} ${excl.comps === 1 ? "comprobante" : "comprobantes"}, ${fmt2(excl.total)})` : "") +
+      (tipo === "INGRESO" ? `; asientos de gestión de sedes propias${nGestion ? ` (${nGestion})` : ""}` : "")
     : "";
   // Se cuentan COMPROBANTES, no renglones: en el modo factura una con dos tipos de IVA ocupa dos filas y
   // decir "117 comprobantes" sería mentir. Si difieren, se aclara.
@@ -303,7 +342,7 @@ export async function exportarDetalleExcel({ tipo = "EGRESO", modo = "ceco", row
       base:  a.base  + (Number(r._base)  || 0),
       cuota: a.cuota + (Number(r._cuota) || 0),
       ret:   a.ret   + (r._primera ? (Number(campo.irpfMonto?.(r)) || 0) : 0),
-      total: a.total + (r._primera ? (r._total ?? Math.abs(Number(r.total) || 0)) : 0),
+      total: a.total + (r._primera ? totalNetoRet(r, campo) : 0),
     }), { base: 0, cuota: 0, ret: 0, total: 0 });
     const rowT = ws.addRow([]);
     rowT.getCell(iLbl).value = "Total Facturas";

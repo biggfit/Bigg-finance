@@ -81,6 +81,17 @@ function movimientoToPnLRows(movs, sociedad, cuentaMap) {
       total = esIngreso ? monto : -monto;
       _tipo = esIngreso ? "Ingreso" : "Gasto";
     }
+    // El IVA lleva el SIGNO del total: una devolución de Stripe (venta negativa) o un reintegro de gasto
+    // (gasto negativo) traen su IVA en contra, y la vista "sin IVA" hace neto = total − iva. Con el IVA en
+    // valor absoluto, la devolución de −486,98 con IVA 84,52 daba un neto de −571,50 en vez de −402,46, y
+    // el IVA débito del mes SUBÍA con una devolución (8/10/2026).
+    const ivaAbs = Math.abs(Number(m.iva_monto) || 0);
+    const iva_monto = total < 0 ? -ivaAbs : ivaAbs;
+    // Alícuota y base solo para los movimientos contados que las traen (ventas Stripe por sede, gastos
+    // contados con IVA): el Excel "por factura" del estudio abre Base Imponible / %IVA / Cuota con esto.
+    // Las retenciones e interusos no llevan base → sin estos campos la celda queda vacía, no "0%".
+    const iva_rate = _tipo === "Ingreso" || _tipo === "Gasto" ? Number(String(m.iva_rate ?? "").replace(",", ".")) || 0 : 0;
+    const conBase = (_tipo === "Ingreso" || _tipo === "Gasto") && (iva_rate > 0 || ivaAbs > 0);
     out.push({
       fecha:           periodoPnLDe(m),
       sociedad:        m.sociedad,
@@ -88,9 +99,11 @@ function movimientoToPnLRows(movs, sociedad, cuentaMap) {
       cuenta_contable: nombre,                        // canónico (nunca el id crudo)
       moneda:          m.moneda ?? "ARS",
       total,
-      iva_monto:       Math.abs(Number(m.iva_monto) || 0),   // para la vista "sin IVA" (neto = total − iva)
+      iva_monto,                                      // firmado como `total` (ver arriba)
+      ...(conBase ? { iva_rate, subtotal: Math.round((total - iva_monto) * 100) / 100 } : {}),
       _tipo,                                          // para el detalle de Informes (tipo de egreso)
       contraparte_nombre: m.contraparte_nombre ?? "",
+      contraparte_id:  m.contraparte_id ?? "",        // cód. de estudio / NIF por id en el Excel del estudio
     });
   }
   return out;

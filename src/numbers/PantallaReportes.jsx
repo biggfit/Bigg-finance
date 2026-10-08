@@ -6,10 +6,10 @@ import { tolerante } from "../lib/http";
 import { BIGG_ORDEN, BIGG_ORDEN_FIN, BIGG_ORDEN_GHQ, BIGG_ORDEN_GPV, BIGG_ORDEN_IMP, CESION, CESION_CUENTA, COM_ENC_RATE, ING_CONTRA_HQ, MESES, PNL_INICIO, SEDES_COMISION_CC, SEDE_GRUPOS, SEDE_HDR, SEDE_ING_ACCTS, SEDE_OCULTAR_SI_VACIA, SEDE_OPEX_GRUPOS, VENTAS_EXCL_PRORR, _nkSede, buildPnLBigg, buildPnLHuergo, buildPnLSede, ccKey, computeCesion, computeSubtotalsHolding, computeSubtotalsHuergo, computeSubtotalsSede, familiaCentro, financiacionToPnLRows, grupoSede, montoPnL, movimientoToPnLRows, normCat, ordCmp, rellenarMesesSinActivas, sumVentasSede } from "./reportes/pnlDerive";
 import { fmtN, fmtSigned, selStyle, MultiSelect, DATE_PRESETS, rangoDePreset } from "./reportes/reportesUi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
-import { fetchComps } from "../lib/sheetsApi";          // Franquicias (read-only)
+import { fetchAll as fetchFranquiciasAll } from "../lib/sheetsApi";   // Franquicias (read-only): comprobantes + maestro
 import { franquiciasIngresoPnLRows } from "../lib/franquiciasAdapter";
 import { exportarPackReportes } from "./exportReportes";
-import { exportarDetalleExcel } from "./reportes/exportDetalleComprobantes";
+import { exportarDetalleExcel, CUENTAS_FUERA_DEL_ESTUDIO } from "./reportes/exportDetalleComprobantes";
 import { copiarReporteComoImagen, clonarParaFoto, medirContenido } from "./fotoReporte";
 import TabTesoreriaConsolidada from "./reportes/TabTesoreriaConsolidada";
 import { finMesAnteriorReal, hoyISO } from "./reportes/balanceUtils";   // Posición financiera abre en el último cierre de mes
@@ -1435,8 +1435,9 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
       const maestro = await (esEg ? fetchProveedores() : fetchClientes());
       const porId = new Map(), porNombre = new Map();
       for (const m of (Array.isArray(maestro) ? maestro : [])) {
-        const dato = { cod: String(m.cod_estudio ?? "").trim(), cuit: String(m.cuit ?? "").trim() };
-        if (!dato.cod && !dato.cuit) continue;
+        const dato = { cod: String(m.cod_estudio ?? "").trim(), cuit: String(m.cuit ?? "").trim(),
+                       domicilio: String(m.domicilio ?? "").trim() };
+        if (!dato.cod && !dato.cuit && !dato.domicilio) continue;
         porId.set(String(m.id), dato);
         porNombre.set(String(m.nombre ?? "").trim().toLowerCase(), dato);
       }
@@ -1444,13 +1445,21 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
       const deMaestro = r => porId.get(String(r.contraparte_id ?? ""))
         ?? porNombre.get(String(r.contraparte_nombre ?? "").trim().toLowerCase());
       const codEstudio = r => deMaestro(r)?.cod ?? "";
-      const cuit       = r => deMaestro(r)?.cuit ?? "";
-      // Retención (IRPF) practicada sobre la factura: vive en nb_movimientos (origen "retencion_practicada",
-      // `documento_id` = id_comp), no en el comprobante. Hoy no hay ninguna cargada en España → la columna
-      // sale vacía y se llena sola a medida que se registren.
+      // Las facturas a franquiciados traen el NIF en la fila (`_cuit`, del maestro de Franquicias): no están
+      // en nb_clientes.
+      const cuit       = r => deMaestro(r)?.cuit ?? r._cuit ?? "";
+      // Domicilio del cliente: columna `domicilio` de nb_clientes, o el del maestro de Franquicias (`_domicilio`).
+      // Solo en Facturas Emitidas; en Recibidas el estudio no lo pidió.
+      const domicilio  = r => deMaestro(r)?.domicilio || r._domicilio || "";
+      // Retención por factura: vive en nb_movimientos con `documento_id` = id_comp, no en el comprobante.
+      //   · "retencion_practicada" → la que le hicimos al proveedor (columna de Facturas Recibidas).
+      //   · "retencion"            → la que nos hizo el cliente (columna de Facturas Emitidas; ej. Revolut
+      //     19% a cuenta del IS sobre el alquiler del cajero, 7/10/2026).
+      // Las claves no chocan: una apunta a EG-…, la otra a IN-…. El exportador saca del libro las filas de
+      // retención sufrida, que acá solo alimentan la columna.
       const irpfPorComp = {};
       for (const m of movs) {
-        if (m.origen !== "retencion_practicada" || !m.documento_id) continue;
+        if ((m.origen !== "retencion_practicada" && m.origen !== "retencion") || !m.documento_id) continue;
         const k = String(m.documento_id);
         irpfPorComp[k] = (irpfPorComp[k] || 0) + Math.abs(Number(m.monto) || 0);
       }
@@ -1463,6 +1472,7 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
           sociedad: r => socMap.get(String(r.sociedad)) || r.sociedad || "",
           centro:   r => ccMap.get(ccKey(r.centro_costo)) || r.centro_costo || "",
           codEstudio, cuit, irpfMonto,
+          ...(esEg ? {} : { domicilio }),
         },
       });
     } catch (e) {
@@ -1519,8 +1529,11 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
               <div style={{ fontSize: 10, fontWeight: 800, color: T.muted, textTransform: "uppercase",
                 letterSpacing: ".08em", padding: "6px 11px 4px" }}>Bajar a Excel</div>
               {/* Dos aperturas del mismo dato: por centro (management) o por comprobante (fiscal). */}
+              {/* El modo factura declara acá mismo qué cuentas deja fuera del libro del estudio (pedido de
+                  Martín, 8/10/2026): que nadie busque en el archivo lo que no va a estar. */}
               {[{ modo: "ceco", label: "Por centro de costo", desc: "Una fila por línea, con centro y cuenta" },
-                { modo: "factura", label: "Por factura", desc: "Una fila por comprobante, sin centro ni cuenta" }].map(op => {
+                { modo: "factura", label: "Por factura",
+                  desc: `Una fila por comprobante, sin centro ni cuenta · fuera del libro: ${(CUENTAS_FUERA_DEL_ESTUDIO[esEg ? "EGRESO" : "INGRESO"] || []).join(", ")}` }].map(op => {
                 const off = filt.length === 0 || !!bajando;
                 return (
                   <button key={op.modo} type="button" role="menuitem" onClick={() => bajarExcel(op.modo)} disabled={off}
@@ -1741,6 +1754,7 @@ export default function PantallaReportes({ onVerComprobante }) {
   const [liqsCerradas, setLiqsCerradas] = useState([]);  // su_liquidaciones cerradas (devengado sueldos)
   const [rawFin,    setRawFin]    = useState([]);        // financiaciones (planes AFIP + créditos)
   const [rawFranq,  setRawFranq]  = useState({});        // comprobantes de Franquicias (read-only)
+  const [franquicias, setFranquicias] = useState([]);    // maestro de Franquicias (razón social, NIF, domicilio)
   const [intercoData,  setIntercoData]  = useState({ movs: [], comps: [], centros: [] });  // fuentes interco (read-only, todas las sociedades)
   const [sociedades,   setSociedades]   = useState([]);  // maestro sociedades (id→nombre/anillo)
   const [loading,   setLoading]   = useState(true);
@@ -1813,7 +1827,13 @@ export default function PantallaReportes({ onVerComprobante }) {
         setLiqsCerradas(Array.isArray(liqsC) ? liqsC : []);
         setRawFin(Array.isArray(fin) ? fin : []);
         // Franquicias (read-only) — fuera del Promise.all para NO bloquear Reportes si ese backend tarda.
-        fetchComps().then(c => { if (!cancelled && c && typeof c === "object") setRawFranq(c); })
+        // "all" en vez de "comps": el maestro de franquicias (razón social, NIF, domicilio) va al libro de
+        // Facturas Emitidas del estudio (8/10/2026).
+        fetchFranquiciasAll().then(a => {
+            if (cancelled || !a) return;
+            if (a.comps && typeof a.comps === "object") setRawFranq(a.comps);
+            setFranquicias(Array.isArray(a.franchises) ? a.franchises : []);
+          })
           .catch(() => { if (!cancelled) setCargaFallida(f => [...f, "franquicias"]); })
           .finally(() => { if (!cancelled) setSecReady(s => ({ ...s, franq: true })); });
         // Intercompañía (read-only) — todas las fuentes (fondeo + transfers) + maestro sociedades (anillo).
@@ -2133,19 +2153,23 @@ export default function PantallaReportes({ onVerComprobante }) {
   //   · sociedad sin centro conocido → afuera (no hay dónde ponerla sin inflar a otro).
   const franqRows = useMemo(() => {
     const estructuraDe = Object.fromEntries(Object.values(FONDEADAS).filter(f => f.estructuraCC).map(f => [f.empresa, f.estructuraCC]));
-    return franquiciasIngresoPnLRows(rawFranq, "", ventasCcId).map(r => {
+    return franquiciasIngresoPnLRows(rawFranq, "", ventasCcId, franquicias).map(r => {
       if (nucleoEmpresas.has(r.sociedad)) return { ...r, _tipo: "Franquicia" };
       const cc = estructuraDe[r.sociedad];
       return cc ? { ...r, centro_costo: cc, subtipo: "INGRESO", _tipo: "Franquicia" } : null;
     }).filter(Boolean);
-  }, [rawFranq, ventasCcId, nucleoEmpresas]);
+  }, [rawFranq, franquicias, ventasCcId, nucleoEmpresas]);
   const inConFranq = useMemo(() => [...rawIn, ...franqRows, ...histIn], [rawIn, franqRows, histIn]);
 
   // Detalle de Informes: las MISMAS fuentes que el P&L (comprobantes + gastos directos + sueldos +
   // financiaciones), tagueadas por `_tipo`. Egresos = todo lo que resta en el resultado; Ingresos = ventas
   // + franquicias + ingresos contabilizados por movimiento.
   const egDetalle  = useMemo(() => egConSueldos.filter(r => !r._tipo || ["Gasto", "Sueldo", "Financiación"].includes(r._tipo)), [egConSueldos]);
-  const ingDetalle = useMemo(() => [...inConFranq, ...gastoMovRows.filter(r => r._tipo === "Ingreso" || r._tipo === "Retención")], [inConFranq, gastoMovRows]);
+  // Las retenciones sufridas (origen "retencion") NO se listan como filas: en el Excel de Facturas Emitidas son la
+  // columna "Retención" de su factura (como el IRPF en Recibidas) y acá sumaban al total como si fueran ventas.
+  // Tampoco van a Egresos: sería contarlas dos veces. Siguen en el P&L (Impuestos · Ganancias) y en la CxC
+  // (Martín, 8/10/2026).
+  const ingDetalle = useMemo(() => [...inConFranq, ...gastoMovRows.filter(r => r._tipo === "Ingreso")], [inConFranq, gastoMovRows]);
 
   // Filas pre-traducidas a la moneda del consolidado (UNA vez, mes por mes). En modo nativo (fxConv null) son
   // las mismas filas → todos los P&L (Sedes/Huergo/BIGG) corren nativos ahí sin tocar su lógica. Mecanismo

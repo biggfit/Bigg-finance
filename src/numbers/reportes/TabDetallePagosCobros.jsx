@@ -19,6 +19,7 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { T } from "../theme";
 import { MONEDA_SYM } from "../../data/tesoreriaData";
 import { fetchProveedores, fetchClientes, esIgnorado } from "../../lib/numbersApi";
+import { fetchAll } from "../../lib/sheetsApi";   // maestro de Franquicias (read-only): razón social, NIF, domicilio
 import { fmtN, fmtSigned, selStyle, MultiSelect, DATE_PRESETS, rangoDePreset } from "./reportesUi";
 import { PNL_INICIO } from "./pnlDerive";
 import { exportarPagosCobrosExcel } from "./exportPagosCobros";
@@ -185,13 +186,25 @@ export default function TabDetallePagosCobros({ movs = [], comps = [], cuentasBa
     setMenuOpen(false);
     setBajando(true);
     try {
-      const [provs, clis] = await Promise.all([fetchProveedores(), fetchClientes()]);
+      // Los franquiciados no están en nb_clientes: su razón social, NIF y domicilio viven en el maestro de
+      // Franquicias (sheetsApi "all"), y los cobros que vienen de ahí llevan el id numérico de la franquicia
+      // en contraparte_id. Si Franquicias no responde, el archivo sale igual, sin esos datos.
+      const [provs, clis, franq] = await Promise.all([
+        fetchProveedores(), fetchClientes(),
+        fetchAll().then(a => a?.franchises ?? []).catch(() => []),
+      ]);
       const porId = new Map(), porNombre = new Map();
       for (const m of [...(Array.isArray(provs) ? provs : []), ...(Array.isArray(clis) ? clis : [])]) {
-        const dato = { cod: String(m.cod_estudio ?? "").trim(), cuit: String(m.cuit ?? "").trim() };
+        const dato = { cod: String(m.cod_estudio ?? "").trim(), cuit: String(m.cuit ?? "").trim(),
+                       nombre: String(m.nombre ?? "").trim(), domicilio: String(m.domicilio ?? "").trim() };
         if (!dato.cod && !dato.cuit) continue;
         porId.set(String(m.id), dato);
-        porNombre.set(String(m.nombre ?? "").trim().toLowerCase(), dato);
+        porNombre.set(dato.nombre.toLowerCase(), dato);
+      }
+      for (const f of franq) {
+        if (f?.id == null) continue;
+        porId.set(String(f.id), { cod: "", cuit: String(f.cuit ?? "").trim(),
+          nombre: String(f.razonSocial || f.name || "").trim(), domicilio: String(f.domicilio || f.billingAddress || "").trim() });
       }
       const deMaestro = r => porId.get(String(r._cpId || "")) ?? porNombre.get(String(r._contra || "").trim().toLowerCase());
       await exportarPagosCobrosExcel({
@@ -200,9 +213,11 @@ export default function TabDetallePagosCobros({ movs = [], comps = [], cuentasBa
           sociedad:       r => socMap.get(String(r.sociedad)) || r.sociedad || "",
           cuentaBancaria: r => r._caja,
           tipo:           r => r._tipo,
-          contraparte:    r => r._contra,
+          // Razón social del maestro cuando la contraparte está identificada; si no, lo que dice el banco.
+          contraparte:    r => deMaestro(r)?.nombre || r._contra,
           cuit:           r => deMaestro(r)?.cuit ?? "",
           codEstudio:     r => deMaestro(r)?.cod ?? "",
+          domicilio:      r => deMaestro(r)?.domicilio ?? "",
           nroComp:        r => r._nroComp,
           idComp:         r => r._totalFc != null ? (r.documento_id || "") : "",
           fechaFiscal:    r => r._fFiscal,
