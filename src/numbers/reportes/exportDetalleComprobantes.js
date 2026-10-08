@@ -1,6 +1,7 @@
-// Exportación a Excel del detalle de Egresos / Ingresos (ExcelJS). Baja EXACTAMENTE las filas que quedaron
-// después de los filtros de pantalla, más columnas que en la tabla no entran pero se necesitan para trabajar
-// afuera: N° de comprobante, id interno del comprobante, código del estudio contable y fecha fiscal.
+// Exportación a Excel del detalle de Egresos / Ingresos (ExcelJS). El modo por centro baja EXACTAMENTE las filas
+// que quedaron después de los filtros de pantalla; el modo por factura recibe del llamador las mismas filas pero
+// cortadas por FECHA FISCAL (es el libro del estudio) y recalcula sus totales con signo. En los dos van columnas
+// que en la tabla no entran: N° de comprobante, id interno, código del estudio contable y fecha fiscal.
 //
 // Dos aperturas, porque son dos lecturas distintas del mismo dato:
 //  · "ceco"    (management) — una fila por LÍNEA, con su centro de costo y su cuenta. Es lo que se ve en pantalla.
@@ -10,6 +11,8 @@
 // El llamador resuelve los campos derivados (nombres de sociedad/centro, tipo, cód. de estudio) porque los mapas
 // viven en la pantalla; acá solo se serializa.
 import { FMT_MONEY, FMT_DATE, isoADate, nuevoWorkbook, addTitulo, addTabla, descargarWorkbook } from "./xlsxUtils";
+import { fechaFiscalDe } from "./pnlDerive";
+import { hoyISO } from "./balanceUtils";
 
 const CFG = {
   EGRESO:  { titulo: "Egresos (detalle)",  headerBg: "FFDC2626", archivo: "Egresos" },
@@ -58,6 +61,13 @@ export const CUENTAS_FUERA_DEL_ESTUDIO = {
   INGRESO: ["Ventas en Efectivo"],
 };
 const fueraDe = tipo => new Set(CUENTAS_FUERA_DEL_ESTUDIO[tipo] || CUENTAS_FUERA_DEL_ESTUDIO.EGRESO);
+// Leyenda de lo que queda fuera del libro: QUÉ cuentas, nunca cuánto suman ni cuántas son (el archivo va al
+// estudio; el importe de las nóminas no es dato para ese documento — Martín, 8/10/2026). Es el mismo texto en
+// el subtítulo del Excel y en el menú "Bajar a Excel" de Reportes, para que nadie busque en el archivo lo que
+// no va a estar.
+export const fueraDelLibroTxt = tipo =>
+  `fuera del libro por diseño: ${[...fueraDe(tipo)].join(", ")}` +
+  (tipo === "INGRESO" ? "; asientos de gestión de sedes propias" : "");
 
 // Una fila por comprobante: suma las líneas que pasaron el filtro (no el total original del comprobante — si
 // filtraste por centro, lo que baja es lo que estás mirando). Las filas que NO son comprobantes (sueldos,
@@ -148,7 +158,7 @@ function montoCol(r, kAgg, kRaw) {
 // Total de la factura neto de su retención (ver columna "Total Fra."). Redondeado a 2 como todo lo sumado.
 const totalNetoRet = (r, campo) => r2((r._total ?? (Number(r.total) || 0)) - (Number(campo.irpfMonto?.(r)) || 0));
 
-function columnas(modo, contraLabel, campo) {
+function columnas(modo, contraLabel, campo, tipo) {
   // ── Modo factura: es el archivo que recibe el estudio contable, así que sigue el orden y el vocabulario de
   //    SU plantilla de "Facturas Recibidas" (Expedidor, N.I.F., Base Imponible, Cuota, Retención, Total Fra.).
   //    No es un clon: sus columnas internas (N.Referencia) no las podemos llenar, y al final van las nuestras,
@@ -163,13 +173,13 @@ function columnas(modo, contraLabel, campo) {
     // La FISCAL, no la de devengado: es la que rige el período de IVA, que es lo que el estudio liquida. El
     // encabezado lo dice para que no haya dudas (Martín, 8/10/2026). Las filas que no tienen fecha fiscal propia
     // (ventas Stripe/datáfono, gastos contados) usan la del movimiento, que es la misma cosa.
-    { h: "Fecha fiscal",   w: 12, get: r => isoADate(r.fecha_fiscal || r.fecha), fmt: FMT_DATE },
+    { h: "Fecha fiscal",   w: 12, get: r => isoADate(fechaFiscalDe(r)), fmt: FMT_DATE },
     { h: "Concepto",       w: 38, get: r => r.nota || r.cuenta_contable || "" },
     { h: "N.I.F.",         w: 16, get: r => campo.cuit?.(r) ?? "" },
     { h: "Expedidor",      w: 34, get: r => r.contraparte_nombre || "" },
-    // Domicilio fiscal del cliente, solo en Facturas Emitidas (el estudio lo pidió el 8/10/2026). Sale del
-    // maestro de clientes (columna `domicilio`) o del de Franquicias; el llamador lo pasa solo para INGRESO.
-    ...(campo.domicilio ? [{ h: "Domicilio", w: 36, get: r => campo.domicilio(r) ?? "" }] : []),
+    // Domicilio fiscal del cliente, solo en Facturas Emitidas (el estudio lo pidió el 8/10/2026; en Recibidas
+    // no). Sale del maestro de clientes (columna `domicilio`) o del de Franquicias.
+    ...(tipo === "INGRESO" ? [{ h: "Domicilio", w: 36, get: r => campo.domicilio?.(r) ?? "" }] : []),
     { h: "Base Imponible", w: 15, get: r => r._base  === "" ? "" : r._base,  fmt: FMT_MONEY, num: true },
     { h: "%IVA",           w: 8,  get: r => r._tasa  === "" ? "" : r._tasa,  num: true },
     { h: "Cuota",          w: 14, get: r => r._cuota === "" ? "" : r._cuota, fmt: FMT_MONEY, num: true },
@@ -194,7 +204,7 @@ function columnas(modo, contraLabel, campo) {
 
   const cols = [
     { h: "Fecha",        w: 12, get: r => isoADate(r.fecha),                     fmt: FMT_DATE },
-    { h: "Fecha fiscal", w: 12, get: r => isoADate(r.fecha_fiscal || r.fecha),   fmt: FMT_DATE },
+    { h: "Fecha fiscal", w: 12, get: r => isoADate(fechaFiscalDe(r)),   fmt: FMT_DATE },
     { h: "Tipo",         w: 16, get: r => campo.tipo?.(r) ?? "" },
     { h: "Sociedad",     w: 20, get: r => campo.sociedad?.(r) ?? "" },
     { h: contraLabel,    w: 34, get: r => r.contraparte_nombre || "" },
@@ -218,8 +228,9 @@ function columnas(modo, contraLabel, campo) {
   );
   cols.push(
     { h: "Moneda", w: 10, get: r => r.moneda || "ARS" },
-    // Los tres en positivo, igual que en pantalla (el reporte ya dice si son egresos o ingresos). En el dato,
-    // subtotal + IVA = total en 1.006 de 1.014 comprobantes; los que no, difieren por centavos de redondeo.
+    // Subtotal e IVA con signo (una NC o devolución baja negativa); Total en valor absoluto, igual que la columna
+    // de pantalla (el reporte ya dice si son egresos o ingresos). En el dato, subtotal + IVA = total en 1.006 de
+    // 1.014 comprobantes; los que no, difieren por centavos de redondeo.
     { h: "Subtotal", w: 15, get: r => montoCol(r, "_subtotal", "subtotal"),  fmt: FMT_MONEY, num: true },
     { h: "IVA",      w: 13, get: r => montoCol(r, "_iva",      "iva_monto"), fmt: FMT_MONEY, num: true },
     { h: "Total",    w: 16, get: r => r._total ?? Math.abs(Number(r.total) || 0), fmt: FMT_MONEY, num: true },
@@ -230,67 +241,62 @@ function columnas(modo, contraLabel, campo) {
 /**
  * @param tipo     "EGRESO" | "INGRESO"
  * @param modo     "ceco" (una fila por línea, con centro y cuenta) | "factura" (una fila por comprobante)
- * @param rows     filas YA filtradas y ordenadas (las de pantalla)
- * @param campo    resolvers: { tipo, sociedad, centro, codEstudio } — cada uno (row) => string
- * @param totales  { [moneda]: importe } de pantalla; no cambia entre modos (agrupar solo junta líneas)
+ * @param rows     filas YA filtradas y ordenadas (modo ceco: las de pantalla; modo factura: cortadas por fecha fiscal)
+ * @param campo    resolvers: { tipo, sociedad, centro, codEstudio, cuit, irpfMonto, domicilio } — cada uno (row) => string
+ * @param totales  { [moneda]: importe } de pantalla (en valor absoluto); solo lo usa el modo ceco — el modo
+ *                 factura recalcula con signo sobre lo que baja
  */
 export async function exportarDetalleExcel({ tipo = "EGRESO", modo = "ceco", rows = [], campo = {}, totales = {}, contraLabel = "Contraparte", rango = {} }) {
   const cfg  = CFG[tipo] || CFG.EGRESO;
   const mcfg = MODOS[modo] || MODOS.ceco;
 
-  // El modo factura es el que va al estudio contable → se le sacan las cuentas que la contadora no quiere.
-  // El modo ceco (management) baja todo.
-  const fueraSet = fueraDe(tipo);
-  const fuera = modo === "factura" ? rows.filter(r => fueraSet.has(String(r.cuenta_contable || ""))) : [];
-  // En el libro del estudio la retención sufrida es una COLUMNA de la factura emitida (campo.irpfMonto), no un
-  // renglón: sin este filtro las 4 retenciones de Revolut salían como "facturas" de 171 con cuenta Ganancias y
-  // se sumaban al Total Facturas. En el modo por centro siguen apareciendo (es lo que se ve en pantalla).
-  // Tampoco van los asientos de gestión de sedes propias (`_gestion`, GFAC/GNC de Franquicias): son interusos
-  // internos sin NIF, no facturas a terceros.
-  const dentro = rows.filter(r =>
-    !(fuera.length && fueraSet.has(String(r.cuenta_contable || ""))) &&
-    !(modo === "factura" && (r._tipo === "Retención" || r._gestion)));
+  // El modo factura es el que va al estudio contable → se le sacan las cuentas que la contadora no quiere y
+  // los asientos de gestión de sedes propias (`_gestion`, GFAC/GNC de Franquicias: interusos internos sin NIF, no
+  // facturas a terceros). El modo ceco (management) baja todo. Las retenciones sufridas no llegan acá: el
+  // llamador (ingDetalle, PantallaReportes) no las lista como filas porque en este libro son la columna
+  // "Retención" de su factura.
+  const fueraSet = modo === "factura" ? fueraDe(tipo) : new Set();
+  const dentro = rows.filter(r => !fueraSet.has(String(r.cuenta_contable || "")) && !(modo === "factura" && r._gestion));
 
-  const COLS = columnas(modo, contraLabel, campo);
+  const COLS = columnas(modo, contraLabel, campo, tipo);
 
-  const periodo = rango.desde || rango.hasta
-    ? `${rango.desde ? rango.desde.split("-").reverse().join("/") : "inicio"} → ${rango.hasta ? rango.hasta.split("-").reverse().join("/") : "hoy"}`
-    : "todo el período";
-  const unidad = modo === "factura" ? "comprobante" : "registro";
+  const dmy = iso => String(iso || "").split("-").reverse().join("/");
+  const periodo = rango.desde || rango.hasta ? `${rango.desde ? dmy(rango.desde) : "inicio"} → ${rango.hasta ? dmy(rango.hasta) : "hoy"}` : "todo el período";
   const fmt2 = v => v.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  // La regla se declara SIEMPRE en el modo factura: QUÉ cuentas quedan fuera, nunca cuánto suman ni cuántas son
-  // (el archivo va al estudio; el importe de las nóminas no es dato para ese documento — Martín, 8/10/2026).
-  const exclTxt = modo === "factura"
-    ? ` — fuera del libro por diseño: ${[...fueraSet].join(", ")}` +
-      (tipo === "INGRESO" ? "; asientos de gestión de sedes propias" : "")
-    : "";
+  const exclTxt = modo === "factura" ? ` — ${fueraDelLibroTxt(tipo)}` : "";
+  // Cabecera del estudio: Empresa / Período / Fecha, como en su plantilla (antes del subtítulo). Período y Fecha
+  // son los mismos en todas las pestañas; la empresa sale de cada hoja. Misma fecha (UTC) que lleva el nombre
+  // del archivo.
+  const metaFont = { bold: true, size: 11, color: { argb: "FF0F172A" } };
+  const metasFijas = [`Período: ${periodo}`, `Fecha: ${dmy(hoyISO())}`];
 
   // ── Hojas. En el libro del estudio, las facturas y lo que no tiene factura van en pestañas distintas (Martín,
   //    8/10/2026). Egresos: "Facturas Recibidas" = comprobantes (IVA deducible); "Pagos sin factura" = gastos
-  //    contados (es lo que Ana pidió "en otra hoja" el 29/9); "Otros" (financiaciones, histórico) solo si hay algo.
-  //    Ingresos: "Facturas Emitidas" = nuestros comprobantes y las facturas/NC a franquiciados (`_key`); "Ventas sin
-  //    factura" = ingresos directos (Stripe, datáfono, otros ingresos de caja), que son ventas con IVA pero sin
-  //    factura emitida. El modo por centro sigue en una hoja. El archivo se llama como su libro ("Facturas
-  //    Recibidas"), no como nuestro reporte: es el documento que ellos archivan.
+  //    contados (es lo que Ana pidió "en otra hoja" el 29/9); "Otros egresos" (financiaciones, histórico) solo si
+  //    hay algo. Ingresos: "Facturas Emitidas" = nuestros comprobantes y las facturas/NC a franquiciados (`_key`);
+  //    "Ventas sin factura" = ingresos directos (Stripe, datáfono, otros ingresos de caja), que son ventas con IVA
+  //    pero sin factura emitida. La primera pestaña va siempre (aunque quede vacía); las demás, solo con filas. El
+  //    modo por centro sigue en una hoja. El archivo se llama como su libro ("Facturas Recibidas"), no como
+  //    nuestro reporte: es el documento que ellos archivan.
   const esFactura = r => !!(r.id_comp || r._key);
-  const hojas = modo !== "factura"
-    ? [{ nombre: tipo === "INGRESO" ? "Ingresos" : "Egresos", titulo: `${cfg.titulo} · ${mcfg.sufijo}`, unidad, rows: dentro }]
-    : tipo === "EGRESO"
-    ? [
-        { nombre: "Facturas Recibidas", titulo: "Facturas Recibidas", unidad: "comprobante", rows: dentro.filter(esFactura) },
-        { nombre: "Pagos sin factura",  titulo: "Pagos sin factura",  unidad: "pago",        rows: dentro.filter(r => !esFactura(r) && r._tipo === "Gasto") },
-        { nombre: "Otros",              titulo: "Otros egresos",      unidad: "registro",    rows: dentro.filter(r => !esFactura(r) && r._tipo !== "Gasto") },
-      ].filter((h, i) => i === 0 || h.rows.length)
-    : [
-        { nombre: "Facturas Emitidas",  titulo: "Facturas Emitidas",  unidad: "comprobante", rows: dentro.filter(esFactura) },
-        { nombre: "Ventas sin factura", titulo: "Ventas sin factura", unidad: "venta",       rows: dentro.filter(r => !esFactura(r)) },
-      ].filter((h, i) => i === 0 || h.rows.length);
+  const LIBRO = {   // [nombre de la pestaña, unidad del subtítulo, qué filas]
+    EGRESO:  [["Facturas Recibidas", "comprobante", esFactura],
+              ["Pagos sin factura",  "pago",        r => !esFactura(r) && r._tipo === "Gasto"],
+              ["Otros egresos",      "registro",    r => !esFactura(r) && r._tipo !== "Gasto"]],
+    INGRESO: [["Facturas Emitidas",  "comprobante", esFactura],
+              ["Ventas sin factura", "venta",       r => !esFactura(r)]],
+  };
+  const hojas = modo === "factura"
+    ? (LIBRO[tipo] || LIBRO.EGRESO).map(([nombre, unidad, pred]) => ({ nombre, titulo: nombre, unidad, rows: dentro.filter(pred) }))
+        .filter((h, i) => i === 0 || h.rows.length)
+    : [{ nombre: tipo === "INGRESO" ? "Ingresos" : "Egresos", titulo: `${cfg.titulo} · ${mcfg.sufijo}`, unidad: "registro", rows: dentro }];
 
   const wb = nuevoWorkbook();
   for (const hoja of hojas) {
     const comps = modo === "factura" ? agruparPorFactura(hoja.rows) : hoja.rows;
     const datos = modo === "factura" ? abrirPorTasa(comps) : comps;
-    const ws = wb.addWorksheet(hoja.nombre);
+    // El nombre de una pestaña de Excel admite 31 caracteres; el título de la hoja es el nombre completo.
+    const ws = wb.addWorksheet(hoja.nombre.slice(0, 31));
 
     // Los totales vienen de pantalla (sin filtrar), así que en el modo factura se recalculan sobre lo que
     // realmente baja — si no, el encabezado diría un número que las filas no suman.
@@ -299,7 +305,7 @@ export async function exportarDetalleExcel({ tipo = "EGRESO", modo = "ceco", row
     // En el modo factura SIEMPRE se recalcula con signo (las devoluciones restan); el total de pantalla es en
     // valor absoluto y no coincidiría con lo que suma la columna.
     const totVis = modo === "factura"
-      ? comps.reduce((a, r) => { const k = r.moneda || "ARS"; a[k] = (a[k] || 0) + totalNetoRet({ ...r, _primera: true }, campo); return a; }, {})
+      ? comps.reduce((a, r) => { const k = r.moneda || "ARS"; a[k] = (a[k] || 0) + totalNetoRet(r, campo); return a; }, {})
       : totales;
     const totTxt = Object.entries(totVis).sort((a, b) => b[1] - a[1])
       .map(([mo, v]) => `${mo} ${fmt2(v)}`).join(" · ");
@@ -307,19 +313,10 @@ export async function exportarDetalleExcel({ tipo = "EGRESO", modo = "ceco", row
     // decir "117 comprobantes" sería mentir. Si difieren, se aclara.
     const nComp = modo === "factura" ? comps.length : datos.length;
     const filasTxt = datos.length !== nComp ? ` en ${datos.length} renglones (los que llevan dos tipos de IVA ocupan uno por tipo)` : "";
-    // Cabecera del estudio: Empresa / Período / Fecha, como en su plantilla (antes del subtítulo). La empresa
-    // sale de las sociedades que quedaron en lo filtrado (normalmente una sola, porque el archivo se baja por
-    // sociedad).
     const metas = [];
     if (modo === "factura") {
       const empresas = [...new Set(datos.map(r => campo.sociedad?.(r) || r.sociedad || "").filter(Boolean))];
-      const hoy = new Date();
-      const dd = n => String(n).padStart(2, "0");
-      for (const txt of [
-        `Empresa: ${empresas.join(" · ") || "—"}`,
-        `Período: ${periodo}`,
-        `Fecha: ${dd(hoy.getDate())}/${dd(hoy.getMonth() + 1)}/${hoy.getFullYear()}`,
-      ]) metas.push({ texto: txt, font: { bold: true, size: 11, color: { argb: "FF0F172A" } } });
+      for (const txt of [`Empresa: ${empresas.join(" · ") || "—"}`, ...metasFijas]) metas.push({ texto: txt, font: metaFont });
     }
     const otrasHojas = hojas.length > 1 ? ` · las demás pestañas: ${hojas.filter(h => h !== hoja).map(h => h.nombre).join(", ")}` : "";
     metas.push(`${periodo} · ${nComp} ${hoja.unidad}${nComp === 1 ? "" : "s"}${filasTxt}${totTxt ? ` · ${totTxt}` : ""}${exclTxt}${otrasHojas}`);

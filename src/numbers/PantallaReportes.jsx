@@ -3,13 +3,14 @@ import { T, PageHeader, fmtDate } from "./theme";
 import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, fetchFinanciaciones, fetchIntercoData, fondeoFondeadasMensual, intercoConsolidadoMensual, calcSaldoPendiente, primeCache, fetchTiposCambio, tcDelMes, montoAUSD, montoAMoneda, fetchPnLHistorico, fetchProveedores, fetchClientes, RETDEP_TAG } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows } from "../lib/sueldosApi";
 import { tolerante } from "../lib/http";
-import { BIGG_ORDEN, BIGG_ORDEN_FIN, BIGG_ORDEN_GHQ, BIGG_ORDEN_GPV, BIGG_ORDEN_IMP, CESION, CESION_CUENTA, COM_ENC_RATE, ING_CONTRA_HQ, MESES, PNL_INICIO, SEDES_COMISION_CC, SEDE_GRUPOS, SEDE_HDR, SEDE_ING_ACCTS, SEDE_OCULTAR_SI_VACIA, SEDE_OPEX_GRUPOS, VENTAS_EXCL_PRORR, _nkSede, buildPnLBigg, buildPnLHuergo, buildPnLSede, ccKey, computeCesion, computeSubtotalsHolding, computeSubtotalsHuergo, computeSubtotalsSede, familiaCentro, financiacionToPnLRows, grupoSede, montoPnL, movimientoToPnLRows, normCat, ordCmp, rellenarMesesSinActivas, sumVentasSede } from "./reportes/pnlDerive";
+import { BIGG_ORDEN, BIGG_ORDEN_FIN, BIGG_ORDEN_GHQ, BIGG_ORDEN_GPV, BIGG_ORDEN_IMP, CESION, CESION_CUENTA, COM_ENC_RATE, ING_CONTRA_HQ, MESES, PNL_INICIO, SEDES_COMISION_CC, SEDE_GRUPOS, SEDE_HDR, SEDE_ING_ACCTS, SEDE_OCULTAR_SI_VACIA, SEDE_OPEX_GRUPOS, VENTAS_EXCL_PRORR, _nkSede, buildPnLBigg, buildPnLHuergo, buildPnLSede, ccKey, computeCesion, computeSubtotalsHolding, computeSubtotalsHuergo, computeSubtotalsSede, familiaCentro, fechaFiscalDe, financiacionToPnLRows, grupoSede, montoPnL, movimientoToPnLRows, normCat, ordCmp, rellenarMesesSinActivas, sumVentasSede } from "./reportes/pnlDerive";
 import { fmtN, fmtSigned, selStyle, MultiSelect, DATE_PRESETS, rangoDePreset } from "./reportes/reportesUi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
 import { fetchAll as fetchFranquiciasAll } from "../lib/sheetsApi";   // Franquicias (read-only): comprobantes + maestro
 import { franquiciasIngresoPnLRows } from "../lib/franquiciasAdapter";
 import { exportarPackReportes } from "./exportReportes";
-import { exportarDetalleExcel, CUENTAS_FUERA_DEL_ESTUDIO } from "./reportes/exportDetalleComprobantes";
+import { exportarDetalleExcel, fueraDelLibroTxt } from "./reportes/exportDetalleComprobantes";
+import { armarMaestroContrapartes } from "./reportes/contrapartes";
 import { copiarReporteComoImagen, clonarParaFoto, medirContenido } from "./fotoReporte";
 import TabTesoreriaConsolidada from "./reportes/TabTesoreriaConsolidada";
 import { finMesAnteriorReal, hoyISO } from "./reportes/balanceUtils";   // Posición financiera abre en el último cierre de mes
@@ -1328,7 +1329,7 @@ const TIPO_COMP_LABEL = { EGRESO: "Compra", GASTO: "Gasto", INGRESO: "Venta", NC
 // subtipo del comprobante traducido. La usan la columna Tipo Y su filtro → no se pueden desalinear.
 const tipoDeFila = (r) => r._tipo || TIPO_COMP_LABEL[String(r.subtipo || "").toUpperCase()] || r.subtipo || "—";
 
-function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedades = [] }) {
+function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedades = [], franquicias = [] }) {
   const esEg = tipo === "EGRESO";
   // Egresos incluyen sueldos → la contraparte es proveedor O legajo (ambos en contraparte_nombre,
   // que el buscador de la línea 2288 ya matchea). El label lo refleja.
@@ -1414,9 +1415,7 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
       return true;
     }).sort((a, b) => String(fechaDe(b) || "").localeCompare(String(fechaDe(a) || "")));
   }, [rows, q, fSoc, fCC, fCta, fMon, fTipo, fEstado, desde, hasta, estadoDe]);
-  const fechaDevengado = r => r.fecha;
-  const fechaFiscal    = r => r.fecha_fiscal || r.fecha;
-  const filt = useMemo(() => filtrarPor(fechaDevengado), [filtrarPor]);
+  const filt = useMemo(() => filtrarPor(r => r.fecha), [filtrarPor]);   // devengado
 
   const porMon = useMemo(() => {
     const m = {};
@@ -1432,57 +1431,42 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
     return () => document.removeEventListener("mousedown", h);
   }, [menuOpen]);
 
-  // Descarga a Excel: baja las MISMAS filas que quedaron filtradas en pantalla, más columnas que en la tabla no
-  // entran (N° comp, cód. de estudio, fecha fiscal). El `cod_estudio` NO vive en el comprobante sino en el
-  // maestro de proveedores/clientes → se resuelve por contraparte, y el maestro se pide recién acá para no
-  // sumarle otra llamada a la carga del reporte.
+  // Descarga a Excel: baja las filas filtradas (por devengado en el modo por centro, por fecha fiscal en el libro
+  // del estudio), más columnas que en la tabla no entran (N° comp, cód. de estudio, NIF, domicilio, fecha
+  // fiscal). Cód. de estudio, NIF y domicilio NO viven en el comprobante sino en los maestros de proveedores/
+  // clientes y de Franquicias (reportes/contrapartes.js); el de Numbers se pide recién acá para no sumarle otra
+  // llamada a la carga del reporte.
   const bajarExcel = async (modo) => {
     setMenuOpen(false);
     setBajando(modo);
     try {
-      const maestro = await (esEg ? fetchProveedores() : fetchClientes());
-      const porId = new Map(), porNombre = new Map();
-      for (const m of (Array.isArray(maestro) ? maestro : [])) {
-        const dato = { cod: String(m.cod_estudio ?? "").trim(), cuit: String(m.cuit ?? "").trim(),
-                       domicilio: String(m.domicilio ?? "").trim() };
-        if (!dato.cod && !dato.cuit && !dato.domicilio) continue;
-        porId.set(String(m.id), dato);
-        porNombre.set(String(m.nombre ?? "").trim().toLowerCase(), dato);
-      }
-      // Por id; si la fila no lo trae (sueldos, financiaciones, histórico), por nombre.
-      const deMaestro = r => porId.get(String(r.contraparte_id ?? ""))
-        ?? porNombre.get(String(r.contraparte_nombre ?? "").trim().toLowerCase());
-      const codEstudio = r => deMaestro(r)?.cod ?? "";
-      // Las facturas a franquiciados traen el NIF en la fila (`_cuit`, del maestro de Franquicias): no están
-      // en nb_clientes.
-      const cuit       = r => deMaestro(r)?.cuit ?? r._cuit ?? "";
-      // Domicilio del cliente: columna `domicilio` de nb_clientes, o el del maestro de Franquicias (`_domicilio`).
-      // Solo en Facturas Emitidas; en Recibidas el estudio no lo pidió.
-      const domicilio  = r => deMaestro(r)?.domicilio || r._domicilio || "";
-      // Retención por factura: vive en nb_movimientos con `documento_id` = id_comp, no en el comprobante.
-      //   · "retencion_practicada" → la que le hicimos al proveedor (columna de Facturas Recibidas).
-      //   · "retencion"            → la que nos hizo el cliente (columna de Facturas Emitidas; ej. Revolut
-      //     19% a cuenta del IS sobre el alquiler del cajero, 7/10/2026).
-      // Las claves no chocan: una apunta a EG-…, la otra a IN-…. El exportador saca del libro las filas de
-      // retención sufrida, que acá solo alimentan la columna.
+      const maestro = armarMaestroContrapartes({
+        ...(esEg ? { proveedores: await fetchProveedores() } : { clientes: await fetchClientes() }), franquicias });
+      const deMaestro = r => maestro(r.contraparte_id, r.contraparte_nombre);
+      // Retención por factura: vive en nb_movimientos con `documento_id` = id_comp, no en el comprobante. En
+      // Facturas Recibidas es la que le hicimos al proveedor ("retencion_practicada"); en Facturas Emitidas, la
+      // que nos hizo el cliente ("retencion"; ej. Revolut 19% a cuenta del IS sobre el alquiler del cajero,
+      // 7/10/2026). Acá solo alimenta la columna; como fila no se lista (ver ingDetalle).
+      const origenRet = esEg ? "retencion_practicada" : "retencion";
       const irpfPorComp = {};
       for (const m of movs) {
-        if ((m.origen !== "retencion_practicada" && m.origen !== "retencion") || !m.documento_id) continue;
+        if (m.origen !== origenRet || !m.documento_id) continue;
         const k = String(m.documento_id);
         irpfPorComp[k] = (irpfPorComp[k] || 0) + Math.abs(Number(m.monto) || 0);
       }
-      const irpfMonto = r => irpfPorComp[String(r.id_comp ?? "")] ?? "";
 
       await exportarDetalleExcel({
         // El libro del estudio baja lo que tiene FECHA FISCAL en el período (ver filtrarPor); el modo por centro,
         // lo mismo que está en pantalla.
-        tipo, modo, rows: modo === "factura" ? filtrarPor(fechaFiscal) : filt, totales: porMon, rango: { desde, hasta }, contraLabel,
+        tipo, modo, rows: modo === "factura" ? filtrarPor(fechaFiscalDe) : filt, totales: porMon, rango: { desde, hasta }, contraLabel,
         campo: {
           tipo: tipoDeFila,
-          sociedad: r => socMap.get(String(r.sociedad)) || r.sociedad || "",
-          centro:   r => ccMap.get(ccKey(r.centro_costo)) || r.centro_costo || "",
-          codEstudio, cuit, irpfMonto,
-          ...(esEg ? {} : { domicilio }),
+          sociedad:   r => socMap.get(String(r.sociedad)) || r.sociedad || "",
+          centro:     r => ccMap.get(ccKey(r.centro_costo)) || r.centro_costo || "",
+          codEstudio: r => deMaestro(r)?.cod || "",
+          cuit:       r => deMaestro(r)?.cuit || "",
+          domicilio:  r => deMaestro(r)?.domicilio || "",   // el exportador la muestra solo en Facturas Emitidas
+          irpfMonto:  r => irpfPorComp[String(r.id_comp ?? "")] ?? "",
         },
       });
     } catch (e) {
@@ -1539,11 +1523,11 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
               <div style={{ fontSize: 10, fontWeight: 800, color: T.muted, textTransform: "uppercase",
                 letterSpacing: ".08em", padding: "6px 11px 4px" }}>Bajar a Excel</div>
               {/* Dos aperturas del mismo dato: por centro (management) o por comprobante (fiscal). */}
-              {/* El modo factura declara acá mismo qué cuentas deja fuera del libro del estudio (pedido de
-                  Martín, 8/10/2026): que nadie busque en el archivo lo que no va a estar. */}
+              {/* El modo factura declara acá mismo qué deja fuera del libro del estudio (misma leyenda que el
+                  subtítulo del Excel; pedido de Martín, 8/10/2026): que nadie busque en el archivo lo que no va
+                  a estar. */}
               {[{ modo: "ceco", label: "Por centro de costo", desc: "Una fila por línea, con centro y cuenta" },
-                { modo: "factura", label: "Por factura",
-                  desc: `Una fila por comprobante, sin centro ni cuenta · fuera del libro: ${(CUENTAS_FUERA_DEL_ESTUDIO[esEg ? "EGRESO" : "INGRESO"] || []).join(", ")}` }].map(op => {
+                { modo: "factura", label: "Por factura", desc: `Una fila por comprobante, sin centro ni cuenta · ${fueraDelLibroTxt(tipo)}` }].map(op => {
                 const off = filt.length === 0 || !!bajando;
                 return (
                   <button key={op.modo} type="button" role="menuitem" onClick={() => bajarExcel(op.modo)} disabled={off}
@@ -3046,16 +3030,16 @@ export default function PantallaReportes({ onVerComprobante }) {
 
       {/* ── Informes · detalle de comprobantes (Egresos / Ingresos) ── */}
       {activeTab === "inf_egresos" && (
-        <TabDetalleComprobantes rows={egDetalle} movs={rawMovs} tipo="EGRESO" ccs={ccs} sociedades={sociedades} />
+        <TabDetalleComprobantes rows={egDetalle} movs={rawMovs} tipo="EGRESO" ccs={ccs} sociedades={sociedades} franquicias={franquicias} />
       )}
       {activeTab === "inf_ingresos" && (
-        <TabDetalleComprobantes rows={ingDetalle} movs={rawMovs} tipo="INGRESO" ccs={ccs} sociedades={sociedades} />
+        <TabDetalleComprobantes rows={ingDetalle} movs={rawMovs} tipo="INGRESO" ccs={ccs} sociedades={sociedades} franquicias={franquicias} />
       )}
       {/* Pagos y cobros: mira nb_movimientos (la caja), no el devengado. `comps` son las LÍNEAS de los
           comprobantes, de donde sale la factura que cada movimiento cancela. */}
       {activeTab === "inf_pagos" && (
         <TabDetallePagosCobros movs={rawMovs} comps={[...rawEg, ...rawIn]}
-          cuentasBancarias={cuentasBancarias} sociedades={sociedades} />
+          cuentasBancarias={cuentasBancarias} sociedades={sociedades} franquicias={franquicias} />
       )}
 
       {/* ── Reportes en construcción (esqueleto navegable, sin cálculo todavía) ── */}

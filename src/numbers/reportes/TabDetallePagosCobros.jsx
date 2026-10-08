@@ -18,11 +18,11 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T } from "../theme";
 import { MONEDA_SYM } from "../../data/tesoreriaData";
-import { fetchProveedores, fetchClientes, esIgnorado } from "../../lib/numbersApi";
-import { fetchAll } from "../../lib/sheetsApi";   // maestro de Franquicias (read-only): razón social, NIF, domicilio
+import { fetchProveedores, fetchClientes, esIgnorado, esExtractoSinConciliar, esIntercoParkAbierta } from "../../lib/numbersApi";
 import { fmtN, fmtSigned, selStyle, MultiSelect, DATE_PRESETS, rangoDePreset } from "./reportesUi";
-import { PNL_INICIO } from "./pnlDerive";
+import { PNL_INICIO, fechaFiscalDe } from "./pnlDerive";
 import { exportarPagosCobrosExcel } from "./exportPagosCobros";
+import { armarMaestroContrapartes } from "./contrapartes";
 
 // Movimientos que SON plata moviéndose por una caja. Quedan afuera los asientos que viven en nb_movimientos
 // sin ser caja (retenciones sufridas, interusos de gestión): no tienen cuenta bancaria y meterlos rompería
@@ -41,20 +41,20 @@ const TIPO_LABEL = {
 const esInterco = m => /^interco/.test(String(m.origen || ""));
 // "Sin conciliar" = la línea del banco todavía no fue aceptada por nadie: (a) extracto sin documento_id, que
 // conserva el tipo crudo del parser (EGRESO/INGRESO) y la cuenta que PROPUSO la regla sin que nadie la haya
-// confirmado; (b) interco parkeada a la que el otro lado aún no le declaró su pata (lecturaInterco marca
-// `recibida=` en referencia cuando se cierra). Sin esta etiqueta el estudio las leía como pagos hechos.
-const esSinConciliar = m =>
-  (String(m.origen || "") === "extracto" && !m.documento_id) ||
-  (String(m.origen || "") === "interco_park" && !/recibida=/.test(String(m.referencia || "")));
-const tipoDeMov = m => esSinConciliar(m)
-  ? "Sin conciliar"
-  : esInterco(m)
-  ? (Number(m.monto) < 0 ? "Pago" : "Cobro")
-  : (TIPO_LABEL[String(m.tipo || "").toUpperCase()] || m.tipo || "—");
+// confirmado; (b) interco parkeada a la que el otro lado aún no le declaró su pata. Los dos predicados los
+// define numbersApi (es quien escribe esos estados). Sin esta etiqueta el estudio las leía como pagos hechos.
+const esSinConciliar = m => esExtractoSinConciliar(m) || esIntercoParkAbierta(m);
+const tipoDeMov = (m, sinConciliar) => {
+  if (sinConciliar) return "Sin conciliar";
+  if (esInterco(m)) return Number(m.monto) < 0 ? "Pago" : "Cobro";
+  return TIPO_LABEL[String(m.tipo || "").toUpperCase()] || m.tipo || "—";
+};
 
 const fmtF = iso => String(iso || "").split("-").reverse().join("/");
 
-export default function TabDetallePagosCobros({ movs = [], comps = [], cuentasBancarias = [], sociedades = [] }) {
+// `franquicias`: el maestro de Franquicias (razón social, NIF, domicilio), que PantallaReportes ya tiene cargado;
+// los cobros que vienen de ahí llevan el id numérico de la franquicia en contraparte_id.
+export default function TabDetallePagosCobros({ movs = [], comps = [], cuentasBancarias = [], sociedades = [], franquicias = [] }) {
   const socMap = useMemo(() => new Map(sociedades.map(s => [String(s.id), s.nombre])), [sociedades]);
   const cbMap  = useMemo(() => new Map(cuentasBancarias.map(c => [String(c.id), c.nombre])), [cuentasBancarias]);
 
@@ -67,7 +67,7 @@ export default function TabDetallePagosCobros({ movs = [], comps = [], cuentasBa
       if (!k) continue;
       let e = m.get(k);
       if (!e) {
-        e = { nroComp: r.nro_comp || "", fechaFiscal: r.fecha_fiscal || r.fecha || "",
+        e = { nroComp: r.nro_comp || "", fechaFiscal: fechaFiscalDe(r) || "",
               cuenta: r.cuenta_contable || "", cpId: r.contraparte_id || "",
               cpNombre: r.contraparte_nombre || "", total: 0 };
         m.set(k, e);
@@ -85,9 +85,10 @@ export default function TabDetallePagosCobros({ movs = [], comps = [], cuentasBa
     .filter(m => String(m.fecha || "") >= PNL_INICIO && !esIgnorado(m) && m.cuenta_bancaria)
     .map(m => {
       const c = m.documento_id ? compMap.get(String(m.documento_id)) : null;
+      const sinConc = esSinConciliar(m);
       return {
         ...m,
-        _tipo:    tipoDeMov(m),
+        _tipo:    tipoDeMov(m, sinConc),
         _caja:    cbMap.get(String(m.cuenta_bancaria)) || m.cuenta_bancaria || "",
         _contra:  m.contraparte_nombre || c?.cpNombre || m.legajo_nombre || "",
         _cpId:    m.contraparte_id || c?.cpId || "",
@@ -96,7 +97,7 @@ export default function TabDetallePagosCobros({ movs = [], comps = [], cuentasBa
         // La cuenta contable sale del comprobante aplicado; si el movimiento la trae propia (gasto contado
         // imputado en la conciliación) se usa esa. La tarjeta queda vacía a propósito, y una línea sin
         // conciliar también: lo que trae es la propuesta de la regla, no una imputación.
-        _cuenta:  esSinConciliar(m) ? "" : (c?.cuenta || m.cuenta_contable || ""),
+        _cuenta:  sinConc ? "" : (c?.cuenta || m.cuenta_contable || ""),
         _totalFc: c?.total ?? null,
       };
     }), [movs, compMap, cbMap]);
@@ -180,33 +181,16 @@ export default function TabDetallePagosCobros({ movs = [], comps = [], cuentasBa
     return () => document.removeEventListener("mousedown", h);
   }, [menuOpen]);
 
-  // El cód. de estudio y el CUIT NO viven en el movimiento sino en el maestro de proveedores/clientes: se
-  // resuelven por contraparte y el maestro se pide recién acá, para no sumarle otra llamada a la carga.
+  // El cód. de estudio, el NIF y el domicilio NO viven en el movimiento sino en el maestro de proveedores/
+  // clientes (y en el de Franquicias): se resuelven por contraparte, y los maestros de Numbers se piden recién
+  // acá, para no sumarle otra llamada a la carga.
   const bajarExcel = async () => {
     setMenuOpen(false);
     setBajando(true);
     try {
-      // Los franquiciados no están en nb_clientes: su razón social, NIF y domicilio viven en el maestro de
-      // Franquicias (sheetsApi "all"), y los cobros que vienen de ahí llevan el id numérico de la franquicia
-      // en contraparte_id. Si Franquicias no responde, el archivo sale igual, sin esos datos.
-      const [provs, clis, franq] = await Promise.all([
-        fetchProveedores(), fetchClientes(),
-        fetchAll().then(a => a?.franchises ?? []).catch(() => []),
-      ]);
-      const porId = new Map(), porNombre = new Map();
-      for (const m of [...(Array.isArray(provs) ? provs : []), ...(Array.isArray(clis) ? clis : [])]) {
-        const dato = { cod: String(m.cod_estudio ?? "").trim(), cuit: String(m.cuit ?? "").trim(),
-                       nombre: String(m.nombre ?? "").trim(), domicilio: String(m.domicilio ?? "").trim() };
-        if (!dato.cod && !dato.cuit) continue;
-        porId.set(String(m.id), dato);
-        porNombre.set(dato.nombre.toLowerCase(), dato);
-      }
-      for (const f of franq) {
-        if (f?.id == null) continue;
-        porId.set(String(f.id), { cod: "", cuit: String(f.cuit ?? "").trim(),
-          nombre: String(f.razonSocial || f.name || "").trim(), domicilio: String(f.domicilio || f.billingAddress || "").trim() });
-      }
-      const deMaestro = r => porId.get(String(r._cpId || "")) ?? porNombre.get(String(r._contra || "").trim().toLowerCase());
+      const [proveedores, clientes] = await Promise.all([fetchProveedores(), fetchClientes()]);
+      const maestro = armarMaestroContrapartes({ proveedores, clientes, franquicias });
+      const deMaestro = r => maestro(r._cpId, r._contra);
       await exportarPagosCobrosExcel({
         rows: filt, totales: porMon, rango: { desde, hasta },
         campo: {

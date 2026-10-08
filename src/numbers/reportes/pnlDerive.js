@@ -47,6 +47,11 @@ const ccEnFiltro = (ccFilter, cc) => {
 // respetaba un override `periodo=YYYY-MM` empacado en `referencia` (consumos de tarjeta movidos de mes a mano):
 // separaba el P&L del balance y rompía el cierre del PN. Los tags viejos que quedaron en la hoja se IGNORAN.
 const periodoPnLDe = (m) => m.fecha;
+// Fecha FISCAL de una fila de detalle (comprobante, venta/gasto contado, factura de Franquicias): la que rige el
+// período de IVA. Las filas que no traen una propia (ventas Stripe/datáfono, gastos contados) usan la del
+// movimiento, que es la misma cosa. Único lugar donde vive el fallback: lo usan el libro del estudio, su corte
+// de período y Pagos y cobros.
+export const fechaFiscalDe = (r) => r.fecha_fiscal || r.fecha;
 function movimientoToPnLRows(movs, sociedad, cuentaMap) {
   const soc = (sociedad ?? "").toLowerCase();
   const out = [];
@@ -90,8 +95,9 @@ function movimientoToPnLRows(movs, sociedad, cuentaMap) {
     // Alícuota y base solo para los movimientos contados que las traen (ventas Stripe por sede, gastos
     // contados con IVA): el Excel "por factura" del estudio abre Base Imponible / %IVA / Cuota con esto.
     // Las retenciones e interusos no llevan base → sin estos campos la celda queda vacía, no "0%".
-    const iva_rate = _tipo === "Ingreso" || _tipo === "Gasto" ? Number(String(m.iva_rate ?? "").replace(",", ".")) || 0 : 0;
-    const conBase = (_tipo === "Ingreso" || _tipo === "Gasto") && (iva_rate > 0 || ivaAbs > 0);
+    const contado = _tipo === "Ingreso" || _tipo === "Gasto";
+    const iva_rate = contado ? Number(String(m.iva_rate ?? "").replace(",", ".")) || 0 : 0;
+    const conBase = contado && (iva_rate > 0 || ivaAbs > 0);
     out.push({
       fecha:           periodoPnLDe(m),
       sociedad:        m.sociedad,

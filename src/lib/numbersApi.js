@@ -1386,6 +1386,13 @@ export async function appendIngresosDirectos({ sociedad, items = [] }) {
 // documento_id "IGN-…". Sale de pendientes y NO cuenta en Tesorería ni Cash Flow (evita
 // el doble conteo, ej. el débito del pago de haberes que ya está en los movs origen=sueldos).
 export const esIgnorado = m => String(m?.documento_id || "").startsWith("IGN-");
+// Línea del extracto que nadie aceptó todavía: conserva el tipo crudo del parser (EGRESO/INGRESO) y la cuenta
+// que PROPUSO la regla, sin documento_id. Es la condición de `fetchMovimientosPendientes`.
+export const esExtractoSinConciliar = m => String(m?.origen || "") === "extracto" && !m?.documento_id;
+// Interco parkeada a la que el otro lado aún no le declaró su pata: al cerrarse, la pata parkeada recibe
+// `recibida=<id>` en referencia (ver aceptarMovimiento / declararIntercoRecibida). Reportes la lee como
+// "Sin conciliar".
+export const esIntercoParkAbierta = m => String(m?.origen || "") === "interco_park" && !/recibida=/.test(String(m?.referencia || ""));
 
 // Cuenta de crédito (tarjeta): saldo negativo = deuda. No es caja disponible; va al pasivo y se excluye del Cash Flow.
 export const esCuentaCredito = c => (c?.tipo ?? "").toLowerCase() === "tarjeta";
