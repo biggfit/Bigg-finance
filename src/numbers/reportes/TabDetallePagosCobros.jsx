@@ -28,10 +28,28 @@ import { exportarPagosCobrosExcel } from "./exportPagosCobros";
 // el cruce contra el extracto.
 const TIPO_LABEL = {
   PAGO: "Pago", COBRO: "Cobro", INGRESO: "Ingreso", EGRESO: "Egreso",
-  EGRESO_GASTO: "Gasto contado", SUELDO: "Sueldo", TRANSFERENCIA: "Transferencia",
+  // "Pagos sin factura" y no "Gasto contado" (vocabulario Contagram): el estudio de España separa el mundo
+  // en factura (IVA deducible) y sin factura; "contado" además sugiere efectivo cuando salió por banco.
+  EGRESO_GASTO: "Pagos sin factura", SUELDO: "Sueldo", TRANSFERENCIA: "Transferencia",
   PAGO_TARJETA: "Tarjeta", INTERCOMPANIA: "Interco", CAMBIO: "Cambio",
 };
-const tipoDeMov = m => TIPO_LABEL[String(m.tipo || "").toUpperCase()] || m.tipo || "—";
+// Intercompañía: para el estudio es plata que salió o entró de la cuenta contra otra sociedad del grupo,
+// y la contraparte ya dice cuál. El estado interno del circuito (parkeada = INTERCOMPANIA, emparejada =
+// EGRESO/INGRESO) hacía que la misma transferencia a Bigg Fit LLC saliera "Interco" o "Egreso" según si el
+// otro lado ya había declarado su pata (Martín, 7/10/2026). Se etiqueta por sentido de la caja.
+const esInterco = m => /^interco/.test(String(m.origen || ""));
+// "Sin conciliar" = la línea del banco todavía no fue aceptada por nadie: (a) extracto sin documento_id, que
+// conserva el tipo crudo del parser (EGRESO/INGRESO) y la cuenta que PROPUSO la regla sin que nadie la haya
+// confirmado; (b) interco parkeada a la que el otro lado aún no le declaró su pata (lecturaInterco marca
+// `recibida=` en referencia cuando se cierra). Sin esta etiqueta el estudio las leía como pagos hechos.
+const esSinConciliar = m =>
+  (String(m.origen || "") === "extracto" && !m.documento_id) ||
+  (String(m.origen || "") === "interco_park" && !/recibida=/.test(String(m.referencia || "")));
+const tipoDeMov = m => esSinConciliar(m)
+  ? "Sin conciliar"
+  : esInterco(m)
+  ? (Number(m.monto) < 0 ? "Pago" : "Cobro")
+  : (TIPO_LABEL[String(m.tipo || "").toUpperCase()] || m.tipo || "—");
 
 const fmtF = iso => String(iso || "").split("-").reverse().join("/");
 
@@ -58,9 +76,12 @@ export default function TabDetallePagosCobros({ movs = [], comps = [], cuentasBa
     return m;
   }, [comps]);
 
-  // Universo: movimientos de caja desde el go-live, sin los ignorados (que son tumbas de deduplicación).
+  // Universo: movimientos de caja desde el go-live, sin los ignorados (que son tumbas de deduplicación) y
+  // sin los que no pasaron por ninguna caja (retenciones sufridas, origen="retencion": tipo COBRO con
+  // cuenta_bancaria vacía). Sin esta condición entraban como "Cobro" sin caja y sumaban al neto, que dejaba
+  // de ser la variación de caja del período (Revolut, 7/10/2026: 4 × 171 € de IRPF sobre alquiler).
   const base = useMemo(() => (movs || [])
-    .filter(m => String(m.fecha || "") >= PNL_INICIO && !esIgnorado(m))
+    .filter(m => String(m.fecha || "") >= PNL_INICIO && !esIgnorado(m) && m.cuenta_bancaria)
     .map(m => {
       const c = m.documento_id ? compMap.get(String(m.documento_id)) : null;
       return {
@@ -72,8 +93,9 @@ export default function TabDetallePagosCobros({ movs = [], comps = [], cuentasBa
         _nroComp: c?.nroComp || "",
         _fFiscal: c?.fechaFiscal || "",
         // La cuenta contable sale del comprobante aplicado; si el movimiento la trae propia (gasto contado
-        // imputado en la conciliación) se usa esa. La tarjeta queda vacía a propósito.
-        _cuenta:  c?.cuenta || m.cuenta_contable || "",
+        // imputado en la conciliación) se usa esa. La tarjeta queda vacía a propósito, y una línea sin
+        // conciliar también: lo que trae es la propuesta de la regla, no una imputación.
+        _cuenta:  esSinConciliar(m) ? "" : (c?.cuenta || m.cuenta_contable || ""),
         _totalFc: c?.total ?? null,
       };
     }), [movs, compMap, cbMap]);

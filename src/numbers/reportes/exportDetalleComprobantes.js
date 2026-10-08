@@ -37,10 +37,12 @@ function toNum(v) {
 //     la seguridad social se carga acá, y eso no se adivina leyendo el nombre.
 //   · IVA               — los pagos a Hacienda España. "Hacienda España no es un gasto", dijo la contadora,
 //     y tiene razón: liquidar el IVA cancela un pasivo, no devenga un costo.
+//   · IRPF              — las provisiones del modelo 111 (Hacienda España, 1.900 jul / 1.800 ago 2026). Misma
+//     naturaleza que IVA: se liquidan con Hacienda, no son una factura con IVA deducible (Martín, 8/10/2026).
 // Las nóminas y la TGSS se cargan como compra a propósito (para diferir el pago del devengamiento y poder
 // repartirlas entre varios centros), así que esto es un filtro del REPORTE, no un cambio en cómo se carga:
-// las tres siguen enteras en el P&L, en Tesorería y en el modo por centro de costo.
-const CUENTAS_FUERA_DEL_ESTUDIO = new Set(["Sueldos", "Costos Salariales", "IVA"]);
+// las cuatro siguen enteras en el P&L, en Tesorería y en el modo por centro de costo.
+const CUENTAS_FUERA_DEL_ESTUDIO = new Set(["Sueldos", "Costos Salariales", "IVA", "IRPF"]);
 
 // Una fila por comprobante: suma las líneas que pasaron el filtro (no el total original del comprobante — si
 // filtraste por centro, lo que baja es lo que estás mirando). Las filas que NO son comprobantes (sueldos,
