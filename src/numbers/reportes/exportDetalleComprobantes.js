@@ -160,8 +160,10 @@ function columnas(modo, contraLabel, campo) {
     // cualquiera de los dos vuelve al documento si hay que discutir una línea.
     { h: "N.Referencia",   w: 22, get: r => r.id_comp || "" },
     { h: "Núm.Fact.",      w: 18, get: r => r.nro_comp || "" },
-    // La FISCAL, no la de emisión: es la que rige el período de IVA, que es lo que el estudio liquida.
-    { h: "Fecha",          w: 12, get: r => isoADate(r.fecha_fiscal || r.fecha), fmt: FMT_DATE },
+    // La FISCAL, no la de devengado: es la que rige el período de IVA, que es lo que el estudio liquida. El
+    // encabezado lo dice para que no haya dudas (Martín, 8/10/2026). Las filas que no tienen fecha fiscal propia
+    // (ventas Stripe/datáfono, gastos contados) usan la del movimiento, que es la misma cosa.
+    { h: "Fecha fiscal",   w: 12, get: r => isoADate(r.fecha_fiscal || r.fecha), fmt: FMT_DATE },
     { h: "Concepto",       w: 38, get: r => r.nota || r.cuenta_contable || "" },
     { h: "N.I.F.",         w: 16, get: r => campo.cuit?.(r) ?? "" },
     { h: "Expedidor",      w: 34, get: r => r.contraparte_nombre || "" },
