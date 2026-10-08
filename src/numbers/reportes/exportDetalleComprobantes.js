@@ -46,8 +46,15 @@ function toNum(v) {
 //   · Ventas en Efectivo — cobros de caja de las sedes sin factura emitida; el libro del estudio es solo de
 //     facturas (Martín, 8/10/2026). Siguen enteras en el P&L.
 // La lista se DECLARA en el subtítulo del Excel y en el menú de descarga, para que nadie busque lo que no está.
+//   · Gastos Menores de Caja — el espejo de Ventas en Efectivo: salidas chicas de las cajas físicas de las sedes,
+//     sin factura (Martín, 8/10/2026). Las facturas PAGADAS desde una caja no son esto: son comprobantes y van.
+//   · Tarjeta de Crédito — la liquidación mensual de la Visa Negocios (Caixa "V.NEGOCIOS CRED-P"), cargada como
+//     comprobante de Caixabank para que el débito la cancele. "La visa es un medio de pago, no un gasto" (Ana,
+//     29/9): el estudio contabiliza el resumen de la tarjeta por fuera, con el extracto crudo (Martín, 8/10/2026).
+//   · Gastos Financieros — el costo financiero del descubierto (Caixa "LIQUIDACION CTA.CTO"): "es un gasto/comisión",
+//     no una factura (Ana, 29/9); el estudio lo toma del extracto (Martín, 8/10/2026).
 export const CUENTAS_FUERA_DEL_ESTUDIO = {
-  EGRESO:  ["Sueldos", "Costos Salariales", "IVA", "IRPF"],
+  EGRESO:  ["Sueldos", "Costos Salariales", "IVA", "IRPF", "Gastos Menores de Caja", "Tarjeta de Crédito", "Gastos Financieros"],
   INGRESO: ["Ventas en Efectivo"],
 };
 const fueraDe = tipo => new Set(CUENTAS_FUERA_DEL_ESTUDIO[tipo] || CUENTAS_FUERA_DEL_ESTUDIO.EGRESO);
@@ -242,115 +249,121 @@ export async function exportarDetalleExcel({ tipo = "EGRESO", modo = "ceco", row
     !(fuera.length && fueraSet.has(String(r.cuenta_contable || ""))) &&
     !(modo === "factura" && (r._tipo === "Retención" || r._gestion)));
 
-  const comps = modo === "factura" ? agruparPorFactura(dentro) : dentro;
-  const datos = modo === "factura" ? abrirPorTasa(comps) : comps;
   const COLS = columnas(modo, contraLabel, campo);
-
-  // Lo excluido se DECLARA en el archivo (abajo, en el subtítulo): nada se descarta en silencio.
-  const excl = fuera.length ? {
-    comps: new Set(fuera.map(r => r.id_comp || r.id)).size,
-    total: fuera.reduce((s, r) => s + Math.abs(Number(r.total) || 0), 0),
-    cuentas: [...new Set(fuera.map(r => String(r.cuenta_contable || "")))].sort(),
-  } : null;
-
-  const wb = nuevoWorkbook();
-  const ws = wb.addWorksheet(tipo === "INGRESO" ? "Ingresos" : "Egresos");
-
-  // El archivo del estudio se llama como su libro ("Facturas Recibidas"), no como nuestro reporte: es el
-  // documento que ellos archivan, así que lleva su nombre.
-  const titulo = modo === "factura"
-    ? (tipo === "INGRESO" ? "Facturas Emitidas" : "Facturas Recibidas")
-    : `${cfg.titulo} · ${mcfg.sufijo}`;
 
   const periodo = rango.desde || rango.hasta
     ? `${rango.desde ? rango.desde.split("-").reverse().join("/") : "inicio"} → ${rango.hasta ? rango.hasta.split("-").reverse().join("/") : "hoy"}`
     : "todo el período";
   const unidad = modo === "factura" ? "comprobante" : "registro";
   const fmt2 = v => v.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  // Los totales vienen de pantalla (sin filtrar), así que en el modo factura se recalculan sobre lo que
-  // realmente baja — si no, el encabezado diría un número que las filas no suman.
-  // Se suma sobre COMPS, no sobre los renglones: una factura con dos tipos de IVA ocupa dos filas y las dos
-  // arrastran el total del comprobante — sumar los renglones la contaría dos veces.
-  // En el modo factura SIEMPRE se recalcula con signo (las devoluciones restan); el total de pantalla es en
-  // valor absoluto y no coincidiría con lo que suma la columna.
-  const totVis = modo === "factura"
-    ? comps.reduce((a, r) => { const k = r.moneda || "ARS"; a[k] = (a[k] || 0) + totalNetoRet({ ...r, _primera: true }, campo); return a; }, {})
-    : totales;
-  const totTxt = Object.entries(totVis).sort((a, b) => b[1] - a[1])
-    .map(([mo, v]) => `${mo} ${fmt2(v)}`).join(" · ");
-  // La regla se declara SIEMPRE en el modo factura (aunque esta vez no haya tocado ninguna fila), y si tocó,
-  // cuántos comprobantes y por cuánto.
-  const nGestion = modo === "factura" ? rows.filter(r => r._gestion).length : 0;
+  // La regla se declara SIEMPRE en el modo factura: QUÉ cuentas quedan fuera, nunca cuánto suman ni cuántas son
+  // (el archivo va al estudio; el importe de las nóminas no es dato para ese documento — Martín, 8/10/2026).
   const exclTxt = modo === "factura"
     ? ` — fuera del libro por diseño: ${[...fueraSet].join(", ")}` +
-      (excl ? ` (esta vez ${excl.comps} ${excl.comps === 1 ? "comprobante" : "comprobantes"}, ${fmt2(excl.total)})` : "") +
-      (tipo === "INGRESO" ? `; asientos de gestión de sedes propias${nGestion ? ` (${nGestion})` : ""}` : "")
+      (tipo === "INGRESO" ? "; asientos de gestión de sedes propias" : "")
     : "";
-  // Se cuentan COMPROBANTES, no renglones: en el modo factura una con dos tipos de IVA ocupa dos filas y
-  // decir "117 comprobantes" sería mentir. Si difieren, se aclara.
-  const nComp = modo === "factura" ? comps.length : datos.length;
-  const filasTxt = datos.length !== nComp ? ` en ${datos.length} renglones (los que llevan dos tipos de IVA ocupan uno por tipo)` : "";
-  // Cabecera del estudio: Empresa / Período / Fecha, como en su plantilla (antes del subtítulo). La empresa
-  // sale de las sociedades que quedaron en lo filtrado (normalmente una sola, porque el archivo se baja por
-  // sociedad).
-  const metas = [];
-  if (modo === "factura") {
-    const empresas = [...new Set(datos.map(r => campo.sociedad?.(r) || r.sociedad || "").filter(Boolean))];
-    const hoy = new Date();
-    const dd = n => String(n).padStart(2, "0");
-    for (const txt of [
-      `Empresa: ${empresas.join(" · ") || "—"}`,
-      `Período: ${periodo}`,
-      `Fecha: ${dd(hoy.getDate())}/${dd(hoy.getMonth() + 1)}/${hoy.getFullYear()}`,
-    ]) metas.push({ texto: txt, font: { bold: true, size: 11, color: { argb: "FF0F172A" } } });
-  }
-  metas.push(`${periodo} · ${nComp} ${unidad}${nComp === 1 ? "" : "s"}${filasTxt}${totTxt ? ` · ${totTxt}` : ""}${exclTxt}`);
-  addTitulo(ws, titulo, metas, COLS.length);
 
-  addTabla(ws, COLS, datos, { headerBg: cfg.headerBg, autoFilter: true });
+  // ── Hojas. En el libro de Egresos del estudio, las facturas y los pagos sin factura van en pestañas distintas
+  //    (Martín, 8/10/2026): "Facturas Recibidas" = comprobantes (IVA deducible); "Pagos sin factura" = gastos
+  //    contados (sin factura, sin IVA que deducir; es lo que Ana pidió "en otra hoja" el 29/9); lo que no es ni
+  //    una cosa ni otra (financiaciones, histórico) cae en "Otros" solo si hay algo. Ingresos y el modo por
+  //    centro siguen en una hoja. El archivo del estudio se llama como su libro ("Facturas Recibidas"), no como
+  //    nuestro reporte: es el documento que ellos archivan.
+  const tituloUnico = modo === "factura"
+    ? (tipo === "INGRESO" ? "Facturas Emitidas" : "Facturas Recibidas")
+    : `${cfg.titulo} · ${mcfg.sufijo}`;
+  const hojas = modo === "factura" && tipo === "EGRESO"
+    ? [
+        { nombre: "Facturas Recibidas", titulo: "Facturas Recibidas", unidad: "comprobante", rows: dentro.filter(r => r.id_comp) },
+        { nombre: "Pagos sin factura",  titulo: "Pagos sin factura",  unidad: "pago",        rows: dentro.filter(r => !r.id_comp && r._tipo === "Gasto") },
+        { nombre: "Otros",              titulo: "Otros egresos",      unidad: "registro",    rows: dentro.filter(r => !r.id_comp && r._tipo !== "Gasto") },
+      ].filter((h, i) => i === 0 || h.rows.length)
+    : [{ nombre: tipo === "INGRESO" ? "Ingresos" : "Egresos", titulo: tituloUnico, unidad, rows: dentro }];
 
-  // ── Totales al pie (solo el archivo del estudio): un renglón por tipo de IVA + el total de facturas. Es
-  //    como cierra su plantilla, y es lo que le permite cuadrar el libro alícuota por alícuota.
-  if (modo === "factura") {
-    const iBase = COLS.findIndex(c => c.h === "Base Imponible") + 1;
-    const iTasa = COLS.findIndex(c => c.h === "%IVA") + 1;
-    const iCuota = COLS.findIndex(c => c.h === "Cuota") + 1;
-    const iRet = COLS.findIndex(c => c.h === "Retención") + 1;
-    const iTot = COLS.findIndex(c => c.h === "Total Fra.") + 1;
-    const porTasa = totalesPorTasa(datos);
-    const iLbl = Math.max(1, iBase - 1);
-    ws.addRow([]);
-    const pintar = (row, negrita) => {
-      for (const i of [iBase, iTasa, iCuota, iRet, iTot]) {
-        const cell = row.getCell(i);
-        cell.alignment = { horizontal: "right" };
-        if (i !== iTasa) cell.numFmt = FMT_MONEY;
-        if (negrita) cell.font = { bold: true };
-      }
-      row.getCell(iLbl).font = { bold: true };
-      row.getCell(iLbl).alignment = { horizontal: "right" };
-    };
-    porTasa.forEach(([t, v], i) => {
-      const row = ws.addRow([]);
-      if (i === 0) row.getCell(iLbl).value = "Total Período";
-      row.getCell(iBase).value = r2(v.base);
-      row.getCell(iTasa).value = t;
-      row.getCell(iCuota).value = r2(v.cuota);
-      pintar(row, false);
-    });
-    const tot = datos.reduce((a, r) => ({
-      base:  a.base  + (Number(r._base)  || 0),
-      cuota: a.cuota + (Number(r._cuota) || 0),
-      ret:   a.ret   + (r._primera ? (Number(campo.irpfMonto?.(r)) || 0) : 0),
-      total: a.total + (r._primera ? totalNetoRet(r, campo) : 0),
-    }), { base: 0, cuota: 0, ret: 0, total: 0 });
-    const rowT = ws.addRow([]);
-    rowT.getCell(iLbl).value = "Total Facturas";
-    rowT.getCell(iBase).value = r2(tot.base);
-    rowT.getCell(iCuota).value = r2(tot.cuota);
-    rowT.getCell(iRet).value = r2(tot.ret);
-    rowT.getCell(iTot).value = r2(tot.total);
-    pintar(rowT, true);
+  const wb = nuevoWorkbook();
+  for (const hoja of hojas) {
+    const comps = modo === "factura" ? agruparPorFactura(hoja.rows) : hoja.rows;
+    const datos = modo === "factura" ? abrirPorTasa(comps) : comps;
+    const ws = wb.addWorksheet(hoja.nombre);
+
+    // Los totales vienen de pantalla (sin filtrar), así que en el modo factura se recalculan sobre lo que
+    // realmente baja — si no, el encabezado diría un número que las filas no suman.
+    // Se suma sobre COMPS, no sobre los renglones: una factura con dos tipos de IVA ocupa dos filas y las dos
+    // arrastran el total del comprobante — sumar los renglones la contaría dos veces.
+    // En el modo factura SIEMPRE se recalcula con signo (las devoluciones restan); el total de pantalla es en
+    // valor absoluto y no coincidiría con lo que suma la columna.
+    const totVis = modo === "factura"
+      ? comps.reduce((a, r) => { const k = r.moneda || "ARS"; a[k] = (a[k] || 0) + totalNetoRet({ ...r, _primera: true }, campo); return a; }, {})
+      : totales;
+    const totTxt = Object.entries(totVis).sort((a, b) => b[1] - a[1])
+      .map(([mo, v]) => `${mo} ${fmt2(v)}`).join(" · ");
+    // Se cuentan COMPROBANTES, no renglones: en el modo factura una con dos tipos de IVA ocupa dos filas y
+    // decir "117 comprobantes" sería mentir. Si difieren, se aclara.
+    const nComp = modo === "factura" ? comps.length : datos.length;
+    const filasTxt = datos.length !== nComp ? ` en ${datos.length} renglones (los que llevan dos tipos de IVA ocupan uno por tipo)` : "";
+    // Cabecera del estudio: Empresa / Período / Fecha, como en su plantilla (antes del subtítulo). La empresa
+    // sale de las sociedades que quedaron en lo filtrado (normalmente una sola, porque el archivo se baja por
+    // sociedad).
+    const metas = [];
+    if (modo === "factura") {
+      const empresas = [...new Set(datos.map(r => campo.sociedad?.(r) || r.sociedad || "").filter(Boolean))];
+      const hoy = new Date();
+      const dd = n => String(n).padStart(2, "0");
+      for (const txt of [
+        `Empresa: ${empresas.join(" · ") || "—"}`,
+        `Período: ${periodo}`,
+        `Fecha: ${dd(hoy.getDate())}/${dd(hoy.getMonth() + 1)}/${hoy.getFullYear()}`,
+      ]) metas.push({ texto: txt, font: { bold: true, size: 11, color: { argb: "FF0F172A" } } });
+    }
+    const otrasHojas = hojas.length > 1 ? ` · las demás pestañas: ${hojas.filter(h => h !== hoja).map(h => h.nombre).join(", ")}` : "";
+    metas.push(`${periodo} · ${nComp} ${hoja.unidad}${nComp === 1 ? "" : "s"}${filasTxt}${totTxt ? ` · ${totTxt}` : ""}${exclTxt}${otrasHojas}`);
+    addTitulo(ws, hoja.titulo, metas, COLS.length);
+
+    addTabla(ws, COLS, datos, { headerBg: cfg.headerBg, autoFilter: true });
+
+    // ── Totales al pie (solo el archivo del estudio): un renglón por tipo de IVA + el total de facturas. Es
+    //    como cierra su plantilla, y es lo que le permite cuadrar el libro alícuota por alícuota.
+    if (modo === "factura") {
+      const iBase = COLS.findIndex(c => c.h === "Base Imponible") + 1;
+      const iTasa = COLS.findIndex(c => c.h === "%IVA") + 1;
+      const iCuota = COLS.findIndex(c => c.h === "Cuota") + 1;
+      const iRet = COLS.findIndex(c => c.h === "Retención") + 1;
+      const iTot = COLS.findIndex(c => c.h === "Total Fra.") + 1;
+      const porTasa = totalesPorTasa(datos);
+      const iLbl = Math.max(1, iBase - 1);
+      ws.addRow([]);
+      const pintar = (row, negrita) => {
+        for (const i of [iBase, iTasa, iCuota, iRet, iTot]) {
+          const cell = row.getCell(i);
+          cell.alignment = { horizontal: "right" };
+          if (i !== iTasa) cell.numFmt = FMT_MONEY;
+          if (negrita) cell.font = { bold: true };
+        }
+        row.getCell(iLbl).font = { bold: true };
+        row.getCell(iLbl).alignment = { horizontal: "right" };
+      };
+      porTasa.forEach(([t, v], i) => {
+        const row = ws.addRow([]);
+        if (i === 0) row.getCell(iLbl).value = "Total Período";
+        row.getCell(iBase).value = r2(v.base);
+        row.getCell(iTasa).value = t;
+        row.getCell(iCuota).value = r2(v.cuota);
+        pintar(row, false);
+      });
+      const tot = datos.reduce((a, r) => ({
+        base:  a.base  + (Number(r._base)  || 0),
+        cuota: a.cuota + (Number(r._cuota) || 0),
+        ret:   a.ret   + (r._primera ? (Number(campo.irpfMonto?.(r)) || 0) : 0),
+        total: a.total + (r._primera ? totalNetoRet(r, campo) : 0),
+      }), { base: 0, cuota: 0, ret: 0, total: 0 });
+      const rowT = ws.addRow([]);
+      rowT.getCell(iLbl).value = "Total Facturas";
+      rowT.getCell(iBase).value = r2(tot.base);
+      rowT.getCell(iCuota).value = r2(tot.cuota);
+      rowT.getCell(iRet).value = r2(tot.ret);
+      rowT.getCell(iTot).value = r2(tot.total);
+      pintar(rowT, true);
+    }
   }
 
   await descargarWorkbook(wb, `${cfg.archivo}_${mcfg.archivo}_${new Date().toISOString().slice(0, 10)}.xlsx`);
