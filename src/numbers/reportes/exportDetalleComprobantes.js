@@ -263,22 +263,26 @@ export async function exportarDetalleExcel({ tipo = "EGRESO", modo = "ceco", row
       (tipo === "INGRESO" ? "; asientos de gestión de sedes propias" : "")
     : "";
 
-  // ── Hojas. En el libro de Egresos del estudio, las facturas y los pagos sin factura van en pestañas distintas
-  //    (Martín, 8/10/2026): "Facturas Recibidas" = comprobantes (IVA deducible); "Pagos sin factura" = gastos
-  //    contados (sin factura, sin IVA que deducir; es lo que Ana pidió "en otra hoja" el 29/9); lo que no es ni
-  //    una cosa ni otra (financiaciones, histórico) cae en "Otros" solo si hay algo. Ingresos y el modo por
-  //    centro siguen en una hoja. El archivo del estudio se llama como su libro ("Facturas Recibidas"), no como
-  //    nuestro reporte: es el documento que ellos archivan.
-  const tituloUnico = modo === "factura"
-    ? (tipo === "INGRESO" ? "Facturas Emitidas" : "Facturas Recibidas")
-    : `${cfg.titulo} · ${mcfg.sufijo}`;
-  const hojas = modo === "factura" && tipo === "EGRESO"
+  // ── Hojas. En el libro del estudio, las facturas y lo que no tiene factura van en pestañas distintas (Martín,
+  //    8/10/2026). Egresos: "Facturas Recibidas" = comprobantes (IVA deducible); "Pagos sin factura" = gastos
+  //    contados (es lo que Ana pidió "en otra hoja" el 29/9); "Otros" (financiaciones, histórico) solo si hay algo.
+  //    Ingresos: "Facturas Emitidas" = nuestros comprobantes y las facturas/NC a franquiciados (`_key`); "Ventas sin
+  //    factura" = ingresos directos (Stripe, datáfono, otros ingresos de caja), que son ventas con IVA pero sin
+  //    factura emitida. El modo por centro sigue en una hoja. El archivo se llama como su libro ("Facturas
+  //    Recibidas"), no como nuestro reporte: es el documento que ellos archivan.
+  const esFactura = r => !!(r.id_comp || r._key);
+  const hojas = modo !== "factura"
+    ? [{ nombre: tipo === "INGRESO" ? "Ingresos" : "Egresos", titulo: `${cfg.titulo} · ${mcfg.sufijo}`, unidad, rows: dentro }]
+    : tipo === "EGRESO"
     ? [
-        { nombre: "Facturas Recibidas", titulo: "Facturas Recibidas", unidad: "comprobante", rows: dentro.filter(r => r.id_comp) },
-        { nombre: "Pagos sin factura",  titulo: "Pagos sin factura",  unidad: "pago",        rows: dentro.filter(r => !r.id_comp && r._tipo === "Gasto") },
-        { nombre: "Otros",              titulo: "Otros egresos",      unidad: "registro",    rows: dentro.filter(r => !r.id_comp && r._tipo !== "Gasto") },
+        { nombre: "Facturas Recibidas", titulo: "Facturas Recibidas", unidad: "comprobante", rows: dentro.filter(esFactura) },
+        { nombre: "Pagos sin factura",  titulo: "Pagos sin factura",  unidad: "pago",        rows: dentro.filter(r => !esFactura(r) && r._tipo === "Gasto") },
+        { nombre: "Otros",              titulo: "Otros egresos",      unidad: "registro",    rows: dentro.filter(r => !esFactura(r) && r._tipo !== "Gasto") },
       ].filter((h, i) => i === 0 || h.rows.length)
-    : [{ nombre: tipo === "INGRESO" ? "Ingresos" : "Egresos", titulo: tituloUnico, unidad, rows: dentro }];
+    : [
+        { nombre: "Facturas Emitidas",  titulo: "Facturas Emitidas",  unidad: "comprobante", rows: dentro.filter(esFactura) },
+        { nombre: "Ventas sin factura", titulo: "Ventas sin factura", unidad: "venta",       rows: dentro.filter(r => !esFactura(r)) },
+      ].filter((h, i) => i === 0 || h.rows.length);
 
   const wb = nuevoWorkbook();
   for (const hoja of hojas) {
