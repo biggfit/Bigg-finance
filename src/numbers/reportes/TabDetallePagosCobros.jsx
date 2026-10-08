@@ -181,7 +181,7 @@ export default function TabDetallePagosCobros({ movs = [], comps = [], cuentasBa
     return () => document.removeEventListener("mousedown", h);
   }, [menuOpen]);
 
-  // El cód. de estudio, el NIF y el domicilio NO viven en el movimiento sino en el maestro de proveedores/
+  // El cód. de estudio, el NIF y la razón social NO viven en el movimiento sino en el maestro de proveedores/
   // clientes (y en el de Franquicias): se resuelven por contraparte, y los maestros de Numbers se piden recién
   // acá, para no sumarle otra llamada a la carga.
   const bajarExcel = async () => {
@@ -201,7 +201,6 @@ export default function TabDetallePagosCobros({ movs = [], comps = [], cuentasBa
           contraparte:    r => deMaestro(r)?.nombre || r._contra,
           cuit:           r => deMaestro(r)?.cuit ?? "",
           codEstudio:     r => deMaestro(r)?.cod ?? "",
-          domicilio:      r => deMaestro(r)?.domicilio ?? "",
           nroComp:        r => r._nroComp,
           idComp:         r => r._totalFc != null ? (r.documento_id || "") : "",
           fechaFiscal:    r => r._fFiscal,

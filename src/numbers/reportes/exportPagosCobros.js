@@ -31,9 +31,7 @@ function columnas(campo) {
     // no los guarda) y van pegados al nombre porque identifican a la misma contraparte.
     { h: "CUIT / NIF",      w: 16, get: r => campo.cuit?.(r) ?? "" },
     { h: "Cód. estudio",    w: 16, get: r => campo.codEstudio?.(r) ?? "" },
-    // Domicilio fiscal de la contraparte (el estudio lo pidió el 7/10/2026). Hoy sale del maestro de
-    // Franquicias para los franquiciados; proveedores y clientes lo tendrán cuando el maestro lleve la columna.
-    { h: "Domicilio",       w: 34, get: r => campo.domicilio?.(r) ?? "" },
+    // Sin Domicilio: el estudio lo necesita en el libro de Facturas Emitidas, no acá (Martín, 8/10/2026).
     { h: "Concepto",        w: 40, get: r => r.concepto || "" },
     // ── La factura aplicada. Vacío cuando el movimiento no cancela ninguna (cobro directo, gasto contado,
     //    transferencia, pago de tarjeta): no se completa con nada derivado.
