@@ -1390,10 +1390,15 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
   }, [rows, movs, esEg]);
 
   const inSet = (set, v) => set.size === 0 || set.has(v);
-  const filt = useMemo(() => {
+  // Un solo juego de filtros con DOS fechas posibles. La pantalla y el Excel por centro cortan el período por
+  // DEVENGADO (lectura de gestión). El libro del estudio ("Por factura") corta por FECHA FISCAL: una factura
+  // pertenece al trimestre de IVA de su fecha fiscal, no de cuándo devengamos el gasto. Con el corte por devengado
+  // el 3T de Wellness perdía las tres de Nabalia de junio emitidas en julio (2.990 €), y una devengada en
+  // septiembre con fecha fiscal de octubre entraba al 3T con fecha de octubre (Martín, 8/10/2026).
+  const filtrarPor = useCallback((fechaDe) => {
     const qq = q.trim().toLowerCase();
     return rows.filter(r => {
-      const f = String(r.fecha || "");
+      const f = String(fechaDe(r) || "");
       if (desde && f < desde) return false;
       if (hasta && f > hasta) return false;
       if (!inSet(fSoc, String(r.sociedad))) return false;
@@ -1407,8 +1412,11 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
         if (!hay.includes(qq)) return false;
       }
       return true;
-    }).sort((a, b) => String(b.fecha || "").localeCompare(String(a.fecha || "")));
+    }).sort((a, b) => String(fechaDe(b) || "").localeCompare(String(fechaDe(a) || "")));
   }, [rows, q, fSoc, fCC, fCta, fMon, fTipo, fEstado, desde, hasta, estadoDe]);
+  const fechaDevengado = r => r.fecha;
+  const fechaFiscal    = r => r.fecha_fiscal || r.fecha;
+  const filt = useMemo(() => filtrarPor(fechaDevengado), [filtrarPor]);
 
   const porMon = useMemo(() => {
     const m = {};
@@ -1466,7 +1474,9 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
       const irpfMonto = r => irpfPorComp[String(r.id_comp ?? "")] ?? "";
 
       await exportarDetalleExcel({
-        tipo, modo, rows: filt, totales: porMon, rango: { desde, hasta }, contraLabel,
+        // El libro del estudio baja lo que tiene FECHA FISCAL en el período (ver filtrarPor); el modo por centro,
+        // lo mismo que está en pantalla.
+        tipo, modo, rows: modo === "factura" ? filtrarPor(fechaFiscal) : filt, totales: porMon, rango: { desde, hasta }, contraLabel,
         campo: {
           tipo: tipoDeFila,
           sociedad: r => socMap.get(String(r.sociedad)) || r.sociedad || "",
