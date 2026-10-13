@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "react";
 import * as XLSX from "xlsx";
 import {
-  fetchLegajos, fetchLiquidaciones, updateLegajo,
+  fetchLegajos, fetchLiquidaciones, updateLegajo, legajoVigenteEnMes,
   fetchPagos, appendPago, deletePago, nuevoLote, fetchNovedades, updateNovedad, ROLES_HQ, ambitoLiq,
   FP_TIPOS, FP_TIPO_LABEL, FP_TIPO_COLOR,
   fetchSociedadesNumbers, fetchCuentasBancariasNumbers, fetchCuentasContablesNumbers,
@@ -254,7 +254,9 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
       setLoadError(false);
       const legs = w1[0].value;
       const liqs = w1[1].status === "fulfilled" ? w1[1].value : [];
-      const legsHQ = legs.filter(l => ROLES_HQ.includes(l.rol) && l.activo);
+      // Activos + dados de baja CON fecha de baja (siguen apareciendo en los meses anteriores a la baja;
+      // el filtro por mes se hace al armar las filas con legajoVigenteEnMes).
+      const legsHQ = legs.filter(l => ROLES_HQ.includes(l.rol) && (l.activo || l.fecha_baja));
       const descartados = legs.filter(l => l.activo && !ROLES_HQ.includes(l.rol));
       if (descartados.length)
         console.warn("[HQ] Legajos activos descartados por rol desconocido:", descartados.map(l => `${l.nombre} → "${l.rol}"`));
@@ -405,7 +407,8 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
       if (!pagosByLegajo.has(p.legajo_id)) pagosByLegajo.set(p.legajo_id, []);
       pagosByLegajo.get(p.legajo_id).push(p);
     }
-    return legajos.map(leg => {
+    // Solo legajos vigentes en el mes (alta/baja); uno con liquidación guardada se muestra siempre.
+    return legajos.filter(leg => liqByLegajo.has(leg.id) || legajoVigenteEnMes(leg, mes, anio)).map(leg => {
       const liq = liqByLegajo.get(leg.id);
       // Split escalar congelado al cerrar (monto_*): si existe, es la fuente de verdad del
       // reparto por forma y se usa TAL CUAL (sin re-normalizar contra la receta del legajo).

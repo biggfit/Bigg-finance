@@ -34,7 +34,7 @@ const FORM_VACIO = {
   tipo_contratacion: "",
   blanco_neto: "", tarifa_hora: "",
   activo: true,
-  fecha_ingreso: "", fecha_alta: "",
+  fecha_ingreso: "", fecha_alta: "", fecha_baja: "",
   notas: "",
   formas_pago: [],
 };
@@ -621,6 +621,13 @@ function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
               <span style={{ color: T.dim, fontWeight: 400 }}> (empieza a cobrar)</span>
             </label>
             <input style={inputStyle} type="date" value={form.fecha_alta} onChange={e => set("fecha_alta", e.target.value)} />
+          </div>
+          <div>
+            <label style={labelStyle}>
+              Fecha de baja
+              <span style={{ color: T.dim, fontWeight: 400 }}> (último día que cobra; después no aparece en liquidaciones)</span>
+            </label>
+            <input style={inputStyle} type="date" value={form.fecha_baja} onChange={e => set("fecha_baja", e.target.value)} />
           </div>
         </div>
 

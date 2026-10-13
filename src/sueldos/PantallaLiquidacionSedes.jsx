@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
 import { useConfirm } from "../numbers/useConfirm";
 import {
-  fetchLegajos, fetchCategorias, fetchObjetivos,
+  fetchLegajos, fetchCategorias, fetchObjetivos, legajoVigenteEnMes,
   fetchLiquidacionesSedes, delLiquidacionComp,
   fetchCentrosCostoNumbers, fetchSociedadesNumbers, fetchCuentasBancariasNumbers,
   fetchPagos, appendPago, appendPagos, deletePago, nuevoLote, updateLegajo, fetchHorasDesdeEye, fetchCdpDesdeEye,
@@ -679,11 +679,15 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       });
     }
 
-    // 2) Legajos activos de rol Sedes sin check-in → se siembran igual (0 horas).
+    // 2) Legajos de rol Sedes sin check-in → se siembran igual (0 horas), SOLO si están vigentes en
+    //    el mes (alta ≤ fin de mes, baja ≥ inicio de mes; sin fechas = vigente). Un dado de baja CON
+    //    fecha de baja entra al pool para seguir apareciendo en los meses anteriores a su baja.
     const rolesSedes = [...ROLES_COACHES, ...ROLES_FIJOS];
-    for (const leg of legajos) {
+    const pool = [...legajos, ...legajosInactivos.filter(l => l.fecha_baja)];
+    for (const leg of pool) {
       if (!rolesSedes.includes(leg.rol)) continue;
       if (matchedLegIds.has(leg.id))     continue;
+      if (!legajoVigenteEnMes(leg, mes, anio)) continue;
       const sedeId = leg.sede_id ?? "";
       const key = `${leg.id}__${sedeId}`;
       if (byKey.has(key)) continue;

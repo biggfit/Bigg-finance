@@ -263,9 +263,28 @@ export async function fetchLegajos() {
     activo:              String(r.activo ?? "true").toLowerCase() !== "false",
     fecha_ingreso:       r.fecha_ingreso ?? "",
     fecha_alta:          r.fecha_alta ?? "",
+    fecha_baja:          r.fecha_baja ?? "",     // último mes que cobra (requiere header en su_legajos)
     notas:               r.notas ?? "",
     formas_pago:         safeParseArray(r.formas_pago_json),
   }));
+}
+
+// ¿El legajo está vigente en el mes? Entra si su alta (o ingreso, si no hay alta) es anterior al fin
+// del mes y si no tiene baja o la baja es posterior al inicio del mes. Sin fechas → vigente (como
+// siempre). Evita que un alta de septiembre aparezca "sin cerrar" en agosto, y que una baja de agosto
+// siga apareciendo —y cobrando haberes— en septiembre (caso Hilaria, 10/2026). Las liquidaciones ya
+// cerradas se muestran igual: esto solo decide a quién se SIEMBRA en un mes sin liquidación.
+export function legajoVigenteEnMes(leg, mes, anio) {
+  const m = Number(mes), a = Number(anio);
+  if (!m || !a) return true;
+  const mm  = String(m).padStart(2, "0");
+  const ini = `${a}-${mm}-01`;
+  const fin = `${a}-${mm}-${String(new Date(a, m, 0).getDate()).padStart(2, "0")}`;
+  const alta = String(leg?.fecha_alta || leg?.fecha_ingreso || "").slice(0, 10);
+  const baja = String(leg?.fecha_baja || "").slice(0, 10);
+  if (alta && alta > fin) return false;
+  if (baja && baja < ini) return false;
+  return true;
 }
 
 export async function appendLegajo(data) {
