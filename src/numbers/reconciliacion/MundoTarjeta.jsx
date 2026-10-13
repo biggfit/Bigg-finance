@@ -11,6 +11,7 @@ import { ccActivos } from "../formUtils";
 
 // ── Helpers de prefill (mismo criterio que la pantalla Resumen TC) ──────────────
 const num = v => Number(v) || 0;
+const round2 = n => Math.round((Number(n) || 0) * 100) / 100;
 const normCom = s => String(s || "").toUpperCase().replace(/\s+/g, " ").trim();
 const normNom = s => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
 const overlapNom = (a, b) => { const wb = new Set(b.split(" ").filter(w => w.length > 2)); return a.split(" ").filter(w => w.length > 2 && wb.has(w)).length; };
@@ -222,9 +223,13 @@ export default function MundoTarjeta({ sociedad }) {
       // Saldo anterior impago (Amex): NO se ingesta — es deuda de ciclos previos, que o ya vive en
       // la cuenta-tarjeta o hay que darla de alta como saldo inicial. Se avisa para que el pago no
       // sorprenda: lo que se va a pagar es saldo anterior + estos consumos.
-      const sa = r.saldoAnterior;
-      const saTxt = sa && (Math.abs(sa.ars) > 1 || Math.abs(sa.usd) > 0.5)
-        ? ` · ⚠️ el resumen arrastra saldo anterior impago de ${[sa.ars ? money(sa.ars, "ARS") : "", sa.usd ? money(sa.usd, "USD") : ""].filter(Boolean).join(" + ")} (NO se carga acá)`
+      // IMPAGO = saldo anterior − créditos del ciclo, no el saldo anterior a secas: cuando el
+      // resumen anterior se pagó entero (lo normal) el arrastre es CERO, y avisar igual por el
+      // saldo anterior completo hacía dudar de una carga que estaba bien.
+      const sa = r.saldoAnterior, cr = r.creditos || { ars: 0, usd: 0 };
+      const impago = sa ? { ars: round2(sa.ars - (cr.ars || 0)), usd: round2(sa.usd - (cr.usd || 0)) } : null;
+      const saTxt = impago && (Math.abs(impago.ars) > 1 || Math.abs(impago.usd) > 0.5)
+        ? ` · ⚠️ el resumen arrastra saldo anterior impago de ${[impago.ars ? money(impago.ars, "ARS") : "", impago.usd ? money(impago.usd, "USD") : ""].filter(Boolean).join(" + ")} (NO se carga acá)`
         : "";
       setPdfMsg(`✓ ${res.creados} consumo(s) cargados a la bandeja`
         + (parseo.archivos > 1 ? ` de ${parseo.archivos} resúmenes` : "")

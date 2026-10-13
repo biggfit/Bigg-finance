@@ -115,8 +115,16 @@ export function parseAmexLines(lines) {
     if (/^Total de transacciones financieras/i.test(ln)) {
       const a = amountsOf(ln);
       if (a.length && moneda) totPdf[moneda] = round2(totPdf[moneda] + a[a.length - 1]);
+      // CIERRA el grupo. Si la sección quedara abierta, el crédito del pago que Amex imprime al
+      // empezar el bloque de la OTRA moneda (ver abajo) caería todavía con la moneda anterior.
+      moneda = null;
       continue;
     }
+    // CRÉDITOS (pagos recibidos), no consumos. Amex los imprime arriba de cada bloque de moneda,
+    // ANTES del "Nuevos Cargos en …" que abre la sección. Sumarlos inflaba los débitos y, peor, les
+    // ponía la moneda del bloque anterior: en el resumen de 10/2026 el pago en USD entraba como un
+    // cargo en PESOS (1.309,19 en Mazzoni, 79,67 en Amadeo) y el control contra la cabecera fallaba.
+    if (/Gracias por su pago/i.test(ln)) continue;
     if (!moneda) continue;
 
     const f = ln.match(FECHA);
@@ -156,6 +164,11 @@ export function parseAmexLines(lines) {
     controles,
     totalAPagar: null,                                        // a propósito — ver cabecera del archivo
     saldoAnterior: { ars: ars?.anterior ?? 0, usd: usd?.anterior ?? 0 },
+    // Pagos recibidos en el ciclo. Van aparte para que el caller pueda avisar del ARRASTRE REAL
+    // (anterior − créditos) y no del saldo anterior a secas: estas cuentas cancelan el resumen
+    // entero casi todos los meses, y avisar "arrastra $730.819,42 impagos" cuando se pagó completo
+    // es ruido que hace dudar de la carga.
+    creditos:      { ars: ars?.creditos ?? 0, usd: usd?.creditos ?? 0 },
     debitos:       { ars: ars?.debitos  ?? 0, usd: usd?.debitos  ?? 0 },
     aPagar:        { ars: ars?.aPagar   ?? 0, usd: usd?.aPagar   ?? 0 },
   };
@@ -182,6 +195,7 @@ export function mergeAmex(resultados) {
     controles:  rs.flatMap(r => r.controles),
     totalAPagar: null,
     saldoAnterior: acc("saldoAnterior"),
+    creditos:      acc("creditos"),
     debitos:       acc("debitos"),
     aPagar:        acc("aPagar"),
     ciclosDistintos: [...new Set(rs.map(r => r.header?.fechaCierre).filter(Boolean))].length > 1,
