@@ -414,19 +414,24 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
   }, [franchises, comps, activeCompany]);
 
   // 3. Pagos a cuenta sin factura de pauta
-  // Se compara lo cobrado contra lo facturado en una VENTANA de dos meses —el del pago y el
-  // anterior— consumiendo primero el mes anterior. No se comparan importes uno a uno, porque el
-  // criterio viejo (una FACTURA|PAUTA del mismo importe exacto) fallaba de tres formas:
+  // Se compara lo cobrado contra lo facturado de pauta EN EL MES DEL PAGO. No se comparan importes
+  // uno a uno, porque el criterio viejo (una FACTURA|PAUTA del mismo importe exacto) fallaba:
   //   · sin mirar el mes, una sede que pauta siempre lo mismo apareaba el cobro nuevo con una
   //     factura vieja (MDQ pagó 600.000 en jun, jul y ago; los tres se cruzaron con facturas de
   //     feb/mar/abr "financiadas por BIGG"), y la pauta del mes quedaba sin facturar;
   //   · exigiendo importes iguales, una factura que cubre el pago MÁS el saldo a favor nunca
-  //     apareaba (Canning cobró 701.756 y facturó 739.000, lo correcto, y seguía "pendiente");
-  //   · exigiendo el mismo mes, se rompen las sedes que facturan la pauta por adelantado. La
-  //     convención no es uniforme: MDQ y Saavedra fechan la factura en el mes de la pauta, Devoto
-  //     la fecha un mes antes ("Pauta Septiembre 2026" emitida el 31/08), y su cobro llega recién
-  //     en septiembre. La ventana de dos meses cubre las dos convenciones sin aflojar el criterio:
-  //     una factura ya consumida por el cobro de su propio mes no queda disponible para el siguiente.
+  //     apareaba (Canning cobró 701.756 y facturó 739.000, lo correcto, y seguía "pendiente").
+  //
+  // La ventana era de dos meses —el del pago y el anterior, consumiendo primero el anterior— para
+  // las sedes que facturan la pauta por adelantado. Se achicó al mes del pago (14/10/2026) porque
+  // escondía el caso inverso, que es el habitual: la pauta se cobra a fin del mes anterior, y el
+  // que paga atrasado los primeros días del mes siguiente veía su adelanto absorbido por la factura
+  // del período anterior. Esa factura suele estar cancelada por el saldo de la cuenta corriente y no
+  // por un PAGO_PAUTA, así que acá seguía viva y disponible. En octubre 2026 tapó seis cobros por
+  // 4.282.204 ARS (Devoto tenía la factura del 30/9 cubierta al centavo —saldo −0,01— y aun así se
+  // comía el pago del 2/10). Queda alineado con computeSaldoReal, cuyo tope Math.min(ppMes,
+  // fPautaMes) siempre miró solo el mes del pago.
+  //
   // Se netean las NC|PAUTA porque anulan facturación del mes. `falta` es lo que queda sin cubrir:
   // si es menor al pago, la factura lo cubrió en parte.
   const pagosSinFactura = useMemo(() => {
@@ -440,12 +445,10 @@ export default function PendientesPanel({ onEmitir, onEmitirAfip, onEmitirPago, 
       const pendientes = [];
       for (const pago of frComps.filter(c => c.type === "PAGO_PAUTA" && !c.invoice).sort((a, b) => cmpDate(a.date, b.date))) {
         let resta = pago.amount ?? 0;
-        for (let atras = 1; atras >= 0 && resta > 0.01; atras--) {
-          const k = idxMes(pago) - atras;
-          const usa = Math.min(Math.max(facturado[k] ?? 0, 0), resta);
-          facturado[k] = (facturado[k] ?? 0) - usa;
-          resta -= usa;
-        }
+        const k = idxMes(pago);
+        const usa = Math.min(Math.max(facturado[k] ?? 0, 0), resta);
+        facturado[k] = (facturado[k] ?? 0) - usa;
+        resta -= usa;
         if (resta > 0.01) pendientes.push({ fr, comp: pago, falta: resta });
       }
       return pendientes;

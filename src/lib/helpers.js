@@ -293,12 +293,21 @@ export function buildCuentaCorriente(frId, comps, saldoInicial, frCurrency = nul
 
 /**
  * Calcula cuánto falta facturar de pagos a cuenta (PAGO_PAUTA).
- * Compara lo cobrado contra lo facturado de pauta en una ventana de dos meses —el del pago y el
- * anterior, consumiendo primero el anterior—, no factura contra pago. Exigir importes iguales
- * dejaba pendiente una pauta bien facturada (la factura puede cubrir el cobro MÁS el saldo a favor
- * de la sede); exigir el mismo mes rompía las sedes que facturan la pauta por adelantado, que
- * fechan la factura un mes antes del período que dice el concepto. Se netean las NC|PAUTA porque
- * anulan facturación del mes. Mismo criterio que el panel de Pendientes.
+ * Compara lo cobrado contra lo facturado de pauta EN EL MES DEL PAGO, no factura contra pago.
+ * Exigir importes iguales dejaba pendiente una pauta bien facturada (la factura puede cubrir el
+ * cobro MÁS el saldo a favor de la sede). Se netean las NC|PAUTA porque anulan facturación del mes.
+ *
+ * La ventana era de dos meses —el del pago y el anterior, consumiendo primero el anterior— para
+ * las sedes que facturan la pauta por adelantado. Se achicó al mes del pago (14/10/2026) porque
+ * dejaba pasar lo contrario: la pauta se paga a fin del mes anterior, y el que paga atrasado los
+ * primeros días del mes siguiente veía su adelanto absorbido por la factura del período anterior
+ * —que ya estaba cancelada por el saldo de la cuenta corriente, no por un PAGO_PAUTA, así que
+ * seguía viva en este pozo—. En octubre 2026 escondía seis cobros por 4.282.204 ARS: Devoto, por
+ * ejemplo, tenía la factura del 30/9 cubierta al centavo (saldo −0,01) y aun así se comía el pago
+ * del 2/10. Esto deja a `computePautaPendiente` alineado con `computeSaldoReal`, cuyo tope
+ * `Math.min(ppMes, fPautaMes)` siempre miró solo el mes del pago.
+ *
+ * Mismo criterio que el panel de Pendientes (pagosSinFactura, PendientesPanel.jsx).
  */
 export function computePautaPendiente(frId, comps, upToYear, upToMonth, frCurrency = null, filterCurrency = null, empresa = null) {
   const key = String(frId);
@@ -317,12 +326,10 @@ export function computePautaPendiente(frId, comps, upToYear, upToMonth, frCurren
   for (const pago of all.filter(c => c.type === "PAGO_PAUTA").sort((a, b) => cmpDate(a.date, b.date))) {
     if (pago.invoice) continue; // vinculado manualmente a un comprobante ya existente
     let resta = pago.amount ?? 0;
-    for (let atras = 1; atras >= 0 && resta > 0.01; atras--) {
-      const k = idxMes(pago) - atras;
-      const usa = Math.min(Math.max(facturado[k] ?? 0, 0), resta);
-      facturado[k] = (facturado[k] ?? 0) - usa;
-      resta -= usa;
-    }
+    const k = idxMes(pago);
+    const usa = Math.min(Math.max(facturado[k] ?? 0, 0), resta);
+    facturado[k] = (facturado[k] ?? 0) - usa;
+    resta -= usa;
     if (resta > 0.01) total += resta;
   }
   return total;
