@@ -5,6 +5,7 @@
 import { COMPANIES } from "../lib/helpers";
 import { emitirComprobante, invoiceFromResult } from "../lib/facturanteApi";
 import { getNextInvoiceNum, fetchCompsFresh } from "../lib/sheetsApi";
+import { reglaEmision } from "../lib/reglaEmision";
 
 // ── Importe formateado estilo AR ("1.234.567,89") ──────────────────────────
 export function formatCurrencyInput(raw) {
@@ -19,9 +20,6 @@ export function parseCurrencyInput(formatted) {
   return parseFloat(String(formatted).replace(/\./g, "").replace(",", ".")) || 0;
 }
 export const round2 = n => Math.round((Number(n) || 0) * 100) / 100;
-
-export const getInvoicePrefix = (activeCompany) =>
-  COMPANIES[activeCompany]?.side === "es" ? "ESP" : "USA";
 
 // TC por país: moneda local → USD. Estas son las monedas locales de los países LATAM.
 // Sin valores por defecto a propósito: el TC sale de Maestros o no se factura. Un default
@@ -97,11 +95,13 @@ export async function emitirLote({ items, franchisor, activeCompany, onAddComp, 
     const { fr, meta = {}, sinEmision = false } = items[idx];
     let comp = items[idx].comp;
     setBatchProg({ current: idx + 1, total, name: fr.name });
-    const isAR = fr.country === "Argentina";
+    // La sociedad ya la eligió el lote por país (empresaEmisoraPorPais, regla del fee); si sale por
+    // ARCA o por correlativo lo dice reglaEmision, igual que en el resto de los caminos.
+    const regla = reglaEmision({ empresa: activeCompany, currency: comp.currency, doc: String(comp.type ?? "").split("|")[0] });
     let facturanteStatus = "omitido";
     if (sinEmision) {
       facturanteStatus = "gestion";
-    } else if (!skipFacturante && isAR && activeCompany === "ÑAKO SRL") {
+    } else if (!skipFacturante && regla.destino === "arca") {
       try {
         const result = await emitirComprobante({
           franchisor: franchisor?.ar ?? franchisor,
@@ -114,9 +114,9 @@ export async function emitirLote({ items, franchisor, activeCompany, onAddComp, 
         facturanteStatus = `ERROR: ${err.message}`;
         console.error("[Lote Facturante]", fr.name, err.message);
       }
-    } else if (!skipFacturante && !isAR) {
+    } else if (!skipFacturante && regla.destino === "correlativo") {
       try {
-        const res = await getNextInvoiceNum(fr.id, getInvoicePrefix(activeCompany));
+        const res = await getNextInvoiceNum(fr.id, regla.prefijo);
         comp = { ...comp, invoice: res.label };
         facturanteStatus = "invoice_ok";
       } catch (e) {

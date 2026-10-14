@@ -15,6 +15,7 @@ import { emitirComprobante, invoiceFromResult, downloadFacturantePdfBlob, afipSa
 import { downloadInvoicePdf } from "../lib/invoicePdf";
 import { buildFacturaPDF, downloadTextAsPDF } from "../lib/pdf";
 import { getNextInvoiceNum } from "../lib/sheetsApi";
+import { reglaEmision } from "../lib/reglaEmision";
 
 // ─── ADD COMP MODAL ───────────────────────────────────────────────────────────
 // Versión completa con la misma lógica de ModoManual del Facturador:
@@ -58,10 +59,6 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
 
   const allowedCurrencies = getCompanyCurrencies(activeCompany, franchisor);
   const applyIVA = !!(COMPANIES[activeCompany]?.applyIVA);
-  const isAR     = selectedFr?.country === "Argentina";
-  // A ARCA se va por QUIÉN emite, no por el país de la sede: ÑAKO le factura la pauta en pesos a
-  // sedes del exterior (Pocitos) y ese comprobante también es fiscal argentino.
-  const emiteAR  = COMPANIES[activeCompany]?.side === "ar";
   const isSedePropia = selectedFr?.esSedePropia === true;   // interusos = asiento de gestión (no fiscal, no CxC/CxP)
 
   const initCur = () => {
@@ -136,9 +133,15 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
   const autoMovConcepto = `${COMP_TYPES[movTipo]?.label ?? movTipo} - ${MONTHS[mesMovComp]} ${anioMovComp}`;
 
   // ── flags de emisión ──
-  // Sede propia: interuso NO fiscal → nunca ARCA (además el type de gestión no es FACTURA/NC).
-  const usaFacturante = mode === "comprobante" && emiteAR && currency === "ARS" && (doc === "FACTURA" || doc === "NC") && !isSedePropia;
+  // A ARCA se va por QUIÉN emite, no por el país de la sede (reglaEmision). Sede propia = asiento
+  // de gestión, salvo una NC que anula una factura que sí salió fiscal (igual que el wizard).
   const refFAComp     = doc === "NC" ? (comps[String(selectedFr?.id)] ?? []).find(c => c.id === refCompId) : null;
+  const regla         = reglaEmision({
+    empresa: activeCompany, currency, doc: mode === "comprobante" ? doc : null,
+    esSedePropia: isSedePropia, refEsFiscal: !!(refFAComp?.facturanteId || refFAComp?.invoice),
+  });
+  const esGestion     = regla.destino === "gestion";
+  const usaFacturante = regla.destino === "arca";
   const ncSinRef      = usaFacturante && doc === "NC" && !refFAComp?.invoice;
 
   const inputS = { padding: "9px 12px", fontSize: 14, borderRadius: 8, background: "var(--bg)", border: "1px solid var(--border2)", color: "var(--text)", fontFamily: "var(--font)", width: "100%", boxSizing: "border-box" };
@@ -186,12 +189,11 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
       } catch (err) {
         setEmitState("error"); setEmitError(err.message ?? "Error al emitir ante ARCA"); return;
       }
-    } else if (!usaFacturante && !skipFacturante && mode === "comprobante" && !isSedePropia) {
+    } else if (regla.destino === "correlativo" && !skipFacturante) {
       // Invoice USA/ESP
       setEmitState("emitting"); setEmitError(null);
       try {
-        const invoicePrefix = COMPANIES[activeCompany]?.side === "es" ? "ESP" : "USA";
-        const res = await getNextInvoiceNum(selectedFr?.id, invoicePrefix);
+        const res = await getNextInvoiceNum(selectedFr?.id, regla.prefijo);
         enriched = { ...enriched, invoice: res.label };
         setEmitState("idle");
       } catch (e) {
@@ -201,7 +203,7 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
 
     // Sede propia: guardar con type de GESTIÓN (GFAC|/GNC|) → asiento de gestión. Se emitió
     // arriba con el type normal para el preview/labels; acá se remapea al persistir en comprobantes.
-    if (isSedePropia && mode === "comprobante") {
+    if (esGestion) {
       enriched = { ...enriched, type: makeType(doc === "NC" ? "GNC" : "GFAC", cuenta) };
     }
     try { onAdd(selectedFr?.id, enriched); } catch {
@@ -219,7 +221,7 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
           setTimeout(() => URL.revokeObjectURL(url), 100);
         })
         .catch(() => downloadTextAsPDF(buildFacturaPDF(selectedFr, franchisor, enriched), `Factura_${selectedFr?.name}.html`));
-    } else if (isAR && !isSedePropia) {
+    } else if (usaFacturante) {
       downloadTextAsPDF(buildFacturaPDF(selectedFr, franchisor, enriched), `Factura_${selectedFr?.name}.html`);
     } else if (enriched.invoice) {
       downloadInvoicePdf(selectedFr, franchisor, enriched).catch(console.error);
@@ -407,7 +409,7 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
               ["Moneda",      preview.currency],
               ["Fecha",       preview.date],
               ["Descripción", preview.nota],
-              ["Documento",   usaFacturante ? (doc === "NC" ? "NC ARCA (ÑAKO SRL)" : "Factura ARCA (ÑAKO SRL)") : isAR ? (doc === "NC" ? "Nota de Crédito" : "Factura") : "Invoice"],
+              ["Documento",   regla.etiqueta],
             ].map(([k, v]) => (
               <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, borderBottom: "1px solid var(--border)", paddingBottom: 4, marginBottom: 4 }}>
                 <span style={{ color: "var(--muted)" }}>{k}</span>
@@ -503,7 +505,7 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
               onClick={() => doConfirm(false)}>
               {emitState === "emitting"
                 ? (usaFacturante ? "Emitiendo ante ARCA…" : "Generando…")
-                : `✓ ${usaFacturante ? (doc === "NC" ? "Emitir NC ARCA" : "Emitir Factura ARCA") : isAR ? (doc === "NC" ? "Generar NC" : "Generar Factura") : "Generar Invoice"}`}
+                : esGestion ? "✓ Guardar asiento de gestión" : `✓ ${usaFacturante ? "Emitir" : "Generar"} ${regla.etiqueta}`}
             </button>
           </>)}
         </div>

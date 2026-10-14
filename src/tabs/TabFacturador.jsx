@@ -9,6 +9,7 @@ import { buildFacturaPDF, downloadTextAsPDF } from "../lib/pdf";
 import { downloadInvoicePdf, downloadBatchInvoicePdf } from "../lib/invoicePdf";
 import { emitirComprobante, formatInvoiceLabel, invoiceFromResult, fetchAfipNumero, downloadFacturantePdfBlob, afipSaveFailedMsg } from "../lib/facturanteApi";
 import { getNextInvoiceNum, fetchCompsFresh } from "../lib/sheetsApi";
+import { reglaEmision } from "../lib/reglaEmision";
 import { fetchCuentasBancarias } from "../lib/numbersApi";       // cuentas de Numbers (destino de la plata)
 import { SOCIEDAD_EMPRESA } from "../lib/franquiciasAdapter";
 import { SOCIEDADES } from "../data/tesoreriaData";
@@ -16,7 +17,7 @@ import { SOCIEDADES } from "../data/tesoreriaData";
 const SOCIEDAD_NOMBRE = Object.fromEntries(SOCIEDADES.map(s => [s.id, s.nombre]));
 // Helpers compartidos entre los lotes (fee desde CRM y CRM WhatsApp): sociedad/moneda por país, TC de
 // Maestros, importes formateados y el ciclo emitir → guardar → confirmar dudosos (emitirLote).
-import { formatCurrencyInput, parseCurrencyInput, round2, getInvoicePrefix, getCountryCur, getTcRate,
+import { formatCurrencyInput, parseCurrencyInput, round2, getCountryCur, getTcRate,
          empresaEmisoraPorPais, monedaFacturacionPorPais, emitirLote, subtituloCrmWhatsapp } from "./facturadorBatch";
 import ModoCrmWhatsapp from "./ModoCrmWhatsapp";
 
@@ -113,7 +114,6 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
   }, [activeCompany]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fr     = activeFr.find(f => f.id === parseInt(frId));
-  const isAR   = fr?.country === "Argentina";
   const applyIVA = !!(COMPANIES[activeCompany]?.applyIVA);
   const sym    = SYM[currency] ?? "$";
 
@@ -291,8 +291,9 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
     // Sede propia + factura/NC = asiento de GESTIÓN: no se emite ante ARCA, no lleva número, no hay
     // PDF, y `SKIP_CC_TYPES` lo esconde de toda la CC de Franquicias. Se avisa ANTES de confirmar:
     // el botón decía "generar Nota de Crédito ARCA" y guardaba una fila invisible y sin documento.
-    const esGestion      = esSedePropia && (doc === "FACTURA" || doc === "NC") && !refEsFiscal;
-    const usaFacturante  = isAR && currency === "ARS" && (doc === "FACTURA" || doc === "NC") && !esGestion;
+    const regla          = reglaEmision({ empresa: activeCompany, currency, doc, esSedePropia, refEsFiscal });
+    const esGestion      = regla.destino === "gestion";
+    const usaFacturante  = regla.destino === "arca";
     const ncSinRef       = usaFacturante && doc === "NC" && !refFAComp?.invoice;
 
     const doConfirm = async (skipFacturante = false) => {
@@ -325,13 +326,12 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
           setEmitError(err.message ?? "Error al emitir ante ARCA");
           return;
         }
-      } else if (!usaFacturante && !skipFacturante && (doc === "FACTURA" || doc === "NC") && !esGestion) {
-        // ── Invoice USA: asignar correlativo ──────────────────────────────
+      } else if (regla.destino === "correlativo" && !skipFacturante) {
+        // ── Invoice USA / ESP: asignar correlativo ────────────────────────
         setEmitState("emitting");
         setEmitError(null);
         try {
-          const invoicePrefix = getInvoicePrefix(activeCompany);
-          const res = await getNextInvoiceNum(fr.id, invoicePrefix);
+          const res = await getNextInvoiceNum(fr.id, regla.prefijo);
           enriched = { ...enriched, invoice: res.label };
           setEmitState("idle");
         } catch (e) {
@@ -357,7 +357,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
       catch (e) { saveResult = { ok: false, error: e }; }
       const saveFailed = saveResult?.ok === false;
 
-      if (isAR && enriched.facturanteId) {
+      if (enriched.facturanteId) {
         // AR emitida por Facturante: bajar el PDF oficial de AFIP
         const filename = `Factura_${enriched.invoice ?? enriched.facturanteId}_${fr.name}.pdf`;
         downloadFacturantePdfBlob(enriched.facturanteId)
@@ -373,8 +373,8 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
             downloadTextAsPDF(buildFacturaPDF(fr, franchisor, enriched),
               `Factura_${fr.name}_${MONTHS[preview.month]}_${preview.year}.html`);
           });
-      } else if (isAR && !esGestion) {
-        // AR guardada sin emitir: HTML de respaldo
+      } else if (usaFacturante) {
+        // ARCA guardada sin emitir: HTML de respaldo
         downloadTextAsPDF(buildFacturaPDF(fr, franchisor, enriched),
           `Factura_${fr.name}_${MONTHS[preview.month]}_${preview.year}.html`);
       } else if (enriched.invoice) {
@@ -504,14 +504,14 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
               ["Moneda",      preview.currency],
               ["Fecha",       preview.date],
               ["Descripción", preview.nota],
-              ["Documento",   isAR ? "Factura AR (ÑAKO SRL)" : "Invoice (BIGG FIT LLC)"],
+              ["Documento",   regla.etiqueta],
             ].map(([k,v]) => (
               <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, borderBottom: "1px solid var(--border)", paddingBottom: 4, marginBottom: 4 }}>
                 <span style={{ color: "var(--muted)" }}>{k}</span><span style={{ fontWeight: 600 }}>{v}</span>
               </div>
             ))}
             {/* NC reference picker — obligatoria para AR + ARS + NC (Facturante lo requiere) */}
-            {isAR && currency === "ARS" && doc === "NC" && (() => {
+            {usaFacturante && doc === "NC" && (() => {
               // Todas las FAs con invoice label (tipo + número AFIP)
               const allFAs  = (comps[String(fr?.id)] ?? [])
                 .filter(c => c.type?.startsWith("FACTURA") && c.invoice)
@@ -597,10 +597,10 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
                 <button className="btn" style={{ flex: 3, height: 48, fontSize: 15 }} disabled={emitState === "emitting" || ncSinRef} onClick={handleConfirm}
                   title={ncSinRef ? "Seleccioná la factura de referencia antes de emitir" : undefined}>
                   {emitState === "emitting"
-                    ? (usaFacturante ? "Emitiendo ante ARCA…" : esGestion ? "Guardando…" : "Generando Invoice…")
+                    ? (usaFacturante ? "Emitiendo ante ARCA…" : esGestion ? "Guardando…" : "Generando…")
                     : esGestion
-                      ? `✓ Guardar asiento de gestión (${doc === "NC" ? "NC" : "factura"} interna, sin ARCA)`
-                      : `✓ Confirmar y generar ${isAR && currency === "ARS" ? (doc === "NC" ? "Nota de Crédito ARCA" : "Factura ARCA") : isAR ? (doc === "NC" ? "Nota de Crédito" : "Factura") : "Invoice"}`}
+                      ? `✓ Guardar ${regla.etiqueta.charAt(0).toLowerCase()}${regla.etiqueta.slice(1)}`
+                      : `✓ Confirmar y generar ${regla.etiqueta}`}
                 </button>
               </>
           }
@@ -1659,7 +1659,6 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
     setProcessLog([]);
     for (const r of activeRows) {
       const fr = franchises.find(f => f.id === r.franchiseId);
-      const isAR = fr?.country === "Argentina";
       const esSedePropia = fr?.esSedePropia === true;   // interuso de sede propia → asiento de gestión (no fiscal)
       const doc  = String(r.type ?? "").split("|")[0];
       const esComp = doc === "FACTURA" || doc === "NC";
@@ -1682,7 +1681,9 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
       let invoice = null;
       let msg = r.franchiseName;
 
-      if (!skipFacturante && isAR && r.currency === "ARS" && esComp && fr && activeCompany === "ÑAKO SRL" && !esSedePropia) {
+      // Quién emite lo dice la sociedad activa, no el país de la sede (reglaEmision).
+      const regla = reglaEmision({ empresa: activeCompany, currency: r.currency, doc, esSedePropia });
+      if (!skipFacturante && regla.destino === "arca" && fr) {
         try {
           const result = await emitirComprobante({
             franchisor: franchisor?.ar ?? franchisor,
@@ -1697,10 +1698,9 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
           status = "error";
           msg = err.message ?? "Error ARCA";
         }
-      } else if (!skipFacturante && !isAR && esComp && fr && !esSedePropia) {
+      } else if (!skipFacturante && regla.destino === "correlativo" && fr) {
         try {
-          const invoicePrefix = getInvoicePrefix(activeCompany);
-          const res = await getNextInvoiceNum(r.franchiseId, invoicePrefix);
+          const res = await getNextInvoiceNum(r.franchiseId, regla.prefijo);
           comp = { ...comp, invoice: res.label };
           invoice = res.label;
           status = "ok";
@@ -1732,7 +1732,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
       setProcessLog(prev => [...prev, { status, invoice, frName: r.franchiseName, msg }]);
     }
     setStage(FACT_STAGE.DONE);
-  }, [activeRows, franchises, onAddComp, loteId, franchisor]);
+  }, [activeRows, franchises, onAddComp, loteId, franchisor, activeCompany]);
 
   const downloadPlantilla = () => {
     const wb = XLSX.utils.book_new();
@@ -2277,13 +2277,12 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
         ref: conceptoFinal, nota: conceptoFinal,
         contado: true,
       };
-      // A ARCA se va por QUIÉN emite y en qué moneda, NO por el país de la sede: la pauta de una
-      // sede del exterior la factura igual ÑAKO, en pesos y contra un CUIT argentino, así que
-      // necesita comprobante de ARCA. Mirando el país, Pocitos (Uruguay) caía al correlativo
-      // interno y acumuló 5 facturas por 4.806.000 con número "USA-24-00XX" y sin facturanteId,
-      // invisibles además para el panel de pendientes de AFIP.
-      const emiteAR = COMPANIES[activeCompany]?.side === "ar";
-      if (emiteAR && factComp.currency === "ARS") {
+      // A ARCA se va por QUIÉN emite y en qué moneda, NO por el país de la sede (reglaEmision):
+      // mirando el país, Pocitos (Uruguay) acumuló 5 facturas de ÑAKO por 4.806.000 con número
+      // "USA-24-00XX" y sin facturanteId. Sin esSedePropia a propósito: este camino nunca lo miró
+      // y el pago a cuenta de una sede propia se sigue facturando como hasta ahora.
+      const regla = reglaEmision({ empresa: activeCompany, currency: factComp.currency, doc: "FACTURA" });
+      if (regla.destino === "arca") {
         const result = await emitirComprobante({
           franchisor: franchisor?.ar ?? franchisor,
           franchise:  fr,
@@ -2291,9 +2290,8 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
         });
         factComp.invoice      = invoiceFromResult(result);
         factComp.facturanteId = String(result.idComprobante);
-      } else if (!emiteAR) {
-        const invoicePrefix = getInvoicePrefix(activeCompany);
-        const res = await getNextInvoiceNum(fr.id, invoicePrefix);
+      } else if (regla.destino === "correlativo") {
+        const res = await getNextInvoiceNum(fr.id, regla.prefijo);
         factComp.invoice = res.label;
       }
       // La empresa va en el payload (no por addCompWithEmpresa) para que un reintento desde la
