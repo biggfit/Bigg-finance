@@ -10,6 +10,11 @@ import { generateInvoicePdfBlob } from "../lib/invoicePdf";
 import { downloadFacturantePdfBlob } from "../lib/facturanteApi";
 import { sendMailFr } from "../lib/sheetsApi";
 import { RecordatorioDots } from "../tabs/TabSaldos";
+import { useConfirm } from "../numbers/useConfirm";
+
+// Factura o NC con número (de ARCA o correlativo interno USA-/ESP-): ya está en manos del
+// franquiciado. Las FC recibidas y los movimientos quedan afuera.
+const esEmitido = (c) => /^(FACTURA|NC)\|/.test(c.type ?? "") && !!(c.facturanteId || c.invoice);
 
 // ─── FRANCHISE DETAIL MODAL — Estado de cuenta mensual / recordatorio ─────────
 export default function FrDetail({ franchise, month, year, onClose, onAddComp, onDelComp, onEditComp }) {
@@ -23,6 +28,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
   const [localYear,   setLocalYear]   = useState(year);
   const [mailStatus,  setMailStatus]  = useState(null); // null | "sending" | "ok" | "error"
   const [mailError,   setMailError]   = useState("");
+  const [confirm, confirmUI] = useConfirm();
 
   // Resetear estado del mail al navegar entre meses
   useEffect(() => { setMailStatus(null); setMailError(""); }, [localMonth, localYear]);
@@ -59,9 +65,40 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
   const handleAdd = useCallback((frId, comp) => onAddComp(frId, comp), [onAddComp]);
 
   const openEdit = (c) => { setEditingId(c.id); setEditBuf({ date: c.date ?? "", nota: c.ref ?? c.nota ?? "", amount: c.amount ?? 0, type: c.type ?? "" }); };
-  const saveEdit = () => {
-    if (onEditComp && editingId) onEditComp(franchise.id, editingId, { date: editBuf.date, nota: editBuf.nota, ref: editBuf.nota, amount: parseFloat(String(editBuf.amount).replace(",", ".")) || 0, type: editBuf.type || undefined });
+  const saveEdit = async () => {
+    if (!onEditComp || !editingId) { setEditingId(null); return; }
+    const orig  = frComps.find(c => c.id === editingId);
+    const patch = { date: editBuf.date, nota: editBuf.nota, ref: editBuf.nota, amount: parseFloat(String(editBuf.amount).replace(",", ".")) || 0, type: editBuf.type || undefined };
+    // Importe, tipo y fecha de uno emitido tienen que coincidir con lo que tiene el franquiciado
+    // (y ARCA): se pueden cambiar, pero avisando. El concepto solo, sin preguntar.
+    const cambios = orig && esEmitido(orig) ? [
+      Math.abs(patch.amount - (orig.amount ?? 0)) > 0.001 && `importe ${fmt(orig.amount, orig.currency ?? displayCurrency)} → ${fmt(patch.amount, orig.currency ?? displayCurrency)}`,
+      patch.type && patch.type !== orig.type && `tipo ${COMP_TYPES[orig.type]?.label ?? orig.type} → ${COMP_TYPES[patch.type]?.label ?? patch.type}`,
+      patch.date !== orig.date && `fecha ${orig.date} → ${patch.date}`,
+    ].filter(Boolean) : [];
+    if (cambios.length > 0 && !(await confirm({
+      title:   "Editar comprobante emitido",
+      message: `${orig.invoice} ya está emitido${orig.facturanteId ? " en ARCA" : ""}. Vas a cambiar: ${cambios.join("; ")}. `
+             + `El sistema deja de coincidir con el comprobante que tiene el franquiciado${orig.facturanteId ? " y con ARCA" : ""}: `
+             + `si el emitido está mal, lo que corresponde es una nota de crédito. ¿Guardar igual?`,
+      confirmLabel: "Guardar igual", cancelLabel: "Cancelar",
+    }))) return;
+    onEditComp(franchise.id, editingId, patch);
     setEditingId(null);
+  };
+
+  const handleDel = async (c) => {
+    const importe = fmt(c.amount ?? 0, c.currency ?? displayCurrency);
+    const ok = esEmitido(c)
+      ? await confirm({
+          title:   "Borrar comprobante emitido",
+          message: `${c.invoice} (${importe}) ya está emitido${c.facturanteId ? " en ARCA" : ""}. Borrar la fila no lo anula: `
+                 + `el franquiciado lo sigue teniendo${c.facturanteId ? " y ARCA también" : ""}. Para anularlo, emití una nota de crédito. `
+                 + `¿Borrar igual la fila del sistema? (por ejemplo, si quedó duplicada)`,
+          confirmLabel: "Borrar igual", cancelLabel: "Cancelar",
+        })
+      : await confirm(`¿Borrar ${COMP_TYPES[c.type]?.label ?? c.type} del ${c.date ?? "—"} por ${importe}?`);
+    if (ok) onDelComp(franchise.id, c.id);
   };
 
   // Calcular saldo corriente después de cada comprobante
@@ -294,7 +331,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
                         ) : (
                           <span style={{ display: "flex", gap: 3, justifyContent: "flex-end" }}>
                             <button className="ghost" style={{ fontSize: 12, padding: "2px 5px", opacity: .55 }} title="Editar" onClick={() => openEdit(c)}>✎</button>
-                            <button className="del"   style={{ opacity: .5 }} onClick={() => onDelComp(franchise.id, c.id)}>✕</button>
+                            <button className="del"   style={{ opacity: .5 }} onClick={() => handleDel(c)}>✕</button>
                           </span>
                         )}
                       </td>
@@ -341,6 +378,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
 
       {adding && <AddCompModal franchise={franchise} month={localMonth} year={localYear} onClose={() => { setAdding(false); setAddingPrefill(null); }} onAdd={handleAdd} prefill={addingPrefill} />}
       {showCC && <CCModal franchise={franchise} onClose={() => setShowCC(false)} onDelComp={onDelComp} onEditComp={onEditComp} />}
+      {confirmUI}
     </>
   );
 }
