@@ -295,12 +295,28 @@ function buildPnLSede(inRows, egRows, ccFilter, year, moneda, sinIva = false) {
       // su signo — ya vienen firmados desde movimientoToPnLRows (un reintegro en cuenta de costo llega negativo;
       // un ingreso financiero, ej. Intereses Ganados, llega positivo y cae en Sin clasificar, de donde la cola
       // "Resultado Financiero" de fondeadas/Rosedal lo toma con signo natural: + ganancia). NO re-firmar acá.
+      //
+      // EXCEPCIÓN — el asiento de GESTIÓN (pata 2 del interuso de sede propia) llega firmado como RESULTADO
+      // de la sede: − = cargo, + = crédito. Esa ES la convención de los grupos de INGRESO (un cargo resta del
+      // interuso), pero la OPUESTA a la de los grupos de COSTO (+ = costo). Mientras estos asientos solo
+      // cayeron en interusos nadie lo vio; CRM fue el primero en caer en "Mkt y Pauta" y el cargo se leía como
+      // recupero: sep 2026, Gastos Operativos de las sedes 1.890.362 BAJOS, y la misma cifra como ganancia
+      // fantasma del grupo (el asiento es interno: HQ cobra y la sede paga, tiene que netear a cero).
       const st = String(row.subtipo || "").toUpperCase();
       const esEg = st === "EGRESO", esIn = st === "INGRESO", enIng = SEDE_ING_KEYS.has(gkey);
-      const contra = !!gkey && ((esEg && enIng) || (esIn && !enIng));
+      const esGestion = row._tipo === "Interuso gestión";
+      const contra = !!gkey && ((esEg && enIng) || (esIn && !enIng) || (esGestion && !enIng));
+      const iva = Number(row.iva_monto) || 0;
       bucket[nombre][m] += montoPnL(row, sinIva) * (contra ? -1 : 1);
-      // IVA: comprobante ingreso → débito, egreso → crédito; movimiento (sin subtipo) → por grupo.
-      if (sinIva && gkey) ((esIn ? true : esEg ? false : enIng) ? ivaDeb : ivaCred)[m] += Number(row.iva_monto) || 0;
+      // IVA: comprobante ingreso → débito, egreso → crédito; movimiento (sin subtipo) → por grupo. El asiento
+      // de gestión se clasifica por el SIGNO DE SU IVA, que el writer ya alinea con el del monto: un cargo es
+      // una compra para la sede (crédito fiscal) aunque viva en la línea de interusos, que es de ingreso. Da
+      // lo mismo en qué grupo caiga, porque `contra` y la naturaleza del grupo se cancelan entre sí. Sin esto,
+      // un cargo en cuenta de COSTO aportaba el IVA al revés y el puente Con/Sin IVA no cerraba.
+      if (sinIva && gkey) {
+        if (esGestion) (iva >= 0 ? ivaDeb : ivaCred)[m] += Math.abs(iva);
+        else ((esIn ? true : esEg ? false : enIng) ? ivaDeb : ivaCred)[m] += iva;
+      }
     }
   };
   add(inRows); add(egRows);
