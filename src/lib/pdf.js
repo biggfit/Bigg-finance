@@ -4,6 +4,17 @@ import { todayDmy } from "../data/franchisor";
 // ─── PDF GENERATORS ──────────────────────────────────────────────────────────
 export function buildFacturaPDF(fr, franchisor, comp) {
   const ar = franchisor?.ar ?? {};
+  // comp.amount es el TOTAL (IVA incluido). Neto e IVA: los que se guardaron al emitir; si faltan,
+  // se desarman del total al 21%. Antes tomaba el total como subtotal y le sumaba otro 21%: este
+  // HTML (respaldo cuando no hay PDF de ARCA, adjunto en mails y "guardar sin emitir") mostraba un
+  // total 21% mayor al facturado.
+  const cur   = comp.currency ?? "ARS";
+  const total = Number(comp.amount) || 0;
+  const neto  = comp.amountNeto != null ? Number(comp.amountNeto)
+              : comp.applyIVA === false ? total
+              : Math.round(total / 1.21 * 100) / 100;
+  const iva   = comp.amountIVA != null ? Number(comp.amountIVA) : Math.round((total - neto) * 100) / 100;
+  const ivaPct = neto > 0 ? Math.round(iva / neto * 1000) / 10 : 0;
   const lines = [
     `FACTURA`,
     ``,
@@ -21,9 +32,9 @@ export function buildFacturaPDF(fr, franchisor, comp) {
     `Descripción: ${comp.nota ?? comp.ref ?? ""}`,
     ``,
     `─────────────────────────────────────────`,
-    `Subtotal:   ${fmt(comp.amount, comp.currency ?? "ARS")}`,
-    `IVA 21%:    ${fmt(comp.amount * 0.21, comp.currency ?? "ARS")}`,
-    `TOTAL:      ${fmt(comp.amount * 1.21, comp.currency ?? "ARS")}`,
+    `Subtotal:   ${fmt(neto, cur)}`,
+    `${`IVA ${ivaPct}%:`.padEnd(12)}${fmt(iva, cur)}`,
+    `TOTAL:      ${fmt(total, cur)}`,
     `─────────────────────────────────────────`,
     ``,
     fr.notaFactura ?? ar.notaPie ?? "",
