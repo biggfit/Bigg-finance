@@ -139,6 +139,17 @@ export async function fetchComps() {
 }
 
 /**
+ * Relee los comprobantes salteando las dos cachés (memoria y borde). Para confirmar si una
+ * escritura rechazada entró igual: una escritura fallida no invalida la caché (post() tira antes),
+ * así que fetchComps() podía devolver la foto de antes y dar por perdida una fila que sí está.
+ */
+export async function fetchCompsFresh() {
+  _cache.clear();
+  forzarRefresco();
+  return fetchComps();
+}
+
+/**
  * Carga los saldos iniciales desde Sheets.
  * @returns {{ [frId: string]: number }}
  */

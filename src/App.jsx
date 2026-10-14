@@ -246,20 +246,26 @@ export default function App({ onVolverNumbers } = {}) {
     // Mismo criterio que delComp/moveComp: manda `_numbers`, no el tipo. Un PAGO* del cuaderno viejo
     // vive en `comprobantes` y va por updateComp; por tipo se iba a updateMovTesoreria, que lo rechaza
     // con "fila no encontrada" mientras la UI optimista mostraba el cambio como aplicado.
+    // Igual que addComp: no rechaza, devuelve { ok, error }. Guardar el número de ARCA después de
+    // emitir necesita saber si la escritura entró — sin eso, al recargar el comprobante vuelve a
+    // "sin emisión AFIP" y se emite dos veces.
     if (comp?._numbers) {
       const m = { ...comp, ...patch };
       const signo = m.type === "PAGO_ENVIADO" ? -1 : 1;
-      updateMovTesoreria(compId, {
+      return queueWrite(() => updateMovTesoreria(compId, {
         tipo: m.type === "PAGO_ENVIADO" ? "EGRESO" : "COBRO", fr_tipo: m.type,
         monto: signo * Math.abs(Number(m.amount) || 0),
         moneda: m.currency, fecha: dmyToIso(m.date),
         concepto: m.nota || m.ref || "",
         documento_id: m.invoice || "",
-      }).catch(err => console.error('Numbers updateMov:', err));
-      return;
+      }))
+        .then(() => ({ ok: true }))
+        .catch(err => { console.error('Numbers updateMov:', err); return { ok: false, error: err }; });
     }
-    updateComp(frId, compId, patch).catch(err => console.error('Sheets updateComp:', err));
-  }, []);
+    return queueWrite(() => updateComp(frId, compId, patch))
+      .then(() => ({ ok: true }))
+      .catch(err => { console.error('Sheets updateComp:', err); return { ok: false, error: err }; });
+  }, [queueWrite]);
 
   const moveComp = useCallback((oldFrId, newFrId, compId, patch) => {
     const oldKey = String(oldFrId);

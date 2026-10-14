@@ -8,7 +8,7 @@ import PendientesPanel from "../components/PendientesPanel";
 import { buildFacturaPDF, downloadTextAsPDF } from "../lib/pdf";
 import { downloadInvoicePdf, downloadBatchInvoicePdf } from "../lib/invoicePdf";
 import { emitirComprobante, formatInvoiceLabel, invoiceFromResult, fetchAfipNumero, downloadFacturantePdfBlob, afipSaveFailedMsg } from "../lib/facturanteApi";
-import { getNextInvoiceNum } from "../lib/sheetsApi";
+import { getNextInvoiceNum, fetchCompsFresh } from "../lib/sheetsApi";
 import { fetchCuentasBancarias } from "../lib/numbersApi";       // cuentas de Numbers (destino de la plata)
 import { SOCIEDAD_EMPRESA } from "../lib/franquiciasAdapter";
 import { SOCIEDADES } from "../data/tesoreriaData";
@@ -2109,6 +2109,42 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
   );
 }
 
+// ── Emitidas en ARCA cuyo guardado no se confirmó ────────────────────────────
+// Emitir desde Pendientes es dos pasos: Facturante (irreversible) y después la hoja. Si el
+// segundo falla, al recargar el comprobante vuelve a "sin emisión AFIP" y el lote lo emite otra
+// vez. Se anota en este navegador lo emitido sin guardar, y el próximo "Emitir" sobre ese
+// comprobante solo reintenta el guardado. Anotar es best-effort: sin storage, queda el mensaje.
+const AFIP_SIN_GUARDAR_KEY = "bigg_afip_sin_guardar";
+function leerAfipSinGuardar() {
+  try { return JSON.parse(localStorage.getItem(AFIP_SIN_GUARDAR_KEY) || "{}"); } catch { return {}; }
+}
+function anotarAfipSinGuardar(srcId, entry) {
+  try { localStorage.setItem(AFIP_SIN_GUARDAR_KEY, JSON.stringify({ ...leerAfipSinGuardar(), [srcId]: entry })); } catch {}
+}
+function borrarAfipSinGuardar(srcId) {
+  const all = leerAfipSinGuardar();
+  if (!(srcId in all)) return;
+  delete all[srcId];
+  try { localStorage.setItem(AFIP_SIN_GUARDAR_KEY, JSON.stringify(all)); } catch {}
+}
+
+/**
+ * ¿Está en la hoja? Por facturanteId cuando lo hay (edit post-emisión o factura de ARCA); si no,
+ * por id de la fila (correlativo USA/ESP). "si" | "no" | "?" (no se pudo releer).
+ */
+async function emitidaEnHoja({ facturanteId, rowId }) {
+  try {
+    const frescos = await fetchCompsFresh();
+    const todos = Object.values(frescos).flat();
+    const esta = facturanteId
+      ? todos.some(c => String(c.facturanteId ?? "") === String(facturanteId))
+      : todos.some(c => String(c.id) === String(rowId));
+    return esta ? "si" : "no";
+  } catch {
+    return "?";
+  }
+}
+
 // ── Tab principal ───────────────────────────────────────────────────────────
 const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, factState, setFactState, franchisor, tiposCambio = {}, onStartImport }) {
   const { editComp, activeCompany } = useStore();
@@ -2132,11 +2168,50 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
 
   // Emite directamente ante AFIP un comp ya guardado en Sheets (sin wizard)
   // dateOverride: string dd/mm/yyyy — si viene, se usa como fecha de emisión en vez de comp.date
+  /**
+   * Guarda en la hoja lo que ya se emitió y confirma que entró. `kind`: "edit" (número de ARCA
+   * sobre una fila existente, `srcId`) o "add" (factura nueva, `payload` completo con empresa).
+   * Una escritura rechazada puede haber entrado igual (timeout del proxy): antes de darla por
+   * perdida se relee la hoja. El edit se reintenta una vez (es idempotente); el add no, porque un
+   * POST todavía en vuelo duplicaría la fila. Si no se confirma, queda anotado y se tira el error.
+   * `reintento`: viene de una anotación previa → primero mirar si entró mientras tanto.
+   */
+  const guardarEmitida = async ({ srcId, frId, kind, payload, invoice, facturanteId, reintento = false }) => {
+    const rowId = kind === "add" ? payload.id : srcId;
+    const save  = () => kind === "edit" ? editComp(frId, srcId, payload) : onAddComp(frId, payload);
+    const pendiente = { frId, kind, payload, invoice: invoice ?? null, facturanteId: facturanteId ?? null };
+    const fallo = (enHoja) => {
+      anotarAfipSinGuardar(srcId, pendiente);
+      const base = afipSaveFailedMsg(invoice, facturanteId);
+      throw new Error(enHoja === "?"
+        ? `${base}. No se pudo releer la hoja para confirmarlo. Tocar Emitir de nuevo en esta compu reintenta solo el guardado, sin volver a emitir en ARCA.`
+        : `${base}. Tocar Emitir de nuevo en esta compu reintenta solo el guardado, sin volver a emitir en ARCA.`);
+    };
+
+    if (reintento) {
+      const enHoja = await emitidaEnHoja({ facturanteId, rowId });
+      if (enHoja === "si") { borrarAfipSinGuardar(srcId); return; }
+      if (enHoja === "?") fallo("?");
+    }
+    if ((await save())?.ok !== false) { borrarAfipSinGuardar(srcId); return; }
+
+    const enHoja = await emitidaEnHoja({ facturanteId, rowId });
+    if (enHoja === "si") { borrarAfipSinGuardar(srcId); return; }
+    if (enHoja === "no" && kind === "edit" && (await save())?.ok !== false) { borrarAfipSinGuardar(srcId); return; }
+    fallo(enHoja);
+  };
+
   const handleEmitirAfip = async (fr, comp, dateOverride, conceptoOverride) => {
     const lockKey = `afip-${comp.id}`;
     if (emitLockRef.current.has(lockKey)) return;
     emitLockRef.current.add(lockKey);
     try {
+      // Ya emitida en un intento anterior cuyo guardado no se confirmó → no volver a ARCA.
+      const previo = leerAfipSinGuardar()[comp.id];
+      if (previo) {
+        await guardarEmitida({ srcId: comp.id, ...previo, reintento: true });
+        return;
+      }
       let compToEmit = dateOverride ? { ...comp, date: dateOverride } : comp;
       if (conceptoOverride) compToEmit = { ...compToEmit, ref: conceptoOverride, nota: conceptoOverride };
       const result = await emitirComprobante({
@@ -2150,11 +2225,7 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
       const facturanteId = String(result.idComprobante);
       const updates = { invoice, facturanteId };
       if (dateOverride) updates.date = dateOverride;
-      try {
-        editComp(fr.id, comp.id, updates);
-      } catch {
-        throw new Error(afipSaveFailedMsg(invoice, facturanteId));
-      }
+      await guardarEmitida({ srcId: comp.id, frId: fr.id, kind: "edit", payload: updates, invoice, facturanteId });
     } finally {
       emitLockRef.current.delete(lockKey);
     }
@@ -2165,7 +2236,10 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
     const { numero, prefijo } = await fetchAfipNumero(comp.facturanteId);
     const tipoStr = String(comp.type ?? "").split("|")[0] === "NC" ? "NCA" : "FA";
     const invoice = formatInvoiceLabel(tipoStr, numero, prefijo);
-    editComp(fr.id, comp.id, { invoice });
+    // Sin riesgo fiscal (el facturanteId ya está guardado y el comp sigue en "sin número"), pero
+    // que no muestre el número como guardado si la escritura falló.
+    const r = await editComp(fr.id, comp.id, { invoice });
+    if (r?.ok === false) throw new Error(`Número ${invoice} traído de AFIP pero no se pudo guardar. Reintentá.`);
   };
 
   // Crea y emite FACTURA_PAUTA para un PAGO_PAUTA sin factura
@@ -2174,6 +2248,11 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
     if (emitLockRef.current.has(lockKey)) return;
     emitLockRef.current.add(lockKey);
     try {
+      const previo = leerAfipSinGuardar()[pagoComp.id];
+      if (previo) {
+        await guardarEmitida({ srcId: pagoComp.id, ...previo, reintento: true });
+        return;
+      }
       // _importe (preview de Pendientes) = lo que se factura: transferencia + saldo a favor que la
       // sede ya traía, ajustable. Sin override, el total transferido. → back-calcular neto e IVA
       const applyIVA    = !!(COMPANIES[activeCompany]?.applyIVA);
@@ -2217,12 +2296,13 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
         const res = await getNextInvoiceNum(fr.id, invoicePrefix);
         factComp.invoice = res.label;
       }
-      // addComp nunca rechaza (devuelve {ok:false, error} para no romper callers que no
-      // la esperan) — si el guardado post-AFIP falla hay que chequear `ok`, no un catch.
-      const saveResult = await addCompWithEmpresa(fr.id, factComp);
-      if (saveResult?.ok === false) {
-        throw new Error(afipSaveFailedMsg(factComp.invoice, factComp.facturanteId));
-      }
+      // La empresa va en el payload (no por addCompWithEmpresa) para que un reintento desde la
+      // anotación la conserve aunque para entonces esté activa otra sociedad.
+      await guardarEmitida({
+        srcId: pagoComp.id, frId: fr.id, kind: "add",
+        payload: { ...factComp, empresa: activeCompany },
+        invoice: factComp.invoice, facturanteId: factComp.facturanteId,
+      });
     } finally {
       emitLockRef.current.delete(lockKey);
     }

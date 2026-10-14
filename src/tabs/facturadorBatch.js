@@ -4,7 +4,7 @@
 // confirmar dudosos releyendo la hoja. Una sola copia para que las dos pantallas no diverjan.
 import { COMPANIES } from "../lib/helpers";
 import { emitirComprobante, invoiceFromResult } from "../lib/facturanteApi";
-import { getNextInvoiceNum, fetchComps } from "../lib/sheetsApi";
+import { getNextInvoiceNum, fetchCompsFresh } from "../lib/sheetsApi";
 
 // ── Importe formateado estilo AR ("1.234.567,89") ──────────────────────────
 export function formatCurrencyInput(raw) {
@@ -134,7 +134,7 @@ export async function emitirLote({ items, franchisor, activeCompany, onAddComp, 
 
   if (dudosos.length > 0) {
     try {
-      const frescos = await fetchComps();
+      const frescos = await fetchCompsFresh();
       const guardados = new Set(
         Object.values(frescos).flat().map(c => String(c.facturanteId ?? "")).filter(Boolean));
       for (const { entry, facturanteId } of dudosos) {
