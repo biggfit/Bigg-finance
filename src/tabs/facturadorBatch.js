@@ -46,12 +46,13 @@ export function getTcRate(country, tiposCambio, year, month) {
   return tc?.[cc.tcField] > 0 ? tc[cc.tcField] : null;
 }
 
-// Los lotes facturan según el PAÍS de la sede (AR → ÑAKO, país EUR → la sociedad de España,
-// resto → BIGG FIT LLC), nunca según las monedas habilitadas de la sede (esas son para
-// comprobantes manuales tipo Pauta).
+// Los lotes (fee, CRM WhatsApp) facturan según el PAÍS de la sede: Argentina → ÑAKO, el resto
+// → BIGG FIT LLC, Europa incluida (en EUR): las franquicias firmaron con LLC. Wellness a esas
+// sedes emite pauta e interusos de la red, nunca el fee. Entre el 3/8 y el 14/10/2026 esto mandaba
+// los países EUR a Wellness: el lote de LLC dejó de listar España y el fee se cargó a mano.
+// Nunca según las monedas habilitadas de la sede (esas son para comprobantes manuales tipo Pauta).
 export function empresaEmisoraPorPais(country) {
-  if (country === "Argentina") return "ÑAKO SRL";
-  return getCountryCur(country).code === "EUR" ? "Gestión Deportiva y Wellness SL" : "BIGG FIT LLC";
+  return country === "Argentina" ? "ÑAKO SRL" : "BIGG FIT LLC";
 }
 export function monedaFacturacionPorPais(country) {
   if (country === "Argentina") return "ARS";
@@ -59,8 +60,8 @@ export function monedaFacturacionPorPais(country) {
 }
 
 // ── Lote CRM WhatsApp ───────────────────────────────────────────────────────
-// IVA por sociedad emisora para FACTURA|CRM. Wellness en false para tratarlo igual que el fee actual
-// (que sale sin IVA aunque la sociedad aplica IVA). Cambiar acá cuando Contabilidad lo defina.
+// IVA por sociedad emisora para FACTURA|CRM. Wellness no emite este lote (empresaEmisoraPorPais
+// manda Europa a BIGG FIT LLC); queda en false por si alguien lo corre con Wellness activa.
 export const CRM_WA_APLICA_IVA = { "ÑAKO SRL": true, "BIGG FIT LLC": false, "Gestión Deportiva y Wellness SL": false };
 
 // Subtítulo del lote (lo muestra el encabezado del Facturador, al lado del título del modo).

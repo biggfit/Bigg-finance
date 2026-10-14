@@ -858,9 +858,9 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
   const activeFr = useMemo(() => franchises.filter(f => f.activa !== false).sort((a,b) => a.name.localeCompare(b.name, "es")), [franchises]);
   const activeCurrency    = COMPANIES[activeCompany]?.currency ?? "ARS";
 
-  // El fee se factura siempre según el país de la sede (AR → ÑAKO, resto → BIGG FIT LLC
-  // o la sociedad de España si es país EUR) — NUNCA según las monedas habilitadas de la
-  // sede (esas son para comprobantes manuales tipo Pauta, no para el batch de fee/CRM).
+  // El fee se factura siempre según el país de la sede (AR → ÑAKO, resto → BIGG FIT LLC, Europa
+  // incluida, en EUR) — NUNCA según las monedas habilitadas de la sede (esas son para
+  // comprobantes manuales tipo Pauta, no para el batch de fee/CRM).
   const feeCompanyFor = (fr) => empresaEmisoraPorPais(fr.country);
   const frForCompany = useMemo(() =>
     activeFr.filter(f => feeCompanyFor(f) === activeCompany),
@@ -1064,13 +1064,16 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
         amount:     feeTotal,
         amountNeto: applyIVA ? feeNeto : undefined,
         amountIVA:  applyIVA ? feeIVA  : undefined,
+        // Explícito: sin esto el PDF y el P&L deducen el IVA por su cuenta (y para una emisora con
+        // IVA tomaban el total como IVA incluido aunque no se le hubiera sumado).
+        applyIVA,
         ref: `Fee ${MONTHS[crmMonth]} ${crmYear} — CRM`,
         nota: `Fee Royalty ${MONTHS[crmMonth]} ${crmYear}${dto > 0 ? ` (${dto}% dto.)` : ""}`,
         month: crmMonth, year: crmYear,
         currency: billingCur,
         empresa: activeCompany,
       };
-      items.push({ fr, comp, meta: { frName: r.frName, fee, country: r.country, dto } });
+      items.push({ fr, comp, meta: { frName: r.frName, fee, country: r.country, cur: billingCur, dto } });
     }
     const log = await emitirLote({ items, franchisor, activeCompany, onAddComp, skipFacturante, setBatchProg });
     setProcessed(log);
@@ -1113,9 +1116,7 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                 {p.dto > 0 && <span className="pill" style={{ fontSize: 9, color: "var(--gold)", background: "rgba(251,191,36,.1)" }}>{p.dto}% dto.</span>}
                 <span className="mono" style={{ fontWeight: 700, color: p.fee <= 0 ? "var(--muted)" : "var(--green)" }}>
-                  {p.country === "Argentina"
-                    ? `$ ${p.fee.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                    : `U$D ${p.fee.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                  {`${SYM[p.cur] ?? p.cur ?? ""} ${p.fee.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                 </span>
               </div>
             </div>
