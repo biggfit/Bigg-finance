@@ -4,6 +4,7 @@ import { useStore } from "../lib/context";
 import { compEmpresa, compCurrency, cmpDate, MONTHS, COMP_TYPES, computeSaldoPrevMes, getSaldoInicial, fmt, monthRange } from "../lib/helpers";
 import { COMPANIES, todayDmy, dmyToIso, isoToDmy } from "../data/franchisor";
 import { RecordatorioDots } from "./TabSaldos";
+import { monedasDeSede } from "../lib/monedasSede";
 import { buildCCHtml, fetchLogoDataUrl, blobToBase64, htmlToBase64, buildFacturaHtmlForMail } from "../lib/pdf";
 import { generateInvoicePdfBlob } from "../lib/invoicePdf";
 import { downloadFacturantePdfBlob } from "../lib/facturanteApi";
@@ -64,7 +65,7 @@ function CountryDropdown({ countries, value, onChange, onClose }) {
   );
 }
 
-function RowDeudor({ fr, saldoAnt, pagosNet, saldoReal, i, f, onOpenFr, handleMail, dotsForFr, sinFc, checked, onToggle }) {
+function RowDeudor({ fr, cur, saldoAnt, pagosNet, saldoReal, i, f, onOpenFr, handleMail, dotsForFr, sinFc, checked, onToggle }) {
   return (
     <tr style={{ borderBottom: "1px solid var(--border)", background: checked ? "rgba(173,255,25,.04)" : i % 2 === 0 ? "transparent" : "rgba(255,255,255,.012)" }}>
       <td style={{ padding: "0 8px", textAlign: "center" }}>
@@ -92,7 +93,7 @@ function RowDeudor({ fr, saldoAnt, pagosNet, saldoReal, i, f, onOpenFr, handleMa
             ? <span title="Pendiente de recibir factura" style={{ fontSize: 9, fontWeight: 800, color: "#ef4444", background: "rgba(239,68,68,.12)", border: "1px solid rgba(239,68,68,.3)", borderRadius: 4, padding: "1px 5px", whiteSpace: "nowrap", minWidth: 34, textAlign: "center", display: "inline-block" }}>✕ FC</span>
             : <span style={{ display: "inline-block", minWidth: 34 }} />}
           <button className="ghost" style={{ fontSize: 10, padding: "2px 7px" }} onClick={() => onOpenFr?.(fr.id)}>CC</button>
-          <button onClick={() => handleMail([{ fr, saldoAnt }])} title="Enviar recordatorio"
+          <button onClick={() => handleMail([{ fr, cur, saldoAnt }])} title="Enviar recordatorio"
             style={{ background: "rgba(255,255,255,.04)", border: "1px solid var(--border2)", borderRadius: 999,
                      padding: "2px 8px", fontSize: 11, color: "var(--muted)", cursor: "pointer",
                      fontFamily: "var(--font)", lineHeight: 1, flexShrink: 0 }}>
@@ -150,13 +151,21 @@ function sortRows(arr, sc, sd) {
   });
 }
 
+// Totales POR MONEDA: [{ cur, saldoAnt, pagosNet, saldoReal }], en el orden en que aparecen las
+// monedas en las filas. Sumar dólares y euros en un solo número no significa nada.
 function sumGroup(group) {
-  return group.reduce((acc, r) => ({
-    saldoAnt:  acc.saldoAnt  + r.saldoAnt,
-    pagosNet:  acc.pagosNet  + r.pagosNet,
-    saldoReal: acc.saldoReal + r.saldoReal,
-  }), { saldoAnt: 0, pagosNet: 0, saldoReal: 0 });
+  const by = new Map();
+  for (const r of group) {
+    const t = by.get(r.cur) ?? { cur: r.cur, saldoAnt: 0, pagosNet: 0, saldoReal: 0 };
+    t.saldoAnt += r.saldoAnt; t.pagosNet += r.pagosNet; t.saldoReal += r.saldoReal;
+    by.set(r.cur, t);
+  }
+  return [...by.values()];
 }
+
+/** "U$D 48.200 · € 9.150" — un importe por moneda (con signo). */
+const fmtPorMoneda = (tots, campo, filtro = () => true) =>
+  tots.filter(t => filtro(t[campo])).map(t => `${t[campo] < 0 ? "-" : ""}${fmt(Math.abs(t[campo]), t.cur)}`).join(" · ");
 
 const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr, cutoff, periodMonth, periodYear, soloPendiente, selectedFrIds, showDeben, setShowDeben, showOtros, setShowOtros }) {
   const { comps, saldoInicial, activeCompany, recordatorios, addRecordatorioEntry, franchisor } = useStore();
@@ -205,6 +214,10 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
     const logoDataUrl = await fetchLogoDataUrl(logoUrl);
     for (let i = 0; i < rows.length; i++) {
       const d = rows[i];
+      // Moneda de la fila (Deudores arma una por sede y moneda): el estado de cuenta va en esa
+      // moneda y no suma las demás. Sin fila (llamada vieja), el filtro de la pantalla.
+      const dCur = d.cur ?? filterCurrency;
+      const dLabel = dCur ?? cur;
       setSendProgress({ current: i + 1, total: rows.length, name: d.fr.name });
       const to = (d.fr.emailFactura ?? "").split(",").map(s => s.trim()).filter(Boolean).join(",");
       if (!to) { err.push(`${d.fr.name} (sin email)`); continue; }
@@ -226,7 +239,7 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
         const aperturaDate = `${String(apLast.getDate()).padStart(2,"0")}/${String(apLast.getMonth()+1).padStart(2,"0")}/${apLast.getFullYear()}`;
 
         // Saldo apertura = saldo al fin del mes anterior al inicio del rango
-        const sp = computeSaldoPrevMes(d.fr.id, rangeStartYear, rangeStartMonth, comps, saldoInicial, null, filterCurrency, activeCompany);
+        const sp = computeSaldoPrevMes(d.fr.id, rangeStartYear, rangeStartMonth, comps, saldoInicial, null, dCur, activeCompany);
 
         // Movimientos en la ventana
         const frComps = (comps[String(d.fr.id)] ?? [])
@@ -234,7 +247,7 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
             cmpDate(c.date, windowStart) >= 0 &&
             cmpDate(c.date, cutoff) <= 0 &&
             compEmpresa(c) === activeCompany &&
-            (!filterCurrency || compCurrency(c) === filterCurrency)
+            (!dCur || compCurrency(c) === dCur)
           )
           .sort((a, b) => cmpDate(a.date, b.date));
 
@@ -251,7 +264,7 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
             return sign >= 0 ? { ...c, debit: c.amount, credit: 0 } : { ...c, debit: 0, credit: c.amount };
           }),
         ];
-        const ccHtml = buildCCHtml(d.fr.name, d.fr.razonSocial ?? null, ccLines, cur, rangeStartMonth, rangeStartYear, logoDataUrl, activeCompany);
+        const ccHtml = buildCCHtml(d.fr.name, d.fr.razonSocial ?? null, ccLines, dLabel, rangeStartMonth, rangeStartYear, logoDataUrl, activeCompany);
 
         // Adjuntar facturas/NC del período (igual que FrDetail)
         const isAR     = d.fr.country === "Argentina";
@@ -282,13 +295,13 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
           htmlBody: ccHtml,
           attachments: factAdjs,
         });
-        addRecordatorioEntry(d.fr.id, { frName: d.fr.name, tipo: "cc", fecha: todayDmy(), ccMes: periodMonth + 1, ccAnio: periodYear, to, status: "ok", empresa: activeCompany, currency: cur });
+        addRecordatorioEntry(d.fr.id, { frName: d.fr.name, tipo: "cc", fecha: todayDmy(), ccMes: periodMonth + 1, ccAnio: periodYear, to, status: "ok", empresa: activeCompany, currency: dLabel });
         ok.push(d.fr.name);
       } catch (e) {
         const msg = e.message ?? "Error desconocido";
         err.push(`${d.fr.name} (${msg})`);
         // Guardar el fallo como punto rojo para no perder registro del intento
-        addRecordatorioEntry(d.fr.id, { frName: d.fr.name, tipo: "cc", fecha: todayDmy(), ccMes: periodMonth + 1, ccAnio: periodYear, to, status: "error", error: msg, empresa: activeCompany, currency: cur });
+        addRecordatorioEntry(d.fr.id, { frName: d.fr.name, tipo: "cc", fecha: todayDmy(), ccMes: periodMonth + 1, ccAnio: periodYear, to, status: "error", error: msg, empresa: activeCompany, currency: dLabel });
       }
     }
     setSendingMail(false);
@@ -314,11 +327,16 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
   const handleSortOtros = makeHandleSort(sortColOtros, setSortColOtros, setSortDirOtros);
 
   const rows = useMemo(() => {
+    const curSociedad = COMPANIES[activeCompany]?.currency ?? "ARS";
+    // Una fila por sede y MONEDA: con "TODAS", una sede de LLC en EUR no se puede sumar ni
+    // etiquetar en USD. Hoy cada sede opera en una sola moneda por sociedad (una fila, como antes);
+    // si aparece una segunda, la sede sale en dos filas en lugar de sumarlas.
     const data = franchises
-      .map(fr => {
+      .flatMap(fr => (filterCurrency ? [filterCurrency] : monedasDeSede(fr.id, comps, saldoInicial, activeCompany, curSociedad))
+        .map(rowCur => {
         const key        = String(fr.id);
         const frCurrency = fr.currency ?? fr.moneda ?? "ARS";
-        const si         = getSaldoInicial(saldoInicial, key, activeCompany, frCurrency, filterCurrency);
+        const si         = getSaldoInicial(saldoInicial, key, activeCompany, frCurrency, rowCur);
 
         // Acumuladores
         // Ant = hasta fin del mes anterior (todo incluido, PAGO_PAUTA cerrado con FC)
@@ -330,7 +348,7 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
         for (const c of (comps[key] ?? [])) {
           if (cmpDate(c.date, cutoff) > 0) continue;
           if (activeCompany && compEmpresa(c) !== activeCompany) continue;
-          if (filterCurrency && compCurrency(c) !== filterCurrency) continue;
+          if (compCurrency(c) !== rowCur) continue;
           const amt        = c.amount ?? 0;
           const t          = c.type ?? "";
           const beforeMes  = cmpDate(c.date, mesInicio) < 0;
@@ -360,8 +378,8 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
         if (fr.activa === false && Math.abs(saldoReal) < 1) return null;
         if (selectedFrIds?.size > 0 && !selectedFrIds.has(fr.id)) return null;
         if (filterCountry && fr.country !== filterCountry) return null;
-        return { fr, saldoAnt, pagosNet, saldoReal };
-      })
+        return { fr, cur: rowCur, rowKey: `${fr.id}-${rowCur}`, saldoAnt, pagosNet, saldoReal };
+      }))
       .filter(Boolean);
 
     return data;
@@ -396,10 +414,11 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
   const downloadDebemos = useCallback((e) => {
     e.stopPropagation();
     const source = selectedOtros.size > 0 ? rowsOtros.filter(r => selectedOtros.has(r.fr.id)) : rowsOtros;
-    const data = source.map(({ fr, saldoReal }) => ({
+    const data = source.map(({ fr, cur: rowCur, saldoReal }) => ({
       "Sede":    fr.name ?? "",
       "CUIT":    fr.cuit ?? "",
       "Saldo":   saldoReal,
+      "Moneda":  rowCur,
       "Banco":   fr.banco ?? "",
       "Cuenta":  fr.alias ?? "",
       "CBU":     fr.cbu ?? "",
@@ -540,13 +559,13 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
           onClick={() => setShowDeben(v => !v)}
         >
           <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: ".08em", color: "var(--red)" }}>NOS DEBEN</span>
-          {totDeben.saldoReal > 0.01 && (
-            <span style={{ fontSize: 13, color: "var(--red)", fontWeight: 800 }}>{f(totDeben.saldoReal)}</span>
+          {totDeben.some(t => t.saldoReal > 0.01) && (
+            <span style={{ fontSize: 13, color: "var(--red)", fontWeight: 800 }}>{fmtPorMoneda(totDeben, "saldoReal", v => v > 0.01)}</span>
           )}
           <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 400 }}>{rowsDeben.length} sedes</span>
           {selectedDeben.size > 0 && (
             <button className="ghost" style={{ fontSize: 10, padding: "2px 8px", marginLeft: 4 }}
-              onClick={e => { e.stopPropagation(); handleMail(rowsDeben.filter(r => selectedDeben.has(r.fr.id)).map(r => ({ fr: r.fr, saldoAnt: r.saldoAnt }))); }}>
+              onClick={e => { e.stopPropagation(); handleMail(rowsDeben.filter(r => selectedDeben.has(r.fr.id)).map(r => ({ fr: r.fr, cur: r.cur, saldoAnt: r.saldoAnt }))); }}>
               ✉ Enviar {selectedDeben.size}
             </button>
           )}
@@ -557,13 +576,15 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
             {COLGROUP}
             {thead(sortCol, sortDir, handleSort, { selected: selectedDeben, allIds: rowsDeben.map(r => r.fr.id), onToggleAll: () => toggleAllDeben(rowsDeben.map(r => r.fr.id)) })}
             <tbody>
-              <tr style={{ borderBottom: "3px solid rgba(255,85,112,.75)", background: "rgba(255,85,112,.04)" }}>
-                <SubtotalCells label="SUBTOTAL" tot={totDeben} f={f} color="var(--red)" />
-              </tr>
+              {totDeben.map(t => (
+                <tr key={t.cur} style={{ borderBottom: "3px solid rgba(255,85,112,.75)", background: "rgba(255,85,112,.04)" }}>
+                  <SubtotalCells label={totDeben.length > 1 ? `SUBTOTAL ${t.cur}` : "SUBTOTAL"} tot={t} f={v => fmt(v, t.cur)} color="var(--red)" />
+                </tr>
+              ))}
               {showDeben && (rowsDeben.length === 0
                 ? <tr><td colSpan={7} style={{ textAlign: "center", padding: 20, color: "var(--muted)", fontSize: 12 }}>Sin deudores</td></tr>
-                : rowsDeben.map(({ fr, saldoAnt, pagosNet, saldoReal }, i) => (
-                    <RowDeudor key={fr.id} fr={fr} saldoAnt={saldoAnt} pagosNet={pagosNet} saldoReal={saldoReal} i={i} f={f} onOpenFr={onOpenFr} handleMail={handleMail} dotsForFr={dotsForFr} checked={selectedDeben.has(fr.id)} onToggle={() => toggleDeben(fr.id)} />
+                : rowsDeben.map(({ fr, cur: rowCur, rowKey, saldoAnt, pagosNet, saldoReal }, i) => (
+                    <RowDeudor key={rowKey} fr={fr} cur={rowCur} saldoAnt={saldoAnt} pagosNet={pagosNet} saldoReal={saldoReal} i={i} f={v => fmt(v, rowCur)} onOpenFr={onOpenFr} handleMail={handleMail} dotsForFr={dotsForFr} checked={selectedDeben.has(fr.id)} onToggle={() => toggleDeben(fr.id)} />
                   ))
               )}
             </tbody>
@@ -578,15 +599,15 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
           onClick={() => setShowOtros(v => !v)}
         >
           <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: ".08em", color: "var(--green)" }}>DEBEMOS</span>
-          {Math.abs(totOtros.saldoReal) > 0.01 && (
-            <span style={{ fontSize: 13, color: totOtros.saldoReal < 0 ? "var(--green)" : "var(--red)", fontWeight: 800 }}>
-              {totOtros.saldoReal < 0 ? "-" : ""}{f(Math.abs(totOtros.saldoReal))}
+          {totOtros.some(t => Math.abs(t.saldoReal) > 0.01) && (
+            <span style={{ fontSize: 13, color: totOtros.every(t => t.saldoReal <= 0.01) ? "var(--green)" : "var(--red)", fontWeight: 800 }}>
+              {fmtPorMoneda(totOtros, "saldoReal", v => Math.abs(v) > 0.01)}
             </span>
           )}
           <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 400 }}>{rowsOtros.length} sedes</span>
           {selectedOtros.size > 0 && (
             <button className="ghost" style={{ fontSize: 10, padding: "2px 8px" }}
-              onClick={e => { e.stopPropagation(); handleMail(rowsOtros.filter(r => selectedOtros.has(r.fr.id)).map(r => ({ fr: r.fr, saldoAnt: r.saldoAnt }))); }}>
+              onClick={e => { e.stopPropagation(); handleMail(rowsOtros.filter(r => selectedOtros.has(r.fr.id)).map(r => ({ fr: r.fr, cur: r.cur, saldoAnt: r.saldoAnt }))); }}>
               ✉ Enviar {selectedOtros.size}
             </button>
           )}
@@ -605,13 +626,15 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
             {COLGROUP}
             {thead(sortColOtros, sortDirOtros, handleSortOtros, { selected: selectedOtros, allIds: rowsOtros.map(r => r.fr.id), onToggleAll: () => toggleAllOtros(rowsOtros.map(r => r.fr.id)) })}
             <tbody>
-              <tr style={{ borderBottom: "3px solid rgba(16,217,122,.75)", background: "rgba(16,217,122,.04)" }}>
-                <SubtotalCells label="SUBTOTAL" tot={totOtros} f={f} color="var(--green)" />
-              </tr>
+              {totOtros.map(t => (
+                <tr key={t.cur} style={{ borderBottom: "3px solid rgba(16,217,122,.75)", background: "rgba(16,217,122,.04)" }}>
+                  <SubtotalCells label={totOtros.length > 1 ? `SUBTOTAL ${t.cur}` : "SUBTOTAL"} tot={t} f={v => fmt(v, t.cur)} color="var(--green)" />
+                </tr>
+              ))}
               {showOtros && (rowsOtros.length === 0
                 ? <tr><td colSpan={7} style={{ textAlign: "center", padding: 20, color: "var(--muted)", fontSize: 12 }}>Sin registros</td></tr>
-                : rowsOtros.map(({ fr, saldoAnt, pagosNet, saldoReal }, i) => (
-                    <RowDeudor key={fr.id} fr={fr} saldoAnt={saldoAnt} pagosNet={pagosNet} saldoReal={saldoReal} i={i} f={f} onOpenFr={onOpenFr} handleMail={handleMail} dotsForFr={dotsForFr} sinFc={frIdsSinFc.has(fr.id)} checked={selectedOtros.has(fr.id)} onToggle={() => toggleOtros(fr.id)} />
+                : rowsOtros.map(({ fr, cur: rowCur, rowKey, saldoAnt, pagosNet, saldoReal }, i) => (
+                    <RowDeudor key={rowKey} fr={fr} cur={rowCur} saldoAnt={saldoAnt} pagosNet={pagosNet} saldoReal={saldoReal} i={i} f={v => fmt(v, rowCur)} onOpenFr={onOpenFr} handleMail={handleMail} dotsForFr={dotsForFr} sinFc={frIdsSinFc.has(fr.id)} checked={selectedOtros.has(fr.id)} onToggle={() => toggleOtros(fr.id)} />
                   ))
               )}
             </tbody>
@@ -624,9 +647,11 @@ const TabDeudores = memo(function TabDeudores({ franchises, filterCur, onOpenFr,
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed" }}>
           {COLGROUP}
           <tbody>
-            <tr style={{ background: "rgba(255,255,255,.03)" }}>
-              <SubtotalCells label="TOTAL GENERAL" tot={totGrand} f={f} color="var(--accent)" grand />
-            </tr>
+            {totGrand.map(t => (
+              <tr key={t.cur} style={{ background: "rgba(255,255,255,.03)" }}>
+                <SubtotalCells label={totGrand.length > 1 ? `TOTAL GENERAL ${t.cur}` : "TOTAL GENERAL"} tot={t} f={v => fmt(v, t.cur)} color="var(--accent)" grand />
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>

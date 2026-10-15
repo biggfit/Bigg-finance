@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useStore } from "../lib/context";
-import { computeSaldo, computeSaldoPrevMes, computePautaPendiente, compEmpresa, COMP_TYPES, SKIP_CC_TYPES, fmt, fmtS } from "../lib/helpers";
+import { computeSaldo, computeSaldoPrevMes, computePautaPendiente, compEmpresa, compCurrency, COMP_TYPES, SKIP_CC_TYPES, fmt, fmtS } from "../lib/helpers";
 import { dmyToIso, isoToDmy, inPeriod, cmpDate, COMPANIES, todayDmy } from "../data/franchisor";
 import { TypePill } from "./atoms";
 import AddCompModal from "./AddCompModal";
@@ -11,6 +11,7 @@ import { downloadFacturantePdfBlob } from "../lib/facturanteApi";
 import { sendMailFr } from "../lib/sheetsApi";
 import { RecordatorioDots } from "../tabs/TabSaldos";
 import { useConfirm } from "../numbers/useConfirm";
+import { monedasDeSede } from "../lib/monedasSede";
 
 // Factura o NC con número (de ARCA o correlativo interno USA-/ESP-): ya está en manos del
 // franquiciado. Las FC recibidas y los movimientos quedan afuera.
@@ -44,11 +45,21 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
 
   const key = String(franchise.id);
 
+  // Saldo POR MONEDA: la CC se arma por sociedad y dentro de una sociedad la sede casi siempre opera
+  // en una sola moneda (esa es la que se usa, y la etiqueta sale de los datos, no del campo moneda
+  // de la sede). Si aparece una segunda (p. ej. un pago en pesos dentro de LLC), se elige cuál ver
+  // en lugar de sumarlas en un solo saldo.
+  const monedas = useMemo(
+    () => monedasDeSede(franchise.id, comps, saldoInicial, activeCompany, COMPANIES[activeCompany]?.currency ?? "ARS"),
+    [franchise.id, comps, saldoInicial, activeCompany]);
+  const [monedaSel, setMonedaSel] = useState(null);
+  const moneda = monedas.includes(monedaSel) ? monedaSel : monedas[0];
+
   const _now           = new Date();
   const isCurrentMonth = localMonth === _now.getMonth() && localYear === _now.getFullYear();
 
   const frComps = useMemo(() => {
-    const base = (comps[key] ?? []).filter(c => compEmpresa(c) === activeCompany && !SKIP_CC_TYPES.has(c.type));
+    const base = (comps[key] ?? []).filter(c => compEmpresa(c) === activeCompany && compCurrency(c) === moneda && !SKIP_CC_TYPES.has(c.type));
     // Mostrar solo el mes seleccionado: 01/MM/YYYY → último día del mes (o hoy si es mes actual)
     const from = `01/${String(localMonth + 1).padStart(2,"0")}/${localYear}`;
     const lastDay = new Date(localYear, localMonth + 1, 0).getDate();
@@ -56,12 +67,12 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
     return base
       .filter(c => c.date && cmpDate(c.date, from) >= 0 && cmpDate(c.date, to) <= 0)
       .sort((a, b) => cmpDate(a.date, b.date));
-  }, [comps, key, localMonth, localYear, activeCompany]);
+  }, [comps, key, localMonth, localYear, activeCompany, moneda]);
 
   // sp: saldo acumulado hasta fin del mes anterior al seleccionado
-  const sp = useMemo(() => computeSaldoPrevMes(franchise.id, localYear, localMonth, comps, saldoInicial, null, null, activeCompany), [franchise.id, localYear, localMonth, comps, saldoInicial, activeCompany]);
-  const sa = useMemo(() => computeSaldo(franchise.id, localYear, localMonth, comps, saldoInicial, null, null, activeCompany), [franchise.id, localYear, localMonth, comps, saldoInicial, activeCompany]);
-  const pautaPend = useMemo(() => computePautaPendiente(franchise.id, comps, localYear, localMonth, null, null, activeCompany), [franchise.id, comps, localYear, localMonth, activeCompany]);
+  const sp = useMemo(() => computeSaldoPrevMes(franchise.id, localYear, localMonth, comps, saldoInicial, moneda, moneda, activeCompany), [franchise.id, localYear, localMonth, comps, saldoInicial, activeCompany, moneda]);
+  const sa = useMemo(() => computeSaldo(franchise.id, localYear, localMonth, comps, saldoInicial, moneda, moneda, activeCompany), [franchise.id, localYear, localMonth, comps, saldoInicial, activeCompany, moneda]);
+  const pautaPend = useMemo(() => computePautaPendiente(franchise.id, comps, localYear, localMonth, moneda, moneda, activeCompany), [franchise.id, comps, localYear, localMonth, activeCompany, moneda]);
   const handleAdd = useCallback((frId, comp) => onAddComp(frId, comp), [onAddComp]);
 
   const openEdit = (c) => { setEditingId(c.id); setEditBuf({ date: c.date ?? "", nota: c.ref ?? c.nota ?? "", amount: c.amount ?? 0, type: c.type ?? "" }); };
@@ -126,8 +137,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
   }, [localMonth, localYear]);
 
   // Moneda de visualización: la franquicia tiene prioridad sobre la empresa activa
-  const frCurrency      = franchise.currency ?? franchise.moneda ?? null;
-  const displayCurrency = frCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS";
+  const displayCurrency = moneda;
 
   const inpS = { padding: "3px 7px", fontSize: 11, borderRadius: 5, background: "var(--bg)", border: "1px solid var(--accent)", color: "var(--text)", fontFamily: "var(--font)" };
   const saldoColor = (s) => s > 0.01 ? "var(--red)" : s < -0.01 ? "var(--green)" : "var(--muted)";
@@ -143,7 +153,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
 
       // CC del mes: línea de apertura + movimientos del período (misma estructura que buildCCHtml espera)
       const ccLines = [
-        { type: "apertura", label: "Saldo anterior", debit: 0, credit: 0, saldo: sp, date: aperturaDate, currency: frCurrency ?? displayCurrency },
+        { type: "apertura", label: "Saldo anterior", debit: 0, credit: 0, saldo: sp, date: aperturaDate, currency: displayCurrency },
         ...compsWithSaldo.map(c => {
           const sign = COMP_TYPES[c.type]?.sign ?? 0;
           return sign >= 0
@@ -160,7 +170,7 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
       const docTypes    = ["FACTURA", "NC", "FC_RECIBIDA"];
       // Todos los comprobantes del mes, no solo los del rango recortado (ej: facturas futuras del mismo mes)
       const allMonthComps = (comps[key] ?? [])
-        .filter(c => compEmpresa(c) === activeCompany)
+        .filter(c => compEmpresa(c) === activeCompany && compCurrency(c) === moneda)
         .filter(c => {
           if (!c.date) return false;
           const from = `01/${String(localMonth + 1).padStart(2,"0")}/${localYear}`;
@@ -229,6 +239,16 @@ export default function FrDetail({ franchise, month, year, onClose, onAddComp, o
               <button className="ghost" onClick={onClose}>Cerrar</button>
             </div>
           </div>
+
+          {/* ── Sede con más de una moneda en esta sociedad: un saldo por moneda ── */}
+          {monedas.length > 1 && (
+            <div style={{ padding: "8px 24px", borderBottom: "1px solid var(--border)", background: "rgba(251,191,36,.06)", flexShrink: 0, display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+              <span style={{ color: "var(--gold)" }}>⚠ Esta sede tiene movimientos en {monedas.join(" y ")}: el saldo se muestra por moneda.</span>
+              {monedas.map(m => (
+                <button key={m} className={m === moneda ? "btn" : "ghost"} style={{ fontSize: 11, padding: "2px 10px" }} onClick={() => setMonedaSel(m)}>{m}</button>
+              ))}
+            </div>
+          )}
 
           {/* ── Saldo Acumulado (arriba, izquierda) ── */}
           <div style={{ padding: "12px 24px", borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,.02)", flexShrink: 0, display: "flex", justifyContent: "flex-start", alignItems: "baseline", gap: 12 }}>

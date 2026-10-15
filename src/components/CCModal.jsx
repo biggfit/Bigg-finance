@@ -8,14 +8,17 @@ import { buildCCHtml, fetchLogoDataUrl, blobToBase64, htmlToBase64, buildFactura
 import { generateInvoicePdfBlob } from "../lib/invoicePdf";
 import { downloadFacturantePdfBlob } from "../lib/facturanteApi";
 import { sendMailFr } from "../lib/sheetsApi";
+import { monedasDeSede } from "../lib/monedasSede";
 
 // ─── CC MODAL — Historial completo tipo base de datos ────────────────────────
 export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
   const { comps, saldoInicial, activeCompany, franchisor } = useStore();
-  // Franchise's own currency takes precedence over company default
-  const frCurrency     = franchise.currency ?? franchise.moneda ?? null;
-  const displayCurrency = frCurrency ?? COMPANIES[activeCompany]?.currency ?? "ARS";
-  const { lines } = buildCuentaCorriente(franchise.id, comps, saldoInicial, frCurrency, null, activeCompany);
+  // Un historial POR MONEDA (ver monedasSede): sin filtro, el saldo corrido sumaba todas las
+  // monedas de la sede en la sociedad y cada línea mostraba la suya. Casi siempre hay una sola.
+  const monedas = monedasDeSede(franchise.id, comps, saldoInicial, activeCompany, COMPANIES[activeCompany]?.currency ?? "ARS");
+  const [monedaSel, setMonedaSel] = useState(null);
+  const displayCurrency = monedas.includes(monedaSel) ? monedaSel : monedas[0];
+  const { lines } = buildCuentaCorriente(franchise.id, comps, saldoInicial, displayCurrency, displayCurrency, activeCompany);
   const MOV_TYPES = new Set(["PAGO", "PAGO_PAUTA", "PAGO_ENVIADO"]);
   const [confirmId,  setConfirmId]  = useState(null);
   const [editId,     setEditId]     = useState(null);
@@ -110,6 +113,14 @@ export default function CCModal({ franchise, onClose, onDelComp, onEditComp }) {
             <div style={{ color: "var(--muted)", fontSize: 10, marginTop: 1 }}>
               {franchise.razonSocial && <span>{franchise.razonSocial} · </span>}
               Historial completo · {activeCompany} · {displayCurrency}
+              {monedas.length > 1 && (
+                <span style={{ marginLeft: 10, color: "var(--gold)" }}>
+                  ⚠ movimientos en {monedas.join(" y ")}:{" "}
+                  {monedas.map(m => (
+                    <button key={m} className={m === displayCurrency ? "btn" : "ghost"} style={{ fontSize: 10, padding: "1px 8px", marginLeft: 4 }} onClick={() => setMonedaSel(m)}>{m}</button>
+                  ))}
+                </span>
+              )}
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
