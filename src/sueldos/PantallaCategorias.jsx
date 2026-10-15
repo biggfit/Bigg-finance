@@ -4,6 +4,7 @@ import {
   fetchAllConceptos,
 } from "../lib/sueldosApi";
 import { useRowChecks, migrarMarcasAgrupadas } from "../lib/useRowChecks";
+import { tmpRowId } from "../lib/tmpRowId";
 import { fmtEntero, HeaderCheckTodas } from "./sueldosUi";
 
 const T = {
@@ -40,7 +41,7 @@ const CONCEPTOS_DEFAULT = [
 ];
 
 function newRow(overrides = {}) {
-  return { _id: Date.now() + Math.random(), concepto: "", monto: "", pct: "", ...overrides };
+  return { _id: tmpRowId(), concepto: "", monto: "", pct: "", ...overrides };
 }
 
 const normC = (s) => String(s || "").trim().toUpperCase();

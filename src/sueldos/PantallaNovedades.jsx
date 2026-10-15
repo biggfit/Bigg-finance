@@ -6,7 +6,8 @@ import {
   fmtMiles, limpiarMonto,
 } from "../lib/sueldosApi";
 import { useRowChecks } from "../lib/useRowChecks";
-import { esNovedadAguinaldo } from "../lib/aguinaldo";
+import { novedadesDeAmbito } from "../lib/aguinaldo";
+import { tmpRowId } from "../lib/tmpRowId";
 import { fmtEntero, HeaderCheckTodas } from "./sueldosUi";
 
 const T = {
@@ -74,7 +75,7 @@ function conceptoDeNovedad(nov) {
 
 function newRow(overrides = {}) {
   return {
-    _id: Date.now() + Math.random(),
+    _id: tmpRowId(),
     id: null,
     legajo_id: "", legajo_nombre: "",
     monto: "", forma_pago: "efectivo", nota: "",
@@ -130,10 +131,9 @@ export default function PantallaNovedades({ pais = "" }) {
         fetchLegajos(),
         fetchCuentasContablesNumbers(),
       ]);
-      // Solo novedades de HQ (sin sede). Las de Sedes (con sede_id) viven en su propia pantalla.
-      // Las de AGUINALDO (cuenta Aguinaldos) viven en la pantalla Aguinaldo: acá no se muestran ni se
-      // borran (el snapshot `loaded` no las incluye). (El dedup por id lo hace fetchNovedades.)
-      const extras = novs.filter(n => n.tipo === "extra" && !n.sede_id && !esNovedadAguinaldo(n));
+      // Solo novedades de HQ (sin sede, sin aguinaldo): las de Sedes y las de Aguinaldo viven en su
+      // propia pantalla y acá no se muestran ni se borran (el snapshot `loaded` no las incluye).
+      const extras = novedadesDeAmbito(novs, "hq");
       setRows(extras.map(n => ({ ...novToRow(n), concepto: conceptoDeNovedad(n) })));
       setLoaded(extras);
       // Monto del mes anterior por legajo+cuenta → alimenta la columna comparativa.
@@ -216,10 +216,10 @@ export default function PantallaNovedades({ pais = "" }) {
     const aAnt = mes === 1 ? anio - 1 : anio;
     // Solo novedades de HQ (sin sede). Copiar las de Sedes acá les borraría el sede_id
     // y las duplicaría como novedades de HQ (bug de fuga a HQ).
-    const novs = (await fetchNovedades(mAnt, aAnt)).filter(n => n.tipo === "extra" && !n.sede_id && !esNovedadAguinaldo(n));
+    const novs = novedadesDeAmbito(await fetchNovedades(mAnt, aAnt), "hq");
     if (!novs.length) { alert("No hay novedades de HQ en el mes anterior."); return; }
     // Filas nuevas (sin id) para revisar y guardar.
-    setRows(novs.map(n => ({ ...newRow(novToRow(n)), id: null, _id: Date.now() + Math.random(), concepto: conceptoDeNovedad(n) })));
+    setRows(novs.map(n => ({ ...newRow(novToRow(n)), id: null, _id: tmpRowId(), concepto: conceptoDeNovedad(n) })));
     setDirty(true);
   };
 

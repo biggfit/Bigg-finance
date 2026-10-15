@@ -4,6 +4,7 @@ import {
   fetchCentrosCostoNumbers, fetchSociedadesNumbers,
 } from "../lib/sueldosApi";
 import { useRowChecks, migrarMarcasAgrupadas } from "../lib/useRowChecks";
+import { tmpRowId } from "../lib/tmpRowId";
 import { HeaderCheckTodas } from "./sueldosUi";
 
 // Tildes guardados con el formato viejo (un objeto para todos los meses) → formato de useRowChecks.
@@ -28,7 +29,7 @@ const MES_DEF = hoy.getMonth() === 0 ? 12 : hoy.getMonth();
 const ANO_DEF = hoy.getMonth() === 0 ? hoy.getFullYear() - 1 : hoy.getFullYear();
 
 function newObjRow(overrides = {}) {
-  return { _id: Date.now() + Math.random(), sede_id: "", sede_nombre: "", porcentaje: "", ...overrides };
+  return { _id: tmpRowId(), sede_id: "", sede_nombre: "", porcentaje: "", ...overrides };
 }
 
 const iStyle = {

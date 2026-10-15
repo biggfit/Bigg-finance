@@ -696,12 +696,12 @@ function PasivoChip({ value }) {
 }
 
 // ─── Modal: Cuenta contable ───────────────────────────────────────────────────
+// base_aguinaldo llega crudo de la hoja (booleano o "TRUE"): fetchCuentas no mapea columnas.
+const esBaseAguinaldo = (c) => String(c?.base_aguinaldo ?? "").toLowerCase() === "true";
+
 export function CuentaModal({ initial, onClose, onSave }) {
   const blank = { nombre:"", tipo:"gasto", categoria_pnl:"", cuenta_pasivo:"", base_aguinaldo:false };
-  // base_aguinaldo llega de la hoja como booleano o "TRUE"; el form lo maneja como booleano.
-  const [form, setForm] = useState(initial
-    ? { ...initial, base_aguinaldo: String(initial.base_aguinaldo ?? "").toLowerCase() === "true" }
-    : blank);
+  const [form, setForm] = useState(initial ? { ...initial, base_aguinaldo: esBaseAguinaldo(initial) } : blank);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const canSave = !!form.nombre.trim() && !!form.tipo;
 
@@ -890,7 +890,7 @@ function TabCuentas() {
                   <td style={{ padding:"9px 14px", fontSize:13, color:T.text, fontWeight:600 }}>{c.nombre}</td>
                   <td style={{ padding:"9px 14px" }}><PasivoChip value={c.cuenta_pasivo} /></td>
                   <td style={{ padding:"9px 14px", fontSize:11 }} title="Base para aguinaldo (SAC)">
-                    {String(c.base_aguinaldo ?? "").toLowerCase() === "true"
+                    {esBaseAguinaldo(c)
                       ? <span style={{ background:"#dcfce7", color:"#166534", borderRadius:999, padding:"2px 8px", fontWeight:700 }}>base</span>
                       : <span style={{ color:T.dim }}>—</span>}
                   </td>

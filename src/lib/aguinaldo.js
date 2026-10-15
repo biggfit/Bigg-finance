@@ -27,6 +27,7 @@ export const CUENTA_AGUINALDO = { id: "CUENTA_Aguinaldos", nombre: "Aguinaldos" 
 export const CUENTAS_BASE_FIJAS = ["Sueldos", "Comisiones", "Incentivos", "Comision S/Resultado"];
 export const MESES_CORTO = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
 
+// Normalizador de texto compartido (sueldosApi lo re-exporta como claveNorm).
 export const normTxt = (s) => String(s ?? "").trim().toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
 export const esCuentaAguinaldo = (id, nombre) =>
   String(id ?? "") === CUENTA_AGUINALDO.id || normTxt(nombre) === normTxt(CUENTA_AGUINALDO.nombre);
@@ -35,22 +36,30 @@ export const semestreDeMes = (mes) => (Number(mes) <= 6 ? 1 : 2);
 export const descripcionAguinaldo = (anio, semestre, forma) =>
   `Aguinaldo ${SEMESTRES[semestre].label} ${anio}${forma ? ` (${forma})` : ""}`;
 
-// Vigencia por fecha de un legajo en un mes (misma regla que legajoVigenteEnMes de sueldosApi).
-// Solo se usa para AVISAR cuando no coincide con los meses con sueldo, y para asumir los meses
-// que todavía no están cerrados.
-export function vigentePorFecha(legajo, mes, anio) {
+// Ámbito de una novedad: HQ = sin sede, Sedes = con sede. Una sola definición para las pantallas de
+// Novedades (HQ/Sedes) y Aguinaldo; las de aguinaldo (cuenta Aguinaldos) viven en su propia pantalla.
+export const ambitoNovedad = (n) => (n?.sede_id ? "sedes" : "hq");
+export const novedadesDeAmbito = (novs, ambito) =>
+  (novs || []).filter(n => n.tipo === "extra" && ambitoNovedad(n) === ambito && !esNovedadAguinaldo(n));
+
+// ¿El legajo está vigente en el mes? Entra si su alta (o ingreso, si no hay alta) es anterior al fin
+// del mes y si no tiene baja o la baja es posterior al inicio del mes. Sin fechas → vigente (como
+// siempre). La usan Liquidación HQ/Sedes para sembrar el mes (vía sueldosApi, que la re-exporta) y
+// acá para los avisos y para asumir los meses todavía no cerrados.
+export function legajoVigenteEnMes(leg, mes, anio) {
   const m = Number(mes), a = Number(anio);
+  if (!m || !a) return true;
   const mm  = String(m).padStart(2, "0");
   const ini = `${a}-${mm}-01`;
   const fin = `${a}-${mm}-${String(new Date(a, m, 0).getDate()).padStart(2, "0")}`;
-  const alta = String(legajo?.fecha_alta || legajo?.fecha_ingreso || "").slice(0, 10);
-  const baja = String(legajo?.fecha_baja || "").slice(0, 10);
+  const alta = String(leg?.fecha_alta || leg?.fecha_ingreso || "").slice(0, 10);
+  const baja = String(leg?.fecha_baja || "").slice(0, 10);
   if (alta && alta > fin) return false;
   if (baja && baja < ini) return false;
   return true;
 }
 export const mesesVigentesPorFecha = (legajo, anio, semestre) =>
-  SEMESTRES[semestre].meses.filter(m => vigentePorFecha(legajo, m, anio));
+  SEMESTRES[semestre].meses.filter(m => legajoVigenteEnMes(legajo, m, anio));
 
 // Base remunerativa de UN mes (todas las liquidaciones cerradas de la persona ese mes y ámbito;
 // en Sedes puede haber varias, una por sede). Devuelve el detalle por cuenta para mostrarlo.
@@ -58,7 +67,7 @@ export function baseMensual(liqsDelMes, { devengadoDe, esCuentaBase }) {
   const porCuenta = new Map();
   const formas = {};
   const sedes  = [];
-  let base = 0, noBase = 0, haberes = 0;
+  let base = 0, haberes = 0;
   for (const liq of liqsDelMes) {
     let totLiq = 0;
     for (const it of devengadoDe(liq)) {
@@ -72,14 +81,12 @@ export function baseMensual(liqsDelMes, { devengadoDe, esCuentaBase }) {
         base += monto;
         formas[it.bucket] = (formas[it.bucket] || 0) + monto;
         if (it.bucket === "haberes") haberes += monto;
-      } else {
-        noBase += monto;
       }
       totLiq += monto;
     }
     sedes.push({ sede_id: liq.sede_id ?? "", sede_nombre: liq.sede_nombre ?? "", total: totLiq });
   }
-  return { base, noBase, haberes, formas, cuentas: [...porCuenta.values()], sedes };
+  return { base, haberes, formas, cuentas: [...porCuenta.values()], sedes };
 }
 
 // Forma de pago del resto (lo que no va por haberes): efectivo si el mejor mes tuvo efectivo;
@@ -120,7 +127,8 @@ export function calcularAguinaldo({ legajo, liqs, anio, semestre, ambito, mesesC
   // cobró el último mes cerrado y sigue vigente por fecha (ej. diciembre al calcular en diciembre).
   const cerrados = [...(mesesCerrados || [])].filter(m => S.meses.includes(Number(m))).map(Number);
   const ultimoCerrado = cerrados.length ? Math.max(...cerrados) : 0;
-  const asumidos = S.meses.filter(m => m > ultimoCerrado && conSueldo.includes(ultimoCerrado) && vigentePorFecha(legajo, m, anio));
+  const cobroUltimo = conSueldo.includes(ultimoCerrado);
+  const asumidos = S.meses.filter(m => m > ultimoCerrado && cobroUltimo && legajoVigenteEnMes(legajo, m, anio));
   const mesesSinSueldo = S.meses.filter(m => m <= ultimoCerrado && !conSueldo.includes(m));
   const cantidad   = conSueldo.length + asumidos.length;
   const proporcion = cantidad / S.meses.length;
@@ -131,14 +139,13 @@ export function calcularAguinaldo({ legajo, liqs, anio, semestre, ambito, mesesC
   const out = {
     legajo_id: legajo.id, legajo_nombre: legajo.nombre, ambito, anio, semestre,
     meses, mesesConSueldo: conSueldo, mesesAsumidos: asumidos, mesesSinSueldo,
-    cantidad, totalMeses: S.meses.length, proporcion,
+    cantidad, totalMeses: S.meses.length,
     mejorMes, aguinaldo: 0, haberesDefault: 0, restoForma: "efectivo", sedeDestino: null,
     motivo: "", avisos: [],
   };
-  // Dado de baja al mes de pago → no cobra (la liquidación final ya lo cubrió; Martín, 14/10). Se mira
-  // la fecha de baja (anterior al mes de pago) y también el flag inactivo sin fecha, con aviso.
-  const bajaAntes = String(legajo.fecha_baja || "").slice(0, 10) < `${anio}-${String(S.mesPago).padStart(2, "0")}-01`;
-  if ((legajo.fecha_baja && bajaAntes) || legajo.activo === false) {
+  // Dado de baja al mes de pago → no cobra (la liquidación final ya lo cubrió; Martín, 14/10): no
+  // vigente por fecha en el mes de pago, o inactivo sin fecha (con aviso para que la carguen).
+  if (!legajoVigenteEnMes(legajo, S.mesPago, anio) || legajo.activo === false) {
     out.motivo = `dado de baja antes de ${MESES_CORTO[S.mesPago - 1]} (liquidación final)`;
     if (legajo.activo === false && !legajo.fecha_baja) out.avisos.push("inactivo sin fecha de baja");
     return out;
@@ -160,13 +167,13 @@ export function calcularAguinaldo({ legajo, liqs, anio, semestre, ambito, mesesC
 
   const vig = mesesVigentesPorFecha(legajo, anio, semestre);
   if (vig.length !== cantidad) out.avisos.push(`vigente por fecha en ${vig.length} meses, con sueldo en ${cantidad}`);
-  if (legajo.activo === false && !legajo.fecha_baja) out.avisos.push("inactivo sin fecha de baja");
   if (asumidos.length) out.avisos.push(`se asume con sueldo en ${asumidos.map(m => MESES_CORTO[m - 1]).join(", ")} (sin cerrar)`);
   return out;
 }
 
-// Filas (forma de una novedad, sin id) que representan el aguinaldo calculado: haberes + resto.
-export function filasNovedadAguinaldo(res, haberes, { cuenta = CUENTA_AGUINALDO } = {}) {
+// Filas (forma de una novedad, sin id ni cuenta: la pantalla pone la cuenta Aguinaldos al guardar)
+// que representan el aguinaldo calculado: haberes + resto.
+export function filasNovedadAguinaldo(res, haberes) {
   const total = Number(res.aguinaldo) || 0;
   if (total <= 0) return [];
   const hab   = Math.max(0, Math.min(total, Math.round(Number(haberes) || 0)));
@@ -174,7 +181,6 @@ export function filasNovedadAguinaldo(res, haberes, { cuenta = CUENTA_AGUINALDO 
   const base = {
     legajo_id: res.legajo_id, legajo_nombre: res.legajo_nombre,
     sede_id: res.sedeDestino?.sede_id ?? "", sede_nombre: res.sedeDestino?.sede_nombre ?? "",
-    cuenta_contable_id: cuenta.id, cuenta_contable_nombre: cuenta.nombre,
   };
   const out = [];
   if (hab   > 0) out.push({ ...base, forma_pago: "haberes",       monto: hab,   descripcion: descripcionAguinaldo(res.anio, res.semestre, "haberes") });

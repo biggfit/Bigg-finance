@@ -6,7 +6,8 @@ import {
   fmtMiles, limpiarMonto,
 } from "../lib/sueldosApi";
 import { useRowChecks } from "../lib/useRowChecks";
-import { esNovedadAguinaldo } from "../lib/aguinaldo";
+import { novedadesDeAmbito } from "../lib/aguinaldo";
+import { tmpRowId } from "../lib/tmpRowId";
 import { HeaderCheckTodas } from "./sueldosUi";
 
 // Orden del picker de legajos (pedido del usuario): encargado/vendedor → coach → limpieza → HQ.
@@ -45,7 +46,7 @@ const ANO_DEF = hoy.getMonth() === 0 ? hoy.getFullYear() - 1 : hoy.getFullYear()
 
 function newRow(overrides = {}) {
   return {
-    _id: Date.now() + Math.random(),
+    _id: tmpRowId(),
     id: null,
     legajo_id: "", legajo_nombre: "",
     sede_id: "", sede_nombre: "",
@@ -108,9 +109,9 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
         fetchCentrosCostoNumbers(),
         fetchCuentasContablesNumbers(),
       ]);
-      // Solo las de Sedes (extra + con sede). Las de HQ (sin sede) viven en la pantalla de HQ, y las de
-      // AGUINALDO (cuenta Aguinaldos) en la pantalla Aguinaldo: acá no se muestran ni se borran.
-      const sedesNovs = novs.filter(n => n.tipo === "extra" && n.sede_id && !esNovedadAguinaldo(n));
+      // Solo las de Sedes (con sede, sin aguinaldo): las de HQ y las de Aguinaldo viven en su propia
+      // pantalla y acá no se muestran ni se borran.
+      const sedesNovs = novedadesDeAmbito(novs, "sedes");
       setRows(sedesNovs.map(novToRow));
       setLoaded(sedesNovs);
       setLegajos(legs
@@ -179,9 +180,9 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
   const handleCopiarMesAnterior = async () => {
     const mAnt = mes === 1 ? 12 : mes - 1;
     const aAnt = mes === 1 ? anio - 1 : anio;
-    const novs = (await fetchNovedades(mAnt, aAnt)).filter(n => n.tipo === "extra" && n.sede_id && !esNovedadAguinaldo(n));
+    const novs = novedadesDeAmbito(await fetchNovedades(mAnt, aAnt), "sedes");
     if (!novs.length) { alert("No hay novedades de Sedes en el mes anterior."); return; }
-    setRows(novs.map(n => ({ ...newRow(novToRow(n)), id: null, _id: Date.now() + Math.random() })));
+    setRows(novs.map(n => ({ ...newRow(novToRow(n)), id: null, _id: tmpRowId() })));
     setDirty(true);
   };
 

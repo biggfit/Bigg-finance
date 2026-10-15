@@ -6,6 +6,7 @@
 import { stamp } from "./auth";
 import { bustToken, forzarRefresco } from "./cacheBust";
 import { fetchJsonWithRetry } from "./http";
+import { normTxt } from "./aguinaldo";
 
 const BASE    = "/api/sueldos";
 const TOKEN   = import.meta.env.VITE_SHEETS_TOKEN ?? "";
@@ -269,23 +270,11 @@ export async function fetchLegajos() {
   }));
 }
 
-// ¿El legajo está vigente en el mes? Entra si su alta (o ingreso, si no hay alta) es anterior al fin
-// del mes y si no tiene baja o la baja es posterior al inicio del mes. Sin fechas → vigente (como
-// siempre). Evita que un alta de septiembre aparezca "sin cerrar" en agosto, y que una baja de agosto
-// siga apareciendo —y cobrando haberes— en septiembre (caso Hilaria, 10/2026). Las liquidaciones ya
-// cerradas se muestran igual: esto solo decide a quién se SIEMBRA en un mes sin liquidación.
-export function legajoVigenteEnMes(leg, mes, anio) {
-  const m = Number(mes), a = Number(anio);
-  if (!m || !a) return true;
-  const mm  = String(m).padStart(2, "0");
-  const ini = `${a}-${mm}-01`;
-  const fin = `${a}-${mm}-${String(new Date(a, m, 0).getDate()).padStart(2, "0")}`;
-  const alta = String(leg?.fecha_alta || leg?.fecha_ingreso || "").slice(0, 10);
-  const baja = String(leg?.fecha_baja || "").slice(0, 10);
-  if (alta && alta > fin) return false;
-  if (baja && baja < ini) return false;
-  return true;
-}
+// ¿El legajo está vigente en el mes? (alta/baja). Vive en lib/aguinaldo.js (módulo puro, sin
+// import.meta.env) para que el cálculo del aguinaldo la comparta; acá se re-exporta. Evita que un alta
+// de septiembre aparezca "sin cerrar" en agosto, y que una baja de agosto siga apareciendo —y cobrando
+// haberes— en septiembre (caso Hilaria, 10/2026). Solo decide a quién se SIEMBRA en un mes sin liquidación.
+export { legajoVigenteEnMes } from "./aguinaldo";
 
 export async function appendLegajo(data) {
   const socId   = data.sociedad_id ?? "hq";
@@ -1297,7 +1286,7 @@ export async function fetchAllConceptos(pais) {
 // escribir. Ahora la fila de un concepto/sede es siempre la misma (id estable país+año+mes+clave): se
 // edita solo si cambió, se agrega solo la nueva (todas en UN add_batch) y se borra solo la que ya no
 // está. Las filas viejas con id de timestamp se matchean por clave y conservan su id.
-const claveNorm = (s) => String(s ?? "").trim().toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
+const claveNorm = normTxt;   // normalizador compartido (lib/aguinaldo.js)
 const slugId    = (s) => claveNorm(s).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 const pad2      = (n) => String(n).padStart(2, "0");
 
