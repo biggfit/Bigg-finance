@@ -697,8 +697,11 @@ function PasivoChip({ value }) {
 
 // ─── Modal: Cuenta contable ───────────────────────────────────────────────────
 export function CuentaModal({ initial, onClose, onSave }) {
-  const blank = { nombre:"", tipo:"gasto", categoria_pnl:"", cuenta_pasivo:"" };
-  const [form, setForm] = useState(initial ?? blank);
+  const blank = { nombre:"", tipo:"gasto", categoria_pnl:"", cuenta_pasivo:"", base_aguinaldo:false };
+  // base_aguinaldo llega de la hoja como booleano o "TRUE"; el form lo maneja como booleano.
+  const [form, setForm] = useState(initial
+    ? { ...initial, base_aguinaldo: String(initial.base_aguinaldo ?? "").toLowerCase() === "true" }
+    : blank);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const canSave = !!form.nombre.trim() && !!form.tipo;
 
@@ -747,6 +750,13 @@ export function CuentaModal({ initial, onClose, onSave }) {
               { value:"impuestos",  label:"Impuestos"    },
               { value:"financiero", label:"Financiero"   },
             ]} />
+          {/* Sueldos › Aguinaldo: lo imputado a esta cuenta (sueldo, novedades) cuenta como base remunerativa.
+              Requiere el header `base_aguinaldo` en nb_cuentas (sin header, el GAS descarta el valor). */}
+          <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, color:T.text, cursor:"pointer" }}>
+            <input type="checkbox" checked={!!form.base_aguinaldo} onChange={e=>set("base_aguinaldo", e.target.checked)} />
+            Base para aguinaldo (SAC)
+            <span style={{ fontSize:11, color:T.dim }}>— remunerativo: entra en el mejor mes del semestre</span>
+          </label>
           <div style={{ display:"flex", justifyContent:"flex-end", gap:10, paddingTop:8 }}>
             <Btn variant="ghost" onClick={onClose}>Cancelar</Btn>
             <Btn variant="accent" onClick={() => { onSave(initial ? { ...form, id: initial.id } : form); onClose(); }} disabled={!canSave}>
@@ -861,7 +871,7 @@ function TabCuentas() {
           <table style={{ width:"100%", borderCollapse:"collapse" }}>
             <thead>
               <tr style={{ background:T.tableHead }}>
-                {["Tipo","Nombre","Cta. Pasivo P&L","ID",""].map(h=>(
+                {["Tipo","Nombre","Cta. Pasivo P&L","SAC","ID",""].map(h=>(
                   <th key={h} style={{ padding:"10px 14px", fontSize:11, fontWeight:700,
                     letterSpacing:".08em", textTransform:"uppercase", color:T.tableHeadText, textAlign:"left",
                     position:"sticky", top:0, zIndex:1, background:T.tableHead }}>{h}</th>
@@ -870,7 +880,7 @@ function TabCuentas() {
             </thead>
             <tbody>
               {rows.length === 0 ? (
-                <tr><td colSpan={5} style={{ padding:32, textAlign:"center", color:T.dim, fontSize:13 }}>Sin resultados</td></tr>
+                <tr><td colSpan={6} style={{ padding:32, textAlign:"center", color:T.dim, fontSize:13 }}>Sin resultados</td></tr>
               ) : rows.map((c, i) => (
                 <tr key={c.id} style={{ borderBottom:`1px solid ${T.cardBorder}`,
                   background: i%2===0 ? T.card : "#fafbfc" }}
@@ -879,6 +889,11 @@ function TabCuentas() {
                   <td style={{ padding:"9px 14px" }}><TipoChip tipo={c.tipo} /></td>
                   <td style={{ padding:"9px 14px", fontSize:13, color:T.text, fontWeight:600 }}>{c.nombre}</td>
                   <td style={{ padding:"9px 14px" }}><PasivoChip value={c.cuenta_pasivo} /></td>
+                  <td style={{ padding:"9px 14px", fontSize:11 }} title="Base para aguinaldo (SAC)">
+                    {String(c.base_aguinaldo ?? "").toLowerCase() === "true"
+                      ? <span style={{ background:"#dcfce7", color:"#166534", borderRadius:999, padding:"2px 8px", fontWeight:700 }}>base</span>
+                      : <span style={{ color:T.dim }}>—</span>}
+                  </td>
                   <td style={{ padding:"9px 14px", fontSize:11, color:T.dim, fontFamily:"var(--mono)" }}>{c.id}</td>
                   <td style={{ padding:"9px 14px", textAlign:"right", whiteSpace:"nowrap" }}>
                     {!fromSeed && <>

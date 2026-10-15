@@ -1260,6 +1260,8 @@ export async function fetchCuentasContablesNumbers() {
     id:     r.id ?? "",
     nombre: r.nombre ?? r.id ?? "",
     tipo:   r.tipo ?? "",
+    // Flag "base para aguinaldo" (columna base_aguinaldo de nb_cuentas, se tilda en Maestros).
+    base_aguinaldo: String(r.base_aguinaldo ?? "").toLowerCase() === "true",
   })).sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));  // orden alfabético para los desplegables
 }
 

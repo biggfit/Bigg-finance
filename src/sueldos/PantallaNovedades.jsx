@@ -6,6 +6,7 @@ import {
   fmtMiles, limpiarMonto,
 } from "../lib/sueldosApi";
 import { useRowChecks } from "../lib/useRowChecks";
+import { esNovedadAguinaldo } from "../lib/aguinaldo";
 import { fmtEntero, HeaderCheckTodas } from "./sueldosUi";
 
 const T = {
@@ -130,8 +131,9 @@ export default function PantallaNovedades({ pais = "" }) {
         fetchCuentasContablesNumbers(),
       ]);
       // Solo novedades de HQ (sin sede). Las de Sedes (con sede_id) viven en su propia pantalla.
-      // (El dedup por id lo hace fetchNovedades, para que todas las pantallas vean lo mismo.)
-      const extras = novs.filter(n => n.tipo === "extra" && !n.sede_id);
+      // Las de AGUINALDO (cuenta Aguinaldos) viven en la pantalla Aguinaldo: acá no se muestran ni se
+      // borran (el snapshot `loaded` no las incluye). (El dedup por id lo hace fetchNovedades.)
+      const extras = novs.filter(n => n.tipo === "extra" && !n.sede_id && !esNovedadAguinaldo(n));
       setRows(extras.map(n => ({ ...novToRow(n), concepto: conceptoDeNovedad(n) })));
       setLoaded(extras);
       // Monto del mes anterior por legajo+cuenta → alimenta la columna comparativa.
@@ -214,7 +216,7 @@ export default function PantallaNovedades({ pais = "" }) {
     const aAnt = mes === 1 ? anio - 1 : anio;
     // Solo novedades de HQ (sin sede). Copiar las de Sedes acá les borraría el sede_id
     // y las duplicaría como novedades de HQ (bug de fuga a HQ).
-    const novs = (await fetchNovedades(mAnt, aAnt)).filter(n => n.tipo === "extra" && !n.sede_id);
+    const novs = (await fetchNovedades(mAnt, aAnt)).filter(n => n.tipo === "extra" && !n.sede_id && !esNovedadAguinaldo(n));
     if (!novs.length) { alert("No hay novedades de HQ en el mes anterior."); return; }
     // Filas nuevas (sin id) para revisar y guardar.
     setRows(novs.map(n => ({ ...newRow(novToRow(n)), id: null, _id: Date.now() + Math.random(), concepto: conceptoDeNovedad(n) })));

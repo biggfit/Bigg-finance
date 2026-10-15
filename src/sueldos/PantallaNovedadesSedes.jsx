@@ -6,6 +6,7 @@ import {
   fmtMiles, limpiarMonto,
 } from "../lib/sueldosApi";
 import { useRowChecks } from "../lib/useRowChecks";
+import { esNovedadAguinaldo } from "../lib/aguinaldo";
 import { HeaderCheckTodas } from "./sueldosUi";
 
 // Orden del picker de legajos (pedido del usuario): encargado/vendedor → coach → limpieza → HQ.
@@ -107,8 +108,9 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
         fetchCentrosCostoNumbers(),
         fetchCuentasContablesNumbers(),
       ]);
-      // Solo las de Sedes (extra + con sede). Las de HQ (sin sede) viven en la pantalla de HQ.
-      const sedesNovs = novs.filter(n => n.tipo === "extra" && n.sede_id);
+      // Solo las de Sedes (extra + con sede). Las de HQ (sin sede) viven en la pantalla de HQ, y las de
+      // AGUINALDO (cuenta Aguinaldos) en la pantalla Aguinaldo: acá no se muestran ni se borran.
+      const sedesNovs = novs.filter(n => n.tipo === "extra" && n.sede_id && !esNovedadAguinaldo(n));
       setRows(sedesNovs.map(novToRow));
       setLoaded(sedesNovs);
       setLegajos(legs
@@ -177,7 +179,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
   const handleCopiarMesAnterior = async () => {
     const mAnt = mes === 1 ? 12 : mes - 1;
     const aAnt = mes === 1 ? anio - 1 : anio;
-    const novs = (await fetchNovedades(mAnt, aAnt)).filter(n => n.tipo === "extra" && n.sede_id);
+    const novs = (await fetchNovedades(mAnt, aAnt)).filter(n => n.tipo === "extra" && n.sede_id && !esNovedadAguinaldo(n));
     if (!novs.length) { alert("No hay novedades de Sedes en el mes anterior."); return; }
     setRows(novs.map(n => ({ ...newRow(novToRow(n)), id: null, _id: Date.now() + Math.random() })));
     setDirty(true);
