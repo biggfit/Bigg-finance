@@ -16,6 +16,7 @@ import { downloadInvoicePdf } from "../lib/invoicePdf";
 import { buildFacturaPDF, downloadTextAsPDF } from "../lib/pdf";
 import { getNextInvoiceNum } from "../lib/sheetsApi";
 import { reglaEmision } from "../lib/reglaEmision";
+import { emitidaEnHoja } from "../tabs/facturadorBatch";
 
 // ─── ADD COMP MODAL ───────────────────────────────────────────────────────────
 // Versión completa con la misma lógica de ModoManual del Facturador:
@@ -100,6 +101,9 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
   const [preview,   setPreview]   = useState(null);
   const [emitState, setEmitState] = useState("idle"); // "idle"|"emitting"|"error"
   const [emitError, setEmitError] = useState(null);
+  const [pendiente, setPendiente] = useState(null);   // emitido/numerado sin guardado confirmado
+  const [saveError,   setSaveError]   = useState(null);   // alta sin documento que no se confirmó
+  const [registrando, setRegistrando] = useState(false);
   const [refCompId, setRefCompId] = useState(null);
 
   // ── derivados comprobante ──
@@ -169,6 +173,8 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
   // ── confirmar emisión ──
   const doConfirm = async (skipFacturante = false) => {
     if (!preview || emitState === "emitting") return;
+    // Ya emitido/numerado en un intento cuyo guardado no se confirmó → solo reintentar el guardado.
+    if (pendiente) { await guardar(pendiente, true); return; }
     let enriched = doc === "NC" && refFAComp?.invoice
       ? { ...preview, refInvoice: refFAComp.invoice, refDate: refFAComp.date }
       : { ...preview };
@@ -206,11 +212,58 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
     if (esGestion) {
       enriched = { ...enriched, type: makeType(doc === "NC" ? "GNC" : "GFAC", cuenta) };
     }
-    try { onAdd(selectedFr?.id, enriched); } catch {
-      setEmitState("error"); setEmitError(afipSaveFailedMsg(enriched.invoice, enriched.facturanteId)); return;
-    }
+    await guardar(enriched, false);
+  };
 
-    // PDF automático
+  /**
+   * Guarda y confirma. onAdd no rechaza: devuelve { ok, error } (el try/catch de antes nunca
+   * saltaba, y un alta que no entró cerraba el modal como si nada). Si falla, relee la hoja antes de
+   * darla por perdida; sin confirmar, el modal queda abierto con el error y "Reintentar" reintenta
+   * solo el guardado (no vuelve a ARCA ni pide otro número). No reintenta solo: un alta todavía en
+   * vuelo duplicaría la fila. `reintento`: primero mira si entró mientras tanto.
+   */
+  const guardar = async (enriched, reintento) => {
+    setEmitState("emitting"); setEmitError(null);
+    let enHoja = reintento ? await emitidaEnHoja(enriched) : "no";
+    if (enHoja === "no") {
+      const r = await onAdd(selectedFr?.id, enriched);
+      enHoja = r?.ok === false ? await emitidaEnHoja(enriched) : "si";
+    }
+    // El documento existe aunque la fila no haya entrado: se baja igual, una sola vez.
+    if (!reintento) descargarDocumento(enriched);
+    if (enHoja === "si") { setPendiente(null); onClose(); return; }
+
+    const tieneNumero = !!(enriched.facturanteId || enriched.invoice);
+    setPendiente(tieneNumero ? enriched : null);
+    setEmitState("error");
+    setEmitError(
+      (enriched.facturanteId
+        ? afipSaveFailedMsg(enriched.invoice, enriched.facturanteId) + "."
+        : enriched.invoice
+          ? `Se asignó ${enriched.invoice} pero no llegó la confirmación del guardado. Puede haberse guardado igual: buscalo en la sede antes de cargarlo a mano.`
+          : "No se pudo guardar en la planilla: el comprobante NO quedó guardado.")
+      + (enHoja === "?" ? " No se pudo releer la hoja para confirmarlo." : "")
+      + (tieneNumero ? " «Reintentar» solo vuelve a intentar el guardado, sin emitir de nuevo." : " Reintentá."));
+  };
+
+  // Altas sin documento (FC recibida, movimientos): esperar el resultado y, si falla, no cerrar.
+  // Sin relectura: un movimiento vive en nb_movimientos, no en la hoja de comprobantes.
+  const registrar = async (comp) => {
+    if (registrando) return;
+    setRegistrando(true); setSaveError(null);
+    const r = await onAdd(selectedFr?.id, comp);
+    setRegistrando(false);
+    if (r?.ok === false) {
+      setSaveError(`No llegó la confirmación del guardado (${r.error?.message || "error de red"}). Puede haberse guardado igual: revisá la cuenta corriente antes de volver a cargarlo.`);
+      return;
+    }
+    onClose();
+  };
+  const saveErrorUI = saveError && (
+    <div style={{ marginBottom: 12, padding: "10px 14px", background: "rgba(255,85,112,.08)", border: "1px solid rgba(255,85,112,.25)", borderRadius: 8, fontSize: 12, color: "var(--red)", fontWeight: 700 }}>⚠ {saveError}</div>
+  );
+
+  const descargarDocumento = (enriched) => {
     if (enriched.facturanteId) {
       const filename = `Factura_${enriched.invoice ?? enriched.facturanteId}_${selectedFr?.name}.pdf`;
       downloadFacturantePdfBlob(enriched.facturanteId)
@@ -226,7 +279,6 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
     } else if (enriched.invoice) {
       downloadInvoicePdf(selectedFr, franchisor, enriched).catch(console.error);
     }
-    onClose();
   };
 
   // Franchises filtradas por búsqueda (para el picker global)
@@ -454,10 +506,12 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
             <div style={{ color: "var(--red)", fontWeight: 700, marginBottom: 6 }}>⚠ {emitError}</div>
             <div style={{ display: "flex", gap: 8 }}>
               <button className="btn" style={{ fontSize: 11, padding: "4px 12px" }} onClick={() => doConfirm(false)}>Reintentar</button>
-              {usaFacturante && <button className="ghost" style={{ fontSize: 11, padding: "4px 12px" }} onClick={() => doConfirm(true)}>Guardar sin emitir</button>}
+              {usaFacturante && !pendiente && <button className="ghost" style={{ fontSize: 11, padding: "4px 12px" }} onClick={() => doConfirm(true)}>Guardar sin emitir</button>}
             </div>
           </div>
         )}
+
+        {mode === "fc_recibida" && saveErrorUI}
 
         {/* Acciones */}
         <div style={{ display: "flex", gap: 10, marginBottom: 4 }}>
@@ -470,7 +524,7 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
               onClick={() => {
                 if (importeNeto <= 0) return;
                 const nota = `FC Recibida - ${CUENTA_LABEL[cuenta] ?? cuenta} - ${MONTHS[mesComp]} ${anioComp}`;
-                onAdd(selectedFr?.id, {
+                registrar({
                   id: uid(), type: makeType("FC_RECIBIDA", cuenta), date: inputDateToDmy(fechaIso),
                   amount: importeTotal, amountNeto: importeNeto,
                   amountIVA: importeIVA > 0 ? importeIVA : undefined,
@@ -478,7 +532,6 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
                   month: mesComp, year: anioComp,
                   currency, empresa: activeCompany,
                 });
-                onClose();
               }}>
               ✓ Registrar comprobante recibido
             </button>
@@ -607,6 +660,8 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
         {movTipo === "PAGO_PAUTA"   && <div style={{ background: "rgba(34,211,238,.05)", border: "1px solid rgba(34,211,238,.15)", borderRadius: 6, padding: "10px 14px", marginBottom: 14, fontSize: 12, color: "var(--cyan)" }}>Cobro anticipado — queda pendiente hasta emitir la factura de pauta.</div>}
         {movTipo === "PAGO_ENVIADO" && <div style={{ background: "rgba(255,85,112,.05)", border: "1px solid rgba(255,85,112,.15)", borderRadius: 6, padding: "10px 14px", marginBottom: 14, fontSize: 12, color: "var(--red)" }}>BIGG transfiere fondos al franquiciado. Aumenta la deuda de BIGG.</div>}
 
+        {saveErrorUI}
+
         <div style={{ display: "flex", gap: 10, marginBottom: 4 }}>
           <button className="ghost" style={{ flex: 1, height: 44, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}>Cancelar</button>
           <button className="btn" style={{ flex: 3, height: 44, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center" }}
@@ -616,7 +671,7 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
               const nota = movConcepto || autoMovConcepto;
               // Financiero de franquicia → nb_movimientos (numbersApi). La sociedad y la caja
               // salen de la cuenta elegida; empresa (para la CC) se deriva de esa sociedad.
-              onAdd(selectedFr?.id, {
+              registrar({
                 id: uid(), type: movTipo, date: inputDateToDmy(movFecha),
                 amount: movImporte, ref: nota, nota,
                 month: mesMovComp, year: anioMovComp,
@@ -625,7 +680,6 @@ export default function AddCompModal({ franchise = null, month, year, onClose, o
                 cuenta_bancaria: cuentaSel.id,
                 empresa: SOCIEDAD_EMPRESA[(cuentaSel.sociedad || "").toLowerCase()] || activeCompany,
               });
-              onClose();
             }}>
             ✓ Registrar movimiento
           </button>

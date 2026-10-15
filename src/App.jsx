@@ -192,7 +192,9 @@ export default function App({ onVolverNumbers } = {}) {
   // Stable mutation handlers — IDs are normalised to strings here, once
   const addComp = useCallback((frId, comp) => {
     const key = String(frId);
-    setComps(prev => ({ ...prev, [key]: [...(prev[key] ?? []), comp] }));   // optimista (misma forma de comp para la CC)
+    // Optimista (misma forma de comp para la CC). Reemplaza si ya está el mismo id: un reintento de
+    // guardado (Pendientes, modal rápido) vuelve a llamar con la misma fila y la duplicaba en pantalla.
+    setComps(prev => ({ ...prev, [key]: [...(prev[key] ?? []).filter(c => c.id !== comp.id), comp] }));
     const fr = franchises.find(f => f.id === Number(frId) || String(f.id) === String(frId));
     // Movimientos financieros (PAGO/PAGO_PAUTA/PAGO_ENVIADO) → nb_movimientos (Numbers, fuente única).
     // Facturas/NC/FC recibidas → comprobantes (Franquicias), como siempre.

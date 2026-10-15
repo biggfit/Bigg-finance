@@ -73,6 +73,44 @@ export function subtituloCrmWhatsapp(activeCompany) {
        + " · aparte del fee";
 }
 
+// ── ¿Entró igual? ─────────────────────────────────────────────────────────
+// Un alta rechazada puede haberse escrito igual (el POST llega al Apps Script y se pierde la
+// respuesta por el corte del proxy). Antes de darla por perdida se relee la hoja: darla por fallida
+// cuando entró termina en cargarla a mano dos veces.
+
+/**
+ * Relee la hoja una vez (sin caché) y devuelve un comprobador `({ facturanteId, id }) => boolean`:
+ * por facturanteId cuando lo hay (factura de ARCA, o número puesto sobre una fila existente), si
+ * no por id de fila. null = no se pudo releer.
+ */
+export async function releerHoja() {
+  try {
+    const todos = Object.values(await fetchCompsFresh()).flat();
+    const fids  = new Set(todos.map(c => String(c.facturanteId ?? "")).filter(Boolean));
+    const ids   = new Set(todos.map(c => String(c.id)));
+    return ({ facturanteId, id }) => facturanteId ? fids.has(String(facturanteId)) : ids.has(String(id));
+  } catch {
+    return null;
+  }
+}
+
+/** Lo mismo para un solo comprobante: "si" | "no" | "?" (no se pudo releer). */
+export async function emitidaEnHoja(ref) {
+  const esta = await releerHoja();
+  return esta == null ? "?" : esta(ref) ? "si" : "no";
+}
+
+/** Estado de log para un alta cuyo guardado no se confirmó, según lo que dijo la relectura. */
+export function estadoNoGuardado(comp, enHoja) {
+  const fid = comp.facturanteId ? String(comp.facturanteId) : null;
+  const doc = fid ? `AFIP OK, ID=${fid}` : comp.invoice ? `número ${comp.invoice} asignado` : null;
+  if (enHoja === "si") return `guardado (se perdió la respuesta${fid ? `, ID=${fid}` : ""})`;
+  if (enHoja === "?") return `VERIFICAR (${doc ?? "sin número"}) — no se pudo releer la hoja; buscalo en la sede antes de cargarlo a mano`;
+  return doc
+    ? `GUARDADO_FALLIDO (${doc}) — cargar a mano en el sistema${fid ? "" : " con ese número"}`
+    : "GUARDADO_FALLIDO — no se guardó; volvé a cargarlo";
+}
+
 /**
  * Emite y guarda un lote de comprobantes ya armados.
  * items: [{ fr, comp, meta, sinEmision }] — `comp` viene completo del caller (type, amount, neto/IVA,
@@ -126,28 +164,19 @@ export async function emitirLote({ items, franchisor, activeCompany, onAddComp, 
     }
     const saveResult = await onAddComp(fr.id, comp);
     const entry = { ...meta, facturanteStatus, invoice: comp.invoice ?? null };
-    if (saveResult?.ok === false && comp.facturanteId) {
+    // Cualquier alta rechazada, no solo las de ARCA: un correlativo USA-/ESP- que no se guardó deja
+    // el número consumido, y sin esto figuraba como "invoice_ok".
+    if (saveResult?.ok === false) {
       entry.facturanteStatus = "verificando…";
-      dudosos.push({ entry, facturanteId: String(comp.facturanteId) });
+      dudosos.push({ entry, comp });
     }
     log.push(entry);
   }
 
   if (dudosos.length > 0) {
-    try {
-      const frescos = await fetchCompsFresh();
-      const guardados = new Set(
-        Object.values(frescos).flat().map(c => String(c.facturanteId ?? "")).filter(Boolean));
-      for (const { entry, facturanteId } of dudosos) {
-        entry.facturanteStatus = guardados.has(facturanteId)
-          ? `guardado (se perdió la respuesta, ID=${facturanteId})`
-          : `GUARDADO_FALLIDO (AFIP OK, ID=${facturanteId}) — cargar a mano en el sistema`;
-      }
-    } catch {
-      // Sin relectura no se puede afirmar ninguna de las dos cosas: se pide revisar antes de cargar.
-      for (const { entry, facturanteId } of dudosos) {
-        entry.facturanteStatus = `VERIFICAR (AFIP OK, ID=${facturanteId}) — no se pudo releer la hoja; buscá la factura en la sede antes de cargarla a mano`;
-      }
+    const esta = await releerHoja();
+    for (const { entry, comp } of dudosos) {
+      entry.facturanteStatus = estadoNoGuardado(comp, esta == null ? "?" : esta(comp) ? "si" : "no");
     }
   }
 

@@ -8,7 +8,7 @@ import PendientesPanel from "../components/PendientesPanel";
 import { buildFacturaPDF, downloadTextAsPDF } from "../lib/pdf";
 import { downloadInvoicePdf, downloadBatchInvoicePdf } from "../lib/invoicePdf";
 import { emitirComprobante, formatInvoiceLabel, invoiceFromResult, fetchAfipNumero, downloadFacturantePdfBlob, afipSaveFailedMsg } from "../lib/facturanteApi";
-import { getNextInvoiceNum, fetchCompsFresh } from "../lib/sheetsApi";
+import { getNextInvoiceNum } from "../lib/sheetsApi";
 import { reglaEmision } from "../lib/reglaEmision";
 import { fetchCuentasBancarias } from "../lib/numbersApi";       // cuentas de Numbers (destino de la plata)
 import { SOCIEDAD_EMPRESA } from "../lib/franquiciasAdapter";
@@ -18,7 +18,8 @@ const SOCIEDAD_NOMBRE = Object.fromEntries(SOCIEDADES.map(s => [s.id, s.nombre])
 // Helpers compartidos entre los lotes (fee desde CRM y CRM WhatsApp): sociedad/moneda por país, TC de
 // Maestros, importes formateados y el ciclo emitir → guardar → confirmar dudosos (emitirLote).
 import { formatCurrencyInput, parseCurrencyInput, round2, getCountryCur, getTcRate,
-         empresaEmisoraPorPais, monedaFacturacionPorPais, emitirLote, subtituloCrmWhatsapp } from "./facturadorBatch";
+         empresaEmisoraPorPais, monedaFacturacionPorPais, emitirLote, subtituloCrmWhatsapp,
+         emitidaEnHoja, releerHoja, estadoNoGuardado } from "./facturadorBatch";
 import ModoCrmWhatsapp from "./ModoCrmWhatsapp";
 
 // ─── TAB: EMISIÓN DE COMPROBANTES ────────────────────────────────────────────
@@ -1094,9 +1095,9 @@ function ModoCRM({ month: monthProp, year: yearProp, onAddComp, onDone, franchis
       </div>
       {failedCount > 0 && (
         <div style={{ color: "var(--red)", fontWeight: 700, fontSize: 13, marginBottom: 16 }}>
-          {failedCount} factura{failedCount !== 1 ? "s" : ""} emitida{failedCount !== 1 ? "s" : ""} en Facturante pero NO guardada{failedCount !== 1 ? "s" : ""} en el sistema
+          {failedCount} factura{failedCount !== 1 ? "s" : ""} NO guardada{failedCount !== 1 ? "s" : ""} en el sistema
           <div style={{ fontWeight: 400, fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
-            Verificado releyendo la hoja: estas no están. Cargalas a mano con el ID que figura abajo.
+            Verificado releyendo la hoja: estas no están. Cargalas a mano con el ID de AFIP o el número que figura abajo.
           </div>
         </div>
       )}
@@ -1658,6 +1659,7 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
   const handleConfirm = useCallback(async (skipFacturante = false) => {
     setStage(FACT_STAGE.PROCESSING);
     setProcessLog([]);
+    const log = [], dudosos = [];
     for (const r of activeRows) {
       const fr = franchises.find(f => f.id === r.franchiseId);
       const esSedePropia = fr?.esSedePropia === true;   // interuso de sede propia → asiento de gestión (no fiscal)
@@ -1721,16 +1723,27 @@ function ModoExcel({ month, year, onAddComp, onDone, franchisor }) {
         comp = { ...comp, type: makeType(doc === "NC" ? "GNC" : "GFAC", String(r.type).split("|")[1] || "INTERUSOS") };
       }
 
-      try {
-        await onAddComp(r.franchiseId, comp);
-      } catch {
-        status = "error";
-        msg = comp.facturanteId
-          ? `AFIP OK (${comp.facturanteId}) — fallo Sheets`
-          : "Fallo Sheets";
+      // onAddComp no rechaza: devuelve { ok, error }. El try/catch de antes nunca saltaba y una fila
+      // que no entró figuraba "ok". Las rechazadas se confirman al final releyendo la hoja (pueden
+      // haber entrado igual); sin reintento acá: un alta todavía en vuelo duplicaría la fila.
+      const saveResult = await onAddComp(r.franchiseId, comp);
+      const entry = { status, invoice, frName: r.franchiseName, msg };
+      if (saveResult?.ok === false) {
+        entry.status = "verificando";
+        entry.msg    = "verificando…";
+        dudosos.push({ entry, comp });
       }
-
-      setProcessLog(prev => [...prev, { status, invoice, frName: r.franchiseName, msg }]);
+      log.push(entry);
+      setProcessLog([...log]);
+    }
+    if (dudosos.length > 0) {
+      const esta = await releerHoja();
+      for (const { entry, comp } of dudosos) {
+        const enHoja = esta == null ? "?" : esta(comp) ? "si" : "no";
+        entry.status = enHoja === "si" ? "ok" : "error";
+        entry.msg    = estadoNoGuardado(comp, enHoja);
+      }
+      setProcessLog([...log]);
     }
     setStage(FACT_STAGE.DONE);
   }, [activeRows, franchises, onAddComp, loteId, franchisor, activeCompany]);
@@ -2129,23 +2142,6 @@ function borrarAfipSinGuardar(srcId) {
   try { localStorage.setItem(AFIP_SIN_GUARDAR_KEY, JSON.stringify(all)); } catch {}
 }
 
-/**
- * ¿Está en la hoja? Por facturanteId cuando lo hay (edit post-emisión o factura de ARCA); si no,
- * por id de la fila (correlativo USA/ESP). "si" | "no" | "?" (no se pudo releer).
- */
-async function emitidaEnHoja({ facturanteId, rowId }) {
-  try {
-    const frescos = await fetchCompsFresh();
-    const todos = Object.values(frescos).flat();
-    const esta = facturanteId
-      ? todos.some(c => String(c.facturanteId ?? "") === String(facturanteId))
-      : todos.some(c => String(c.id) === String(rowId));
-    return esta ? "si" : "no";
-  } catch {
-    return "?";
-  }
-}
-
 // ── Tab principal ───────────────────────────────────────────────────────────
 const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, factState, setFactState, franchisor, tiposCambio = {}, onStartImport }) {
   const { editComp, activeCompany } = useStore();
@@ -2190,13 +2186,13 @@ const TabFacturador = memo(function TabFacturador({ month, year, onAddComp, fact
     };
 
     if (reintento) {
-      const enHoja = await emitidaEnHoja({ facturanteId, rowId });
+      const enHoja = await emitidaEnHoja({ facturanteId, id: rowId });
       if (enHoja === "si") { borrarAfipSinGuardar(srcId); return; }
       if (enHoja === "?") fallo("?");
     }
     if ((await save())?.ok !== false) { borrarAfipSinGuardar(srcId); return; }
 
-    const enHoja = await emitidaEnHoja({ facturanteId, rowId });
+    const enHoja = await emitidaEnHoja({ facturanteId, id: rowId });
     if (enHoja === "si") { borrarAfipSinGuardar(srcId); return; }
     if (enHoja === "no" && kind === "edit" && (await save())?.ok !== false) { borrarAfipSinGuardar(srcId); return; }
     fallo(enHoja);

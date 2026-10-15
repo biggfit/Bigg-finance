@@ -161,8 +161,8 @@ export default function ModoCrmWhatsapp({ month: monthProp, year: yearProp, onAd
         </div>
         {failedCount > 0 && (
           <div style={{ color: "var(--red)", fontWeight: 700, fontSize: 13, marginBottom: 16 }}>
-            {failedCount} factura{failedCount !== 1 ? "s" : ""} emitida{failedCount !== 1 ? "s" : ""} en Facturante pero NO guardada{failedCount !== 1 ? "s" : ""} en el sistema
-            <div style={{ fontWeight: 400, fontSize: 11, color: "var(--muted)", marginTop: 4 }}>Verificado releyendo la hoja. Cargalas a mano con el ID que figura abajo.</div>
+            {failedCount} factura{failedCount !== 1 ? "s" : ""} NO guardada{failedCount !== 1 ? "s" : ""} en el sistema
+            <div style={{ fontWeight: 400, fontSize: 11, color: "var(--muted)", marginTop: 4 }}>Verificado releyendo la hoja. Cargalas a mano con el ID de AFIP o el número que figura abajo.</div>
           </div>
         )}
         {verificarCount > 0 && (
