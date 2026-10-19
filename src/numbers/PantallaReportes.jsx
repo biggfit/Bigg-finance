@@ -408,9 +408,10 @@ function colsSedeVista(vista, mes, year) {
     { header: "Δ",               kind: "var", abs: true, a: c => sumTo(c, mes), b: (c, p) => sumTo(p, mes) },
     { header: "Var%",            kind: "var", a: c => sumTo(c, mes), b: (c, p) => sumTo(p, mes) },
   ];
-  return [   // mensual
+  return [   // mensual: Mes · Mes ant. · Δ nominal vs mes ant. · Var% · mismo mes año ant. · Var%
     { header: MESES[mes],       kind: "val", get: c => Number(c[mes]) || 0 },
     { header: "Mes ant.",       kind: "val", get: (c, p) => m1(c, p) },
+    { header: "Δ",              kind: "var", abs: true, a: c => Number(c[mes]) || 0, b: (c, p) => m1(c, p) },
     { header: "Var%",           kind: "var", a: c => Number(c[mes]) || 0, b: (c, p) => m1(c, p) },
     { header: `${MESES[mes]} ${year - 1}`, kind: "val", get: (c, p) => Number(p?.[mes]) || 0 },
     { header: "Var%",           kind: "var", a: c => Number(c[mes]) || 0, b: (c, p) => Number(p?.[mes]) || 0 },
