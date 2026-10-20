@@ -250,6 +250,45 @@ function ModalLabel({ children }) {
   return <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>{children}</label>;
 }
 
+// Menú ⋯ por fila: botón chico que abre una lista de acciones. El popover va en posición fija (la
+// tabla scrollea en horizontal y un absolute quedaría recortado); se cierra al elegir o al clickear afuera.
+function MenuAcciones({ items }) {
+  const [pos, setPos] = useState(null);   // { top, right } del popover abierto
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!pos) return;
+    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setPos(null); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [pos]);
+  const abrir = (e) => {
+    if (pos) return setPos(null);
+    const r = e.currentTarget.getBoundingClientRect();
+    setPos({ top: r.bottom + 4, right: window.innerWidth - r.right });
+  };
+  return (
+    <span ref={ref} style={{ display: "inline-block" }}>
+      <button onClick={abrir} title="Acciones"
+        style={{ background: "#fff", color: T.muted, border: `1px solid ${T.border}`, borderRadius: 6, padding: "2px 9px", fontSize: 14, lineHeight: 1.2, fontWeight: 700, cursor: "pointer", fontFamily: T.font }}>
+        ⋯
+      </button>
+      {pos && (
+        <div style={{ position: "fixed", top: pos.top, right: pos.right, zIndex: 200, background: "#fff", border: `1px solid ${T.border}`,
+          borderRadius: 8, boxShadow: "0 8px 24px rgba(15,23,42,.18)", padding: "4px 0", minWidth: 150, textAlign: "left" }}>
+          {items.map(it => (
+            <button key={it.label} disabled={it.disabled} title={it.hint}
+              onClick={() => { setPos(null); it.onClick(); }}
+              style={{ display: "block", width: "100%", background: "none", border: "none", textAlign: "left", padding: "7px 14px", fontSize: 12.5,
+                fontWeight: 600, color: it.disabled ? T.dim : T.text, cursor: it.disabled ? "default" : "pointer", fontFamily: T.font }}>
+              {it.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </span>
+  );
+}
+
 // Candado único de liquidación cerrada (mismo diseño que HQ): un 🔒 que abre un modal de
 // confirmación para reabrir. Si NO está cerrada → no muestra nada. Reemplaza el doble candado.
 function ReabrirLock({ empl, onReabrir, reabriendo }) {
@@ -344,7 +383,7 @@ function applyObjetivosToRows(rowsArr, objetivosArr) {
 // ── Componente principal ───────────────────────────────────────────────────────
 
 export default function PantallaLiquidacionSedes({ pais = "", initialMes, initialAnio, initialPaso }) {
-  const [, confirmUI] = useConfirm();
+  const [confirm, confirmUI] = useConfirm();
   const [mes,  setMes]  = useState(initialMes  ?? MES_DEF);
   const [anio, setAnio] = useState(initialAnio ?? ANO_DEF);
   const [paso, setPaso] = useState(initialPaso ?? 1);
@@ -471,6 +510,18 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     } catch (e) {
       alert("Error al reabrir: " + e.message);
     } finally { setReabriendo(false); }
+  };
+
+  // Menú ⋯ del paso Pagos: cerrar o reabrir UN legajo, con confirmación in-app.
+  const handleCerrarUno = async (legajo_id, legajo_nombre) => {
+    const ok = await confirm({ title: `🔒 Cerrar liquidación — ${legajo_nombre}`, danger: false, confirmLabel: "Cerrar", cancelLabel: "Cancelar",
+      message: "Se cierra solo este legajo (todas sus sedes de este mes) con el reparto haberes / efectivo cargado en Forma de pago. El resto de los legajos no se toca." });
+    if (ok) await handleConfirmarFormaPago({ soloLegajo: legajo_id });
+  };
+  const handleReabrirUno = async (legajo_id, legajo_nombre) => {
+    const ok = await confirm({ title: `🔓 Reabrir liquidación — ${legajo_nombre}`, confirmLabel: "Reabrir", cancelLabel: "Cancelar",
+      message: "Se borra la liquidación cerrada de todas sus sedes de este mes y la fila vuelve a vivo. Los pagos ya registrados no se tocan." });
+    if (ok) await handleReabrir(legajo_id, legajo_nombre);
   };
 
   const draftKey = `sedesDraft:${pais}:${anio}-${mes}`;
@@ -1069,7 +1120,8 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     setPaso(4);
   }
 
-  async function handleConfirmarFormaPago() {
+  // `soloLegajo`: cierra únicamente ese legajo (menú ⋯ del paso Pagos); sin él, todas las abiertas.
+  async function handleConfirmarFormaPago({ soloLegajo = null } = {}) {
     if (savingRef.current) return;
     // Sin la lectura de cerradas no sabemos qué hay en la hoja → no cerrar (antes borraba a ciegas).
     if (!liqsFetchOk) {
@@ -1081,14 +1133,15 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     // reescriben) → sus montos quedan congelados y el cierre es un único add_batch.
     // Un legajo con ALGUNA sede cerrada se saltea ENTERO (el blanco se reparte entre todas sus filas y
     // una fila nueva suelta lo desbalancearía): hay que reabrirlo para incluir la sede nueva.
-    const legajosCerrados = new Set(rows.filter(r => isCerrada(r.estado)).map(r => r.legajo_id));
-    const rowsAbiertas = rows.filter(r => !legajosCerrados.has(r.legajo_id));
-    const mixtos = [...new Set(rows.filter(r => legajosCerrados.has(r.legajo_id) && !isCerrada(r.estado)).map(r => r.legajo_nombre))];
+    const rowsAlcance = soloLegajo ? rows.filter(r => r.legajo_id === soloLegajo) : rows;
+    const legajosCerrados = new Set(rowsAlcance.filter(r => isCerrada(r.estado)).map(r => r.legajo_id));
+    const rowsAbiertas = rowsAlcance.filter(r => !legajosCerrados.has(r.legajo_id));
+    const mixtos = [...new Set(rowsAlcance.filter(r => legajosCerrados.has(r.legajo_id) && !isCerrada(r.estado)).map(r => r.legajo_nombre))];
     if (mixtos.length)
       alert(`No se cierran (tienen la liquidación cerrada en otra sede este mes — reabrilas 🔒 para incluir la sede nueva):\n• ${mixtos.join("\n• ")}`);
     if (!rowsAbiertas.length) {
-      alert("Todas las liquidaciones de este mes ya están cerradas. Para modificar una, reabrí ese legajo (🔒).");
-      setPaso(5);
+      if (!mixtos.length) alert(soloLegajo ? "Ese legajo ya tiene la liquidación cerrada este mes." : "Todas las liquidaciones de este mes ya están cerradas. Para modificar una, reabrí ese legajo (🔒).");
+      if (!soloLegajo) setPaso(5);
       return;
     }
     savingRef.current = true;
@@ -1184,7 +1237,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       // Un solo add_batch para todas las liquidaciones nuevas/reabiertas.
       await saveLiquidacionesLinesBatch(entries);
       await refreshLiqs();   // refresh liviano (no bloquea la pantalla)
-      setPaso(5);
+      if (!soloLegajo) setPaso(5);
     } catch (e) {
       alert("Error al guardar: " + e.message);
     } finally {
@@ -1390,6 +1443,9 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
               onBatchPaid={() => refreshLiqs()}
               onReabrir={handleReabrir}
               reabriendo={reabriendo}
+              onCerrarUno={handleCerrarUno}
+              onReabrirUno={handleReabrirUno}
+              saving={saving}
               onPagarHaberes={() => setShowPagoHaberes(true)}
             />
           )}
@@ -2423,7 +2479,7 @@ function FondeoBand({ stats }) {
 
 // ── Componente PasoPagos ──────────────────────────────────────────────────────
 
-function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, onReabrir, reabriendo, onPagarHaberes }) {
+function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, onReabrir, reabriendo, onCerrarUno, onReabrirUno, saving, onPagarHaberes }) {
   const [batchModal,  setBatchModal]  = useState(null);
   const [anularModal, setAnularModal] = useState(null);
 
@@ -2566,19 +2622,19 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, on
                 <td style={TD({ textAlign: "right", fontWeight: 600, color: empl.pendiente > 0 ? T.red : T.green })}>
                   {fmtMoney(empl.pendiente)}
                 </td>
-                <td style={TD({ whiteSpace: "nowrap" })}>
-                  {/* total === 0 → todavía no hay nada cargado/devengado este mes, pero se puede
-                      registrar un ADELANTO igual (appendPago no exige liquidación ni pendiente:
-                      queda como activo hasta que se cargue y cierre el mes real). */}
-                  {empl.pendiente > 0 || empl.total === 0
-                    ? <button onClick={() => onRegistrarPago(empl.legajo_id)}
-                        title={empl.pendiente > 0 ? undefined : "Todavía no hay nada cargado este mes — esto registra un adelanto a cuenta"}
-                        style={{
-                        background: "#fff", color: T.green, border: `1px solid ${T.green}`,
-                        borderRadius: 6, padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer",
-                      }}>{empl.pendiente > 0 ? "💳 Pagar" : "💰 Adelanto"}</button>
-                    : <span style={{ fontSize: 12, color: T.green, fontWeight: 600 }}>✓</span>
-                  }
+                <td style={TD({ whiteSpace: "nowrap", textAlign: "right" })}>
+                  {/* ✓ = nada pendiente. El menú ⋯ junta las acciones por legajo: pagar (o adelantar si
+                      todavía no hay nada cargado: appendPago no exige liquidación, queda como activo hasta
+                      que se cierre el mes real), cerrar solo este legajo, o reabrirlo. */}
+                  {empl.pendiente <= 0 && empl.total > 0 && <span style={{ fontSize: 12, color: T.green, fontWeight: 600, marginRight: 6 }}>✓</span>}
+                  {/* Siempre las tres opciones; las que no aplican al estado de la liquidación van en gris. */}
+                  <MenuAcciones items={[
+                    empl.total === 0
+                      ? { label: "💰 Adelantar", hint: "Todavía no hay nada cargado este mes: registra un adelanto a cuenta", onClick: () => onRegistrarPago(empl.legajo_id) }
+                      : { label: "💳 Pagar", disabled: empl.pendiente <= 0, hint: empl.pendiente <= 0 ? "Nada pendiente de pago" : undefined, onClick: () => onRegistrarPago(empl.legajo_id) },
+                    { label: "🔒 Cerrar", disabled: empl.cerrada || saving, hint: empl.cerrada ? "Ya está cerrada" : "Cierra solo este legajo con el reparto de Forma de pago", onClick: () => onCerrarUno(empl.legajo_id, empl.legajo_nombre) },
+                    { label: "🔓 Reabrir", disabled: !empl.cerrada || reabriendo, hint: empl.cerrada ? "Borra la liquidación cerrada de este legajo; vuelve a vivo" : "No está cerrada", onClick: () => onReabrirUno(empl.legajo_id, empl.legajo_nombre) },
+                  ]} />
                 </td>
               </tr>
             ))}
