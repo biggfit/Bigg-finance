@@ -22,7 +22,9 @@ function TipoChip({ tipo }) {
   const cfg = {
     gasto:      { bg:"#fee2e2", color:"#dc2626", label:"Gasto"      },
     ingreso:    { bg:"#dcfce7", color:"#16a34a", label:"Ingreso"    },
+    venta:      { bg:"#dcfce7", color:"#16a34a", label:"Venta"      },
     financiero: { bg:"#ede9fe", color:"#7c3aed", label:"Financiero" },
+    financieros:{ bg:"#ede9fe", color:"#7c3aed", label:"Financieros"},
     hq:         { bg:"#f0f9ff", color:"#0369a1", label:"HQ"         },
     operaciones:{ bg:"#fef9c3", color:"#b45309", label:"Sede"       },
   }[(tipo ?? "").toLowerCase()] ?? { bg:"#f3f4f6", color:"#374151", label: tipo };
@@ -683,10 +685,12 @@ const PASIVO_CFG = {
   sueldos:     { bg:"#ede9fe", color:"#7c3aed", label:"Sueldos"     },
   impuestos:   { bg:"#fee2e2", color:"#dc2626", label:"Impuestos"   },
   financiero:  { bg:"#e0f2fe", color:"#0369a1", label:"Financiero"  },
+  financieros: { bg:"#e0f2fe", color:"#0369a1", label:"Financieros" },
+  ventas:      { bg:"#dcfce7", color:"#16a34a", label:"Ventas"      },
 };
 function PasivoChip({ value }) {
   if (!value) return <span style={{ color:"#9ca3af", fontStyle:"italic", fontSize:11 }}>—</span>;
-  const cfg = PASIVO_CFG[value] ?? { bg:"#f3f4f6", color:"#374151", label: value };
+  const cfg = PASIVO_CFG[String(value).toLowerCase()] ?? { bg:"#f3f4f6", color:"#374151", label: value };
   return (
     <span style={{ display:"inline-block", padding:"2px 9px", borderRadius:999,
       fontSize:10, fontWeight:700, background:cfg.bg, color:cfg.color, letterSpacing:".04em" }}>
@@ -699,9 +703,33 @@ function PasivoChip({ value }) {
 // base_aguinaldo llega crudo de la hoja (booleano o "TRUE"): fetchCuentas no mapea columnas.
 const esBaseAguinaldo = (c) => String(c?.base_aguinaldo ?? "").toLowerCase() === "true";
 
+// Valores CANÓNICOS del maestro (los que tienen las 70 cuentas desde el 20/10/2026). Hasta entonces el formulario
+// guardaba sus claves internas ("gasto", "gastos_operativos", "proveedores", "financiero") y cada cuenta nueva
+// volvía a mezclar mayúsculas y guiones; la app lo toleraba al leer, pero Tesorería usa `cuenta_pasivo` tal cual
+// como nombre del rubro ("financiero" abría un rubro aparte de "Financieros"). Al editar una cuenta con un valor
+// viejo se normaliza al cargar, así el select la reconoce; un valor especial que no está en la lista
+// ("Coorporativos", "Inversores", "Comision S/Resultado"…) se conserva y se muestra como opción propia.
+const TIPO_OPCIONES   = [["Gasto", "Gasto"], ["Venta", "Ingreso / Venta"], ["Financieros", "Financieros"], ["Activo", "Activo"], ["Pasivo", "Pasivo"]];
+const CAT_OPCIONES    = [["Ventas", "Ventas"], ["Costo por Venta", "Costo por Venta"], ["Gastos Operativos", "Gastos Operativos"],
+                         ["Financieros", "Financieros"], ["Impuestos", "Impuestos"], ["capex", "Inversiones / Capex"]];
+const PASIVO_OPCIONES = [["Proveedores", "Proveedores"], ["Sueldos", "Sueldos"], ["Impuestos", "Impuestos"], ["Financieros", "Financieros"], ["Ventas", "Ventas"]];
+const SINONIMOS = { ingreso: "Venta", ingresos: "Venta", ventas: "Venta", gastos: "Gasto", financiero: "Financieros",
+                    "costo venta": "Costo por Venta", "gastos financieros": "Financieros", impuesto: "Impuestos", inversiones: "capex" };
+const canon = (v, opciones) => {
+  const k = String(v ?? "").trim().toLowerCase().replace(/_/g, " ");
+  if (!k) return "";
+  const hit = opciones.find(([val]) => val.toLowerCase() === k);
+  return hit ? hit[0] : (SINONIMOS[k] ?? String(v).trim());
+};
+// Opciones del select + el valor actual si es uno especial (para que se vea y no se pierda al guardar).
+const conActual = (opciones, v) => [...opciones.map(([value, label]) => ({ value, label })), ...(v && !opciones.some(([val]) => val === v) ? [{ value: v, label: v }] : [])];
+
 export function CuentaModal({ initial, onClose, onSave }) {
-  const blank = { nombre:"", tipo:"gasto", categoria_pnl:"", cuenta_pasivo:"", base_aguinaldo:false };
-  const [form, setForm] = useState(initial ? { ...initial, base_aguinaldo: esBaseAguinaldo(initial) } : blank);
+  const blank = { nombre:"", tipo:"Gasto", categoria_pnl:"", cuenta_pasivo:"", base_aguinaldo:false };
+  const [form, setForm] = useState(initial
+    ? { ...initial, tipo: canon(initial.tipo, TIPO_OPCIONES), categoria_pnl: canon(initial.categoria_pnl, CAT_OPCIONES),
+        cuenta_pasivo: canon(initial.cuenta_pasivo, PASIVO_OPCIONES), base_aguinaldo: esBaseAguinaldo(initial) }
+    : blank);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const canSave = !!form.nombre.trim() && !!form.tipo;
 
@@ -726,30 +754,11 @@ export function CuentaModal({ initial, onClose, onSave }) {
           <Input label="Nombre de la cuenta" required value={form.nombre} onChange={v=>set("nombre",v)}
             placeholder="Alquileres, Sueldos, Fee Franquicias..." />
           <Select label="Tipo" required value={form.tipo} onChange={v=>set("tipo",v)}
-            options={[
-              { value:"gasto",      label:"Gasto"      },
-              { value:"ingreso",    label:"Ingreso"    },
-              { value:"financiero", label:"Financiero" },
-              { value:"activo",     label:"Activo"     },
-              { value:"pasivo",     label:"Pasivo"     },
-            ]} />
+            options={conActual(TIPO_OPCIONES, form.tipo)} />
           <Select label="Categoría P&L" value={form.categoria_pnl ?? ""} onChange={v=>set("categoria_pnl",v)}
-            options={[
-              { value:"",                   label:"— Sin clasificar —"        },
-              { value:"ventas",             label:"Ventas"                    },
-              { value:"costo_venta",        label:"Costo por Venta"           },
-              { value:"gastos_operativos",  label:"Gastos Operativos"         },
-              { value:"gastos_financieros", label:"Gastos Financieros"        },
-              { value:"impuestos",          label:"Impuestos"                 },
-            ]} />
+            options={conActual(CAT_OPCIONES, form.categoria_pnl)} />
           <Select label="Cuenta pasivo P&L" value={form.cuenta_pasivo ?? ""} onChange={v=>set("cuenta_pasivo",v)}
-            options={[
-              { value:"",           label:"— Ninguna —"  },
-              { value:"proveedores",label:"Proveedores"  },
-              { value:"sueldos",    label:"Sueldos"      },
-              { value:"impuestos",  label:"Impuestos"    },
-              { value:"financiero", label:"Financiero"   },
-            ]} />
+            options={conActual(PASIVO_OPCIONES, form.cuenta_pasivo)} />
           {/* Sueldos › Aguinaldo: lo imputado a esta cuenta (sueldo, novedades) cuenta como base remunerativa.
               Requiere el header `base_aguinaldo` en nb_cuentas (sin header, el GAS descarta el valor). */}
           <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, color:T.text, cursor:"pointer" }}>
