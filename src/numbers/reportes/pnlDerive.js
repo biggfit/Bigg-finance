@@ -188,7 +188,7 @@ const SEDE_GRUPOS = [
   // "CRM" (1/10/2026): servicio WhatsApp del CRM que HQ le cobra a la sede propia (asiento de gestión). Va en
   // Mkt y Pauta por ahora, como herramienta comercial; Martín lo revisa más adelante.
   { key: "gp_mkt",    label: "Mkt y Pauta",              color: SEDE_HDR, cuentas: ["Acciones de Mkt", "Pauta", "CRM"] },
-  { key: "gp_otros",  label: "Otros Gastos de la Sede",  color: SEDE_HDR, cuentas: ["Honorarios Profesionales", "Equipamiento y Mantenimiento", "Limpieza", "Otros Gastos del Centro", "Gastos Menores de Caja"] },
+  { key: "gp_otros",  label: "Otros Gastos de la Sede",  color: SEDE_HDR, cuentas: ["Honorarios Profesionales", "Equipamiento y Mantenimiento", "Limpieza", "Otros Gastos del Centro", "Gastos Menores de Caja", "Tarjeta de Crédito"] },
   { key: "com_res",   label: "Comisión por resultados",  color: SEDE_HDR, cuentas: ["Comision S/Resultado"] },
   { key: "inv_no_op", label: "Inversiones no operativas", color: SEDE_HDR, cuentas: ["Inversiones / Gastos no Operativos"] },
 ];
@@ -200,7 +200,7 @@ const _nkSede = s => (s ?? "").trim().toLowerCase();
 // naturales de España → en el resto de las sedes vienen en 0 y ensucian; en España, donde sí hay dato, se
 // muestran solas.
 const SEDE_OCULTAR_SI_VACIA = new Set([_nkSede("Ing.Stripe"), _nkSede("Ing. Datafono"), _nkSede("IRPF"),
-  _nkSede("Ventas Mercado Pago"), _nkSede("Depositos"), _nkSede("Ventas en Efectivo")]);
+  _nkSede("Tarjeta de Crédito"), _nkSede("Ventas Mercado Pago"), _nkSede("Depositos"), _nkSede("Ventas en Efectivo")]);
 const SEDE_CUENTA_A_GRUPO = (() => {
   const m = new Map();
   for (const g of SEDE_GRUPOS) for (const c of g.cuentas) m.set(_nkSede(c), g.key);
