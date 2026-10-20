@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
 import { useConfirm } from "../numbers/useConfirm";
+import { RowMenu } from "../numbers/comprobantesUi";
 import {
   fetchLegajos, fetchCategorias, fetchObjetivos, legajoVigenteEnMes,
   fetchLiquidacionesSedes, delLiquidacionComp,
@@ -250,77 +251,16 @@ function ModalLabel({ children }) {
   return <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 3 }}>{children}</label>;
 }
 
-// Menú ⋯ por fila: botón chico que abre una lista de acciones. El popover va en posición fija (la
-// tabla scrollea en horizontal y un absolute quedaría recortado); se cierra al elegir o al clickear afuera.
-function MenuAcciones({ items }) {
-  const [pos, setPos] = useState(null);   // { top, right } del popover abierto
-  const ref = useRef(null);
-  useEffect(() => {
-    if (!pos) return;
-    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setPos(null); };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, [pos]);
-  const abrir = (e) => {
-    if (pos) return setPos(null);
-    const r = e.currentTarget.getBoundingClientRect();
-    setPos({ top: r.bottom + 4, right: window.innerWidth - r.right });
-  };
-  return (
-    <span ref={ref} style={{ display: "inline-block" }}>
-      <button onClick={abrir} title="Acciones"
-        style={{ background: "#fff", color: T.muted, border: `1px solid ${T.border}`, borderRadius: 6, padding: "2px 9px", fontSize: 14, lineHeight: 1.2, fontWeight: 700, cursor: "pointer", fontFamily: T.font }}>
-        ⋯
-      </button>
-      {pos && (
-        <div style={{ position: "fixed", top: pos.top, right: pos.right, zIndex: 200, background: "#fff", border: `1px solid ${T.border}`,
-          borderRadius: 8, boxShadow: "0 8px 24px rgba(15,23,42,.18)", padding: "4px 0", minWidth: 150, textAlign: "left" }}>
-          {items.map(it => (
-            <button key={it.label} disabled={it.disabled} title={it.hint}
-              onClick={() => { setPos(null); it.onClick(); }}
-              style={{ display: "block", width: "100%", background: "none", border: "none", textAlign: "left", padding: "7px 14px", fontSize: 12.5,
-                fontWeight: 600, color: it.disabled ? T.dim : T.text, cursor: it.disabled ? "default" : "pointer", fontFamily: T.font }}>
-              {it.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </span>
-  );
-}
-
-// Candado único de liquidación cerrada (mismo diseño que HQ): un 🔒 que abre un modal de
-// confirmación para reabrir. Si NO está cerrada → no muestra nada. Reemplaza el doble candado.
+// Candado de liquidación cerrada (mismo diseño que HQ): un 🔒 por fila. Si NO está cerrada no muestra
+// nada. La confirmación la pide el handler (handleReabrirUno → modal in-app), igual que el menú ⋯.
 function ReabrirLock({ empl, onReabrir, reabriendo }) {
-  const [confirm, setConfirm] = useState(false);
   if (!empl.cerrada) return null;
   return (
-    <>
-      <button onClick={(e) => { e.stopPropagation(); setConfirm(true); }}
-        title="Cerrada — click para reabrir (vuelve a vivo; no toca los pagos)"
-        style={{ marginLeft: 8, fontSize: 12, color: T.green, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
-        🔒
-      </button>
-      {confirm && (
-        <div onClick={() => setConfirm(false)} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, fontFamily: T.font }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: 420, padding: 22, boxShadow: "0 12px 40px rgba(0,0,0,.25)" }}>
-            <h3 style={{ margin: "0 0 8px", fontSize: 16, fontWeight: 700, color: T.text }}>🔓 Reabrir liquidación — {empl.legajo_nombre}</h3>
-            <p style={{ margin: "0 0 16px", fontSize: 13, color: T.muted, lineHeight: 1.5 }}>
-              Se borra la liquidación cerrada de <strong>todas sus sedes</strong> de este mes y la fila vuelve
-              a <strong>vivo</strong> (se recalcula de BIGG Eye / legajo / novedades). Editá lo que falte y cerrá
-              de nuevo: solo se reescribe este legajo. Los pagos ya registrados <strong>no se tocan</strong>.
-            </p>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button onClick={() => setConfirm(false)} style={BTN_SECONDARY}>Cancelar</button>
-              <button disabled={reabriendo} onClick={async () => { setConfirm(false); await onReabrir(empl.legajo_id, empl.legajo_nombre); }}
-                style={{ background: T.blue, color: "#fff", border: "none", borderRadius: 7, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: reabriendo ? "default" : "pointer", opacity: reabriendo ? 0.5 : 1 }}>
-                Reabrir
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
+    <button onClick={(e) => { e.stopPropagation(); onReabrir(empl.legajo_id, empl.legajo_nombre); }} disabled={reabriendo}
+      title="Cerrada — click para reabrir (vuelve a vivo; no toca los pagos)"
+      style={{ marginLeft: 8, fontSize: 12, color: T.green, background: "none", border: "none", cursor: reabriendo ? "default" : "pointer", padding: 0 }}>
+      🔒
+    </button>
   );
 }
 
@@ -421,7 +361,9 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   // Wizard state
   const [actualizarLegs, setActualizarLegs] = useState(false);
   const [pagoDraft,      setPagoDraft]      = useState({});
-  // { [legajo_id]: { monto_haberes, monto_transferencia } }  (monto_transferencia = Monotributo)
+  // { [legajo_id]: { monto_haberes } }: SOLO lo que el usuario cambió en Forma de pago. El reparto por
+  // defecto (blanco del legajo / congelado) lo resuelve `empls`; así el borrador local guarda overrides y
+  // un cambio de blanco en Legajos llega a los pasos 4 y 5 sin descartar nada.
 
   // Add row form (shared between paso 1 & 2)
   const [showAddForm, setShowAddForm] = useState(false);
@@ -501,7 +443,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   // persistido. Al volver a cerrar, solo se escribe este legajo (ver handleConfirmarFormaPago).
   // Los pagos (nb_movimientos) no se tocan: en Sedes matchean por legajo+mes+forma, no por id.
   const [reabriendo, setReabriendo] = useState(false);
-  const handleReabrir = async (legajo_id, legajo_nombre) => {   // la confirmación la maneja ReabrirLock (modal)
+  const handleReabrir = async (legajo_id) => {   // sin confirmación: la pide handleReabrirUno
     setReabriendo(true);
     try {
       const sedeIds = [...new Set(rows.filter(r => r.legajo_id === legajo_id).map(r => r.sede_id ?? ""))];
@@ -520,8 +462,8 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   };
   const handleReabrirUno = async (legajo_id, legajo_nombre) => {
     const ok = await confirm({ title: `🔓 Reabrir liquidación — ${legajo_nombre}`, confirmLabel: "Reabrir", cancelLabel: "Cancelar",
-      message: "Se borra la liquidación cerrada de todas sus sedes de este mes y la fila vuelve a vivo. Los pagos ya registrados no se tocan." });
-    if (ok) await handleReabrir(legajo_id, legajo_nombre);
+      message: "Se borra la liquidación cerrada de todas sus sedes de este mes y la fila vuelve a vivo (se recalcula de BIGG Eye / legajo / novedades). Editá lo que falte y cerrá de nuevo: solo se reescribe este legajo. Los pagos ya registrados no se tocan." });
+    if (ok) await handleReabrir(legajo_id);
   };
 
   const draftKey = `sedesDraft:${pais}:${anio}-${mes}`;
@@ -542,6 +484,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         const d = JSON.parse(raw);
         setEdits(d.edits || {});
         setManualRows(d.manualRows || []);
+        setPagoDraft(d.pagoDraft || {});   // reparto haberes/efectivo del paso 4, sobrevive al F5
         setPaso(deep ? initialPaso : (d.paso || 1));
         return;
       } catch { /* fall through */ }
@@ -554,9 +497,9 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   // Borrador local automático (debounced). La pestaña "vive abierta como un mail".
   useEffect(() => {
     if (loading) return;
-    if (!Object.keys(edits).length && !manualRows.length) return;
+    if (!Object.keys(edits).length && !manualRows.length && !Object.keys(pagoDraft).length) return;
     const t = setTimeout(() => {
-      const payload = JSON.stringify({ edits, manualRows, paso });
+      const payload = JSON.stringify({ edits, manualRows, pagoDraft, paso });
       if (payload === lastDraftRef.current) return;  // nada cambió: no reescribir ni re-renderizar
       try {
         localStorage.setItem(draftKey, payload);
@@ -565,13 +508,14 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       } catch { /* storage lleno o no disponible */ }
     }, 800);
     return () => clearTimeout(t);
-  }, [edits, manualRows, paso, loading, draftKey]);
+  }, [edits, manualRows, pagoDraft, paso, loading, draftKey]);
 
   const discardDraft = () => {
     try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
     lastDraftRef.current = null;
     setEdits({});
     setManualRows([]);
+    setPagoDraft({});
     setDraftSavedAt(null);
   };
 
@@ -868,7 +812,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   // One entry per unique legajo (coaches may have multiple sede-rows).
   // Includes payment distribution fields (monto_haberes etc.) summed from all rows,
   // plus pagos/total_pagado/pendiente for the HQ-style PasoPagos table.
-  const empls = useMemo(() => {
+  const emplsBase = useMemo(() => {
     // Index pagos by legajo_id once — O(pagos) — to avoid O(rows × pagos) filter per row.
     const pagosByLeg = {};
     for (const p of pagos) {
@@ -959,59 +903,34 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         map[ek].novedades.push(...novsR);
       }
     });
-    const arr = Object.values(map)
-      .map(e => {
-        // Cerrada → CONGELADO (línea "pago" del sueldo ya escrita al cerrar + novedades de esa
-        // misma forma, ver _XCong más arriba). Borrador → haberes en VIVO = blanco pactado del
-        // legajo (mismo criterio que ya usaba Efectivo para no mostrar todo en "—" hasta cerrar;
-        // ver Paso 4, donde el blanco por defecto sale de ahí también). Solo si el LEGAJO es de
-        // Sedes: un HQ que dio clases sueltas en una sede tiene rol de fila (tarifa) de Sedes (ej.
-        // HUERGO_B) pero su legajo sigue siendo HQ y ya cobra su blanco allá, no acá — por eso se
-        // mira legajo_rol (rol real del legajo), no el rol de la fila/tarifa.
-        const habVivo      = e.cerrada ? (Number(e._habCong)      || 0) : (ROLES_SEDES_ALL.includes(e.legajo_rol) ? e.blanco_neto : 0);
-        const depositoCong = e.cerrada ? (Number(e._depCong)      || 0) : e.monto_deposito;
-        const transferCong = e.cerrada ? (Number(e._transferCong) || 0) : e.monto_transferencia;
-        // Cerrada → efectivo CONGELADO (lo que se liquidó y hay que pagar en cash). Borrador →
-        // efectivo en vivo = remanente del total. Evita el parcial fantasma por recálculo del roster.
-        const efectivo = e.cerrada
-          ? (Number(e._efCong) || 0)
-          : Math.max(0, e.total - habVivo - e.monto_deposito - e.monto_transferencia);
-        // Cerrada → el pendiente (columna + botón Pagar) se mide contra el total CONGELADO
-        // (baldes de banco + efectivo congelado), no el total del roster en vivo, que deriva y
-        // muestra pendientes fantasma en coaches ya pagados. Borrador → total en vivo.
-        const totalPend = e.cerrada
-          ? (habVivo + depositoCong + transferCong + efectivo)
-          : e.total;
-        return { ...e, monto_haberes: habVivo, monto_deposito: depositoCong, monto_transferencia: transferCong, monto_efectivo: efectivo, pendiente: totalPend - e.total_pagado };
-      });
-    return sortByRol(arr);
+    return sortByRol(Object.values(map));
   }, [rows, legajos, pagos, calcTotal, novsByRowKey]);
 
-  const totalMes = useMemo(() => empls.reduce((s, e) => s + e.total, 0), [empls]);
+  // Reparto en vivo por encima del roster: haberes / efectivo / pendiente que ven Forma de pago y
+  // Pagos y que congela el cierre (única fuente). Aparte de emplsBase para que una tecla en el paso 4
+  // no recalcule el roster entero. El orden no cambia (sortByRol mira el rol).
+  const empls = useMemo(() => emplsBase.map(e => {
+    // Blanco en vivo = el pactado del legajo, solo si el LEGAJO es de Sedes: un HQ que dio clases sueltas
+    // en una sede tiene rol de fila (tarifa) de Sedes (ej. HUERGO_B) pero su legajo sigue siendo HQ y ya
+    // cobra su blanco allá, no acá — por eso se mira legajo_rol, no el rol de la fila. Si en Forma de pago
+    // el usuario repartió otra cosa (pagoDraft), manda eso.
+    const blancoVivo   = ROLES_SEDES_ALL.includes(e.legajo_rol) ? e.blanco_neto : 0;
+    const habVivo      = e.cerrada ? (Number(e._habCong) || 0) : (Number(pagoDraft[e.legajo_id]?.monto_haberes ?? blancoVivo) || 0);
+    const depositoCong = e.cerrada ? (Number(e._depCong)      || 0) : e.monto_deposito;
+    const transferCong = e.cerrada ? (Number(e._transferCong) || 0) : e.monto_transferencia;
+    // Cerrada → efectivo CONGELADO (lo que se liquidó y hay que pagar en cash). Borrador →
+    // efectivo en vivo = remanente del total. Evita el parcial fantasma por recálculo del roster.
+    const efectivo = e.cerrada
+      ? (Number(e._efCong) || 0)
+      : Math.max(0, e.total - habVivo - e.monto_deposito - e.monto_transferencia);
+    // Cerrada → el pendiente (columna + botón Pagar) se mide contra el total CONGELADO
+    // (baldes de banco + efectivo congelado), no el total del roster en vivo, que deriva y
+    // muestra pendientes fantasma en coaches ya pagados. Borrador → total en vivo.
+    const totalPend = e.cerrada ? (habVivo + depositoCong + transferCong + efectivo) : e.total;
+    return { ...e, monto_haberes: habVivo, monto_deposito: depositoCong, monto_transferencia: transferCong, monto_efectivo: efectivo, pendiente: totalPend - e.total_pagado };
+  }), [emplsBase, pagoDraft]);
 
-  // Al entrar a Forma de pago, sembrar la distribución faltante: lo ya guardado
-  // (monto_haberes) o, si no, el neto en blanco del legajo. No pisa ediciones previas.
-  useEffect(() => {
-    if (paso !== 4) return;
-    setPagoDraft(prev => {
-      let changed = false;
-      const next = { ...prev };
-      for (const empl of empls) {
-        if (next[empl.legajo_id]) continue;
-        // El blanco (haberes registrados) solo aplica si el LEGAJO es de Sedes. Un empleado de HQ que
-        // dio clases sueltas cobra ese trabajo acá (cae en efectivo) con rol de fila/tarifa de Sedes
-        // (ej. HUERGO_B), pero su legajo sigue siendo HQ y su blanco YA se paga allá → no sembrarlo
-        // en Sedes o se duplica (su sociedad aparecería de más en el fondeo de banco).
-        const esSedes = ROLES_SEDES_ALL.includes(empl.legajo_rol);
-        next[empl.legajo_id] = {
-          monto_haberes:       empl.monto_haberes       || (esSedes ? empl.blanco_neto : 0) || 0,
-          monto_transferencia: empl.monto_transferencia || 0,  // = Monotributo
-        };
-        changed = true;
-      }
-      return changed ? next : prev;
-    });
-  }, [paso, empls]);
+  const totalMes = useMemo(() => empls.reduce((s, e) => s + e.total, 0), [empls]);
 
   const updateRow = useCallback((_id, key, val) => {
     if (filaCerrada(_id)) return;   // candado: cerrada no se edita sin reabrir
@@ -1121,6 +1040,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   }
 
   // `soloLegajo`: cierra únicamente ese legajo (menú ⋯ del paso Pagos); sin él, todas las abiertas.
+  // Devuelve true si el cierre terminó (o no había nada que cerrar): el botón del paso 4 avanza a Pagos.
   async function handleConfirmarFormaPago({ soloLegajo = null } = {}) {
     if (savingRef.current) return;
     // Sin la lectura de cerradas no sabemos qué hay en la hoja → no cerrar (antes borraba a ciegas).
@@ -1141,8 +1061,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       alert(`No se cierran (tienen la liquidación cerrada en otra sede este mes — reabrilas 🔒 para incluir la sede nueva):\n• ${mixtos.join("\n• ")}`);
     if (!rowsAbiertas.length) {
       if (!mixtos.length) alert(soloLegajo ? "Ese legajo ya tiene la liquidación cerrada este mes." : "Todas las liquidaciones de este mes ya están cerradas. Para modificar una, reabrí ese legajo (🔒).");
-      if (!soloLegajo) setPaso(5);
-      return;
+      return true;
     }
     savingRef.current = true;
     setSaving(true);
@@ -1183,8 +1102,9 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       // total de la casa, el excedente derrama a las otras sedes por total desc (no debería pasar: el
       // coach siempre genera lo más grande en su sede casa). Monotributo se sacó del flujo de Sedes.
       const habByKey = {};
+      const habPorLegajo = new Map(empls.map(e => [e.legajo_id, e.monto_haberes]));   // mismo reparto que ven los pasos 4 y 5
       for (const [lid, rs] of Object.entries(rowsByLegajo)) {
-        const blanco = Number((pagoDraft[lid] || {}).monto_haberes) || 0;
+        const blanco = Number(habPorLegajo.get(lid)) || 0;
         const homeSede = sedeDeLegajo.get(String(lid)) || "";
         const casa = rs.find(o => String(o.r.sede_id) === homeSede)
           || rs.reduce((a, b) => (b.tot > a.tot ? b : a), rs[0]);
@@ -1237,7 +1157,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       // Un solo add_batch para todas las liquidaciones nuevas/reabiertas.
       await saveLiquidacionesLinesBatch(entries);
       await refreshLiqs();   // refresh liviano (no bloquea la pantalla)
-      if (!soloLegajo) setPaso(5);
+      return true;
     } catch (e) {
       alert("Error al guardar: " + e.message);
     } finally {
@@ -1426,9 +1346,9 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
               }
               onAtras={() => setPaso(3)}
               onContinuar={() => setPaso(5)}
-              onSiguiente={handleConfirmarFormaPago}
+              onSiguiente={async () => { if (await handleConfirmarFormaPago()) setPaso(5); }}
               saving={saving}
-              onReabrir={handleReabrir}
+              onReabrir={handleReabrirUno}
               reabriendo={reabriendo}
             />
           )}
@@ -1441,10 +1361,9 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
               onAtras={() => setPaso(4)}
               onRegistrarPago={setShowPago}
               onBatchPaid={() => refreshLiqs()}
-              onReabrir={handleReabrir}
+              onReabrir={handleReabrirUno}
               reabriendo={reabriendo}
               onCerrarUno={handleCerrarUno}
-              onReabrirUno={handleReabrirUno}
               saving={saving}
               onPagarHaberes={() => setShowPagoHaberes(true)}
             />
@@ -2243,8 +2162,8 @@ function PasoFormaPago({ empls, pagoDraft, onChangePago, onAtras, onContinuar, o
           </thead>
           <tbody>
             {emplsFilt.map((empl, i) => {
-              const d    = pagoDraft[empl.legajo_id] || {};
-              const hab  = Number(d.monto_haberes)       || 0;
+              const habTxt = pagoDraft[empl.legajo_id]?.monto_haberes ?? empl.monto_haberes;   // override del usuario o reparto en vivo
+              const hab  = Number(habTxt) || 0;
               // Haberes es el reparto en blanco del SUELDO (input). El Efectivo es el remanente del
               // TOTAL (incluye las novedades): así las columnas suman el total mostrado y la novedad
               // (que se paga en su forma, normalmente efectivo) no queda fuera del reparto.
@@ -2264,7 +2183,7 @@ function PasoFormaPago({ empls, pagoDraft, onChangePago, onAtras, onContinuar, o
                     {fmtMoney(empl.total)}
                   </td>
                   <td style={{ padding: "4px 8px", textAlign: "right" }}>
-                    <input style={{ ...MON(), ...(empl.cerrada ? LOCKED : {}) }} value={d.monto_haberes ?? ""} placeholder="0"
+                    <input style={{ ...MON(), ...(empl.cerrada ? LOCKED : {}) }} value={habTxt ?? ""} placeholder="0"
                       disabled={empl.cerrada} title={empl.cerrada ? "Cerrada — reabrí (🔒) para cambiar el blanco" : undefined}
                       onChange={e => onChangePago(empl.legajo_id, "monto_haberes", parseFloat(e.target.value) || 0)} />
                   </td>
@@ -2388,9 +2307,8 @@ function isPaid(empl, tipo) {
 function statsDesdePagoDraft(empls, pagoDraft) {
   const s = { haberes: { total: 0, pagado: 0 }, monotributo: { total: 0, pagado: 0 }, efectivo: { total: 0, pagado: 0 }, bancoPorSociedad: {} };
   for (const empl of empls) {
-    const d    = pagoDraft[empl.legajo_id] || {};
-    const hab  = Number(d.monto_haberes)       || 0;
-    const mono = Number(d.monto_transferencia) || 0;
+    const hab  = Number(pagoDraft[empl.legajo_id]?.monto_haberes ?? empl.monto_haberes) || 0;
+    const mono = Number(empl.monto_transferencia) || 0;
     // Cerrada → efectivo CONGELADO (empl.monto_efectivo, ya = lo liquidado). Borrador → remanente
     // en vivo redondeado. Así una liq cerrada no muestra pendiente fantasma por recálculo del roster.
     const eft  = empl.cerrada
@@ -2479,7 +2397,7 @@ function FondeoBand({ stats }) {
 
 // ── Componente PasoPagos ──────────────────────────────────────────────────────
 
-function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, onReabrir, reabriendo, onCerrarUno, onReabrirUno, saving, onPagarHaberes }) {
+function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, onReabrir, reabriendo, onCerrarUno, saving, onPagarHaberes }) {
   const [batchModal,  setBatchModal]  = useState(null);
   const [anularModal, setAnularModal] = useState(null);
 
@@ -2510,6 +2428,22 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, on
     (!fNombre || (e.legajo_nombre || "").toLowerCase().includes(fNombre.toLowerCase())) &&
     (fSede.size === 0 || (e.sedes || []).some(s => fSede.has(s)))
   ), [empls, fNombre, fSede]);
+
+  // Menú ⋯ de cada fila: siempre las tres acciones; las que no aplican al estado van en gris con el
+  // motivo. "Adelantar" = pagar en un mes sin nada cargado (appendPago no exige liquidación: queda como
+  // activo hasta que se cierre el mes real).
+  const accionesDe = (empl) => [
+    { label: empl.total === 0 ? "💰 Adelantar" : "💳 Pagar",
+      disabled: empl.total > 0 && empl.pendiente <= 0,
+      hint: empl.total === 0 ? "Todavía no hay nada cargado este mes: registra un adelanto a cuenta" : empl.pendiente <= 0 ? "Nada pendiente de pago" : undefined,
+      onClick: () => onRegistrarPago(empl.legajo_id) },
+    { label: "🔒 Cerrar", disabled: empl.cerrada || saving,
+      hint: empl.cerrada ? "Ya está cerrada" : "Cierra solo este legajo con el reparto de Forma de pago",
+      onClick: () => onCerrarUno(empl.legajo_id, empl.legajo_nombre) },
+    { label: "🔓 Reabrir", disabled: !empl.cerrada || reabriendo,
+      hint: empl.cerrada ? "Borra la liquidación cerrada de este legajo; vuelve a vivo" : "No está cerrada",
+      onClick: () => onReabrir(empl.legajo_id, empl.legajo_nombre) },
+  ];
 
   return (
     <div>
@@ -2576,7 +2510,10 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, on
                 {TIPOS_PAGO.map(({ id, color }) => {
                   const monto = getMontoTipo(empl, id);
                   const pagos = getPagosTipo(empl, id);
-                  if (!monto) return (
+                  // Sin monto esperado Y sin pagos → guion. Si hay un pago en una forma que no espera nada
+                  // (ej. haberes pagados y la fila con todo en efectivo), cae al render normal y se ve en
+                  // rojo como sobrepagado: la plata no se esconde.
+                  if (!monto && !pagos.length) return (
                     <td key={id} style={TD({ textAlign: "right" })}>
                       <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
                         <span style={{ color: T.dim }}>—</span>
@@ -2623,18 +2560,7 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, on
                   {fmtMoney(empl.pendiente)}
                 </td>
                 <td style={TD({ whiteSpace: "nowrap", textAlign: "right" })}>
-                  {/* ✓ = nada pendiente. El menú ⋯ junta las acciones por legajo: pagar (o adelantar si
-                      todavía no hay nada cargado: appendPago no exige liquidación, queda como activo hasta
-                      que se cierre el mes real), cerrar solo este legajo, o reabrirlo. */}
-                  {empl.pendiente <= 0 && empl.total > 0 && <span style={{ fontSize: 12, color: T.green, fontWeight: 600, marginRight: 6 }}>✓</span>}
-                  {/* Siempre las tres opciones; las que no aplican al estado de la liquidación van en gris. */}
-                  <MenuAcciones items={[
-                    empl.total === 0
-                      ? { label: "💰 Adelantar", hint: "Todavía no hay nada cargado este mes: registra un adelanto a cuenta", onClick: () => onRegistrarPago(empl.legajo_id) }
-                      : { label: "💳 Pagar", disabled: empl.pendiente <= 0, hint: empl.pendiente <= 0 ? "Nada pendiente de pago" : undefined, onClick: () => onRegistrarPago(empl.legajo_id) },
-                    { label: "🔒 Cerrar", disabled: empl.cerrada || saving, hint: empl.cerrada ? "Ya está cerrada" : "Cierra solo este legajo con el reparto de Forma de pago", onClick: () => onCerrarUno(empl.legajo_id, empl.legajo_nombre) },
-                    { label: "🔓 Reabrir", disabled: !empl.cerrada || reabriendo, hint: empl.cerrada ? "Borra la liquidación cerrada de este legajo; vuelve a vivo" : "No está cerrada", onClick: () => onReabrirUno(empl.legajo_id, empl.legajo_nombre) },
-                  ]} />
+                  <RowMenu align="right" label="⋯" items={accionesDe(empl)} />
                 </td>
               </tr>
             ))}

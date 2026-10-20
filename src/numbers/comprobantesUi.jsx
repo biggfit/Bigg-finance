@@ -26,17 +26,20 @@ export function matchBusqueda(doc, busqueda, partyKey) {
 }
 
 // ─── Dropdown de acciones por fila ────────────────────────────────────────────
-// items: [{ label, onClick, color? } | "divider" | falsy]. Los falsy se saltan (acciones condicionales).
-export function RowMenu({ items }) {
+// items: [{ label, onClick, color?, disabled?, hint? } | "divider" | falsy]. Los falsy se saltan (acciones
+// condicionales); `disabled` deja la opción en gris con `hint` como tooltip (motivo). `align="right"`
+// pega el menú al borde derecho del botón (última columna de una tabla); `label` cambia el glifo.
+export function RowMenu({ items, align = "left", label = "▾" }) {
   const [open, setOpen] = useState(false);
-  const [pos,  setPos]  = useState({ top:0, left:0 });
+  const [pos,  setPos]  = useState({ top:0 });
   const btnRef  = useRef(null);
   const menuRef = useRef(null);
+  const horizontal = (r) => (align === "right" ? { right: window.innerWidth - r.right } : { left: r.left });
 
   const handleToggle = () => {
     if (!open && btnRef.current) {
       const r = btnRef.current.getBoundingClientRect();
-      setPos({ top: r.bottom + 4, left: r.left });
+      setPos({ top: r.bottom + 4, ...horizontal(r) });
     }
     setOpen(o => !o);
   };
@@ -47,9 +50,9 @@ export function RowMenu({ items }) {
     const menu = menuRef.current.getBoundingClientRect();
     if (menu.bottom > window.innerHeight - 8) {
       const b = btnRef.current.getBoundingClientRect();
-      setPos({ top: b.top - menu.height - 4, left: b.left });
+      setPos({ top: b.top - menu.height - 4, ...horizontal(b) });
     }
-  }, [open]);
+  }, [open]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!open) return;
@@ -70,11 +73,11 @@ export function RowMenu({ items }) {
         border:`1px solid ${T.cardBorder}`, borderRadius:6,
         padding:"3px 8px", cursor:"pointer", fontSize:12, color:T.muted,
         fontFamily:T.font, lineHeight:1,
-      }}>▾</button>
+      }}>{label}</button>
 
       {open && (
         <div ref={menuRef} style={{
-          position:"fixed", top:pos.top, left:pos.left, zIndex:9999,
+          position:"fixed", top:pos.top, left:pos.left, right:pos.right, zIndex:9999,
           background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:8,
           boxShadow:"0 8px 24px rgba(0,0,0,.15)", minWidth:170, overflow:"hidden",
         }}>
@@ -82,12 +85,13 @@ export function RowMenu({ items }) {
             if (!it) return null;
             if (it === "divider") return <div key={`d${i}`} style={{ height:1, background:T.cardBorder, margin:"3px 0" }} />;
             return (
-              <button key={it.label} onClick={() => { it.onClick(); setOpen(false); }} style={{
+              <button key={it.label} disabled={it.disabled} title={it.hint}
+                onClick={() => { it.onClick(); setOpen(false); }} style={{
                 display:"block", width:"100%", textAlign:"left", padding:"8px 14px",
-                background:"transparent", border:"none", fontSize:13, color: it.color ?? T.text,
-                cursor:"pointer", fontFamily:T.font,
+                background:"transparent", border:"none", fontSize:13, color: it.disabled ? T.dim : (it.color ?? T.text),
+                cursor: it.disabled ? "default" : "pointer", fontFamily:T.font,
               }}
-              onMouseEnter={e => e.currentTarget.style.background="#f3f4f6"}
+              onMouseEnter={e => { if (!it.disabled) e.currentTarget.style.background="#f3f4f6"; }}
               onMouseLeave={e => e.currentTarget.style.background="transparent"}>
                 {it.label}
               </button>
