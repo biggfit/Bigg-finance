@@ -521,7 +521,10 @@ export function PaginaAging({ item, fechaCorte, headerColor, onBack }) {
   // Toggle Aging ↔ Movimientos: si el item trae un ledger (ej. financiaciones), se puede ver el extracto
   // de la cuenta de pasivo (apertura + cuotas por fecha con saldo corriente), como en un banco.
   const hayLedger = !!(item.ledger && ((item.ledger.entries?.length) || item.ledger.opening));
-  const [verLedger, setVerLedger] = useState(false);
+  // Tarjeta de crédito: es un saldo corriente, no facturas con vencimiento → abre en el extracto y no ofrece
+  // el aging (agrupaba consumos ya pagados por comercio y los bucketizaba por fecha de compra).
+  const soloLedger = !!item.esTarjeta && hayLedger;
+  const [verLedger, setVerLedger] = useState(soloLedger);
 
   const grouped = {};
   for (const doc of (item.docs ?? [])) {
@@ -575,12 +578,12 @@ export function PaginaAging({ item, fechaCorte, headerColor, onBack }) {
             {item.label}
           </h1>
           <div style={{ fontSize:12, color:T.muted, marginTop:2 }}>
-            {item.ccGrupo ? "Cuenta corriente · por fecha" : `Detalle por ${contraparteLabel.toLowerCase()}`}
+            {item.ccGrupo ? "Cuenta corriente · por fecha" : soloLedger ? "Extracto · saldo corriente" : `Detalle por ${contraparteLabel.toLowerCase()}`}
             {fechaCorte && <span style={{ marginLeft:8 }}>· Al {fmtDate(fechaCorte)}</span>}
           </div>
         </div>
         <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:16 }}>
-          {hayLedger && (
+          {hayLedger && !soloLedger && (
             <button onClick={() => setVerLedger(v => !v)}
               style={{ background: verLedger ? headerColor : "#f3f4f6", border:`1px solid ${verLedger ? headerColor : T.cardBorder}`,
                 borderRadius:8, padding:"7px 14px", fontSize:12.5, fontWeight:800,

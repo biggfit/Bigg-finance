@@ -4,7 +4,7 @@
 // La usan PantallaTesoreria (una sociedad, datos ya scopeados) y el tab consolidado
 // de Reportes (loop por sociedad sobre datasets de todas). Sin React, sin I/O.
 import {
-  calcSaldoNeto, esCuentaCredito, esIgnorado,
+  calcSaldoNeto, esCuentaCredito, esIgnorado, metaVal,
   financiacionPasivoBuckets, financiacionLedger, remanenteCuota, agruparAnticipos, anticipoPasivo, sociosSaldos, lecturaInterco,
 } from "../lib/numbersApi";
 import { parsePagoFromMov, normSoc, pendienteSueldosPorLegajo, adelantoSueldosPorLegajo } from "../lib/sueldosApi";
@@ -66,6 +66,41 @@ function resolveCuenta(cuentaById, cuentaByNombre, id, nombre) {
     || cuentaByNombre.get(_norm(id))
     || cuentaByNombre.get(_norm(nombre))
     || null;
+}
+
+/**
+ * Extracto de una cuenta-tarjeta: movimientos por fecha con saldo corriente, en el formato que PaginaAging ya
+ * dibuja para Planes de pago ({ opening, entries:[{fecha, concepto, sub, delta, saldo, pend}], final }).
+ * Signo: la DEUDA es positiva (consumo +, pago −), como en el ledger de financiaciones. Con `aFavor` (la tarjeta
+ * quedó con saldo positivo) se invierte para que el extracto muestre el crédito a favor.
+ * No hay saldo de apertura aparte: la deuda inicial de la tarjeta entró como un movimiento más.
+ */
+export function tarjetaLedger(movsCard = [], { aFavor = false } = {}) {
+  const sgn = aFavor ? 1 : -1;
+  const tipoDe = (m) => {
+    if (m.tipo === "PAGO_TARJETA") return "Pago de tarjeta";
+    if (m.tipo === "CAMBIO")       return "Cambio de moneda";
+    if (m.tipo === "SALDO_INICIAL") return "Saldo inicial";
+    if (m.origen === "tarjeta") {
+      if (metaVal(m.referencia, "ajuste") === "1") return "Ajuste";   // diferencia vs. Total a Pagar / exceso de pago
+      return m.documento_id ? "Consumo" : "Consumo · pendiente de autorizar";
+    }
+    if (m.tipo === "PAGO")         return "Factura pagada con tarjeta";
+    return Number(m.monto) > 0 ? "Crédito" : "Cargo";
+  };
+  const entries = [...movsCard]
+    .sort((a, b) => String(a.fecha ?? "").localeCompare(String(b.fecha ?? "")))
+    .map(m => {
+      const per = metaVal(m.referencia, "per");
+      const tipo = tipoDe(m);
+      const sub = [tipo !== m.concepto ? tipo : "", per ? `resumen ${per}` : "", m.contraparte_nombre && m.contraparte_nombre !== m.concepto ? m.contraparte_nombre : ""]
+        .filter(Boolean).join(" · ");
+      return { fecha: String(m.fecha ?? "").slice(0, 10), concepto: m.concepto || tipo, sub,
+        delta: sgn * (Number(m.monto) || 0), pend: m.origen === "tarjeta" && !m.documento_id };
+    });
+  let saldo = 0;
+  for (const e of entries) { saldo += e.delta; e.saldo = saldo; }
+  return { opening: 0, entries, final: saldo };
 }
 
 /**
@@ -351,15 +386,21 @@ export function derivarSaldos({
   })();
 
   // ── Deuda de tarjetas (saldo negativo de las cuentas-tarjeta) ──
-  const tarjetasPasivo = cuentas.filter(c => esCuentaCredito(c) && (Number(c.saldo) || 0) < 0)
+  // La tarjeta NO es un proveedor: no tiene facturas con vencimiento, tiene un saldo corriente (consumos suben la
+  // deuda, pagos la bajan). Su detalle es un EXTRACTO (ledger, mismo formato que Planes de pago), no un aging: el
+  // aging por "contraparte = comercio / vto = fecha del consumo" mostraba consumos ya pagados como deuda vencida.
+  // Tolerancia 0,005 como en el lado activo: una tarjeta pagada quedaba en el Pasivo con "U$D 0" por centavos.
+  const movsTarjeta = (c) => movimientos.filter(m => m.cuenta_bancaria === c.id && !esIgnorado(m)
+    && (!corte || (m.fecha ?? "") <= corte));
+  const tarjetasPasivo = cuentas.filter(c => esCuentaCredito(c) && (Number(c.saldo) || 0) < -0.005)
     .map(c => {
-      const movsCard = movimientos.filter(m => m.cuenta_bancaria === c.id && !esIgnorado(m)
-        && (!corte || (m.fecha ?? "") <= corte));
+      const movsCard = movsTarjeta(c);
       const docs = movsCard.map(m => ({
         contraparte: m.concepto || (Number(m.monto) < 0 ? "Consumo" : "Pago"),
         vto: m.fecha, saldo: -(Number(m.monto) || 0), moneda: c.moneda,
       }));
-      return { label: c.nombre, moneda: c.moneda, saldo: -(Number(c.saldo) || 0), docs, headerColor: "#dc2626", esTarjeta: true };
+      return { label: c.nombre, moneda: c.moneda, saldo: -(Number(c.saldo) || 0), docs,
+        ledger: tarjetaLedger(movsCard), headerColor: "#dc2626", esTarjeta: true };
     });
 
   // ── Saldo A FAVOR de tarjetas (saldo positivo: se pagó de más / crédito del banco) → ACTIVO ──
@@ -368,13 +409,13 @@ export function derivarSaldos({
   // gasto el exceso chico al pagar; esto cubre cualquier otro caso y mantiene el PN honesto.)
   const tarjetasActivo = cuentas.filter(c => esCuentaCredito(c) && (Number(c.saldo) || 0) > 0.005)
     .map(c => {
-      const movsCard = movimientos.filter(m => m.cuenta_bancaria === c.id && !esIgnorado(m)
-        && (!corte || (m.fecha ?? "") <= corte));
+      const movsCard = movsTarjeta(c);
       const docs = movsCard.map(m => ({
         contraparte: m.concepto || (Number(m.monto) < 0 ? "Consumo" : "Pago"),
         vto: m.fecha, saldo: (Number(m.monto) || 0), moneda: c.moneda,
       }));
-      return { label: `Saldo a favor · ${c.nombre}`, moneda: c.moneda, saldo: (Number(c.saldo) || 0), docs, headerColor: "#16a34a", esTarjeta: true };
+      return { label: `Saldo a favor · ${c.nombre}`, moneda: c.moneda, saldo: (Number(c.saldo) || 0), docs,
+        ledger: tarjetaLedger(movsCard, { aFavor: true }), headerColor: "#16a34a", esTarjeta: true };
     });
   if (tarjetasActivo.length) { aCobrar.push(...tarjetasActivo); aCobrar.sort(franqFirst); }
   if (pagosACuentaAct.length) { aCobrar.push(...pagosACuentaAct); aCobrar.sort(franqFirst); }

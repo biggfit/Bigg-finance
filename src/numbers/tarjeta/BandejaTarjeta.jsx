@@ -8,6 +8,7 @@ import {
 import { fetchLegajos } from "../../lib/sueldosApi";
 import { parseResumenes } from "../parsers/resumenTarjeta";
 import { ccActivos } from "../formUtils";
+import { baseTarjeta, periodoDe } from "./tarjetaDerive";
 
 // ── Helpers de prefill (mismo criterio que la pantalla Resumen TC) ──────────────
 const num = v => Number(v) || 0;
@@ -16,8 +17,6 @@ const normCom = s => String(s || "").toUpperCase().replace(/\s+/g, " ").trim();
 const normNom = s => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
 const overlapNom = (a, b) => { const wb = new Set(b.split(" ").filter(w => w.length > 2)); return a.split(" ").filter(w => w.length > 2 && wb.has(w)).length; };
 const nameScore = (a, b) => a === b ? 4 : (a.includes(b) || b.includes(a)) ? 2 : overlapNom(a, b) >= 2 ? 1.5 : 0;
-// Nombre base de una tarjeta (sin token de moneda) para emparejar sus cuentas ARS/USD.
-const baseTarjeta = s => String(s || "").replace(/\b(ARS|USD|EUR)\b|\$|u\$d|us\$/gi, "").replace(/\s+/g, " ").trim();
 
 const cell = { width: "100%", background: "#fff", border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "5px 7px", fontSize: 12, color: T.text, fontFamily: T.font, outline: "none", boxSizing: "border-box" };
 // Campo imputado (mismo criterio que Banco): VERDE si está completo, ÁMBAR si falta.
@@ -29,10 +28,12 @@ const money = (n, mon) => n ? `${mon === "USD" ? "U$D" : "$"} ${Math.abs(n).toLo
 // (un ajuste-crédito puede dejar el neto de un grupo o el total general por debajo de cero).
 const moneySigned = (n, mon) => n ? `${n < 0 ? "-" : ""}${money(n, mon)}` : "—";
 
-// Mundo Tarjeta de Conciliaciones: el resumen es "un extracto más". Se sube el PDF, cada consumo
-// entra como PENDIENTE (nb_movimientos, origen "tarjeta") con su propuesta ya puesta, y se van
-// AUTORIZANDO uno por uno (→ gasto contra la cuenta-tarjeta). Reusa el motor de conciliación.
-export default function MundoTarjeta({ sociedad }) {
+// Bandeja de la tarjeta (ex Conciliaciones › Tarjeta, hoy dentro de Egresos › Tarjeta de crédito): el resumen es
+// "un extracto más". Se sube el PDF, cada consumo entra como PENDIENTE (nb_movimientos, origen "tarjeta") con su
+// propuesta ya puesta, y se van AUTORIZANDO uno por uno (→ gasto contra la cuenta-tarjeta). Reusa el motor de
+// conciliación. La tarjeta elegida (`tarjetaId`) y el período a mostrar (`periodo`, "" = todos) vienen de la
+// pantalla padre; `onChanged` le avisa cuando algo cambió en la hoja (ingesta, autorizar, ignorar).
+export default function BandejaTarjeta({ sociedad, tarjetaId = "", periodo = "", onChanged }) {
   const [cuentasBanc, setCuentasBanc] = useState([]);
   const [cuentas, setCuentas]   = useState([]);   // plan de cuentas contables
   const [centros, setCentros]   = useState([]);
@@ -42,7 +43,6 @@ export default function MundoTarjeta({ sociedad }) {
   const [pendientes, setPend]   = useState([]);
   const [reglas, setReglas]     = useState([]);       // nb_banco_reglas (usamos las match_tipo="comercio")
   const [edits, setEdits]       = useState({});       // { movId: { cuenta_contable, centro_costo } }
-  const [tarjetaId, setTarjetaId] = useState("");
   const [pdfMsg, setPdfMsg]     = useState("");
   const [cuadre, setCuadre]     = useState(null);   // { faltaARS, faltaUSD, totalARS, totalUSD } si el PDF trae TOTAL A PAGAR
   const [busy, setBusy]         = useState(false);
@@ -62,11 +62,6 @@ export default function MundoTarjeta({ sociedad }) {
   // Tarjetas = cuentas bancarias tipo "tarjeta" de la sociedad.
   const tarjetas = useMemo(() => cuentasBanc.filter(c =>
     esCuentaCredito(c) && (c.sociedad ?? "").toLowerCase() === (sociedad ?? "").toLowerCase()), [cuentasBanc, sociedad]);
-  const tarjetaFamilias = useMemo(() => {
-    const seen = new Map();
-    for (const c of tarjetas) { const b = baseTarjeta(c.nombre) || c.nombre; if (!seen.has(b)) seen.set(b, { id: c.id, nombre: b }); }
-    return [...seen.values()];
-  }, [tarjetas]);
   const tarjetaIds = useMemo(() => new Set(tarjetas.map(c => c.id)), [tarjetas]);
   const tarjetaSel = tarjetas.find(c => c.id === tarjetaId);
 
@@ -92,8 +87,9 @@ export default function MundoTarjeta({ sociedad }) {
     return reglasComercio.find(r => c === r.valor || c.startsWith(r.valor) || c.includes(r.valor)) || null;
   };
 
-  const recargarPend = () =>
-    fetchPendientesTarjeta(sociedad).then(p => setPend(Array.isArray(p) ? p : [])).finally(() => setLoading(false));
+  // `notify`: avisar a la pantalla padre que la hoja cambió (no en la carga inicial).
+  const recargarPend = (notify = false) =>
+    fetchPendientesTarjeta(sociedad).then(p => { setPend(Array.isArray(p) ? p : []); if (notify) onChanged?.(); }).finally(() => setLoading(false));
 
   useEffect(() => { setLoading(true); recargarPend(); /* eslint-disable-next-line */ }, [sociedad]);
 
@@ -215,7 +211,7 @@ export default function MundoTarjeta({ sociedad }) {
       }
 
       const res = await ingestarResumenTarjeta({ sociedad, tarjeta: tarjetaSel?.nombre || "", periodo, fecha, lineas: rutear });
-      await recargarPend();
+      await recargarPend(true);
       const ajusteTxt = ajustes.map(a => a.sinCuenta
         ? `⚠️ diferencia de ${money(Math.abs(a.dif), a.mon)} sin cuenta-tarjeta ${a.mon} para ajustarla`
         : `+ ajuste de ${money(Math.abs(a.dif), a.mon)} (${a.dif > 0 ? "crédito" : "cargo"}) contra el Total a Pagar`
@@ -285,7 +281,7 @@ export default function MundoTarjeta({ sociedad }) {
     setBusy(true);
     try {
       await aceptarMovimiento(m, { cuenta_contable: cuentaDe(m), centro_costo: centroDe(m) });
-      await recargarPend();
+      await recargarPend(true);
     } catch (e) { alert("No se pudo autorizar: " + (e?.message || e)); }
     setBusy(false);
   }
@@ -293,7 +289,7 @@ export default function MundoTarjeta({ sociedad }) {
     if (confirmIgnorarId !== m.id) { setConfirmIgnorarId(m.id); return; }   // 1er click: armar
     setConfirmIgnorarId(null);
     setBusy(true);
-    try { await ignorarMovimiento(m, "tarjeta"); await recargarPend(); }
+    try { await ignorarMovimiento(m, "tarjeta"); await recargarPend(true); }
     catch (e) { alert("No se pudo ignorar: " + (e?.message || e)); }
     setBusy(false);
   }
@@ -313,7 +309,7 @@ export default function MundoTarjeta({ sociedad }) {
       catch (e) { fallaron.push(`${comercioDe(m)} (${e?.message || e})`); }
       setProg({ done: done + fallaron.length, total: listas.length });
     }
-    try { await recargarPend(); } catch { /* la bandeja se recarga al volver a entrar */ }
+    try { await recargarPend(true); } catch { /* la bandeja se recarga al volver a entrar */ }
     setPdfMsg(fallaron.length
       ? `⚠️ Se autorizaron ${done} de ${listas.length}. Fallaron ${fallaron.length}: ${fallaron.slice(0, 3).join(" · ")}${fallaron.length > 3 ? "…" : ""}. Volvé a darle "Autorizar todas" para reintentar solo esas.`
       : `✓ ${done} consumo(s) autorizados.`);
@@ -322,7 +318,9 @@ export default function MundoTarjeta({ sociedad }) {
 
   // Filtro por cuenta → autorizar de a lotes (ej. todas las de "Representación").
   const cuentasBandeja = useMemo(() => [...new Set(pendientes.map(cuentaDe).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [pendientes, edits]);
-  const pendFiltrados = useMemo(() => pendientes.filter(m => !filtroCuenta || cuentaDe(m) === filtroCuenta), [pendientes, filtroCuenta, edits]);
+  // Período abierto en la pantalla padre → solo sus pendientes (sin período: todos).
+  const pendPeriodo   = useMemo(() => pendientes.filter(m => !periodo || periodoDe(m) === periodo), [pendientes, periodo]);
+  const pendFiltrados = useMemo(() => pendPeriodo.filter(m => !filtroCuenta || cuentaDe(m) === filtroCuenta), [pendPeriodo, filtroCuenta, edits]);
 
   // Cortes por titular (como el resumen): cada grupo con su subtotal en pesos y dólares.
   const gruposTit = useMemo(() => {
@@ -354,24 +352,7 @@ export default function MundoTarjeta({ sociedad }) {
 
   return (
     <div className="fade" style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
-      {/* Header: título + control de carga en una sola línea (mismo layout que Banco) */}
-      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
-        <h2 style={{ fontSize: 20, fontWeight: 900, color: T.text, margin: 0 }}>
-          Conciliaciones <span style={{ fontSize: 13, fontWeight: 700, color: T.muted }}>· Tarjeta</span>
-        </h2>
-        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <select value={tarjetaId} onChange={e => setTarjetaId(e.target.value)} style={{ ...cell, width: 210, background: "#fff" }}>
-            <option value="">{tarjetaFamilias.length ? "— elegí la tarjeta —" : "(sin tarjetas)"}</option>
-            {tarjetaFamilias.map(f => <option key={f.id} value={f.id}>{f.nombre}</option>)}
-          </select>
-          <label style={{ background: tarjetaId && !busy ? T.accentDark : "#cbd5e1", color: tarjetaId && !busy ? T.accent : "#fff", borderRadius: 999, padding: "8px 16px", fontSize: 12.5, fontWeight: 700, cursor: tarjetaId && !busy ? "pointer" : "default", fontFamily: T.font, whiteSpace: "nowrap" }}>
-            {busy ? "Procesando…" : "⬆ Subir resumen"}
-            {/* multiple: Amex emite un PDF por titular → los del ciclo se suben juntos y se mergean. */}
-            <input type="file" accept=".pdf" multiple disabled={!tarjetaId || busy} style={{ display: "none" }} onChange={e => { onPdf(e.target.files); e.target.value = ""; }} />
-          </label>
-        </div>
-      </div>
-      {pdfMsg && <div style={{ fontSize: 11.5, marginBottom: 10, textAlign: "right", color: pdfMsg.startsWith("✓") ? T.green : (pdfMsg.startsWith("Error") || pdfMsg.startsWith("No pude")) ? T.red : T.muted }}>{pdfMsg}</div>}
+      {pdfMsg && <div style={{ fontSize: 11.5, marginBottom: 10, color: pdfMsg.startsWith("✓") ? T.green : (pdfMsg.startsWith("Error") || pdfMsg.startsWith("No pude")) ? T.red : T.muted }}>{pdfMsg}</div>}
 
       {/* Cuadre por titular vs los subtotales del PDF: si no cuadra, el lector se comió renglones */}
       {cuadre && (
@@ -385,10 +366,10 @@ export default function MundoTarjeta({ sociedad }) {
         </div>
       )}
 
-      {/* Bandeja */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+      {/* Bandeja: contador + filtro por cuenta + autorizar en lote + carga del PDF */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
         <span style={{ fontSize: 12, color: T.muted }}>
-          {pendientes.length} consumo(s) sin autorizar{filtroCuenta ? ` · ${pendFiltrados.length} de "${filtroCuenta}"` : ""}
+          {pendPeriodo.length} consumo(s) sin autorizar{filtroCuenta ? ` · ${pendFiltrados.length} de "${filtroCuenta}"` : ""}
         </span>
         {cuentasBandeja.length > 0 && (
           <select value={filtroCuenta} onChange={e => setFiltroCuenta(e.target.value)} style={{ ...cell, width: 210 }} title="Filtrar por cuenta para autorizar de a lotes">
@@ -396,9 +377,15 @@ export default function MundoTarjeta({ sociedad }) {
             {cuentasBandeja.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
         )}
+        <label style={{ marginLeft: "auto", background: tarjetaId && !busy ? T.accentDark : "#cbd5e1", color: tarjetaId && !busy ? T.accent : "#fff", borderRadius: 999, padding: "8px 16px", fontSize: 12.5, fontWeight: 700, cursor: tarjetaId && !busy ? "pointer" : "default", fontFamily: T.font, whiteSpace: "nowrap" }}
+          title={tarjetaId ? "Subir el PDF del resumen (Amex: los de todos los titulares juntos)" : "Elegí primero la tarjeta"}>
+          {busy ? "Procesando…" : "⬆ Subir resumen"}
+          {/* multiple: Amex emite un PDF por titular → los del ciclo se suben juntos y se mergean. */}
+          <input type="file" accept=".pdf" multiple disabled={!tarjetaId || busy} style={{ display: "none" }} onChange={e => { onPdf(e.target.files); e.target.value = ""; }} />
+        </label>
         {listasCount > 0 && (
           <button onClick={autorizarTodas} disabled={busy}
-            style={{ marginLeft: "auto", background: T.accent, border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 12.5, fontWeight: 800, color: "#000", cursor: busy ? "default" : "pointer", fontFamily: T.font, opacity: busy ? .6 : 1 }}>
+            style={{ background: T.accent, border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 12.5, fontWeight: 800, color: "#000", cursor: busy ? "default" : "pointer", fontFamily: T.font, opacity: busy ? .6 : 1 }}>
             {prog ? `Autorizando… ${prog.done}/${prog.total}` : `✓ Autorizar ${listasCount} completa${listasCount > 1 ? "s" : ""}`}
           </button>
         )}
@@ -416,8 +403,8 @@ export default function MundoTarjeta({ sociedad }) {
 
       {loading ? (
         <div style={{ color: T.muted, fontSize: 13, padding: "24px 4px" }}>Cargando…</div>
-      ) : pendientes.length === 0 ? (
-        <div style={{ color: T.muted, fontSize: 13, padding: "24px 4px" }}>No hay consumos pendientes. Elegí una tarjeta y subí el resumen.</div>
+      ) : pendPeriodo.length === 0 ? (
+        <div style={{ color: T.muted, fontSize: 13, padding: "24px 4px" }}>{periodo ? "No hay consumos pendientes de este período." : "No hay consumos pendientes. Subí el resumen para cargar los del próximo período."}</div>
       ) : (
         <div style={{ flex: 1, minHeight: 0, overflow: "auto", background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10, boxShadow: T.shadow }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, color: T.text }}>

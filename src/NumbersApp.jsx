@@ -14,6 +14,7 @@ import PantallaCambioMoneda     from "./numbers/PantallaCambioMoneda";
 import PantallaIntercompania    from "./numbers/PantallaIntercompania";
 import PantallaGastos           from "./numbers/PantallaGastos";
 import PantallaReconciliacion   from "./numbers/PantallaReconciliacion";
+import PantallaTarjeta          from "./numbers/tarjeta/PantallaTarjeta";
 import PantallaFinanciaciones   from "./numbers/PantallaFinanciaciones";
 import PantallaUsuarios          from "./numbers/PantallaUsuarios";
 import { SOCIEDADES as SOC_FALLBACK } from "./data/tesoreriaData";
@@ -130,6 +131,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
     if (!cuentaId) return;
     setActiveSpecial(null);
     setActiveMaestrosTab(null);
+    setEgresoSubView(null);   // el breadcrumb mira la sub-vista de Egresos antes que la sección (Tarjeta → Tesorería)
     setActiveId("tesoreria");
     setDeepCaja(cuentaId);
   };
@@ -391,6 +393,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
                     {egresoOpen && [
                       { id:"new-compra", label:"Compras", listId:null,      ariaAdd:"Agregar compra" },
                       { id:"new-gasto",  label:"Gastos",  listId:"gastos",  ariaAdd:"Agregar gasto"  },
+                      { id:"new-tarjeta", label:"Tarjeta de crédito", listId:"tarjeta", ariaAdd:"Subir resumen de tarjeta" },
                     ].map(sub => {
                       const subActive = activeId === "egresos" && !activeSpecial && !showMaestros && (
                         sub.listId === null
@@ -539,7 +542,6 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
                 const subs = [
                   { id:"banco",   label:"Banco" },
                   { id:"interco", label:"Interco" },
-                  { id:"tarjeta", label:"Tarjeta" },
                 ];
                 return (
                   <div key={s.id}>
@@ -738,6 +740,8 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
               : activeSpecial === "intercompania"  ? "Intercompañía"
               : activeSpecial === "cambio"         ? "Cambio de moneda"
               : activeSpecial === "usuarios"       ? "Usuarios del sistema"
+              : egresoSubView  === "new-tarjeta" ? "Tarjeta de crédito › Subir resumen"
+              : egresoSubView  === "tarjeta"     ? "Tarjeta de crédito"
               : egresoSubView  === "new-compra" ? "Egresos › Nueva Compra"
               : egresoSubView  === "new-gasto"  ? "Gastos › Nuevo Gasto"
               : egresoSubView  === "gastos"     ? "Gastos"
@@ -821,7 +825,9 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
             : activeSpecial === "reportes"
             ? <PantallaReportes sociedad={activeSoc.id} onVerComprobante={irAComprobante} />
             : section?.component
-            ? section.id === "egresos" && (egresoSubView === "gastos" || egresoSubView === "new-gasto")
+            ? section.id === "egresos" && (egresoSubView === "tarjeta" || egresoSubView === "new-tarjeta")
+              ? <PantallaTarjeta  sociedad={activeSoc.id} subView={egresoSubView}  navPulse={navPulse} />
+              : section.id === "egresos" && (egresoSubView === "gastos" || egresoSubView === "new-gasto")
               ? <PantallaGastos   sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView} navPulse={navPulse} />
               : section.id === "egresos"
               ? <PantallaEgresos  sociedad={activeSoc.id} subView={egresoSubView}  onSubViewChange={setEgresoSubView} navPulse={navPulse}

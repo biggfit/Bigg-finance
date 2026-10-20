@@ -16,7 +16,6 @@ import {
   esCuentaStripe, esCuentaVentaDirecta, ultimaCargaExtractoPorCuenta,
 } from "../lib/numbersApi";
 import { BancoReglaModal } from "./PantallaMaestros";
-import MundoTarjeta from "./reconciliacion/MundoTarjeta";
 import { useConfirm } from "./useConfirm";
 import { fetchAll, removeComp } from "../lib/sheetsApi";
 import { franquiciasPendientesInterco, enriquecerCompsConMovs } from "../lib/franquiciasAdapter";
@@ -1639,7 +1638,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: "20px 28px", boxSizing: "border-box" }}>
       {confirmUI}
-      {mundo !== "tarjeta" && (<div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
         <h2 style={{ fontSize: 20, fontWeight: 900, color: T.text, margin: 0 }}>
           Conciliaciones <span style={{ fontSize: 13, fontWeight: 700, color: T.muted }}>· {mundo === "interco" ? "Intercompañía" : "Banco"}</span>
         </h2>
@@ -1682,7 +1681,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
           </button>
         </div>
         )}
-      </div>)}
+      </div>
 
       {/* ── MUNDO INTERCOMPAÑÍA — posiciones de esta sociedad (read-only) ── */}
       {mundo === "interco" && (() => {
@@ -1888,9 +1887,6 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
           </div>
         );
       })()}
-
-      {/* ── MUNDO TARJETA — resumen como bandeja de consumos a autorizar ── */}
-      {mundo === "tarjeta" && <MundoTarjeta sociedad={sociedad} />}
 
       {/* ── MUNDO BANCO — extracto + bandeja ── */}
       {mundo === "banco" && (<>
