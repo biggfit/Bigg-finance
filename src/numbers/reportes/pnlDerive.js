@@ -118,7 +118,9 @@ function movimientoToPnLRows(movs, sociedad, cuentaMap) {
 // Adapter: financiaciones (planes AFIP + créditos) → filas P&L. Dos reconocimientos en
 // distinta línea de tiempo (sin partida doble; la caja vive aparte en nb_movimientos):
 //   · Capital del plan AFIP = el impuesto → 1 fila en el mes de consolidación (salvo apertura,
-//     que ya está en Contagram). El capital de un préstamo NO entra (es deuda, no gasto).
+//     que ya está en Contagram, y salvo `comprobante_origen`: plan que financia una CxP ya devengada —
+//     el gasto está en el comprobante y el plan solo reclasifica el pasivo). El capital de un préstamo NO
+//     entra (es deuda, no gasto).
 //     EXCEPCIÓN `capital_en_cuotas`: el capital se devenga en el VENCIMIENTO de cada cuota, como el interés.
 //     Caso: una rectificativa de meses ya cerrados que se reconoce para adelante en vez de hacer un pozo en
 //     el mes de consolidación. Ojo: el pasivo de esos planes también nace cuota a cuota
@@ -134,7 +136,9 @@ function financiacionToPnLRows(planes, sociedad) {
   const out = [];
   for (const p of (planes ?? [])) {
     if (soc && (p.sociedad ?? "").toLowerCase() !== soc) continue;
-    const capitalEsGasto = p.tipo === "plan_afip" && !p.es_apertura && p.cuenta_capital;
+    // `comprobante_origen`: el plan financia una CxP ya devengada (el gasto vive en el comprobante, con sus
+    // líneas por centro). El capital solo reclasifica pasivo (CxP → Planes de pago): no se devenga de nuevo.
+    const capitalEsGasto = p.tipo === "plan_afip" && !p.es_apertura && !p.comprobante_origen && p.cuenta_capital;
     if (capitalEsGasto && !p.capital_en_cuotas) {
       const capTot = (p.cuotas ?? []).reduce((s, c) => s + (Number(c.capital) || 0), 0);
       if (capTot > 0) out.push({ fecha: p.fecha_consolidacion, sociedad: p.sociedad, centro_costo: p.centro_capital, cuenta_contable: p.cuenta_capital, moneda: p.moneda, total: capTot, _tipo: "Financiación", contraparte_nombre: p.acreedor_nombre ?? "" });

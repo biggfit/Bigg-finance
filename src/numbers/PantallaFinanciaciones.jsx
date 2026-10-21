@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, Fragment } from "react";
 import { T, Badge, PageHeader, Btn, CompactCard, fmtMoney, fmtDate, MoneyField } from "./theme";
 import {
-  fetchFinanciaciones, appendFinanciacion, generarCuotas,
+  fetchFinanciaciones, appendFinanciacion, financiarComprobante, generarCuotas,
   pagarCuota, cancelarFinanciacion, deleteFinanciacion,
   fetchCuentas, fetchCentrosCosto, fetchCuentasBancarias, fetchProveedores,
   fetchAnticipos, appendAnticipo, deleteAnticipo, fetchClientes, fetchIngresos, shortId, round2,
@@ -29,6 +29,33 @@ const ESTADO_ANT = {
   disponible: { label: "Disponible", bg: T.blueBg,  color: T.blue },
   consumido:  { label: "Consumido",  bg: T.greenBg, color: T.green },
 };
+// "jul 2026" a partir de una fecha ISO (mes del devengado de la compra financiada).
+const mesLabel = (iso) => {
+  const m = String(iso || "").match(/^(\d{4})-(\d{2})/);
+  if (!m) return "";
+  return new Date(Number(m[1]), Number(m[2]) - 1, 1).toLocaleDateString("es-AR", { month: "short", year: "numeric" }).replace(".", "");
+};
+// Columna "Devengado" de la lista: en qué mes el CAPITAL del plan pegó (o pega) en el P&L. Misma regla que
+// financiacionToPnLRows (pnlDerive), contada para leer:
+//   · financia una CxP   → el mes del comprobante de origen (el gasto ya estaba ahí; el plan no lo devenga)
+//   · apertura           → afuera (pre go-live, Contagram)
+//   · capital en cuotas  → en el vencimiento de cada cuota (rango)
+//   · plan normal        → el mes de la consolidación
+//   · préstamo           → nunca (el capital es deuda, no gasto)
+function devengadoDe(p) {
+  if (p.tipo === "prestamo") return { label: "—", title: "Préstamo: el capital no es gasto" };
+  if (p.comprobante_origen) {
+    const mes = mesLabel(p.comprobante_fecha);
+    return { label: mes || "compra", title: `Financia la compra ${shortId(p.comprobante_origen)}${p.comprobante_fecha ? ` del ${fmtDate(p.comprobante_fecha)}` : ""}: el gasto está en el comprobante` };
+  }
+  if (p.es_apertura) return { label: "apertura", title: "Deuda anterior al go-live: el capital se contabilizó afuera (no está en el P&L de Numbers)" };
+  if (p.capital_en_cuotas) {
+    const vtos = (p.cuotas || []).map(c => c.vto).filter(Boolean).sort();
+    const a = mesLabel(vtos[0]), b = mesLabel(vtos[vtos.length - 1]);
+    return { label: a ? (a === b ? a : `${a} → ${b}`) : "en cuotas", title: "El capital se devenga en el vencimiento de cada cuota" };
+  }
+  return { label: mesLabel(p.fecha_consolidacion) || "—", title: `Consolidado el ${fmtDate(p.fecha_consolidacion)}: el capital pegó en el P&L ese mes` };
+}
 const DEF_INTERES = "Perdidas Financieras";   // nombre exacto de la cuenta (sin acento)
 const DEF_IVA     = "IVA";
 
@@ -221,7 +248,7 @@ export default function PantallaFinanciaciones({ sociedad, tab: tabProp, onTabCh
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: T.tableHead, color: T.tableHeadText }}>
-                {["Estado", "Acreedor", "Nº Plan", "Cuenta capital", "Capital", "Pagado", "Saldo", "Próx. vto", "Cuotas", ""].map((h, i) => (
+                {["Estado", "Acreedor", "Nº Plan", "Cuenta capital", "Devengado", "Capital", "Pagado", "Saldo", "Próx. vto", "Cuotas", ""].map((h, i) => (
                   <th key={i} style={{ padding: "9px 12px", textAlign: "center", fontSize: 11, fontWeight: 700, letterSpacing: ".04em", whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>
@@ -235,7 +262,13 @@ export default function PantallaFinanciaciones({ sociedad, tab: tabProp, onTabCh
                   <td style={{ padding: "9px 12px", textAlign: "center" }}><Badge estado={p.estado} cfg={ESTADO_FIN} /></td>
                   <td style={{ padding: "9px 12px", textAlign: "center", fontWeight: 600, color: T.text }}>{p.acreedor_nombre || "—"}</td>
                   <td style={{ padding: "9px 12px", textAlign: "center", color: T.muted, fontFamily: T.mono, fontSize: 12 }}>{p.nro_plan || "—"}</td>
-                  <td style={{ padding: "9px 12px", textAlign: "center", color: T.muted, fontSize: 12 }}>{String(p.cuenta_capital || "").replace(/^CUENTA_/, "") || "—"}</td>
+                  <td style={{ padding: "9px 12px", textAlign: "center", color: T.muted, fontSize: 12 }}>
+                    {String(p.cuenta_capital || "").replace(/^CUENTA_/, "") || "—"}
+                  </td>
+                  {/* Devengado: en qué mes el capital pegó (o pega) en el P&L. Ver devengadoDe(). */}
+                  {(() => { const d = devengadoDe(p); return (
+                    <td style={{ padding: "9px 12px", textAlign: "center", color: T.muted, fontSize: 12, whiteSpace: "nowrap" }} title={d.title}>{d.label}</td>
+                  ); })()}
                   <td style={{ padding: "9px 12px", textAlign: "right", fontFamily: T.mono, color: T.text, fontWeight: 600 }}>{fmtMoney(p.capital_total, p.moneda)}</td>
                   <td style={{ padding: "9px 12px", textAlign: "right", fontFamily: T.mono, color: T.green }}>{fmtMoney(p.capital_pagado, p.moneda)}</td>
                   <td style={{ padding: "9px 12px", textAlign: "right", fontFamily: T.mono, fontWeight: 700, color: p.saldo > 0 ? T.red : T.green }}>{fmtMoney(p.saldo, p.moneda)}</td>
@@ -248,7 +281,7 @@ export default function PantallaFinanciaciones({ sociedad, tab: tabProp, onTabCh
             <tfoot>
               {totalesMon.map(([m, t]) => (
                 <tr key={m} style={{ borderTop: `2px solid ${T.text}`, background: "#f9fafb" }}>
-                  <td colSpan={4} style={{ padding: "10px 12px", fontWeight: 800, color: T.text }}>
+                  <td colSpan={5} style={{ padding: "10px 12px", fontWeight: 800, color: T.text }}>
                     Total{totalesMon.length > 1 ? ` · ${m}` : ""}
                   </td>
                   <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: T.mono, fontWeight: 800, color: T.text }}>{fmtMoney(t.capital, m)}</td>
@@ -448,15 +481,22 @@ function DetalleAnticipo({ anticipo: a, ingById = new Map(), onBack, onChanged }
 // ════════════════════════════════════════════════════════════════════════════
 // ALTA — header + editor de cronograma
 // ════════════════════════════════════════════════════════════════════════════
-function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedores = [], onCancel, onSaved }) {
+// `financiar` (opcional) = { egreso, saldo }: el plan FINANCIA una CxP ya cargada (ver financiarComprobante en
+// numbersApi). Se usa desde Egresos › ⋯ › "Financiar en plan de pagos". Cambia tres cosas: el acreedor, la
+// moneda y el capital vienen de la compra; el capital no lleva cuenta contable (no se devenga: ya está en el
+// comprobante); y al guardar se escribe también el neteo que salda la compra.
+export function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedores = [], financiar = null, onCancel, onSaved }) {
   const cfg = TIPOS[tipo];
+  const egresoFin = financiar?.egreso || null;
+  const saldoFin  = Number(financiar?.saldo ?? egresoFin?.saldoPendiente ?? egresoFin?.importe) || 0;
   const [h, setH] = useState(() => {
     // Pre-cargamos centros buscándolos por nombre (capital/iva → Impuestos, interés/sellos → Financieros).
     const ccPorNombre = frag => centros.find(c => new RegExp(frag, "i").test(c.nombre || ""))?.id || "";
     const ccImpuestos = ccPorNombre("impuesto"), ccFinancieros = ccPorNombre("financ");
-    return {
+    const hoy = new Date().toISOString().slice(0, 10);
+    const base = {
       acreedor_id: "", acreedor_nombre: "", acreedor_cuit: "", nro_plan: "", moneda: "ARS",
-      fecha_consolidacion: new Date().toISOString().slice(0, 10),
+      fecha_consolidacion: hoy,
       es_apertura: false,
       capital_en_cuotas: false,
       cuenta_capital: "",            centro_capital: ccImpuestos,   // vacía a propósito: el impuesto cambia por plan → se elige a mano
@@ -465,8 +505,18 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
       cuenta_impuestos: "",          centro_impuestos: ccFinancieros,
       cuenta_bancaria: "", nota: "",
     };
+    if (!egresoFin) return base;
+    const prov = proveedores.find(p => String(p.id) === String(egresoFin.proveedorId));
+    const fechaComp = String(egresoFin.fecha || "").slice(0, 10);
+    return {
+      ...base,
+      acreedor_id: egresoFin.proveedorId || "", acreedor_nombre: prov?.nombre || egresoFin.proveedor || "", acreedor_cuit: prov?.cuit || "",
+      moneda: egresoFin.moneda || "ARS",
+      fecha_consolidacion: fechaComp > hoy ? fechaComp : hoy,   // nunca antes de la compra (el writer lo rechaza)
+      nota: `Financia compra ${egresoFin.nroComp || shortId(egresoFin.id)}`,
+    };
   });
-  const [gen, setGen] = useState({ capital_original: "", n_cuotas: "12", tasaMensual: "", ivaPct: "", impuestoPct: "", periodicidad: "mensual" });
+  const [gen, setGen] = useState({ capital_original: egresoFin ? String(round2(saldoFin)) : "", n_cuotas: "12", tasaMensual: "", ivaPct: "", impuestoPct: "", periodicidad: "mensual" });
   const [cuotas, setCuotas] = useState([]);
   const [busy, setBusy] = useState(false);
   const [pdfMsg, setPdfMsg] = useState("");
@@ -524,25 +574,31 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
     for (const c of cuotas) { s.capital += num(c.capital); s.interes += num(c.interes); s.iva += num(c.iva); s.impuestos += num(c.impuestos); }
     return s;
   }, [cuotas]);
+  // Al financiar una CxP el capital NO es gasto del plan (ya lo es el comprobante) → sin cuenta contable.
+  const capitalEsGasto = cfg.capitalEsGasto && !egresoFin;
   // Una cuenta es obligatoria solo si el cronograma tiene importe para ese componente
   // (y, para el capital, solo si en este tipo el capital es gasto — el préstamo no).
   const compRequerido = comp => comp.key === "capital"
-    ? cfg.capitalEsGasto && compSum.capital > 0
+    ? capitalEsGasto && compSum.capital > 0
     : compSum[comp.key] > 0;
   // Aviso: con el capital devengado en cuotas, una cuota que vence antes del go-live no reconoce su capital
   // en ningún mes (el P&L arranca el 1/7/2026).
   const cuotasPreGoLive = h.capital_en_cuotas ? cuotas.filter(c => c.vto && c.vto < "2026-07-01").length : 0;
 
-  const compsVisibles = COMPONENTES.filter(comp => !comp.soloPlan || cfg.capitalEsGasto);
+  const compsVisibles = COMPONENTES.filter(comp => !comp.soloPlan || capitalEsGasto);
   const faltanCuentas = compsVisibles.some(comp => compRequerido(comp) && !h[comp.cuentaK]);
   const cuotasOk = cuotas.length > 0 && cuotas.every(c => num(c.total) > 0 && c.vto);
-  const canSave = h.acreedor_nombre.trim() && h.fecha_consolidacion && h.cuenta_bancaria && cuotasOk && !faltanCuentas && !busy;
+  // Financiación: Σcapital contra el saldo de la compra. Mayor = sobrepago (bloquea); menor = parcial (avisa).
+  const excesoFin  = egresoFin && cuotas.length > 0 && compSum.capital > saldoFin + 0.5;
+  const parcialFin = egresoFin && cuotas.length > 0 && compSum.capital > 0 && compSum.capital < saldoFin - 0.5;
+  const canSave = h.acreedor_nombre.trim() && h.fecha_consolidacion && h.cuenta_bancaria && cuotasOk && !faltanCuentas && !excesoFin && !busy;
 
   async function guardar() {
     if (!canSave) return;
     setBusy(true);
     try {
-      await appendFinanciacion({ ...h, tipo, sociedad, cuotas });
+      if (egresoFin) await financiarComprobante({ egreso: egresoFin, plan: { ...h, tipo, sociedad, cuotas } });
+      else           await appendFinanciacion({ ...h, tipo, sociedad, cuotas });
       onSaved();
     } catch (e) {
       alert("Error al guardar: " + (e?.message || e));
@@ -553,12 +609,34 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
   return (
     <div className="fade" style={{ padding: "28px 32px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
-        <PageHeader title={cfg.nuevoLabel}
-          subtitle={!cfg.capitalEsGasto ? "El capital es deuda (no es gasto); solo el interés es resultado"
+        <PageHeader title={egresoFin ? "Financiar compra en un plan de pagos" : cfg.nuevoLabel}
+          subtitle={egresoFin ? "El capital salda la compra (ya devengada) y pasa a Planes de pago; solo interés, IVA y sellos son resultado"
+            : !cfg.capitalEsGasto ? "El capital es deuda (no es gasto); solo el interés es resultado"
             : h.capital_en_cuotas ? "El capital es el impuesto y se devenga en cada vencimiento, junto con el interés"
             : "El capital es el impuesto (gasto al consolidar); el interés se devenga mes a mes"} />
         <button onClick={onCancel} style={{ background: "none", border: "none", color: T.muted, fontSize: 13, cursor: "pointer", fontFamily: T.font, whiteSpace: "nowrap", flexShrink: 0 }}>‹ Volver</button>
       </div>
+
+      {/* Qué compra se financia y cómo cierra el capital contra su saldo */}
+      {egresoFin && (
+        <div style={{ marginBottom: 14, padding: "12px 16px", borderRadius: T.radius, fontSize: 13, lineHeight: 1.55,
+          background: excesoFin ? "#fef2f2" : parcialFin ? "#fffbeb" : "#eff6ff",
+          border: `1px solid ${excesoFin ? "#fecaca" : parcialFin ? "#fde68a" : "#bfdbfe"}`,
+          color: excesoFin ? "#991b1b" : parcialFin ? "#92400e" : "#1e40af" }}>
+          <div>
+            <b>Compra {egresoFin.nroComp || shortId(egresoFin.id)}</b> · {egresoFin.proveedor || "—"} · {fmtDate(egresoFin.fecha)} ·
+            saldo pendiente <b>{fmtMoney(saldoFin, egresoFin.moneda)}</b>
+            {cuotas.length > 0 && <> · capital del plan <b>{fmtMoney(compSum.capital, h.moneda)}</b></>}
+          </div>
+          <div style={{ fontSize: 12, marginTop: 4, opacity: .9 }}>
+            {excesoFin
+              ? "El capital supera el saldo de la compra: sería un sobrepago. Si AFIP sumó resarcitorio al consolidar, cargalo como interés o impuestos de la cuota 1, no como capital."
+              : parcialFin
+              ? `Financiación parcial: la compra queda con ${fmtMoney(saldoFin - compSum.capital, egresoFin.moneda)} a pagar.`
+              : "La compra queda saldada con un neteo sin caja fechado en la consolidación; su gasto no se toca y el capital no vuelve a pegar en el P&L. El saldo ya incluye el IVA del comprobante; el IVA del plan es solo el IVA sobre el interés."}
+          </div>
+        </div>
+      )}
 
       {/* 1 · Datos del acreedor */}
       <SectionCard title="Datos del acreedor">
@@ -577,8 +655,8 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
       {/* 2 · Fechas, moneda y caja */}
       <SectionCard title="Fechas, moneda y caja">
         <Field label="Fecha de consolidación *"><input type="date" value={h.fecha_consolidacion} onChange={e => set("fecha_consolidacion", e.target.value)} style={inputStyle} /></Field>
-        <Field label="Moneda">
-          <select value={h.moneda} onChange={e => set("moneda", e.target.value)} style={inputStyle}>
+        <Field label={egresoFin ? "Moneda (de la compra)" : "Moneda"}>
+          <select value={h.moneda} onChange={e => set("moneda", e.target.value)} disabled={!!egresoFin} style={{ ...inputStyle, opacity: egresoFin ? .6 : 1 }}>
             {["ARS", "USD", "EUR"].map(m => <option key={m} value={m}>{m}</option>)}
           </select>
         </Field>
@@ -588,7 +666,9 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
             {bancos.map(b => <option key={b.id} value={b.id}>{b.nombre || b.id}</option>)}
           </select>
         </Field>
-        <div style={{ gridColumn: "1 / -1" }}>
+        {/* Al financiar una CxP no hay apertura ni devengo en cuotas: la deuda nace entera en la consolidación,
+            el mismo día en que la compra se cierra (el writer los fuerza a false igual). */}
+        {!egresoFin && <div style={{ gridColumn: "1 / -1" }}>
           <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: T.text, cursor: "pointer" }}>
             {/* Tildar Apertura apaga el devengado en cuotas: son excluyentes y, si solo se ocultara el check,
                 el estado quedaría en true y el subtítulo prometería algo que el writer después ignora. */}
@@ -614,7 +694,7 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
               ⚠ {cuotasPreGoLive} cuota{cuotasPreGoLive > 1 ? "s vencen" : " vence"} antes del 01/07/2026: el P&L arranca en el go-live, así que ese capital no se va a reconocer en ningún mes.
             </div>
           )}
-        </div>
+        </div>}
         <div style={{ gridColumn: "1 / -1" }}>
           <Field label="Nota"><input value={h.nota} onChange={e => set("nota", e.target.value)} style={inputStyle} /></Field>
         </div>
@@ -623,7 +703,9 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
       {/* 3 · Imputación contable por componente (cuenta + centro propios) */}
       <SectionCard title="Imputación contable — cuenta y centro por componente" cols="1.4fr 1.4fr 1.2fr">
         <div style={{ gridColumn: "1 / -1", fontSize: 11, color: T.muted, lineHeight: 1.5, marginBottom: 2 }}>
-          La cuota tiene 5 componentes, pero el <b>interés resarcitorio</b> (recargo por mora) es costo financiero igual que el interés → se imputa a la <b>misma cuenta de Interés financiero</b>. Por eso hay 4 filas. Cubre también préstamos bancarios (capital · interés · IVA s/interés · sellos/IVAP).
+          {egresoFin
+            ? <>El <b>capital no lleva cuenta</b>: su gasto ya está en la compra que se financia. Solo se imputan interés (+ resarcitorio), IVA sobre interés y sellos, que se devengan en el vencimiento de cada cuota.</>
+            : <>La cuota tiene 5 componentes, pero el <b>interés resarcitorio</b> (recargo por mora) es costo financiero igual que el interés → se imputa a la <b>misma cuenta de Interés financiero</b>. Por eso hay 4 filas. Cubre también préstamos bancarios (capital · interés · IVA s/interés · sellos/IVAP).</>}
         </div>
         <div style={{ fontSize: 11, fontWeight: 700, color: T.muted }}>Componente</div>
         <div style={{ fontSize: 11, fontWeight: 700, color: T.muted }}>Cuenta contable</div>
@@ -727,7 +809,7 @@ function AltaFinanciacion({ tipo, sociedad, cuentas, centros, bancos, proveedore
 
       <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
         <Btn variant="ghost" onClick={onCancel}>Cancelar</Btn>
-        <Btn variant="accent" onClick={guardar} disabled={!canSave}>{busy ? "Guardando…" : "Guardar"}</Btn>
+        <Btn variant="accent" onClick={guardar} disabled={!canSave}>{busy ? "Guardando…" : egresoFin ? "Financiar compra" : "Guardar"}</Btn>
       </div>
     </div>
   );
@@ -753,7 +835,8 @@ function DetalleFinanciacion({ plan, bancos, onBack, onChanged }) {
     catch (e) { alert("Error: " + (e?.message || e)); setBusy(false); }
   }
   async function doEliminar() {
-    if (!(await confirm("¿Eliminar el plan completo (todas sus cuotas)? No se puede deshacer."))) return;
+    const extra = plan.comprobante_origen ? " La compra que financiaba vuelve a quedar a pagar." : "";
+    if (!(await confirm("¿Eliminar el plan completo (todas sus cuotas)? No se puede deshacer." + extra))) return;
     setBusy(true);
     try { await deleteFinanciacion(plan.plan_id); onChanged(); }
     catch (e) { alert("Error: " + (e?.message || e)); setBusy(false); }
@@ -766,7 +849,7 @@ function DetalleFinanciacion({ plan, bancos, onBack, onChanged }) {
       {confirmUI}
       <PageHeader title={plan.acreedor_nombre || "Financiación"}
         back={<button onClick={onBack} style={{ background: "none", border: "none", color: T.muted, fontSize: 13, cursor: "pointer", fontFamily: T.font, padding: 0 }}>‹ Volver</button>}
-        subtitle={`${TIPOS[plan.tipo]?.label || ""} · Nº ${plan.nro_plan || "—"} · consolidado ${fmtDate(plan.fecha_consolidacion)}${plan.es_apertura ? " · apertura" : ""}${plan.capital_en_cuotas ? " · capital devengado en cuotas" : ""}${cuentaCapital ? ` · Capital → ${cuentaCapital}` : ""}`}
+        subtitle={`${TIPOS[plan.tipo]?.label || ""} · Nº ${plan.nro_plan || "—"} · consolidado ${fmtDate(plan.fecha_consolidacion)}${plan.es_apertura ? " · apertura" : ""}${plan.capital_en_cuotas ? " · capital devengado en cuotas" : ""}${cuentaCapital ? ` · Capital → ${cuentaCapital}` : ""}${plan.comprobante_origen ? ` · financia la compra ${shortId(plan.comprobante_origen)}${plan.comprobante_fecha ? ` devengada el ${fmtDate(plan.comprobante_fecha)}` : ""} (capital sin P&L)` : ""}`}
         action={<div style={{ display: "flex", gap: 8 }}>
           <Btn variant="ghost" onClick={doCancelar} disabled={busy}>Cancelar cuotas</Btn>
           <Btn variant="danger" onClick={doEliminar} disabled={busy}>Eliminar</Btn>

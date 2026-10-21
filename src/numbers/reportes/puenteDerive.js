@@ -184,6 +184,8 @@ export function buildPuente({
       continue;
     }
     if (mv.origen === "anticipo_alta" || mv.origen === "anticipo_consumo") { info("mov_anticipo", monto, fMov(mv)); continue; }
+    // Neteo de una CxP financiada en un plan: sin caja; el pasivo pasa de CxP a "Planes de pago" el mismo día.
+    if (mv.origen === "financiacion_plan") { info("mov_financiacion_plan", monto, fMov(mv)); continue; }
     if (mv.origen === "socios") { info("mov_socios", monto, fMov(mv, { socio_tipo: mv.socio_tipo })); continue; }
     if (mv.origen === "franquicias" && ["nako","biggfit","wellness"].some(x => S.has(x))) { info("mov_cobro_franquicia", monto, fMov(mv)); continue; }
     if (mv.origen === "franquicias") { ex("E1d_cobro_franquicia", "Caja: cobro de franquicia (S sin mapeo de empresa emisora → CxC no en su balance)", monto, fMov(mv)); continue; }

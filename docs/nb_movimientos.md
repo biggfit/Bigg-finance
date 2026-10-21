@@ -103,6 +103,7 @@
 | `socios` | Préstamo/aporte/dividendo a/de socio (trae `socio_tipo`). |
 | `tarjeta` / `pago_tarjeta` | Consumo / pago de tarjeta de crédito. |
 | `cuota` / `financiacion_alta` | Cuota o alta de plan AFIP / préstamo. |
+| `financiacion_plan` | **Neteo sin caja** (tipo PAGO, `cuenta_bancaria` vacía) de una CxP cuyo capital pasó a un plan de pagos. `documento_id` = la factura que salda; `referencia` = `fin_plan=<plan_id>`. El gasto sigue en el comprobante; el plan (`comprobante_origen`) no devenga capital. Se borra solo al eliminar el plan. |
 | `anticipo_alta` / `anticipo_consumo` | Anticipos. |
 | `manual` / `maestros` | Carga manual / de setup. |
 
@@ -138,6 +139,7 @@ Se lee con `parseMeta()`. Claves:
 | `prov=` | Proveedor reconocido por regla. |
 | `par=` | Id de la pata interco emparejada. |
 | `recibida=` | Id del movimiento que cerró la interco. |
+| `fin_plan=` | Id del plan de pagos que financia la factura (neteo `origen=financiacion_plan`). |
 | `tipo=` | Sub-tipo empaquetado. |
 | `1` | Marcador simple de "procesado". |
 

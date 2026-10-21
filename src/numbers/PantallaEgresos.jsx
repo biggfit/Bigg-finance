@@ -2,12 +2,16 @@ import { useState, useMemo, useEffect } from "react";
 import { T, ESTADO_EGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn, MoneyField } from "./theme";
 import ConfirmModal from "./ConfirmModal";
 import { regimenRetencionDeSociedad } from "../data/tesoreriaData";
-import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcSaldoNeto, calcEstadoEgreso, round2, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, borrarPagoImputado, shortId, appendProveedor, appendCuenta, aplicarRetencionPracticada, RETDEP_TAG } from "../lib/numbersApi";
+import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcSaldoNeto, calcEstadoEgreso, round2, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, borrarPagoImputado, shortId, appendProveedor, appendCuenta, aplicarRetencionPracticada, RETDEP_TAG, esNeteoFinanciacion, planIdDeNeteo } from "../lib/numbersApi";
+import { AltaFinanciacion } from "./PantallaFinanciaciones";
 
 // Una factura admite UNA sola retención practicada: se detecta por sus líneas de neteo
 // (tipo=PAGO origen="retencion_practicada" / tag RETDEP) ya vinculadas al comprobante.
 const tieneRetPracticada = (e) => (e?.pagosVinculados ?? []).some(
   p => p.origen === "retencion_practicada" || String(p.nota || "").includes(RETDEP_TAG));
+// Compra financiada en un plan de pagos: su neteo (PAGO sin caja, origen="financiacion_plan") ya está vinculado.
+// Un solo plan por compra; se deshace eliminando el plan en Financiaciones, no desde acá.
+const neteoFinanciacion = (e) => (e?.pagosVinculados ?? []).find(esNeteoFinanciacion) || null;
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC, todayISO } from "../data/numbersData";
 import { makeResolveCC, makeResolveCB, inputStyle, makeCrearMaestro, stripForDuplicate, calcLineasTotals } from "./formUtils";
 import NuevoEgresoModal from "./NuevoEgresoModal";
@@ -177,11 +181,12 @@ function RegistrarRetencionPracticadaModal({ egreso, sociedad, saldoPendiente, c
 }
 
 // ─── Modal: Ver Detalle (estilo Contagram) ───────────────────────────────────
-function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClose, onAgregarPago, onAplicarRetencion, retencionAplicada = false, onEditar, onEditarPago, onIrACaja, asPage = false }) {
+function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClose, onAgregarPago, onAplicarRetencion, retencionAplicada = false, onFinanciar, onEditar, onEditarPago, onIrACaja, asPage = false }) {
   const resolveCB = makeResolveCB(cuentasBancarias);
   const resolveCC = makeResolveCC(centrosCosto);
   const pagado  = egreso.pagosVinculados?.reduce((s,p) => s + Math.abs(Number(p.monto)||0), 0) ?? 0;
   const aPagar  = egreso.importe - pagado;
+  const financiado = neteoFinanciacion(egreso);   // neteo del plan que financia esta compra (o null)
   const lineas  = egreso.lineas ?? [];
 
   const netoNoGravado = lineas.filter(l => !Number(l.ivaRate))
@@ -286,7 +291,11 @@ function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClos
                           fontFamily:"var(--mono)" }}>{p.id}</td>
                         <td style={{ padding:"8px 14px", fontSize:13, color:"#1a1a1a" }}>{fmtDate(p.fecha)}</td>
                         <td style={{ padding:"8px 14px", fontSize:13, color:"#333" }}>
-                          {p.cuenta_bancaria && onIrACaja
+                          {esNeteoFinanciacion(p)
+                            ? <span title={`Neteo sin caja: el capital pasó al plan ${planIdDeNeteo(p) || ""}`}
+                                style={{ display:"inline-block", fontSize:11, background:"#e0f2fe", color:"#0369a1",
+                                  borderRadius:6, padding:"2px 8px", fontWeight:700 }}>Plan de pago · {p.concepto?.replace(/^Financiado en plan\s*/i, "") || planIdDeNeteo(p)}</span>
+                            : p.cuenta_bancaria && onIrACaja
                             ? <button onClick={() => onIrACaja(p.cuenta_bancaria)} title="Ver esta caja en Tesorería"
                                 style={{ background:"none", border:"none", padding:0, font:"inherit", cursor:"pointer",
                                   color:"#0284c7", fontWeight:600, textDecoration:"underline" }}>
@@ -301,10 +310,14 @@ function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClos
                           {fmtMoney(Math.abs(Number(p.monto)||0), egreso.moneda)}
                         </td>
                         <td style={{ padding:"8px 8px", textAlign:"center" }}>
-                          <button onClick={() => onEditarPago?.(p)} title="Editar pago"
-                            style={{ background:"transparent", border:`1px solid ${T.cardBorder}`,
-                              borderRadius:6, padding:"3px 7px", cursor:"pointer",
-                              fontSize:12, color:T.muted, lineHeight:1 }}>✎</button>
+                          {/* El neteo del plan no se edita ni se borra desde acá (le pondrían un banco o lo
+                              borrarían dejando el plan vivo): se deshace eliminando el plan en Financiaciones. */}
+                          {!esNeteoFinanciacion(p) && (
+                            <button onClick={() => onEditarPago?.(p)} title="Editar pago"
+                              style={{ background:"transparent", border:`1px solid ${T.cardBorder}`,
+                                borderRadius:6, padding:"3px 7px", cursor:"pointer",
+                                fontSize:12, color:T.muted, lineHeight:1 }}>✎</button>
+                          )}
                         </td>
                       </tr>
                     ))
@@ -327,6 +340,18 @@ function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClos
                 {retencionAplicada && (
                   <span style={{ fontSize:12, color:"#7c3aed", fontWeight:700, display:"flex", alignItems:"center", gap:6, padding:"6px 4px" }}>
                     ✓ Retención aplicada
+                  </span>
+                )}
+                {onFinanciar && !financiado && aPagar > 0.005 && (
+                  <button onClick={() => { if (!asPage) onClose?.(); onFinanciar(egreso); }} style={{
+                    background:"transparent", border:`1.5px dashed #bae6fd`,
+                    borderRadius:7, padding:"6px 16px", fontSize:12, color:"#0369a1",
+                    cursor:"pointer", fontFamily:T.font, fontWeight:700,
+                    display:"flex", alignItems:"center", gap:6 }}>% Financiar en plan de pagos</button>
+                )}
+                {financiado && (
+                  <span style={{ fontSize:12, color:"#0369a1", fontWeight:700, display:"flex", alignItems:"center", gap:6, padding:"6px 4px" }}>
+                    ✓ Financiado en plan de pagos
                   </span>
                 )}
               </div>
@@ -619,6 +644,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
   const [borrando, setBorrando]             = useState(false);
   const [showCtaCte, setShowCtaCte]         = useState(null); // { proveedor, docs }
   const [showMigrar, setShowMigrar]         = useState(null); // egreso a migrar de sociedad
+  const [showFinanciar, setShowFinanciar]   = useState(null); // egreso a financiar en un plan de pagos (alta de plan como página)
   const [sociedades, setSociedades]         = useState([]);
   const [proveedores, setProveedores]       = useState([]);
   const [centrosCosto, setCentrosCosto]     = useState(CENTROS_COSTO_STATIC);
@@ -719,6 +745,15 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
   const duplicarEgreso = (e) => setShowEditar(stripForDuplicate(e));
 
   const handleSave = async (egreso) => {
+    // Compra financiada: bajar el total por debajo de lo ya neteado/pagado la dejaría en sobrepago contra el plan.
+    if (egreso._isEdit) {
+      const actual = egresos.find(e => e.id === egreso.id);
+      const pagado = (actual?.pagosVinculados ?? []).reduce((s, p) => s + Math.abs(Number(p.monto) || 0), 0);
+      if (neteoFinanciacion(actual) && (Number(egreso.importe) || 0) < pagado - 0.5) {
+        alert(`Esta compra está financiada en un plan de pagos por ${fmtMoney(pagado, actual.moneda)}: el nuevo total no puede ser menor. Si cambió la deuda, eliminá el plan en Financiaciones y volvé a financiarla.`);
+        throw new Error("total menor al financiado");
+      }
+    }
     try {
       const result = egreso._isEdit
         ? await updateEgreso(egreso.id, { ...egreso, sociedad })
@@ -749,6 +784,10 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
 
   const handleEliminar = (id_comp) => {
     const egreso = egresos.find(e => e.id === id_comp);
+    // Financiada: borrarla dejaría el plan vivo con un comprobante_origen colgado y su gasto desaparecería
+    // de todos lados (el plan no devenga capital). Primero se elimina el plan (eso reabre la compra).
+    const fin = neteoFinanciacion(egreso);
+    if (fin) { alert(`Esta compra está financiada en un plan de pagos (${planIdDeNeteo(fin) || "ver Financiaciones"}). Eliminá primero el plan en Financiaciones: la compra vuelve a quedar a pagar.`); return; }
     // Los pagos que vinieron del motor (origen="extracto") NO se borran: se desimputan y vuelven a la
     // conciliación (no se pierde el movimiento del banco). Los manuales sí se borran. borrarPagoImputado decide.
     const delMotor = (egreso?.pagosVinculados ?? []).filter(p => p.origen === "extracto").length;
@@ -841,6 +880,15 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
   };
 
   // ── Páginas de alta: no esperan el loading de la lista ───────────────────────
+  // ── Financiar en plan de pagos: el alta de plan de Financiaciones, como página, precargada con la compra ──
+  if (showFinanciar && subView !== "new-compra") {
+    return (
+      <AltaFinanciacion tipo="plan_afip" sociedad={sociedad} cuentas={cuentas} centros={centrosCosto} bancos={cuentasSoc} proveedores={proveedores}
+        financiar={{ egreso: showFinanciar, saldo: showFinanciar.saldoPendiente ?? showFinanciar.importe }}
+        onCancel={() => setShowFinanciar(null)}
+        onSaved={() => { setShowFinanciar(null); setShowDetalle(null); cargarEgresos(); }} />
+    );
+  }
   // ── Detalle como página ──────────────────────────────────────────────────────
   if (showDetalle && subView !== "new-compra") {
     return (
@@ -854,6 +902,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
           onAgregarPago={e => setShowPago(e)}
           onAplicarRetencion={tieneRetPracticada(showDetalle) ? undefined : e => setShowRetencion(e)}
           retencionAplicada={tieneRetPracticada(showDetalle)}
+          onFinanciar={e => setShowFinanciar(e)}
           onEditar={e => { setShowDetalle(null); setShowEditar(e); }}
           onEditarPago={p => setEditingPago(p)}
           onIrACaja={onIrACaja}
@@ -982,6 +1031,8 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
                       { label:"Agregar Pago", onClick:() => setShowPago(e), color:"#0e7490" },
                       (e.saldoPendiente ?? e.importe ?? 0) > 0 && !tieneRetPracticada(e)
                         && { label:"Aplicar Retención", onClick:() => setShowRetencion(e), color:"#7c3aed" },
+                      (e.saldoPendiente ?? e.importe ?? 0) > 0 && !neteoFinanciacion(e)
+                        && { label:"Financiar en plan de pagos", onClick:() => setShowFinanciar(e), color:"#0369a1" },
                       { label:"Cta. Cte.",    onClick:() => setShowCtaCte({ proveedor: e.proveedor, docs: egresos.filter(x => x.proveedor === e.proveedor) }) },
                       "divider",
                       { label:"Eliminar",     onClick:() => handleEliminar(e.id), color:T.red },
@@ -1019,6 +1070,12 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
                         {resolveCB(id)}
                       </span>
                     ))}
+                    {neteoFinanciacion(e) && (
+                      <span style={{ display:"inline-block", fontSize:11, background:"#e0f2fe",
+                        color:"#0369a1", borderRadius:6, padding:"2px 8px", fontWeight:700, marginRight:3 }}>
+                        Plan de pago
+                      </span>
+                    )}
                     {!(e.pagosVinculados??[]).length && <span style={{ color:T.dim, fontSize:11 }}>—</span>}
                   </td>
                   <td style={{ padding:"10px 14px", fontSize:12, color:T.muted, maxWidth:180, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.nota || "—"}</td>

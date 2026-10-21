@@ -591,8 +591,15 @@ export async function updateIngreso(id_comp, ingreso) {
 //
 // tipo:   "INGRESO" | "EGRESO" | "TRANSFERENCIA" | "PAGO" | "COBRO"
 // monto:  firmado — PAGO/EGRESO = negativo, COBRO/INGRESO = positivo
-// origen: "manual" | "pago" | "cobro"
+// origen: "manual" | "pago" | "cobro" | … (ver docs/nb_movimientos.md §3)
 // documento_id: id_comp del comprobante vinculado (solo para PAGO/COBRO)
+//
+// Neteos SIN caja (cuenta_bancaria vacía): bajan el saldo de un comprobante sin mover un banco. Tres flujos:
+//   · origen="retencion_practicada" → PAGO que netea la factura por el impuesto retenido al proveedor.
+//   · origen="anticipo_consumo"     → COBRO que netea la factura contra un anticipo del cliente.
+//   · origen="financiacion_plan"    → PAGO que netea una CxP cuyo capital pasó a un plan de pagos
+//     (Financiaciones). referencia="fin_plan=<plan_id>". El gasto sigue en el comprobante; el pasivo se
+//     reclasifica de CxP a "Planes de pago" en la fecha de consolidación. Ver financiarComprobante.
 
 /** Trae todos los pagos/cobros de una sociedad (filtra nb_movimientos por tipo). */
 export async function fetchPagosCobros(sociedad) {
@@ -2013,6 +2020,9 @@ async function desimputarPago(mov) {
 // para cualquier pago/cobro que cuelgue de un comprobante.
 export async function borrarPagoImputado(mov) {
   if (mov?.origen === "extracto") return desimputarPago(mov);
+  // El neteo de una CxP financiada lo creó el plan: borrarlo solo reabriría la compra dejando el plan
+  // (y su pasivo) vivos → doble deuda. Se deshace eliminando el plan (deleteFinanciacion borra el neteo).
+  if (esNeteoFinanciacion(mov)) throw new Error("Este pago es el neteo de un plan de pagos. Para deshacerlo, eliminá el plan en Financiaciones: la compra vuelve a quedar a pagar.");
   return deleteMovTesoreria(mov.id);
 }
 
@@ -3330,7 +3340,24 @@ export async function fetchFinanciaciones(sociedad) {
   for (const key of Object.keys(pagosPorCuota)) {
     pagadoPorCuota[key] = pagosPorCuota[key].reduce((s, p) => s + p.monto, 0);
   }
-  return agruparPlanes(rows, pagadoPorCuota, pagosPorCuota);
+  const planes = agruparPlanes(rows, pagadoPorCuota, pagosPorCuota);
+  // Planes que financian una CxP: le colgamos la fecha del comprobante de origen (= mes en que se devengó el
+  // impuesto) para mostrarla. Se deriva del comprobante al leer, sin columna nueva en la hoja. Best-effort.
+  if (planes.some(p => p.comprobante_origen)) {
+    try {
+      const comps = await get("nb_comprobantes", sociedad ? { sociedad } : {});
+      const porComp = new Map();
+      for (const c of (Array.isArray(comps) ? comps : [])) {
+        if (c.id_comp && !porComp.has(c.id_comp)) porComp.set(c.id_comp, { fecha: c.fecha ?? "", nro_comp: c.nro_comp ?? "" });
+      }
+      for (const p of planes) {
+        const c = p.comprobante_origen ? porComp.get(p.comprobante_origen) : null;
+        p.comprobante_fecha = c?.fecha ?? "";
+        p.comprobante_nro   = c?.nro_comp ?? "";
+      }
+    } catch { /* sin la fecha del comprobante el plan se muestra igual */ }
+  }
+  return planes;
 }
 
 // Ledger (extracto) del PASIVO de financiaciones de un bucket (plan_afip / prestamo) en una moneda, A UNA FECHA
@@ -3547,6 +3574,69 @@ export async function appendFinanciacion({ tipo = "plan_afip", nro_plan = "", ac
   return { ok: true, plan_id };
 }
 
+// ─── CxP → plan de pagos ("financiar" como forma de pago) ────────────────────
+// Caso: un impuesto (IVA, F931…) cargado como comprobante EGRESO —ya devengado y reportado— que al vencer
+// se mete en un plan de facilidades. El comprobante NO se toca (su gasto está bien, con sus líneas por
+// centro). Lo que cambia es el pasivo: deja de ser CxP y pasa a "Planes de pago", en la fecha de
+// consolidación. Para eso se escriben dos cosas:
+//   1) el plan en nb_financiaciones con `comprobante_origen = id_comp` → pnlDerive NO devenga su capital
+//      (ya está en el comprobante); interés/IVA/sellos sí, cuota a cuota como siempre;
+//   2) un neteo en nb_movimientos igual al de la retención practicada: PAGO sin caja, documento_id = id_comp,
+//      monto = −Σcapital, origen="financiacion_plan", referencia="fin_plan=<plan_id>" (nb_movimientos no tiene
+//      columna origen_id, y el prefijo FIN- en documento_id lo leen puente/cashflow como pago de cuota).
+// Puente P&L↔ΔPN: CxP −X y plan +X el mismo día, P&L sin cambios → neutro. Cash Flow no lo ve (sin caja).
+export const esNeteoFinanciacion = (m) => m?.origen === "financiacion_plan";
+export const planIdDeNeteo = (m) => metaVal(m?.referencia, "fin_plan");
+
+export async function financiarComprobante({ egreso, plan }) {
+  if (!egreso?.id) throw new Error("Falta el comprobante a financiar.");
+  const monedaComp = egreso.moneda || "ARS";
+  const moneda     = plan.moneda || monedaComp;
+  const saldo      = Number(egreso.saldoPendiente ?? egreso.importe ?? egreso.total) || 0;
+  const capital    = round2((plan.cuotas || []).reduce((s, c) => s + (Number(c.capital) || 0), 0));
+  const fecha      = String(plan.fecha_consolidacion || "").slice(0, 10);
+  if (moneda !== monedaComp) throw new Error(`El plan tiene que ser en ${monedaComp}, la moneda de la compra.`);
+  if (capital <= 0.005) throw new Error("El cronograma no tiene capital.");
+  if (capital > saldo + 0.5) throw new Error("El capital del plan supera el saldo pendiente de la compra: sería un sobrepago. Si AFIP sumó resarcitorio al consolidar, cargalo como interés o impuestos de la cuota 1, no como capital.");
+  if (!fecha || fecha < String(egreso.fecha || "").slice(0, 10)) throw new Error("La fecha de consolidación no puede ser anterior a la fecha de la compra.");
+  if ((egreso.pagosVinculados || []).some(esNeteoFinanciacion)) throw new Error("Esta compra ya está financiada en un plan de pagos.");
+
+  // 1) El plan. Apertura y capital_en_cuotas forzados a false: la deuda tiene que nacer entera en la
+  //    consolidación, el mismo día en que la CxP se cierra, o el PN cae sin que el P&L lo explique.
+  const sociedad = plan.sociedad || egreso.sociedad;
+  const { plan_id } = await appendFinanciacion({
+    ...plan, tipo: "plan_afip", sociedad, moneda,
+    acreedor_id:     plan.acreedor_id     || egreso.proveedorId || "",
+    acreedor_nombre: plan.acreedor_nombre || egreso.proveedor   || "",
+    // Cuenta/centro del capital = los del comprobante. Informativo (dice qué impuesto es el plan en la lista);
+    // el P&L NO devenga este capital porque manda `comprobante_origen`.
+    cuenta_capital:  plan.cuenta_capital  || egreso.cuenta || "",
+    centro_capital:  plan.centro_capital  || egreso.cc || egreso.lineas?.[0]?.cc || "",
+    es_apertura: false, capital_en_cuotas: false,
+    comprobante_origen: egreso.id,
+  });
+
+  // 2) El neteo. Orden plan → neteo a propósito: si esto falla, el pasivo queda SOBREestimado (CxP + plan),
+  //    visible en Egresos y Financiaciones, nunca subestimado. El mensaje dice cómo volver atrás.
+  try {
+    await post({ action: "add", sheet: "nb_movimientos", row: {
+      id: newId("MOV"), sociedad, fecha, tipo: "PAGO",
+      cuenta_bancaria: "", cuenta_destino: "", cuenta_contable: "", centro_costo: "",
+      moneda, monto: -capital,
+      documento_id: egreso.id,
+      concepto: `Financiado en plan ${plan.nro_plan || plan_id}`,
+      contraparte_id: egreso.proveedorId || "", contraparte_nombre: egreso.proveedor || "",
+      origen: "financiacion_plan",
+      referencia: `fin_plan=${plan_id}`,
+      nota: plan.nota || "",
+      created_at: new Date().toISOString(),
+    }});
+  } catch (e) {
+    throw new Error(`El plan ${plan.nro_plan || plan_id} quedó creado, pero la compra NO se marcó como financiada (${e?.message || e}). Eliminá el plan en Financiaciones y volvé a intentar.`);
+  }
+  return { ok: true, plan_id, capital, parcial: capital < saldo - 0.5 };
+}
+
 /**
  * Imputa una línea del extracto a una cuota: la convierte en PAGO (documento_id
  * FIN-<plan_id>#<nro>, no-CONTAB- → excluida del P&L) y marca la cuota pagada. El capital
@@ -3596,11 +3686,18 @@ export async function cancelarFinanciacion(plan_id) {
   for (const id of ids) await post({ action: "edit", sheet: "nb_financiaciones", id, patch: { estado: "cancelada" } });
 }
 
-/** Borra un plan entero (todas sus filas). */
+/** Borra un plan entero (todas sus filas). Si el plan financiaba una CxP (comprobante_origen), borra
+ *  PRIMERO su neteo en nb_movimientos → la compra vuelve a quedar a pagar. Orden a propósito: si falla a
+ *  mitad, quedan CxP + plan (pasivo sobreestimado y visible), nunca una compra saldada sin plan. */
 export async function deleteFinanciacion(plan_id) {
   const rows = await get("nb_financiaciones", {});
-  const ids  = rows.filter(r => r.plan_id === plan_id).map(r => r.id);
-  for (const id of ids) await post({ action: "del", sheet: "nb_financiaciones", id });
+  const propias = rows.filter(r => r.plan_id === plan_id);
+  if (propias.some(r => r.comprobante_origen)) {
+    const movs = await get("nb_movimientos", {});
+    const neteos = movs.filter(m => esNeteoFinanciacion(m) && planIdDeNeteo(m) === plan_id);
+    for (const m of neteos) await post({ action: "del", sheet: "nb_movimientos", id: m.id });
+  }
+  for (const r of propias) await post({ action: "del", sheet: "nb_financiaciones", id: r.id });
 }
 
 // ─── SOCIOS (cuenta corriente: dividendos + préstamos) ─────────────────────────
