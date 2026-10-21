@@ -124,8 +124,10 @@ const DISTRIB_ROSEDAL = {
 const _mesActualYM = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; })();
 
 // Selector de moneda → [modo, destino]. "ARS"/"USD"/… = nativo (el reporte filtra por esa moneda, como
-// siempre). "<CUR>_REAL" / "<CUR>_CONST" = consolidado: traduce TODAS las monedas a <CUR>, al TC del mes de
-// cada fila (real) o al de un mes ancla (const). El destino sale del mismo valor, no de una variable aparte.
+// siempre). "<CUR>_REAL" / "<CUR>_COMP" = consolidado: traduce TODAS las monedas a <CUR>, al TC del mes de
+// cada fila (real) o al TC del MISMO mes del año en curso (comparable: el año anterior se reexpresa al dólar
+// de este año, mes a mes → el año en curso da igual que en real y la variación interanual queda sin efecto
+// cambiario). "<CUR>_CONST" se acepta como alias viejo. El destino sale del mismo valor, no de otra variable.
 // Monedas en las que se puede consolidar: U$D (grupo), € (España se analiza en euros) y COP (la moneda de
 // gestión de Colombia). El ARS no está: Rosedal/Huergo son negocios de una sola moneda y no lo necesitan.
 const FX_DESTINOS = ["USD", "EUR", "COP"];
@@ -142,9 +144,9 @@ const monedaValidaEn = (sel, tab) => {
   return modo === "native" || fxDestinosDe(tab).includes(dst);
 };
 function parseMonedaSel(sel) {
-  const m = /^([A-Z]{3})_(REAL|CONST)$/.exec(String(sel || ""));
+  const m = /^([A-Z]{3})_(REAL|COMP|CONST)$/.exec(String(sel || ""));
   if (!m || !FX_DESTINOS.includes(m[1])) return ["native", null];
-  return [m[2] === "REAL" ? "real" : "const", m[1]];
+  return [m[2] === "REAL" ? "real" : "comp", m[1]];
 }
 
 // Pre-traduce filas de P&L a la moneda del consolidado: convierte `total` + `iva_monto` al TC del mes de CADA
@@ -400,13 +402,20 @@ const primaryVal = (vista, arr, mes) =>
   : (arr || []).reduce((s, v) => s + (Number(v) || 0), 0);
 
 // Columnas de las vistas comparativas (mensual / ytd). Cada col: {header, kind:"val"|"var", get|a,b}.
-function colsSedeVista(vista, mes, year) {
+// Los getters reciben (cur, prev, prevC): `prevC` es el año anterior en el OTRO lente (comparable) y solo
+// existe en YTD con moneda comparable (`dosLentes`), donde el año anterior se muestra a TC real y comparable lado a lado.
+function colsSedeVista(vista, mes, year, dosLentes = false) {
   const m1 = (c, p) => mes > 0 ? (Number(c[mes - 1]) || 0) : (Number(p?.[11]) || 0);   // M-1 (enero → dic año ant.)
   if (vista === "ytd") return [
     { header: `YTD ${year}`,     kind: "val", get: c => sumTo(c, mes) },
     { header: `YTD ${year - 1}`, kind: "val", get: (c, p) => sumTo(p, mes) },
     { header: "Δ",               kind: "var", abs: true, a: c => sumTo(c, mes), b: (c, p) => sumTo(p, mes) },
     { header: "Var%",            kind: "var", a: c => sumTo(c, mes), b: (c, p) => sumTo(p, mes) },
+    // Dos lentes: el año anterior reexpresado al TC del año en curso, mes a mes (ver modo "comp" del selector).
+    ...(dosLentes ? [
+      { header: `YTD ${year - 1} comp.`, kind: "val", comp: true, get: (c, p, pc) => sumTo(pc, mes) },
+      { header: "Var%",                  kind: "var", comp: true, a: c => sumTo(c, mes), b: (c, p, pc) => sumTo(pc, mes) },
+    ] : []),
   ];
   return [   // mensual: Mes · Mes ant. · Δ nominal vs mes ant. · Var% · mismo mes año ant. · Var%
     { header: MESES[mes],       kind: "val", get: c => Number(c[mes]) || 0 },
@@ -427,9 +436,10 @@ const colsEvolucion = months => [
 // con border-collapse los bordes del <tr> no pintan confiablemente sobre las celdas).
 function celdasSede(cols, cur, prev, pol, o) {
   const bord = { ...(o.bt ? { borderTop: o.bt } : {}), ...(o.bb ? { borderBottom: o.bb } : {}) };
+  const pc = o.prevC;   // año anterior en el lente comparable (solo YTD consolidado)
   return cols.map((col, i) => {
     if (col.kind === "var") {
-      const a = col.a(cur, prev), b = col.b(cur, prev), d = a - b;
+      const a = col.a(cur, prev, pc), b = col.b(cur, prev, pc), d = a - b;
       const varTd = (color, content) => <td key={i} style={{ padding: o.pad, fontSize: (o.fs || 13) - 1,
         textAlign: "right", fontFamily: "var(--mono)", fontWeight: 700, color, whiteSpace: "nowrap", ...bord,
         ...(col.total ? { borderLeft: `1px solid ${T.cardBorder}` } : {}) }}>{content}</td>;
@@ -462,7 +472,7 @@ function celdasSede(cols, cur, prev, pol, o) {
     if (o.stock && col.total) {
       let lm = o.lastM; while (lm > 0 && !(Number(cur?.[lm]) || 0)) lm--;
       v = Number(cur?.[lm]) || 0;
-    } else v = col.get(cur, prev);
+    } else v = col.get(cur, prev, pc);
     if (o.pct && !o.stock) {
       // Share sobre el Total de Ingresos de la MISMA columna. Dos modos (evita saturar la vista con número+% en
       // cada celda): "pct" = solo el %; "nominal" (default) = el número, con el % (chiquito, gris) SOLO en la col TOTAL.
@@ -482,6 +492,58 @@ function celdasSede(cols, cur, prev, pol, o) {
       fontFamily: "var(--mono)", fontWeight: o.fw || 400, color, whiteSpace: "nowrap", ...bord,
       ...(col.total ? { borderLeft: `1px solid ${T.cardBorder}` } : {}) }}>
       {fmtPar(v, pol < 0)}</td>;
+  });
+}
+
+// ── Fila de RATIO ("Margen sobre ventas" = resultado / ingresos). Un ratio no se suma: en cada columna se
+// calcula numerador y denominador con el getter de la columna y recién ahí se divide (YTD = Σres / Σing). Las
+// columnas de variación muestran la diferencia en PUNTOS; si una Δ (abs) ya mostró los pp, la Var% contigua
+// queda vacía para no repetir. Estilo suave (cursiva, gris) para que no compita con Resultado Final.
+function celdasRatio(cols, f, o) {
+  const val = (g) => {
+    const n = g(f.num, f.numPrev, f.numPrevC), d = g(f.den, f.denPrev, f.denPrevC);
+    return d ? n / d * 100 : null;
+  };
+  const base = { padding: o.pad, fontSize: o.fs || 12, textAlign: "right", fontFamily: "var(--mono)", fontStyle: "italic",
+    whiteSpace: "nowrap" };
+  return cols.map((col, i) => {
+    const bl = col.total ? { borderLeft: `1px solid ${T.cardBorder}` } : {};
+    if (col.kind === "var") {
+      const prevEsAbs = cols[i - 1]?.kind === "var" && cols[i - 1].abs;
+      if (!col.abs && prevEsAbs) return <td key={i} style={{ ...base, ...bl }} />;
+      const a = val(col.a), b = val(col.b);
+      const d = (a != null && b != null) ? a - b : null;
+      return <td key={i} style={{ ...base, ...bl, fontWeight: 700, color: d == null ? T.dim : d > 0 ? T.green : d < 0 ? T.red : T.dim }}>
+        {d == null ? "—" : `${d > 0 ? "+" : ""}${d.toFixed(1)} pp`}</td>;
+    }
+    const v = val(col.get);
+    return <td key={i} style={{ ...base, ...bl, color: T.muted }}>{v == null ? "—" : `${v.toFixed(1).replace(".", ",")}%`}</td>;
+  });
+}
+// <tr> completa de una fila de ratio (misma para Sedes, Huergo y BIGG).
+function filaRatio(f, cols, idx) {
+  return (
+    <tr key={idx} style={{ background: "#fff", borderBottom: `1px solid ${T.cardBorder}` }}>
+      <td style={{ padding: "7px 14px 7px 32px", fontSize: 12.5, fontStyle: "italic", color: T.muted, whiteSpace: "nowrap",
+        ...stickyCol, background: "#fff" }}>{f.label}</td>
+      {celdasRatio(cols, f, { pad: "7px 12px", fs: 12 })}
+    </tr>
+  );
+}
+// Fila de ratio lista para `filas.push`: numerador/denominador del año y del anterior (el lente comparable
+// se completa después con `zipPrevC`).
+const filaRatioDe = (label, num, den, numPrev, denPrev) =>
+  ({ kind: "ratio", label, num, den, numPrev: numPrev || ZERO12, denPrev: denPrev || ZERO12 });
+// Dos lentes (YTD consolidado): el constructor corre una segunda vez con el año anterior COMPARABLE y se copia
+// ese `prev` como `prevC` fila a fila (la estructura de filas no depende del año anterior → índice a índice;
+// si por algún motivo difiere, se empareja por label).
+function zipPrevC(filas, filasAlt) {
+  const porLabel = new Map(filasAlt.map(f => [f.kind + "|" + f.label, f]));
+  filas.forEach((f, i) => {
+    const g = (filasAlt[i] && filasAlt[i].kind === f.kind && filasAlt[i].label === f.label) ? filasAlt[i] : porLabel.get(f.kind + "|" + f.label);
+    if (!g) return;
+    if (f.kind === "ratio") { f.numPrevC = g.numPrev; f.denPrevC = g.denPrev; }
+    else if (g.prev) f.prevC = g.prev;
   });
 }
 
@@ -584,7 +646,7 @@ export function buildPnLSedeFilas(props, isCol) {
     : sinClasEff;
   const sinCls = Object.keys(sinClasView).length > 0;
 
-  const cols = vista === "evolucion" ? colsEvolucion(activeMonths) : colsSedeVista(vista, mes, year);
+  const cols = vista === "evolucion" ? colsEvolucion(activeMonths) : colsSedeVista(vista, mes, year, !!props.pnlPrevC);
   const lastM = activeMonths[activeMonths.length - 1];
   const Pg = pnlPrev?.grupos || {};
   const stP = k => (subPrev?.st?.[k]) || ZERO12;
@@ -664,11 +726,14 @@ export function buildPnLSedeFilas(props, isCol) {
         const fcfPrev = resFinPrev.map((v, m) => v - (Number(stP0("com_res")[m]) || 0) - (Number(stP0("inv_no_op")[m]) || 0));
         filas.push({ kind: "result", label: netoLabel, cur: fcfArr, prev: fcfPrev, pol: 1 });
       }
+      // Margen sobre ventas = Resultado Final / Total Ingresos (pedido Martín 21/10: en todos los P&L).
+      filas.push(filaRatioDe("Margen sobre ventas", resFin, totIngresos, resFinPrev, subPrev.totIngresos));
     } else {
       // Vista estándar (P&L Sedes): Comisión/Inversiones → Resultado Final (sin cola). Bandas vacías se ocultan.
       if (provMes || !esVacio12(sub.st.com_res)) pushComRes();
       if (!esVacio12(sub.st.inv_no_op)) pushGrupo("inv_no_op", -1);
       filas.push({ kind: "result", label: "Resultado Final", cur: resFinalEff, prev: subPrev.resFinal, pol: 1 });
+      filas.push(filaRatioDe("Margen sobre ventas", resFinalEff, totIngresos, subPrev.resFinal, subPrev.totIngresos));
     }
 
     // Distribución del FCF (Rosedal): cuenta corriente por parte (Socios / Ñako-BIGG). Apropiación del resultado
@@ -725,6 +790,14 @@ export function buildPnLSedeFilas(props, isCol) {
       for (const [name, arr] of Object.entries(sinClasView))
         filas.push({ kind: "cuenta", label: nombreCuenta(name), cur: arr, prev: ZERO12, pol: 1, color: "#b45309" });
     }
+  }
+  // Dos lentes: segunda pasada con el año anterior comparable → prevC en cada fila.
+  if (props.pnlPrevC && !props._alt) {
+    const alt = buildPnLSedeFilas({ ...props, _alt: true, pnlPrevC: null,
+      pnlPrev: props.pnlPrevC, subPrev: props.subPrevC,
+      estructuraCuotaPrev: props.estructuraCuotaPrevC ?? props.estructuraCuotaPrev,
+      estructuraImpuestosPrev: props.estructuraImpuestosPrevC ?? props.estructuraImpuestosPrev }, isCol);
+    zipPrevC(filas, alt.filas);
   }
   return { cols, filas, activeMonths, lastM, sinCls };
 }
@@ -808,7 +881,7 @@ function PnLTableSede(props) {
                     letterSpacing: ".06em", userSelect: "none", ...stickyCol, background: "#f1f5f9" }}>
                     <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{isCol(f.key) ? "▶" : "▼"}</span>{f.label}
                   </td>
-                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "7px 12px", fs: 12, fw: 800, color: SEDE_HDR })}
+                  {celdasSede(cols, f.cur, f.prev, f.pol, { prevC: f.prevC, pad: "7px 12px", fs: 12, fw: 800, color: SEDE_HDR })}
                 </tr>
               );
               if (f.kind === "cuenta") {
@@ -824,7 +897,7 @@ function PnLTableSede(props) {
                     <td style={{ padding: pad, fontSize: 13, color: f.color || T.text, whiteSpace: "nowrap",
                       borderBottom: `1px solid ${T.cardBorder}`, userSelect: clickable ? "none" : undefined, ...stickyCol, background: cbg }}>
                       {clickable && <span style={{ display: "inline-block", width: 18, marginLeft: -18, fontSize: 9, opacity: .7 }}>{isCol(f.toggleKey) ? "▶" : "▼"}</span>}{f.label}</td>
-                    {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "6px 12px", fs: 13, fw: 400, color: f.color || SEDE_HDR, stock: f.stock, lastM })}
+                    {celdasSede(cols, f.cur, f.prev, f.pol, { prevC: f.prevC, pad: "6px 12px", fs: 13, fw: 400, color: f.color || SEDE_HDR, stock: f.stock, lastM })}
                   </tr>
                 );
               }
@@ -844,17 +917,18 @@ function PnLTableSede(props) {
                   <tr key={idx} style={{ background: bg, borderTop: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, borderBottom: `2px solid ${T.cardBorder}` }}>
                     <td style={{ padding: "12px 14px", fontSize: f.strong ? 15 : 14, fontWeight: 900, color: SEDE_HDR,
                       borderTop: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, borderBottom: `2px solid ${T.cardBorder}`, ...stickyCol, background: bg }}>{f.label}</td>
-                    {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: f.strong ? 15 : 14, fw: 900, color: SEDE_HDR,
+                    {celdasSede(cols, f.cur, f.prev, f.pol, { prevC: f.prevC, pad: "12px 12px", fs: f.strong ? 15 : 14, fw: 900, color: SEDE_HDR,
                       bt: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, bb: `2px solid ${T.cardBorder}` })}
                   </tr>
                 );
               }
+              if (f.kind === "ratio") return filaRatio(f, cols, idx);
               const pv = primaryVal(vista, f.cur, mes), rc = pv >= 0 ? T.green : T.red, rbg = pv >= 0 ? "#bbf7d0" : "#fecaca";
               return (
                 <tr key={idx} style={{ background: rbg, borderTop: `3px solid ${rc}`, borderBottom: `2px solid ${rc}` }}>
                   <td style={{ padding: "12px 14px", fontSize: 15, fontWeight: 900, color: rc,
                     borderTop: `3px solid ${rc}`, borderBottom: `2px solid ${rc}`, ...stickyCol, background: rbg }}>{f.label}</td>
-                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: 15, fw: 900, bySign: true,
+                  {celdasSede(cols, f.cur, f.prev, f.pol, { prevC: f.prevC, pad: "12px 12px", fs: 15, fw: 900, bySign: true,
                     stock: f.stock, lastM, bt: `3px solid ${rc}`, bb: `2px solid ${rc}` })}
                 </tr>
               );
@@ -874,24 +948,37 @@ function PnLTableSede(props) {
 // ─── P&L HUERGO (Wellness Real Estate, anillo 1) — negocio de MARGEN, no sede ──────────────────────
 // Estructura simple (no waterfall de sede): Ingresos (lo que paga el edificio) − Costos (horas de coaches)
 // = Margen. Agrupa dinámico por cuenta: inRows→Ingresos, egRows→Costos (así no hay que hardcodear cuentas).
-function PnLTableHuergo({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolucion", mes = 0, hayHistorico = false, mesMax = null }) {
+// Filas del P&L Huergo (puro, también para el export). `pnlPrevC/subPrevC` = año anterior comparable (YTD consolidado).
+function buildPnLHuergoFilas({ pnl, sub, pnlPrev, subPrev, pnlPrevC = null, subPrevC = null, year, vista = "evolucion", mes = 0, hayHistorico = false, mesMax = null }) {
   const { totIng, totCos, margen, activeMonths: _amRaw } = sub;
   const activeMonths = mesesVisibles(_amRaw, year, hayHistorico, mesMax);
+  const cols = vista === "evolucion" ? colsEvolucion(activeMonths) : colsSedeVista(vista, mes, year, !!pnlPrevC);
+  const armar = (pp, sp) => {
+    const Pi = pp?.ingresos || {}, Pc = pp?.costos || {};
+    const filas = [{ kind: "banda", label: "Ingresos" }];
+    for (const [n, a] of Object.entries(pnl.ingresos)) filas.push({ kind: "cuenta", label: n, cur: a, prev: Pi[n] || ZERO12, pol: 1 });
+    filas.push({ kind: "subtotal", strong: true, label: "Total Ingresos", cur: totIng, prev: sp.totIng, pol: 1 });
+    filas.push({ kind: "banda", label: "Costos (horas de coaches)" });
+    for (const [n, a] of Object.entries(pnl.costos)) filas.push({ kind: "cuenta", label: n, cur: a, prev: Pc[n] || ZERO12, pol: -1 });
+    filas.push({ kind: "subtotal", label: "Total Costos", cur: totCos, prev: sp.totCos, pol: -1 });
+    filas.push({ kind: "result", label: "Margen", cur: margen, prev: sp.margen, pol: 1 });
+    filas.push(filaRatioDe("Margen sobre ventas", margen, totIng, sp.margen, sp.totIng));
+    return filas;
+  };
+  const filas = armar(pnlPrev, subPrev || {});
+  if (pnlPrevC) zipPrevC(filas, armar(pnlPrevC, subPrevC || {}));
+  return { cols, filas, activeMonths, lastM: activeMonths[activeMonths.length - 1] };
+}
+
+function PnLTableHuergo(props) {
+  const { year, moneda, vista = "evolucion", mes = 0 } = props;
+  const { cols, filas, activeMonths } = buildPnLHuergoFilas(props);
   if (activeMonths.length === 0) return (
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
       padding: "60px 24px", textAlign: "center", boxShadow: T.shadow }}>
       <div style={{ fontSize: 14, color: T.muted }}>Sin datos para {year} en {moneda}.</div>
     </div>
   );
-  const cols = vista === "evolucion" ? colsEvolucion(activeMonths) : colsSedeVista(vista, mes, year);
-  const Pi = pnlPrev?.ingresos || {}, Pc = pnlPrev?.costos || {};
-  const filas = [{ kind: "banda", label: "Ingresos" }];
-  for (const [n, a] of Object.entries(pnl.ingresos)) filas.push({ kind: "cuenta", label: n, cur: a, prev: Pi[n] || ZERO12, pol: 1 });
-  filas.push({ kind: "subtotal", strong: true, label: "Total Ingresos", cur: totIng, prev: subPrev.totIng, pol: 1 });
-  filas.push({ kind: "banda", label: "Costos (horas de coaches)" });
-  for (const [n, a] of Object.entries(pnl.costos)) filas.push({ kind: "cuenta", label: n, cur: a, prev: Pc[n] || ZERO12, pol: -1 });
-  filas.push({ kind: "subtotal", label: "Total Costos", cur: totCos, prev: subPrev.totCos, pol: -1 });
-  filas.push({ kind: "result", label: "Margen", cur: margen, prev: subPrev.margen, pol: 1 });
 
   return (
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
@@ -914,7 +1001,7 @@ function PnLTableHuergo({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evo
                 <tr key={idx} style={{ borderBottom: `1px solid ${T.cardBorder}`, background: T.card }}>
                   <td style={{ padding: "6px 14px 6px 32px", fontSize: 13, color: T.text, whiteSpace: "nowrap",
                     borderBottom: `1px solid ${T.cardBorder}`, ...stickyCol, background: T.card }}>{f.label}</td>
-                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "6px 12px", fs: 13, fw: 400, color: SEDE_HDR })}
+                  {celdasSede(cols, f.cur, f.prev, f.pol, { prevC: f.prevC, pad: "6px 12px", fs: 13, fw: 400, color: SEDE_HDR })}
                 </tr>
               );
             }
@@ -924,17 +1011,18 @@ function PnLTableHuergo({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evo
                 <tr key={idx} style={{ background: bg, borderTop: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, borderBottom: `2px solid ${T.cardBorder}` }}>
                   <td style={{ padding: "12px 14px", fontSize: f.strong ? 15 : 14, fontWeight: 900, color: SEDE_HDR,
                     borderTop: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, borderBottom: `2px solid ${T.cardBorder}`, ...stickyCol, background: bg }}>{f.label}</td>
-                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: f.strong ? 15 : 14, fw: 900, color: SEDE_HDR,
+                  {celdasSede(cols, f.cur, f.prev, f.pol, { prevC: f.prevC, pad: "12px 12px", fs: f.strong ? 15 : 14, fw: 900, color: SEDE_HDR,
                     bt: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, bb: `2px solid ${T.cardBorder}` })}
                 </tr>
               );
             }
+            if (f.kind === "ratio") return filaRatio(f, cols, idx);
             const pv = primaryVal(vista, f.cur, mes), rc = pv >= 0 ? T.green : T.red, rbg = pv >= 0 ? "#bbf7d0" : "#fecaca";
             return (
               <tr key={idx} style={{ background: rbg, borderTop: `3px solid ${rc}`, borderBottom: `2px solid ${rc}` }}>
                 <td style={{ padding: "12px 14px", fontSize: 15, fontWeight: 900, color: rc,
                   borderTop: `3px solid ${rc}`, borderBottom: `2px solid ${rc}`, ...stickyCol, background: rbg }}>{f.label}</td>
-                {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: 15, fw: 900, bySign: true, bt: `3px solid ${rc}`, bb: `2px solid ${rc}` })}
+                {celdasSede(cols, f.cur, f.prev, f.pol, { prevC: f.prevC, pad: "12px 12px", fs: 15, fw: 900, bySign: true, bt: `3px solid ${rc}`, bb: `2px solid ${rc}` })}
               </tr>
             );
           })}
@@ -947,12 +1035,14 @@ function PnLTableHuergo({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evo
 // Construye cols + filas del P&L BIGG (holding). PURA y reutilizable: la usa el render (PnLTableBigg) Y la
 // exportación a Excel → la planilla sale idéntica a la pantalla. `isCol(key)` decide qué secciones van
 // expandidas (en export = () => false: todas abiertas, y el agrupado nativo de Excel las colapsa).
-export function buildPnLBiggFilas({ pnl, sub, pnlPrev, subPrev, year, vista = "evolucion", mes = 0, hayHistorico = false, mesMax = null, soloIngresos = false, sedesApertura = null }, isCol) {
+export function buildPnLBiggFilas(propsBigg, isCol) {
+  const { pnl, sub, pnlPrev, subPrev, year, vista = "evolucion", mes = 0, hayHistorico = false, mesMax = null, soloIngresos = false, sedesApertura = null,
+          pnlPrevC = null, subPrevC = null, _alt = false } = propsBigg;
   const { sar, fg, wre, hqAccounts, ghqAccounts, gpvAccounts, capexAccounts,
           resOperaciones, resOpMasIngHQ, margen, resOpGrupo, resAntesImp, resGrupo, resFinal, activeMonths: _amRaw } = sub;
   const activeMonths = mesesVisibles(_amRaw, year, hayHistorico, mesMax);
   const hayCapex = Object.keys(capexAccounts || {}).length > 0;
-  const cols = vista === "evolucion" ? colsEvolucion(activeMonths) : colsSedeVista(vista, mes, year);
+  const cols = vista === "evolucion" ? colsEvolucion(activeMonths) : colsSedeVista(vista, mes, year, !!pnlPrevC);
   const lastM = activeMonths.length ? activeMonths[activeMonths.length - 1] : 0;
   const P = subPrev || {};
   const Pg = pnlPrev?.grupos || {};
@@ -1022,18 +1112,26 @@ export function buildPnLBiggFilas({ pnl, sub, pnlPrev, subPrev, year, vista = "e
       filas.push({ kind: "cuenta", label: n, cur: v, prev: (Pg.imp?.[n]) || ZERO12, pol: -1 });
   }
   filas.push({ kind: "result", strong: true, label: "Resultado del Grupo", cur: resGrupo, prev: P.resGrupo, pol: 1 });
+  // Margen sobre ventas del grupo = Resultado del Grupo / Total Ingresos (pedido Martín 21/10).
+  filas.push(filaRatioDe("Margen sobre ventas", resGrupo, resOpMasIngHQ, P.resGrupo, P.resOpMasIngHQ));
   if (hayCapex) {
     filas.push({ kind: "spacer" });
     secc("sec_capex", "Inversiones / Capex", capexAccounts, P.capexAccounts, null, -1);
     filas.push({ kind: "result", strong: true, label: "Resultado Final del Grupo", cur: resFinal, prev: P.resFinal, pol: 1 });
   }
   }
+  // Dos lentes (YTD consolidado): segunda pasada con el año anterior comparable → prevC fila a fila.
+  if (pnlPrevC && !_alt) {
+    const alt = buildPnLBiggFilas({ ...propsBigg, _alt: true, pnlPrevC: null, subPrevC: null, pnlPrev: pnlPrevC, subPrev: subPrevC,
+      sedesApertura: sedesApertura ? { cur: sedesApertura.cur, prev: sedesApertura.prevC || sedesApertura.prev } : null }, isCol);
+    zipPrevC(filas, alt.filas);
+  }
   return { cols, filas, lastM, activeMonths };
 }
 
 // P&L BIGG = P&L de HOLDING. Arriba el RESULTADO de cada negocio operativo (no la venta); después HQ
 // (ingresos − opex), y al final financieros + impuestos del grupo. `sub` = computeSubtotalsHolding.
-function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolucion", mes = 0, hayHistorico = false, mesMax = null, soloIngresos = false, sedesApertura = null, pctMode = false, pctVista = "nominal" }) {
+function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, pnlPrevC = null, subPrevC = null, year, moneda, vista = "evolucion", mes = 0, hayHistorico = false, mesMax = null, soloIngresos = false, sedesApertura = null, pctMode = false, pctVista = "nominal" }) {
   const ALLKEYS = ["sec_op", "sec_sedes", "sec_ing", "sec_gpv", "sec_opex", "sec_fin", "sec_imp", "sec_capex"];
   const [collapsed, setCollapsed] = useState(() => Object.fromEntries(ALLKEYS.map(k => [k, true])));   // arranca compactado
   const isCol  = k => !!collapsed[k];
@@ -1042,7 +1140,7 @@ function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolu
   const toggleAll = () => setCollapsed(allCol ? {} : Object.fromEntries(ALLKEYS.map(k => [k, true])));
 
   const { cols, filas, activeMonths } = buildPnLBiggFilas(
-    { pnl, sub, pnlPrev, subPrev, year, vista, mes, hayHistorico, mesMax, soloIngresos, sedesApertura }, isCol);
+    { pnl, sub, pnlPrev, subPrev, pnlPrevC, subPrevC, year, vista, mes, hayHistorico, mesMax, soloIngresos, sedesApertura }, isCol);
 
   if (activeMonths.length === 0) return (
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
@@ -1079,7 +1177,7 @@ function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolu
                   letterSpacing: ".04em", userSelect: "none", ...stickyCol, background: "#f1f5f9" }}>
                   <span style={{ marginRight: 6, fontSize: 9, opacity: .7 }}>{isCol(f.key) ? "▶" : "▼"}</span>{f.label}
                 </td>
-                {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "7px 12px", fs: 12, fw: 800, color: SEDE_HDR, ...pctOpt })}
+                {celdasSede(cols, f.cur, f.prev, f.pol, { prevC: f.prevC, pad: "7px 12px", fs: 12, fw: 800, color: SEDE_HDR, ...pctOpt })}
               </tr>
             );
             if (f.kind === "cuenta") {
@@ -1092,7 +1190,7 @@ function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolu
                   <td style={{ padding: pad, fontSize: 13, color: T.text, whiteSpace: "nowrap",
                     borderBottom: `1px solid ${T.cardBorder}`, userSelect: clickable ? "none" : undefined, ...stickyCol, background: cbg }}>
                     {clickable && <span style={{ display: "inline-block", width: 18, marginLeft: -18, fontSize: 9, opacity: .7 }}>{isCol(f.toggleKey) ? "▶" : "▼"}</span>}{f.label}</td>
-                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "6px 12px", fs: 13, fw: 400, color: SEDE_HDR, ...pctOpt })}
+                  {celdasSede(cols, f.cur, f.prev, f.pol, { prevC: f.prevC, pad: "6px 12px", fs: 13, fw: 400, color: SEDE_HDR, ...pctOpt })}
                 </tr>
               );
             }
@@ -1102,17 +1200,18 @@ function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, year, moneda, vista = "evolu
                 <tr key={idx} style={{ background: bg, borderTop: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, borderBottom: `2px solid ${T.cardBorder}` }}>
                   <td style={{ padding: "12px 14px", fontSize: f.strong ? 15 : 14, fontWeight: 900, color: SEDE_HDR,
                     borderTop: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, borderBottom: `2px solid ${T.cardBorder}`, ...stickyCol, background: bg }}>{f.label}</td>
-                  {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: f.strong ? 15 : 14, fw: 900, color: SEDE_HDR,
+                  {celdasSede(cols, f.cur, f.prev, f.pol, { prevC: f.prevC, pad: "12px 12px", fs: f.strong ? 15 : 14, fw: 900, color: SEDE_HDR,
                     bt: `${f.strong ? 3 : 2}px solid ${SEDE_HDR}`, bb: `2px solid ${T.cardBorder}`, ...(f.pctTotal ? {} : pctOpt) })}
                 </tr>
               );
             }
+            if (f.kind === "ratio") return filaRatio(f, cols, idx);
             const pv = primaryVal(vista, f.cur, mes), rc = pv >= 0 ? T.green : T.red, rbg = pv >= 0 ? "#bbf7d0" : "#fecaca";
             return (
               <tr key={idx} style={{ background: rbg, borderTop: `3px solid ${rc}`, borderBottom: `2px solid ${rc}` }}>
                 <td style={{ padding: "12px 14px", fontSize: 15, fontWeight: 900, color: rc,
                   borderTop: `3px solid ${rc}`, borderBottom: `2px solid ${rc}`, ...stickyCol, background: rbg }}>{f.label}</td>
-                {celdasSede(cols, f.cur, f.prev, f.pol, { pad: "12px 12px", fs: 15, fw: 900, bySign: true, bt: `3px solid ${rc}`, bb: `2px solid ${rc}` })}
+                {celdasSede(cols, f.cur, f.prev, f.pol, { prevC: f.prevC, pad: "12px 12px", fs: 15, fw: 900, bySign: true, bt: `3px solid ${rc}`, bb: `2px solid ${rc}` })}
               </tr>
             );
           })}
@@ -1735,8 +1834,10 @@ export default function PantallaReportes({ onVerComprobante }) {
   }, [loadKey]);
   // Modo de consolidación FX derivado del selector. "native" = filtra por moneda (como siempre);
   // "real" = traduce TODO a la moneda destino al TC de cierre de CADA mes (mezcla operación + efecto
-  // cambiario); "const" = traduce TODO al TC de UN mes ancla (el del selector Mes) → comparable, aísla el FX
-  // (las paridades quedan fijas, sin ruido de devaluación/caída del euro). Destino = U$D o € (ver FX_DESTINOS).
+  // cambiario); "comp" = traduce cada fila al TC del MISMO mes del AÑO EN CURSO: el año actual queda igual que
+  // en real y el anterior se reexpresa al dólar de este año, mes a mes → la variación interanual aísla el FX.
+  // (Hasta el 21/10/2026 era "constante": todo al TC de un mes ancla, que distorsionaba el YTD del año en curso
+  // contra sí mismo. Cambiado con Martín.) Destino = U$D, € o COP (ver FX_DESTINOS).
   const [fxMode, fxTarget] = parseMonedaSel(monedaSel);
   const monedaPL = fxMode === "native" ? monedaSel : fxTarget;
   const setMonedaPL = setMonedaSel;   // los efectos que forzaban moneda (fondeadas/Huergo) siguen andando
@@ -2052,23 +2153,26 @@ export default function PantallaReportes({ onVerComprobante }) {
   const egParaPnL = useMemo(() => rawEg.filter(r => !String(r.nota || "").includes(RETDEP_TAG)), [rawEg]);
   const egConSueldos = useMemo(() => [...egParaPnL, ...salaryRows, ...gastoMovRows, ...finRows, ...histEg], [egParaPnL, salaryRows, gastoMovRows, finRows, histEg]);
 
-  // Mes ancla del modo constante: sigue al selector Mes en Mensual/YTD; en Evolución usa "Hasta" (o el
-  // último mes completo). 0-based. El TC de ESTE mes (del año en curso) traduce TODOS los meses de AMBOS años.
+  // Mes que se está mirando (0-based): el selector Mes en Mensual/YTD; en Evolución, "Hasta" o el último mes
+  // completo. En modo comparable sirve para avisar si falta el TC de ese mes del año en curso.
   const anchorMes = (vistaPnl === "evolucion")
     ? (mesCorte ?? (year >= CUR_YEAR ? Math.max(0, new Date().getMonth() - 1) : 11))
     : mesSel;
-  const fxConstTC   = useMemo(() => fxMode === "const" ? tcDelMes(tiposCambio, year, anchorMes + 1) : null, [fxMode, tiposCambio, year, anchorMes]);
-  // El mes ancla no tiene TC cargado… o lo tiene pero sin la tasa del destino (ej. el mes existe pero le falta
-  // eurUSD): en ese caso la traducción devolvería null para todo y el reporte quedaría vacío sin explicación.
-  const fxConstFalta = fxMode === "const" &&
-    (!fxConstTC || (fxTarget !== "USD" && montoAMoneda(1, "USD", fxConstTC, fxTarget) == null));
+  const fxAnclaTC = useMemo(() => fxMode === "comp" ? tcDelMes(tiposCambio, year, anchorMes + 1) : null, [fxMode, tiposCambio, year, anchorMes]);
+  // El mes mirado no tiene TC del año en curso… o lo tiene pero sin la tasa del destino (ej. le falta eurUSD):
+  // la traducción daría null para ese mes en los dos años y la columna quedaría vacía sin explicación.
+  const fxCompFalta = fxMode === "comp" &&
+    (!fxAnclaTC || (fxTarget !== "USD" && montoAMoneda(1, "USD", fxAnclaTC, fxTarget) == null));
   // Traductor FX del P&L (consolidación). null en modo nativo. "real" = al destino con el TC de cierre del mes
-  // de cada fila (traducí mes por mes y sumá). "const" = al destino con el TC del mes ancla, ignorando el mes.
+  // de cada fila. "comp" = al destino con el TC del mismo mes pero del AÑO EN CURSO (`year`), sea la fila de
+  // este año o del anterior: así el año actual coincide con real y el anterior queda reexpresado mes a mes.
+  // Un mes del año en curso sin TC cargado (ej. oct–dic antes de cerrarlos) deja sin traducir las filas de ese
+  // mes de AMBOS años; en Mensual/YTD no se ven, y el aviso de arriba lo cubre para el mes mirado.
   const fxConv = useMemo(() => {
-    if (fxMode === "real")  return (monto, moneda, anio, mes) => montoAMoneda(monto, moneda, tcDelMes(tiposCambio, anio, mes), fxTarget);
-    if (fxMode === "const") return (monto, moneda) => montoAMoneda(monto, moneda, fxConstTC, fxTarget);
+    if (fxMode === "real") return (monto, moneda, anio, mes) => montoAMoneda(monto, moneda, tcDelMes(tiposCambio, anio, mes), fxTarget);
+    if (fxMode === "comp") return (monto, moneda, _anio, mes) => montoAMoneda(monto, moneda, tcDelMes(tiposCambio, year, mes), fxTarget);
     return null;
-  }, [fxMode, fxTarget, tiposCambio, fxConstTC]);
+  }, [fxMode, fxTarget, tiposCambio, year]);
 
   // Matriz del reporte "Intercompañía por negocio" (siempre en USD, independiente del modo FX del P&L). Se
   // computa acá (una vez) para poder dibujar el selector de Negocio junto al de Año y pasarla ya lista al tab.
@@ -2172,6 +2276,17 @@ export default function PantallaReportes({ onVerComprobante }) {
   const inFxRows = useMemo(() => traducirFilasFx(inConFranq, fxConv, fxTarget), [inConFranq, fxConv, fxTarget]);
   const egFxRows = useMemo(() => traducirFilasFx(egConSueldos, fxConv, fxTarget), [egConSueldos, fxConv, fxTarget]);
   const inFx = inFxRows.rows, egFx = egFxRows.rows;
+  // ── El OTRO lente (TC real) para la vista YTD "en dos lentes", que existe SOLO con moneda comparable: el año
+  // anterior se muestra a TC real y reexpresado al TC del año en curso, lado a lado. El año en curso es idéntico
+  // en los dos lentes (ver modo "comp") → solo hace falta traducir y construir el año anterior una segunda vez.
+  // Con TC real o moneda nativa no existe → null (Martín, 21/10: en TC real se ven solo las columnas de siempre;
+  // el comparable se introduce de a poco en el comité).
+  const fxConvAlt = useMemo(() => {
+    if (fxMode === "comp") return (monto, moneda, anio, mes) => montoAMoneda(monto, moneda, tcDelMes(tiposCambio, anio, mes), fxTarget);
+    return null;
+  }, [fxMode, fxTarget, tiposCambio, year]);
+  const inFxAlt = useMemo(() => fxConvAlt ? traducirFilasFx(inConFranq, fxConvAlt, fxTarget).rows : null, [inConFranq, fxConvAlt, fxTarget]);
+  const egFxAlt = useMemo(() => fxConvAlt ? traducirFilasFx(egConSueldos, fxConvAlt, fxTarget).rows : null, [egConSueldos, fxConvAlt, fxTarget]);
   // Meses PASADOS sin TC (alimenta el aviso). El mes en curso sin TC de cierre es esperado → no entra.
   const mesesSinTC = useMemo(
     () => [...new Set([...(inFxRows.mesesSinTC || []), ...(egFxRows.mesesSinTC || [])])].sort(),
@@ -2189,6 +2304,12 @@ export default function PantallaReportes({ onVerComprobante }) {
   );
   const subSede     = useMemo(() => computeSubtotalsSede(pnlSede), [pnlSede]);
   const subSedePrev = useMemo(() => computeSubtotalsSede(pnlSedePrev), [pnlSedePrev]);
+  // Año anterior en el otro lente (ver fxConvAlt).
+  const pnlSedePrevAlt = useMemo(
+    () => inFxAlt ? buildPnLSede(inFxAlt, egFxAlt, resolvedCCSede, year - 1, monedaPL, sinIva) : null,
+    [inFxAlt, egFxAlt, resolvedCCSede, year, monedaPL, sinIva]
+  );
+  const subSedePrevAlt = useMemo(() => pnlSedePrevAlt ? computeSubtotalsSede(pnlSedePrevAlt) : null, [pnlSedePrevAlt]);
   // Resultado NETO (sin IVA) de la sede → base para el ACREDITADO de la cesión: el 49% se apropia sobre la
   // ganancia real, NO sobre el resultado bruto (en Con IVA el acreditado se infla). Independiente del toggle.
   const subSedeNet  = useMemo(
@@ -2308,6 +2429,16 @@ export default function PantallaReportes({ onVerComprobante }) {
     if (wellnessEnScope || !factorEstructuraPrev) return full;
     return MESES.map((_, m) => (Number(full[m]) || 0) * factorEstructuraPrev[m]);
   }, [estructuraPnlPrev, wellnessEnScope, factorEstructuraPrev]);
+  // Lo mismo en el otro lente (los factores son proporciones → independientes del lente).
+  const estructuraPnlPrevAlt = useMemo(() => (
+    (estructuraCCId && inFxAlt) ? buildPnLSede(inFxAlt, egFxAlt, [estructuraCCId], year - 1, monedaPL, sinIva) : null
+  ), [estructuraCCId, inFxAlt, egFxAlt, year, monedaPL, sinIva]);
+  const estructuraCuotaPrevAlt = useMemo(() => {
+    if (!estructuraPnlPrevAlt) return null;
+    const full = computeSubtotalsSede(estructuraPnlPrevAlt).totGastosOp;
+    if (wellnessEnScope || !factorEstructuraPrev) return full;
+    return MESES.map((_, m) => (Number(full[m]) || 0) * factorEstructuraPrev[m]);
+  }, [estructuraPnlPrevAlt, wellnessEnScope, factorEstructuraPrev]);
   // ── Cola de IMPUESTOS del centro de estructura (España): el IVA de la sociedad (Modelo 303, aplazamientos)
   // se carga en 16-Wellness. Con Wellness en el scope ("Todas") ya está en pnlSede.sinClasificar. Con una sede
   // sola se PRORRATEA por POSICIÓN DE IVA (decisión Martín 29/9/2026): cada sede se lleva del pago la parte de
@@ -2338,12 +2469,29 @@ export default function PantallaReportes({ onVerComprobante }) {
     const factor = factorScope(statsPorSedePrev, "ivaPos").map((f, m) => f ?? factorEstructuraPrev[m]);
     return prorratearImpuestos(estructuraPnlPrev.sinClasificar, factor);
   }, [estructuraPnlPrev, statsPorSedePrev, factorEstructuraPrev, resolvedCCSede]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const estructuraImpuestosPrevAlt = useMemo(() => {
+    if (!estructuraPnlPrevAlt || !statsPorSedePrev || !factorEstructuraPrev) return null;
+    const factor = factorScope(statsPorSedePrev, "ivaPos").map((f, m) => f ?? factorEstructuraPrev[m]);
+    return prorratearImpuestos(estructuraPnlPrevAlt.sinClasificar, factor);
+  }, [estructuraPnlPrevAlt, statsPorSedePrev, factorEstructuraPrev, resolvedCCSede]);   // eslint-disable-line react-hooks/exhaustive-deps
   // Estructura efectiva a pasar a la tabla: centro (España, ya está dentro de Gastos Op → estructuraEnOpex)
   // o cuenta (Colombia, fuera de Gastos Op → resta al Resultado Operativo). Label según la lente.
   const estructuraCuotaEff  = estructuraCuota ?? estructuraCuentaVals;
   const estructuraCuotaPrevEff = estructuraCuota ? estructuraCuotaPrev : null;
+  const estructuraCuotaPrevAltEff = estructuraCuota ? estructuraCuotaPrevAlt : null;
   const estructuraEnOpexEff = estructuraCuota ? wellnessEnScope : false;
   const estructuraLabelEff  = estructuraCuentaName || "Estructura Wellness";
+
+  // ── Lentes del año anterior para la tabla de Sedes. En YTD comparable: `prev` = TC real y `prevC` = comparable
+  // (la vista muestra los dos). En TC real, Mensual o Evolución: `prev` = el lente del selector, sin `prevC`.
+  const dosLentes = fxMode !== "native" && vistaPnl === "ytd" && !!pnlSedePrevAlt;
+  const lenteSede = useMemo(() => {
+    const sel = { pnlPrev: pnlSedePrev, subPrev: subSedePrev, estructuraCuotaPrev: estructuraCuotaPrevEff, estructuraImpuestosPrev };
+    if (!dosLentes) return { ...sel, pnlPrevC: null, subPrevC: null, estructuraCuotaPrevC: null, estructuraImpuestosPrevC: null };
+    const alt = { pnlPrev: pnlSedePrevAlt, subPrev: subSedePrevAlt, estructuraCuotaPrev: estructuraCuotaPrevAltEff, estructuraImpuestosPrev: estructuraImpuestosPrevAlt };
+    const real = fxMode === "real" ? sel : alt, comp = fxMode === "real" ? alt : sel;
+    return { ...real, pnlPrevC: comp.pnlPrev, subPrevC: comp.subPrev, estructuraCuotaPrevC: comp.estructuraCuotaPrev, estructuraImpuestosPrevC: comp.estructuraImpuestosPrev };
+  }, [dosLentes, fxMode, pnlSedePrev, subSedePrev, estructuraCuotaPrevEff, estructuraImpuestosPrev, pnlSedePrevAlt, subSedePrevAlt, estructuraCuotaPrevAltEff, estructuraImpuestosPrevAlt]);
 
   // Retiros de la cesión (cuenta "Inversores") SIEMPRE con IVA (total), independiente del toggle: el retiro es
   // el efectivo real pagado al inversor. Tomo la versión Con IVA del pnl de sede.
@@ -2363,6 +2511,13 @@ export default function PantallaReportes({ onVerComprobante }) {
   const subHuergo     = useMemo(() => pnlHuergo ? computeSubtotalsHuergo(pnlHuergo) : null, [pnlHuergo]);
   const pnlHuergoPrev = useMemo(() => isHuergo ? buildPnLHuergo(inFx, egFx, huergoCCs, year - 1, monedaPL) : null, [isHuergo, inFx, egFx, huergoCCs, year, monedaPL]);
   const subHuergoPrev = useMemo(() => pnlHuergoPrev ? computeSubtotalsHuergo(pnlHuergoPrev) : null, [pnlHuergoPrev]);
+  const pnlHuergoPrevAlt = useMemo(() => (isHuergo && inFxAlt) ? buildPnLHuergo(inFxAlt, egFxAlt, huergoCCs, year - 1, monedaPL) : null, [isHuergo, inFxAlt, egFxAlt, huergoCCs, year, monedaPL]);
+  const subHuergoPrevAlt = useMemo(() => pnlHuergoPrevAlt ? computeSubtotalsHuergo(pnlHuergoPrevAlt) : null, [pnlHuergoPrevAlt]);
+  const lenteHuergo = (fxMode !== "native" && vistaPnl === "ytd" && pnlHuergoPrevAlt)
+    ? (fxMode === "real"
+        ? { pnlPrev: pnlHuergoPrev, subPrev: subHuergoPrev, pnlPrevC: pnlHuergoPrevAlt, subPrevC: subHuergoPrevAlt }
+        : { pnlPrev: pnlHuergoPrevAlt, subPrev: subHuergoPrevAlt, pnlPrevC: pnlHuergoPrev, subPrevC: subHuergoPrev })
+    : { pnlPrev: pnlHuergoPrev, subPrev: subHuergoPrev, pnlPrevC: null, subPrevC: null };
 
   // ── P&L BIGG = P&L de HOLDING (Núcleo/anillo 1). Se computa solo en la pestaña pl_bigg. ──
   const isBigg = activeTab === "pl_bigg";
@@ -2435,6 +2590,13 @@ export default function PantallaReportes({ onVerComprobante }) {
     [isBigg, isVentasHQ, inBigg, egBigg, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva, intercoData, fxConv]);
   const biggPrev = useMemo(() => (isBigg || isVentasHQ) ? holdingDe(year - 1) : null,   // eslint-disable-line react-hooks/exhaustive-deps
     [isBigg, isVentasHQ, inBigg, egBigg, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva, intercoData, fxConv]);
+  const biggPrevAlt = useMemo(() => ((isBigg || isVentasHQ) && inFxAlt) ? holdingDe(year - 1, { inR: inFxAlt, egR: egFxAlt, fx: fxConvAlt }) : null,   // eslint-disable-line react-hooks/exhaustive-deps
+    [isBigg, isVentasHQ, inFxAlt, egFxAlt, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva, intercoData, fxConvAlt]);
+  const lenteBigg = (fxMode !== "native" && vistaPnl === "ytd" && biggPrevAlt)
+    ? (fxMode === "real"
+        ? { pnlPrev: biggPrev?.pnl || null, subPrev: biggPrev?.sub || null, pnlPrevC: biggPrevAlt.pnl, subPrevC: biggPrevAlt.sub }
+        : { pnlPrev: biggPrevAlt.pnl, subPrev: biggPrevAlt.sub, pnlPrevC: biggPrev?.pnl || null, subPrevC: biggPrev?.sub || null })
+    : { pnlPrev: biggPrev?.pnl || null, subPrev: biggPrev?.sub || null, pnlPrevC: null, subPrevC: null };
   const pnlBigg     = biggCur?.pnl  || null;
   const subBigg     = biggCur?.sub  || null;
   // DEV-ONLY: check "P&L BIGG vs Devengado" desde consola (ver memoria puente). Descartable.
@@ -2459,6 +2621,14 @@ export default function PantallaReportes({ onVerComprobante }) {
     [isVentasHQ, inBigg, egBigg, arNucleoCCs, ccMap, year, monedaPL, sinIva]);
   const sedesApPrev = useMemo(() => isVentasHQ ? sedesAperturaDe(year - 1) : null,   // eslint-disable-line react-hooks/exhaustive-deps
     [isVentasHQ, inBigg, egBigg, arNucleoCCs, ccMap, year, monedaPL, sinIva]);
+  // Apertura por sede del año anterior en el otro lente (YTD en dos lentes de Composición de Ingresos).
+  const sedesApPrevAlt = useMemo(() => (isVentasHQ && inFxAlt) ? arNucleoCCs.map(cc => ({   // eslint-disable-line react-hooks/exhaustive-deps
+    label: nombreCC(cc), isBN: String(cc) === String(bnCcId),
+    arr: computeSubtotalsSede(buildPnLSede(inFxAlt, egFxAlt, [cc], year - 1, monedaPL, sinIva)).resFinal,
+  })) : null, [isVentasHQ, inFxAlt, egFxAlt, arNucleoCCs, ccMap, year, monedaPL, sinIva]);
+  const sedesApLente = (dosLentesBigg => dosLentesBigg
+    ? (fxMode === "real" ? { cur: sedesApCur, prev: sedesApPrev, prevC: sedesApPrevAlt } : { cur: sedesApCur, prev: sedesApPrevAlt, prevC: sedesApPrev })
+    : { cur: sedesApCur, prev: sedesApPrev })(fxMode !== "native" && vistaPnl === "ytd" && !!sedesApPrevAlt);
 
   const toggleSedeCC = (id) => {
     setSelectedSedeCCs(prev => {
@@ -2554,10 +2724,23 @@ export default function PantallaReportes({ onVerComprobante }) {
   const ejecutarExport = ({ vistas, mes }) => {
     const monLabel = MONEDA_SYM[monedaPL] || monedaPL;
     const repLabel = curTab?.label || "Reporte";
-    const monMeta  = `Moneda: ${monLabel}${fxMode === "const" ? " · constante" : fxMode === "real" ? " · TC real" : ""}`;
+    const monMeta  = `Moneda: ${monLabel}${fxMode === "comp" ? " · comparable (TC del mismo mes del año en curso)" : fxMode === "real" ? " · TC real" : ""}`;
     const scopeLabel = isBigg ? "Grupo BIGG (holding · todas las sociedades)"
       : selectedSedeCCs === null ? "Todas las sedes"
       : selectedSedeCCs.length === 0 ? "Ninguna sede" : `${selectedSedeCCs.length} sede(s)`;
+    // Año anterior por vista: YTD consolidado lleva los dos lentes (real + comparable); Mensual/Evolución, el del selector.
+    const lenteYtdSede = (fxMode !== "native" && pnlSedePrevAlt)
+      ? (fxMode === "real"
+          ? { pnlPrev: pnlSedePrev, subPrev: subSedePrev, estructuraCuotaPrev: estructuraCuotaPrevEff, estructuraImpuestosPrev,
+              pnlPrevC: pnlSedePrevAlt, subPrevC: subSedePrevAlt, estructuraCuotaPrevC: estructuraCuotaPrevAltEff, estructuraImpuestosPrevC: estructuraImpuestosPrevAlt }
+          : { pnlPrev: pnlSedePrevAlt, subPrev: subSedePrevAlt, estructuraCuotaPrev: estructuraCuotaPrevAltEff, estructuraImpuestosPrev: estructuraImpuestosPrevAlt,
+              pnlPrevC: pnlSedePrev, subPrevC: subSedePrev, estructuraCuotaPrevC: estructuraCuotaPrevEff, estructuraImpuestosPrevC: estructuraImpuestosPrev })
+      : {};
+    const lenteYtdBigg = (fxMode !== "native" && biggPrevAlt)
+      ? (fxMode === "real"
+          ? { pnlPrevC: biggPrevAlt.pnl, subPrevC: biggPrevAlt.sub }
+          : { pnlPrev: biggPrevAlt.pnl, subPrev: biggPrevAlt.sub, pnlPrevC: pnlBiggPrev, subPrevC: subBiggPrev })
+      : {};
     const baseSede = {
       pnl: pnlSede, sub: subSede, pnlPrev: pnlSedePrev, subPrev: subSedePrev, year,
       nombreCuenta, cesion: cesionSede, cesionResFinal: subSedeNet?.resFinal, cesionRetiros: cesionRetirosCI,
@@ -2576,7 +2759,7 @@ export default function PantallaReportes({ onVerComprobante }) {
     const VIS = [
       { key: "evolucion", sheet: "Evolución",            vista: "evolucion", extra: { mesMax: mes } },
       { key: "mensual",   sheet: `Mensual ${MESES[mes]}`, vista: "mensual",   extra: { mes } },
-      { key: "ytd",       sheet: `YTD ${MESES[mes]}`,      vista: "ytd",       extra: { mes } },
+      { key: "ytd",       sheet: `YTD ${MESES[mes]}`,      vista: "ytd",       extra: { mes, ...(isBigg ? lenteYtdBigg : lenteYtdSede) } },
     ];
     const hojas = VIS.filter(v => vistas[v.key]).map(v => {
       const { cols, filas, lastM } = buildFilas(v.vista, v.extra);
@@ -2591,9 +2774,9 @@ export default function PantallaReportes({ onVerComprobante }) {
   // Encabezado de la "foto" (Ampliar / Copiar imagen): título + año + vista + moneda + IVA, para entender
   // qué se está viendo (igual criterio que la bajada a Excel).
   const monedaFotoLabel = { ARS: "$ ARS", USD: "U$D", EUR: "€ EUR", COP: "COP",
-    USD_REAL: "U$D · TC Real", USD_CONST: `U$D constante (${MESES[anchorMes]} ${year})`,
-    EUR_REAL: "€ · TC Real",   EUR_CONST: `€ constante (${MESES[anchorMes]} ${year})`,
-    COP_REAL: "COP · TC Real", COP_CONST: `COP constante (${MESES[anchorMes]} ${year})` }[monedaSel] || monedaSel;
+    USD_REAL: "U$D · TC Real", USD_COMP: `U$D comparable (TC ${year})`, USD_CONST: `U$D comparable (TC ${year})`,
+    EUR_REAL: "€ · TC Real",   EUR_COMP: `€ comparable (TC ${year})`,   EUR_CONST: `€ comparable (TC ${year})`,
+    COP_REAL: "COP · TC Real", COP_COMP: `COP comparable (TC ${year})`, COP_CONST: `COP comparable (TC ${year})` }[monedaSel] || monedaSel;
   const vistaFotoLabel = vistaPnl === "evolucion" ? "Evolución mensual"
     : vistaPnl === "mensual" ? `Mensual · ${MESES[mesSel]}`
     : `YTD a ${MESES[mesSel]}`;
@@ -2764,14 +2947,14 @@ export default function PantallaReportes({ onVerComprobante }) {
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 700, color: T.muted,
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>
               Moneda
-              {/* Estado del modo constante: badge chico con tooltip por hover (no ocupa fila en el reporte). */}
-              {fxMode === "const" && (
+              {/* Estado del modo comparable: badge chico con tooltip por hover (no ocupa fila en el reporte). */}
+              {fxMode === "comp" && (
                 <span className="nb-tip" style={{ fontSize: 12, lineHeight: 1 }}>
-                  {fxConstFalta ? "⚠️" : "🔒"}
+                  {fxCompFalta ? "⚠️" : "🔒"}
                   <span className="nb-tip-box">
-                    {fxConstFalta
-                      ? `Falta el tipo de cambio de ${MESES[anchorMes]} ${year} a ${MONEDA_SYM[fxTarget] || fxTarget} (mes ancla del modo constante). Cargalo en Maestros (nb_tipos_cambio) o elegí otro mes.`
-                      : `${MONEDA_SYM[fxTarget] || fxTarget} constante — todo valuado al TC de ${MESES[anchorMes]} ${year} (comparable, sin efecto cambiario). El mes ancla lo fija el selector ${vistaPnl === "evolucion" ? "Hasta" : "Mes"}.`}
+                    {fxCompFalta
+                      ? `Falta el tipo de cambio de ${MESES[anchorMes]} ${year} a ${MONEDA_SYM[fxTarget] || fxTarget}: en comparable ese mes se valúa con el TC del año en curso, en los dos años. Cargalo en Maestros (nb_tipos_cambio) o elegí otro mes.`
+                      : `${MONEDA_SYM[fxTarget] || fxTarget} comparable — cada mes valuado al TC de ese mismo mes de ${year}, en los dos años. ${year} da igual que en TC Real; ${year - 1} queda reexpresado al dólar de ${year} mes a mes, así la variación no tiene efecto cambiario.`}
                   </span>
                 </span>
               )}
@@ -2785,7 +2968,7 @@ export default function PantallaReportes({ onVerComprobante }) {
               <optgroup label="Consolidado">
                 {fxDestinosDe(activeTab).flatMap(d => [
                   <option key={`${d}_REAL`}  value={`${d}_REAL`}>{MONEDA_SYM[d] || d} · TC Real</option>,
-                  <option key={`${d}_CONST`} value={`${d}_CONST`}>{MONEDA_SYM[d] || d} · Constante</option>,
+                  <option key={`${d}_COMP`} value={`${d}_COMP`}>{MONEDA_SYM[d] || d} · Comparable</option>,
                 ])}
               </optgroup>
             </select>
@@ -2934,12 +3117,12 @@ export default function PantallaReportes({ onVerComprobante }) {
              universo de sedes (scopeEmpresas) + cola de impuestos en Fondeadas ── */}
       {isSedeLike && (
         <div ref={reportRef}>
-        <PnLTableSede pnl={pnlSede} sub={subSede} pnlPrev={pnlSedePrev} subPrev={subSedePrev}
+        <PnLTableSede pnl={pnlSede} sub={subSede} {...lenteSede}
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} nombreCuenta={nombreCuenta}
           cesion={cesionSede} cesionResFinal={subSedeNet?.resFinal} cesionRetiros={cesionRetirosCI}
           comBaseResOp={comBaseResOp} estructuraCuota={estructuraCuotaEff} estructuraEnOpex={estructuraEnOpexEff} estructuraLabel={estructuraLabelEff}
-          estructuraDetalle={estructuraDetalle} estructuraCuotaPrev={estructuraCuotaPrevEff}
-          estructuraImpuestos={estructuraImpuestos} estructuraImpuestosPrev={estructuraImpuestosPrev}
+          estructuraDetalle={estructuraDetalle}
+          estructuraImpuestos={estructuraImpuestos}
           impuestos={isFond ? IMPUESTOS_FOND : null} financieros={isFond ? FINANCIEROS_FOND : null}
           distribucion={activeTab === "op_rosedal" ? distribRosedalFx : null}
           retirosVivos={activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null}
@@ -2957,7 +3140,7 @@ export default function PantallaReportes({ onVerComprobante }) {
       {/* ── P&L Huergo (Wellness Real Estate): Ingresos − Costos (horas de coaches) = Margen ── */}
       {isHuergo && (
         <div ref={reportRef}>
-        <PnLTableHuergo pnl={pnlHuergo} sub={subHuergo} pnlPrev={pnlHuergoPrev} subPrev={subHuergoPrev}
+        <PnLTableHuergo pnl={pnlHuergo} sub={subHuergo} {...lenteHuergo}
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} hayHistorico={hayHistorico} mesMax={mesCorte} />
         </div>
       )}
@@ -2965,7 +3148,7 @@ export default function PantallaReportes({ onVerComprobante }) {
       {/* ── P&L BIGG consolidado (subgrupos, hasta Margen Bruto) ── */}
       {activeTab === "pl_bigg" && (
         <div ref={reportRef}>
-        <PnLTableBigg pnl={pnlBigg} sub={subBigg} pnlPrev={pnlBiggPrev} subPrev={subBiggPrev}
+        <PnLTableBigg pnl={pnlBigg} sub={subBigg} {...lenteBigg}
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} hayHistorico={hayHistorico} mesMax={mesCorte} />
         </div>
       )}
@@ -2990,9 +3173,9 @@ export default function PantallaReportes({ onVerComprobante }) {
 
       {isVentasHQ && subBigg && (
         <div ref={reportRef}>
-        <PnLTableBigg pnl={pnlBigg} sub={subBigg} pnlPrev={pnlBiggPrev} subPrev={subBiggPrev}
+        <PnLTableBigg pnl={pnlBigg} sub={subBigg} {...lenteBigg}
           vista={vistaPnl} mes={mesSel} year={year} moneda={monedaPL} hayHistorico={hayHistorico} mesMax={mesCorte}
-          soloIngresos pctMode pctVista={compPctVista} sedesApertura={{ cur: sedesApCur, prev: sedesApPrev }} />
+          soloIngresos pctMode pctVista={compPctVista} sedesApertura={sedesApLente} />
         </div>
       )}
 

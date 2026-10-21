@@ -25,15 +25,21 @@ const C = {
 // (polaridad −1) van en negativo → Excel los muestra entre paréntesis; ingresos/resultados con su signo.
 // Columnas "var" = variación como fracción (formato %). Saldos (stock) en la col TOTAL = último mes con dato.
 function cellVal(fila, col, lastM) {
+  // Fila de ratio (Margen sobre ventas): se divide por columna (Σnum/Σden); las variaciones van en puntos (fracción).
+  if (fila.kind === "ratio") {
+    const val = (g) => { const n = g(fila.num, fila.numPrev, fila.numPrevC), d = g(fila.den, fila.denPrev, fila.denPrevC); return d ? n / d : null; };
+    if (col.kind === "var") { const a = val(col.a), b = val(col.b); return (a != null && b != null) ? a - b : null; }
+    return val(col.get);
+  }
   if (col.kind === "var") {
     if (fila.kind === "cesion" || !fila.cur) return null;
-    const a = col.a(fila.cur, fila.prev), b = col.b(fila.cur, fila.prev);
+    const a = col.a(fila.cur, fila.prev, fila.prevC), b = col.b(fila.cur, fila.prev, fila.prevC);
     if (col.abs) return (fila.pol < 0 ? -1 : 1) * (a - b);   // Δ absoluto, con el signo del P&L (costos negativos → paréntesis)
     return b ? (a - b) / b : null;
   }
   let v;
   if (fila.stock && col.total) { let lm = lastM; while (lm > 0 && !(Number(fila.cur?.[lm]) || 0)) lm--; v = Number(fila.cur?.[lm]) || 0; }
-  else v = col.get(fila.cur, fila.prev);
+  else v = col.get(fila.cur, fila.prev, fila.prevC);
   v = Number(v) || 0;
   return fila.kind === "cesion" ? v : (fila.pol < 0 ? -v : v);
 }
@@ -49,6 +55,7 @@ function estiloFila(f) {
   if (f.kind === "subtotal") return { fill: solid(f.strong ? C.subStrongBg : C.subBg), font: { bold: true, color: { argb: C.cuentaFg } } };
   if (f.kind === "result")   return { fill: solid(C.resultBg), font: { bold: true, color: { argb: C.resultFg } } };
   if (f.kind === "cesion")   return { fill: solid(C.cesionBg), font: { bold: !!f.bold, color: { argb: C.cesionFg } } };
+  if (f.kind === "ratio")    return { fill: solid("FFFFFFFF"), font: { italic: true, color: { argb: C.grupoFg } } };
   return null;   // cuenta
 }
 
@@ -86,7 +93,7 @@ function construirHoja(wb, { sheetName, cols, filas, lastM, titulo, meta }) {
       if (col === 1) { cell.alignment = { horizontal: "left" }; }
       else {
         cell.alignment = { horizontal: "right" };
-        cell.numFmt = (cols[col - 2]?.kind === "var" && !cols[col - 2]?.abs) ? FMT_PCT : FMT_NUM;
+        cell.numFmt = (f.kind === "ratio" || (cols[col - 2]?.kind === "var" && !cols[col - 2]?.abs)) ? FMT_PCT : FMT_NUM;
       }
     });
     // Detalle de cuenta → nivel 1 del esquema, oculto de arranque (se despliega desde su resumen de arriba).
