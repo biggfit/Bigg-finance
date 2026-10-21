@@ -11,7 +11,7 @@ import {
   fetchEgresos, fetchIngresos, fetchPagosCobros,
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto, fetchSaldoMercadoPago, esCuentaMercadoPago,
   appendGastoDirecto, esIgnorado, ignorarMovimiento, esCuentaCredito, fetchFinanciaciones,
-  pagarTarjeta, fetchSocios, fetchSociosCC, fetchIntercoData, intercoLedger, primeCache, esNeteoFinanciacion,
+  pagarTarjeta, fetchSocios, fetchSociosCC, fetchIntercoData, intercoLedger, primeCache, motivoNoBorrable,
 } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas } from "../lib/sueldosApi";
 import { fetchAll } from "../lib/sheetsApi";        // Franquicias (read-only)
@@ -1812,15 +1812,11 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
   // (deja el borrado sin efecto). Se arma un { title, message, confirmLabel, danger, run } y se ejecuta
   // desde el modal (doConfirmAcc). Igual criterio que en Egresos/Ingresos.
   const handleEliminarMov = (mov) => {
-    // Neteo de una compra financiada en un plan de pagos (sin caja): borrarlo reabriría la compra dejando el
-    // plan y su pasivo vivos → doble deuda. Se deshace eliminando el plan en Financiaciones.
-    if (esNeteoFinanciacion(mov)) {
-      setConfirmAcc({
-        title: "Este movimiento lo creó un plan de pagos",
-        message: `"${mov.concepto ?? mov.id}" es el neteo sin caja de una compra financiada. No se borra desde acá: eliminá el plan en Financiaciones y la compra vuelve a quedar a pagar.`,
-        confirmLabel: "Entendido", danger: false,
-        run: async () => {},
-      });
+    // Movimiento que creó otro módulo y solo ese módulo deshace (ej. el neteo de una compra financiada en
+    // plan): se informa con el mismo modal (window.alert lo puede bloquear Chrome) y no se borra.
+    const motivo = motivoNoBorrable(mov);
+    if (motivo) {
+      setConfirmAcc({ title: "Este movimiento no se borra desde acá", message: `"${mov.concepto ?? mov.id}": ${motivo}`, confirmLabel: "Entendido", danger: false, run: async () => {} });
       return;
     }
     // Un PAGO/COBRO que vino del motor de conciliación (origen="extracto") ES la línea del banco: no se

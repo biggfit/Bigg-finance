@@ -2020,10 +2020,18 @@ async function desimputarPago(mov) {
 // para cualquier pago/cobro que cuelgue de un comprobante.
 export async function borrarPagoImputado(mov) {
   if (mov?.origen === "extracto") return desimputarPago(mov);
-  // El neteo de una CxP financiada lo creó el plan: borrarlo solo reabriría la compra dejando el plan
-  // (y su pasivo) vivos → doble deuda. Se deshace eliminando el plan (deleteFinanciacion borra el neteo).
-  if (esNeteoFinanciacion(mov)) throw new Error("Este pago es el neteo de un plan de pagos. Para deshacerlo, eliminá el plan en Financiaciones: la compra vuelve a quedar a pagar.");
+  const motivo = motivoNoBorrable(mov);
+  if (motivo) throw new Error(motivo);
   return deleteMovTesoreria(mov.id);
+}
+
+/** Un movimiento que creó OTRO módulo y que solo ese módulo sabe deshacer → mensaje; si no, null.
+ *  Hoy: el neteo de una CxP financiada en plan (borrarlo solo reabriría la compra dejando el plan y su
+ *  pasivo vivos → doble deuda; se deshace eliminando el plan, que borra el neteo). Único lugar para esta
+ *  regla: la usan borrarPagoImputado, Egresos (eliminar/✎) y Tesorería (eliminar movimiento). */
+export function motivoNoBorrable(mov) {
+  if (esNeteoFinanciacion(mov)) return "Este pago es el neteo de un plan de pagos: no se borra desde acá. Eliminá el plan en Financiaciones y la compra vuelve a quedar a pagar.";
+  return null;
 }
 
 // Registra retenciones sufridas sobre una factura de venta SIN cobro de caja (ej. al recibir la
@@ -2081,6 +2089,19 @@ export async function appendRetenciones({ sociedad, documento_id, fecha, moneda 
 //   tiene número) y ref es cómo se deposita ("VEP 1661738826", "Modelo 111"), que el llamador arma con el
 //   régimen del país. Acá no se deriva de nada: esta función no sabe de países.
 export const RETDEP_TAG = "[RETDEP]";
+/** Fila de nb_movimientos para un NETEO SIN CAJA: baja el saldo de un comprobante sin tocar ningún banco
+ *  (cuenta_bancaria vacía → fuera de caja, Cash Flow y P&L). La usan la retención practicada y la
+ *  financiación en plan; `origen` dice qué módulo la creó y desde dónde se deshace (ver motivoNoBorrable). */
+function neteoSinCajaRow({ prefix = "MOV", sociedad, fecha, tipo = "PAGO", moneda, monto, documento_id, concepto, contraparte_id = "", contraparte_nombre = "", origen, referencia = "", nota = "", created_at = new Date().toISOString() }) {
+  const abs = round2(Math.abs(Number(monto) || 0));
+  return {
+    id: newId(prefix), sociedad, fecha, tipo,
+    cuenta_bancaria: "", cuenta_destino: "", cuenta_contable: "", centro_costo: "",
+    moneda, monto: tipo === "PAGO" ? -abs : abs,
+    documento_id, concepto, contraparte_id, contraparte_nombre, origen, referencia, nota, created_at,
+  };
+}
+
 export async function aplicarRetencionPracticada({
   sociedad, factura_id, factura_nro = "", fecha, moneda = "ARS",
   proveedor_id = "", proveedor_nombre = "", retenciones = [], fisco = {},
@@ -2116,13 +2137,9 @@ export async function aplicarRetencionPracticada({
   await post({ action: "add_batch", sheet: "nb_comprobantes", rows: compRows });
 
   // 2) Pata proveedor — neteo SIN caja que baja el saldo de la factura.
-  const netRows = rets.map(r => ({
-    id: newId("RETP"), sociedad, fecha,
-    tipo: "PAGO", cuenta_bancaria: "", cuenta_destino: "",
-    cuenta_contable: "", centro_costo: "", moneda,
-    monto: -round2(Math.abs(Number(r.monto) || 0)),
-    documento_id: factura_id,
-    concepto: lbl(r),
+  const netRows = rets.map(r => neteoSinCajaRow({
+    prefix: "RETP", sociedad, fecha, moneda, monto: r.monto,
+    documento_id: factura_id, concepto: lbl(r),
     contraparte_id: proveedor_id, contraparte_nombre: proveedor_nombre || "",
     origen: "retencion_practicada",
     nota: `${RETDEP_TAG}${refDeposito ? ` ${refDeposito}` : ""}`.trim(),
@@ -3318,10 +3335,15 @@ export function agruparPlanes(rows = [], pagadoPorCuota = {}, pagosPorCuota = {}
  *  Suma los pagos de cuota (movimientos origen "cuota", ref FIN-<plan>#<nro> en origen_id/documento_id)
  *  → habilita el saldo parcial por cuota (fuente de verdad = los movimientos, como CxC/CxP). */
 export async function fetchFinanciaciones(sociedad) {
-  const [rows, movs] = await Promise.all([
-    get("nb_financiaciones", sociedad ? { sociedad } : {}),
-    get("nb_movimientos", sociedad ? { sociedad } : {}).catch(() => []),
-  ]);
+  const q = sociedad ? { sociedad } : {};
+  const rowsP = get("nb_financiaciones", q);
+  const movsP = get("nb_movimientos", q).catch(() => []);
+  const rows  = await rowsP;
+  // Planes que financian una CxP: necesitamos la fecha del comprobante de origen (= mes del devengado) para
+  // mostrarla. Se deriva del comprobante al leer, sin columna nueva en la hoja. El pedido arranca apenas
+  // sabemos que hace falta, mientras nb_movimientos (el pesado) sigue bajando. Best-effort.
+  const compsP = rows.some(r => r.comprobante_origen) ? get("nb_comprobantes", q).catch(() => null) : null;
+  const movs  = await movsP;
   // Pagos por cuota CON FECHA (no solo el total): el saldo a una fecha pasada (as-of, ver finAsOf)
   // necesita saber cuánto estaba pagado a ESE corte. Un pago parcial no setea fecha_pago en la cuota,
   // así que sin esto su reducción "se filtraba" a meses anteriores al pago (deuda subvaluada al 31/mes).
@@ -3341,21 +3363,11 @@ export async function fetchFinanciaciones(sociedad) {
     pagadoPorCuota[key] = pagosPorCuota[key].reduce((s, p) => s + p.monto, 0);
   }
   const planes = agruparPlanes(rows, pagadoPorCuota, pagosPorCuota);
-  // Planes que financian una CxP: le colgamos la fecha del comprobante de origen (= mes en que se devengó el
-  // impuesto) para mostrarla. Se deriva del comprobante al leer, sin columna nueva en la hoja. Best-effort.
-  if (planes.some(p => p.comprobante_origen)) {
-    try {
-      const comps = await get("nb_comprobantes", sociedad ? { sociedad } : {});
-      const porComp = new Map();
-      for (const c of (Array.isArray(comps) ? comps : [])) {
-        if (c.id_comp && !porComp.has(c.id_comp)) porComp.set(c.id_comp, { fecha: c.fecha ?? "", nro_comp: c.nro_comp ?? "" });
-      }
-      for (const p of planes) {
-        const c = p.comprobante_origen ? porComp.get(p.comprobante_origen) : null;
-        p.comprobante_fecha = c?.fecha ?? "";
-        p.comprobante_nro   = c?.nro_comp ?? "";
-      }
-    } catch { /* sin la fecha del comprobante el plan se muestra igual */ }
+  const comps = compsP ? await compsP : null;
+  if (Array.isArray(comps)) {
+    const fechaDe = new Map();
+    for (const c of comps) if (c.id_comp && !fechaDe.has(c.id_comp)) fechaDe.set(c.id_comp, c.fecha ?? "");
+    for (const p of planes) if (p.comprobante_origen) p.comprobante_fecha = fechaDe.get(p.comprobante_origen) ?? "";
   }
   return planes;
 }
@@ -3619,22 +3631,16 @@ export async function financiarComprobante({ egreso, plan }) {
   // 2) El neteo. Orden plan → neteo a propósito: si esto falla, el pasivo queda SOBREestimado (CxP + plan),
   //    visible en Egresos y Financiaciones, nunca subestimado. El mensaje dice cómo volver atrás.
   try {
-    await post({ action: "add", sheet: "nb_movimientos", row: {
-      id: newId("MOV"), sociedad, fecha, tipo: "PAGO",
-      cuenta_bancaria: "", cuenta_destino: "", cuenta_contable: "", centro_costo: "",
-      moneda, monto: -capital,
-      documento_id: egreso.id,
-      concepto: `Financiado en plan ${plan.nro_plan || plan_id}`,
+    await post({ action: "add", sheet: "nb_movimientos", row: neteoSinCajaRow({
+      sociedad, fecha, moneda, monto: capital,
+      documento_id: egreso.id, concepto: `Financiado en plan ${plan.nro_plan || plan_id}`,
       contraparte_id: egreso.proveedorId || "", contraparte_nombre: egreso.proveedor || "",
-      origen: "financiacion_plan",
-      referencia: `fin_plan=${plan_id}`,
-      nota: plan.nota || "",
-      created_at: new Date().toISOString(),
-    }});
+      origen: "financiacion_plan", referencia: `fin_plan=${plan_id}`, nota: plan.nota || "",
+    })});
   } catch (e) {
     throw new Error(`El plan ${plan.nro_plan || plan_id} quedó creado, pero la compra NO se marcó como financiada (${e?.message || e}). Eliminá el plan en Financiaciones y volvé a intentar.`);
   }
-  return { ok: true, plan_id, capital, parcial: capital < saldo - 0.5 };
+  return { ok: true, plan_id };
 }
 
 /**
@@ -3689,13 +3695,15 @@ export async function cancelarFinanciacion(plan_id) {
 /** Borra un plan entero (todas sus filas). Si el plan financiaba una CxP (comprobante_origen), borra
  *  PRIMERO su neteo en nb_movimientos → la compra vuelve a quedar a pagar. Orden a propósito: si falla a
  *  mitad, quedan CxP + plan (pasivo sobreestimado y visible), nunca una compra saldada sin plan. */
-export async function deleteFinanciacion(plan_id) {
-  const rows = await get("nb_financiaciones", {});
+export async function deleteFinanciacion(plan_id, sociedad = "") {
+  // Con `sociedad` las lecturas pegan en la caché que la pantalla ya calentó (nb_movimientos entera son MB).
+  const q = sociedad ? { sociedad } : {};
+  const rows = await get("nb_financiaciones", q);
   const propias = rows.filter(r => r.plan_id === plan_id);
   if (propias.some(r => r.comprobante_origen)) {
-    const movs = await get("nb_movimientos", {});
+    const movs = await get("nb_movimientos", q);
     const neteos = movs.filter(m => esNeteoFinanciacion(m) && planIdDeNeteo(m) === plan_id);
-    for (const m of neteos) await post({ action: "del", sheet: "nb_movimientos", id: m.id });
+    for (const m of neteos) await deleteMovTesoreria(m.id);
   }
   for (const r of propias) await post({ action: "del", sheet: "nb_financiaciones", id: r.id });
 }

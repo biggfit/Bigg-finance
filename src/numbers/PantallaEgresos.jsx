@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import { T, ESTADO_EGRESO, fmtMoney, fmtDate, Badge, CompactCard, PageHeader, Btn, MoneyField } from "./theme";
 import ConfirmModal from "./ConfirmModal";
 import { regimenRetencionDeSociedad } from "../data/tesoreriaData";
-import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcSaldoNeto, calcEstadoEgreso, round2, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, borrarPagoImputado, shortId, appendProveedor, appendCuenta, aplicarRetencionPracticada, RETDEP_TAG, esNeteoFinanciacion, planIdDeNeteo } from "../lib/numbersApi";
+import { fetchEgresos, appendEgreso, deleteEgreso, updateEgreso, migrarComprobanteSociedad, appendPago, fetchPagosCobros, calcSaldoPendiente, calcSaldoNeto, calcEstadoEgreso, round2, fetchProveedores, fetchCentrosCosto, fetchCuentasBancarias, fetchCuentas, fetchSociedades, borrarPagoImputado, shortId, appendProveedor, appendCuenta, aplicarRetencionPracticada, RETDEP_TAG, esNeteoFinanciacion, motivoNoBorrable } from "../lib/numbersApi";
 import { AltaFinanciacion } from "./PantallaFinanciaciones";
 
 // Una factura admite UNA sola retención practicada: se detecta por sus líneas de neteo
@@ -12,6 +12,8 @@ const tieneRetPracticada = (e) => (e?.pagosVinculados ?? []).some(
 // Compra financiada en un plan de pagos: su neteo (PAGO sin caja, origen="financiacion_plan") ya está vinculado.
 // Un solo plan por compra; se deshace eliminando el plan en Financiaciones, no desde acá.
 const neteoFinanciacion = (e) => (e?.pagosVinculados ?? []).find(esNeteoFinanciacion) || null;
+// Chip "Plan de pago" (medio de pago sin caja), mismo tono que los chips de banco de la tabla.
+const chipPlan = { display:"inline-block", fontSize:11, background:"#e0f2fe", color:"#0369a1", borderRadius:6, padding:"2px 8px", fontWeight:700, marginRight:3 };
 import { CENTROS_COSTO as CENTROS_COSTO_STATIC, todayISO } from "../data/numbersData";
 import { makeResolveCC, makeResolveCB, inputStyle, makeCrearMaestro, stripForDuplicate, calcLineasTotals } from "./formUtils";
 import NuevoEgresoModal from "./NuevoEgresoModal";
@@ -292,9 +294,7 @@ function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClos
                         <td style={{ padding:"8px 14px", fontSize:13, color:"#1a1a1a" }}>{fmtDate(p.fecha)}</td>
                         <td style={{ padding:"8px 14px", fontSize:13, color:"#333" }}>
                           {esNeteoFinanciacion(p)
-                            ? <span title={`Neteo sin caja: el capital pasó al plan ${planIdDeNeteo(p) || ""}`}
-                                style={{ display:"inline-block", fontSize:11, background:"#e0f2fe", color:"#0369a1",
-                                  borderRadius:6, padding:"2px 8px", fontWeight:700 }}>Plan de pago · {p.concepto?.replace(/^Financiado en plan\s*/i, "") || planIdDeNeteo(p)}</span>
+                            ? <span title="Neteo sin caja: el capital pasó al plan de pagos" style={chipPlan}>{p.concepto || "Plan de pago"}</span>
                             : p.cuenta_bancaria && onIrACaja
                             ? <button onClick={() => onIrACaja(p.cuenta_bancaria)} title="Ver esta caja en Tesorería"
                                 style={{ background:"none", border:"none", padding:0, font:"inherit", cursor:"pointer",
@@ -310,9 +310,9 @@ function DetalleModal({ egreso, cuentasBancarias = [], centrosCosto = [], onClos
                           {fmtMoney(Math.abs(Number(p.monto)||0), egreso.moneda)}
                         </td>
                         <td style={{ padding:"8px 8px", textAlign:"center" }}>
-                          {/* El neteo del plan no se edita ni se borra desde acá (le pondrían un banco o lo
-                              borrarían dejando el plan vivo): se deshace eliminando el plan en Financiaciones. */}
-                          {!esNeteoFinanciacion(p) && (
+                          {/* Un neteo que gestiona otro módulo no se edita ni se borra desde acá (le pondrían un
+                              banco o lo borrarían dejando el plan vivo). Misma regla que borrarPagoImputado. */}
+                          {!motivoNoBorrable(p) && (
                             <button onClick={() => onEditarPago?.(p)} title="Editar pago"
                               style={{ background:"transparent", border:`1px solid ${T.cardBorder}`,
                                 borderRadius:6, padding:"3px 7px", cursor:"pointer",
@@ -748,9 +748,8 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
     // Compra financiada: bajar el total por debajo de lo ya neteado/pagado la dejaría en sobrepago contra el plan.
     if (egreso._isEdit) {
       const actual = egresos.find(e => e.id === egreso.id);
-      const pagado = (actual?.pagosVinculados ?? []).reduce((s, p) => s + Math.abs(Number(p.monto) || 0), 0);
-      if (neteoFinanciacion(actual) && (Number(egreso.importe) || 0) < pagado - 0.5) {
-        alert(`Esta compra está financiada en un plan de pagos por ${fmtMoney(pagado, actual.moneda)}: el nuevo total no puede ser menor. Si cambió la deuda, eliminá el plan en Financiaciones y volvé a financiarla.`);
+      if (neteoFinanciacion(actual) && calcSaldoNeto(Number(egreso.importe) || 0, actual.pagosVinculados) < -0.5) {
+        alert(`Esta compra está financiada en un plan de pagos por ${fmtMoney(actual.importe - actual.saldoNeto, actual.moneda)}: el nuevo total no puede ser menor. Si cambió la deuda, eliminá el plan en Financiaciones y volvé a financiarla.`);
         throw new Error("total menor al financiado");
       }
     }
@@ -786,8 +785,8 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
     const egreso = egresos.find(e => e.id === id_comp);
     // Financiada: borrarla dejaría el plan vivo con un comprobante_origen colgado y su gasto desaparecería
     // de todos lados (el plan no devenga capital). Primero se elimina el plan (eso reabre la compra).
-    const fin = neteoFinanciacion(egreso);
-    if (fin) { alert(`Esta compra está financiada en un plan de pagos (${planIdDeNeteo(fin) || "ver Financiaciones"}). Eliminá primero el plan en Financiaciones: la compra vuelve a quedar a pagar.`); return; }
+    const motivo = motivoNoBorrable(neteoFinanciacion(egreso));
+    if (motivo) { alert(motivo); return; }
     // Los pagos que vinieron del motor (origen="extracto") NO se borran: se desimputan y vuelven a la
     // conciliación (no se pierde el movimiento del banco). Los manuales sí se borran. borrarPagoImputado decide.
     const delMotor = (egreso?.pagosVinculados ?? []).filter(p => p.origen === "extracto").length;
@@ -884,7 +883,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
   if (showFinanciar && subView !== "new-compra") {
     return (
       <AltaFinanciacion tipo="plan_afip" sociedad={sociedad} cuentas={cuentas} centros={centrosCosto} bancos={cuentasSoc} proveedores={proveedores}
-        financiar={{ egreso: showFinanciar, saldo: showFinanciar.saldoPendiente ?? showFinanciar.importe }}
+        financiar={showFinanciar}
         onCancel={() => setShowFinanciar(null)}
         onSaved={() => { setShowFinanciar(null); setShowDetalle(null); cargarEgresos(); }} />
     );
@@ -1070,12 +1069,7 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
                         {resolveCB(id)}
                       </span>
                     ))}
-                    {neteoFinanciacion(e) && (
-                      <span style={{ display:"inline-block", fontSize:11, background:"#e0f2fe",
-                        color:"#0369a1", borderRadius:6, padding:"2px 8px", fontWeight:700, marginRight:3 }}>
-                        Plan de pago
-                      </span>
-                    )}
+                    {neteoFinanciacion(e) && <span style={chipPlan}>Plan de pago</span>}
                     {!(e.pagosVinculados??[]).length && <span style={{ color:T.dim, fontSize:11 }}>—</span>}
                   </td>
                   <td style={{ padding:"10px 14px", fontSize:12, color:T.muted, maxWidth:180, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.nota || "—"}</td>
