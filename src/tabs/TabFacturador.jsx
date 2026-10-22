@@ -11,6 +11,9 @@ import { emitirComprobante, formatInvoiceLabel, invoiceFromResult, fetchAfipNume
 import { getNextInvoiceNum } from "../lib/sheetsApi";
 import { fetchCuentasBancarias } from "../lib/numbersApi";       // cuentas de Numbers (destino de la plata)
 import { SOCIEDAD_EMPRESA } from "../lib/franquiciasAdapter";
+import { SOCIEDADES } from "../data/tesoreriaData";
+// Mismo banco aparece en varias sociedades ("Galicia ARS") → el desplegable de cuentas muestra de quién es.
+const SOCIEDAD_NOMBRE = Object.fromEntries(SOCIEDADES.map(s => [s.id, s.nombre]));
 // Helpers compartidos entre los lotes (fee desde CRM y CRM WhatsApp): sociedad/moneda por país, TC de
 // Maestros, importes formateados y el ciclo emitir → guardar → confirmar dudosos (emitirLote).
 import { formatCurrencyInput, parseCurrencyInput, round2, getInvoicePrefix, getCountryCur, getTcRate,
@@ -690,7 +693,7 @@ function ModoManual({ month, year, onAddComp, onDone, franchisor, prefillFr, pre
           <select value={movCuenta} onChange={e => setMovCuenta(e.target.value)} style={inputS}>
             <option value="">— Elegí la cuenta —</option>
             {cuentasMov.map(c => (
-              <option key={c.id} value={c.id}>{c.nombre} ({c.moneda})</option>
+              <option key={c.id} value={c.id}>{c.nombre} ({c.moneda}) · {SOCIEDAD_NOMBRE[(c.sociedad || "").toLowerCase()] || c.sociedad || "sin sociedad"}</option>
             ))}
           </select>
           {cuentasMov.length === 0 && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>No hay cuentas {movCurrency} en Numbers.</div>}
