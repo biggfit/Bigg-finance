@@ -179,7 +179,8 @@ export default function BandejaTarjeta({ sociedad, tarjetaId = "", periodo = "",
         lineas.push({
           comercio: x.comercio, titular: x.titular || "", moneda, monto,
           cuenta_contable: cuentaNom, centro_costo: cc,
-          cuenta_bancaria: card?.id || "", fecha: x.fecha || fecha,
+          // Sin fallback a la fecha de cierre: una línea sin fecha la marca la ingesta (fecha_rev).
+          cuenta_bancaria: card?.id || "", fecha: x.fecha || "",
         });
       }
       const rutear = lineas.filter(l => l.cuenta_bancaria);
@@ -229,6 +230,7 @@ export default function BandejaTarjeta({ sociedad, tarjetaId = "", periodo = "",
         : "";
       setPdfMsg(`✓ ${res.creados} consumo(s) cargados a la bandeja`
         + (parseo.archivos > 1 ? ` de ${parseo.archivos} resúmenes` : "")
+        + (res.sinFecha ? ` · ⚠️ ${res.sinFecha} sin fecha legible — quedaron a la fecha de cierre, marcadas con ⚠️: corregilas` : "")
         + (res.sinCambio ? ` · ${res.sinCambio} ya estaban (sin cambios)` : "")
         + (res.borradas ? ` · ${res.borradas} que ya no están en el resumen se borraron` : "")
         + (res.sobrantes ? ` · ⚠️ ${res.sobrantes} viejos no se pudieron borrar — borralos a mano` : "")
@@ -424,11 +426,14 @@ export default function BandejaTarjeta({ sociedad, tarjetaId = "", periodo = "",
                     // (ver onPdf) — monto>0 en la pendiente = crédito (resta), <0 = cargo (suma).
                     const esAjuste = metaVal(m.referencia, "ajuste") === "1";
                     const esCredito = esAjuste && Number(m.monto) > 0;
+                    const fechaRev = metaVal(m.referencia, "fecha_rev") === "1";   // el parser no leyó la fecha de la línea
                     return (
                       <tr key={m.id} style={{ borderTop: `1px solid ${T.cardBorder}`, ...(esAjuste ? { background: "#fefce8" } : {}) }}>
-                        <td style={{ padding: "5px 10px", color: T.muted, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}
-                          title="Fecha del consumo (P&L y deuda de la tarjeta). Las cuotas viejas van al 1° del período del resumen.">
-                          {String(m.fecha || "").slice(0, 10)}
+                        <td style={{ padding: "5px 10px", color: fechaRev ? "#b45309" : T.muted, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}
+                          title={fechaRev
+                            ? "No se pudo leer la fecha de esta línea del PDF: quedó a la fecha de cierre del resumen. Corregila antes de autorizar."
+                            : "Fecha del consumo (P&L y deuda de la tarjeta). Las cuotas viejas van al 1° del período del resumen."}>
+                          {fechaRev && "⚠️ "}{String(m.fecha || "").slice(0, 10)}
                         </td>
                         <td style={{ padding: "5px 10px", minWidth: 200, fontStyle: esAjuste ? "italic" : "normal" }}>
                           {esAjuste && <span title={esCredito ? "Crédito: resta del total a pagar" : "Cargo: suma al total a pagar"} style={{ marginRight: 5 }}>{esCredito ? "➖" : "➕"}</span>}

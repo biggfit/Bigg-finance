@@ -1,7 +1,7 @@
 // Parser del resumen de tarjeta de crédito Galicia (VISA Business) → líneas de consumo.
 // Reusa extractLines (genérico, de planPdf.js). Validado contra un resumen real (8 págs).
 // Layout: tras "DETALLE DEL CONSUMO", una fila por consumo
-//   FECHA(DD-MM-YY) [marca */K/E/F] DESCRIPCIÓN [cuota NN/NN] COMPROBANTE(6díg) IMPORTE
+//   FECHA(DD-MM-YY, se devuelve ISO) [marca */K/E/F] DESCRIPCIÓN [cuota NN/NN] COMPROBANTE(6díg) IMPORTE
 // Los consumos se agrupan por titular; cada grupo cierra con
 //   "TARJETA NNNN Total Consumos de <NOMBRE> <tot pesos> <tot dólares>"
 // → el titular se autocompleta a las líneas del grupo. Moneda: USD si la línea trae
@@ -16,6 +16,15 @@
 
 const arNum = s => { const n = parseFloat(String(s).replace(/\./g, "").replace(",", ".")); return isNaN(n) ? 0 : n; };
 const DATE  = /^(\d{2}-\d{2}-\d{2})\b/;
+// "28-09-26" → "2026-09-28". La fecha SALE en ISO: la ingesta la compara como string contra el piso
+// del período ("2026-09-01"), y un "DD-MM-YY" crudo perdía esa comparación según el día (del 01 al 20
+// caía al 1° del período = mes siguiente; del 21 en adelante entraba crudo a la hoja). Inválida → ""
+// (la ingesta la marca para revisión en vez de inventarle una fecha).
+const ddmmyyISO = s => {
+  const m = String(s || "").match(/^(\d{2})-(\d{2})-(\d{2})$/); if (!m) return "";
+  const d = Number(m[1]), mo = Number(m[2]);
+  return (d >= 1 && d <= 31 && mo >= 1 && mo <= 12) ? `20${m[3]}-${m[2]}-${m[1]}` : "";
+};
 // Importe es-AR: parte entera con separadores de miles (1.234) o corrida de dígitos (1234),
 // + coma decimal + 2 decimales. La 2ª alternativa evita truncar "5867,00" → "867,00".
 const AMT   = /-?(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2}/g;
@@ -98,7 +107,7 @@ export function parseTarjetaLines(lines) {
       .replace(/\b\d{5,}\b/g, "")                         // comprobante / refs largas
       .replace(/\s+/g, " ").trim();
 
-    pending.push({ fecha: dm[1], comercio: desc.slice(0, 60), monto, moneda });
+    pending.push({ fecha: ddmmyyISO(dm[1]), comercio: desc.slice(0, 60), monto, moneda });
   }
   flush("");                                             // grupo final sin "Total Consumos" (impuestos)
   return { lineas: out, header, controles, totalAPagar };

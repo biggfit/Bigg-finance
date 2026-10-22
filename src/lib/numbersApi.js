@@ -1572,11 +1572,24 @@ export async function ingestarResumenTarjeta({ sociedad, tarjeta = "", periodo =
     return prev > GO_LIVE ? prev : GO_LIVE;
   };
   const piso = pisoDe(periodo);
-  const fechaEfectiva = (f) => {
-    const d = String(f || fecha || "").slice(0, 10);
-    if (!d) return d;
-    if (d >= piso) return d;                                        // dentro del ciclo → fecha real del consumo
-    return periodo ? `${periodo}-01` : (String(fecha || "").slice(0, 10) || d);   // cuota / consumo viejo → 1° del período
+  // La comparación contra el piso es de STRINGS → solo vale con YYYY-MM-DD. Un "28-09-26" crudo (así
+  // lo devolvía el parser de Galicia) perdía contra "2026-09-01" del día 01 al 20 y caía en silencio al
+  // 1° del período: el resumen per=2026-10 de Hektor dejó ~150 consumos de septiembre al 01/10.
+  // Se acepta DD-MM-YY / DD/MM/YYYY por las dudas; lo que no se entiende NO se rellena con el 1° del
+  // período: va con la fecha de cierre y `fecha_rev=1` en la referencia (la bandeja lo marca).
+  const isoDe = (f) => {
+    const s = String(f || "").slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const m = String(f || "").trim().match(/^(\d{2})[-/](\d{2})[-/](\d{2}|\d{4})$/);
+    return m ? `${m[3].length === 2 ? "20" + m[3] : m[3]}-${m[2]}-${m[1]}` : "";
+  };
+  const fechaEfectiva = (l) => {
+    const cierre = isoDe(fecha);
+    if (l.ajuste) return { fecha: isoDe(l.fecha) || cierre, revisar: false };   // ajuste: va a la fecha del resumen a propósito
+    const d = isoDe(l.fecha);
+    if (!d) return { fecha: cierre || (periodo ? `${periodo}-01` : ""), revisar: true };
+    if (d >= piso) return { fecha: d, revisar: false };            // dentro del ciclo → fecha real del consumo
+    return { fecha: periodo ? `${periodo}-01` : (cierre || d), revisar: false };   // cuota / consumo viejo → 1° del período
   };
   const cardIds = new Set(lineas.map(l => String(l.cuenta_bancaria)).filter(Boolean));
   // Titulares de ESTA tanda. El reemplazo se limita a ellos porque Amex emite UN RESUMEN POR
@@ -1612,7 +1625,7 @@ export async function ingestarResumenTarjeta({ sociedad, tarjeta = "", periodo =
 
   const nuevas = [];
   const sobran = [];
-  let yaAutorizadas = 0, sinCambio = 0;
+  let yaAutorizadas = 0, sinCambio = 0, sinFecha = 0;
   const nc = await resolverCuenta();   // catálogo una sola vez para todo el resumen
   for (const l of lineas) {
     const monto = Math.abs(Number(l.monto) || 0);
@@ -1621,10 +1634,12 @@ export async function ingestarResumenTarjeta({ sociedad, tarjeta = "", periodo =
     const hit = pool.find(p => !p.used && p.k === `${_normCom(l.comercio)}|${monto}|${mon}`);
     if (hit) { hit.used = true; yaAutorizadas++; continue; }
     // ¿Ya está pendiente en la hoja, idéntico? → no tocar (ni borrar ni re-crear).
-    const ya = existentes.get(claveDe(fechaEfectiva(l.fecha), _normCom(l.comercio), monto, mon));
+    const fe = fechaEfectiva(l);
+    if (fe.revisar) sinFecha++;
+    const ya = existentes.get(claveDe(fe.fecha, _normCom(l.comercio), monto, mon));
     if (ya?.length) { ya.shift(); sinCambio++; continue; }
     nuevas.push({
-      id: newId("TAR"), sociedad, fecha: fechaEfectiva(l.fecha),
+      id: newId("TAR"), sociedad, fecha: fe.fecha,
       tipo: "EGRESO", cuenta_bancaria: l.cuenta_bancaria, cuenta_destino: "",
       cuenta_contable: nc(l.cuenta_contable),
       centro_costo: l.centro_costo || "",
@@ -1635,7 +1650,7 @@ export async function ingestarResumenTarjeta({ sociedad, tarjeta = "", periodo =
       iva_rate: 0, iva_monto: 0,
       concepto: l.comercio || "",
       contraparte_id: "", contraparte_nombre: l.comercio || "",
-      referencia: `tc=${tarjeta};per=${periodo};com=${_normCom(l.comercio)};tit=${l.titular || ""}${l.ajuste ? ";ajuste=1" : ""}`,
+      referencia: `tc=${tarjeta};per=${periodo};com=${_normCom(l.comercio)};tit=${l.titular || ""}${l.ajuste ? ";ajuste=1" : ""}${fe.revisar ? ";fecha_rev=1" : ""}`,
       origen: "tarjeta", created_at: new Date().toISOString(),
     });
   }
@@ -1661,7 +1676,7 @@ export async function ingestarResumenTarjeta({ sociedad, tarjeta = "", periodo =
       if (!/no encontrada|not found/i.test(e?.message || "")) break;
     }
   }
-  return { creados, borradas, yaAutorizadas, sinCambio, sobrantes: sobran.length - borradas };
+  return { creados, borradas, yaAutorizadas, sinCambio, sinFecha, sobrantes: sobran.length - borradas };
 }
 
 // Consumos del resumen que faltan autorizar (bandeja del mundo Tarjeta).
