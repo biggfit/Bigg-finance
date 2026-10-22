@@ -331,7 +331,7 @@ export function derivarSaldos({
     const pagado = (pagosDocIdx.get(eg.id) || []).reduce((s, p) => s + Math.abs(Number(p.monto) || 0), 0);
     acumACuenta(pagosACuenta, eg.moneda ?? "ARS", pagado * fCentro, eg.proveedor || "Sin proveedor", eg.vto, eg.proveedorId, "cobrar", docCC(eg));
   }
-  const itemsACuenta = (store, label, headerColor) => Object.entries(store).filter(([, e]) => e.saldo > 0.005)
+  const itemsACuenta = (store, label, headerColor) => Object.entries(store).filter(([, e]) => e.saldo > 0.5)
     .map(([moneda, e]) => ({ label, moneda, saldo: e.saldo, docs: e.docs.sort((a, b) => b.saldo - a.saldo), headerColor }));
   const pagosACuentaAct  = itemsACuenta(pagosACuenta,  "Pagos a cuenta a proveedores", "#16a34a");
   const cobrosACuentaPas = itemsACuenta(cobrosACuenta, "Cobros a cuenta de clientes",  "#dc2626");
