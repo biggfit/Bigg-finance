@@ -489,6 +489,7 @@ export default function App({ onVolverNumbers } = {}) {
           franchises={franchises}
           franchisor={franchisor}
           comps={comps}
+          saldoInicial={saldoInicial}
           onSaveFr={saveFr}
           onAddFr={addFr}
           onDeleteFr={deleteFr}

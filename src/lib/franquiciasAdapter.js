@@ -213,11 +213,14 @@ export function franquiciasSaldosCxC({ comps, saldos, franchises }, sociedad, ye
     const deben = [], debemos = [];
     let totA = 0, totP = 0;
     for (const fr of (franchises ?? [])) {
-      if (fr.activa === false) continue;
       // Moneda por defecto de la franquicia (para saldos/comps SIN currency explícita): así no se cuentan
       // en las 3 monedas del loop. Un saldo/comp con currency propia sigue ganando (entry.currency ?? frCurrency).
       const frCur = fr.currencies?.[0] || "ARS";
       const saldo = computeSaldoReal(fr.id, year, month, compsCC, saldos, frCur, moneda, empresa);
+      // Inactiva: fuera solo si ya no tiene saldo (mismo criterio que Deudores en Franquicias). Antes se
+      // salteaba siempre: una sede dada de baja debiendo plata desaparecía de la CxC del balance mientras
+      // Franquicias la seguía cobrando, y los totales de las dos apps no coincidían.
+      if (fr.activa === false && Math.abs(saldo) < 1) continue;
       if (saldo > 0.01)       { deben.push({ contraparte: fr.name, vto: "", saldo, moneda }); totA += saldo; }
       else if (saldo < -0.01) { debemos.push({ contraparte: fr.name, vto: "", saldo: -saldo, moneda }); totP += -saldo; }
     }

@@ -1,6 +1,8 @@
 import { useState, useRef } from "react";
 import React from "react";
-import { COMP_TYPES, CURRENCIES } from "../lib/helpers";
+import { CURRENCIES, computeSaldoReal, fmt } from "../lib/helpers";
+import { COMPANIES } from "../data/franchisor";
+import { monedasDeSede } from "../lib/monedasSede";
 
 // ─── SHARED FIELD COMPONENTS (defined at module scope — no remount on rerender) ─
 function CountryGroup({ country, sedes, activeFrId, openFr, startOpen }) {
@@ -281,7 +283,7 @@ function frToBuf(fr) {
   };
 }
 
-export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr, onAddFr, onDeleteFr, onSaveFranchisor, onClose }) {
+export default function MaestrosModal({ franchises, franchisor, comps, saldoInicial, onSaveFr, onAddFr, onDeleteFr, onSaveFranchisor, onClose }) {
   const [topSection,  setTopSection]  = useState(null);  // arranca en el landing (antes abría en TC, que ya no vive acá)
   const [biggSub,     setBiggSub]     = useState(null);
   const [activeFrId,  setActiveFrId]  = useState(null);
@@ -348,14 +350,20 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
     });
   };
 
-  const hasSaldo = (frId) => {
-    let saldo = 0;
-    Object.entries(comps || {}).forEach(([key, arr]) => {
-      const parts = key.split("-");
-      if (String(parts[0]) === String(frId))
-        (arr || []).forEach(c => { saldo += (c.importe ?? 0) * (COMP_TYPES[c.tipo]?.sign ?? 0); });
-    });
-    return Math.abs(saldo) > 0.01;
+  // Saldos que la sede todavía tiene, por sociedad y moneda, con el mismo cálculo que Deudores y
+  // el balance de Numbers (saldo de apertura + comprobantes + cobros). Antes sumaba c.importe y
+  // c.tipo, campos que los comprobantes no tienen: daba siempre 0 y nunca frenaba la baja de una
+  // sede que debía plata. → [{ empresa, moneda, saldo }] con |saldo| ≥ 1.
+  const saldosPendientes = (frId) => {
+    const hoy = new Date();
+    const out = [];
+    for (const empresa of Object.keys(COMPANIES)) {
+      for (const moneda of monedasDeSede(frId, comps, saldoInicial ?? {}, empresa, COMPANIES[empresa].currency)) {
+        const saldo = computeSaldoReal(frId, hoy.getFullYear(), hoy.getMonth(), comps ?? {}, saldoInicial ?? {}, moneda, moneda, empresa);
+        if (Math.abs(saldo) >= 1) out.push({ empresa, moneda, saldo });
+      }
+    }
+    return out;
   };
 
   const handleDeleteClick = () => {
@@ -820,8 +828,9 @@ export default function MaestrosModal({ franchises, franchisor, comps, onSaveFr,
                     )}
                     {!newMode && (
                       <button onClick={() => {
-                        if (buf.activa && hasSaldo(activeFrId)) {
-                          showSaved("Esta sede tiene saldo pendiente. Ajustá el saldo antes de inactivarla.");
+                        const pend = buf.activa ? saldosPendientes(activeFrId) : [];
+                        if (pend.length > 0) {
+                          showSaved("Esta sede tiene saldo pendiente — " + pend.map(p => p.empresa + ": " + (p.saldo < 0 ? "-" : "") + fmt(Math.abs(p.saldo), p.moneda)).join(" · ") + ". Ajustá el saldo antes de inactivarla.");
                           return;
                         }
                         setBuf(b => ({ ...b, activa: !b.activa }));
