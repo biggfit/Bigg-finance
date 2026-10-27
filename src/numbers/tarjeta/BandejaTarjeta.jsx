@@ -53,6 +53,11 @@ export default function BandejaTarjeta({ sociedad, tarjetaId = "", periodo = "",
   // Chrome tras varios confirm() seguidos lo desactivan silenciosamente (confirm() devuelve false sin
   // mostrar nada) → el botón "no hacía nada". 1er click arma, 2do click (dentro de los 4s) ejecuta.
   const [confirmIgnorarId, setConfirmIgnorarId] = useState(null);
+  const [selIds, setSelIds] = useState(() => new Set());   // selección múltiple para acciones en lote
+  const [confirmIgnorarLote, setConfirmIgnorarLote] = useState(false);
+  useEffect(() => { setSelIds(new Set()); setConfirmIgnorarLote(false); }, [sociedad, tarjetaId, periodo]);
+  useEffect(() => { setConfirmIgnorarLote(false); }, [selIds]);
+  const toggleSel = id => setSelIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   useEffect(() => {
     if (!confirmIgnorarId) return;
     const t = setTimeout(() => setConfirmIgnorarId(null), 4000);
@@ -295,6 +300,25 @@ export default function BandejaTarjeta({ sociedad, tarjetaId = "", periodo = "",
     catch (e) { alert("No se pudo ignorar: " + (e?.message || e)); }
     setBusy(false);
   }
+  // Selección múltiple → Ignorar en lote (mismo doble click de confirmación que el Ignorar por fila).
+  async function ignorarSeleccionados(movs) {
+    if (!movs.length) return;
+    if (!confirmIgnorarLote) { setConfirmIgnorarLote(true); return; }   // 1er click: armar
+    setConfirmIgnorarLote(false);
+    setBusy(true);
+    let done = 0;
+    const fallaron = [];
+    for (const m of movs) {
+      try { await ignorarMovimiento(m, "tarjeta"); done++; }
+      catch (e) { fallaron.push(`${comercioDe(m)} (${e?.message || e})`); }
+    }
+    setSelIds(new Set());
+    try { await recargarPend(true); } catch { /* la bandeja se recarga al volver a entrar */ }
+    setPdfMsg(fallaron.length
+      ? `⚠️ Se ignoraron ${done} de ${movs.length}. Fallaron ${fallaron.length}: ${fallaron.slice(0, 3).join(" · ")}${fallaron.length > 3 ? "…" : ""}.`
+      : `✓ ${done} consumo(s) ignorados.`);
+    setBusy(false);
+  }
   async function autorizarTodas() {
     const listas = pendFiltrados.filter(completa);
     if (!listas.length) return;
@@ -350,6 +374,8 @@ export default function BandejaTarjeta({ sociedad, tarjetaId = "", periodo = "",
   const totD = gruposTit.reduce((s, g) => s + g.d, 0);
 
   const listasCount = pendFiltrados.filter(completa).length;
+  const elegidos = pendFiltrados.filter(m => selIds.has(m.id));
+  const todosSel = pendFiltrados.length > 0 && elegidos.length === pendFiltrados.length;
   const centroOpts = useMemo(() => ccActivos(centros).sort((a, b) => String(a.nombre).localeCompare(String(b.nombre))), [centros]);
 
   return (
@@ -393,6 +419,22 @@ export default function BandejaTarjeta({ sociedad, tarjetaId = "", periodo = "",
         )}
       </div>
 
+      {elegidos.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10, padding: "8px 14px",
+          background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 8, fontSize: 12 }}>
+          <b>{elegidos.length} seleccionado{elegidos.length !== 1 ? "s" : ""}</b>
+          <button onClick={() => ignorarSeleccionados(elegidos)} disabled={busy}
+            style={{ background: "#dc2626", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 12, fontWeight: 700,
+              color: "#fff", cursor: busy ? "default" : "pointer", fontFamily: T.font, opacity: busy ? .6 : 1 }}>
+            {busy ? "Procesando…" : confirmIgnorarLote ? `¿Seguro? Ignorar ${elegidos.length}` : `Ignorar ${elegidos.length}`}
+          </button>
+          <button onClick={() => setSelIds(new Set())} disabled={busy}
+            style={{ background: "transparent", border: "none", color: T.muted, fontSize: 11, cursor: "pointer", fontFamily: T.font }}>
+            quitar selección
+          </button>
+        </div>
+      )}
+
       {/* Barra de progreso mientras autoriza en lote */}
       {prog && prog.total > 0 && (
         <div style={{ marginBottom: 12 }}>
@@ -412,6 +454,11 @@ export default function BandejaTarjeta({ sociedad, tarjetaId = "", periodo = "",
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, color: T.text }}>
             <thead>
               <tr style={{ background: T.tableHead, color: T.tableHeadText, position: "sticky", top: 0, zIndex: 1 }}>
+                <th style={{ padding: "8px 4px 8px 10px", width: 18 }}>
+                  <input type="checkbox" title="Seleccionar todos los visibles" checked={todosSel}
+                    ref={el => { if (el) el.indeterminate = !todosSel && elegidos.length > 0; }}
+                    onChange={() => setSelIds(todosSel ? new Set() : new Set(pendFiltrados.map(m => m.id)))} />
+                </th>
                 {["Fecha", "Comercio", "Titular", "Cuenta *", "Centro", "ARS", "USD", ""].map((c, i) => (
                   <th key={i} style={{ padding: "8px 10px", textAlign: (i === 5 || i === 6) ? "right" : "left", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{c}</th>
                 ))}
@@ -428,7 +475,10 @@ export default function BandejaTarjeta({ sociedad, tarjetaId = "", periodo = "",
                     const esCredito = esAjuste && Number(m.monto) > 0;
                     const fechaRev = metaVal(m.referencia, "fecha_rev") === "1";   // el parser no leyó la fecha de la línea
                     return (
-                      <tr key={m.id} style={{ borderTop: `1px solid ${T.cardBorder}`, ...(esAjuste ? { background: "#fefce8" } : {}) }}>
+                      <tr key={m.id} style={{ borderTop: `1px solid ${T.cardBorder}`, ...(esAjuste ? { background: "#fefce8" } : {}), ...(selIds.has(m.id) ? { background: "#eff6ff" } : {}) }}>
+                        <td style={{ padding: "5px 4px 5px 10px" }}>
+                          <input type="checkbox" checked={selIds.has(m.id)} onChange={() => toggleSel(m.id)} />
+                        </td>
                         <td style={{ padding: "5px 10px", color: fechaRev ? "#b45309" : T.muted, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}
                           title={fechaRev
                             ? "No se pudo leer la fecha de esta línea del PDF: quedó a la fecha de cierre del resumen. Corregila antes de autorizar."
@@ -473,7 +523,7 @@ export default function BandejaTarjeta({ sociedad, tarjetaId = "", periodo = "",
                     );
                   })}
                   <tr style={{ borderTop: `1px solid ${T.cardBorder}`, background: "#e6eaf0", fontWeight: 700 }}>
-                    <td colSpan={5} style={{ padding: "6px 10px", fontSize: 11.5 }}>Total {g.tit || "Sin titular"}</td>
+                    <td colSpan={6} style={{ padding: "6px 10px", fontSize: 11.5 }}>Total {g.tit || "Sin titular"}</td>
                     <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: T.mono }}>{moneySigned(g.p, "ARS")}</td>
                     <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: T.mono }}>{moneySigned(g.d, "USD")}</td>
                     <td />
@@ -483,7 +533,7 @@ export default function BandejaTarjeta({ sociedad, tarjetaId = "", periodo = "",
             </tbody>
             <tfoot>
               <tr style={{ borderTop: `2px solid ${T.cardBorder}`, background: "#fafafa", fontWeight: 800 }}>
-                <td colSpan={5} style={{ padding: "8px 10px" }}>Total general</td>
+                <td colSpan={6} style={{ padding: "8px 10px" }}>Total general</td>
                 <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: T.mono }}>{moneySigned(totP, "ARS")}</td>
                 <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: T.mono }}>{moneySigned(totD, "USD")}</td>
                 <td />

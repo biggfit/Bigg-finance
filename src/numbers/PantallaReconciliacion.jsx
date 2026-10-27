@@ -1293,6 +1293,36 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       setIgnorados(prev => [{ ...mov, documento_id: "IGN-" + mov.id, referencia: ref }, ...prev]);
     } catch (e) { setMsg("Error al ignorar: " + e.message); }
   };
+  // Selección múltiple de pendientes → acción en lote (hoy: Ignorar). Caso típico: varias líneas de un
+  // mismo proveedor que ya entraron a Tesorería por otro lado. Se limpia al cambiar de cuenta.
+  const [selIds, setSelIds] = useState(() => new Set());
+  useEffect(() => { setSelIds(new Set()); }, [cuentaTab, sociedad]);
+  const toggleSel = id => setSelIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const ignorarSeleccionados = async (movs) => {
+    if (!movs.length) return;
+    if (!(await confirm({
+      title: `Ignorar ${movs.length} movimiento${movs.length !== 1 ? "s" : ""}`,
+      message: "Salen de pendientes sin contabilizar (no tocan Tesorería ni el P&L). Se pueden restaurar desde \"Ignorados\".",
+      confirmLabel: "Ignorar", cancelLabel: "Cancelar",
+    }))) return;
+    setUploading(true);
+    let ok = 0; const errs = [];
+    // Secuencial: cada ignorar es un edit en la hoja; en paralelo GAS pisa escrituras concurrentes.
+    for (const m of movs) {
+      try {
+        await ignorarMovimiento(m, "");
+        ok++;
+        setPendientes(prev => prev.filter(x => x.id !== m.id));
+        const ref = String(m.referencia || "").replace(/;?ign=[^;]*/g, "") + ";ign=1";
+        setIgnorados(prev => [{ ...m, documento_id: "IGN-" + m.id, referencia: ref }, ...prev]);
+        setSelIds(prev => { const n = new Set(prev); n.delete(m.id); return n; });
+      } catch (e) { errs.push(e?.message || String(e)); }
+    }
+    setUploading(false);
+    setMsg(errs.length
+      ? `Error al ignorar ${errs.length} de ${movs.length}: ${errs[0]}${ok ? ` · ${ok} ignorados` : ""}`
+      : `✓ ${ok} ignorado${ok !== 1 ? "s" : ""}.`);
+  };
   const restaurar = async (mov) => {
     try {
       await restaurarMovimiento(mov);
@@ -1945,6 +1975,28 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
 
       {msg && <div style={{ fontSize: 12, color: msg.startsWith("Error") ? "#dc2626" : "#16a34a", marginBottom: 10 }}>{msg}</div>}
 
+      {(() => {
+        const elegidos = filtered.filter(m => selIds.has(m.id));
+        if (!elegidos.length) return null;
+        const neto = elegidos.reduce((s, m) => s + (Number(m.monto) || 0), 0);
+        return (
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10, padding: "8px 14px",
+            background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 8, fontSize: 12 }}>
+            <b style={{ color: T.text }}>{elegidos.length} seleccionado{elegidos.length !== 1 ? "s" : ""}</b>
+            <span style={{ color: T.muted }}>neto {fmt(neto)}</span>
+            <button onClick={() => ignorarSeleccionados(elegidos)} disabled={uploading}
+              style={{ background: "#dc2626", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 12, fontWeight: 700,
+                color: "#fff", cursor: uploading ? "default" : "pointer", fontFamily: T.font, opacity: uploading ? .6 : 1 }}>
+              {uploading ? "Ignorando…" : `🚫 Ignorar ${elegidos.length}`}
+            </button>
+            <button onClick={() => setSelIds(new Set())} disabled={uploading}
+              style={{ background: "transparent", border: "none", color: T.muted, fontSize: 11, cursor: "pointer", fontFamily: T.font }}>
+              quitar selección
+            </button>
+          </div>
+        );
+      })()}
+
       {erroresIngesta?.lineas?.length > 0 && (
         <div style={{ marginBottom: 12, background: "#fff7ed", border: "1px solid #fb923c", borderRadius: 8, padding: "10px 14px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
@@ -1979,6 +2031,17 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr style={{ background: T.tableHead, position: "sticky", top: 0, zIndex: 1 }}>
+                {(() => {
+                  const todos = filtered.length > 0 && filtered.every(m => selIds.has(m.id));
+                  const algunos = !todos && filtered.some(m => selIds.has(m.id));
+                  return (
+                    <th style={{ padding: "9px 4px 9px 12px", width: 20 }}>
+                      <input type="checkbox" title="Seleccionar todos los visibles" checked={todos}
+                        ref={el => { if (el) el.indeterminate = algunos; }}
+                        onChange={() => setSelIds(todos ? new Set() : new Set(filtered.map(m => m.id)))} />
+                    </th>
+                  );
+                })()}
                 {[["Fecha","left"],["Descripción","left"],["Débitos","right"],["Créditos","right"],["Propuesta","left"],["Imputación","center"],["Acción","left"]].map(([h, al]) => (
                   <th key={h} style={{ padding: "9px 12px", textAlign: al, fontSize: 10, fontWeight: 700,
                     color: T.tableHeadText, letterSpacing: ".06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>
@@ -2052,7 +2115,10 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                 const hMatch = (!fr.es && !modoTransfer && !modoFC && !modoCobro && !modoCuota && !modoInterco && !modoRecv) ? haberesMatch(m) : null;   // débito que coincide con un lote de haberes
                 return (
                   <Fragment key={`${m.id}-${i}`}>
-                  <tr style={{ borderBottom: fr.split ? "none" : "1px solid #cbd5e1", background: bg }}>
+                  <tr style={{ borderBottom: fr.split ? "none" : "1px solid #cbd5e1", background: selIds.has(m.id) ? "#eff6ff" : bg }}>
+                    <td style={{ padding: "8px 4px 8px 12px" }}>
+                      <input type="checkbox" checked={selIds.has(m.id)} onChange={() => toggleSel(m.id)} />
+                    </td>
                     <td style={{ padding: "8px 12px", color: T.muted, whiteSpace: "nowrap" }}>{fmtDate(m.fecha)}</td>
                     <td style={{ padding: "8px 12px", maxWidth: 220 }}>
                       <div style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.concepto}</div>
@@ -2385,7 +2451,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                     <>
                       {fr.split.map((p, idx) => (
                         <tr key={`${m.id}-sp-${idx}`} style={{ background: bg, borderLeft: `3px solid ${T.accent}` }}>
-                          <td /><td />
+                          <td /><td /><td />
                           <td style={{ padding: "4px 12px", textAlign: "right" }}>
                             <MoneyField value={p.monto} onChange={e => updSplit(m.id, idx, "monto", e.target.value)}
                               style={{ width: 110, textAlign: "right", ...sel }} />
@@ -2412,7 +2478,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                         </tr>
                       ))}
                       <tr style={{ background: bg, borderBottom: `1px solid ${T.cardBorder}`, borderLeft: `3px solid ${T.accent}` }}>
-                        <td /><td />
+                        <td /><td /><td />
                         <td style={{ padding: "4px 12px", textAlign: "right", fontSize: 10, fontWeight: 700, color: splitOk ? "#16a34a" : "#dc2626" }}>
                           {fmt(splitSum)} / {fmt(total)} {splitOk
                             ? "✓"
