@@ -1444,48 +1444,23 @@ function lineasGalicia(liqs, tipo) {
   return filas;
 }
 
-// Haberes agrupados por SOCIEDAD del legajo (la que paga el banco: ej. Palermo Rosedal → Segui Fit,
-// el resto → Hektor). Orden estable por nombre de sociedad; dentro, el orden de lineasGalicia.
-function haberesPorSociedad(liqs) {
-  const grupos = new Map();
-  for (const f of lineasGalicia(liqs, "haberes")) {
-    const k = f.sociedad || "Sin sociedad";
-    if (!grupos.has(k)) grupos.set(k, []);
-    grupos.get(k).push(f);
-  }
-  return [...grupos.entries()].sort(([a], [b]) => a.localeCompare(b, "es"));
-}
-
-const nombreArchivoSoc = (s) => s.replace(/[\\/:*?"<>|]/g, "").trim();
-
-// Un archivo Galicia POR SOCIEDAD: cada sociedad sube el suyo desde su propia cuenta.
 function exportarHaberes(liqs, mes, anio) {
   const desc = `Sueldo ${String(mes).padStart(2, "0")}/${anio}`.slice(0, 12);
-  const grupos = haberesPorSociedad(liqs);
-  if (!grupos.length) { alert("No hay líneas de Haberes con CBU cargado."); return; }
-  // Escalonado: el navegador puede bloquear varias descargas disparadas en el mismo instante.
-  grupos.forEach(([soc, fs], i) => setTimeout(() => descargarExcelGalicia(
-    fs.map(f => [f.cbu, f.importe, "acreditamiento de haberes", desc, "", ""]),
-    `Haberes_HQ_${String(mes).padStart(2,"0")}_${anio}_${nombreArchivoSoc(soc)}.xlsx`,
-  ), i * 400));
+  const filas = lineasGalicia(liqs, "haberes")
+    .map(f => [f.cbu, f.importe, "acreditamiento de haberes", desc, "", ""]);
+  if (!filas.length) { alert("No hay líneas de Haberes con CBU cargado."); return; }
+  descargarExcelGalicia(filas, `Haberes_HQ_${String(mes).padStart(2,"0")}_${anio}.xlsx`);
 }
 
-// Archivo de control aparte (no se sube al banco): mismas filas y orden que los Galicia por sociedad,
-// con el nombre de cada CBU, subtotal por sociedad y total general.
+// Archivo de control aparte (no se sube al banco): mismas filas y orden que exportarHaberes,
+// con el nombre de cada CBU. El de Galicia queda intacto para que el banco lo tome.
 function exportarControlHaberes(liqs, mes, anio) {
-  const grupos = haberesPorSociedad(liqs);
-  if (!grupos.length) { alert("No hay líneas de Haberes con CBU cargado."); return; }
-  const filas = [];
-  let total = 0;
-  for (const [soc, fs] of grupos) {
-    const sub = fs.reduce((a, f) => a + (Number(f.importe) || 0), 0);
-    total += sub;
-    filas.push(...fs.map(f => [f.nombre || "", f.sede, f.sociedad, f.cbu, f.importe]));
-    filas.push(["", "", `Subtotal ${soc}`, "", sub], []);
-  }
+  const filas = lineasGalicia(liqs, "haberes").map(f => [f.nombre || "", f.sede, f.sociedad, f.cbu, f.importe]);
+  if (!filas.length) { alert("No hay líneas de Haberes con CBU cargado."); return; }
+  const total = filas.reduce((a, f) => a + (Number(f[4]) || 0), 0);
   descargarExcelHoja({
     headers: ["Nombre", "Sede", "Sociedad", "CBU", "Monto"], anchos: [30, 22, 22, 28, 14], hoja: "Control",
-    filas: [...filas, ["TOTAL", "", "", "", total]],
+    filas: [...filas, [], ["TOTAL", "", "", "", total]],
     nombreArchivo: `Control_Haberes_HQ_${String(mes).padStart(2,"0")}_${anio}.xlsx`,
   });
 }
