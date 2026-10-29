@@ -2251,36 +2251,68 @@ function haberesPorSociedad(empls) {
 
 const nombreArchivoSoc = (s) => s.replace(/[\\/:*?"<>|]/g, "").trim();
 
-// Un archivo Galicia POR SOCIEDAD: cada sociedad sube el suyo desde su propia cuenta.
-function exportarHaberes(empls, mes, anio) {
+// Galicia de UNA sociedad (`[soc, empls]` de haberesPorSociedad): cada una lo sube desde su cuenta.
+function exportarHaberes([soc, es], mes, anio) {
   const desc = `Sueldo ${String(mes).padStart(2, "0")}/${anio}`.slice(0, 12);
-  const grupos = haberesPorSociedad(empls);
-  if (!grupos.length) { alert("No hay empleados con Haberes y CBU cargado."); return; }
-  // Escalonado: el navegador puede bloquear varias descargas disparadas en el mismo instante.
-  grupos.forEach(([soc, es], i) => setTimeout(() => descargarExcelGalicia(
+  descargarExcelGalicia(
     es.map(e => [e.cbu, e.pendiente, "acreditamiento de haberes", desc, "", ""]),
     `Haberes_Sedes_${String(mes).padStart(2,"0")}_${anio}_${nombreArchivoSoc(soc)}.xlsx`,
-  ), i * 400));
+  );
 }
 
-// Archivo de control aparte (no se sube al banco): mismas filas y orden que los Galicia por sociedad,
-// con el nombre de cada CBU, subtotal por sociedad y total general.
-function exportarControlHaberes(empls, mes, anio) {
-  const grupos = haberesPorSociedad(empls);
-  if (!grupos.length) { alert("No hay empleados con Haberes y CBU cargado."); return; }
-  const filas = [];
-  let total = 0;
-  for (const [soc, es] of grupos) {
-    const sub = es.reduce((a, e) => a + e.pendiente, 0);
-    total += sub;
-    filas.push(...es.map(e => [e.legajo_nombre || "", (e.sedes || []).join(", "), e.sociedad_nombre || "", e.cbu, e.pendiente]));
-    filas.push(["", "", `Subtotal ${soc}`, "", sub], []);
-  }
-  const ws = XLSX.utils.aoa_to_sheet([["Nombre", "Sede", "Sociedad", "CBU", "Monto"], ...filas, ["TOTAL", "", "", "", total]]);
+// Archivo de control aparte (no se sube al banco): mismas filas y orden que el Galicia de esa
+// sociedad, con el nombre de cada CBU.
+function exportarControlHaberes([soc, es], mes, anio) {
+  const filas = es.map(e => [e.legajo_nombre || "", (e.sedes || []).join(", "), e.sociedad_nombre || "", e.cbu, e.pendiente]);
+  const total = es.reduce((a, e) => a + e.pendiente, 0);
+  const ws = XLSX.utils.aoa_to_sheet([["Nombre", "Sede", "Sociedad", "CBU", "Monto"], ...filas, [], ["TOTAL", "", "", "", total]]);
   ws["!cols"] = [{ wch: 30 }, { wch: 22 }, { wch: 22 }, { wch: 28 }, { wch: 14 }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Control");
-  XLSX.writeFile(wb, `Control_Haberes_Sedes_${String(mes).padStart(2,"0")}_${anio}.xlsx`);
+  XLSX.writeFile(wb, `Control_Haberes_Sedes_${String(mes).padStart(2,"0")}_${anio}_${nombreArchivoSoc(soc)}.xlsx`);
+}
+
+// Botón de export de Haberes que pide la sociedad: con una sola sociedad descarga directo; con
+// varias abre un menú (hacia arriba: los botones están al pie) con personas y monto de cada una.
+function BotonHaberesPorSociedad({ color, label, grupos, onElegir }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
+  const click = () => {
+    if (!grupos.length) { alert("No hay empleados con Haberes pendientes y CBU cargado."); return; }
+    if (grupos.length === 1) { onElegir(grupos[0]); return; }
+    setOpen(o => !o);
+  };
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button style={BTN_EXPORT(color)} onClick={click}>{label}{grupos.length > 1 ? " ▾" : ""}</button>
+      {open && (
+        <div style={{ position: "absolute", bottom: "calc(100% + 4px)", left: 0, zIndex: 50, minWidth: 260,
+          background: "#fff", border: `1px solid ${T.border}`, borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,.15)", overflow: "hidden" }}>
+          <div style={{ padding: "8px 14px 4px", fontSize: 11, fontWeight: 700, color: T.muted }}>¿Qué sociedad?</div>
+          {grupos.map(g => {
+            const [soc, es] = g;
+            return (
+              <button key={soc} onClick={() => { setOpen(false); onElegir(g); }} style={{
+                display: "flex", justifyContent: "space-between", gap: 16, width: "100%", padding: "8px 14px",
+                background: "transparent", border: "none", cursor: "pointer", fontSize: 13, color: T.text, fontFamily: T.font, textAlign: "left",
+              }}
+                onMouseEnter={e => e.currentTarget.style.background = "#f3f4f6"}
+                onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                <span><strong>{soc}</strong> <span style={{ color: T.muted }}>· {es.length} persona{es.length !== 1 ? "s" : ""}</span></span>
+                <span style={{ fontWeight: 600 }}>{fmtMoney(es.reduce((a, e) => a + e.pendiente, 0))}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // Efectivo + Monotributo (plata en mano / monotributistas): una fila por empleado × forma.
@@ -2427,6 +2459,9 @@ function FondeoBand({ stats }) {
 function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, onReabrir, reabriendo, onCerrarUno, saving, onPagarHaberes }) {
   const [batchModal,  setBatchModal]  = useState(null);
   const [anularModal, setAnularModal] = useState(null);
+
+  // Haberes pendientes por sociedad: alimenta el menú de los botones Excel Haberes / Control.
+  const gruposHaberes = useMemo(() => haberesPorSociedad(empls), [empls]);
 
   // pendientesMap: unpaid employees per tipo. hayAlgoMap: any employee has this tipo (paid or not).
   const { pendientesMap, hayAlgoMap, tipoStats } = useMemo(() => {
@@ -2596,12 +2631,10 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, on
       </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "16px 0", borderTop: `1px solid ${T.border}`, marginTop: 8 }}>
-        <button style={BTN_EXPORT("#16a34a")} onClick={() => exportarHaberes(empls, mes, anio)}>
-          📥 Excel Haberes (banco)
-        </button>
-        <button style={BTN_EXPORT("#475569")} onClick={() => exportarControlHaberes(empls, mes, anio)}>
-          📋 Control Haberes
-        </button>
+        <BotonHaberesPorSociedad color="#16a34a" label="📥 Excel Haberes (banco)" grupos={gruposHaberes}
+          onElegir={g => exportarHaberes(g, mes, anio)} />
+        <BotonHaberesPorSociedad color="#475569" label="📋 Control Haberes" grupos={gruposHaberes}
+          onElegir={g => exportarControlHaberes(g, mes, anio)} />
         <button style={BTN_EXPORT("#ca8a04")} onClick={() => exportarEfectivoSedes(empls, mes, anio)}>
           📥 Excel Monotributo + Efectivo
         </button>
