@@ -1742,6 +1742,10 @@ function PasoPagos({ mes, anio, cargandoPagos = false, liqStaff, liqOwners, liqE
   const totalPagado = todos.reduce((s, l) => s + l.total_pagado, 0);
   const totalPend   = totalBruto - totalPagado;
 
+  // Lo que falta pagar de un ítem (línea o novedad) dados sus pagos — cuenta los parciales.
+  const pendienteDe = (monto, pagos) =>
+    remanentePago(Number(monto) || 0, pagos.reduce((s, p) => s + Math.abs(Number(p.monto) || 0), 0));
+
   // Una pasada por todas las líneas: importe total, cantidad y pendientes por tipo.
   // Alimenta tanto las tarjetas de fondeo como los encabezados de columna.
   const tipoStats = useMemo(() => {
@@ -1753,14 +1757,14 @@ function PasoPagos({ mes, anio, cargandoPagos = false, liqStaff, liqOwners, liqE
         if (!s) continue;
         s.total += Number(l.importe) || 0;
         s.count += 1;
-        if (getPagosLinea(liq, l).length === 0) s.pend += 1;
+        if (pendienteDe(l.importe, getPagosLinea(liq, l)) > PAGO_EPS) s.pend += 1;
       }
       for (const n of liq.novedades || []) {
         const s = acc[n.forma_pago];
         if (!s) continue;
         s.total += Number(n.monto) || 0;
         s.count += 1;
-        if (getPagosNovedad(liq, n).length === 0) s.pend += 1;
+        if (pendienteDe(n.monto, getPagosNovedad(liq, n)) > PAGO_EPS) s.pend += 1;
       }
       for (const p of liq.pagos || []) {
         const s = acc[p.tipo_componente];
@@ -1774,14 +1778,15 @@ function PasoPagos({ mes, anio, cargandoPagos = false, liqStaff, liqOwners, liqE
 
   // Ítems pendientes de un tipo a través de todos los empleados (para imputar en
   // masa): líneas de sueldo + novedades que salen por esa forma de pago.
+  // Incluye los ítems con pago PARCIAL: `pendiente` = lo que falta, y es lo que imputa el lote.
   const pendientesTipo = (tipo) => todos.flatMap(liq => [
     ...liq.lineas
-      .filter(l => l.tipo === tipo && getPagosLinea(liq, l).length === 0)
-      .map(linea => ({ liq, kind: "linea", ref: linea })),
+      .filter(l => l.tipo === tipo)
+      .map(linea => ({ liq, kind: "linea", ref: linea, pendiente: pendienteDe(linea.importe, getPagosLinea(liq, linea)) })),
     ...(liq.novedades || [])
-      .filter(n => n.forma_pago === tipo && getPagosNovedad(liq, n).length === 0)
-      .map(nov => ({ liq, kind: "novedad", ref: nov })),
-  ]);
+      .filter(n => n.forma_pago === tipo)
+      .map(nov => ({ liq, kind: "novedad", ref: nov, pendiente: pendienteDe(nov.monto, getPagosNovedad(liq, nov)) })),
+  ].filter(it => it.pendiente > PAGO_EPS));
 
   return (
     <div>
@@ -2468,7 +2473,8 @@ function ModalBatchPago({ tipo, items, mes, anio, onClose, onSaved }) {
     socFiltro ? cuentas.filter(c => c.sociedad === socFiltro) : [],
   [cuentas, socFiltro]);
 
-  const montoItem  = (it) => (it.kind === "linea" ? Number(it.ref.importe) : Number(it.ref.monto)) || 0;
+  // Lo que falta pagar del ítem (descuenta parciales previos).
+  const montoItem  = (it) => it.pendiente ?? ((it.kind === "linea" ? Number(it.ref.importe) : Number(it.ref.monto)) || 0);
   const cuentaItem = (it) => it.kind === "linea"
     ? findCuenta(cuentasContables, null, CUENTA_CONTABLE_SUELDOS)
     : findCuenta(cuentasContables, it.ref.cuenta_contable_id, it.ref.cuenta_contable_nombre);
