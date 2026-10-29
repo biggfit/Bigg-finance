@@ -2232,24 +2232,51 @@ function descargarExcelGalicia(filas, nombreArchivo) {
   XLSX.writeFile(wb, nombreArchivo);
 }
 
-function exportarHaberes(empls, mes, anio) {
-  const desc = `Sueldo ${String(mes).padStart(2, "0")}/${anio}`.slice(0, 12);
-  const filas = empls
-    .filter(e => (e.monto_haberes || 0) > 0 && e.cbu)
-    .map(e => [e.cbu, e.monto_haberes, "acreditamiento de haberes", desc, "", ""]);
-  if (!filas.length) { alert("No hay empleados con Haberes y CBU cargado."); return; }
-  descargarExcelGalicia(filas, `Haberes_Sedes_${String(mes).padStart(2,"0")}_${anio}.xlsx`);
+// Haberes agrupados por SOCIEDAD del legajo (la que paga el banco: ej. Palermo Rosedal → Segui Fit,
+// el resto → Hektor). Orden estable por nombre de sociedad; dentro, el orden de empls.
+// `pendiente` = haberes menos lo ya pagado por haberes (parciales / anticipos); lo saldado no se exporta.
+function haberesPorSociedad(empls) {
+  const grupos = new Map();
+  for (const e of empls) {
+    if (!e.cbu) continue;
+    const pagado = getPagosTipo(e, "haberes").reduce((a, p) => a + Math.abs(Number(p.monto) || 0), 0);
+    const pendiente = Math.round(remanentePago(e.monto_haberes || 0, pagado));
+    if (pendiente <= 0) continue;
+    const k = e.sociedad_nombre || "Sin sociedad";
+    if (!grupos.has(k)) grupos.set(k, []);
+    grupos.get(k).push({ ...e, pendiente });
+  }
+  return [...grupos.entries()].sort(([a], [b]) => a.localeCompare(b, "es"));
 }
 
-// Archivo de control aparte (no se sube al banco): mismas filas y orden que exportarHaberes,
-// con el nombre de cada CBU. El de Galicia queda intacto para que el banco lo tome.
+const nombreArchivoSoc = (s) => s.replace(/[\\/:*?"<>|]/g, "").trim();
+
+// Un archivo Galicia POR SOCIEDAD: cada sociedad sube el suyo desde su propia cuenta.
+function exportarHaberes(empls, mes, anio) {
+  const desc = `Sueldo ${String(mes).padStart(2, "0")}/${anio}`.slice(0, 12);
+  const grupos = haberesPorSociedad(empls);
+  if (!grupos.length) { alert("No hay empleados con Haberes y CBU cargado."); return; }
+  // Escalonado: el navegador puede bloquear varias descargas disparadas en el mismo instante.
+  grupos.forEach(([soc, es], i) => setTimeout(() => descargarExcelGalicia(
+    es.map(e => [e.cbu, e.pendiente, "acreditamiento de haberes", desc, "", ""]),
+    `Haberes_Sedes_${String(mes).padStart(2,"0")}_${anio}_${nombreArchivoSoc(soc)}.xlsx`,
+  ), i * 400));
+}
+
+// Archivo de control aparte (no se sube al banco): mismas filas y orden que los Galicia por sociedad,
+// con el nombre de cada CBU, subtotal por sociedad y total general.
 function exportarControlHaberes(empls, mes, anio) {
-  const filas = empls
-    .filter(e => (e.monto_haberes || 0) > 0 && e.cbu)
-    .map(e => [e.legajo_nombre || "", (e.sedes || []).join(", "), e.sociedad_nombre || "", e.cbu, e.monto_haberes]);
-  if (!filas.length) { alert("No hay empleados con Haberes y CBU cargado."); return; }
-  const total = filas.reduce((a, f) => a + (Number(f[4]) || 0), 0);
-  const ws = XLSX.utils.aoa_to_sheet([["Nombre", "Sede", "Sociedad", "CBU", "Monto"], ...filas, [], ["TOTAL", "", "", "", total]]);
+  const grupos = haberesPorSociedad(empls);
+  if (!grupos.length) { alert("No hay empleados con Haberes y CBU cargado."); return; }
+  const filas = [];
+  let total = 0;
+  for (const [soc, es] of grupos) {
+    const sub = es.reduce((a, e) => a + e.pendiente, 0);
+    total += sub;
+    filas.push(...es.map(e => [e.legajo_nombre || "", (e.sedes || []).join(", "), e.sociedad_nombre || "", e.cbu, e.pendiente]));
+    filas.push(["", "", `Subtotal ${soc}`, "", sub], []);
+  }
+  const ws = XLSX.utils.aoa_to_sheet([["Nombre", "Sede", "Sociedad", "CBU", "Monto"], ...filas, ["TOTAL", "", "", "", total]]);
   ws["!cols"] = [{ wch: 30 }, { wch: 22 }, { wch: 22 }, { wch: 28 }, { wch: 14 }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Control");
