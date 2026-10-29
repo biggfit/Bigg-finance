@@ -1429,14 +1429,16 @@ function lineasGalicia(liqs, tipo) {
     for (const l of liq.lineas || []) {
       if (l.tipo !== tipo) continue;
       const cbu = (l.cbu || (tipo === "haberes" ? liq.cbu : "")).trim();
-      if (!cbu || !(Number(l.importe) > 0)) continue;
-      filas.push({ cbu, importe: Number(l.importe), nombre: liq.legajo_nombre, sede: liq.sede_nombre || "", sociedad: liq.sociedad_nombre || "", nota: l.nota || "" });
+      const importe = pendienteDe(l.importe, getPagosLinea(liq, l));   // descuenta parciales/anticipos ya pagados
+      if (!cbu || !(importe > PAGO_EPS)) continue;
+      filas.push({ cbu, importe, nombre: liq.legajo_nombre, sede: liq.sede_nombre || "", sociedad: liq.sociedad_nombre || "", nota: l.nota || "" });
     }
     for (const n of liq.novedades || []) {
       if (n.forma_pago !== tipo) continue;
       const cbu = (liq.cbu || "").trim();
-      if (!cbu || !(Number(n.monto) > 0)) continue;
-      filas.push({ cbu, importe: Number(n.monto), nombre: liq.legajo_nombre, sede: liq.sede_nombre || "", sociedad: liq.sociedad_nombre || "", nota: n.cuenta_contable_nombre || n.descripcion || "" });
+      const importe = pendienteDe(n.monto, getPagosNovedad(liq, n));
+      if (!cbu || !(importe > PAGO_EPS)) continue;
+      filas.push({ cbu, importe, nombre: liq.legajo_nombre, sede: liq.sede_nombre || "", sociedad: liq.sociedad_nombre || "", nota: n.cuenta_contable_nombre || n.descripcion || "" });
     }
   }
   return filas;
@@ -1498,7 +1500,8 @@ function lineasDetalle(liqs, tipo) {
 
     for (const l of liq.lineas || []) {
       if (l.tipo !== tipo) continue;
-      if (!(Number(l.importe) > 0)) continue;
+      const importe = pendienteDe(l.importe, getPagosLinea(liq, l));   // descuenta parciales ya pagados
+      if (!(importe > PAGO_EPS)) continue;
       agregar((l.cbu || l.cuenta || "").trim(), {
         titular: l.titular || liq.legajo_nombre || "",
         banco: l.banco || "",
@@ -1506,14 +1509,15 @@ function lineasDetalle(liqs, tipo) {
         cuenta: l.cuenta || "",
         cbu: l.cbu || "",
         cuit: l.cuit || "",
-      }, Number(l.importe), l.nota);
+      }, importe, l.nota);
     }
     // Novedades ruteadas a este tipo (depósito / transf. financiera): también deben instruirse al banco.
     // Igual que lineasGalicia. La novedad no trae banco/cuenta/cuit propios → caen al CBU del empleado,
     // y si ese CBU coincide con el de una línea ya cargada, se suman en la misma fila.
     for (const n of liq.novedades || []) {
       if (n.forma_pago !== tipo) continue;
-      if (!(Number(n.monto) > 0)) continue;
+      const importe = pendienteDe(n.monto, getPagosNovedad(liq, n));
+      if (!(importe > PAGO_EPS)) continue;
       agregar((liq.cbu || "").trim(), {
         titular: liq.legajo_nombre || "",
         banco: "",
@@ -1521,7 +1525,7 @@ function lineasDetalle(liqs, tipo) {
         cuenta: "",
         cbu: liq.cbu || "",
         cuit: "",
-      }, Number(n.monto), n.cuenta_contable_nombre || n.descripcion);
+      }, importe, n.cuenta_contable_nombre || n.descripcion);
     }
 
     for (const g of grupos.values()) {
@@ -1549,10 +1553,10 @@ function lineasDetalle(liqs, tipo) {
 function exportarDeposito(liqs, mes, anio) {
   const filas = [];
   for (const liq of liqs) {
-    const deps = (liq.lineas || []).filter(l => l.tipo === "deposito" && Number(l.importe) > 0);
-    const novs = (liq.novedades || []).filter(n => n.forma_pago === "deposito" && Number(n.monto) > 0);
+    const { ls: deps, novs, total: bruto, pagado } = totalYPagadoPorTipo(liq, "deposito");
     if (!deps.length && !novs.length) continue;
-    const total = deps.reduce((s, l) => s + Number(l.importe), 0) + novs.reduce((s, n) => s + Math.abs(Number(n.monto)), 0);
+    const total = remanentePago(bruto, pagado);   // descuenta parciales ya pagados
+    if (total <= PAGO_EPS) continue;
     const base  = deps.find(l => l.cbu || l.cuenta) || deps[0] || {};   // datos bancarios de la cuenta
     const incluye = novs.length ? "Incluye: " + [...new Set(novs.map(n => n.cuenta_contable_nombre || n.descripcion || "novedad"))].join(", ") : "";
     filas.push([
@@ -1660,6 +1664,11 @@ function totalYPagadoPorTipo(liq, tipo, { soloPositivos = true } = {}) {
   return { ls, novs, total, pagado };
 }
 
+// Lo que falta pagar de un ítem (línea o novedad) dados sus pagos — cuenta los parciales.
+function pendienteDe(monto, pagos) {
+  return remanentePago(Math.abs(Number(monto) || 0), pagos.reduce((s, p) => s + Math.abs(Number(p.monto) || 0), 0));
+}
+
 // Pagos asociados a una línea = los que apuntan a su id/pago_id (byId) + los HUÉRFANOS de su tipo.
 // Con varias líneas del mismo tipo, los huérfanos se reparten por IMPORTE (cada línea sin pago propio
 // toma el de su monto; los sobrantes a la primera) para que el desglose por línea sea prolijo; el total
@@ -1741,10 +1750,6 @@ function PasoPagos({ mes, anio, cargandoPagos = false, liqStaff, liqOwners, liqE
   const totalBruto  = todos.reduce((s, l) => s + l.total_liquidacion, 0);
   const totalPagado = todos.reduce((s, l) => s + l.total_pagado, 0);
   const totalPend   = totalBruto - totalPagado;
-
-  // Lo que falta pagar de un ítem (línea o novedad) dados sus pagos — cuenta los parciales.
-  const pendienteDe = (monto, pagos) =>
-    remanentePago(Number(monto) || 0, pagos.reduce((s, p) => s + Math.abs(Number(p.monto) || 0), 0));
 
   // Una pasada por todas las líneas: importe total, cantidad y pendientes por tipo.
   // Alimenta tanto las tarjetas de fondeo como los encabezados de columna.
