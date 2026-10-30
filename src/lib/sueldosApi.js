@@ -848,12 +848,18 @@ export function adelantoSueldosPorLegajo(liqsCerradas, pagos, opts = {}) {
 
 // ── NOVEDADES ─────────────────────────────────────────────────────────────────
 
-export async function fetchNovedades(mes, anio) {
+// `estado` "pendiente" = la cargó el propio monotributista por el link del mail y falta aprobarla
+// (apps-script-monotributo.gs). No existe para la liquidación hasta que se aprueba → por defecto se
+// excluye; Novedades HQ y Liquidación HQ (aviso al cerrar) piden `conPendientes`.
+export async function fetchNovedades(mes, anio, { conPendientes = false } = {}) {
   const rows = await get("su_novedades", { mes, anio });
   // Dedup por id acá, para que TODAS las pantallas (Novedades, Liquidación HQ/Sedes, Resumen) vean lo
   // mismo si alguna vez queda una fila repetida en la hoja (reintento viejo).
   const vistos = new Set();
-  return (Array.isArray(rows) ? rows : []).filter(r => !r.id || (!vistos.has(r.id) && vistos.add(r.id))).map(r => ({
+  return (Array.isArray(rows) ? rows : [])
+    .filter(r => !r.id || (!vistos.has(r.id) && vistos.add(r.id)))
+    .filter(r => conPendientes || r.estado !== "pendiente")
+    .map(r => ({
     id:                      r.id,
     mes:                     r.mes,
     anio:                    r.anio,
@@ -868,6 +874,8 @@ export async function fetchNovedades(mes, anio) {
     forma_pago:              r.forma_pago ?? "efectivo",
     cuenta_contable_id:      r.cuenta_contable_id ?? "",
     cuenta_contable_nombre:  r.cuenta_contable_nombre ?? "",
+    estado:                  r.estado ?? "",           // "" (carga manual) | pendiente | aprobada
+    comprobante_url:         r.comprobante_url ?? "",  // link de Drive (autocarga del monotributo)
   }));
 }
 

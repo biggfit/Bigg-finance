@@ -200,6 +200,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
   const [liquidaciones, setLiquidaciones] = useState([]);
   const [pagos,         setPagos]         = useState([]);
   const [novedades,     setNovedades]     = useState([]);
+  const [novPendientes, setNovPendientes] = useState([]);   // monotributo cargado por link, sin aprobar
   const [sociedades,    setSociedades]    = useState([]);
   const [loading,       setLoading]       = useState(true);
   const [pagosListos,   setPagosListos]   = useState(false);  // los pagos llegan en 2ª ola (background) → hasta que estén, los tildes/"parcial" del Paso 3 pueden verse incompletos
@@ -234,7 +235,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
     // los legajos/liquidaciones → los pagos llegan lo antes posible. No bloquea: se consume abajo.
     const ola2 = Promise.allSettled([
       fetchPagos(mes, anio),
-      fetchNovedades(mes, anio),
+      fetchNovedades(mes, anio, { conPendientes: true }),
       fetchSociedadesNumbers(),
     ]);
 
@@ -269,7 +270,10 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
       const [pags, novs, socs] = w2.map(r => (r.status === "fulfilled" ? r.value : []));
       // Excluir pagos de Sedes (un legajo con liquidación en ambos: el pago de Sedes no es de HQ).
       setPagos(pags.filter(p => p.ambito !== "sedes"));
-      setNovedades(novs.filter(n => n.tipo === "extra" && !n.sede_id));
+      // Las cargas de monotributo por link sin aprobar no cuentan; solo se avisan al cerrar.
+      const novsHQ = novs.filter(n => n.tipo === "extra" && !n.sede_id);
+      setNovedades(novsHQ.filter(n => n.estado !== "pendiente"));
+      setNovPendientes(novsHQ.filter(n => n.estado === "pendiente"));
       setSociedades(socs);
       // Solo apagar el aviso si los pagos entraron DE VERDAD. Si fetchPagos falló (allSettled
       // no rechaza, devuelve []), dejar el banner puesto — mostrar todo como impago/definitivo
@@ -720,6 +724,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
         <ModalCerrar
           mes={mes} anio={anio}
           liqs={liqsView}
+          pendientes={novPendientes}
           saving={saving}
           onClose={() => setShowCerrar(false)}
           onConfirm={handleCerrarLiquidacion}
@@ -1056,6 +1061,7 @@ function PasoPago({ liqStaff, liqOwners, liqExternos, sueldosDraft, formasDraft,
         tipo: n.tipo ?? "extra", descripcion: n.descripcion ?? "",
         monto: Number(n.monto) || 0, forma_pago,
         cuenta_contable_id: n.cuenta_contable_id ?? "", cuenta_contable_nombre: n.cuenta_contable_nombre ?? "",
+        estado: n.estado ?? "", comprobante_url: n.comprobante_url ?? "",
       });
       setNovDirty(s => { const next = new Set(s); next.delete(n.id); return next; });
       onNovFormaSaved?.(n.id, forma_pago);
@@ -1332,7 +1338,7 @@ function FormasLineEditor({ target, lineas, sociedades = [], onChange, onSaveLeg
 
 // ── Modal: elegir qué legajos cerrar ──────────────────────────────────────────
 
-function ModalCerrar({ mes, anio, liqs, saving, onClose, onConfirm }) {
+function ModalCerrar({ mes, anio, liqs, pendientes = [], saving, onClose, onConfirm }) {
   // Sólo se pueden cerrar los que están en borrador; los ya cerrados quedan fijos.
   const cerrables = liqs.filter(l => l.estado !== "cerrada");
   // Por defecto se cierran todos los cerrables menos los externos (suelen no tener precio cerrado).
@@ -1357,6 +1363,14 @@ function ModalCerrar({ mes, anio, liqs, saving, onClose, onConfirm }) {
             <button onClick={() => setAll(cerrables.filter(l => l.rol !== "HQ_EXT").map(l => l.legajo_id))} style={CHIP_BTN}>Sin externos</button>
             <button onClick={() => setAll([])} style={CHIP_BTN}>Ninguno</button>
           </div>
+          {pendientes.length > 0 && (
+            <div style={{ marginTop: 12, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e",
+              borderRadius: 7, padding: "8px 12px", fontSize: 12.5 }}>
+              ⏳ Hay {pendientes.length === 1 ? "1 monotributo pendiente" : `${pendientes.length} monotributos pendientes`} de
+              aprobar ({pendientes.map(n => n.legajo_nombre).join(", ")}). Si cerrás ahora, no entran en esta liquidación.
+              Se aprueban en Novedades → Monotributo.
+            </div>
+          )}
         </div>
 
         <div style={{ overflowY: "auto", padding: "8px 0" }}>

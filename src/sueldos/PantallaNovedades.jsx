@@ -62,9 +62,31 @@ const IDS_MONOTRIBUTISTAS_FIJOS = [
   "LEG-nako-0007", // Victoria "Vicky" Mendez Casariego
 ];
 
+// Los que cargan SOLOS su monotributo por el link del mail (aviso el 12, recordatorios el 24 y el 27): entra como
+// novedad "pendiente" con comprobante y se aprueba acá. Los demás fijos los carga administración.
+// (Misma lista que AUTOCARGA en apps-script-monotributo.gs.)
+const IDS_MONOTRIBUTO_AUTOCARGA = new Set(IDS_MONOTRIBUTISTAS_FIJOS.filter(id => ![
+  "LEG-nako-0001", // Gigio Mazzoni
+  "LEG-nako-0005", // Guido Mazzoni
+  "LEG-nako-0004", // Ignacio Alsogaray
+  "LEG-nako-0007", // Victoria Mendez Casariego (va en el legajo de Gigio)
+].includes(id)));
+
 // Victoria está casada con Gigio: su devolución se carga en el legajo de él, nunca en el propio.
 const ALIAS_MONOTRIBUTO = {
   "LEG-nako-0007": "LEG-nako-0001", // Victoria Mendez Casariego → Gigio Mazzoni
+};
+// Nota con la que se distingue, dentro del legajo de destino, la fila del alias.
+const NOTA_ALIAS_MONOTRIBUTO = {
+  "LEG-nako-0007": "Monotributo V",
+};
+
+// ¿La fila (o novedad) de Monotributo es la de este monotributista fijo? Resuelve el alias por la nota.
+const filaDeFijo = (id) => (r) => {
+  if (r.legajo_id !== (ALIAS_MONOTRIBUTO[id] ?? id)) return false;
+  const nota = norm(r.nota ?? r.descripcion);
+  if (NOTA_ALIAS_MONOTRIBUTO[id]) return nota === norm(NOTA_ALIAS_MONOTRIBUTO[id]);
+  return !Object.values(NOTA_ALIAS_MONOTRIBUTO).some(n => nota === norm(n));
 };
 
 // A qué solapa pertenece una novedad: por su cuenta contable; si no matchea ninguna nombrada → "otros".
@@ -80,6 +102,7 @@ function newRow(overrides = {}) {
     legajo_id: "", legajo_nombre: "",
     monto: "", forma_pago: "efectivo", nota: "",
     cuenta_contable_id: "", cuenta_contable_nombre: "",
+    estado: "", comprobante_url: "",
     ...overrides,
   };
 }
@@ -91,11 +114,28 @@ function novToRow(n) {
     legajo_id: n.legajo_id, legajo_nombre: n.legajo_nombre,
     monto: String(n.monto || ""), forma_pago: n.forma_pago || "efectivo", nota: n.descripcion || "",
     cuenta_contable_id: n.cuenta_contable_id, cuenta_contable_nombre: n.cuenta_contable_nombre,
+    estado: n.estado || "", comprobante_url: n.comprobante_url || "",
   };
 }
 
+// Los 18 monotributistas fijos siempre tienen su renglón en la solapa Monotributo: al que no tiene fila
+// este mes se le agrega una "semilla" editable (legajo, nota y forma de pago del mes anterior, sin monto).
+// Una semilla sin monto no se guarda. Los de autocarga la ven reemplazada por su carga del link.
+function sembrarFijos(rows, prevMono, nombreDe) {
+  const faltan = IDS_MONOTRIBUTISTAS_FIJOS.filter(id => !rows.some(r => r.concepto === "monotributo" && filaDeFijo(id)(r)));
+  return [...rows, ...faltan.map(id => {
+    const legId = ALIAS_MONOTRIBUTO[id] ?? id;
+    const ant = prevMono.find(filaDeFijo(id));
+    return { ...newRow({
+      legajo_id: legId, legajo_nombre: ant?.legajo_nombre || nombreDe(legId),
+      nota: NOTA_ALIAS_MONOTRIBUTO[id] ?? "Monotributo",
+      forma_pago: ant?.forma_pago || "transferencia_financiera",
+    }), concepto: "monotributo", _semilla: true };
+  })];
+}
+
 // Firma para detectar cambios entre la fila editada y la persistida.
-const rowSig = (r) => [r.legajo_id, r.monto, r.forma_pago, r.nota, r.cuenta_contable_id].join("|");
+const rowSig = (r) => [r.legajo_id, r.monto, r.forma_pago, r.nota, r.cuenta_contable_id, r.estado].join("|");
 
 const iStyle = {
   border: `1px solid ${T.border}`, borderRadius: 5, padding: "5px 8px",
@@ -113,6 +153,7 @@ export default function PantallaNovedades({ pais = "" }) {
   const [legajos,  setLegajos]  = useState([]);
   const [cuentas,  setCuentas]  = useState([]);
   const [prevMap,  setPrevMap]  = useState(() => new Map());  // monto del mes anterior por legajo+cuenta
+  const [prevMono, setPrevMono] = useState([]);   // filas de Monotributo del mes anterior (siembra de los fijos)
   const [loading,  setLoading]  = useState(true);
   const [saving,   setSaving]   = useState(false);
   const [dirty,    setDirty]    = useState(false);
@@ -126,7 +167,7 @@ export default function PantallaNovedades({ pais = "" }) {
       const pm = m === 1 ? 12 : m - 1;
       const pa = m === 1 ? a - 1 : a;
       const [novs, prevNovs, legs, ccs] = await Promise.all([
-        fetchNovedades(m, a),
+        fetchNovedades(m, a, { conPendientes: true }),
         fetchNovedades(pm, pa),
         fetchLegajos(),
         fetchCuentasContablesNumbers(),
@@ -134,7 +175,9 @@ export default function PantallaNovedades({ pais = "" }) {
       // Solo novedades de HQ (sin sede, sin aguinaldo): las de Sedes y las de Aguinaldo viven en su
       // propia pantalla y acá no se muestran ni se borran (el snapshot `loaded` no las incluye).
       const extras = novedadesDeAmbito(novs, "hq");
-      setRows(extras.map(n => ({ ...novToRow(n), concepto: conceptoDeNovedad(n) })));
+      const pMono = novedadesDeAmbito(prevNovs, "hq").filter(n => conceptoDeNovedad(n) === "monotributo");
+      const nombreDe = (id) => legs.find(l => l.id === id)?.nombre ?? "";
+      setRows(sembrarFijos(extras.map(n => ({ ...novToRow(n), concepto: conceptoDeNovedad(n) })), pMono, nombreDe));
       setLoaded(extras);
       // Monto del mes anterior por legajo+cuenta → alimenta la columna comparativa.
       const prev = new Map();
@@ -143,6 +186,7 @@ export default function PantallaNovedades({ pais = "" }) {
         prev.set(k, (prev.get(k) || 0) + (Number(n.monto) || 0));
       }
       setPrevMap(prev);
+      setPrevMono(pMono);
       setLegajos(legs.filter(l => l.activo && ROLES_HQ.includes(l.rol) && l.pais === p));
       setCuentas(ccs);
       setDirty(false);
@@ -216,10 +260,15 @@ export default function PantallaNovedades({ pais = "" }) {
     const aAnt = mes === 1 ? anio - 1 : anio;
     // Solo novedades de HQ (sin sede). Copiar las de Sedes acá les borraría el sede_id
     // y las duplicaría como novedades de HQ (bug de fuga a HQ).
-    const novs = novedadesDeAmbito(await fetchNovedades(mAnt, aAnt), "hq");
+    // El monotributo de los que cargan solos NO se copia (lo cargan ellos por el link); y lo que ya
+    // cargaron este mes se conserva, si no "Guardar" lo borraría.
+    const esAutocarga = (n) => conceptoDeNovedad(n) === "monotributo" && IDS_MONOTRIBUTO_AUTOCARGA.has(n.legajo_id);
+    const novs = novedadesDeAmbito(await fetchNovedades(mAnt, aAnt), "hq").filter(n => !esAutocarga(n));
     if (!novs.length) { alert("No hay novedades de HQ en el mes anterior."); return; }
     // Filas nuevas (sin id) para revisar y guardar.
-    setRows(novs.map(n => ({ ...newRow(novToRow(n)), id: null, _id: tmpRowId(), concepto: conceptoDeNovedad(n) })));
+    const copiadas = novs.map(n => ({ ...newRow(novToRow(n)), id: null, _id: tmpRowId(), concepto: conceptoDeNovedad(n),
+      estado: "", comprobante_url: "" }));
+    setRows(prev => sembrarFijos([...prev.filter(r => r.id && r.comprobante_url), ...copiadas], prevMono, legajoNombre));
     setDirty(true);
   };
 
@@ -228,7 +277,8 @@ export default function PantallaNovedades({ pais = "" }) {
     savingRef.current = true;
     setSaving(true);
     try {
-      const validas = rows.filter(r => r.legajo_id);   // sin legajo no se persiste
+      // Sin legajo no se persiste; una semilla de monotributista fijo, solo si le cargaron monto.
+      const validas = rows.filter(r => r.legajo_id && !(r._semilla && !(parseFloat(r.monto) > 0)));
       const loadedById = new Map(loaded.map(n => [n.id, n]));
 
       // Altas: todas en UN lote (una request en vez de N). Ediciones y bajas: solo las que cambiaron.
@@ -245,6 +295,7 @@ export default function PantallaNovedades({ pais = "" }) {
           forma_pago: r.forma_pago,
           cuenta_contable_id: cc.cuenta_contable_id,
           cuenta_contable_nombre: cc.cuenta_contable_nombre,
+          estado: r.estado || "", comprobante_url: r.comprobante_url || "",
         };
         if (!r.id) {
           nuevas.push({ tmpId: r._id, payload });
@@ -298,6 +349,10 @@ export default function PantallaNovedades({ pais = "" }) {
 
   // Monto del mismo legajo+cuenta el mes anterior (0 si no tenía novedad de ese concepto).
   const montoAnterior = (row) => {
+    // Monotributo de un fijo con alias (Gigio + Victoria en el mismo legajo): cada fila contra la suya.
+    const fijo = row.concepto === "monotributo" && IDS_MONOTRIBUTISTAS_FIJOS.find(id => filaDeFijo(id)(row));
+    if (fijo && Object.values(ALIAS_MONOTRIBUTO).includes(row.legajo_id))
+      return prevMono.filter(filaDeFijo(fijo)).reduce((s, n) => s + (Number(n.monto) || 0), 0);
     const cta = resolveCuenta(row).cuenta_contable_nombre;
     return prevMap.get(`${row.legajo_id}|${norm(cta)}`) || 0;
   };
@@ -324,6 +379,18 @@ export default function PantallaNovedades({ pais = "" }) {
   const monotributistasFaltantes = IDS_MONOTRIBUTISTAS_FIJOS
     .filter(id => !(montoMonotributoPorLegajo.get(ALIAS_MONOTRIBUTO[id] ?? id) > 0))
     .map(legajoNombre);
+
+  // Cargas por link pendientes de aprobar (no entran en la liquidación hasta aprobarlas + Guardar).
+  const pendientes = rows.filter(r => r.estado === "pendiente");
+  const aprobar = (rid) => setRow(rid, { estado: "aprobada" });
+  const aprobarTodos = () => {
+    setRows(prev => prev.map(r => r.estado === "pendiente" ? { ...r, estado: "aprobada" } : r));
+    setDirty(true);
+  };
+  const colsExtra = (esOtros ? 1 : 0) + (esMonotributo ? 1 : 0);
+
+  // Semilla de autocarga todavía vacía: la persona no cargó por el link.
+  const esperaLink = (r) => r._semilla && IDS_MONOTRIBUTO_AUTOCARGA.has(r.legajo_id) && !(parseFloat(r.monto) > 0);
 
   return (
     <div style={{ padding: 24, fontFamily: T.font, color: T.text }}>
@@ -387,6 +454,17 @@ export default function PantallaNovedades({ pais = "" }) {
         )
       )}
 
+      {esMonotributo && !loading && pendientes.length > 0 && (
+        <div style={{ background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 7,
+          padding: "8px 12px", fontSize: 13, marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <span style={{ flexGrow: 1 }}>
+            ⏳ {pendientes.length === 1 ? "1 carga pendiente" : `${pendientes.length} cargas pendientes`} de aprobar.
+            No entran en la liquidación hasta aprobarlas y guardar.
+          </span>
+          <button onClick={aprobarTodos} style={{ ...btnStyle(T.green), padding: "5px 12px" }}>Aprobar todos</button>
+        </div>
+      )}
+
       {loading ? (
         <p style={{ color: T.muted, fontSize: 13 }}>Cargando…</p>
       ) : (
@@ -403,6 +481,7 @@ export default function PantallaNovedades({ pais = "" }) {
                 <th style={{ ...thStyle, width: 150 }}>Forma de pago</th>
                 {esOtros && <th style={{ ...thStyle, width: 170 }}>Cuenta contable</th>}
                 <th style={thStyle}>Nota</th>
+                {esMonotributo && <th style={{ ...thStyle, width: 150 }}>Carga por link</th>}
                 <th style={{ ...thStyle, width: 40 }}></th>
                 <th style={{ ...thStyle, width: 40, textAlign: "center" }}>
                   <HeaderCheckTodas checked={todosMarcados} onToggle={() => setManyChecked(idsConDatos, !todosMarcados)} accent={T.green} />
@@ -411,7 +490,7 @@ export default function PantallaNovedades({ pais = "" }) {
             </thead>
             <tbody>
               {tabRows.length === 0 && (
-                <tr><td colSpan={esOtros ? 10 : 9} style={{ padding: "14px 10px", color: T.dim, fontSize: 13 }}>
+                <tr><td colSpan={9 + colsExtra} style={{ padding: "14px 10px", color: T.dim, fontSize: 13 }}>
                   Sin novedades en esta solapa. Agregá una fila abajo.
                 </td></tr>
               )}
@@ -456,6 +535,25 @@ export default function PantallaNovedades({ pais = "" }) {
                     <input style={iStyle} value={r.nota} placeholder="Nota"
                       onChange={e => setRow(r._id, { nota: e.target.value })} />
                   </td>
+                  {esMonotributo && (
+                    <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>
+                      {r.comprobante_url && (
+                        <a href={r.comprobante_url} target="_blank" rel="noreferrer" title="Ver comprobante"
+                          style={{ textDecoration: "none", fontSize: 15, marginRight: 8 }}>📎</a>
+                      )}
+                      {r.estado === "pendiente" ? (
+                        <button onClick={() => aprobar(r._id)}
+                          style={{ background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a", borderRadius: 5,
+                            padding: "3px 9px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>
+                          Aprobar
+                        </button>
+                      ) : r.estado === "aprobada" ? (
+                        <span style={{ color: T.green, fontSize: 12, fontWeight: 600 }}>✓ Aprobada</span>
+                      ) : esperaLink(r) ? (
+                        <span style={{ color: "#b45309", fontSize: 12, fontWeight: 600 }}>⌛ Esperando carga</span>
+                      ) : null}
+                    </td>
+                  )}
                   <td style={{ padding: "6px 8px", textAlign: "center" }}>
                     <button onClick={() => delRow(r._id)}
                       style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: T.dim, padding: 2 }}>🗑</button>
@@ -478,7 +576,7 @@ export default function PantallaNovedades({ pais = "" }) {
                 <td colSpan={3} style={{ padding: "8px 10px" }}>Total</td>
                 <td style={{ padding: "8px 10px", textAlign: "right" }}>{fmt(totalTab)}</td>
                 <td style={{ padding: "8px 10px", textAlign: "right", color: diffCol(totalDiff) }}>{fmtDiff(totalDiff)}</td>
-                <td colSpan={esOtros ? 5 : 4}></td>
+                <td colSpan={4 + colsExtra}></td>
               </tr>
             </tfoot>
           </table>

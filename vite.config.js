@@ -26,6 +26,7 @@ const localEnv   = readEnvLocal();
 const sheetsUrl  = localEnv['VITE_SHEETS_API_URL'];
 const numbersUrl = localEnv['VITE_NUMBERS_API_URL'];
 const sueldosUrl = localEnv['VITE_SUELDOS_API_URL'];
+const monoUrl    = localEnv['VITE_MONOTRIBUTO_API_URL'];
 
 // Inyectar todas las vars de .env.local en process.env para que los handlers
 // de /api/* (que corren en Node dentro de Vite) puedan leerlas con process.env
@@ -215,6 +216,22 @@ export default defineConfig({
               const cacheable = devCacheable(req, target);
               if (cacheable && serveFromDevCache(target, res, etiquetaRecurso(qs))) return;
               proxyToSheets(sinCb(target), 'GET', null, res, cacheable ? target : null);
+            }
+          });
+        }
+
+        // ── Proxy /api/monotributo → Apps Script BIGG Monotributo (sin caché) ──
+        if (monoUrl) {
+          server.middlewares.use((req, res, next) => {
+            if (!req.url || !req.url.startsWith('/api/monotributo')) { next(); return; }
+            const target = monoUrl + req.url.replace('/api/monotributo', '');
+            if (req.method === 'POST') {
+              devCacheClear();   // la carga escribe su_novedades
+              let body = '';
+              req.on('data', chunk => { body += chunk; });
+              req.on('end',  () => { proxyToSheets(target, 'POST', body, res); });
+            } else {
+              proxyToSheets(target, 'GET', null, res);
             }
           });
         }
