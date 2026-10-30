@@ -1,18 +1,18 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 
 // ── Galicia Office Banking: archivo de Pago de Haberes (.txt, ancho fijo) ─────
 // Replica lo que arma el "Conversor_SNP3.xlsm" del banco (hojas Def-Header / Def-Detalle /
 // Def-Trailer): header *H3 + un detalle por empleado + trailer *F, cada línea de 477 caracteres.
 // El .txt sale listo para subir: no hace falta pasar por la planilla ni su macro.
-// Convive con el Excel "formato Galicia Office" de siempre (botón aparte).
+// Convive con el Excel "formato Galicia Office" de siempre: el botón Haberes Galicia ofrece los dos.
 
 const LARGO_LINEA = 477;
 
 // Cuentas a debitar por sociedad (pantalla "Datos de cuenta" de Galicia). La cuenta va con sus
-// 12 dígitos tal cual: "0005820-7 325-3" → 000582073253. El N° de convenio lo pide el modal
-// y queda recordado en este navegador.
+// 12 dígitos tal cual: "0005820-7 325-3" → 000582073253. Convenio de Pago de Haberes: fijo acá
+// cuando se conoce; si no, lo pide el modal y queda recordado en este navegador.
 const CUENTAS_GALICIA = [
-  { key: "nako",      match: /nako/,   nombre: "Ñako",      cuit: "30717028305", tipoCuenta: "C", cuenta: "000582073253" },
+  { key: "nako",      match: /nako/,   nombre: "Ñako",      cuit: "30717028305", tipoCuenta: "C", cuenta: "000582073253", convenio: "362050" },
   { key: "hektor",    match: /hektor/, nombre: "Hektor",    cuit: "30714015377", tipoCuenta: "C", cuenta: "000526363251" },
   { key: "segui-fit", match: /segui/,  nombre: "Segui Fit", cuit: "30717067769", tipoCuenta: "C", cuenta: "000666463253" },
 ];
@@ -107,15 +107,12 @@ const hoyISO = () => {
 const fmt = (n) => (Number(n) || 0).toLocaleString("es-AR", { style: "currency", currency: "ARS", minimumFractionDigits: 2 });
 
 // Modal: confirma convenio + fecha, muestra quién entra / queda afuera y baja el .txt.
-// `sociedadNombre` elige la cuenta a debitar; `filas` = [{ nombre, cuil, cbu, tipo_cuenta, importe }]
-// con lo pendiente. `filasConPagado` (opcional) = mismas filas con el monto completo, para rehacer
-// o probar el archivo de un mes ya pagado.
-export function ModalGaliciaTxt({ sociedadNombre, filas, filasConPagado, mes, anio, prefijoArchivo, onClose }) {
+// `sociedadNombre` elige la cuenta a debitar; `filas` = [{ nombre, cuil, cbu, tipo_cuenta, importe }].
+export function ModalGaliciaTxt({ sociedadNombre, filas, mes, anio, prefijoArchivo, onClose }) {
   const cuenta = cuentaGaliciaDe(sociedadNombre);
-  const [convenio, setConvenio] = useState(() => (cuenta ? leerConvenio(cuenta.key) : ""));
+  const [convenio, setConvenio] = useState(() => (cuenta ? cuenta.convenio || leerConvenio(cuenta.key) : ""));
   const [fecha, setFecha] = useState(hoyISO);
-  const [incluirPagado, setIncluirPagado] = useState(false);
-  const { ok, excluidas } = validarFilas(incluirPagado && filasConPagado ? filasConPagado : filas);
+  const { ok, excluidas } = validarFilas(filas);
   const total = ok.reduce((a, f) => a + (Number(f.importe) || 0), 0);
   const convenioOk = /^\d{1,6}$/.test(convenio.trim());
 
@@ -145,28 +142,18 @@ export function ModalGaliciaTxt({ sociedadNombre, filas, filasConPagado, mes, an
             <div style={{ display: "flex", gap: 12, marginBottom: 14 }}>
               <div style={{ flex: 1 }}>
                 <label style={lbl}>N° de convenio (Pago de Haberes)</label>
-                <input style={inp} value={convenio} onChange={e => setConvenio(e.target.value.replace(/\D/g, ""))} placeholder="Ej: 502454" />
+                {cuenta.convenio
+                  ? <div style={{ ...inp, background: "#f8fafc" }}>{cuenta.convenio}</div>
+                  : <input style={inp} value={convenio} onChange={e => setConvenio(e.target.value.replace(/\D/g, ""))} placeholder="Ej: 502454" />}
               </div>
               <div style={{ flex: 1 }}>
                 <label style={lbl}>Fecha de acreditación</label>
                 <input style={inp} type="date" value={fecha} onChange={e => setFecha(e.target.value)} />
               </div>
             </div>
-            {filasConPagado && (
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#64748b", marginBottom: 10, cursor: "pointer" }}>
-                <input type="checkbox" checked={incluirPagado} onChange={e => setIncluirPagado(e.target.checked)} />
-                Incluir lo ya pagado (monto completo, para rehacer o probar el archivo)
-              </label>
-            )}
             <div style={{ fontSize: 13, marginBottom: 8 }}>
               <b>{ok.length}</b> empleados · total <b>{fmt(total)}</b>
-              {!ok.length && !excluidas.length && <span style={{ color: "#64748b" }}> — no queda nada pendiente de Haberes</span>}
             </div>
-            {incluirPagado && (
-              <div style={{ background: "#fee2e2", border: "1px solid #fca5a5", borderRadius: 6, padding: "8px 10px", fontSize: 12, marginBottom: 8, color: "#991b1b" }}>
-                Ojo: este archivo incluye sueldos que ya figuran pagados. Si lo subís y lo confirmás en el banco, se pagan dos veces.
-              </div>
-            )}
             {excluidas.length > 0 && (
               <div style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "8px 10px", fontSize: 12, marginBottom: 8 }}>
                 <b>Quedan afuera del archivo ({excluidas.length})</b> — completá el dato en Legajos y volvé a bajarlo:
@@ -187,6 +174,50 @@ export function ModalGaliciaTxt({ sociedadNombre, filas, filasConPagado, mes, an
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Botón único "Haberes Galicia": abre un menú (hacia arriba: está al pie) para elegir entre
+// sueldos por transferencia (Excel de siempre) o por archivo (.txt nuevo). `grupos` =
+// [{ id, titulo?, detalle? }]: con título (Sedes, una entrada por sociedad) el menú muestra
+// las dos opciones bajo cada sociedad; HQ pasa un solo grupo sin título.
+export function BotonHaberesGalicia({ btnStyle, grupos, vacio, onTransferencia, onArchivo }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
+  const click = () => {
+    if (!grupos.length) { alert(vacio); return; }
+    setOpen(o => !o);
+  };
+  const elegir = (fn, id) => { setOpen(false); fn(id); };
+  const opcion = { display: "block", width: "100%", padding: "8px 14px", background: "transparent", border: "none",
+    cursor: "pointer", fontSize: 13, color: "#1e293b", fontFamily: "'Inter', system-ui, sans-serif", textAlign: "left" };
+  const hover = { onMouseEnter: e => e.currentTarget.style.background = "#f3f4f6", onMouseLeave: e => e.currentTarget.style.background = "transparent" };
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button style={btnStyle} onClick={click}>📥 Haberes Galicia ▾</button>
+      {open && (
+        <div style={{ position: "absolute", bottom: "calc(100% + 4px)", left: 0, zIndex: 50, minWidth: 280,
+          background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,.15)", overflow: "hidden" }}>
+          {grupos.map((g, i) => (
+            <div key={g.id} style={{ borderTop: i ? "1px solid #e2e8f0" : "none" }}>
+              {g.titulo && (
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 16, padding: "8px 14px 2px", fontSize: 12 }}>
+                  <strong>{g.titulo}</strong><span style={{ color: "#64748b" }}>{g.detalle}</span>
+                </div>
+              )}
+              <button style={opcion} {...hover} onClick={() => elegir(onTransferencia, g.id)}>Sueldos por transferencia</button>
+              <button style={opcion} {...hover} onClick={() => elegir(onArchivo, g.id)}>Sueldos por archivo</button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -14,7 +14,7 @@ import {
   estadoPago, remanentePago, PAGO_EPS, reabrirLiquidaciones, idsLiqEnHoja,
 } from "../lib/sueldosApi";
 import { fmtPesos, useMesMarcado, BotonMesMarcado } from "./sueldosUi";
-import { ModalGaliciaTxt } from "./galiciaHaberesTxt";
+import { ModalGaliciaTxt, BotonHaberesGalicia } from "./galiciaHaberesTxt";
 
 const T = {
   bg:     "#f8fafc",
@@ -2635,10 +2635,12 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, on
       </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "16px 0", borderTop: `1px solid ${T.border}`, marginTop: 8 }}>
-        <BotonHaberesPorSociedad color="#16a34a" label="📥 Excel Haberes (banco)" grupos={gruposHaberes}
-          onElegir={g => exportarHaberes(g, mes, anio)} />
-        <BotonHaberesPorSociedad color="#ea580c" label="📥 Haberes Galicia .txt (nuevo)" grupos={gruposHaberes}
-          onElegir={setGaliciaTxt} />
+        <BotonHaberesGalicia btnStyle={BTN_EXPORT("#ea580c")}
+          vacio="No hay empleados con Haberes pendientes y CBU cargado."
+          grupos={gruposHaberes.map(([soc, es]) => ({ id: soc, titulo: soc,
+            detalle: `${es.length} persona${es.length !== 1 ? "s" : ""} · ${fmtMoney(es.reduce((a, e) => a + e.pendiente, 0))}` }))}
+          onTransferencia={soc => exportarHaberes(gruposHaberes.find(g => g[0] === soc), mes, anio)}
+          onArchivo={soc => setGaliciaTxt(gruposHaberes.find(g => g[0] === soc))} />
         <BotonHaberesPorSociedad color="#475569" label="📋 Control Haberes" grupos={gruposHaberes}
           onElegir={g => exportarControlHaberes(g, mes, anio)} />
         <button style={BTN_EXPORT("#ca8a04")} onClick={() => exportarEfectivoSedes(empls, mes, anio)}>
