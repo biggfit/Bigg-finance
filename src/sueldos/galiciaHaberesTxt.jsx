@@ -107,12 +107,15 @@ const hoyISO = () => {
 const fmt = (n) => (Number(n) || 0).toLocaleString("es-AR", { style: "currency", currency: "ARS", minimumFractionDigits: 2 });
 
 // Modal: confirma convenio + fecha, muestra quién entra / queda afuera y baja el .txt.
-// `sociedadNombre` elige la cuenta a debitar; `filas` = [{ nombre, cuil, cbu, tipo_cuenta, importe }].
-export function ModalGaliciaTxt({ sociedadNombre, filas, mes, anio, prefijoArchivo, onClose }) {
+// `sociedadNombre` elige la cuenta a debitar; `filas` = [{ nombre, cuil, cbu, tipo_cuenta, importe }]
+// con lo pendiente. `filasConPagado` (opcional) = mismas filas con el monto completo, para rehacer
+// o probar el archivo de un mes ya pagado.
+export function ModalGaliciaTxt({ sociedadNombre, filas, filasConPagado, mes, anio, prefijoArchivo, onClose }) {
   const cuenta = cuentaGaliciaDe(sociedadNombre);
   const [convenio, setConvenio] = useState(() => (cuenta ? leerConvenio(cuenta.key) : ""));
   const [fecha, setFecha] = useState(hoyISO);
-  const { ok, excluidas } = validarFilas(filas);
+  const [incluirPagado, setIncluirPagado] = useState(false);
+  const { ok, excluidas } = validarFilas(incluirPagado && filasConPagado ? filasConPagado : filas);
   const total = ok.reduce((a, f) => a + (Number(f.importe) || 0), 0);
   const convenioOk = /^\d{1,6}$/.test(convenio.trim());
 
@@ -149,9 +152,21 @@ export function ModalGaliciaTxt({ sociedadNombre, filas, mes, anio, prefijoArchi
                 <input style={inp} type="date" value={fecha} onChange={e => setFecha(e.target.value)} />
               </div>
             </div>
+            {filasConPagado && (
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#64748b", marginBottom: 10, cursor: "pointer" }}>
+                <input type="checkbox" checked={incluirPagado} onChange={e => setIncluirPagado(e.target.checked)} />
+                Incluir lo ya pagado (monto completo, para rehacer o probar el archivo)
+              </label>
+            )}
             <div style={{ fontSize: 13, marginBottom: 8 }}>
               <b>{ok.length}</b> empleados · total <b>{fmt(total)}</b>
+              {!ok.length && !excluidas.length && <span style={{ color: "#64748b" }}> — no queda nada pendiente de Haberes</span>}
             </div>
+            {incluirPagado && (
+              <div style={{ background: "#fee2e2", border: "1px solid #fca5a5", borderRadius: 6, padding: "8px 10px", fontSize: 12, marginBottom: 8, color: "#991b1b" }}>
+                Ojo: este archivo incluye sueldos que ya figuran pagados. Si lo subís y lo confirmás en el banco, se pagan dos veces.
+              </div>
+            )}
             {excluidas.length > 0 && (
               <div style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "8px 10px", fontSize: 12, marginBottom: 8 }}>
                 <b>Quedan afuera del archivo ({excluidas.length})</b> — completá el dato en Legajos y volvé a bajarlo:

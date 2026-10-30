@@ -1440,13 +1440,15 @@ function descargarExcelGalicia(filas, nombreArchivo) {
 
 // Genera una fila Galicia por cada línea de pago del tipo indicado (con CBU).
 // Las novedades de la misma forma de pago se acreditan al CBU del empleado.
-function lineasGalicia(liqs, tipo) {
+// `incluirPagado`: monto completo sin descontar lo ya pagado (rehacer / probar el .txt Galicia).
+function lineasGalicia(liqs, tipo, { incluirPagado = false } = {}) {
   const filas = [];
   for (const liq of liqs) {
     for (const l of liq.lineas || []) {
       if (l.tipo !== tipo) continue;
       const cbu = (l.cbu || (tipo === "haberes" ? liq.cbu : "")).trim();
-      const importe = pendienteDe(l.importe, getPagosLinea(liq, l));   // descuenta parciales/anticipos ya pagados
+      const importe = incluirPagado ? Number(l.importe) || 0
+        : pendienteDe(l.importe, getPagosLinea(liq, l));   // descuenta parciales/anticipos ya pagados
       if (!cbu || !(importe > PAGO_EPS)) continue;
       filas.push({ cbu, importe, nombre: liq.legajo_nombre, sede: liq.sede_nombre || "", sociedad: liq.sociedad_nombre || "", nota: l.nota || "",
         cuil: l.cuit || liq.cuil || "", tipo_cuenta: l.tipo_cuenta || liq.tipo_cuenta || "" });
@@ -1454,7 +1456,7 @@ function lineasGalicia(liqs, tipo) {
     for (const n of liq.novedades || []) {
       if (n.forma_pago !== tipo) continue;
       const cbu = (liq.cbu || "").trim();
-      const importe = pendienteDe(n.monto, getPagosNovedad(liq, n));
+      const importe = incluirPagado ? Number(n.monto) || 0 : pendienteDe(n.monto, getPagosNovedad(liq, n));
       if (!cbu || !(importe > PAGO_EPS)) continue;
       filas.push({ cbu, importe, nombre: liq.legajo_nombre, sede: liq.sede_nombre || "", sociedad: liq.sociedad_nombre || "", nota: n.cuenta_contable_nombre || n.descripcion || "",
         cuil: liq.cuil || "", tipo_cuenta: liq.tipo_cuenta || "" });
@@ -1977,6 +1979,7 @@ function PasoPagos({ mes, anio, cargandoPagos = false, liqStaff, liqOwners, liqE
       {/* HQ paga todos los haberes desde Ñako (un solo archivo, como el Excel). */}
       {galiciaTxt && (
         <ModalGaliciaTxt sociedadNombre="Ñako" filas={lineasGalicia(todos, "haberes")}
+          filasConPagado={lineasGalicia(todos, "haberes", { incluirPagado: true })}
           mes={mes} anio={anio} prefijoArchivo="Haberes_HQ_Galicia" onClose={() => setGaliciaTxt(false)} />
       )}
 
