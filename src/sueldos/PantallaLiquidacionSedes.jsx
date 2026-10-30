@@ -14,6 +14,7 @@ import {
   estadoPago, remanentePago, PAGO_EPS, reabrirLiquidaciones, idsLiqEnHoja,
 } from "../lib/sueldosApi";
 import { fmtPesos, useMesMarcado, BotonMesMarcado } from "./sueldosUi";
+import { ModalGaliciaTxt } from "./galiciaHaberesTxt";
 
 const T = {
   bg:     "#f8fafc",
@@ -848,6 +849,8 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
           monto_transferencia: Number(r.monto_transferencia) || 0,
           blanco_neto:         leg?.blanco_neto || 0,
           cbu:                 leg?.cbu   || "",
+          cuil:                leg?.cuil  || "",
+          tipo_cuenta:         leg?.tipo_cuenta || "",
           banco:               leg?.banco || "",
           pagos:               pagosMios,
           total_pagado:        totalPagado,
@@ -2459,6 +2462,7 @@ function FondeoBand({ stats }) {
 function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, onReabrir, reabriendo, onCerrarUno, saving, onPagarHaberes }) {
   const [batchModal,  setBatchModal]  = useState(null);
   const [anularModal, setAnularModal] = useState(null);
+  const [galiciaTxt,  setGaliciaTxt]  = useState(null);   // [soc, empls] del .txt Galicia nuevo formato
 
   // Haberes pendientes por sociedad: alimenta el menú de los botones Excel Haberes / Control.
   const gruposHaberes = useMemo(() => haberesPorSociedad(empls), [empls]);
@@ -2633,6 +2637,8 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, on
       <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "16px 0", borderTop: `1px solid ${T.border}`, marginTop: 8 }}>
         <BotonHaberesPorSociedad color="#16a34a" label="📥 Excel Haberes (banco)" grupos={gruposHaberes}
           onElegir={g => exportarHaberes(g, mes, anio)} />
+        <BotonHaberesPorSociedad color="#ea580c" label="📥 Haberes Galicia .txt (nuevo)" grupos={gruposHaberes}
+          onElegir={setGaliciaTxt} />
         <BotonHaberesPorSociedad color="#475569" label="📋 Control Haberes" grupos={gruposHaberes}
           onElegir={g => exportarControlHaberes(g, mes, anio)} />
         <button style={BTN_EXPORT("#ca8a04")} onClick={() => exportarEfectivoSedes(empls, mes, anio)}>
@@ -2641,6 +2647,12 @@ function PasoPagos({ empls, mes, anio, onAtras, onRegistrarPago, onBatchPaid, on
         <div style={{ flex: 1 }} />
         <button onClick={onAtras} style={BTN_SECONDARY}>← Atrás</button>
       </div>
+
+      {galiciaTxt && (
+        <ModalGaliciaTxt sociedadNombre={galiciaTxt[0]}
+          filas={galiciaTxt[1].map(e => ({ nombre: e.legajo_nombre, cuil: e.cuil, cbu: e.cbu, tipo_cuenta: e.tipo_cuenta, importe: e.pendiente }))}
+          mes={mes} anio={anio} prefijoArchivo="Haberes_Sedes_Galicia" onClose={() => setGaliciaTxt(null)} />
+      )}
 
       {batchModal && (
         <ModalBatchPago

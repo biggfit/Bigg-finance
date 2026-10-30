@@ -9,6 +9,7 @@ import {
   estadoPago, remanentePago, PAGO_EPS,
 } from "../lib/sueldosApi";
 import { fmtPesos, useMesMarcado, BotonMesMarcado } from "./sueldosUi";
+import { ModalGaliciaTxt } from "./galiciaHaberesTxt";
 
 // ── Estilos compartidos ───────────────────────────────────────────────────────
 
@@ -470,6 +471,8 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
         blanco_neto_legajo:  leg.blanco_neto || 0,
         cbu:   leg.cbu   || "",
         banco: leg.banco || "",
+        cuil:  leg.cuil  || "",
+        tipo_cuenta: leg.tipo_cuenta || "",
         pagos: pagosMios,
         total_bruto,
         total_pagado: totalPagado,
@@ -1445,14 +1448,16 @@ function lineasGalicia(liqs, tipo) {
       const cbu = (l.cbu || (tipo === "haberes" ? liq.cbu : "")).trim();
       const importe = pendienteDe(l.importe, getPagosLinea(liq, l));   // descuenta parciales/anticipos ya pagados
       if (!cbu || !(importe > PAGO_EPS)) continue;
-      filas.push({ cbu, importe, nombre: liq.legajo_nombre, sede: liq.sede_nombre || "", sociedad: liq.sociedad_nombre || "", nota: l.nota || "" });
+      filas.push({ cbu, importe, nombre: liq.legajo_nombre, sede: liq.sede_nombre || "", sociedad: liq.sociedad_nombre || "", nota: l.nota || "",
+        cuil: l.cuit || liq.cuil || "", tipo_cuenta: l.tipo_cuenta || liq.tipo_cuenta || "" });
     }
     for (const n of liq.novedades || []) {
       if (n.forma_pago !== tipo) continue;
       const cbu = (liq.cbu || "").trim();
       const importe = pendienteDe(n.monto, getPagosNovedad(liq, n));
       if (!cbu || !(importe > PAGO_EPS)) continue;
-      filas.push({ cbu, importe, nombre: liq.legajo_nombre, sede: liq.sede_nombre || "", sociedad: liq.sociedad_nombre || "", nota: n.cuenta_contable_nombre || n.descripcion || "" });
+      filas.push({ cbu, importe, nombre: liq.legajo_nombre, sede: liq.sede_nombre || "", sociedad: liq.sociedad_nombre || "", nota: n.cuenta_contable_nombre || n.descripcion || "",
+        cuil: liq.cuil || "", tipo_cuenta: liq.tipo_cuenta || "" });
     }
   }
   return filas;
@@ -1753,6 +1758,7 @@ function PasoPagos({ mes, anio, cargandoPagos = false, liqStaff, liqOwners, liqE
   const [expandido,   setExpandido]   = useState(null); // legajo_id desplegado
   const [batchModal,  setBatchModal]  = useState(null); // { tipo }
   const [reabrirLiq,  setReabrirLiq]  = useState(null); // liq a reabrir (confirm)
+  const [galiciaTxt,  setGaliciaTxt]  = useState(false); // modal .txt Galicia nuevo formato
 
   // Cerradas arriba, borradores abajo; dentro de cada grupo, por total de mayor a menor.
   const todos = useMemo(() => {
@@ -1949,6 +1955,9 @@ function PasoPagos({ mes, anio, cargandoPagos = false, liqStaff, liqOwners, liqE
         <button style={BTN_EXPORT("#16a34a")} onClick={() => exportarHaberes(todos, mes, anio)}>
           📥 Excel Haberes (banco)
         </button>
+        <button style={BTN_EXPORT("#ea580c")} onClick={() => setGaliciaTxt(true)}>
+          📥 Haberes Galicia .txt (nuevo)
+        </button>
         <button style={BTN_EXPORT("#475569")} onClick={() => exportarControlHaberes(todos, mes, anio)}>
           📋 Control Haberes
         </button>
@@ -1964,6 +1973,12 @@ function PasoPagos({ mes, anio, cargandoPagos = false, liqStaff, liqOwners, liqE
         <div style={{ flex: 1 }} />
         <button onClick={onAtras} style={BTN_SECONDARY}>← Atrás</button>
       </div>
+
+      {/* HQ paga todos los haberes desde Ñako (un solo archivo, como el Excel). */}
+      {galiciaTxt && (
+        <ModalGaliciaTxt sociedadNombre="Ñako" filas={lineasGalicia(todos, "haberes")}
+          mes={mes} anio={anio} prefijoArchivo="Haberes_HQ_Galicia" onClose={() => setGaliciaTxt(false)} />
+      )}
 
       {reabrirLiq && (
         <div onClick={() => setReabrirLiq(null)} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, fontFamily: T.font }}>
