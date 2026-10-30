@@ -13,8 +13,8 @@ const LARGO_LINEA = 477;
 // cuando se conoce; si no, lo pide el modal y queda recordado en este navegador.
 const CUENTAS_GALICIA = [
   { key: "nako",      match: /nako/,   nombre: "Ñako",      cuit: "30717028305", tipoCuenta: "C", cuenta: "000582073253", convenio: "362050" },
-  { key: "hektor",    match: /hektor/, nombre: "Hektor",    cuit: "30714015377", tipoCuenta: "C", cuenta: "000526363251" },
-  { key: "segui-fit", match: /segui/,  nombre: "Segui Fit", cuit: "30717067769", tipoCuenta: "C", cuenta: "000666463253" },
+  { key: "hektor",    match: /hektor/, nombre: "Hektor",    cuit: "30714015377", tipoCuenta: "C", cuenta: "000526363251", convenio: "028897" },
+  { key: "segui-fit", match: /segui/,  nombre: "Segui Fit", cuit: "30717067769", tipoCuenta: "C", cuenta: "000666463253", convenio: "807212" },
 ];
 
 const sinAcentos = (s) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "");
