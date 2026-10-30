@@ -365,10 +365,10 @@ export async function fetchCargasSociales(mes, anio) {
     const cc = r.centro_costo || "";
     byComp[k].distribucion[cc] = (byComp[k].distribucion[cc] || 0) + t;
   }
-  return Object.values(byComp).map(c => ({
-    ...c,
-    pagado: c.monto_total > 0 && calcSaldoPendiente(c.monto_total, [{ monto: pagadoByComp[c.id_comp] || 0 }]) <= 0.5,
-  })).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+  return Object.values(byComp).map(c => {
+    const saldoPendiente = calcSaldoPendiente(c.monto_total, [{ monto: pagadoByComp[c.id_comp] || 0 }]);
+    return { ...c, saldoPendiente, pagado: c.monto_total > 0 && saldoPendiente <= 0.5 };
+  }).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
 }
 
 /** Elimina todas las líneas de un egreso (por id_comp).

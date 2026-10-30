@@ -2,10 +2,11 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { ccActivos } from "../numbers/formUtils";
 import {
   fetchSociedades, fetchProveedores, fetchCuentas, fetchCentrosCosto,
-  appendCargaSocial, fetchCargasSociales,
+  appendCargaSocial, fetchCargasSociales, fetchCuentasBancarias, appendPago,
 } from "../lib/numbersApi";
 import { baseHaberesPorCentro, fmtMiles, limpiarMonto } from "../lib/sueldosApi";
 import { fmtPesos } from "./sueldosUi";
+import AgregarPagoModal from "../numbers/pagos/AgregarPagoModal";
 
 const T = {
   bg: "#f8fafc", card: "#ffffff", border: "#e2e8f0", text: "#1e293b",
@@ -30,7 +31,9 @@ export default function PantallaCargasSociales({ mes: mesProp, anio: anioProp, p
   const [cargas,  setCargas]  = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
+  const [showPago, setShowPago] = useState(null); // carga sobre la que se está registrando un pago
   const [masters, setMasters] = useState({ soc: [], prov: [], ctas: [], ccs: [] });
+  const [cuentasBancarias, setCuentasBancarias] = useState([]);
 
   useEffect(() => { (async () => {
     const [soc, prov, ctas, ccs] = await Promise.all([
@@ -40,8 +43,28 @@ export default function PantallaCargasSociales({ mes: mesProp, anio: anioProp, p
     setMasters({ soc, prov, ctas, ccs });
   })(); }, []);
 
+  useEffect(() => { fetchCuentasBancarias().then(d => setCuentasBancarias(Array.isArray(d) ? d : [])).catch(() => {}); }, []);
+
   useEffect(() => { load(); }, [mes, anio]);
   async function load() { setLoading(true); try { setCargas(await fetchCargasSociales(mes, anio)); } finally { setLoading(false); } }
+
+  const handlePago = async (data) => {
+    if (!showPago) return;
+    try {
+      await appendPago({
+        documento_id:    showPago.id_comp,
+        sociedad:        showPago.sociedad,
+        fecha:           data.fecha,
+        monto:           Number(data.monto),
+        moneda:          "ARS",
+        cuenta_bancaria: data.medioPago,
+        cuenta:          showPago.cuenta,
+        referencia:      data.referencia ?? "",
+        nota:            data.nota ?? "",
+      });
+      await load();
+    } catch (e) { alert("Error al registrar el pago: " + e.message); }
+  };
 
   const ccNombre = useMemo(() => { const m = new Map(masters.ccs.map(c => [String(c.id).toLowerCase(), c.nombre])); return id => m.get(String(id).toLowerCase()) || id || "(sin centro)"; }, [masters.ccs]);
   const socNombre = useMemo(() => { const m = new Map(masters.soc.map(s => [String(s.id), s.nombre])); return id => m.get(String(id)) || id; }, [masters.soc]);
@@ -92,7 +115,7 @@ export default function PantallaCargasSociales({ mes: mesProp, anio: anioProp, p
               </tr>
             </thead>
             <tbody>
-              {cargas.map(c => <CargaRow key={c.id_comp} carga={c} socNombre={socNombre} />)}
+              {cargas.map(c => <CargaRow key={c.id_comp} carga={c} socNombre={socNombre} onPagar={() => setShowPago(c)} />)}
             </tbody>
           </table>
         </div>
@@ -102,11 +125,22 @@ export default function PantallaCargasSociales({ mes: mesProp, anio: anioProp, p
         <FormCargaSocial mes={mes} anio={anio} masters={masters} ccNombre={ccNombre}
           onClose={() => setShowForm(false)} onSaved={async () => { setShowForm(false); await load(); }} />
       )}
+
+      {showPago && (
+        <AgregarPagoModal
+          egreso={{ id: showPago.id_comp, proveedor: `${socNombre(showPago.sociedad)} · ${showPago.proveedor}`, importe: showPago.monto_total, moneda: "ARS" }}
+          saldoPendiente={showPago.saldoPendiente ?? showPago.monto_total}
+          cuentas={cuentasBancarias.filter(c => String(c.sociedad ?? "").toLowerCase() === String(showPago.sociedad ?? "").toLowerCase())}
+          sociedadNombre={socNombre(showPago.sociedad)}
+          onClose={() => setShowPago(null)}
+          onSave={handlePago}
+        />
+      )}
     </div>
   );
 }
 
-function CargaRow({ carga, socNombre }) {
+function CargaRow({ carga, socNombre, onPagar }) {
   const td = { padding: "9px 12px", borderTop: `1px solid ${T.border}`, whiteSpace: "nowrap" };
   return (
     <tr style={{ background: carga.pagado ? "#f0fdf4" : "#fff" }}>
@@ -119,7 +153,14 @@ function CargaRow({ carga, socNombre }) {
       <td style={{ ...td, textAlign: "center" }}>
         {carga.pagado
           ? <span style={{ fontSize: 11, fontWeight: 600, color: T.green, background: "#dcfce7", padding: "2px 8px", borderRadius: 999 }}>✓ Pagado</span>
-          : <span style={{ fontSize: 11, fontWeight: 600, color: "#92400e", background: "#fef3c7", padding: "2px 8px", borderRadius: 999 }}>CxP pendiente</span>}
+          : (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "center" }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: "#92400e", background: "#fef3c7", padding: "2px 8px", borderRadius: 999 }}>CxP pendiente</span>
+              <button onClick={onPagar} style={{ background: T.blue, color: "#fff", border: "none", borderRadius: 6, padding: "3px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                Pagar
+              </button>
+            </div>
+          )}
       </td>
     </tr>
   );
