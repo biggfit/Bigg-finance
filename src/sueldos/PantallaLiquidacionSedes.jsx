@@ -343,6 +343,9 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     setEyeSource({ source: data?._source ?? null, ts: data?._cache_ts ?? null });
   }, []);
   const [edits,      setEdits]      = useState({});  // overlay editable: { [rowKey]: { campo: val, _deleted? } }
+  // CDP / One Shot traídos de BIGG Eye: capa BASE por debajo de `edits` (como las horas de Eye). Re-cargar
+  // la reemplaza entera, así lo nuevo de Eye se actualiza pero lo que el usuario tipeó a mano sigue ganando.
+  const [cdpEye,     setCdpEye]     = useState({});  // { [rowKey]: { q_cdp_coach, q_cdp_front, q_one_shot } }
   const [manualRows, setManualRows] = useState([]);  // filas agregadas a mano (alta manual)
   const [categorias, setCategorias] = useState([]);
   const [objetivos,  setObjetivos]  = useState([]);
@@ -485,6 +488,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       try {
         const d = JSON.parse(raw);
         setEdits(d.edits || {});
+        setCdpEye(d.cdpEye || {});
         setManualRows(d.manualRows || []);
         setPagoDraft(d.pagoDraft || {});   // reparto haberes/efectivo del paso 4, sobrevive al F5
         setPaso(deep ? initialPaso : (d.paso || 1));
@@ -492,6 +496,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       } catch { /* fall through */ }
     }
     setEdits({});
+    setCdpEye({});
     setManualRows([]);
     setPaso(deep ? initialPaso : 1);
   }, [mes, anio, pais]);  // eslint-disable-line react-hooks/exhaustive-deps
@@ -499,9 +504,9 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   // Borrador local automático (debounced). La pestaña "vive abierta como un mail".
   useEffect(() => {
     if (loading) return;
-    if (!Object.keys(edits).length && !manualRows.length && !Object.keys(pagoDraft).length) return;
+    if (!Object.keys(edits).length && !Object.keys(cdpEye).length && !manualRows.length && !Object.keys(pagoDraft).length) return;
     const t = setTimeout(() => {
-      const payload = JSON.stringify({ edits, manualRows, pagoDraft, paso });
+      const payload = JSON.stringify({ edits, cdpEye, manualRows, pagoDraft, paso });
       if (payload === lastDraftRef.current) return;  // nada cambió: no reescribir ni re-renderizar
       try {
         localStorage.setItem(draftKey, payload);
@@ -510,12 +515,13 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       } catch { /* storage lleno o no disponible */ }
     }, 800);
     return () => clearTimeout(t);
-  }, [edits, manualRows, pagoDraft, paso, loading, draftKey]);
+  }, [edits, cdpEye, manualRows, pagoDraft, paso, loading, draftKey]);
 
   const discardDraft = () => {
     try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
     lastDraftRef.current = null;
     setEdits({});
+    setCdpEye({});
     setManualRows([]);
     setPagoDraft({});
     setDraftSavedAt(null);
@@ -733,10 +739,43 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   }, [rosterBase]);
 
   const rows = useMemo(() => {
-    const overlay = (r) => ({ ...r, ...edits[r._id] });
-    return [...rosterBase.map(overlay), ...manualRows.map(overlay)]
-      .filter(r => !r._deleted);
-  }, [rosterBase, manualRows, edits]);
+    // Capas: roster → CDP de Eye (no sobre una cerrada: está congelada) → lo editado a mano.
+    const overlay = (r) => ({ ...(isCerrada(r.estado) ? r : { ...r, ...cdpEye[r._id] }), ...edits[r._id] });
+    // Una cerrada está en la hoja: se ve siempre, aunque haya quedado marcada como borrada.
+    const visibles = [...rosterBase.map(overlay), ...manualRows.map(overlay)]
+      .filter(r => !r._deleted || isCerrada(r.estado));
+
+    // Fila "solo novedad": quien tiene novedad de Sedes pero ninguna fila (borraron su línea de coach, o no
+    // tiene sueldo fijo ni horas) igual tiene que liquidarse. Sin esto la novedad no se colgaba de nada y la
+    // persona desaparecía de Forma de pago / Pagos (caso Juanjo). Sueldo en 0: el total es la novedad.
+    // No se muestra en Horas ni Incentivos (ver esSoloNov), así borrar la línea de coach no la hace volver.
+    const conFila = new Set(visibles.map(r => String(r.legajo_id)));
+    const soloNov = new Map();
+    for (const n of novedades) {
+      if (!n.legajo_id || conFila.has(String(n.legajo_id))) continue;
+      const k = rowKeyDe(n.legajo_id, n.sede_id);
+      if (soloNov.has(k)) continue;
+      const leg  = legajos.find(l => String(l.id) === String(n.legajo_id))
+                ?? legajosInactivos.find(l => String(l.id) === String(n.legajo_id));
+      const sede = sedes.find(s => String(s.id).toLowerCase() === String(n.sede_id).toLowerCase());
+      if (!leg || !sede) continue;   // las novedades vienen de todos los países: legajo y sede tienen que ser de este
+      soloNov.set(k, {
+        _id: `nov__${k}`, bucket: "solo_novedad", _soloNov: true,
+        mes, anio, pais,
+        legajo_id: n.legajo_id, legajo_nombre: leg.nombre,
+        sociedad_id: leg.sociedad_id ?? "", sociedad_nombre: leg.sociedad_nombre ?? "",
+        sede_id: n.sede_id, sede_nombre: sede.nombre,   // sede_id tal cual la novedad: así novsByRowKey la cuelga acá
+        rol: leg.rol || "COACH",
+        horas: 0, horas_feriados: 0, horas_domingos: 0, horas_yoga: 0, horas_running: 0,
+        horas_detalle: [{ clase: "BIGG CLASS", asistio: "Presentes", regulares: 0, feriado: 0, domingo: 0 }],
+        q_cdp_coach: 0, q_cdp_front: 0, q_one_shot: 0, asignado: 0, c_grupo_pct: 0, redondeo: 0,
+        sueldo_base: 0,
+        monto_haberes: 0, monto_deposito: 0, monto_transferencia: 0, monto_efectivo: 0,
+        estado: "borrador",
+      });
+    }
+    return [...visibles, ...soloNov.values()];
+  }, [rosterBase, manualRows, edits, cdpEye, novedades, legajos, legajosInactivos, sedes, mes, anio, pais]);
   // Ref con las filas vigentes para que los handlers memoizados (updateRow/updateDetalle) puedan
   // chequear el candado de "cerrada" sin re-crearse en cada render.
   const rowsRef = useRef([]);
@@ -781,11 +820,15 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
   // aunque su rol no sea coach: un Encargado/HQ con clases sueltas se liquida acá) + cualquier
   // fila con horas cargadas a mano. Usar el bucket evita que la fila desaparezca al editar
   // (p. ej. borrar Hs. Coach y dejar solo Feriados).
-  const rowsCoaches = useMemo(() => rows.filter(r =>
+  // Fila que solo existe para pagar una novedad: la sintética, o ya cerrada con sueldo 0 (lo que queda en la
+  // hoja al cerrar una "solo novedad"). No va en Horas ni Incentivos; sí en Forma de pago y Pagos.
+  const esSoloNov = useCallback((r) => r._soloNov || (isCerrada(r.estado) && montosDeRow(r).total === 0), [montosDeRow]);
+  const rowsCoaches = useMemo(() => rows.filter(r => !esSoloNov(r) && (
     ROLES_COACHES.includes(r.rol) ||
     r.bucket === "match" || r.bucket === "sin_legajo" ||
     HORA_FIELDS.some(f => Number(r[f]) > 0)
-  ), [rows]);
+  )), [rows, esSoloNov]);
+  const rowsIncentivos = useMemo(() => rows.filter(r => !esSoloNov(r)), [rows, esSoloNov]);
 
   // Novedades de Sedes indexadas por fila (legajo×sede). Una novedad lleva UNA sede →
   // matchea exactamente una fila, así una persona con varias sedes no la cuenta doble.
@@ -941,13 +984,10 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     setEdits(prev => ({ ...prev, [_id]: { ...(prev[_id] || {}), [key]: val } }));
   }, []);
 
-  // CDP/one-shot desde BIGG Eye → overlay en edits. Map<rowKey, { q_cdp, q_one_shot }>
+  // CDP/one-shot desde BIGG Eye → capa base `cdpEye` (reemplazo total), NO en edits: así re-cargar no pisa
+  // lo que el usuario corrigió a mano (antes sí: un One Shot bajado de 5 a 4 volvía a 5). Map<rowKey, {...}>
   const applyEyeCdp = useCallback((cdpMap) => {
-    setEdits(prev => {
-      const next = { ...prev };
-      for (const [id, vals] of cdpMap) next[id] = { ...(next[id] || {}), ...vals };
-      return next;
-    });
+    setCdpEye(Object.fromEntries(cdpMap));
   }, []);
 
   const removeRow = async (_id) => {
@@ -1033,14 +1073,6 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       }
     }
     setPaso(2);
-  }
-
-  function handleConfirmarHoras() {
-    setPaso(3);
-  }
-
-  function handleConfirmarIncentivos() {
-    setPaso(4);
   }
 
   // `soloLegajo`: cierra únicamente ese legajo (menú ⋯ del paso Pagos); sin él, todas las abiertas.
@@ -1312,14 +1344,12 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
               eyeSource={eyeSource}
               onAtras={() => setPaso(1)}
               onContinuar={() => setPaso(3)}
-              onSiguiente={handleConfirmarHoras}
-              saving={saving}
             />
           )}
 
           {paso === 3 && (
             <PasoIncentivos
-              rows={rows}
+              rows={rowsIncentivos}
               legajos={legajos}
               sedes={sedes}
               mes={mes}
@@ -1336,8 +1366,6 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
               onApplyEyeCdp={applyEyeCdp}
               onAtras={() => setPaso(2)}
               onContinuar={() => setPaso(4)}
-              onSiguiente={handleConfirmarIncentivos}
-              saving={saving}
             />
           )}
 
@@ -1649,7 +1677,7 @@ function PasoFijos({ rowsFijos, legajos, sedes, originalRows, novsByRowKey, upda
 function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByRowKey, updateRow, removeRow, updateDetalle, removeDetalle,
   showAddForm, setShowAddForm, addForm, setAddForm, handleAddRow,
   mes, anio, pais, onResyncEye, eyeSource,
-  onAtras, onContinuar, onSiguiente, saving }) {
+  onAtras, onContinuar }) {
 
   const HORA_COLS = [
     { field: "horas",          label: "Hs. Coach", w: 80 },
@@ -1877,10 +1905,7 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByR
       <div style={{ marginTop: 24, display: "flex", gap: 12, padding: "16px 0", borderTop: `1px solid ${T.border}` }}>
         <button onClick={onAtras} style={BTN_SECONDARY}>← Atrás</button>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-          <button onClick={onContinuar} style={BTN_SECONDARY}>Continuar →</button>
-          <button onClick={onSiguiente} disabled={saving} style={BTN_PRIMARY(saving)}>
-            {saving ? "Guardando…" : "Guardar y continuar →"}
-          </button>
+          <button onClick={onContinuar} style={BTN_PRIMARY(false)}>Continuar →</button>
         </div>
       </div>
     </div>
@@ -1891,7 +1916,7 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByR
 
 function PasoIncentivos({ rows, legajos, sedes, mes, anio, pais, novsByRowKey, updateRow, removeRow,
   showAddForm, setShowAddForm, addForm, setAddForm, handleAddRow,
-  onApplyEyeCdp, onAtras, onContinuar, onSiguiente, saving }) {
+  onApplyEyeCdp, onAtras, onContinuar }) {
 
   const [sortKey,    setSortKey]    = useState(null);   // null = orden por rol
   const [sortDir,    setSortDir]    = useState("asc");
@@ -2111,10 +2136,7 @@ function PasoIncentivos({ rows, legajos, sedes, mes, anio, pais, novsByRowKey, u
       <div style={{ marginTop: 24, display: "flex", gap: 12, padding: "16px 0", borderTop: `1px solid ${T.border}` }}>
         <button onClick={onAtras} style={BTN_SECONDARY}>← Atrás</button>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-          <button onClick={onContinuar} style={BTN_SECONDARY}>Continuar →</button>
-          <button onClick={onSiguiente} disabled={saving} style={BTN_PRIMARY(saving)}>
-            {saving ? "Guardando…" : "Guardar y continuar →"}
-          </button>
+          <button onClick={onContinuar} style={BTN_PRIMARY(false)}>Continuar →</button>
         </div>
       </div>
     </div>
