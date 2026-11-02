@@ -8,6 +8,7 @@ import {
 import { useRowChecks } from "../lib/useRowChecks";
 import { novedadesDeAmbito } from "../lib/aguinaldo";
 import { tmpRowId } from "../lib/tmpRowId";
+import { readDraft, writeDraft, clearDraft } from "../lib/borradorLocal";
 import { HeaderCheckTodas } from "./sueldosUi";
 
 // Orden del picker de legajos (pedido del usuario): encargado/vendedor → coach → limpieza → HQ.
@@ -67,21 +68,8 @@ function novToRow(n) {
   };
 }
 
-// Borrador local: lo que se edita sin guardar queda en localStorage (solo esta máquina/navegador) y se
-// recupera al volver a la pantalla. Lo definitivo sigue siendo "Guardar", que escribe en la planilla.
+// Borrador local de lo editado sin guardar (ver lib/borradorLocal), por país y mes.
 const draftKey = (p, a, m) => `novedades_sedes_borrador_${p}_${a}_${m}`;
-function readDraft(key) {
-  try {
-    const d = JSON.parse(localStorage.getItem(key) || "null");
-    return d && Array.isArray(d.rows) ? d : null;
-  } catch { return null; }
-}
-function writeDraft(key, rows) {
-  try { localStorage.setItem(key, JSON.stringify({ ts: Date.now(), rows })); } catch { /* localStorage no disponible */ }
-}
-function clearDraft(key) {
-  try { localStorage.removeItem(key); } catch { /* localStorage no disponible */ }
-}
 
 // Firma para detectar cambios entre la fila editada y la persistida.
 const rowSig = (r) => [r.legajo_id, r.sede_id, r.monto, r.forma_pago, r.nota, r.cuenta_contable_id].join("|");

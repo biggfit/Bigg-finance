@@ -8,6 +8,7 @@ import {
 import { useRowChecks } from "../lib/useRowChecks";
 import { novedadesDeAmbito } from "../lib/aguinaldo";
 import { tmpRowId } from "../lib/tmpRowId";
+import { readDraft, writeDraft, clearDraft } from "../lib/borradorLocal";
 import { fmtEntero, HeaderCheckTodas } from "./sueldosUi";
 
 const T = {
@@ -137,6 +138,46 @@ function sembrarFijos(rows, prevMono, nombreDe) {
 // Firma para detectar cambios entre la fila editada y la persistida.
 const rowSig = (r) => [r.legajo_id, r.monto, r.forma_pago, r.nota, r.cuenta_contable_id, r.estado].join("|");
 
+// Borrador local de lo editado sin guardar (ver lib/borradorLocal), por país y mes.
+const draftKey = (p, a, m) => `novedades_hq_borrador_${p}_${a}_${m}`;
+// Novedad cargada por el link de Monotributo: mientras el borrador está abierto, la persona puede cargarla
+// o corregirla (solo estando pendiente), así que al recuperar el borrador manda la versión de la planilla.
+const esDeLink = (n) => n.estado === "pendiente" || !!n.comprobante_url;
+const firmaLink = (n) => [n.monto, n.comprobante_url, n.estado].join("|");
+const firmasLink = (novs) => Object.fromEntries(novs.filter(esDeLink).map(n => [n.id, firmaLink(n)]));
+
+// Filas del borrador + lo que el link cambió en la planilla desde que se escribió. `base` = firmas de las
+// cargas del link cuando se escribió el borrador. Las semillas vacías se descartan (se vuelven a sembrar).
+function fusionarBorrador(draft, frescas) {
+  const base = draft.linkBase || {};
+  const porId = new Map(frescas.map(n => [n.id, n]));
+  const aFila = (n) => ({ ...novToRow(n), concepto: conceptoDeNovedad(n) });
+  const enBorrador = new Set(draft.rows.filter(r => r.id).map(r => r.id));
+  const out = [];
+  for (const r of draft.rows) {
+    if (r._semilla && !(parseFloat(r.monto) > 0)) continue;
+    if (!r.id) { out.push(r); continue; }
+    const n = porId.get(r.id);
+    if (!n) {
+      // Ya no está en la planilla: una carga del link no se recrea; otra fila vuelve a ser alta.
+      if (!(r.id in base)) out.push({ ...r, id: null });
+      continue;
+    }
+    // El link la cambió después del borrador (nueva carga/corrección) → la de la planilla, otra vez pendiente.
+    if (esDeLink(n) && firmaLink(n) !== base[r.id]) out.push({ ...aFila(n), _id: r._id });
+    else out.push(r);
+  }
+  // Cargas del link que el borrador no tiene: llegaron (o cambiaron) después. Si el borrador las había
+  // borrado y siguen igual, quedan borradas. Reemplazan la semilla con monto del mismo legajo.
+  for (const n of frescas) {
+    if (!esDeLink(n) || enBorrador.has(n.id) || firmaLink(n) === base[n.id]) continue;
+    const i = out.findIndex(r => r._semilla && !r.id && r.concepto === "monotributo" && r.legajo_id === n.legajo_id);
+    if (i !== -1) out.splice(i, 1);
+    out.push(aFila(n));
+  }
+  return out;
+}
+
 const iStyle = {
   border: `1px solid ${T.border}`, borderRadius: 5, padding: "5px 8px",
   fontSize: 13, fontFamily: T.font, background: "#eceff3", color: T.text,
@@ -157,11 +198,17 @@ export default function PantallaNovedades({ pais = "" }) {
   const [loading,  setLoading]  = useState(true);
   const [saving,   setSaving]   = useState(false);
   const [dirty,    setDirty]    = useState(false);
+  const [draftTs,  setDraftTs]  = useState(null);   // fecha del borrador recuperado (para el cartel)
   const savingRef = useRef(false);
+  // Clave del borrador del mes YA cargado: mientras carga otro mes, las filas en pantalla siguen siendo
+  // del anterior y no deben escribirse bajo la clave nueva.
+  const draftKeyRef = useRef(null);
   const { checked, toggle: toggleCheck, setMany: setManyChecked } = useRowChecks(`novedades_check_hq_${anio}_${mes}`);
 
-  const load = useCallback(async (m, a, p) => {
+  const load = useCallback(async (m, a, p, { descartarBorrador = false } = {}) => {
     if (!p) return;
+    const key = draftKey(p, a, m);
+    if (descartarBorrador) clearDraft(key);
     setLoading(true);
     try {
       const pm = m === 1 ? 12 : m - 1;
@@ -177,8 +224,14 @@ export default function PantallaNovedades({ pais = "" }) {
       const extras = novedadesDeAmbito(novs, "hq");
       const pMono = novedadesDeAmbito(prevNovs, "hq").filter(n => conceptoDeNovedad(n) === "monotributo");
       const nombreDe = (id) => legs.find(l => l.id === id)?.nombre ?? "";
-      setRows(sembrarFijos(extras.map(n => ({ ...novToRow(n), concepto: conceptoDeNovedad(n) })), pMono, nombreDe));
+      const draft = descartarBorrador ? null : readDraft(key);
+      const base = draft
+        ? fusionarBorrador(draft, extras)
+        : extras.map(n => ({ ...novToRow(n), concepto: conceptoDeNovedad(n) }));
+      setRows(sembrarFijos(base, pMono, nombreDe));
+      setDraftTs(draft ? draft.ts : null);
       setLoaded(extras);
+      draftKeyRef.current = key;
       // Monto del mes anterior por legajo+cuenta → alimenta la columna comparativa.
       const prev = new Map();
       for (const n of prevNovs.filter(x => x.tipo === "extra" && !x.sede_id)) {
@@ -189,11 +242,24 @@ export default function PantallaNovedades({ pais = "" }) {
       setPrevMono(pMono);
       setLegajos(legs.filter(l => l.activo && ROLES_HQ.includes(l.rol) && l.pais === p));
       setCuentas(ccs);
-      setDirty(false);
+      setDirty(!!draft);
     } finally { setLoading(false); }
   }, []);
 
   useEffect(() => { load(mes, anio, pais); }, [mes, anio, pais, load]);
+
+  // Cada cambio sin guardar se escribe al instante en el borrador (con las firmas de las cargas del link
+  // en las que se basa); sin cambios pendientes, se borra.
+  useEffect(() => {
+    const key = draftKeyRef.current;
+    if (!key || loading) return;
+    if (dirty) writeDraft(key, rows, { linkBase: firmasLink(loaded) }); else clearDraft(key);
+  }, [rows, dirty, loading, loaded]);
+
+  const handleDescartarBorrador = () => {
+    if (!confirm("¿Descartar los cambios sin guardar y volver a lo que está guardado?")) return;
+    load(mes, anio, pais, { descartarBorrador: true });
+  };
 
   const prevMes = () => {
     if (mes === 1) { setMes(12); setAnio(a => a - 1); }
@@ -328,7 +394,7 @@ export default function PantallaNovedades({ pais = "" }) {
       }
       // Secuencial: el GAS pierde escrituras concurrentes (appendRow se pisa → se "borraba" una fila).
       for (const op of ops) await op();
-      await load(mes, anio, pais);
+      await load(mes, anio, pais, { descartarBorrador: true });
     } catch (e) {
       alert("Error al guardar: " + e.message);
     } finally {
@@ -420,6 +486,24 @@ export default function PantallaNovedades({ pais = "" }) {
           {saving ? "Guardando…" : "Guardar"}
         </button>
       </div>
+
+      {!loading && dirty && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+          background: "#fef9c3", border: "1px solid #fde047", borderRadius: 7,
+          padding: "8px 12px", marginBottom: 14, fontSize: 12, color: "#854d0e" }}>
+          <span style={{ flexGrow: 1 }}>
+            {draftTs
+              ? `Recuperé tus cambios sin guardar del ${new Date(draftTs).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })}.`
+              : "Tenés cambios sin guardar."}
+            {" "}Quedan como borrador solo en esta computadora; nadie más los ve hasta que toques Guardar.
+          </span>
+          <button onClick={handleDescartarBorrador}
+            style={{ background: "none", border: "1px solid #eab308", borderRadius: 5, padding: "3px 9px",
+              cursor: "pointer", fontSize: 12, color: "#854d0e", fontFamily: T.font }}>
+            Descartar borrador
+          </button>
+        </div>
+      )}
 
       {/* Solapas */}
       <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${T.border}`, marginBottom: 16, flexWrap: "wrap" }}>
