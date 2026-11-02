@@ -14,6 +14,7 @@ import {
   estadoPago, remanentePago, PAGO_EPS, reabrirLiquidaciones, idsLiqEnHoja,
 } from "../lib/sueldosApi";
 import { fmtPesos, useMesMarcado, BotonMesMarcado } from "./sueldosUi";
+import { MoneyField } from "../numbers/theme";
 import { ModalGaliciaTxt, BotonHaberesGalicia } from "./galiciaHaberesTxt";
 
 const T = {
@@ -3012,7 +3013,7 @@ function ModalPagoHaberesAnticipado({ mes, anio, legajos, pagos, onClose, onSave
                       {l.nombre}
                       {!l.cbu && <span style={{ color: T.yellow, fontSize: 10, marginLeft: 6 }}>sin CBU cargado</span>}
                     </span>
-                    <input type="number" value={montos[l.id] ?? ""} disabled={!checked}
+                    <MoneyField value={montos[l.id] ?? ""} disabled={!checked}
                       onChange={e => setMontos(m => ({ ...m, [l.id]: e.target.value }))}
                       style={{ ...MODAL_INPUT, width: 110, textAlign: "right", padding: "4px 6px" }} />
                   </div>
@@ -3174,7 +3175,7 @@ function ModalAnularPago({ pago, onClose, onAnulado }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <div>
                 <ModalLabel>Monto (ARS)</ModalLabel>
-                <input style={MODAL_INPUT} type="number" value={form.monto} onChange={e => set("monto", e.target.value)} />
+                <MoneyField style={MODAL_INPUT} value={form.monto} onChange={e => set("monto", e.target.value)} />
               </div>
               <div>
                 <ModalLabel>Fecha</ModalLabel>
@@ -3321,7 +3322,7 @@ function ModalPagoSede({ mes, anio, liq, onClose, onSaved }) {
           </div>
           <div>
             <ModalLabel>Monto (ARS)</ModalLabel>
-            <input style={MODAL_INPUT} type="number" value={form.monto} onChange={e => set("monto", e.target.value)} />
+            <MoneyField style={MODAL_INPUT} value={form.monto} onChange={e => set("monto", e.target.value)} />
             {pagadoDe(form.tipo_componente) > 0.5 && (
               <div style={{ fontSize: 11, color: T.yellow, marginTop: 4 }}>
                 Ya pagado {fmtMoney(pagadoDe(form.tipo_componente))} de {fmtMoney(montoFullDe(form.tipo_componente))} · pendiente <strong>{fmtMoney(remanenteDe(form.tipo_componente))}</strong>

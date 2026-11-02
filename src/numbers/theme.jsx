@@ -163,7 +163,9 @@ export function useCaretMask(display, clase) {
 // Hook que traduce entre el valor plano (canonical) y lo que se muestra en el input,
 // reformateando en cada tecla sin perder la posición del cursor (ver useCaretMask).
 export function useMoneyMask(value, onChange) {
-  const str = value == null ? "" : String(value);
+  // Un número precargado (p.ej. un pendiente calculado) puede traer ruido de punto
+  // flotante (99999.99999999999): se muestra redondeado a centavos.
+  const str = value == null ? "" : typeof value === "number" ? String(Math.round(value * 100) / 100) : String(value);
   const display = formatPesosDisplay(str);
   const { ref, capture } = useCaretMask(display, "0-9,");
 

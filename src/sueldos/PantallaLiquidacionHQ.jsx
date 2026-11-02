@@ -9,6 +9,7 @@ import {
   estadoPago, remanentePago, PAGO_EPS,
 } from "../lib/sueldosApi";
 import { fmtPesos, useMesMarcado, BotonMesMarcado } from "./sueldosUi";
+import { MoneyField } from "../numbers/theme";
 import { ModalGaliciaTxt, BotonHaberesGalicia } from "./galiciaHaberesTxt";
 
 // ── Estilos compartidos ───────────────────────────────────────────────────────
@@ -1285,7 +1286,7 @@ function FormasLineEditor({ target, lineas, sociedades = [], onChange, onSaveLeg
                   </select>
                 </td>
                 <td style={FP_TD()}>
-                  <input type="number" value={l.importe} disabled={esEf}
+                  <MoneyField value={l.importe} disabled={esEf}
                     onChange={e => upd(l.id, "importe", e.target.value)}
                     title={esEf ? "El efectivo se calcula automáticamente como el remanente" : undefined}
                     style={FP_INPUT({ textAlign: "right", fontWeight: 600, ...(esEf ? { background: T.bg, color: T.muted } : {}) })} />
@@ -2225,7 +2226,7 @@ function ModalAnularPago({ pago, onClose, onAnulado }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <div>
                 <ModalLabel>Monto (ARS)</ModalLabel>
-                <input style={MODAL_INPUT} type="number" value={form.monto} onChange={e => set("monto", e.target.value)} />
+                <MoneyField style={MODAL_INPUT} value={form.monto} onChange={e => set("monto", e.target.value)} />
               </div>
               <div>
                 <ModalLabel>Fecha</ModalLabel>
