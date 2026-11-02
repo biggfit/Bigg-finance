@@ -67,6 +67,22 @@ function novToRow(n) {
   };
 }
 
+// Borrador local: lo que se edita sin guardar queda en localStorage (solo esta máquina/navegador) y se
+// recupera al volver a la pantalla. Lo definitivo sigue siendo "Guardar", que escribe en la planilla.
+const draftKey = (p, a, m) => `novedades_sedes_borrador_${p}_${a}_${m}`;
+function readDraft(key) {
+  try {
+    const d = JSON.parse(localStorage.getItem(key) || "null");
+    return d && Array.isArray(d.rows) ? d : null;
+  } catch { return null; }
+}
+function writeDraft(key, rows) {
+  try { localStorage.setItem(key, JSON.stringify({ ts: Date.now(), rows })); } catch { /* localStorage no disponible */ }
+}
+function clearDraft(key) {
+  try { localStorage.removeItem(key); } catch { /* localStorage no disponible */ }
+}
+
 // Firma para detectar cambios entre la fila editada y la persistida.
 const rowSig = (r) => [r.legajo_id, r.sede_id, r.monto, r.forma_pago, r.nota, r.cuenta_contable_id].join("|");
 
@@ -92,15 +108,21 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
   const [dirty,   setDirty]   = useState(false);
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState("asc");
+  const [draftTs, setDraftTs] = useState(null);   // fecha del borrador recuperado (para el cartel)
   const savingRef = useRef(false);
+  // Clave del borrador del mes YA cargado: mientras carga otro mes, las filas en pantalla siguen siendo
+  // del anterior y no deben escribirse bajo la clave nueva.
+  const draftKeyRef = useRef(null);
   const { checked, toggle: toggleCheck, setMany: setManyChecked } = useRowChecks(`novedades_check_sedes_${anio}_${mes}`);
   const toggleSort = (k) => {
     if (sortKey === k) setSortDir(d => (d === "asc" ? "desc" : "asc"));
     else { setSortKey(k); setSortDir("asc"); }
   };
 
-  const load = useCallback(async (m, a, p) => {
+  const load = useCallback(async (m, a, p, { descartarBorrador = false } = {}) => {
     if (!p) return;
+    const key = draftKey(p, a, m);
+    if (descartarBorrador) clearDraft(key);
     setLoading(true);
     try {
       const [novs, legs, ccs, ctas] = await Promise.all([
@@ -112,18 +134,40 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
       // Solo las de Sedes (con sede, sin aguinaldo): las de HQ y las de Aguinaldo viven en su propia
       // pantalla y acá no se muestran ni se borran.
       const sedesNovs = novedadesDeAmbito(novs, "sedes");
-      setRows(sedesNovs.map(novToRow));
+      const draft = descartarBorrador ? null : readDraft(key);
+      if (draft) {
+        // Una fila del borrador cuyo id ya no está en la planilla (la borró otro) vuelve a ser alta.
+        const ids = new Set(sedesNovs.map(n => n.id));
+        setRows(draft.rows.map(r => (r.id && !ids.has(r.id) ? { ...r, id: null } : r)));
+        setDraftTs(draft.ts);
+      } else {
+        setRows(sedesNovs.map(novToRow));
+        setDraftTs(null);
+      }
       setLoaded(sedesNovs);
+      draftKeyRef.current = key;
       setLegajos(legs
         .filter(l => l.activo && (!l.pais || l.pais === p))
         .sort((a, b) => rolRank(a.rol) - rolRank(b.rol) || a.nombre.localeCompare(b.nombre, "es")));
       setSedes(ccs.filter(c => !c.pais || c.pais === p));
       setCuentas(ctas);
-      setDirty(false);
+      setDirty(!!draft);
     } finally { setLoading(false); }
   }, []);
 
   useEffect(() => { load(mes, anio, pais); }, [mes, anio, pais, load]);
+
+  // Cada cambio sin guardar se escribe al instante en el borrador; sin cambios pendientes, se borra.
+  useEffect(() => {
+    const key = draftKeyRef.current;
+    if (!key || loading) return;
+    if (dirty) writeDraft(key, rows); else clearDraft(key);
+  }, [rows, dirty, loading]);
+
+  const handleDescartarBorrador = () => {
+    if (!confirm("¿Descartar los cambios sin guardar y volver a lo que está guardado?")) return;
+    load(mes, anio, pais, { descartarBorrador: true });
+  };
 
   const prevMes = () => {
     if (mes === 1) { setMes(12); setAnio(a => a - 1); }
@@ -251,7 +295,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
       }
       // Secuencial: el GAS pierde escrituras concurrentes (appendRow se pisa → se "borraba" la última).
       for (const op of ops) await op();
-      await load(mes, anio, pais);
+      await load(mes, anio, pais, { descartarBorrador: true });
     } catch (e) {
       alert("Error al guardar: " + e.message);
     } finally {
@@ -330,6 +374,24 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
       <p style={{ fontSize: 12, color: T.muted, marginTop: 0, marginBottom: 16 }}>
         Extras que suman al sueldo de Sedes (plus, día de feriado del front desk, etc.). Cada novedad va a una sede y se imputa a esa liquidación.
       </p>
+
+      {!loading && dirty && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+          background: "#fef9c3", border: "1px solid #fde047", borderRadius: 7,
+          padding: "8px 12px", marginBottom: 14, fontSize: 12, color: "#854d0e" }}>
+          <span style={{ flexGrow: 1 }}>
+            {draftTs
+              ? `Recuperé tus cambios sin guardar del ${new Date(draftTs).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })}.`
+              : "Tenés cambios sin guardar."}
+            {" "}Quedan como borrador solo en esta computadora; nadie más los ve hasta que toques Guardar.
+          </span>
+          <button onClick={handleDescartarBorrador}
+            style={{ background: "none", border: "1px solid #eab308", borderRadius: 5, padding: "3px 9px",
+              cursor: "pointer", fontSize: 12, color: "#854d0e", fontFamily: T.font }}>
+            Descartar borrador
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <p style={{ color: T.muted, fontSize: 13 }}>Cargando…</p>
