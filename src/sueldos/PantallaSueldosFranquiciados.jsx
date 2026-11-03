@@ -1,19 +1,16 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { fetchLiquidacionesCerradas, fetchLegajos, fetchObjetivos, fetchCategorias, ambitoLiq } from "../lib/sueldosApi";
 import {
-  MUNDOS, fmtPct, filtrarSedes, filtrarSedeMundo, mesesCerrados, normalizarLiqs, rollupPersonaMes, porPuesto,
-  escalera, objetivosGrupales, lecturas, tarifaDe,
+  filtrarSedes, filtrarSedeMundo, mesesCerrados, normalizarLiqs, rollupPersonaMes, objetivosGrupales, rolLabel, tarifaDe,
 } from "../lib/compensacionSedes";
-import { fmtPesos } from "./sueldosUi";
 import { RowMenu } from "../numbers/comprobantesUi";
-import { T, fmt, fmtN, td, tdR, vacio, colsRatio, copiarImagenReporte } from "./compensacionEstilos";
-import { Seccion, Lectura, Kpi, Sel, Tabla, CeldasRatio, Cascada, TablaEscalera } from "./compensacionUi";
+import { T, fmt, td, tdR, vacio, copiarImagenReporte } from "./compensacionEstilos";
+import { Seccion, Sel, Tabla } from "./compensacionUi";
 
-// Reporte "Sueldos Sedes · Franquiciados": lo que pagamos al staff de Sedes y cómo se compone, para
-// compartir con los franquiciados. Mismo cálculo que Compensación · Sedes (lib/compensacionSedes.js),
-// pero SIN nada que identifique a una persona o a una sede: no hay Por persona, Por sede ni objetivo
-// grupal sede por sede, ni selector de sede. Todas las sedes juntas, un mes cerrado, los dos mundos en
-// una sola imagen. Arriba, los valores de Categorías del mes (tarifas por hora, CDP, one shot…).
+// Informe "Sueldos Sedes · Franquiciados": los valores que pagamos al staff de Sedes en un mes cerrado,
+// para compartir con los franquiciados. Solo la tabla de valores vigentes (Categorías, sueldo fijo de
+// Front Desk y objetivo grupal): la escalera y los promedios de Compensación · Sedes son internos y
+// confundían (decisión del 03/11/2026). Nada identifica a una persona ni a una sede.
 
 const MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
 const hoy = new Date();
@@ -22,9 +19,11 @@ const ANIOS = [hoy.getFullYear() - 1, hoy.getFullYear(), hoy.getFullYear() + 1].
 
 // Valores de Categorías que se muestran, en este orden. Lista cerrada a propósito: un concepto nuevo de
 // Categorías no se publica a los franquiciados hasta sumarlo acá (Huergo y Limpieza quedan fuera).
+// `texto`: fila sin valor en Categorías, se muestra ese texto en lugar del monto.
 const VALORES = [
-  { concepto: "COACH SENIOR",        label: "Hora Coach senior",     como: "por hora de clase (también feriados)" },
-  { concepto: "BIGG COACH",          label: "Hora BIGG coach",       como: "por hora de clase (también feriados)" },
+  { concepto: "COACH SENIOR",        label: "Hora Coach senior",     como: "por hora de clase" },
+  { concepto: "BIGG COACH",          label: "Hora BIGG coach",       como: "por hora de clase" },
+  { concepto: null,                  label: "Hora en feriado",       texto: "Doble", como: "el doble de la hora de su puesto" },
   { concepto: "YOGA",                label: "Hora de yoga",          como: "por hora de yoga" },
   { concepto: "DOMINGO",             label: "Hora de domingo",       como: "por hora de clase en domingo" },
   { concepto: "RUNNING A",           label: "Hora de running A",     como: "por hora de running, categoría A" },
@@ -35,54 +34,13 @@ const VALORES = [
   { concepto: "COMISIÓN X REFERIDO", label: "Comisión por referido", como: "por socio referido" },
 ];
 
-// Escalera + por puesto de un mundo (coaches o Front Desk) sobre las liquidaciones del mes.
-function calcMundo(liqs, mesesActivos, legajos, mundo) {
-  const filas = normalizarLiqs(filtrarSedeMundo(liqs, { meses: mesesActivos, tipo: mundo.tipo }));
-  const k = porPuesto(rollupPersonaMes(filas, legajos), mundo);
-  const esc = escalera(k.filas.length > 1 ? k.filas : [k.total], mundo.tipo);
-  const lec = lecturas({ mundo, puesto: k, esc, sedes: [], evolucion: [], objetivos: { sedes: [] }, meses: [] });
-  return { mundo, filas, k, esc, lec };
-}
-
-function BloqueMundo({ d }) {
-  const { mundo, k, esc, lec } = d;
-  const esCoach = mundo.tipo === "coach", t = k.total;
-  const fmtU = (n) => (n == null ? "—" : esCoach ? `${fmtPesos(n)}/h` : fmtPesos(n));
-  const unidadLabel = esCoach ? "$/h" : "$ por persona y mes";
-  const colTotal = esc.columnas[esc.columnas.length - 1];
-  if (!t.personas) return null;
-  return (
-    <Seccion titulo={mundo.label}
-      sub={esCoach ? `${t.personas} coaches · cobran por hora. La escalera va de la tarifa al $/h con todos los incentivos.`
-                   : `${t.personas} personas (encargados y ventas) · sueldo fijo más incentivos, por persona y mes.`}>
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-        <Kpi label={esCoach ? "$/h de tarifa" : "Sueldo fijo por mes"} value={fmtU(t.baseUnidad)} sub="promedio" />
-        <Kpi label={esCoach ? "$/h con incentivos" : "Sueldo promedio por mes"} value={fmtU(t.finalUnidad)}
-          sub={`${fmtPct(t.mejoraPct, true)} sobre ${esCoach ? "la tarifa" : `el fijo · ${fmtPct(t.pctIncentivos)} son incentivos`}`} destacado />
-        {esCoach && <>
-          <Kpi label="Horas por mes" value={`${fmtN(t.horasPorMes)} h`} sub="promedio por coach" />
-          <Kpi label="Sueldo promedio" value={fmt(t.promedioMensual)} sub={`por coach y mes · ${fmtPct(t.pctIncentivos)} son incentivos`} />
-        </>}
-      </div>
-
-      <div style={{ fontSize: 13, fontWeight: 700, margin: "6px 0 4px" }}>Cómo se compone, escalón por escalón ({unidadLabel})</div>
-      {colTotal && <Cascada pasos={colTotal.pasos.map(p => ({ ...p, ...esc.pasos.find(e => e.key === p.key) })).filter(p => !p.fueraRatio)} />}
-      <div style={{ marginTop: 14 }}><TablaEscalera esc={esc} acumulado fmtU={fmtU} esCoach={esCoach} /></div>
-      <Lectura>{lec.escalera}</Lectura>
-
-      <div style={{ fontSize: 13, fontWeight: 700, margin: "18px 0 4px" }}>Por puesto</div>
-      <Tabla cols={[["Puesto"], ["Personas", "r"], ...(esCoach ? [["Horas / persona", "r"]] : []), ...colsRatio(esCoach)]}>
-        {k.filas.map(r => (
-          <tr key={r.rol} style={{ background: r._sub ? T.bg : undefined, fontWeight: r._sub ? 700 : 400 }}>
-            <td style={td}>{r.label}</td><td style={tdR}>{r.personas}</td>
-            {esCoach && <td style={tdR}>{r.horasTotal ? fmtN(r.horasPorMes) : "—"}</td>}
-            <CeldasRatio r={r} fmtU={fmtU} esCoach={esCoach} />
-          </tr>
-        ))}
-      </Tabla>
-      <Lectura>{lec.puesto}</Lectura>
-    </Seccion>
-  );
+// Roles de sueldo fijo que se informan. El fijo es el mismo para todos los del puesto: se muestra el más
+// repetido del mes (no el promedio, que baja por altas, bajas o meses parciales).
+const ROLES_FIJO = ["ENCARGADO", "VENTAS"];
+function fijoDelPuesto(personasMes, rol) {
+  const cuenta = new Map();
+  for (const p of personasMes) if (p.rol === rol && p.m.fijo > 0) { const v = Math.round(p.m.fijo); cuenta.set(v, (cuenta.get(v) || 0) + 1); }
+  return [...cuenta.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0]?.[0] || null;
 }
 
 export default function PantallaSueldosFranquiciados({ pais = "AR" }) {
@@ -93,6 +51,7 @@ export default function PantallaSueldosFranquiciados({ pais = "AR" }) {
   const [legajos,  setLegajos]  = useState([]);
   const [tarifas,  setTarifas]  = useState([]);            // Categorías del mes elegido
   const [objetivos, setObjetivos] = useState([]);          // Objetivos del mes elegido
+  const [valoresMes, setValoresMes] = useState("");        // key del mes cuyas tarifas/objetivos ya llegaron
   const [loading,  setLoading]  = useState(true);
   const [fallo,    setFallo]    = useState("");
   const [fotoMsg,  setFotoMsg]  = useState(null);
@@ -118,29 +77,34 @@ export default function PantallaSueldosFranquiciados({ pais = "AR" }) {
 
   const mes = meses.find(m => m.key === mesSel) || null;
   useEffect(() => {
-    if (!mes) { setTarifas([]); setObjetivos([]); return; }
+    if (!mes) { setTarifas([]); setObjetivos([]); setValoresMes(""); return; }
     let cancel = false;
     Promise.all([fetchCategorias(mes.mes, mes.anio, pais).catch(() => []), fetchObjetivos(mes.mes, mes.anio, pais).catch(() => [])])
-      .then(([cats, objs]) => { if (!cancel) { setTarifas(cats); setObjetivos(objs); } });
+      .then(([cats, objs]) => { if (!cancel) { setTarifas(cats); setObjetivos(objs); setValoresMes(mes.key); } });
     return () => { cancel = true; };
   }, [mes?.key, pais]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const mesesActivos = useMemo(() => new Set(mesSel ? [mesSel] : []), [mesSel]);
-  const mundos = useMemo(() => MUNDOS.map(m => calcMundo(liqs, mesesActivos, legajos, m)), [liqs, mesesActivos, legajos]);
+  const filas = useMemo(() => ["coach", "fijo"].flatMap(tipo => normalizarLiqs(filtrarSedeMundo(liqs, { meses: mesesActivos, tipo }))), [liqs, mesesActivos]);
   // Objetivo grupal: solo cuántas sedes lo cobraron y con qué porcentajes, sin decir cuáles.
   const grupal = useMemo(() => {
     if (!mes) return null;
-    const objs = objetivosGrupales(mundos.flatMap(d => d.filas), { [mes.key]: objetivos }, [mes]);
+    const objs = objetivosGrupales(filas, { [mes.key]: objetivos }, [mes]);
     const celdas = objs.sedes.map(s => objs.celdas[`${s.sede_id}|${mes.key}`]).filter(c => c?.cumplido);
     const pcts = [...new Set(celdas.map(c => c.pct).filter(p => p > 0))].sort((a, b) => a - b);
     return { sedes: objs.sedes.length, cumplidas: celdas.length, pcts };
-  }, [mundos, objetivos, mes]);
-  const valores = useMemo(() => VALORES.map(v => ({ ...v, monto: tarifaDe(tarifas, v.concepto) })).filter(v => v.monto), [tarifas]);
-  const fijos = useMemo(() => mundos.find(d => d.mundo.tipo === "fijo")?.k.filas.filter(r => !r._sub) || [], [mundos]);
+  }, [filas, objetivos, mes]);
+  const valores = useMemo(() => VALORES.map(v => ({ ...v, monto: v.texto ? null : tarifaDe(tarifas, v.concepto) })).filter(v => v.texto || v.monto), [tarifas]);
+  const fijos = useMemo(() => {
+    const personasMes = rollupPersonaMes(filas, legajos);
+    return ROLES_FIJO.map(rol => ({ rol, label: rolLabel(rol), monto: fijoDelPuesto(personasMes, rol) })).filter(f => f.monto);
+  }, [filas, legajos]);
 
   const periodoLabel = mes ? `${MESES[mes.mes - 1]} ${mes.anio}` : "";
-  const hayDatos = mundos.some(d => d.k.total.personas);
-  const sinDatos = loading || !hayDatos;
+  const hayDatos = filas.length > 0;
+  // Hasta que lleguen las tarifas del mes no se muestra la tabla: una imagen copiada antes saldría incompleta.
+  const cargando = loading || (!!mes && valoresMes !== mes.key);
+  const sinDatos = cargando || !hayDatos;
 
   const copiarFoto = async () => {
     if (!reportRef.current) return;
@@ -165,7 +129,7 @@ export default function PantallaSueldosFranquiciados({ pais = "AR" }) {
       `}</style>
 
       <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
-        <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, flexGrow: 1 }}>Sueldos Sedes · Franquiciados</h2>
+        <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, flexGrow: 1 }}>Valores de referencia para franquiciados</h2>
         <RowMenu align="right" label="⋯" items={[
           { label: "📋 Copiar imagen", onClick: copiarFoto, disabled: sinDatos, hint: "Copia el informe como PNG para pegar o mandar" },
           { label: "🖨 Imprimir / PDF", onClick: () => window.print(), disabled: sinDatos, hint: "A4 vertical" },
@@ -176,12 +140,12 @@ export default function PantallaSueldosFranquiciados({ pais = "AR" }) {
         <Sel label="Mes" value={mesSel} onChange={setMesSel} disabled={!meses.length}>{meses.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}</Sel>
       </div>
       <div className="no-print" style={{ fontSize: 12, color: T.muted, marginBottom: 16 }}>
-        Para compartir: todas las sedes juntas, sin nombres de personas ni montos por sede. Un puesto con una sola persona muestra, de hecho, lo que cobra esa persona.
+        Para compartir: los valores que se pagan en todas las sedes, sin nombres de personas ni montos por sede.
       </div>
       {fotoMsg && <div className="no-print" style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", borderRadius: 7, padding: "8px 12px", fontSize: 13, marginBottom: 12 }}>{fotoMsg}</div>}
       {fallo && <div style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", borderRadius: 7, padding: "8px 12px", fontSize: 13, marginBottom: 12 }}>⚠️ {fallo}</div>}
 
-      {loading ? <p style={{ color: T.muted, fontSize: 13 }}>Cargando…</p> : !meses.length ? (
+      {cargando ? <p style={{ color: T.muted, fontSize: 13 }}>Cargando…</p> : !meses.length ? (
         <div style={vacio}>No hay liquidaciones de Sedes cerradas en {anio}.</div>
       ) : !hayDatos ? (
         <div style={vacio}>Sin liquidaciones de Sedes en {periodoLabel}.</div>
@@ -189,17 +153,17 @@ export default function PantallaSueldosFranquiciados({ pais = "AR" }) {
         <div id="sueldos-franq-report" ref={reportRef}>
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 20, fontWeight: 800 }}>Sueldos Sedes · {periodoLabel}</div>
-            <div style={{ fontSize: 12, color: T.muted }}>Todas las sedes · {pais} · importes brutos liquidados · promedios por puesto.</div>
+            <div style={{ fontSize: 12, color: T.muted }}>Todas las sedes · {pais} · importes brutos.</div>
           </div>
 
           <Seccion titulo="Valores vigentes" sub={`Lo que se paga por cada concepto en ${periodoLabel}.`}>
             <Tabla cols={[["Concepto"], ["Valor", "r"], ["Cómo se paga"]]}>
               {valores.map(v => (
-                <tr key={v.concepto}><td style={{ ...td, fontWeight: 600 }}>{v.label}</td><td style={tdR}>{fmt(v.monto)}</td><td style={{ ...td, color: T.muted, whiteSpace: "normal" }}>{v.como}</td></tr>
+                <tr key={v.label}><td style={{ ...td, fontWeight: 600 }}>{v.label}</td><td style={tdR}>{v.texto ?? fmt(v.monto)}</td><td style={{ ...td, color: T.muted, whiteSpace: "normal" }}>{v.como}</td></tr>
               ))}
-              {fijos.map(r => (
-                <tr key={r.rol}><td style={{ ...td, fontWeight: 600 }}>Sueldo fijo {r.label.toLowerCase()}</td><td style={tdR}>{fmt(r.baseUnidad)}</td>
-                  <td style={{ ...td, color: T.muted, whiteSpace: "normal" }}>por mes, promedio ({r.personas} {r.personas === 1 ? "persona" : "personas"})</td></tr>
+              {fijos.map(f => (
+                <tr key={f.rol}><td style={{ ...td, fontWeight: 600 }}>Sueldo fijo {f.label.toLowerCase()}</td><td style={tdR}>{fmt(f.monto)}</td>
+                  <td style={{ ...td, color: T.muted, whiteSpace: "normal" }}>por mes</td></tr>
               ))}
               <tr>
                 <td style={{ ...td, fontWeight: 600 }}>Objetivo grupal</td>
@@ -212,16 +176,6 @@ export default function PantallaSueldosFranquiciados({ pais = "AR" }) {
             </Tabla>
           </Seccion>
 
-          {mundos.map(d => <BloqueMundo key={d.mundo.key} d={d} />)}
-
-          <div style={{ fontSize: 11, color: T.muted, lineHeight: 1.5 }}>
-            <b>Definiciones.</b>{" "}
-            <b>Tarifa</b> = todas las horas trabajadas (regulares, domingos, feriados, yoga, running) a la tarifa del puesto.{" "}
-            <b>CDP</b> = clases de prueba convertidas en socios. <b>Asignados</b> = objetivos individuales.{" "}
-            <b>Otros</b> = lo que domingos y feriados pagan por encima de la tarifa, one shot, comisión por resultado, redondeo y ajustes.{" "}
-            <b>$/h con incentivos</b> = lo liquidado dividido todas las horas, sin clases especiales (running, custom, programaciones), reemplazos, feriados ni eventos cargados aparte: pagan trabajo cuyas horas no están cargadas y entran solo al sueldo promedio.{" "}
-            <b>Cobrado</b> (Front Desk) = todo lo liquidado por persona y mes. Importes brutos de liquidaciones cerradas. No incluye Limpieza.
-          </div>
         </div>
       )}
     </div>

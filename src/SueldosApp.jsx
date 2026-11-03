@@ -42,7 +42,7 @@ const NAV = [
   { id: "cargas",     icon: "📋", label: "Cargas sociales" },
   { id: "legajos",    icon: "👤", label: "Legajos" },
   { id: "comp-sedes", icon: "📊", label: "Compensación · Sedes" },
-  { id: "franq-sedes", icon: "🤝", label: "Sueldos Sedes · Franquiciados" },
+  { id: "franq-sedes", icon: "◦",  label: "Valores franquiciados", sub: true },
 ];
 
 export default function SueldosApp({ onVolver }) {
@@ -73,7 +73,7 @@ export default function SueldosApp({ onVolver }) {
     "resumen":    "Resúmenes",
     "aguinaldo":  "Aguinaldo (SAC)",
     "comp-sedes": "Compensación · Sedes",
-    "franq-sedes": "Sueldos Sedes · Franquiciados",
+    "franq-sedes": "Valores franquiciados",
     "categorias": "Liquidación · Sedes › Categorías",
     "objetivos":  "Liquidación · Sedes › Objetivos",
     "liq-hq":     "Liquidación · HQ",
