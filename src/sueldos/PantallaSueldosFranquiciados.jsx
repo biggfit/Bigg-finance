@@ -117,7 +117,7 @@ export default function PantallaSueldosFranquiciados({ pais = "AR" }) {
       await descargarValoresPdf({
         nombre: `Valores_Sedes_${pais}_${periodoLabel.replace(/ /g, "_")}.pdf`,
         titulo: `Sueldos Sedes · ${periodoLabel}`,
-        subtitulo: `Valores de referencia · todas las sedes · ${pais} · importes brutos.`,
+        subtitulo: `Valores de referencia · todas las sedes · ${pais}.`,
         filas: informe,
       });
     } catch { setFotoMsg("No se pudo generar el PDF."); setTimeout(() => setFotoMsg(null), 4500); }
@@ -162,7 +162,7 @@ export default function PantallaSueldosFranquiciados({ pais = "AR" }) {
         <div id="sueldos-franq-report" ref={reportRef}>
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 20, fontWeight: 800 }}>Sueldos Sedes · {periodoLabel}</div>
-            <div style={{ fontSize: 12, color: T.muted }}>Todas las sedes · {pais} · importes brutos.</div>
+            <div style={{ fontSize: 12, color: T.muted }}>Todas las sedes · {pais}.</div>
           </div>
 
           <Seccion titulo="Valores vigentes" sub={`Lo que se paga por cada concepto en ${periodoLabel}.`}>
