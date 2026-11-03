@@ -84,7 +84,7 @@ function Placeholder({ section }) {
   );
 }
 
-export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, onCerrarSesion }) {
+export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, onGoToReportes, sesion, onCerrarSesion }) {
   const [activeId,       setActiveId]       = useState(() => localStorage.getItem("nb_activeId") || "tesoreria");
   const [egresoSubView,  setEgresoSubView]  = useState(null);
   const [ingresoSubView, setIngresoSubView] = useState(null);
@@ -619,6 +619,22 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, sesion, o
                 </button>
               );
             })}
+            {onGoToReportes && (
+              <button onClick={onGoToReportes} style={{
+                display:"flex", alignItems:"center", gap:10,
+                width:"calc(100% - 12px)", margin:"0 6px",
+                padding:"9px 10px", borderRadius:8,
+                background:"transparent", border:"none",
+                color:"rgba(255,255,255,.4)",
+                fontFamily:T.font, fontSize:13, fontWeight:500,
+                cursor:"pointer", textAlign:"left", transition:"background .15s",
+              }}
+              onMouseEnter={e=>e.currentTarget.style.background=T.sidebarHover}
+              onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>→</span>
+                BIGG Reportes
+              </button>
+            )}
             {onGoToSueldos && (
               <button onClick={onGoToSueldos} style={{
                 display:"flex", alignItems:"center", gap:10,

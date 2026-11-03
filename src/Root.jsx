@@ -2,10 +2,11 @@ import { useState, useEffect } from "react";
 import App        from "./App";
 import NumbersApp from "./NumbersApp";
 import SueldosApp from "./SueldosApp";
+import ReportesApp from "./ReportesApp";
 import Login      from "./numbers/Login";
 import { sesionActual, cerrarSesion } from "./lib/auth";
 
-// ─── ROOT: switch entre BIGG Numbers, Bigg Franquicias y BIGG Sueldos ──────
+// ─── ROOT: switch entre BIGG Numbers, Bigg Franquicias, BIGG Sueldos y BIGG Reportes ──────
 export default function Root() {
   // Persistido: al refrescar (F5) la app se remonta; sin esto activeApp volvía siempre a "numbers"
   // y sacaba al usuario de Sueldos/Franquicias a Numbers. Se guarda en localStorage como activeCompany.
@@ -40,10 +41,16 @@ export default function Root() {
     return <SueldosApp onVolver={() => setActiveApp("numbers")} />;
   }
 
+  // BIGG Reportes: los mismos reportes de Numbers, solo lectura, con sidebar propio (sin selector de sociedad).
+  if (activeApp === "reportes") {
+    return <ReportesApp onVolver={() => setActiveApp("numbers")} />;
+  }
+
   return (
     <NumbersApp
       onGoToFranquicias={() => setActiveApp("franquicias")}
       onGoToSueldos={() => setActiveApp("sueldos")}
+      onGoToReportes={() => setActiveApp("reportes")}
       sesion={sesion}
       onCerrarSesion={salir}
     />

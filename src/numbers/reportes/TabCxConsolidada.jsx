@@ -355,7 +355,7 @@ export default function TabCxConsolidada({ lado = "cxp", onBack, onVerComprobant
       {/* Header propio: título + volver a Reportes (el PageHeader global se omite para este reporte) */}
       <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:24 }}>
         <h1 style={h1S}>{cfg.titulo}</h1>
-        <button onClick={onBack} style={backBtn}>← Reportes</button>
+        {onBack && <button onClick={onBack} style={backBtn}>← Reportes</button>}
       </div>
 
       {/* Toolbar: moneda + fecha de corte */}
