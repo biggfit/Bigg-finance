@@ -1163,6 +1163,14 @@ function buildPnLGrupoFilas(propsBigg, isCol) {
   // ingresos de Huergo y la cesión BN del mes. Si faltaran (no deberían), caen a 0 y el control de abajo avisa.
   const pz = sub.piezas || {}, pzP = P.piezas || {};
   const cesion = sub.cesionBN || Z, cesionP = P.cesionBN || Z;
+  // SOLO para el memo de ventas (Martín 4/11): la Red BRUTA (sin el neteo de interusos pagados, pauta y CRM
+  // comprados) y Rosedal con la venta de la sede (no el fee). Misma estructura de 4 líneas, otra fórmula.
+  // Negocios y la cascada siguen netos: el atribuible no cambia.
+  const contra = pz.contraHQ || {}, contraP = pzP.contraHQ || {};
+  const bruto  = n => MESES.map((_, m) => (Number(hqAccounts?.[n]?.[m]) || 0) + (Number(contra[n]?.[m]) || 0));
+  const brutoP = n => MESES.map((_, m) => (Number(P.hqAccounts?.[n]?.[m]) || 0) + (Number(contraP[n]?.[m]) || 0));
+  const ventasRed  = add(ingHQ, sumMap(contra)), ventasRedP = add(P.ingHQ, sumMap(contraP));
+  const ventasRos  = pz.rosedalVentas || fg || Z, ventasRosP = pzP.rosedalVentas || P.fg || Z;
   // Reubicación (Martín 4/11): en HQ estas cuentas llegan como "Costo por Venta" (categoría correcta para una
   // sede, donde van proporcionales a SU venta), pero acá son costo de mover plata y posición fiscal del grupo, no
   // costo de vender de ningún negocio → salen de la Red y bajan a Financieros / Impuestos. Solo cambia el renglón:
@@ -1185,8 +1193,8 @@ function buildPnLGrupoFilas(propsBigg, isCol) {
   const finTotP = MESES.map((_, m) => (Number(P.financieros?.[m]) || 0) + finExtraP[m]);
 
   // ── Cascada ──
-  const ventas   = add(pz.ventasSedes, fg, pz.huergoIng, ingHQ);
-  const ventasP  = add(pzP.ventasSedes, P.fg, pzP.huergoIng, P.ingHQ);
+  const ventas   = add(pz.ventasSedes, ventasRos, pz.huergoIng, ventasRed);
+  const ventasP  = add(pzP.ventasSedes, ventasRosP, pzP.huergoIng, ventasRedP);
   const sedes100 = pz.sedes100 || Z, sedes100P = pzP.sedes100 || Z;
   const red      = MESES.map((_, m) => (Number(ingHQ?.[m]) || 0) - gpvRed[m]);
   const redP     = MESES.map((_, m) => (Number(P.ingHQ?.[m]) || 0) - gpvRedP[m]);
@@ -1227,15 +1235,14 @@ function buildPnLGrupoFilas(propsBigg, isCol) {
         const prevV = (sedesApertura.prev || []).find(x => x.label === s.label)?.ventas || Z;
         filas.push({ kind: "cuenta", nested: true, label: s.label, cur: s.ventas || Z, prev: prevV, pol: 1 });
       }
-    // Rosedal: lo que BIGG vende es el fee (la venta de la sede es de Segui, anillo 3; no entra acá).
-    filas.push({ kind: "cuenta", label: "Gerenciamiento de Sedes (Rosedal)",     cur: fg || Z,             prev: P.fg || Z,            pol: 1 });
+    // Rosedal: en el memo va la venta de la SEDE (de Segui); el fee es lo que entra en Negocios.
+    filas.push({ kind: "cuenta", label: "Gerenciamiento de Sedes (Rosedal)",     cur: ventasRos,           prev: ventasRosP,           pol: 1 });
     filas.push({ kind: "cuenta", label: "Wellness Real Estate (Huergo)",         cur: pz.huergoIng || Z,   prev: pzP.huergoIng || Z,   pol: 1 });
-    // Red: abre por cuenta. Coorporativos, Pauta y CRM llegan NETEADOS de su contra (interusos pagados, pauta
-    // comprada): el holding los pliega en una línea. La venta bruta por cuenta es trabajo de "Ventas por negocio" (T3).
-    filas.push({ kind: "cuenta", toggleKey: "sec_vred", label: "Red BIGG (franquicias y corporativos)",  cur: ingHQ || Z, prev: P.ingHQ || Z, pol: 1 });
+    // Red BRUTA, por cuenta: lo facturado antes de interusos pagados y pauta/CRM comprados.
+    filas.push({ kind: "cuenta", toggleKey: "sec_vred", label: "Red BIGG (franquicias y corporativos)",  cur: ventasRed, prev: ventasRedP, pol: 1 });
     if (!isCol("sec_vred"))
       for (const [n] of Object.entries(hqAccounts || {}).sort(ordCmp(BIGG_ORDEN)))
-        filas.push({ kind: "cuenta", nested: true, label: n, cur: hqAccounts[n], prev: (P.hqAccounts?.[n]) || Z, pol: 1 });
+        filas.push({ kind: "cuenta", nested: true, label: n, cur: bruto(n), prev: brutoP(n), pol: 1 });
   }
   filas.push({ kind: "spacer" });
 
@@ -2718,7 +2725,10 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
     const cesionBN = MESES.map((_, m) => CESION.pct * (Number(sBNnet?.resFinal?.[m]) || 0));
     // Piezas de la cascada "P&L del grupo" (buildPnLGrupoFilas). Viajan DENTRO de sub → prev/prevC las traen solas.
     sub.cesionBN = cesionBN;
-    sub.piezas   = { ventasSedes: sAR.totIngresos, sedes100: sAR.resFinal, huergoIng: sH.totIng };
+    // Venta de la sede Rosedal (de Segui, anillo 3): solo para el memo de ventas del P&L del grupo (Martín 4/11).
+    const rosedalCCs = ccs.filter(c => (c.grupo ?? "").toLowerCase() === "operaciones" && (c.empresa ?? "").trim() === "segui-fit" && familiaCentro(c) === "gerenciamiento").map(c => c.id);
+    const rosedalVentas = rosedalCCs.length ? computeSubtotalsSede(buildPnLSede(inR, egR, rosedalCCs, yr, moneda, sinIvaArg)).totIngresos : null;
+    sub.piezas   = { ventasSedes: sAR.totIngresos, sedes100: sAR.resFinal, huergoIng: sH.totIng, contraHQ: pnl.grupos.hqContra || {}, rosedalVentas };
     return { pnl, sub, cesionBN,
       // DEV-ONLY (check "P&L BIGG vs Devengado" en consola): piezas del holding para descomponer la diferencia.
       _dbg: import.meta.env.DEV ? { sAR, sBNnet, feeGer, resWRE, arNucleoCCs, bnCcId } : undefined };

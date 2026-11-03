@@ -467,6 +467,10 @@ const HUERGO_CENTRO = "11 - Huergo";
 // una sociedad núcleo). Un centro sin `empresa` (HQ/transversal) cuenta como núcleo.
 function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, moneda, sinIva = false) {
   const grupos = {}; for (const g of BIGG_GRUPOS) grupos[g.key] = {};
+  // Contras que netean DENTRO de Ingresos HQ (interusos pagados → Coorporativos, pauta/CRM comprados → Pauta/CRM),
+  // guardadas aparte como costo (+): venta BRUTA de la cuenta = hq[n] + hqContra[n]. Solo las lee el memo de
+  // ventas del P&L del grupo (Martín 4/11); el neto (hq) y todo lo que consolida el holding no cambian.
+  grupos.hqContra = {};
   const sinClasificar = {};
   // IVA embebido (solo modo sin IVA): débito de ventas y crédito de compras, con signo "de caja"
   // (crédito compras = entra, + ; débito ventas = sale, −). Suman al resultado igual que hoy (el neto
@@ -538,6 +542,12 @@ function buildPnLBigg(inRows, egRows, ccMap, cuentaMap, nucleoEmpresas, year, mo
       const bucket = gkey ? grupos[gkey] : sinClasificar;
       if (!bucket[rowKey]) bucket[rowKey] = new Array(12).fill(0);
       bucket[rowKey][m] += val;
+      // Contra = toda fila de cuenta intermediada que entra RESTANDO en Ingresos HQ: el egreso dado vuelta (neg) y
+      // el interuso de franquicias, que el adaptador ya trae como ingreso NETO NEGATIVO (lo pagado supera lo cobrado).
+      if (gkey === "hq" && ING_CONTRA_HQ.has(cuenta) && val < 0) {
+        if (!grupos.hqContra[rowKey]) grupos.hqContra[rowKey] = new Array(12).fill(0);
+        grupos.hqContra[rowKey][m] += -val;
+      }
       // IVA stripped (solo Sin IVA) SOLO de los buckets HQ que consolida el holding (hq/gpv/ghq/fin/imp) —
       // sede/WRE/gerenciamiento reportan su IVA por su propio motor, no acá. Se clasifica por el signo con
       // que la línea entra al Resultado del Grupo: revenue (+) → débito ventas, costo (−) → crédito compras.
