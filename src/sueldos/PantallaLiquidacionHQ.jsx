@@ -523,17 +523,36 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
         }
       }
     }
-    setFormasDraft(() => {
-      const d = {};
+    armarFormasDraft();
+    setPaso(2);
+  }
+
+  // Borrador de formas de pago (lo que ven los pasos 2 y 3 y lo que se cierra). Conserva lo editado en el
+  // paso 2: solo se rearma el empleado que no tiene borrador o cuyo sueldo cambió en el paso 1 (Σ líneas ≠
+  // nuevo total). Así se puede ir y volver entre pasos sin perder ediciones.
+  function armarFormasDraft() {
+    setFormasDraft(prev => {
+      const d = { ...prev };
       liqs.forEach(liq => {
+        const target = getDraftTotal(liq);
+        const actual = prev[liq.legajo_id];
+        if (actual?.length && Math.abs(actual.reduce((s, l) => s + (Number(l.importe) || 0), 0) - target) < 1) return;
         const base = liq.lineas?.length ? liq.lineas : defaultLineasFromLeg({
-          sueldo_total: getDraftTotal(liq), blanco_neto: liq.blanco_neto_legajo, banco: liq.banco, cbu: liq.cbu,
+          sueldo_total: target, blanco_neto: liq.blanco_neto_legajo, banco: liq.banco, cbu: liq.cbu,
         });
-        d[liq.legajo_id] = normalizeEfectivo(base.map(l => ({ ...l })), getDraftTotal(liq));
+        d[liq.legajo_id] = normalizeEfectivo(base.map(l => ({ ...l })), target);
       });
       return d;
     });
-    setPaso(2);
+  }
+
+  // Navegación libre por el indicador de pasos. Hacia adelante hace lo mismo que "Continuar" pero SIN los
+  // guardados opcionales (actualizar legajos / recetas): esos quedan solo en el botón. Nada persiste en
+  // su_liquidaciones hasta cerrar.
+  function irAPaso(p) {
+    if (p === paso || saving) return;
+    if (p > paso && paso === 1) armarFormasDraft();
+    setPaso(p);
   }
 
   // Avanzar a Paso 3 NO persiste en su_liquidaciones (eso pasa solo al CERRAR).
@@ -667,7 +686,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
       ) : (
         <>
 
-          <StepsIndicator paso={paso} onPaso={p => p < paso && setPaso(p)} />
+          <StepsIndicator paso={paso} onPaso={irAPaso} />
 
           {paso === 1 && (
             <PasoSueldos
@@ -806,9 +825,9 @@ function StepsIndicator({ paso, onPaso }) {
           style={{
             flex: 1, padding: "10px 0", border: "none",
             borderRight: i < steps.length - 1 ? `1px solid ${T.border}` : "none",
-            cursor: s.n < paso ? "pointer" : "default",
+            cursor: s.n === paso ? "default" : "pointer",
             background: s.n === paso ? T.blue : s.n < paso ? "#eff6ff" : T.bg,
-            color: s.n === paso ? "#fff" : s.n < paso ? "#1d4ed8" : T.dim,
+            color: s.n === paso ? "#fff" : s.n < paso ? "#1d4ed8" : T.muted,
             fontWeight: 600, fontSize: 12, fontFamily: T.font,
             transition: "background .15s",
           }}>
@@ -1165,7 +1184,7 @@ function PasoPago({ liqStaff, liqOwners, liqExternos, sueldosDraft, formasDraft,
                       ))}
                     </tr>
                   )}
-                  {open && novs.map((n, ni) => {
+                  {open && novs.map((n) => {
                     const m = Number(n.monto) || 0;
                     const dirty      = novDirty.has(n.id);
                     const savingThis = savingNov === n.id;
@@ -1887,7 +1906,6 @@ function PasoPagos({ mes, anio, cargandoPagos = false, liqStaff, liqOwners, liqE
               const open = expandido === liq.legajo_id;
               // Estado por columna: null (no aplica) | "none" | "partial" | "full".
               // Parcial-aware: suma pagos vs total, no solo "¿tiene algún pago?".
-              const abs = (ps) => ps.reduce((a, p) => a + Math.abs(Number(p.monto) || 0), 0);
               const colState = (col) => {
                 const { ls, novs, total, pagado } = totalYPagadoPorTipo(liq, col, { soloPositivos: false });
                 if (!ls.length && !novs.length) return null;
