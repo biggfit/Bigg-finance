@@ -212,7 +212,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
 
   // Wizard state
   const [paso,             setPaso]             = useState(initialPaso ?? 1);
-  const [sueldosDraft,     setSueldosDraft]     = useState({});  // { [legajo_id]: { pct: "", total: N } }
+  const [sueldosDraft,     setSueldosDraft]     = useState({});  // solo lo editado: { [legajo_id]: { pct, total } }; el resto cae a sueldo_mes
   const [actualizarLegs,   setActualizarLegs]   = useState(false);
   const [formasDraft,      setFormasDraft]      = useState({});  // { [legajo_id]: lineas[] }
   const [actualizarRecetas, setActualizarRecetas] = useState(false);
@@ -401,7 +401,8 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
   // aparece siempre; si ya tiene liquidación persistida la mergeamos, si no es una
   // fila virtual (sin id) que se materializa lazily al avanzar/pagar.
   const liqs = useMemo(() => {
-    const liqByLegajo = new Map(liquidaciones.map(l => [l.legajo_id, l]));
+    const delMes = liquidaciones.filter(l => Number(l.mes) === Number(mes) && Number(l.anio) === Number(anio));
+    const liqByLegajo = new Map(delMes.map(l => [l.legajo_id, l]));
     const novByLegajo = new Map();
     for (const n of novedades) {
       if (!novByLegajo.has(n.legajo_id)) novByLegajo.set(n.legajo_id, []);
@@ -416,6 +417,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
     // Solo legajos vigentes en el mes (alta/baja); uno con liquidación guardada se muestra siempre.
     return legajos.filter(leg => liqByLegajo.has(leg.id) || legajoVigenteEnMes(leg, mes, anio)).map(leg => {
       const liq = liqByLegajo.get(leg.id);
+      const cerrada = isCerrada(liq?.estado);
       // Split escalar congelado al cerrar (monto_*): si existe, es la fuente de verdad del
       // reparto por forma y se usa TAL CUAL (sin re-normalizar contra la receta del legajo).
       // Esto evita el drift por-forma que daba pendientes negativos en liquidaciones cerradas.
@@ -467,8 +469,11 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
         tipo_contratacion:   liq?.tipo_contratacion ?? leg.tipo_contratacion,
         sueldo_base:         liq?.sueldo_base ?? (leg.sueldo_total || leg.blanco_neto),
         estado:              liq?.estado ?? "borrador",
+        cerrada,
         lineas,
-        sueldo_total_legajo: leg.sueldo_total || 0,
+        // Sueldo del mes: CONGELADO si la liquidación está cerrada (el legajo ya puede tener el sueldo
+        // de un mes posterior); del legajo si todavía está abierta. Alimenta los pasos 1 y 2.
+        sueldo_mes:          cerrada ? (Number(liq.sueldo_base) || total_bruto) : (leg.sueldo_total || 0),
         blanco_neto_legajo:  leg.blanco_neto || 0,
         cbu:   leg.cbu   || "",
         banco: leg.banco || "",
@@ -485,19 +490,7 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
     });
   }, [liquidaciones, pagos, legajos, novedades, mes, anio]);
 
-  useEffect(() => {
-    if (!liqs.length) return;
-    setSueldosDraft(prev => {
-      const next = { ...prev };
-      liqs.forEach(liq => {
-        if (!(liq.legajo_id in next))
-          next[liq.legajo_id] = { pct: "", total: liq.sueldo_total_legajo };
-      });
-      return next;
-    });
-  }, [liqs.length]);
-
-  const getDraftTotal = (liq) => sueldosDraft[liq.legajo_id]?.total ?? liq.sueldo_total_legajo;
+  const getDraftTotal = (liq) => sueldosDraft[liq.legajo_id]?.total ?? liq.sueldo_mes;
 
   // Avanzar a Paso 2 NO persiste en su_liquidaciones (eso pasa solo al CERRAR).
   // Solo arma el borrador en memoria; opcionalmente empuja el sueldo al legajo maestro.
@@ -506,8 +499,9 @@ export default function PantallaLiquidacionHQ({ pais = "", initialMes, initialAn
       // Solo los que cambiaron. Resiliente: reintenta cada uno, NO aborta el lote si uno falla,
       // parchea legajos en memoria (sin load() completo) y avisa si quedó alguno pendiente.
       const cambios = liqs
+        .filter(liq => !liq.cerrada)   // una cerrada muestra su sueldo congelado: no es un cambio del legajo
         .map(liq => ({ liq, total: getDraftTotal(liq) }))
-        .filter(({ liq, total }) => total !== liq.sueldo_total_legajo);
+        .filter(({ liq, total }) => total !== liq.sueldo_mes);
       if (cambios.length) {
         setSaving(true);
         const ok = [], fallidos = [];
@@ -867,8 +861,8 @@ function PasoSueldos({ liqStaff, liqOwners, liqExternos, sueldosDraft, onChangeD
   const { sortCol, sortDir, toggle, sort } = useSortable("actual", "desc");
 
   const todos       = [...liqStaff, ...liqOwners, ...liqExternos];
-  const totalActual = todos.reduce((s, l) => s + (l.sueldo_total_legajo || 0), 0);
-  const totalNuevo  = todos.reduce((s, l) => s + (sueldosDraft[l.legajo_id]?.total ?? l.sueldo_total_legajo), 0);
+  const totalActual = todos.reduce((s, l) => s + (l.sueldo_mes || 0), 0);
+  const totalNuevo  = todos.reduce((s, l) => s + (sueldosDraft[l.legajo_id]?.total ?? l.sueldo_mes), 0);
   const totalNovedades = todos.reduce((s, l) => s + (l.total_novedades || 0), 0);
   const diff        = totalNuevo - totalActual;
 
@@ -878,8 +872,8 @@ function PasoSueldos({ liqStaff, liqOwners, liqExternos, sueldosDraft, onChangeD
     // solo aplica cuando hay un aumento real.
     const p = parseFloat(rawPct);
     const nuevoTotal = (rawPct !== "" && !Number.isNaN(p) && p !== 0)
-      ? redondear(liq.sueldo_total_legajo * (1 + p / 100))
-      : liq.sueldo_total_legajo;
+      ? redondear(liq.sueldo_mes * (1 + p / 100))
+      : liq.sueldo_mes;
     onChangeDraft(liq.legajo_id, { pct: rawPct, total: nuevoTotal });
   };
 
@@ -890,15 +884,15 @@ function PasoSueldos({ liqStaff, liqOwners, liqExternos, sueldosDraft, onChangeD
   // Aplica el mismo % a todos los empleados de una vez
   const handlePctGlobal = (rawPct) => {
     setPctGlobal(rawPct);
-    todos.forEach(liq => handlePct(liq, rawPct));
+    todos.filter(liq => !liq.cerrada).forEach(liq => handlePct(liq, rawPct));
   };
 
   const sorted = sort(todos, (r, col) => {
     if (col === "nombre") return r.legajo_nombre;
     if (col === "rol")    return r.rol;
     if (col === "centro") return r.sede_nombre || r.sede_id || "";
-    if (col === "actual") return r.sueldo_total_legajo;
-    if (col === "nuevo")  return sueldosDraft[r.legajo_id]?.total ?? r.sueldo_total_legajo;
+    if (col === "actual") return r.sueldo_mes;
+    if (col === "nuevo")  return sueldosDraft[r.legajo_id]?.total ?? r.sueldo_mes;
   });
 
   return (
@@ -946,9 +940,9 @@ function PasoSueldos({ liqStaff, liqOwners, liqExternos, sueldosDraft, onChangeD
           {sorted.map((liq, i) => {
             const d          = sueldosDraft[liq.legajo_id];
             const pct        = d?.pct   ?? "";
-            const nuevoTotal = d?.total ?? liq.sueldo_total_legajo;
-            const subio      = nuevoTotal > liq.sueldo_total_legajo;
-            const aumento    = nuevoTotal - liq.sueldo_total_legajo;
+            const nuevoTotal = d?.total ?? liq.sueldo_mes;
+            const subio      = nuevoTotal > liq.sueldo_mes;
+            const aumento    = nuevoTotal - liq.sueldo_mes;
             const novs       = liq.novedades || [];
             const open       = expandido === liq.legajo_id;
             return (
@@ -981,11 +975,13 @@ function PasoSueldos({ liqStaff, liqOwners, liqExternos, sueldosDraft, onChangeD
                 </td>
                 <td style={TD({ color: T.muted, fontSize: 12 })}>{liq.rol}</td>
                 <td style={TD({ color: T.muted, fontSize: 12 })}>{liq.sede_nombre || liq.sede_id || "—"}</td>
-                <td style={TD({ textAlign: "right", fontWeight: 700, color: T.blue })}>{fmtMoney(liq.sueldo_total_legajo)}</td>
+                <td style={TD({ textAlign: "right", fontWeight: 700, color: T.blue })}>
+                  {fmtMoney(liq.sueldo_mes)}{liq.cerrada && <span title="Liquidación cerrada: sueldo congelado" style={{ marginLeft: 6, fontSize: 11 }}>🔒</span>}
+                </td>
                 <td style={TD({ textAlign: "right", borderLeft: `1px solid ${T.border}` })}>
                   <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
                     <input
-                      type="number" value={pct}
+                      type="number" value={pct} disabled={liq.cerrada}
                       onChange={e => handlePct(liq, e.target.value)}
                       placeholder="0"
                       style={INPUT({ width: 48 })}
@@ -999,7 +995,7 @@ function PasoSueldos({ liqStaff, liqOwners, liqExternos, sueldosDraft, onChangeD
                 <td style={TD({ textAlign: "right" })}>
                   <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
                     <input
-                      type="text"
+                      type="text" disabled={liq.cerrada}
                       value={nuevoTotal ? Math.round(nuevoTotal).toLocaleString("es-AR") : ""}
                       onChange={e => handleTotal(liq, e.target.value.replace(/\./g, ""))}
                       style={INPUT({ width: 92, fontWeight: 700, color: subio ? T.green : T.text })}
@@ -1032,7 +1028,7 @@ function PasoSueldos({ liqStaff, liqOwners, liqExternos, sueldosDraft, onChangeD
 // ── Paso 2: Forma de pago ─────────────────────────────────────────────────────
 
 function PasoPago({ liqStaff, liqOwners, liqExternos, sueldosDraft, formasDraft, sociedades = [], onChangeLineas, actualizarRecetas, onChangeActualizar, onSaveLegajo, savingLegajo, onNovFormaSaved, onAtras, onSiguiente, saving }) {
-  const getTarget = (liq) => sueldosDraft[liq.legajo_id]?.total ?? liq.sueldo_total_legajo;
+  const getTarget = (liq) => sueldosDraft[liq.legajo_id]?.total ?? liq.sueldo_mes;
   const todos = [...liqStaff, ...liqOwners, ...liqExternos];
   const [expandido, setExpandido] = useState(null); // legajo_id desplegado
 
