@@ -1,16 +1,17 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { fetchLiquidacionesCerradas, fetchLegajos, fetchObjetivos, fetchCategorias, ambitoLiq } from "../lib/sueldosApi";
+import { fetchLiquidacionesCerradas, fetchLegajos, fetchCategorias, ambitoLiq } from "../lib/sueldosApi";
 import {
-  filtrarSedes, filtrarSedeMundo, mesesCerrados, normalizarLiqs, rollupPersonaMes, objetivosGrupales, rolLabel, tarifaDe,
+  filtrarSedes, filtrarSedeMundo, mesesCerrados, normalizarLiqs, rollupPersonaMes, rolLabel, tarifaDe,
 } from "../lib/compensacionSedes";
 import { RowMenu } from "../numbers/comprobantesUi";
-import { T, fmt, td, tdR, vacio, copiarImagenReporte } from "./compensacionEstilos";
+import { T, fmt, td, tdR, vacio, btn, copiarImagenReporte, descargarImagenReporte } from "./compensacionEstilos";
 import { Seccion, Sel, Tabla } from "./compensacionUi";
 
 // Informe "Sueldos Sedes · Franquiciados": los valores que pagamos al staff de Sedes en un mes cerrado,
 // para compartir con los franquiciados. Solo la tabla de valores vigentes (Categorías, sueldo fijo de
 // Front Desk y objetivo grupal): la escalera y los promedios de Compensación · Sedes son internos y
-// confundían (decisión del 03/11/2026). Nada identifica a una persona ni a una sede.
+// confundían (decisión del 03/11/2026). Nada identifica a una persona ni a una sede. El objetivo grupal
+// va sin porcentajes ni reglas: los fija Ventas y Operaciones cada mes y no se explican afuera.
 
 const MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
 const hoy = new Date();
@@ -50,8 +51,7 @@ export default function PantallaSueldosFranquiciados({ pais = "AR" }) {
   const [meses,    setMeses]    = useState([]);            // meses cerrados del año
   const [legajos,  setLegajos]  = useState([]);
   const [tarifas,  setTarifas]  = useState([]);            // Categorías del mes elegido
-  const [objetivos, setObjetivos] = useState([]);          // Objetivos del mes elegido
-  const [valoresMes, setValoresMes] = useState("");        // key del mes cuyas tarifas/objetivos ya llegaron
+  const [valoresMes, setValoresMes] = useState("");        // key del mes cuyas tarifas ya llegaron
   const [loading,  setLoading]  = useState(true);
   const [fallo,    setFallo]    = useState("");
   const [fotoMsg,  setFotoMsg]  = useState(null);
@@ -77,23 +77,15 @@ export default function PantallaSueldosFranquiciados({ pais = "AR" }) {
 
   const mes = meses.find(m => m.key === mesSel) || null;
   useEffect(() => {
-    if (!mes) { setTarifas([]); setObjetivos([]); setValoresMes(""); return; }
+    if (!mes) { setTarifas([]); setValoresMes(""); return; }
     let cancel = false;
-    Promise.all([fetchCategorias(mes.mes, mes.anio, pais).catch(() => []), fetchObjetivos(mes.mes, mes.anio, pais).catch(() => [])])
-      .then(([cats, objs]) => { if (!cancel) { setTarifas(cats); setObjetivos(objs); setValoresMes(mes.key); } });
+    fetchCategorias(mes.mes, mes.anio, pais).catch(() => [])
+      .then(cats => { if (!cancel) { setTarifas(cats); setValoresMes(mes.key); } });
     return () => { cancel = true; };
   }, [mes?.key, pais]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const mesesActivos = useMemo(() => new Set(mesSel ? [mesSel] : []), [mesSel]);
   const filas = useMemo(() => ["coach", "fijo"].flatMap(tipo => normalizarLiqs(filtrarSedeMundo(liqs, { meses: mesesActivos, tipo }))), [liqs, mesesActivos]);
-  // Objetivo grupal: solo cuántas sedes lo cobraron y con qué porcentajes, sin decir cuáles.
-  const grupal = useMemo(() => {
-    if (!mes) return null;
-    const objs = objetivosGrupales(filas, { [mes.key]: objetivos }, [mes]);
-    const celdas = objs.sedes.map(s => objs.celdas[`${s.sede_id}|${mes.key}`]).filter(c => c?.cumplido);
-    const pcts = [...new Set(celdas.map(c => c.pct).filter(p => p > 0))].sort((a, b) => a - b);
-    return { sedes: objs.sedes.length, cumplidas: celdas.length, pcts };
-  }, [filas, objetivos, mes]);
   const valores = useMemo(() => VALORES.map(v => ({ ...v, monto: v.texto ? null : tarifaDe(tarifas, v.concepto) })).filter(v => v.texto || v.monto), [tarifas]);
   const fijos = useMemo(() => {
     const personasMes = rollupPersonaMes(filas, legajos);
@@ -106,14 +98,14 @@ export default function PantallaSueldosFranquiciados({ pais = "AR" }) {
   const cargando = loading || (!!mes && valoresMes !== mes.key);
   const sinDatos = cargando || !hayDatos;
 
-  const copiarFoto = async () => {
+  const nombreImagen = `Valores_Sedes_${pais}_${periodoLabel.replace(/\s+/g, "_")}.png`;
+  const conMensaje = async (accion) => {
     if (!reportRef.current) return;
-    setFotoMsg(await copiarImagenReporte(reportRef.current, {
-      nombre: `Sueldos_Sedes_${pais}_${periodoLabel.replace(/\s+/g, "_")}.png`,
-      caption: `Sueldos Sedes · ${pais} · ${periodoLabel}`,
-    }));
+    setFotoMsg(await accion(reportRef.current));
     setTimeout(() => setFotoMsg(null), 4500);
   };
+  const copiarFoto = () => conMensaje(node => copiarImagenReporte(node, { nombre: nombreImagen, caption: `Sueldos Sedes · ${pais} · ${periodoLabel}` }));
+  const descargarFoto = () => conMensaje(node => descargarImagenReporte(node, { nombre: nombreImagen }));
 
   return (
     <div className="fade" style={{ padding: "24px 28px", maxWidth: 1180, fontFamily: T.font, color: T.text, "--border": T.border }}>
@@ -130,6 +122,7 @@ export default function PantallaSueldosFranquiciados({ pais = "AR" }) {
 
       <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
         <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, flexGrow: 1 }}>Valores de referencia para franquiciados</h2>
+        <button onClick={descargarFoto} disabled={sinDatos} style={{ ...btn(true), opacity: sinDatos ? 0.5 : 1 }}>⬇ Descargar imagen</button>
         <RowMenu align="right" label="⋯" items={[
           { label: "📋 Copiar imagen", onClick: copiarFoto, disabled: sinDatos, hint: "Copia el informe como PNG para pegar o mandar" },
           { label: "🖨 Imprimir / PDF", onClick: () => window.print(), disabled: sinDatos, hint: "A4 vertical" },
@@ -167,11 +160,8 @@ export default function PantallaSueldosFranquiciados({ pais = "AR" }) {
               ))}
               <tr>
                 <td style={{ ...td, fontWeight: 600 }}>Objetivo grupal</td>
-                <td style={tdR}>{grupal?.pcts.length ? grupal.pcts.map(p => `${p} %`).join(" · ") : "—"}</td>
-                <td style={{ ...td, color: T.muted, whiteSpace: "normal" }}>
-                  % según el cumplimiento de la sede. Coaches: sobre horas, feriados, domingos y asignados. Front Desk: sobre el sueldo fijo. Yoga no lo cobra.
-                  {grupal?.sedes ? ` Este mes lo cobraron ${grupal.cumplidas} de ${grupal.sedes} sedes.` : ""}
-                </td>
+                <td style={tdR}>Variable</td>
+                <td style={{ ...td, color: T.muted, whiteSpace: "normal" }}>% según el cumplimiento de la sede</td>
               </tr>
             </Tabla>
           </Seccion>
