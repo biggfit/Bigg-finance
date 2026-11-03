@@ -876,6 +876,7 @@ export async function fetchNovedades(mes, anio, { conPendientes = false } = {}) 
     cuenta_contable_nombre:  r.cuenta_contable_nombre ?? "",
     estado:                  r.estado ?? "",           // "" (carga manual) | pendiente | aprobada
     comprobante_url:         r.comprobante_url ?? "",  // link de Drive (autocarga del monotributo)
+    solapa:                  r.solapa ?? "",           // solapa de Novedades Sedes ("" = cargada antes de las solapas)
   }));
 }
 

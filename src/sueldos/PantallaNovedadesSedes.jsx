@@ -6,7 +6,7 @@ import {
   fmtMiles, limpiarMonto,
 } from "../lib/sueldosApi";
 import { useRowChecks } from "../lib/useRowChecks";
-import { novedadesDeAmbito } from "../lib/aguinaldo";
+import { novedadesDeAmbito, normTxt } from "../lib/aguinaldo";
 import { tmpRowId } from "../lib/tmpRowId";
 import { readDraft, writeDraft, clearDraft } from "../lib/borradorLocal";
 import { HeaderCheckTodas } from "./sueldosUi";
@@ -45,6 +45,26 @@ const hoy     = new Date();
 const MES_DEF = hoy.getMonth() === 0 ? 12 : hoy.getMonth();
 const ANO_DEF = hoy.getMonth() === 0 ? hoy.getFullYear() - 1 : hoy.getFullYear();
 
+// Solapas por concepto. A diferencia de HQ, la cuenta contable se sigue eligiendo por fila: la solapa
+// se guarda aparte, en `solapa`.
+const SOLAPAS = [
+  { key: "comision_resultados", label: "Comisión sobre resultados" },
+  { key: "servicio_custom",     label: "Servicio Custom" },
+  { key: "comision_referido",   label: "Comisión por referido" },
+  { key: "otros",               label: "Otros conceptos", ayuda: "Reemplazos, horas extras, ajustes puntuales, adicionales, running, programaciones…" },
+];
+const SOLAPA_KEYS = new Set(SOLAPAS.map(c => c.key));
+
+// Solapa de una novedad: la guardada; las cargadas antes de las solapas se ubican por la nota y la cuenta.
+function solapaDe(n) {
+  if (SOLAPA_KEYS.has(n.solapa)) return n.solapa;
+  const cta = normTxt(n.cuenta_contable_nombre), txt = normTxt(n.descripcion);
+  if (/referid/.test(txt)) return "comision_referido";
+  if (/custom/.test(txt)) return "servicio_custom";
+  if (/resultado/.test(cta) || /comisi/.test(txt)) return "comision_resultados";
+  return "otros";
+}
+
 function newRow(overrides = {}) {
   return {
     _id: tmpRowId(),
@@ -53,6 +73,7 @@ function newRow(overrides = {}) {
     sede_id: "", sede_nombre: "",
     monto: "", forma_pago: "efectivo", nota: "",
     cuenta_contable_id: "", cuenta_contable_nombre: "",
+    solapa: "otros",
     ...overrides,
   };
 }
@@ -65,6 +86,7 @@ function novToRow(n) {
     sede_id: n.sede_id, sede_nombre: n.sede_nombre,
     monto: String(n.monto || ""), forma_pago: n.forma_pago || "efectivo", nota: n.descripcion || "",
     cuenta_contable_id: n.cuenta_contable_id, cuenta_contable_nombre: n.cuenta_contable_nombre,
+    solapa: solapaDe(n),
   };
 }
 
@@ -72,7 +94,7 @@ function novToRow(n) {
 const draftKey = (p, a, m) => `novedades_sedes_borrador_${p}_${a}_${m}`;
 
 // Firma para detectar cambios entre la fila editada y la persistida.
-const rowSig = (r) => [r.legajo_id, r.sede_id, r.monto, r.forma_pago, r.nota, r.cuenta_contable_id].join("|");
+const rowSig = (r) => [r.legajo_id, r.sede_id, r.monto, r.forma_pago, r.nota, r.cuenta_contable_id, r.solapa].join("|");
 
 const iStyle = {
   border: `1px solid ${T.border}`, borderRadius: 5, padding: "5px 8px",
@@ -85,6 +107,7 @@ const invStyle = { border: "1px solid #ef4444", background: "#fee2e2" };
 export default function PantallaNovedadesSedes({ pais = "" }) {
   const [mes,  setMes]  = useState(MES_DEF);
   const [anio, setAnio] = useState(ANO_DEF);
+  const [tab,  setTab]  = useState(SOLAPAS[0].key);
 
   const [rows,    setRows]    = useState([]);
   const [loaded,  setLoaded]  = useState([]);   // snapshot persistido (para diff)
@@ -126,7 +149,11 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
       if (draft) {
         // Una fila del borrador cuyo id ya no está en la planilla (la borró otro) vuelve a ser alta.
         const ids = new Set(sedesNovs.map(n => n.id));
-        setRows(draft.rows.map(r => (r.id && !ids.has(r.id) ? { ...r, id: null } : r)));
+        // Un borrador de antes de las solapas no trae `solapa`: se ubica igual que una novedad vieja.
+        setRows(draft.rows.map(r => {
+          const fila = { ...r, solapa: solapaDe({ ...r, descripcion: r.nota }) };
+          return fila.id && !ids.has(fila.id) ? { ...fila, id: null } : fila;
+        }));
         setDraftTs(draft.ts);
       } else {
         setRows(sedesNovs.map(novToRow));
@@ -206,7 +233,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
     const cc = cuentas.find(c => c.id === ccId);
     setRow(rid, { cuenta_contable_id: ccId, cuenta_contable_nombre: cc?.nombre ?? "" });
   };
-  const addRow = () => { setRows(prev => [...prev, newRow()]); setDirty(true); };
+  const addRow = () => { setRows(prev => [...prev, newRow({ solapa: tab })]); setDirty(true); };
   const delRow = (rid) => { setRows(prev => prev.filter(r => r._id !== rid)); setDirty(true); };
 
   const handleCopiarMesAnterior = async () => {
@@ -250,6 +277,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
           forma_pago: r.forma_pago,
           cuenta_contable_id: r.cuenta_contable_id,
           cuenta_contable_nombre: r.cuenta_contable_nombre,
+          solapa: r.solapa,
         };
         if (!r.id) {
           nuevas.push({ tmpId: r._id, payload });
@@ -302,7 +330,11 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
     color: T.muted, fontSize: 11, letterSpacing: ".04em",
     borderBottom: `1px solid ${T.border}` };
 
-  const total = rows.filter(r => r.legajo_id && r.sede_id).reduce((s, r) => s + Math.abs(parseFloat(r.monto) || 0), 0);
+  const sumar = (rs) => rs.filter(r => r.legajo_id && r.sede_id).reduce((s, r) => s + Math.abs(parseFloat(r.monto) || 0), 0);
+  const tabRows = rows.filter(r => r.solapa === tab);
+  const totalTab = sumar(tabRows);
+  const totalGeneral = sumar(rows);
+  const tabActual = SOLAPAS.find(c => c.key === tab);
 
   // Orden por header (vista derivada; los edits siguen mapeando por _id).
   // Mapas id→nombre precomputados una vez (antes se hacía arr.find en CADA comparación del sort).
@@ -319,15 +351,15 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
     : k === "forma_pago" ? (r.forma_pago || "")
     :                      (r.nota || "");
   const vista = useMemo(() => {
-    if (!sortKey) return rows;
-    return [...rows].sort((a, b) => {
+    if (!sortKey) return tabRows;
+    return [...tabRows].sort((a, b) => {
       const va = valOrden(a, sortKey), vb = valOrden(b, sortKey);
       const cmp = typeof va === "number" ? va - vb : String(va).localeCompare(String(vb), "es", { numeric: true, sensitivity: "base" });
       return sortDir === "asc" ? cmp : -cmp;
     });
-  }, [rows, sortKey, sortDir, nombreMaps]);
+  }, [rows, tab, sortKey, sortDir, nombreMaps]);
 
-  const idsConDatos = rows.filter(r => r.legajo_id && r.sede_id).map(r => r.id ?? r._id);
+  const idsConDatos = tabRows.filter(r => r.legajo_id && r.sede_id).map(r => r.id ?? r._id);
   const todosMarcados = idsConDatos.length > 0 && idsConDatos.every(id => checked.has(id));
 
   return (
@@ -381,6 +413,32 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
         </div>
       )}
 
+      {/* Solapas */}
+      <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${T.border}`, marginBottom: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
+        {SOLAPAS.map(c => {
+          const isActive = c.key === tab;
+          const n = rows.filter(r => r.solapa === c.key && r.legajo_id).length;
+          return (
+            <button key={c.key} onClick={() => setTab(c.key)} title={c.ayuda}
+              style={{
+                background: "none", border: "none", borderBottom: `2px solid ${isActive ? T.blue : "transparent"}`,
+                padding: "8px 12px", cursor: "pointer", fontFamily: T.font,
+                fontSize: 13, fontWeight: isActive ? 700 : 500,
+                color: isActive ? T.blue : T.muted, marginBottom: -1,
+              }}>
+              {c.label}{n > 0 ? ` (${n})` : ""}
+            </button>
+          );
+        })}
+        <span style={{ marginLeft: "auto", padding: "8px 4px", fontSize: 12, color: T.muted }}>
+          Total todas las solapas: <b style={{ color: T.text }}>${totalGeneral.toLocaleString("es-AR")}</b>
+        </span>
+      </div>
+
+      {tabActual?.ayuda && (
+        <p style={{ fontSize: 12, color: T.muted, marginTop: -6, marginBottom: 12 }}>{tabActual.ayuda}</p>
+      )}
+
       {loading ? (
         <p style={{ color: T.muted, fontSize: 13 }}>Cargando…</p>
       ) : (
@@ -400,6 +458,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
                     {h}{sortKey === k ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
                   </th>
                 ))}
+                <th style={{ ...thStyle, width: 130 }}>Mover a</th>
                 <th style={{ ...thStyle, width: 40 }}></th>
                 <th style={{ ...thStyle, width: 40, textAlign: "center" }}>
                   <HeaderCheckTodas checked={todosMarcados} onToggle={() => setManyChecked(idsConDatos, !todosMarcados)} accent={T.green} />
@@ -407,9 +466,9 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
               </tr>
             </thead>
             <tbody>
-              {rows.length === 0 && (
-                <tr><td colSpan={9} style={{ padding: "14px 10px", color: T.dim, fontSize: 13 }}>
-                  Sin novedades de Sedes este mes. Agregá una fila abajo.
+              {tabRows.length === 0 && (
+                <tr><td colSpan={10} style={{ padding: "14px 10px", color: T.dim, fontSize: 13 }}>
+                  Sin novedades en esta solapa. Agregá una fila abajo.
                 </td></tr>
               )}
               {vista.map(r => {
@@ -464,6 +523,13 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
                     <input style={iStyle} value={r.nota} placeholder="Nota (ej: feriado 1/5)"
                       onChange={e => setRow(r._id, { nota: e.target.value })} />
                   </td>
+                  <td style={{ padding: "6px 10px" }}>
+                    <select style={{ ...iStyle, fontSize: 12, color: T.muted }} value={r.solapa}
+                      title="Pasar esta novedad a otra solapa"
+                      onChange={e => setRow(r._id, { solapa: e.target.value })}>
+                      {SOLAPAS.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+                    </select>
+                  </td>
                   <td style={{ padding: "6px 8px", textAlign: "center" }}>
                     <button onClick={() => delRow(r._id)}
                       style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: T.dim, padding: 2 }}>🗑</button>
@@ -483,11 +549,11 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
             </tbody>
             <tfoot>
               <tr style={{ background: T.bg, fontWeight: 700 }}>
-                <td colSpan={3} style={{ padding: "8px 10px" }}>Total</td>
+                <td colSpan={3} style={{ padding: "8px 10px" }}>Total {tabActual?.label}</td>
                 <td style={{ padding: "8px 10px", textAlign: "right" }}>
-                  ${total.toLocaleString("es-AR")}
+                  ${totalTab.toLocaleString("es-AR")}
                 </td>
-                <td colSpan={5}></td>
+                <td colSpan={6}></td>
               </tr>
             </tfoot>
           </table>
