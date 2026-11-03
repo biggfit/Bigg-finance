@@ -1953,10 +1953,11 @@ function PasoIncentivos({ rows, legajos, sedes, mes, anio, pais, novsByRowKey, u
   );
 
   const dash = <span style={{ display: "block", textAlign: "right", color: T.dim }}>—</span>;
-  const inp  = (row, field) => {
+  const inp  = (row, field, money = false) => {
     const cerr = isCerrada(row.estado);
+    const Campo = money ? MoneyField : "input";
     return (
-      <input style={{ ...iStyle, ...(cerr ? LOCKED : {}) }} value={row[field] || ""} placeholder="0"
+      <Campo style={{ ...iStyle, ...(cerr ? LOCKED : {}) }} value={row[field] || ""} placeholder="0"
         disabled={cerr} title={cerr ? LOCK_TITLE : undefined}
         onChange={e => updateRow(row._id, field, e.target.value)} />
     );
@@ -2090,7 +2091,7 @@ function PasoIncentivos({ rows, legajos, sedes, mes, anio, pais, novsByRowKey, u
                   </td>
                   <td style={{ padding: "5px 8px", color: T.muted }}>{row.sede_nombre || "—"}</td>
                   <td style={{ padding: "4px 6px" }}>
-                    {!isLimp ? inp(row, "asignado") : dash}
+                    {!isLimp ? inp(row, "asignado", true) : dash}
                   </td>
                   <td style={{ padding: "4px 6px" }}>
                     {/* Objetivo grupal: coaches (sobre horas) y fijos no-limpieza (sobre sueldo básico).
@@ -2209,9 +2210,9 @@ function PasoFormaPago({ empls, pagoDraft, onChangePago, onAtras, onContinuar, o
                     {fmtMoney(empl.total)}
                   </td>
                   <td style={{ padding: "4px 8px", textAlign: "right" }}>
-                    <input style={{ ...MON(), ...(empl.cerrada ? LOCKED : {}) }} value={habTxt ?? ""} placeholder="0"
+                    <MoneyField style={{ ...MON(), ...(empl.cerrada ? LOCKED : {}) }} value={habTxt ?? ""} placeholder="0"
                       disabled={empl.cerrada} title={empl.cerrada ? "Cerrada — reabrí (🔒) para cambiar el blanco" : undefined}
-                      onChange={e => onChangePago(empl.legajo_id, "monto_haberes", parseFloat(e.target.value) || 0)} />
+                      onChange={e => onChangePago(empl.legajo_id, "monto_haberes", e.target.value)} />
                   </td>
                   <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700,
                     color: sobra ? T.red : T.muted }}>

@@ -6,6 +6,7 @@ import {
 import { useRowChecks, migrarMarcasAgrupadas } from "../lib/useRowChecks";
 import { tmpRowId } from "../lib/tmpRowId";
 import { fmtEntero, HeaderCheckTodas } from "./sueldosUi";
+import { MoneyField } from "../numbers/theme";
 
 const T = {
   bg:     "#f8fafc",
@@ -270,7 +271,7 @@ export default function PantallaCategorias({ pais = "" }) {
                       />
                     </td>
                     <td style={{ padding: "6px 10px" }}>
-                      <input
+                      <MoneyField
                         style={{ ...iStyle, textAlign: "right" }}
                         value={r.monto}
                         placeholder="0"
