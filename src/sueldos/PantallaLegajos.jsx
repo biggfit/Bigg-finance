@@ -35,6 +35,7 @@ const FORM_VACIO = {
   blanco_neto: "", tarifa_hora: "",
   activo: true,
   fecha_ingreso: "", fecha_alta: "", fecha_baja: "",
+  running_categoria: "B",
   notas: "",
   formas_pago: [],
 };
@@ -571,10 +572,19 @@ function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
           </div>
         </div>
 
-        {/* Col 2: Hs/mes */}
-        <div>
-          <label style={labelStyle} title="Horas mensuales contratadas (base para coaches)">Hs/mes</label>
-          <input style={inputStyle} type="number" value={form.horas_contratadas} onChange={e => set("horas_contratadas", e.target.value)} placeholder="0" />
+        {/* Col 2: Hs/mes + tarifa de running */}
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            <label style={labelStyle} title="Horas mensuales contratadas (base para coaches)">Hs/mes</label>
+            <input style={inputStyle} type="number" value={form.horas_contratadas} onChange={e => set("horas_contratadas", e.target.value)} placeholder="0" />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={labelStyle} title="Tarifa de sus clases de running (Categorías: RUNNING A / RUNNING B). No cambia sus otras horas.">Running</label>
+            <select style={inputStyle} value={form.running_categoria || "B"} onChange={e => set("running_categoria", e.target.value)}>
+              <option value="B">B</option>
+              <option value="A">A</option>
+            </select>
+          </div>
         </div>
 
         {/* Col 3: Relación con la empresa */}

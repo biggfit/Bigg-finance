@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   fetchCategorias, saveCategorias,
-  fetchAllConceptos,
+  fetchAllConceptos, CONCEPTOS_CALCULO_SEDES,
 } from "../lib/sueldosApi";
 import { useRowChecks, migrarMarcasAgrupadas } from "../lib/useRowChecks";
 import { tmpRowId } from "../lib/tmpRowId";
@@ -28,8 +28,8 @@ const hoy     = new Date();
 const MES_DEF = hoy.getMonth() === 0 ? 12 : hoy.getMonth();
 const ANO_DEF = hoy.getMonth() === 0 ? hoy.getFullYear() - 1 : hoy.getFullYear();
 
+// Sugerencias del campo Concepto (sin BOTANICO: el botánico que da clases cobra a COACH SENIOR).
 const CONCEPTOS_DEFAULT = [
-  "BOTANICO",
   "BIGG COACH",
   "COACH SENIOR",
   "CDP FRONT DESK",
@@ -38,14 +38,21 @@ const CONCEPTOS_DEFAULT = [
   "COMISIÓN X REFERIDO",
   "DOMINGO",
   "YOGA",
-  "RUNNING",
+  "RUNNING A",
+  "RUNNING B",
 ];
 
+// `_grupo` = concepto con el que se decide el bloque (calcula / referencia). Se fija al cargar y al
+// salir del campo, no en cada tecla: si no, la fila salta de bloque mientras se escribe y pierde el foco.
 function newRow(overrides = {}) {
-  return { _id: tmpRowId(), concepto: "", monto: "", pct: "", ...overrides };
+  return { _id: tmpRowId(), concepto: "", monto: "", pct: "", ...overrides, _grupo: overrides.concepto ?? "" };
 }
 
 const normC = (s) => String(s || "").trim().toUpperCase();
+// Mismo match que getTarifa de la liquidación (sin mayúsculas ni acentos).
+const normSinAcento = (s) => normC(s).normalize("NFD").replace(/\p{Diacritic}/gu, "");
+const CALCULO_SET = new Set(CONCEPTOS_CALCULO_SEDES.map(normSinAcento));
+const impactaCalculo = (concepto) => CALCULO_SET.has(normSinAcento(concepto));
 const fmtMonto = fmtEntero;
 // Tildes guardados con el formato viejo (un objeto para todos los meses) → formato de useRowChecks.
 migrarMarcasAgrupadas("sedesCategoriasRevisadas");
@@ -89,13 +96,14 @@ export default function PantallaCategorias({ pais = "" }) {
         fetchAllConceptos(p),
         fetchCategorias(mAnt, aAnt, p).catch(() => []),
       ]);
-      const merged = [...new Set([...CONCEPTOS_DEFAULT, ...conceptosHist])].sort();
+      const merged = [...new Set([...CONCEPTOS_DEFAULT, ...conceptosHist])]
+        .filter(c => normSinAcento(c) !== "BOTANICO").sort();
       setConceptos(merged);
       const prevMap = {};
       for (const c of (prevCats || [])) prevMap[normC(c.concepto)] = Number(c.monto) || 0;
       setPrevPorConcepto(prevMap);
       setPctGlobal("");
-      setTarifas(cats.length ? cats.map(c => ({ ...newRow(), concepto: c.concepto, _id: c.id, monto: String(c.monto) })) : [newRow()]);
+      setTarifas(cats.length ? cats.map(c => newRow({ concepto: c.concepto, _id: c.id, monto: String(c.monto) })) : [newRow()]);
       setDirty(false);
     } finally { setLoading(false); }
   }, []);
@@ -116,6 +124,7 @@ export default function PantallaCategorias({ pais = "" }) {
     setDirty(true);
   };
   const addTarifa = () => { setTarifas(prev => [...prev, newRow()]); setDirty(true); };
+  const fijarGrupo = (idx) => setTarifas(prev => prev.map((r, i) => i === idx ? { ...r, _grupo: r.concepto } : r));
   const delTarifa = (idx) => { setTarifas(prev => prev.filter((_, i) => i !== idx)); setDirty(true); };
 
   // Valor del mismo concepto el mes anterior (base del % de ajuste).
@@ -151,7 +160,7 @@ export default function PantallaCategorias({ pais = "" }) {
     const aAnt = mes === 1 ? anio - 1 : anio;
     const cats = await fetchCategorias(mAnt, aAnt, pais);
     if (!cats.length) { alert("No hay tarifas en el mes anterior."); return; }
-    setTarifas(cats.map(c => ({ ...newRow(), concepto: c.concepto, monto: String(c.monto) })));
+    setTarifas(cats.map(c => newRow({ concepto: c.concepto, monto: String(c.monto) })));
     setDirty(true);
   };
 
@@ -244,8 +253,27 @@ export default function PantallaCategorias({ pais = "" }) {
                   <th style={{ ...thStyle, width: 40 }}></th>
                 </tr>
               </thead>
-              <tbody>
-                {tarifas.map((r, i) => {
+              {[
+                { calcula: true,  titulo: "Impactan en la liquidación", nota: "La liquidación de Sedes multiplica estas tarifas por horas / cantidades." },
+                { calcula: false, titulo: "Solo referencia",            nota: "No entran en ningún cálculo: quedan como recordatorio para actualizarlas con los aumentos." },
+              ].map(g => {
+                const filas = tarifas.map((r, i) => ({ r, i })).filter(({ r }) => impactaCalculo(r._grupo) === g.calcula);
+                return (
+              <tbody key={g.titulo}>
+                <tr style={{ background: T.bg, borderBottom: `1px solid ${T.border}` }}>
+                  <td colSpan={6} style={{ padding: "8px 10px" }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: g.calcula ? T.blue : T.muted, letterSpacing: ".06em", textTransform: "uppercase" }}>
+                      {g.titulo}
+                    </span>
+                    <span style={{ fontSize: 12, color: T.dim, marginLeft: 10 }}>{g.nota}</span>
+                  </td>
+                </tr>
+                {filas.length === 0 && (
+                  <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                    <td colSpan={6} style={{ padding: "8px 10px", fontSize: 12, color: T.dim }}>—</td>
+                  </tr>
+                )}
+                {filas.map(({ r, i }) => {
                   const ant = montoAnteriorDe(r.concepto);
                   const revisada = isRevisada(r.concepto);
                   return (
@@ -257,6 +285,7 @@ export default function PantallaCategorias({ pais = "" }) {
                         value={r.concepto}
                         placeholder="Ej: BIGG COACH"
                         onChange={e => setTarifa(i, "concepto", e.target.value)}
+                        onBlur={() => fijarGrupo(i)}
                       />
                     </td>
                     <td style={{ padding: "6px 10px", textAlign: "right", color: T.muted, fontVariantNumeric: "tabular-nums" }}>
@@ -293,6 +322,8 @@ export default function PantallaCategorias({ pais = "" }) {
                   );
                 })}
               </tbody>
+                );
+              })}
             </table>
             <div style={{ padding: "8px 10px" }}>
               <button onClick={addTarifa}

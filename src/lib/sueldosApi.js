@@ -265,6 +265,7 @@ export async function fetchLegajos() {
     fecha_ingreso:       r.fecha_ingreso ?? "",
     fecha_alta:          r.fecha_alta ?? "",
     fecha_baja:          r.fecha_baja ?? "",     // último mes que cobra (requiere header en su_legajos)
+    running_categoria:   String(r.running_categoria ?? "").trim().toUpperCase() === "A" ? "A" : "B",  // tarifa RUNNING A/B (requiere header en su_legajos)
     notas:               r.notas ?? "",
     formas_pago:         safeParseArray(r.formas_pago_json),
   }));
@@ -1143,6 +1144,16 @@ export const ROL_CONCEPTO = {
   HUERGO_B:     "HUERGO B",
 };
 
+// Conceptos de su_categorias que la liquidación de Sedes lee (montosDeRow / desglosarLiquidacion).
+// Categorías los separa de los "solo referencia". Si se suma un getTarifa nuevo, agregarlo acá.
+export const CONCEPTOS_CALCULO_SEDES = [
+  ...Object.values(ROL_CONCEPTO), "DOMINGO", "RUNNING A", "RUNNING B", "CDP COACHES", "CDP FRONT DESK", "ONE SHOT",
+];
+
+// Tarifa de running por persona (independiente del rol, que define sus horas de BIGG CLASS):
+// el legajo marcado A (ej. quien además programa) cobra RUNNING A; cualquier otro, RUNNING B.
+export const conceptoRunning = (categoria) => (categoria === "A" ? "RUNNING A" : "RUNNING B");
+
 // Desglose por concepto de una liquidación (para la ficha de Resumen, solo lectura).
 // Sedes persiste cantidades (horas_cant, cdp_cant) pero no sus importes → se recalculan
 // con las tarifas de `categorias`, igual que calcTotal en la pantalla de liquidación.
@@ -1159,7 +1170,8 @@ export function desglosarLiquidacion(liq, categorias = []) {
   const tarifaOS      = tarifa("ONE SHOT");
   const tarifaDomingo = tarifa("DOMINGO");
   const tarifaYoga    = tarifa("YOGA");
-  const tarifaRunning = tarifa("RUNNING");
+  // La línea guardada trae la tarifa aplicada (A o B según el legajo); sin línea, cae en B.
+  const tarifaRunning = Number(liq.running_monto_unit) || tarifa(conceptoRunning(liq.running_categoria));
 
   const horasCant     = Number(liq.horas_cant) || 0;
   const horasMonto    = horasCant * tarifaHora;

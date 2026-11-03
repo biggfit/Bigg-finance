@@ -8,7 +8,7 @@ import {
   fetchCentrosCostoNumbers, fetchSociedadesNumbers, fetchCuentasBancariasNumbers,
   fetchPagos, appendPago, appendPagos, deletePago, nuevoLote, updateLegajo, fetchHorasDesdeEye, fetchCdpDesdeEye,
   fetchNovedades,
-  ROLES_COACHES, ROLES_FRONT, ROLES_LIMP, ROL_CONCEPTO,
+  ROLES_COACHES, ROLES_FRONT, ROLES_LIMP, ROL_CONCEPTO, conceptoRunning,
   FP_TIPO_LABEL, FP_TIPO_COLOR, esTransferencia,
   idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionesLinesBatch, isCerrada,
   estadoPago, remanentePago, PAGO_EPS, reabrirLiquidaciones, idsLiqEnHoja,
@@ -545,6 +545,15 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     getTarifa(ROLES_COACHES.includes(rol) ? (ROL_CONCEPTO[rol] ?? rol) : ROL_CONCEPTO.COACH_SENIOR),
   [getTarifa]);
 
+  // Running A/B por legajo (no por rol). Incluye los dados de baja: una fila de un ex que vuelve
+  // a dar running conserva su categoría. Sin legajo / sin marcar → B.
+  const runningCatPorLegajo = useMemo(() => {
+    const m = new Map();
+    for (const l of [...legajosInactivos, ...legajos]) m.set(String(l.id), l.running_categoria);
+    return m;
+  }, [legajos, legajosInactivos]);
+  const runningCatDe = useCallback((legajoId) => runningCatPorLegajo.get(String(legajoId)) === "A" ? "A" : "B", [runningCatPorLegajo]);
+
   // Fórmula ÚNICA de los montos por concepto de una fila (la usan calcTotal y lineasConceptoDeRow,
   // así no divergen). `total` = sueldo SIN redondeo (el redondeo se calcula al cerrar y se guarda).
   const montosDeRow = useCallback((row) => {
@@ -554,7 +563,8 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     const tarifaOS   = getTarifa("ONE SHOT");
     const tarifaDom  = getTarifa("DOMINGO");
     const tarifaYoga = getTarifa("YOGA");
-    const tarifaRun  = getTarifa("RUNNING");
+    const runningCat = runningCatDe(row.legajo_id);
+    const tarifaRun  = getTarifa(conceptoRunning(runningCat));
     const fijo     = Number(row.sueldo_base) || 0;
     const horas    = Number(row.horas) || 0,          horasMonto    = horas * tarifaHora;
     const feriados = Number(row.horas_feriados) || 0, feriadosMonto = feriados * tarifaHora;
@@ -569,10 +579,10 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     const cGrupoMonto = baseGrupalDe(row.rol, { horasMonto, feriadosMonto, domingosMonto, asignado, sueldoBase: fijo }) * (cGrupoPct / 100);
     const total = fijo + horasMonto + feriadosMonto + domingosMonto + yogaMonto + runningMonto
                 + cdpCoachMonto + cdpFrontMonto + osMonto + asignado + cGrupoMonto;
-    return { tarifaHora, tCdpCoach, tCdpFront, tarifaOS, tarifaDom, tarifaYoga, tarifaRun, fijo,
+    return { tarifaHora, tCdpCoach, tCdpFront, tarifaOS, tarifaDom, tarifaYoga, tarifaRun, runningCat, fijo,
       horas, horasMonto, feriados, feriadosMonto, domingos, domingosMonto, yoga, yogaMonto, running, runningMonto,
       cdpCoach, cdpCoachMonto, cdpFront, cdpFrontMonto, os, osMonto, asignado, cGrupoPct, cGrupoMonto, total };
-  }, [getTarifa, tarifaHoraRow]);
+  }, [getTarifa, tarifaHoraRow, runningCatDe]);
 
   // Total de la fila = sueldo (montos) + el redondeo guardado (se calcula al cerrar).
   const calcTotal = useCallback((row) => montosDeRow(row).total + (Number(row.redondeo) || 0), [montosDeRow]);
@@ -1342,6 +1352,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
               allLegajos={legajos}
               sedes={sedes}
               calcTotal={calcTotal}
+              runningCatDe={runningCatDe}
               novsByRowKey={novsByRowKey}
               updateRow={updateRow}
               removeRow={removeRow}
@@ -1689,7 +1700,7 @@ function PasoFijos({ rowsFijos, legajos, sedes, originalRows, novsByRowKey, upda
 
 // ── Paso 2: Horas (solo coaches) ──────────────────────────────────────────────
 
-function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByRowKey, updateRow, removeRow, updateDetalle, removeDetalle,
+function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, runningCatDe, novsByRowKey, updateRow, removeRow, updateDetalle, removeDetalle,
   showAddForm, setShowAddForm, addForm, setAddForm, handleAddRow,
   mes, anio, pais, onResyncEye, eyeSource,
   onAtras, onContinuar }) {
@@ -1881,7 +1892,16 @@ function PasoHoras({ rowsCoaches, legajos, allLegajos, sedes, calcTotal, novsByR
                         )}
                       </td>
                       <td style={{ padding: "5px 8px", color: T.muted }}>{first ? (row.sede_nombre || "—") : ""}</td>
-                      <td style={{ padding: "5px 8px", fontWeight: 600, color: T.text }}>{l.clase}</td>
+                      <td style={{ padding: "5px 8px", fontWeight: 600, color: T.text }}>
+                        {l.clase}
+                        {/RUNNING/i.test(l.clase || "") && (
+                          <span title={`Se paga a ${conceptoRunning(runningCatDe(row.legajo_id))} (se cambia en el legajo)`}
+                            style={{ marginLeft: 6, padding: "1px 5px", borderRadius: 4, fontSize: 10, fontWeight: 700,
+                              color: T.blue, background: "#dbeafe" }}>
+                            {runningCatDe(row.legajo_id)}
+                          </span>
+                        )}
+                      </td>
                       <td style={{ padding: "4px 6px", textAlign: "right" }}>{inp("regulares", true)}</td>
                       <td style={{ padding: "4px 6px", textAlign: "right" }}>{inp("feriado", esBigg)}</td>
                       <td style={{ padding: "4px 6px", textAlign: "right" }}>{inp("domingo", esBigg)}</td>
