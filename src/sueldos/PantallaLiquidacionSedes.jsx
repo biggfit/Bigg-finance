@@ -642,21 +642,22 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       const leg  = matchLegajo(normCoach);
       let key, seed;
       if (leg) {
-        matchedLegIds.add(leg.id);
-        // Un FIJO (encargado/vendedor/limpieza) liquida SIEMPRE en la sede de su LEGAJO, no donde
-        // Eye lo matcheó (puede haber cubierto un turno). Su base/objetivo van a su sede. Los coaches
-        // sí van a la sede del check-in de Eye. Evita el enredo tipo Candela (base a la sede ajena).
-        const legSede = ROLES_FIJOS.includes(leg.rol) && leg.sede_id ? sedes.find(s => s.id === leg.sede_id) : null;
-        const sedeF   = legSede ? { id: legSede.id, nombre: legSede.nombre } : sede;
-        key  = `${leg.id}__${sedeF.id}`;
-        seed = { _id: key, bucket: "match",
+        // Un FIJO (encargado/vendedor/limpieza) cobra su sueldo base SOLO en la sede de su LEGAJO,
+        // aunque Eye lo matchee en otra (cubrió un turno): evita el enredo tipo Candela (base a la sede
+        // ajena). Las horas que dio en OTRA sede van a una fila propia de esa sede, sin base (caso Ivan
+        // Silva: encargado de Recoleta con domingos en Palermo Rosedal) → el costo queda donde se ganó.
+        // Esa fila no cuenta como "matcheada": el paso 2 siembra igual la fila de su sede casa con la base.
+        const fijoAjeno = ROLES_FIJOS.includes(leg.rol) && leg.sede_id && sede.id !== leg.sede_id;
+        if (!fijoAjeno) matchedLegIds.add(leg.id);
+        key  = `${leg.id}__${sede.id}`;
+        seed = { _id: key, bucket: "match", _fijoAjeno: fijoAjeno || undefined,
           legajo_id: leg.id, legajo_nombre: leg.nombre,
           sociedad_id: leg.sociedad_id ?? "", sociedad_nombre: leg.sociedad_nombre ?? "",
-          sede_id: sedeF.id, sede_nombre: sedeF.nombre,
+          sede_id: sede.id, sede_nombre: sede.nombre,
           rol: leg.rol || "COACH",
           // El sueldo base de Sedes solo aplica a roles de Sedes. Si quien dio la clase es
           // de otro ámbito (HQ, etc.), en Sedes cobra SOLO sus horas, no su sueldo.
-          sueldo_base: ROLES_SEDES_ALL.includes(leg.rol) ? (Number(leg.sueldo_total) || 0) : 0 };
+          sueldo_base: !fijoAjeno && ROLES_SEDES_ALL.includes(leg.rol) ? (Number(leg.sueldo_total) || 0) : 0 };
       } else {
         const legInact = matchInactivo(normCoach);
         if (legInact) {
@@ -716,6 +717,20 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         byKey.set(key, baseRow({ ...saved, _id: key, id: saved.id,
           bucket: saved.legajo_id ? "match" : "sin_legajo" }));
       }
+    }
+    // Meses liquidados ANTES de separar las horas de un fijo en otra sede: su fila guardada (sede casa)
+    // ya incluye esas horas. Si el legajo tiene filas guardadas y ninguna en esa sede ajena, la fila
+    // ajena nueva se descarta (si no, se pagarían dos veces).
+    const sedesGuardadas = new Map();   // legajo_id → Set(sede_id) con fila guardada
+    for (const s of liqsSaved) if (s.legajo_id) {
+      const lid = String(s.legajo_id);
+      if (!sedesGuardadas.has(lid)) sedesGuardadas.set(lid, new Set());
+      sedesGuardadas.get(lid).add(String(s.sede_id ?? ""));
+    }
+    for (const [key, row] of byKey) {
+      if (!row._fijoAjeno || row.id) continue;
+      const guardadas = sedesGuardadas.get(String(row.legajo_id));
+      if (guardadas && !guardadas.has(String(row.sede_id))) byKey.delete(key);
     }
 
     // Normalización: el detalle por clase es la fuente única de las horas.
