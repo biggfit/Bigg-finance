@@ -23,7 +23,7 @@ import { groupCentrosCosto, makeCrearMaestro } from "./formUtils";
 import NuevoEgresoModal from "./NuevoEgresoModal";
 import NuevoIngresoModal from "./NuevoIngresoModal";
 import { computeSaldoReal } from "../lib/helpers";
-import { parseGalicia } from "./parsers/galicia";
+import { parseGalicia, codigoGaliciaPorDescripcion } from "./parsers/galicia";
 import { parseInterAudi } from "./parsers/interaudi";
 import { parseCaixa } from "./parsers/caixa";
 import { parseBBVA } from "./parsers/bbva";
@@ -1616,11 +1616,14 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     setReglas(reglasFrescas || []);
     const cta = cuentas.find(c => c.id === cuentaTab);
     const ctx = { banco: cta?.banco, sociedad, pais: "", franquicias, sociedades, cuentas: cuentasAll, moneda: cta?.moneda || "ARS", cuotasPendientes };
+    const esGalicia = /galicia/i.test(String(cta?.banco || ""));
     const lineaDeMov = (m) => {
       const meta = parseMeta(m.referencia);
+      // Línea ya ingestada sin código (extracto Galicia con "Concepto" vacío) → se infiere por descripción.
+      const cod = meta.cod || (esGalicia ? codigoGaliciaPorDescripcion(m.concepto) : "");
       return { fecha: m.fecha, monto: Number(m.monto) || 0, descripcion: m.concepto || "",
         ley1: m.contraparte_nombre || "", ley2: meta.cuit || "", cuit: meta.cuit || "",
-        codigoConcepto: meta.cod || "", grupoCodigo: meta.cod || "", saldo: meta.saldo || "" };
+        codigoConcepto: cod, grupoCodigo: cod, saldo: meta.saldo || "" };
     };
     const esStripe = /stripe/i.test(String(cta?.banco || ""));
     // Se arma el patch fuera de setEdits para contar `n` en el acto (si se contara dentro del updater,

@@ -50,6 +50,30 @@ export function num(v) {
   return neg ? -Math.abs(n) : n;
 }
 
+// A veces Galicia exporta el extracto con "Grupo de Conceptos" / "Concepto" VACÍOS (pasó en Eventos
+// sep y nov-2026) → sin código, las reglas (que matchean por código 907xxx) no clasifican líneas que
+// son idénticas a las de siempre. Fallback: código por DESCRIPCIÓN, sacado del historial de todas las
+// sociedades (cada descripción mapeó siempre a un único código). Solo se usa si el código falta.
+const CODIGO_POR_DESCRIPCION = {
+  "IMP. DEB. LEY 25413 GRAL.":           "907176",
+  "IMP. CRE. LEY 25413":                 "907376",
+  "IVA":                                 "907171",
+  "PERCEP. IVA":                         "907172",
+  "IMP. ING. BRUTOS":                    "907174",
+  "ING. BRUTOS S/ CRED":                 "907173",
+  "IMPUESTO DE SELLOS":                  "905130",
+  "COM. GESTION TRANSF.FDOS ENTRE BCOS": "907138",
+  "COMISION CHEQUE PAGADO POR CLEARING": "907120",
+  "INTERESES SOBRE SALDOS DEUDORES":     "907118",
+  "COMISION SERVICIO DE CUENTA":         "907394",
+};
+export function codigoGaliciaPorDescripcion(desc) {
+  const k = String(desc || "").trim().toUpperCase().replace(/\s+/g, " ");
+  if (CODIGO_POR_DESCRIPCION[k]) return CODIGO_POR_DESCRIPCION[k];
+  if (/^COBRO IIBB CUOTA\b/.test(k)) return "907174";   // "Cobro IIBB cuota N°19/20/22…" → mismo código que Imp. Ing. Brutos
+  return "";
+}
+
 // Cabeceras esperadas del extracto Galicia
 const GALICIA_HEADERS = ["Fecha", "Descripción", "Débitos", "Créditos"];
 
@@ -120,7 +144,7 @@ export function parseGalicia(file) {
             const credito = num(r[4]);
             const concepto = String(r[6] || "");
             const grupoConcepto = String(r[5] || "");
-            const codigoConcepto = (concepto.match(/\d{4,}/) || [""])[0];
+            const codigoConcepto = (concepto.match(/\d{4,}/) || [""])[0] || codigoGaliciaPorDescripcion(r[1]);
             const grupoCodigo    = (grupoConcepto.match(/\d{4,}/) || [""])[0];
             return {
               idx,
