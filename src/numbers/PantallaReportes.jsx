@@ -3,7 +3,7 @@ import { T, PageHeader, fmtDate } from "./theme";
 import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, fetchFinanciaciones, fetchIntercoData, fondeoFondeadasMensual, intercoConsolidadoMensual, calcSaldoPendiente, primeCache, fetchTiposCambio, tcDelMes, montoAUSD, montoAMoneda, fetchPnLHistorico, fetchProveedores, fetchClientes, RETDEP_TAG } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows } from "../lib/sueldosApi";
 import { tolerante } from "../lib/http";
-import { BIGG_ORDEN, BIGG_ORDEN_FIN, BIGG_ORDEN_GHQ, BIGG_ORDEN_GPV, BIGG_ORDEN_IMP, CESION, CESION_CUENTA, COM_ENC_RATE, ING_CONTRA_HQ, MESES, PNL_INICIO, SEDES_COMISION_CC, SEDE_GRUPOS, SEDE_HDR, SEDE_ING_ACCTS, SEDE_OCULTAR_SI_VACIA, SEDE_OPEX_GRUPOS, VENTAS_EXCL_PRORR, _nkSede, buildPnLBigg, buildPnLHuergo, buildPnLSede, ccKey, computeCesion, computeSubtotalsHolding, computeSubtotalsHuergo, computeSubtotalsSede, familiaCentro, fechaFiscalDe, financiacionToPnLRows, grupoSede, montoPnL, movimientoToPnLRows, normCat, ordCmp, rellenarMesesSinActivas, sumVentasSede } from "./reportes/pnlDerive";
+import { BIGG_ORDEN, BIGG_ORDEN_FIN, BIGG_ORDEN_GHQ, BIGG_ORDEN_GPV, BIGG_ORDEN_IMP, CESION, CESION_CUENTA, COM_ENC_RATE, ING_CONTRA_HQ, MESES, PNL_INICIO, SEDE_GRUPOS, SEDE_HDR, SEDE_ING_ACCTS, SEDE_OCULTAR_SI_VACIA, SEDE_OPEX_GRUPOS, VENTAS_EXCL_PRORR, _nkSede, buildPnLBigg, buildPnLHuergo, buildPnLSede, ccKey, computeCesion, computeSubtotalsHolding, computeSubtotalsHuergo, computeSubtotalsSede, comisionBaseResOp, familiaCentro, fechaFiscalDe, financiacionToPnLRows, grupoSede, montoPnL, movimientoToPnLRows, normCat, ordCmp, rellenarMesesSinActivas, sumVentasSede } from "./reportes/pnlDerive";
 import { fmtN, fmtSigned, selStyle, MultiSelect, DATE_PRESETS, rangoDePreset } from "./reportes/reportesUi";
 import { MONEDA_SYM } from "../data/tesoreriaData";
 import { fetchAll as fetchFranquiciasAll } from "../lib/sheetsApi";   // Franquicias (read-only): comprobantes + maestro
@@ -2319,12 +2319,8 @@ export default function PantallaReportes({ onVerComprobante }) {
   // Base de la comisión de encargados (2,5%): resOp SIN IVA de SOLO las sedes elegibles ∩ scope. Si el scope
   // no toca ninguna elegible (Botánico solo, Rosedal/España/Colombia) → null → la línea calculada no aparece.
   // Si todo el scope ya es elegible, reuso subSedeNet (evita un build extra).
-  const comBaseResOp = useMemo(() => {
-    const ccs = resolvedCCSede.filter(id => SEDES_COMISION_CC.has(String(id).toLowerCase()));
-    if (ccs.length === 0) return null;
-    if (ccs.length === resolvedCCSede.length) return subSedeNet?.resOp || null;
-    return computeSubtotalsSede(buildPnLSede(inFx, egFx, ccs, year, monedaPL, true)).resOp;
-  }, [inFx, egFx, resolvedCCSede, year, monedaPL, subSedeNet]);
+  // Sede por sede, porque cada una puede entrar a la comisión desde un mes distinto (Botánico desde sep-2026).
+  const comBaseResOp = useMemo(() => comisionBaseResOp(inFx, egFx, resolvedCCSede, year, monedaPL), [inFx, egFx, resolvedCCSede, year, monedaPL]);
   // ── Estructura Wellness (HQ España): el OPEX del centro de estructura se muestra como línea propia ──
   // La "Estructura Wellness" es SOLO el OPEX del centro (Sueldos/Alquiler/etc. de la estructura); sus ventas
   // y costos variables (Otros Ingresos, Fees) quedan en el consolidado. En "Todas las Sedes" el centro está

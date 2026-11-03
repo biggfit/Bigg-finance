@@ -240,10 +240,33 @@ const aliasCuentaSede = (nombre) => SEDE_CUENTA_ALIAS[_nkSede(nombre)] || nombre
 const CESION = { matchNombre: "Barrio Norte", pct: 0.49, contraparte: "", apertura: 7_840_230, aperturaYear: 2026 };
 const CESION_CUENTA = "Inversores";   // cuenta contable donde se imputan los retiros
 
-// Comisión de encargados (2,5% s/ Resultado Operativo): SOLO estas sedes core AR. Botánico, Rosedal,
-// España y Colombia NO cobran. Ids de centro (case-insensitive) — la base calculada se arma sólo con estos.
+// Comisión de encargados (2,5% s/ Resultado Operativo): qué sedes cobran y DESDE qué mes ("AAAA-MM"; null = desde
+// siempre). Las 5 core AR desde el inicio; Botánico desde septiembre 2026 (Martín, 3/11/2026). Rosedal, España y
+// Colombia NO cobran. Ids de centro (case-insensitive) — la base calculada se arma sólo con estos.
 const COM_ENC_RATE = 0.025;
-const SEDES_COMISION_CC = new Set(["cc-2026-88265", "cc-2026-88266", "cc-2026-88267", "cc-2026-88268", "cc-2026-88269"]);
+const COMISION_SEDES = {
+  "cc-2026-88265": null, "cc-2026-88266": null, "cc-2026-88267": null, "cc-2026-88268": null, "cc-2026-88269": null,
+  "cc-2026-botanico": "2026-09",
+};
+const SEDES_COMISION_CC = new Set(Object.keys(COMISION_SEDES));
+
+// Base de la comisión (resOp[12]) de un scope de centros: suma el Resultado Operativo de cada sede elegible, solo
+// desde su mes de alta en la comisión. null si no hay elegibles en el scope. Sede por sede (no el P&L agregado),
+// porque cada una entra desde un mes distinto; sin IVA, como la base de siempre.
+function comisionBaseResOp(inRows, egRows, ccs, year, moneda) {
+  const elegibles = (ccs || []).filter(id => SEDES_COMISION_CC.has(String(id).toLowerCase()));
+  if (!elegibles.length) return null;
+  const base = new Array(12).fill(0);
+  for (const id of elegibles) {
+    const desde = COMISION_SEDES[String(id).toLowerCase()];
+    const resOp = computeSubtotalsSede(buildPnLSede(inRows, egRows, [id], year, moneda, true)).resOp;
+    for (let m = 0; m < 12; m++) {
+      if (desde && `${year}-${String(m + 1).padStart(2, "0")}` < desde) continue;
+      base[m] += Number(resOp[m]) || 0;
+    }
+  }
+  return base;
+}
 
 // Helper puro: dado el resFinal[12] de la sede y los retiros[12] (cuenta "Inversores"), arma la cola.
 function computeCesion(resFinal = [], retiros = [], { pct, apertura = 0, aperturaYear }, year) {
@@ -632,6 +655,7 @@ export {
   computeSubtotalsHolding,
   computeSubtotalsHuergo,
   computeSubtotalsSede,
+  comisionBaseResOp,
   familiaCentro,
   financiacionToPnLRows,
   grupoSede,
