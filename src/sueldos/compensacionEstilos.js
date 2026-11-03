@@ -52,16 +52,3 @@ export async function copiarImagenReporte(node, { nombre, caption }) {
     } catch { return "No se pudo generar la imagen en este navegador."; }
   }
 }
-
-// Descarga el reporte como PNG (para mandarlo por WhatsApp o mail). Devuelve el mensaje a mostrar.
-export async function descargarImagenReporte(node, { nombre }) {
-  try {
-    const { default: html2canvas } = await import("html2canvas");
-    const canvas = await html2canvas(node, { backgroundColor: "#ffffff", scale: 2 });
-    const blob = await new Promise((res, rej) => canvas.toBlob(b => (b ? res(b) : rej(new Error("sin imagen"))), "image/png"));
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob); a.download = nombre; a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-    return `✔ Se descargó ${nombre}.`;
-  } catch { return "No se pudo generar la imagen en este navegador."; }
-}

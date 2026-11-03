@@ -4,7 +4,7 @@ import {
   filtrarSedes, filtrarSedeMundo, mesesCerrados, normalizarLiqs, rollupPersonaMes, rolLabel, tarifaDe,
 } from "../lib/compensacionSedes";
 import { RowMenu } from "../numbers/comprobantesUi";
-import { T, fmt, td, tdR, vacio, btn, copiarImagenReporte, descargarImagenReporte } from "./compensacionEstilos";
+import { T, fmt, td, tdR, vacio, btn, copiarImagenReporte } from "./compensacionEstilos";
 import { Seccion, Sel, Tabla } from "./compensacionUi";
 
 // Informe "Sueldos Sedes · Franquiciados": los valores que pagamos al staff de Sedes en un mes cerrado,
@@ -91,6 +91,12 @@ export default function PantallaSueldosFranquiciados({ pais = "AR" }) {
     const personasMes = rollupPersonaMes(filas, legajos);
     return ROLES_FIJO.map(rol => ({ rol, label: rolLabel(rol), monto: fijoDelPuesto(personasMes, rol) })).filter(f => f.monto);
   }, [filas, legajos]);
+  // Las filas del informe, ya como texto: las usan la tabla de la pantalla y el PDF.
+  const informe = useMemo(() => [
+    ...valores.map(v => ({ concepto: v.label, valor: v.texto ?? fmt(v.monto), como: v.como })),
+    ...fijos.map(f => ({ concepto: `Sueldo fijo ${f.label.toLowerCase()}`, valor: fmt(f.monto), como: "por mes" })),
+    { concepto: "Objetivo grupal", valor: "Variable", como: "% según el cumplimiento de la sede" },
+  ], [valores, fijos]);
 
   const periodoLabel = mes ? `${MESES[mes.mes - 1]} ${mes.anio}` : "";
   const hayDatos = filas.length > 0;
@@ -98,14 +104,24 @@ export default function PantallaSueldosFranquiciados({ pais = "AR" }) {
   const cargando = loading || (!!mes && valoresMes !== mes.key);
   const sinDatos = cargando || !hayDatos;
 
-  const nombreImagen = `Valores_Sedes_${pais}_${periodoLabel.replace(/\s+/g, "_")}.png`;
-  const conMensaje = async (accion) => {
+  const copiarFoto = async () => {
     if (!reportRef.current) return;
-    setFotoMsg(await accion(reportRef.current));
+    setFotoMsg(await copiarImagenReporte(reportRef.current, {
+      nombre: "Valores_Sedes.png", caption: `Sueldos Sedes · ${pais} · ${periodoLabel}`,
+    }));
     setTimeout(() => setFotoMsg(null), 4500);
   };
-  const copiarFoto = () => conMensaje(node => copiarImagenReporte(node, { nombre: nombreImagen, caption: `Sueldos Sedes · ${pais} · ${periodoLabel}` }));
-  const descargarFoto = () => conMensaje(node => descargarImagenReporte(node, { nombre: nombreImagen }));
+  const descargarPdf = async () => {
+    try {
+      const { descargarValoresPdf } = await import("./valoresFranquiciadosPdf");
+      await descargarValoresPdf({
+        nombre: `Valores_Sedes_${pais}_${periodoLabel.replace(/ /g, "_")}.pdf`,
+        titulo: `Sueldos Sedes · ${periodoLabel}`,
+        subtitulo: `Valores de referencia · todas las sedes · ${pais} · importes brutos.`,
+        filas: informe,
+      });
+    } catch { setFotoMsg("No se pudo generar el PDF."); setTimeout(() => setFotoMsg(null), 4500); }
+  };
 
   return (
     <div className="fade" style={{ padding: "24px 28px", maxWidth: 1180, fontFamily: T.font, color: T.text, "--border": T.border }}>
@@ -122,10 +138,10 @@ export default function PantallaSueldosFranquiciados({ pais = "AR" }) {
 
       <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
         <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, flexGrow: 1 }}>Valores de referencia para franquiciados</h2>
-        <button onClick={descargarFoto} disabled={sinDatos} style={{ ...btn(true), opacity: sinDatos ? 0.5 : 1 }}>⬇ Descargar imagen</button>
+        <button onClick={descargarPdf} disabled={sinDatos} style={{ ...btn(true), opacity: sinDatos ? 0.5 : 1 }}>⬇ Descargar PDF</button>
         <RowMenu align="right" label="⋯" items={[
           { label: "📋 Copiar imagen", onClick: copiarFoto, disabled: sinDatos, hint: "Copia el informe como PNG para pegar o mandar" },
-          { label: "🖨 Imprimir / PDF", onClick: () => window.print(), disabled: sinDatos, hint: "A4 vertical" },
+          { label: "🖨 Imprimir", onClick: () => window.print(), disabled: sinDatos, hint: "A4 vertical" },
         ]} />
       </div>
       <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
@@ -151,18 +167,9 @@ export default function PantallaSueldosFranquiciados({ pais = "AR" }) {
 
           <Seccion titulo="Valores vigentes" sub={`Lo que se paga por cada concepto en ${periodoLabel}.`}>
             <Tabla cols={[["Concepto"], ["Valor", "r"], ["Cómo se paga"]]}>
-              {valores.map(v => (
-                <tr key={v.label}><td style={{ ...td, fontWeight: 600 }}>{v.label}</td><td style={tdR}>{v.texto ?? fmt(v.monto)}</td><td style={{ ...td, color: T.muted, whiteSpace: "normal" }}>{v.como}</td></tr>
+              {informe.map(f => (
+                <tr key={f.concepto}><td style={{ ...td, fontWeight: 600 }}>{f.concepto}</td><td style={tdR}>{f.valor}</td><td style={{ ...td, color: T.muted, whiteSpace: "normal" }}>{f.como}</td></tr>
               ))}
-              {fijos.map(f => (
-                <tr key={f.rol}><td style={{ ...td, fontWeight: 600 }}>Sueldo fijo {f.label.toLowerCase()}</td><td style={tdR}>{fmt(f.monto)}</td>
-                  <td style={{ ...td, color: T.muted, whiteSpace: "normal" }}>por mes</td></tr>
-              ))}
-              <tr>
-                <td style={{ ...td, fontWeight: 600 }}>Objetivo grupal</td>
-                <td style={tdR}>Variable</td>
-                <td style={{ ...td, color: T.muted, whiteSpace: "normal" }}>% según el cumplimiento de la sede</td>
-              </tr>
             </Tabla>
           </Seccion>
 
