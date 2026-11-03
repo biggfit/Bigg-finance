@@ -26,23 +26,11 @@
 const TZ = "America/Argentina/Buenos_Aires";
 
 // Quienes cargan solos. Gigio, Guido, Ignacio y Victoria NO: los carga administración a mano.
-// (Misma lista que IDS_MONOTRIBUTO_AUTOCARGA en src/sueldos/PantallaNovedades.jsx.)
-const AUTOCARGA = [
-  "LEG-nako-0011", // Ana Leber
-  "LEG-nako-0026", // Facundo Martino
-  "LEG-nako-0006", // Federico Bosch
-  "LEG-nako-0016", // Federico Bracco
-  "LEG-nako-0017", // Florencia Silveyra
-  "LEG-nako-0003", // Francisco Bosch
-  "LEG-nako-0019", // Jennifer Schwimmer
-  "LEG-nako-0010", // Lucia Pini
-  "LEG-nako-0002", // Martin Bergara
-  "LEG-nako-0008", // Martin Miauro
-  "LEG-nako-0009", // Matias Soloaga
-  "LEG-nako-0012", // Santiago Paz
-  "LEG-nako-0021", // Sara Salviu
-  "LEG-nako-0015", // Tomas Mogaburu
-];
+// Quién carga por link lo dice el LEGAJO: campo `monotributo` = "link" (se edita en Sueldos → Legajos).
+// Misma fuente que la solapa Monotributo de Novedades HQ. Dar de alta o baja a alguien = cambiar el legajo.
+function autocarga_(legs) {
+  return (legs || sueldosGet_("su_legajos", {})).filter(l => l.monotributo === "link" && String(l.activo) !== "false");
+}
 
 const MESES = ["enero","febrero","marzo","abril","mayo","junio",
                "julio","agosto","septiembre","octubre","noviembre","diciembre"];
@@ -79,7 +67,8 @@ function linkDe_(legajoId, periodo) {
 
 function verificar_(l, p, t) {
   if (!l || !/^\d{4}-\d{2}$/.test(p || "") || !t) throw new Error("Link inválido.");
-  if (AUTOCARGA.indexOf(l) === -1 || firma_(l, p) !== t) throw new Error("Link inválido.");
+  if (firma_(l, p) !== t) throw new Error("Link inválido.");
+  if (legajo_(l).monotributo !== "link") throw new Error("Este legajo ya no carga el monotributo por link.");
 }
 
 // ── API del GAS de Sueldos ────────────────────────────────────────────────────
@@ -253,11 +242,9 @@ function enviar_(to, nombre, periodo, legajoId, esRecordatorio) {
 // Disparador día 12 (a todos).
 function enviarMailsMonotributo() {
   const periodo = periodoActual_();
-  const legs = sueldosGet_("su_legajos", {});
-  for (const id of AUTOCARGA) {
-    const l = legs.find(x => x.id === id);
-    if (!l || !l.email || String(l.activo) === "false") { console.warn("Sin mail/inactivo: " + id); continue; }
-    enviar_(l.email, l.nombre, periodo, id, false);
+  for (const l of autocarga_()) {
+    if (!l.email) { console.warn("Sin mail: " + l.id + " " + l.nombre); continue; }
+    enviar_(l.email, l.nombre, periodo, l.id, false);
   }
 }
 
@@ -265,12 +252,9 @@ function enviarMailsMonotributo() {
 function recordatorioMonotributo() {
   const periodo = periodoActual_();
   const cargados = new Set(novedadesMono_(periodo).map(n => n.legajo_id));
-  const legs = sueldosGet_("su_legajos", {});
-  for (const id of AUTOCARGA) {
-    if (cargados.has(id)) continue;
-    const l = legs.find(x => x.id === id);
-    if (!l || !l.email || String(l.activo) === "false") continue;
-    enviar_(l.email, l.nombre, periodo, id, true);
+  for (const l of autocarga_()) {
+    if (cargados.has(l.id) || !l.email) continue;
+    enviar_(l.email, l.nombre, periodo, l.id, true);
   }
 }
 

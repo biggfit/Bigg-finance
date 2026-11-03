@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import {
   fetchLegajos, appendLegajo, updateLegajo, deleteLegajo,
-  ROLES_SEDES, ROLES_HQ, TIPOS_CONTRATACION, FP_TIPO_LABEL,
+  ROLES_SEDES, ROLES_HQ, TIPOS_CONTRATACION, MONOTRIBUTO_CARGA, FP_TIPO_LABEL,
   fetchSociedadesNumbers, fetchCentrosCostoNumbers,
 } from "../lib/sueldosApi";
 import { useRowChecks } from "../lib/useRowChecks";
@@ -32,6 +32,7 @@ const FORM_VACIO = {
   sede_id: "", sede_nombre: "",
   rol: "COACH",
   tipo_contratacion: "",
+  monotributo: "",
   blanco_neto: "", tarifa_hora: "",
   activo: true,
   fecha_ingreso: "", fecha_alta: "", fecha_baja: "",
@@ -593,6 +594,10 @@ function FormLegajo({ initial, sociedades, centrosCosto, onClose, onSaved }) {
           <select style={inputStyle} value={form.tipo_contratacion} onChange={e => set("tipo_contratacion", e.target.value)}>
             <option value="">— Sin definir —</option>
             {TIPOS_CONTRATACION.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+          </select>
+          <label style={{ ...labelStyle, marginTop: 10 }}>Monotributo (devolución mensual)</label>
+          <select style={inputStyle} value={form.monotributo} onChange={e => set("monotributo", e.target.value)}>
+            {MONOTRIBUTO_CARGA.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
           </select>
         </div>
 

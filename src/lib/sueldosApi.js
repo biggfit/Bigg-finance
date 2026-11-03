@@ -257,6 +257,7 @@ export async function fetchLegajos() {
     pais:                r.pais ?? "",
     rol:                 normalizarRol(r.rol),
     tipo_contratacion:   r.tipo_contratacion ?? "",
+    monotributo:         r.monotributo ?? "",     // "" | "admin" (lo carga administración) | "link" (lo carga por el link del mail)
     horas_contratadas:   Number(r.horas_contratadas) || 0,
     blanco_neto:         Number(r.blanco_neto)   || 0,
     sueldo_total:        Number(r.sueldo_total)  || 0,
@@ -1223,6 +1224,14 @@ export function desglosarLiquidacion(liq, categorias = []) {
 
 // Lo que importa es si la empresa recibe su factura (monotributista) o no.
 // La situación impositiva personal del empleado es irrelevante para el módulo.
+// Devolución del monotributo (HQ): quién carga el monto cada mes. Una sola fuente para la solapa
+// Monotributo de Novedades HQ y para el Apps Script del link por mail (apps-script-monotributo.gs).
+export const MONOTRIBUTO_CARGA = [
+  { id: "",      label: "No se le devuelve" },
+  { id: "admin", label: "Lo carga administración" },
+  { id: "link",  label: "Lo carga por el link del mail" },
+];
+
 export const TIPOS_CONTRATACION = [
   { id: "relacion_dependencia", label: "Relación de dependencia" },
   { id: "monotributista",       label: "Factura a la empresa (monotributista)" },

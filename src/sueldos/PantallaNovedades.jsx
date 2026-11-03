@@ -41,37 +41,14 @@ const CONCEPTOS = [
 
 const norm = (s) => String(s || "").trim().toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
 
-// Monotributistas a los que siempre hay que devolverles el monto del monotributo (pedido manual, no viene de una hoja).
-const IDS_MONOTRIBUTISTAS_FIJOS = [
-  "LEG-nako-0011", // Ana Leber
-  "LEG-nako-0026", // Facundo Martino
-  "LEG-nako-0006", // Federico Bosch
-  "LEG-nako-0016", // Federico Bracco
-  "LEG-nako-0017", // Florencia Silveyra
-  "LEG-nako-0003", // Francisco Bosch
-  "LEG-nako-0001", // Guillermo "Gigio" Mazzoni
-  "LEG-nako-0005", // Guido Mazzoni
-  "LEG-nako-0004", // Ignacio Alsogaray
-  "LEG-nako-0019", // Jennifer Schwimmer
-  "LEG-nako-0010", // Lucia Pini
-  "LEG-nako-0002", // Martin Bergara
-  "LEG-nako-0008", // Martin Miauro
-  "LEG-nako-0009", // Matias Soloaga
-  "LEG-nako-0012", // Santiago Paz
-  "LEG-nako-0021", // Sara Salviu
-  "LEG-nako-0015", // Tomas Mogaburu
-  "LEG-nako-0007", // Victoria "Vicky" Mendez Casariego
-];
-
-// Los que cargan SOLOS su monotributo por el link del mail (aviso el 12, recordatorios el 24 y el 27): entra como
-// novedad "pendiente" con comprobante y se aprueba acá. Los demás fijos los carga administración.
-// (Misma lista que AUTOCARGA en apps-script-monotributo.gs.)
-const IDS_MONOTRIBUTO_AUTOCARGA = new Set(IDS_MONOTRIBUTISTAS_FIJOS.filter(id => ![
-  "LEG-nako-0001", // Gigio Mazzoni
-  "LEG-nako-0005", // Guido Mazzoni
-  "LEG-nako-0004", // Ignacio Alsogaray
-  "LEG-nako-0007", // Victoria Mendez Casariego (va en el legajo de Gigio)
-].includes(id)));
+// Monotributistas a los que se les devuelve el monto cada mes: lo dice el legajo (campo `monotributo`,
+// editable en Legajos): "admin" lo carga administración, "link" lo carga la persona por el mail del día 12
+// (aviso) con recordatorios el 24 y el 27; entra como novedad "pendiente" con comprobante y se aprueba acá.
+// El Apps Script del link (apps-script-monotributo.gs) lee el mismo campo.
+function monotributistasDe(legs) {
+  const fijos = (legs || []).filter(l => l.monotributo && l.activo).map(l => l.id);
+  return { fijos, link: new Set((legs || []).filter(l => l.monotributo === "link" && l.activo).map(l => l.id)) };
+}
 
 // Victoria está casada con Gigio: su devolución se carga en el legajo de él, nunca en el propio.
 const ALIAS_MONOTRIBUTO = {
@@ -122,8 +99,8 @@ function novToRow(n) {
 // Los 18 monotributistas fijos siempre tienen su renglón en la solapa Monotributo: al que no tiene fila
 // este mes se le agrega una "semilla" editable (legajo, nota y forma de pago del mes anterior, sin monto).
 // Una semilla sin monto no se guarda. Los de autocarga la ven reemplazada por su carga del link.
-function sembrarFijos(rows, prevMono, nombreDe) {
-  const faltan = IDS_MONOTRIBUTISTAS_FIJOS.filter(id => !rows.some(r => r.concepto === "monotributo" && filaDeFijo(id)(r)));
+function sembrarFijos(rows, prevMono, nombreDe, fijos) {
+  const faltan = fijos.filter(id => !rows.some(r => r.concepto === "monotributo" && filaDeFijo(id)(r)));
   return [...rows, ...faltan.map(id => {
     const legId = ALIAS_MONOTRIBUTO[id] ?? id;
     const ant = prevMono.find(filaDeFijo(id));
@@ -192,6 +169,7 @@ export default function PantallaNovedades({ pais = "" }) {
   const [rows,     setRows]     = useState([]);   // todas las filas (todas las solapas)
   const [loaded,   setLoaded]   = useState([]);   // snapshot persistido (para diff)
   const [legajos,  setLegajos]  = useState([]);
+  const [mono,     setMono]     = useState({ fijos: [], link: new Set() });   // monotributistas según el legajo
   const [cuentas,  setCuentas]  = useState([]);
   const [prevMap,  setPrevMap]  = useState(() => new Map());  // monto del mes anterior por legajo+cuenta
   const [prevMono, setPrevMono] = useState([]);   // filas de Monotributo del mes anterior (siembra de los fijos)
@@ -228,7 +206,9 @@ export default function PantallaNovedades({ pais = "" }) {
       const base = draft
         ? fusionarBorrador(draft, extras)
         : extras.map(n => ({ ...novToRow(n), concepto: conceptoDeNovedad(n) }));
-      setRows(sembrarFijos(base, pMono, nombreDe));
+      const monos = monotributistasDe(legs);
+      setMono(monos);
+      setRows(sembrarFijos(base, pMono, nombreDe, monos.fijos));
       setDraftTs(draft ? draft.ts : null);
       setLoaded(extras);
       draftKeyRef.current = key;
@@ -328,13 +308,13 @@ export default function PantallaNovedades({ pais = "" }) {
     // y las duplicaría como novedades de HQ (bug de fuga a HQ).
     // El monotributo de los que cargan solos NO se copia (lo cargan ellos por el link); y lo que ya
     // cargaron este mes se conserva, si no "Guardar" lo borraría.
-    const esAutocarga = (n) => conceptoDeNovedad(n) === "monotributo" && IDS_MONOTRIBUTO_AUTOCARGA.has(n.legajo_id);
+    const esAutocarga = (n) => conceptoDeNovedad(n) === "monotributo" && mono.link.has(n.legajo_id);
     const novs = novedadesDeAmbito(await fetchNovedades(mAnt, aAnt), "hq").filter(n => !esAutocarga(n));
     if (!novs.length) { alert("No hay novedades de HQ en el mes anterior."); return; }
     // Filas nuevas (sin id) para revisar y guardar.
     const copiadas = novs.map(n => ({ ...newRow(novToRow(n)), id: null, _id: tmpRowId(), concepto: conceptoDeNovedad(n),
       estado: "", comprobante_url: "" }));
-    setRows(prev => sembrarFijos([...prev.filter(r => r.id && r.comprobante_url), ...copiadas], prevMono, legajoNombre));
+    setRows(prev => sembrarFijos([...prev.filter(r => r.id && r.comprobante_url), ...copiadas], prevMono, legajoNombre, mono.fijos));
     setDirty(true);
   };
 
@@ -416,7 +396,7 @@ export default function PantallaNovedades({ pais = "" }) {
   // Monto del mismo legajo+cuenta el mes anterior (0 si no tenía novedad de ese concepto).
   const montoAnterior = (row) => {
     // Monotributo de un fijo con alias (Gigio + Victoria en el mismo legajo): cada fila contra la suya.
-    const fijo = row.concepto === "monotributo" && IDS_MONOTRIBUTISTAS_FIJOS.find(id => filaDeFijo(id)(row));
+    const fijo = row.concepto === "monotributo" && mono.fijos.find(id => filaDeFijo(id)(row));
     if (fijo && Object.values(ALIAS_MONOTRIBUTO).includes(row.legajo_id))
       return prevMono.filter(filaDeFijo(fijo)).reduce((s, n) => s + (Number(n.monto) || 0), 0);
     const cta = resolveCuenta(row).cuenta_contable_nombre;
@@ -442,7 +422,7 @@ export default function PantallaNovedades({ pais = "" }) {
     montoMonotributoPorLegajo.set(r.legajo_id, (montoMonotributoPorLegajo.get(r.legajo_id) || 0) + (parseFloat(r.monto) || 0));
   }
   const legajoNombre = (id) => legajos.find(l => l.id === id)?.nombre ?? id;
-  const monotributistasFaltantes = IDS_MONOTRIBUTISTAS_FIJOS
+  const monotributistasFaltantes = mono.fijos
     .filter(id => !(montoMonotributoPorLegajo.get(ALIAS_MONOTRIBUTO[id] ?? id) > 0))
     .map(legajoNombre);
 
@@ -456,7 +436,7 @@ export default function PantallaNovedades({ pais = "" }) {
   const colsExtra = (esOtros ? 1 : 0) + (esMonotributo ? 1 : 0);
 
   // Semilla de autocarga todavía vacía: la persona no cargó por el link.
-  const esperaLink = (r) => r._semilla && IDS_MONOTRIBUTO_AUTOCARGA.has(r.legajo_id) && !(parseFloat(r.monto) > 0);
+  const esperaLink = (r) => r._semilla && mono.link.has(r.legajo_id) && !(parseFloat(r.monto) > 0);
 
   return (
     <div style={{ padding: 24, fontFamily: T.font, color: T.text }}>
@@ -528,12 +508,12 @@ export default function PantallaNovedades({ pais = "" }) {
         monotributistasFaltantes.length === 0 ? (
           <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534",
             borderRadius: 7, padding: "8px 12px", fontSize: 13, marginBottom: 14 }}>
-            ✅ Los {IDS_MONOTRIBUTISTAS_FIJOS.length} monotributistas fijos tienen monto cargado este mes.
+            ✅ Los {mono.fijos.length} monotributistas fijos tienen monto cargado este mes.
           </div>
         ) : (
           <div style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b",
             borderRadius: 7, padding: "8px 12px", fontSize: 13, marginBottom: 14 }}>
-            ⚠️ Faltan cargar {monotributistasFaltantes.length} de {IDS_MONOTRIBUTISTAS_FIJOS.length} monotributistas fijos: {monotributistasFaltantes.join(", ")}.
+            ⚠️ Faltan cargar {monotributistasFaltantes.length} de {mono.fijos.length} monotributistas fijos: {monotributistasFaltantes.join(", ")}.
           </div>
         )
       )}
