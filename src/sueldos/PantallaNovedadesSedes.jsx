@@ -460,8 +460,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
                     {h}{sortKey === k ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
                   </th>
                 ))}
-                <th style={{ ...thStyle, width: 130 }}>Mover a</th>
-                <th style={{ ...thStyle, width: 40 }}></th>
+                <th style={{ ...thStyle, width: 64 }}></th>
                 <th style={{ ...thStyle, width: 40, textAlign: "center" }}>
                   <HeaderCheckTodas checked={todosMarcados} onToggle={() => setManyChecked(idsConDatos, !todosMarcados)} accent={T.green} />
                 </th>
@@ -469,7 +468,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
             </thead>
             <tbody>
               {tabRows.length === 0 && (
-                <tr><td colSpan={10} style={{ padding: "14px 10px", color: T.dim, fontSize: 13 }}>
+                <tr><td colSpan={9} style={{ padding: "14px 10px", color: T.dim, fontSize: 13 }}>
                   Sin novedades en esta solapa. Agregá una fila abajo.
                 </td></tr>
               )}
@@ -525,14 +524,17 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
                     <input style={iStyle} value={r.nota} placeholder="Nota (ej: feriado 1/5)"
                       onChange={e => setRow(r._id, { nota: e.target.value })} />
                   </td>
-                  <td style={{ padding: "6px 10px" }}>
-                    <select style={{ ...iStyle, fontSize: 12, color: T.muted }} value={r.solapa}
-                      title="Pasar esta novedad a otra solapa"
-                      onChange={e => setRow(r._id, { solapa: e.target.value })}>
-                      {SOLAPAS.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-                    </select>
-                  </td>
-                  <td style={{ padding: "6px 8px", textAlign: "center" }}>
+                  <td style={{ padding: "6px 8px", whiteSpace: "nowrap", textAlign: "center" }}>
+                    {/* Mover a otra solapa: ícono con el <select> nativo invisible encima (abre la lista al tocarlo). */}
+                    <span title="Mover a otra solapa"
+                      style={{ position: "relative", display: "inline-block", fontSize: 14, color: T.dim, padding: 2, marginRight: 6, cursor: "pointer" }}>
+                      ⇄
+                      <select value={r.solapa} onChange={e => setRow(r._id, { solapa: e.target.value })}
+                        aria-label="Mover a otra solapa"
+                        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer" }}>
+                        {SOLAPAS.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+                      </select>
+                    </span>
                     <button onClick={() => delRow(r._id)}
                       style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: T.dim, padding: 2 }}>🗑</button>
                   </td>
@@ -555,7 +557,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
                 <td style={{ padding: "8px 10px", textAlign: "right" }}>
                   ${totalTab.toLocaleString("es-AR")}
                 </td>
-                <td colSpan={6}></td>
+                <td colSpan={5}></td>
               </tr>
             </tfoot>
           </table>
