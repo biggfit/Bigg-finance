@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from "react";
 import { T } from "../theme";
 import { MONEDA_SYM } from "../../data/tesoreriaData";
-import { normCat, ccKey, MESES } from "./pnlDerive";
+import { normCat, ccKey, MESES, ING_CONTRA_HQ, CESION_CUENTA } from "./pnlDerive";
 import { MultiSelect, selStyle, fmtSigned } from "./reportesUi";
 import { crearTraductor } from "./balanceUtils";
 
@@ -13,18 +13,28 @@ import { crearTraductor } from "./balanceUtils";
 // nativas por moneda, SIN fondeo), clasifica cada cuenta por su `categoria_pnl`,
 // y pivotea. La suma de la fila "Resultado económico" es lo que tiene que atar
 // contra la ΔPN de esa moneda/perímetro (fondeo va aparte = PN-neutro).
+//
+// Lectura (27/10, Martín): los retiros a inversores (cuenta "Inversores") se muestran en un bloque aparte
+// DEBAJO de "Resultado antes de distribuciones" pero SIGUEN dentro del Resultado económico (es lo que ata
+// contra el PN y lo que consume el Balance; decisión 23/9 de no tocarlos). Las contra-ventas a franquiciados
+// (NC de Interusos, Pauta refacturada) se muestran dentro de Ventas como líneas negativas, igual que las neta
+// el P&L BIGG (ING_CONTRA_HQ). El mes en curso se marca "parcial" y el Total suma solo meses cerrados.
 
 // Grupos de resultado, en el orden pedido: Ventas → Costo → Operativos →
-// Financieros → Impuestos → Capex. "Sin clasificar" queda al final como alerta.
+// Financieros → Impuestos → Inversiones no operativas → Capex. "Sin clasificar" queda al final como alerta.
+// "distribuciones" va fuera de la lista normal: se dibuja después del subtotal "antes de distribuciones".
 const GRUPOS = [
   { key: "ventas",         label: "Ventas" },
   { key: "costo_venta",    label: "Costo de ventas" },
   { key: "operativos",     label: "Gastos operativos" },
   { key: "financieros",    label: "Financieros" },
   { key: "impuestos",      label: "Impuestos" },
+  { key: "inv_no_op",      label: "Inversiones no operativas" },
   { key: "capex",          label: "Capex / Inversión" },
   { key: "sin_clasificar", label: "⚠ Sin clasificar" },
+  { key: "distribuciones", label: "Retiros a inversores (distribución)" },
 ];
+const GRUPOS_RESULTADO = GRUPOS.filter(g => g.key !== "distribuciones");
 
 // normCat de la cuenta (+ del centro para capex) → uno de los grupos de arriba.
 // El centro con categoría "capex" manda (ej. Botánico), como en el P&L BIGG.
@@ -42,6 +52,28 @@ function grupoDe(catCuenta, catCentro) {
     case "capex":             return "capex";
     default:                  return "sin_clasificar";
   }
+}
+
+// Cuentas que se presentan distinto de lo que dice su categoría, para que el resultado por cuenta se LEA
+// (la suma no cambia). Devuelve null si no hay regla. `key` agrupa filas de ids distintos en una sola línea.
+// - "Inversores" (CESION_CUENTA): retiros a inversores → bloque distribuciones (sigue dentro del resultado).
+// - Lado ingreso de Interusos/Pauta/CRM (ING_CONTRA_HQ): son NC / refacturación a franquiciados → Ventas, en
+//   negativo o positivo según venga, como las neta el P&L BIGG. En el lado egreso "Pauta" es la compra.
+// - "Comision S/Resultado" (provisión de encargados) → operativos; "Inversiones / Gastos no Operativos" → su
+//   propio grupo, como en el P&L de Sedes. Las dos no tienen categoría en Maestros: regla puente hasta cargarla.
+function presentacionDe(nombre, ladoIngreso) {
+  const n = nombre.trim();
+  if (n === CESION_CUENTA) return { grupo: "distribuciones", key: "retiros", label: "Retiros a inversores" };
+  if (ladoIngreso && ING_CONTRA_HQ.has(n)) {
+    if (n === "Interusos") return { grupo: "ventas", key: "interusos-nc", label: "Interusos a franquiciados (NC)" };
+    if (n === "Pauta")     return { grupo: "ventas", key: "pauta-refact", label: "Pauta refacturada a franquiciados" };
+    if (n === "CRM")       return { grupo: "ventas", key: "crm-venta",    label: "CRM (venta)" };
+  }
+  if (!ladoIngreso && n === "Pauta") return { grupo: "operativos",  key: "pauta-compra", label: "Pauta (compra)" };
+  if (!ladoIngreso && n === "CRM")   return { grupo: "costo_venta", key: "crm-costo",    label: "CRM (costo)" };
+  if (/^comisi[oó]n s\/ ?resultado$/i.test(n))  return { grupo: "operativos", key: "comision-resultado", label: "Comisión s/Resultado (encargados)" };
+  if (/^inversiones \/ gastos no operativos$/i.test(n)) return { grupo: "inv_no_op", key: "inv-no-op", label: n };
+  return null;
 }
 
 // TODAS las fuentes de egreso guardan MAGNITUD POSITIVA del costo (comprobantes, sueldos, financiaciones,
@@ -97,7 +129,7 @@ function resolveCuenta(row, ladoIngreso, byId, byNombre) {
 }
 
 export function buildDevengado(inRows, egRows, { cuentaMap, ccMap, year, moneda, socSet, ccSet, sinIva }) {
-  // grupo → Map(idCuenta → { id, nombre, meses:number[12] })
+  // grupo → Map(key → { id, nombre, meses:number[12] })
   const grupos = Object.fromEntries(GRUPOS.map(g => [g.key, new Map()]));
   const diag = { sinCuenta: 0, sinCentro: 0, sinCuentaMonto: 0, sinCentroMonto: 0 };
   // Maestro de cuentas indexado (cuentaMap viene con claves por id Y por nombre → deduplico por id).
@@ -107,10 +139,11 @@ export function buildDevengado(inRows, egRows, { cuentaMap, ccMap, year, moneda,
   for (const c of cuentas) { const k = (c.nombre ?? "").trim(); if (!byNombre.has(k)) byNombre.set(k, []); byNombre.get(k).push(c); }
   // Ventana de meses: desde julio (go-live, en 2026) hasta el mes EN CURSO. No proyectamos al futuro
   // (las financiaciones devengan cuotas futuras y el Botánico es recurrente → Oct+ mostraría solo costos
-  // sin ingresos). Se reconcilian meses cerrados.
+  // sin ingresos). El mes en curso se muestra como PARCIAL (faltan ventas, sueldos…) y queda fuera del Total.
   const hoy = new Date();
   const firstM = year === GO_LIVE_ANIO ? GO_LIVE_MES : 0;
   const mesMax = year === hoy.getFullYear() ? hoy.getMonth() : 11;
+  const mesParcial = year === hoy.getFullYear() ? hoy.getMonth() : null;
 
   const add = (rows, ladoIngreso) => {
     for (const row of (rows ?? [])) {
@@ -133,17 +166,20 @@ export function buildDevengado(inRows, egRows, { cuentaMap, ccMap, year, moneda,
       const raw   = (row.cuenta_contable ?? "").trim();
       const acc   = resolveCuenta(row, ladoIngreso, byId, byNombre);
       const nombre = acc?.nombre || raw || "Sin cuenta";
-      const idCta  = acc?.id || nombre;               // clave de agrupación (id real, o nombre si no resuelve)
       const catCuenta = normCat(acc?.categoria_pnl);
       const catCentro = normCat(ccRow?.categoria_pnl);
-      const grupo = grupoDe(catCuenta, catCentro);
+      // Presentación por nombre manda sobre la categoría (salvo capex por centro, que es del P&L BIGG).
+      const pres  = catCentro === "capex" ? null : presentacionDe(nombre, ladoIngreso);
+      const grupo = pres?.grupo || grupoDe(catCuenta, catCentro);
+      const key   = pres?.key || acc?.id || nombre;   // clave de agrupación (regla, id real, o nombre si no resuelve)
+      const label = pres?.label || nombre;
 
       const val = pnAmount(row, ladoIngreso, sinIva);
       if (!val) continue;
 
       const map = grupos[grupo];
-      if (!map.has(idCta)) map.set(idCta, { id: acc?.id || "", nombre, meses: new Array(12).fill(0) });
-      map.get(idCta).meses[m] += val;
+      if (!map.has(key)) map.set(key, { id: acc?.id || "", nombre: label, meses: new Array(12).fill(0) });
+      map.get(key).meses[m] += val;
 
       // Diagnóstico: asientos que pasan el filtro pero les falta cuenta o centro.
       if (!raw)  { diag.sinCuenta++;  diag.sinCuentaMonto  += Math.abs(val); }
@@ -154,38 +190,46 @@ export function buildDevengado(inRows, egRows, { cuentaMap, ccMap, year, moneda,
   add(egRows, false);
 
   const meses = Array.from({ length: Math.max(0, mesMax - firstM + 1) }, (_, i) => firstM + i);
+  const cerrados = meses.filter(m => m !== mesParcial);
+  const totalDe = arr => cerrados.reduce((a, m) => a + (arr[m] || 0), 0);
 
-  // Armar grupos con filas ordenadas (mayor |total| primero) + subtotales.
-  const out = GRUPOS.map(g => {
+  // Armar grupos con filas ordenadas (mayor |total| primero) + subtotales. El total es de meses CERRADOS.
+  const armar = g => {
     const map = grupos[g.key];
     const filas = [...map.values()]
-      .map(({ id, nombre, meses: arr }) => ({ id, nombre, meses: arr, total: arr.reduce((a, b) => a + b, 0) }))
-      .filter(f => f.total || f.meses.some(v => v))
+      .map(({ id, nombre, meses: arr }) => ({ id, nombre, meses: arr, total: totalDe(arr) }))
+      .filter(f => f.meses.some(v => v))
       .sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
     const sub = new Array(12).fill(0);
     for (const f of filas) for (let i = 0; i < 12; i++) sub[i] += f.meses[i];
-    return { ...g, filas, sub, subTotal: sub.reduce((a, b) => a + b, 0) };
-  });
+    return { ...g, filas, sub, subTotal: totalDe(sub) };
+  };
+  const out = GRUPOS_RESULTADO.map(armar);
+  const distribuciones = armar(GRUPOS.find(g => g.key === "distribuciones"));
 
-  const resultado = new Array(12).fill(0);
-  for (const g of out) for (let i = 0; i < 12; i++) resultado[i] += g.sub[i];
+  // Resultado antes de distribuciones (lo que se compara con el P&L BIGG) y Resultado económico (= ΔPN:
+  // incluye los retiros, que para el balance son una salida de patrimonio como cualquier otra).
+  const resultadoAntes = new Array(12).fill(0);
+  for (const g of out) for (let i = 0; i < 12; i++) resultadoAntes[i] += g.sub[i];
+  const resultado = resultadoAntes.map((v, i) => v + distribuciones.sub[i]);
 
-  return { grupos: out.filter(g => g.filas.length), meses, resultado,
-    resultadoTotal: resultado.reduce((a, b) => a + b, 0), diag };
+  return { grupos: out.filter(g => g.filas.length), distribuciones, meses, mesParcial, cerrados,
+    resultadoAntes, resultadoAntesTotal: totalDe(resultadoAntes),
+    resultado, resultadoTotal: totalDe(resultado), totalDe, diag };
 }
 
 // ─── Componente ───────────────────────────────────────────────────────────────
+// `biggNativo(moneda)` (opcional) → { resGrupo[12], cesionBN[12] } del P&L BIGG en esa moneda, con IVA, para el
+// puente en pantalla. Solo tiene sentido con el perímetro = núcleo completo y sin filtro de centro.
 export default function TabDevengado({
-  inRows, egRows, cuentaMap, ccMap, ccs, socGroups, nucleoEmpresas, year, setYear, years,
+  inRows, egRows, cuentaMap, ccMap, ccs, socGroups, nucleoEmpresas, year, setYear, years, biggNativo = null,
 }) {
   const [moneda, setMoneda]   = useState("ARS");
-  // Default CON IVA: el neteo "sin IVA" (total − iva_monto por fila) NO es neutro en ARS, porque el IVA crédito
-  // no viaja pegado al costo sino en una cuenta aparte ("IVA Compra") → netear sub-cuenta el resultado ~63M.
-  // Con IVA, el crudo ata contra el P&L de management (y contra la ΔPN). En USD/EUR da igual (casi no hay IVA).
-  const [sinIva, setSinIva]   = useState(false);
+  // Siempre CON IVA: netear `iva_monto` fila por fila NO es neutro acá (el IVA crédito vive en la cuenta aparte
+  // "IVA Compra") → el resultado se movía ~63M ARS y dejaba de atar contra la ΔPN. El P&L BIGG sí tiene su
+  // Sin IVA neutro por construcción (devuelve el IVA en dos líneas); este reporte no lo necesita.
   const [selSoc, setSelSoc]   = useState(null);   // null = todavía sin tocar → usa núcleo
   const [selCC, setSelCC]     = useState(new Set());
-  const [showDiag, setShowDiag] = useState(false);
 
   // Sociedades: default = núcleo (como el resto de los reportes del grupo).
   const socSel = selSoc ?? new Set(nucleoEmpresas);
@@ -227,26 +271,55 @@ export default function TabDevengado({
       cuentaMap, ccMap, year, moneda,
       socSet: socSel.size ? socSel : null,
       ccSet: selCC.size ? selCC : null,
-      sinIva,
+      sinIva: false,
     }),
-    [inRows, egRows, cuentaMap, ccMap, year, moneda, socSel, selCC, sinIva]
+    [inRows, egRows, cuentaMap, ccMap, year, moneda, socSel, selCC]
   );
+
+  // Puente al P&L BIGG: solo con el perímetro exacto del holding (núcleo completo, sin filtro de centro).
+  const esNucleo = !selCC.size && socSel.size === nucleoEmpresas.size && [...nucleoEmpresas].every(s => socSel.has(s));
+  const bigg = useMemo(() => (esNucleo && biggNativo) ? biggNativo(moneda) : null, [esNucleo, biggNativo, moneda]);
+  const puente = useMemo(() => {
+    if (!bigg) return null;
+    const Z = () => new Array(12).fill(0);
+    const cesion   = (bigg.cesionBN || Z()).map(v => -(Number(v) || 0));                 // resta
+    const esperado = data.resultadoAntes.map((v, i) => v + cesion[i]);
+    const real     = (bigg.resGrupo || Z()).map(v => Number(v) || 0);
+    const dif      = esperado.map((v, i) => Math.round(v - real[i]));
+    return { cesion, esperado, real, dif };
+  }, [bigg, data]);
 
   const sym = MONEDA_SYM[moneda] || moneda;
   const nMeses = data.meses.length;
+  const hayParcial = data.mesParcial != null && data.meses.includes(data.mesParcial);
+  const totalLabel = hayParcial && data.cerrados.length
+    ? `Total ${MESES[data.cerrados[0]]}–${MESES[data.cerrados[data.cerrados.length - 1]]}`
+    : "Total";
 
-  // Estilos de celda
+  // Estilos de celda. Los números van en texto normal con su signo: el rojo queda para los subtotales
+  // negativos, el resultado y el bloque Sin clasificar (si todo costo es rojo, el rojo no avisa nada).
   const cellR = { padding: "6px 12px", textAlign: "right", fontFamily: T.mono, fontSize: 12.5, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" };
   const th = { padding: "8px 12px", fontSize: 10, fontWeight: 800, color: T.tableHeadText, textTransform: "uppercase",
     letterSpacing: ".06em", textAlign: "right", whiteSpace: "nowrap", background: T.tableHead, position: "sticky", top: 0, zIndex: 3 };
-  const stickyL = { position: "sticky", left: 0, background: "inherit", zIndex: 2, boxShadow: "2px 0 4px rgba(0,0,0,.04)" };
+  const stickyL = { position: "sticky", left: 0, zIndex: 2, boxShadow: "2px 0 4px rgba(0,0,0,.04)" };
+  const nameCell = { ...cellR, ...stickyL, textAlign: "left", fontFamily: T.font, fontSize: 13 };
+  const colTotal = { borderLeft: `2px solid ${T.cardBorder}` };
+  const mesStyle = m => (m === data.mesParcial ? { color: T.muted, background: "#fafafa" } : null);
+  const vColor = (v, { alerta = false } = {}) => (!v ? T.muted : (alerta && v < 0) ? T.red : T.text);
 
-  const valCol = v => v < 0 ? T.red : (v > 0 ? T.text : T.muted);
-  const idCell = { padding: "6px 12px", textAlign: "left", fontFamily: T.mono, fontSize: 11, color: T.muted, whiteSpace: "nowrap" };
+  const filaTotal = ({ label, arr, total, strong = false, bg = T.bg, color = T.text, alerta = true, nota = null, border = `1px solid ${T.cardBorder}` }) => (
+    <tr style={{ background: bg, borderTop: border }}>
+      <td style={{ ...nameCell, fontWeight: strong ? 900 : 700, fontSize: strong ? 13.5 : 13, color, background: bg }}>
+        {label}{nota && <span style={{ fontWeight: 500, color: strong ? color : T.muted, opacity: .8, marginLeft: 8, fontSize: 11.5 }}>{nota}</span>}
+      </td>
+      {data.meses.map(m => <td key={m} style={{ ...cellR, fontWeight: strong ? 900 : 700, ...mesStyle(m), color: strong ? color : vColor(arr[m], { alerta }), background: bg }}>{fmtSigned(arr[m])}</td>)}
+      <td style={{ ...cellR, ...colTotal, fontWeight: strong ? 900 : 700, color: strong ? color : vColor(total, { alerta }) }}>{fmtSigned(total)}</td>
+    </tr>
+  );
 
   return (
     <div>
-      {/* ── Filtros de cabecera: Año · Sociedad (por anillo) · Centro · Moneda · Sin IVA ── */}
+      {/* ── Filtros de cabecera: Año · Sociedad (por anillo) · Centro · Moneda ── */}
       <div style={{ display: "flex", gap: 16, marginBottom: 16, flexWrap: "wrap", alignItems: "flex-end",
         background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, padding: "12px 16px", boxShadow: "0 1px 3px rgba(0,0,0,.04)" }}>
         <div>
@@ -265,56 +338,79 @@ export default function TabDevengado({
             {Object.entries(MONEDA_SYM).map(([k, v]) => <option key={k} value={k}>{v} {k}</option>)}
           </select>
         </div>
-        <label style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer", fontSize: 12.5, fontWeight: 600, color: T.text, height: 36 }}>
-          <input type="checkbox" checked={sinIva} onChange={e => setSinIva(e.target.checked)} style={{ accentColor: T.accentDark }} />
-          Sin IVA
-        </label>
+        {hayParcial && (
+          <div style={{ fontSize: 11.5, color: T.muted, alignSelf: "center", marginLeft: "auto" }}>
+            <b style={{ color: T.text }}>{MESES[data.mesParcial]}</b> es el mes en curso: parcial, fuera del total.
+          </div>
+        )}
       </div>
 
       {/* ── Diagnóstico: asientos sin cuenta / sin centro (los que "desaparecen" del perímetro) ── */}
       {(data.diag.sinCuenta > 0 || data.diag.sinCentro > 0) && (
-        <div style={{ marginBottom: 16, background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 8, padding: "10px 14px", fontSize: 12.5, color: "#92400e" }}>
+        <div style={{ marginBottom: 16, background: "#fef9c3", border: "1px solid #fde047", borderRadius: 8, padding: "10px 14px", fontSize: 12.5, color: "#854d0e" }}>
           <b>⚠ Asientos incompletos en el perímetro filtrado:</b>{" "}
           {data.diag.sinCuenta > 0 && <span>{data.diag.sinCuenta} sin cuenta ({sym} {fmtSigned(data.diag.sinCuentaMonto)})</span>}
           {data.diag.sinCuenta > 0 && data.diag.sinCentro > 0 && " · "}
           {data.diag.sinCentro > 0 && <span>{data.diag.sinCentro} sin centro de costo ({sym} {fmtSigned(data.diag.sinCentroMonto)})</span>}
-          <span style={{ color: "#b45309" }}> — estas líneas ensucian la comparación contra el balance.</span>
+          <span> — estas líneas ensucian la comparación contra el balance.</span>
         </div>
       )}
 
       {/* ── Grilla cuenta × mes ── */}
       <div style={{ overflowX: "auto", border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, background: T.card }}>
-        <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 760 + nMeses * 76 }}>
+        <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 420 + (nMeses + 1) * 110 }}>
           <thead>
             <tr>
-              <th style={{ ...th, textAlign: "left", left: 0, zIndex: 4, ...stickyL }}>Cuenta</th>
-              <th style={{ ...th, textAlign: "left" }}>ID</th>
-              {data.meses.map(m => <th key={m} style={th}>{MESES[m]}</th>)}
-              <th style={{ ...th, borderLeft: `2px solid ${T.cardBorder}` }}>Total</th>
+              <th style={{ ...th, ...stickyL, textAlign: "left", zIndex: 4, background: T.tableHead }}>Cuenta</th>
+              {data.meses.map(m => (
+                <th key={m} style={{ ...th, ...(m === data.mesParcial ? { color: "#c7d2a8" } : null) }}>
+                  {MESES[m]}{m === data.mesParcial && <span style={{ fontWeight: 600, letterSpacing: 0, textTransform: "none", marginLeft: 5 }}>· parcial</span>}
+                </th>
+              ))}
+              <th style={{ ...th, ...colTotal }}>{totalLabel}</th>
             </tr>
           </thead>
           <tbody>
             {data.grupos.map(g => (
-              <GrupoBlock key={g.key} g={g} meses={data.meses} cellR={cellR} stickyL={stickyL} valCol={valCol} idCell={idCell} />
+              <GrupoBlock key={g.key} g={g} meses={data.meses} cellR={cellR} nameCell={nameCell} colTotal={colTotal}
+                mesStyle={mesStyle} vColor={vColor} alerta={g.key === "sin_clasificar"} />
             ))}
-            {/* Resultado económico */}
-            <tr style={{ background: "#eef2ff", borderTop: `2px solid ${T.accentDark}` }}>
-              <td style={{ ...cellR, ...stickyL, textAlign: "left", fontWeight: 900, fontSize: 13, color: T.text, background: "#eef2ff" }}>
-                Resultado económico
-              </td>
-              <td style={{ ...idCell, background: "#eef2ff" }} />
-              {data.meses.map(m => (
-                <td key={m} style={{ ...cellR, fontWeight: 900, color: valCol(data.resultado[m]) }}>{fmtSigned(data.resultado[m])}</td>
-              ))}
-              <td style={{ ...cellR, fontWeight: 900, borderLeft: `2px solid ${T.cardBorder}`, color: valCol(data.resultadoTotal) }}>{fmtSigned(data.resultadoTotal)}</td>
-            </tr>
+
+            {/* Resultado antes de distribuciones → retiros → Resultado económico (= ΔPN) */}
+            {data.distribuciones.filas.length > 0 ? (
+              <>
+                {filaTotal({ label: "Resultado antes de distribuciones", arr: data.resultadoAntes, total: data.resultadoAntesTotal,
+                  bg: "#e5e7eb", border: `2px solid ${T.accentDark}` })}
+                <GrupoBlock g={data.distribuciones} meses={data.meses} cellR={cellR} nameCell={nameCell} colTotal={colTotal}
+                  mesStyle={mesStyle} vColor={vColor} alerta={false} />
+              </>
+            ) : null}
+            {filaTotal({ label: "Resultado económico", nota: "= variación del PN", arr: data.resultado, total: data.resultadoTotal,
+              strong: true, bg: T.accentDark, color: T.accent, border: `2px solid ${T.accentDark}` })}
+
+            {/* Puente al P&L BIGG (solo perímetro núcleo): antes de distribuciones − cesión BN 49% = Resultado del Grupo */}
+            {puente && (
+              <>
+                {filaTotal({ label: "Resultado antes de distribuciones", arr: data.resultadoAntes, total: data.resultadoAntesTotal,
+                  bg: T.card, alerta: false, border: `2px solid ${T.cardBorder}` })}
+                {filaTotal({ label: "− Cesión Barrio Norte 49%", nota: "apropiación del socio, solo en el P&L BIGG",
+                  arr: puente.cesion, total: data.totalDe(puente.cesion), bg: T.card, alerta: false, border: "none" })}
+                {filaTotal({ label: "= Resultado del Grupo esperado", arr: puente.esperado, total: data.totalDe(puente.esperado), bg: T.bg, alerta: false })}
+                {filaTotal({ label: "Resultado del Grupo · P&L BIGG", nota: `${moneda}, con IVA`, arr: puente.real, total: data.totalDe(puente.real), bg: T.bg, alerta: false, border: "none" })}
+                {filaTotal({ label: "Diferencia sin explicar", nota: "control: tiene que ser 0",
+                  arr: puente.dif, total: data.totalDe(puente.dif), bg: T.card, alerta: true, border: `1px solid ${T.cardBorder}` })}
+              </>
+            )}
           </tbody>
         </table>
       </div>
 
       <p style={{ fontSize: 11.5, color: T.muted, marginTop: 12, lineHeight: 1.5 }}>
-        Devengado crudo por moneda nativa (sin fondeo, sin traducción de moneda). El <b>Resultado económico</b> es
-        lo que tiene que atar contra la variación del PN del balance de {sym} {moneda} en el mismo perímetro.
+        Devengado crudo por moneda nativa, con IVA (sin fondeo, sin traducción de moneda). El <b>Resultado económico</b> es
+        lo que ata contra la variación del PN del balance de {sym} {moneda} en el mismo perímetro: incluye los retiros a
+        inversores porque para el patrimonio son una salida más. El P&L BIGG los trata como distribución (no como gasto) y
+        además le resta al grupo el 49% del resultado de Barrio Norte que es del socio: ese es todo el puente entre los dos.
+        {hayParcial && <> El mes en curso se muestra parcial (faltan ventas, sueldos y cierres) y no entra en el total.</>}
       </p>
     </div>
   );
@@ -322,25 +418,24 @@ export default function TabDevengado({
 
 const lbl = { display: "block", fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 };
 
-// Bloque de un grupo: fila de subtotal (colapsable) + filas de cuenta.
-function GrupoBlock({ g, meses, cellR, stickyL, valCol, idCell }) {
+// Bloque de un grupo: fila de subtotal (colapsable) + filas de cuenta. El id de la cuenta queda como tooltip.
+function GrupoBlock({ g, meses, cellR, nameCell, colTotal, mesStyle, vColor, alerta }) {
   const [open, setOpen] = useState(true);
+  const bgSub = T.bg;
   return (
     <>
-      <tr style={{ background: "#f8fafc", borderTop: `1px solid ${T.cardBorder}`, cursor: "pointer" }} onClick={() => setOpen(o => !o)}>
-        <td style={{ ...cellR, ...stickyL, textAlign: "left", fontWeight: 800, fontSize: 12.5, color: T.text, background: "#f8fafc" }}>
+      <tr style={{ background: bgSub, borderTop: `1px solid ${T.cardBorder}`, cursor: "pointer" }} onClick={() => setOpen(o => !o)}>
+        <td style={{ ...nameCell, fontWeight: 800, color: alerta ? T.red : T.text, background: bgSub }}>
           <span style={{ display: "inline-block", width: 14, color: T.muted }}>{open ? "▾" : "▸"}</span>{g.label}
         </td>
-        <td style={{ ...idCell, background: "#f8fafc" }} />
-        {meses.map(m => <td key={m} style={{ ...cellR, fontWeight: 800, color: valCol(g.sub[m]) }}>{fmtSigned(g.sub[m])}</td>)}
-        <td style={{ ...cellR, fontWeight: 800, borderLeft: `2px solid ${T.cardBorder}`, color: valCol(g.subTotal) }}>{fmtSigned(g.subTotal)}</td>
+        {meses.map(m => <td key={m} style={{ ...cellR, fontWeight: 800, ...mesStyle(m), color: vColor(g.sub[m], { alerta }), background: bgSub }}>{fmtSigned(g.sub[m])}</td>)}
+        <td style={{ ...cellR, ...colTotal, fontWeight: 800, color: vColor(g.subTotal, { alerta }) }}>{fmtSigned(g.subTotal)}</td>
       </tr>
       {open && g.filas.map(f => (
         <tr key={f.id || f.nombre} style={{ background: T.card }}>
-          <td style={{ ...cellR, ...stickyL, textAlign: "left", fontWeight: 500, color: T.text, background: T.card, paddingLeft: 26 }}>{f.nombre}</td>
-          <td style={{ ...idCell }} title={f.id}>{f.id || "—"}</td>
-          {meses.map(m => <td key={m} style={{ ...cellR, color: valCol(f.meses[m]) }}>{fmtSigned(f.meses[m])}</td>)}
-          <td style={{ ...cellR, borderLeft: `2px solid ${T.cardBorder}`, color: valCol(f.total) }}>{fmtSigned(f.total)}</td>
+          <td style={{ ...nameCell, fontWeight: 500, color: alerta ? T.red : T.text, background: T.card, paddingLeft: 26 }} title={f.id || undefined}>{f.nombre}</td>
+          {meses.map(m => <td key={m} style={{ ...cellR, ...mesStyle(m), color: vColor(f.meses[m], { alerta }) }}>{fmtSigned(f.meses[m])}</td>)}
+          <td style={{ ...cellR, ...colTotal, color: vColor(f.total, { alerta }) }}>{fmtSigned(f.total)}</td>
         </tr>
       ))}
     </>

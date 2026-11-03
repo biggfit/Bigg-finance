@@ -320,7 +320,10 @@ export default function TabDetallePagosCobros({ movs = [], comps = [], cuentasBa
             {filt.length === 0
               ? <tr><td colSpan={8} style={{ ...td, textAlign: "center", color: T.dim, padding: 32 }}>Sin resultados con esos filtros.</td></tr>
               : filt.map((r, i) => (
-                <tr key={r.id ?? i} style={{ background: i % 2 ? "#fafbfc" : T.card }}>
+                // key por índice a propósito: las filas no tienen estado propio y la lista se re-deriva
+                // entera en cada filtro. Un `id` repetido en los datos dejaba filas fantasma que ningún
+                // filtro borraba (ver la misma tabla en PantallaReportes).
+                <tr key={i} style={{ background: i % 2 ? "#fafbfc" : T.card }}>
                   <td style={{ ...td, color: T.muted }}>{fmtF(r.fecha)}</td>
                   <td style={{ ...td, color: T.text, fontSize: 12 }} title={r._caja}>{r._caja || "—"}</td>
                   <td style={{ ...td, fontSize: 12, color: T.muted }}>{r._tipo}</td>

@@ -1686,7 +1686,10 @@ function TabDetalleComprobantes({ rows = [], movs = [], tipo, ccs = [], sociedad
             {filt.length === 0
               ? <tr><td colSpan={7} style={{ ...td, textAlign: "center", color: T.dim, padding: 32 }}>Sin resultados con esos filtros.</td></tr>
               : filt.map((r, i) => (
-                <tr key={r.id ?? i} style={{ background: i % 2 ? "#fafbfc" : T.card }}>
+                // key por índice a propósito: las filas no tienen estado propio y la lista se re-deriva
+                // entera en cada filtro. Además el 71% llega sin `id` (sueldos/financiaciones/franquicias)
+                // y un `id` repetido en los datos dejaba filas fantasma que ningún filtro borraba.
+                <tr key={i} style={{ background: i % 2 ? "#fafbfc" : T.card }}>
                   <td style={{ ...td, color: T.muted }}>{String(r.fecha || "").split("-").reverse().join("/")}</td>
                   <td style={{ ...td, fontSize: 12, color: T.muted }}>{r._tipo || TIPO_COMP_LABEL[String(r.subtipo || "").toUpperCase()] || r.subtipo || "—"}</td>
                   <td style={{ ...td, color: T.muted, fontSize: 12 }}>{socMap.get(String(r.sociedad)) || r.sociedad || "—"}</td>
@@ -2579,9 +2582,19 @@ export default function PantallaReportes({ onVerComprobante }) {
       pnl.grupos.capex[k] = prev.map((v, i) => v + (arr[i] || 0));
     }
     return { pnl, sub: computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE }),
+      // Cesión BN 49% por mes (lo que el holding le restó a Sedes Propias): la usa el puente del Devengado.
+      cesionBN: MESES.map((_, m) => CESION.pct * (Number(sBNnet?.resFinal?.[m]) || 0)),
       // DEV-ONLY (check "P&L BIGG vs Devengado" en consola): piezas del holding para descomponer la diferencia.
       _dbg: import.meta.env.DEV ? { sAR, sBNnet, feeGer, resWRE, arNucleoCCs, bnCcId } : undefined };
   };
+  // P&L BIGG NATIVO en la moneda que pida el Devengado (con IVA, filas sin traducir, sin fondeo en otra moneda):
+  // el puente "Devengado → Resultado del Grupo" en pantalla. Solo se crea con ese tab abierto; el tab lo memoiza
+  // por moneda, así que el holding se computa una vez por moneda elegida.
+  const biggNativo = useMemo(() => (
+    activeTab === "devengado"
+      ? (mon) => { const h = holdingDe(year, { inR: inConFranq, egR: egConSueldos, fx: null, moneda: mon, sinIvaArg: false }); return { resGrupo: h.sub.resGrupo, cesionBN: h.cesionBN }; }
+      : null
+  ), [activeTab, year, inConFranq, egConSueldos, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, intercoData]);   // eslint-disable-line react-hooks/exhaustive-deps
   const biggCur  = useMemo(() => (isBigg || isVentasHQ) ? holdingDe(year)     : null,   // eslint-disable-line react-hooks/exhaustive-deps
     [isBigg, isVentasHQ, inBigg, egBigg, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, year, monedaPL, sinIva, intercoData, fxConv]);
   const biggPrev = useMemo(() => (isBigg || isVentasHQ) ? holdingDe(year - 1) : null,   // eslint-disable-line react-hooks/exhaustive-deps
@@ -3196,7 +3209,7 @@ export default function PantallaReportes({ onVerComprobante }) {
           inRows={inConFranq} egRows={egConSueldos}
           cuentaMap={cuentaMap} ccMap={ccMap} ccs={ccs}
           socGroups={cfSocGroups} nucleoEmpresas={nucleoEmpresas}
-          year={year} setYear={setYear} years={YEARS}
+          year={year} setYear={setYear} years={YEARS} biggNativo={biggNativo}
         />
       )}
 
