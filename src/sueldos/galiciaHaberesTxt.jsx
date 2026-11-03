@@ -165,7 +165,7 @@ export function ModalGaliciaTxt({ sociedadNombre, filas, mes, anio, prefijoArchi
           </>
         )}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
-          <button onClick={onClose} style={{ border: "1px solid #e2e8f0", background: "#fff", borderRadius: 6, padding: "7px 14px", cursor: "pointer", fontSize: 13 }}>Cancelar</button>
+          <button onClick={onClose} style={{ border: "1px solid #e2e8f0", background: "#fff", color: "#475569", borderRadius: 6, padding: "7px 14px", cursor: "pointer", fontSize: 13 }}>Cancelar</button>
           {cuenta && (
             <button onClick={bajar} disabled={!convenioOk || !fecha || !ok.length}
               style={{ border: "none", background: (!convenioOk || !fecha || !ok.length) ? "#94a3b8" : "#ea580c", color: "#fff", borderRadius: 6, padding: "7px 14px", cursor: (!convenioOk || !fecha || !ok.length) ? "default" : "pointer", fontSize: 13, fontWeight: 600 }}>

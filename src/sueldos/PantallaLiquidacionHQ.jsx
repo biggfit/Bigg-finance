@@ -1479,11 +1479,35 @@ function lineasGalicia(liqs, tipo) {
   return filas;
 }
 
+// Por qué un export quedó sin filas: no hay líneas de esa forma este mes, ya está todo pagado (los Excel
+// de banco descuentan lo pagado) o hay pendientes sin CBU. Los exports devuelven este texto (o nada si
+// descargaron) y PasoPagos lo muestra en pantalla: el `alert` no se ve en el navegador de la app.
+function motivoSinFilas(liqs, tipos, label, { requiereCbu = false } = {}) {
+  const ts = [].concat(tipos);
+  let hay = false, pendiente = false, conCbu = false;
+  for (const liq of liqs) {
+    for (const l of liq.lineas || []) {
+      if (!ts.includes(l.tipo)) continue;
+      hay = true;
+      if (pendienteDe(l.importe, getPagosLinea(liq, l)) > PAGO_EPS) { pendiente = true; if ((l.cbu || liq.cbu || "").trim()) conCbu = true; }
+    }
+    for (const n of liq.novedades || []) {
+      if (!ts.includes(n.forma_pago)) continue;
+      hay = true;
+      if (pendienteDe(n.monto, getPagosNovedad(liq, n)) > PAGO_EPS) { pendiente = true; if ((liq.cbu || "").trim()) conCbu = true; }
+    }
+  }
+  if (!hay) return `No hay líneas de ${label} este mes.`;
+  if (!pendiente) return `${label}: ya está todo pagado, no queda nada pendiente para exportar.`;
+  if (requiereCbu && !conCbu) return `${label}: hay pendientes pero ninguno tiene CBU cargado.`;
+  return `No hay líneas de ${label} para exportar.`;
+}
+
 function exportarHaberes(liqs, mes, anio) {
   const desc = `Sueldo ${String(mes).padStart(2, "0")}/${anio}`.slice(0, 12);
   const filas = lineasGalicia(liqs, "haberes")
     .map(f => [f.cbu, f.importe, "acreditamiento de haberes", desc, "", ""]);
-  if (!filas.length) { alert("No hay líneas de Haberes con CBU cargado."); return; }
+  if (!filas.length) return motivoSinFilas(liqs, "haberes", "Haberes", { requiereCbu: true });
   descargarExcelGalicia(filas, `Haberes_HQ_${String(mes).padStart(2,"0")}_${anio}.xlsx`);
 }
 
@@ -1491,7 +1515,7 @@ function exportarHaberes(liqs, mes, anio) {
 // con el nombre de cada CBU. El de Galicia queda intacto para que el banco lo tome.
 function exportarControlHaberes(liqs, mes, anio) {
   const filas = lineasGalicia(liqs, "haberes").map(f => [f.nombre || "", f.sede, f.sociedad, f.cbu, f.importe]);
-  if (!filas.length) { alert("No hay líneas de Haberes con CBU cargado."); return; }
+  if (!filas.length) return motivoSinFilas(liqs, "haberes", "Haberes", { requiereCbu: true });
   const total = filas.reduce((a, f) => a + (Number(f[4]) || 0), 0);
   descargarExcelHoja({
     headers: ["Nombre", "Sede", "Sociedad", "CBU", "Monto"], anchos: [30, 22, 22, 28, 14], hoja: "Control",
@@ -1606,13 +1630,13 @@ function exportarDeposito(liqs, mes, anio) {
       incluye,
     ]);
   }
-  if (!filas.length) { alert("No hay líneas de Depósito con importe cargado."); return; }
+  if (!filas.length) return motivoSinFilas(liqs, "deposito", "Depósito");
   descargarExcelDetalle(filas, `Deposito_HQ_${String(mes).padStart(2,"0")}_${anio}.xlsx`);
 }
 
 function exportarTransferenciaFinanciera(liqs, mes, anio) {
   const filas = lineasDetalle(liqs, "transferencia_financiera");
-  if (!filas.length) { alert("No hay líneas de Trf. financiera con importe cargado."); return; }
+  if (!filas.length) return motivoSinFilas(liqs, "transferencia_financiera", "Trf. financiera");
   descargarExcelDetalle(filas, `Transferencias_HQ_${String(mes).padStart(2,"0")}_${anio}.xlsx`);
 }
 
@@ -1637,7 +1661,7 @@ function exportarMonotributoEfectivo(liqs, mes, anio) {
         total, pagado, remanentePago(total, pagado), base.cbu || liq.cbu || "", base.cuit || "", incluye]);
     }
   }
-  if (!filas.length) { alert("No hay líneas de Monotributo / Efectivo con importe cargado."); return; }
+  if (!filas.length) return motivoSinFilas(liqs, ["efectivo", "monotributo"], "Monotributo / Efectivo");
   descargarExcelHoja({ headers: MONO_EF_HEADERS, anchos: [24, 12, 12, 26, 14, 14, 14, 26, 16, 30], hoja: "Sheet1", filas,
     nombreArchivo: `Monotributo_Efectivo_HQ_${String(mes).padStart(2, "0")}_${anio}.xlsx` });
 }
@@ -1775,6 +1799,15 @@ function PasoPagos({ mes, anio, cargandoPagos = false, liqStaff, liqOwners, liqE
   const [batchModal,  setBatchModal]  = useState(null); // { tipo }
   const [reabrirLiq,  setReabrirLiq]  = useState(null); // liq a reabrir (confirm)
   const [galiciaTxt,  setGaliciaTxt]  = useState(false); // modal .txt Galicia nuevo formato
+  const [aviso, setAviso] = useState(null);               // por qué un export no descargó nada
+  const avisoTimer = useRef(null);
+  const exportar = (fn) => {
+    const motivo = fn();
+    if (!motivo) return;
+    setAviso(motivo);
+    clearTimeout(avisoTimer.current);
+    avisoTimer.current = setTimeout(() => setAviso(null), 6000);
+  };
 
   // Cerradas arriba, borradores abajo; dentro de cada grupo, por total de mayor a menor.
   const todos = useMemo(() => {
@@ -1968,20 +2001,20 @@ function PasoPagos({ mes, anio, cargandoPagos = false, liqStaff, liqOwners, liqE
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "16px 0", borderTop: `1px solid ${T.border}`, marginTop: 8 }}>
         <BotonHaberesGalicia btnStyle={BTN_EXPORT("#ea580c")} grupos={[{ id: "hq" }]}
-          onTransferencia={() => exportarHaberes(todos, mes, anio)} onArchivo={() => setGaliciaTxt(true)} />
-        <button style={BTN_EXPORT("#475569")} onClick={() => exportarControlHaberes(todos, mes, anio)}>
+          onTransferencia={() => exportar(() => exportarHaberes(todos, mes, anio))} onArchivo={() => setGaliciaTxt(true)} />
+        <button style={BTN_EXPORT("#475569")} onClick={() => exportar(() => exportarControlHaberes(todos, mes, anio))}>
           📋 Control Haberes
         </button>
-        <button style={BTN_EXPORT("#0369a1")} onClick={() => exportarDeposito(todos, mes, anio)}>
+        <button style={BTN_EXPORT("#0369a1")} onClick={() => exportar(() => exportarDeposito(todos, mes, anio))}>
           📥 Excel Depósito
         </button>
-        <button style={BTN_EXPORT("#7c3aed")} onClick={() => exportarTransferenciaFinanciera(todos, mes, anio)}>
+        <button style={BTN_EXPORT("#7c3aed")} onClick={() => exportar(() => exportarTransferenciaFinanciera(todos, mes, anio))}>
           📥 Excel Trf. financiera
         </button>
-        <button style={BTN_EXPORT("#ca8a04")} onClick={() => exportarMonotributoEfectivo(todos, mes, anio)}>
+        <button style={BTN_EXPORT("#ca8a04")} onClick={() => exportar(() => exportarMonotributoEfectivo(todos, mes, anio))}>
           📥 Excel Monotributo + Efectivo
         </button>
-        <div style={{ flex: 1 }} />
+        <div style={{ flex: 1, fontSize: 12, color: "#b45309", paddingLeft: 6 }}>{aviso}</div>
         <button onClick={onAtras} style={BTN_SECONDARY}>← Atrás</button>
       </div>
 
