@@ -49,8 +49,8 @@ const ANO_DEF = hoy.getMonth() === 0 ? hoy.getFullYear() - 1 : hoy.getFullYear()
 // se guarda aparte, en `solapa`.
 const SOLAPAS = [
   { key: "comision_resultados", label: "Comisión sobre resultados" },
-  { key: "servicio_custom",     label: "Servicio Custom" },
   { key: "comision_referido",   label: "Comisión por referido" },
+  { key: "servicio_custom",     label: "Servicio Custom" },
   { key: "otros",               label: "Otros conceptos", ayuda: "Reemplazos, horas extras, ajustes puntuales, adicionales, running, programaciones…" },
 ];
 const SOLAPA_KEYS = new Set(SOLAPAS.map(c => c.key));
