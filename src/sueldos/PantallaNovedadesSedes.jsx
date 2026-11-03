@@ -51,6 +51,7 @@ const SOLAPAS = [
   { key: "comision_resultados", label: "Comisión sobre resultados" },
   { key: "comision_referido",   label: "Comisión por referido" },
   { key: "servicio_custom",     label: "Servicio Custom" },
+  { key: "feriados",            label: "Feriados" },
   { key: "otros",               label: "Otros conceptos", ayuda: "Reemplazos, horas extras, ajustes puntuales, adicionales, running, programaciones…" },
 ];
 const SOLAPA_KEYS = new Set(SOLAPAS.map(c => c.key));
@@ -61,6 +62,7 @@ function solapaDe(n) {
   const cta = normTxt(n.cuenta_contable_nombre), txt = normTxt(n.descripcion);
   if (/referid/.test(txt)) return "comision_referido";
   if (/custom/.test(txt)) return "servicio_custom";
+  if (/feriad/.test(txt)) return "feriados";
   if (/resultado/.test(cta) || /comisi/.test(txt)) return "comision_resultados";
   return "otros";
 }
