@@ -5,7 +5,8 @@ import {
   normalizarLiqs, rollupPersonaMes, porPuesto, escalera, porSede, porPersona, evolucionMensual, objetivosGrupales, lecturas,
 } from "../lib/compensacionSedes";
 import { fmtPesos } from "./sueldosUi";
-import { copiarReporteComoImagen } from "../numbers/fotoReporte";
+import { T, fmt, fmtN, fmtM, td, tdR, lbl, sel, btn, vacio, COLOR_BASE, COLOR_INC, colsRatio, copiarImagenReporte } from "./compensacionEstilos";
+import { Seccion, Lectura, Kpi, Sel, Tabla, CeldasRatio, Cascada, TablaEscalera } from "./compensacionUi";
 import { RowMenu } from "../numbers/comprobantesUi";
 
 // Reporte "Compensación · Sedes": cómo cobra el staff de Sedes, para el management. Dos mundos
@@ -13,65 +14,13 @@ import { RowMenu } from "../numbers/comprobantesUi";
 // sueldo de cada puesto escalón por escalón, de la base (tarifa o fijo) a lo pagado. Solo meses
 // CERRADOS, campos congelados de la liquidación. Cálculo en lib/compensacionSedes.js.
 
-const T = {
-  bg: "#f8fafc", card: "#ffffff", border: "#e2e8f0", text: "#1e293b", muted: "#64748b", dim: "#94a3b8",
-  blue: "#2563eb", green: "#16a34a", red: "#dc2626", head: "#f1f5f9", dark: "#1e2022", fluo: "#ADFF19",
-  font: "'Inter', system-ui, sans-serif",
-};
-const fmt   = (n) => fmtPesos(n, { guion: "vacio" });
-const fmtN  = (n) => (n == null ? "—" : Math.round(Number(n) || 0).toLocaleString("es-AR"));
-const fmtM  = (n) => (n == null ? "—" : `${(Number(n) / 1e6).toLocaleString("es-AR", { maximumFractionDigits: 1 })} M`);
-const th = { padding: "7px 10px", textAlign: "left", fontWeight: 600, color: T.muted, fontSize: 11, letterSpacing: ".04em",
-  borderBottom: `1px solid ${T.border}`, whiteSpace: "nowrap" };
-const thR = { ...th, textAlign: "right" };
-const td  = { padding: "6px 10px", fontSize: 13, whiteSpace: "nowrap", borderBottom: `1px solid ${T.border}` };
-const tdR = { ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" };
-const lbl = { fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".06em", color: T.muted };
-const sel = { border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 10px", fontSize: 13, fontFamily: T.font,
-  background: "#fff", color: T.text };
-const btn = (primary) => ({ background: primary ? T.blue : "transparent", color: primary ? "#fff" : T.muted,
-  border: primary ? "none" : `1px solid ${T.border}`, borderRadius: 7, padding: "7px 14px", fontSize: 13, fontWeight: 600,
-  cursor: "pointer", fontFamily: T.font });
-const vacio = { border: `1px dashed ${T.border}`, borderRadius: 8, padding: 40, textAlign: "center", color: T.muted, fontSize: 13 };
-const COLOR_BASE = "#2a78d6", COLOR_INC = "#1baf7a";
 const hoy = new Date();
 const MES_ACTUAL = { mes: hoy.getMonth() + 1, anio: hoy.getFullYear() };
 const ANIOS = [hoy.getFullYear() - 1, hoy.getFullYear(), hoy.getFullYear() + 1].filter(a => a >= 2026);
-const MSG_COPIADA = "✔ Imagen copiada — pegala en PowerPoint (Ctrl+V).";
 const VISTAS = [{ key: "mensual", label: "Mensual" }, { key: "evolucion", label: "Evolución mensual" }];
 // Tilda/destilda una clave en un estado Set.
 const toggleEn = (set) => (key) => set(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
 
-// ── Piezas visuales ─────────────────────────────────────────────────────────────────────────────
-function Seccion({ titulo, sub, children }) {
-  return (
-    <div className="cs-seccion" style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, padding: "16px 18px", marginBottom: 18, breakInside: "avoid" }}>
-      <div style={{ fontSize: 15, fontWeight: 800, color: T.text }}>{titulo}</div>
-      {sub && <div style={{ fontSize: 12, color: T.muted, marginBottom: 10 }}>{sub}</div>}
-      {children}
-    </div>
-  );
-}
-function Lectura({ children }) {
-  if (!children) return null;
-  return <div style={{ fontSize: 12.5, color: T.text, marginTop: 10, lineHeight: 1.45 }}><b>Lectura:</b> {children}</div>;
-}
-function Kpi({ label, value, sub, destacado }) {
-  return (
-    <div style={{ flex: "1 1 150px", minWidth: 150, borderRadius: 10, padding: "12px 14px",
-      background: destacado ? T.dark : T.card, border: `1px solid ${destacado ? T.dark : T.border}` }}>
-      <div style={{ ...lbl, color: destacado ? "rgba(255,255,255,.6)" : T.muted }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 800, marginTop: 4, color: destacado ? T.fluo : T.text, fontVariantNumeric: "tabular-nums" }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, marginTop: 2, color: destacado ? "rgba(255,255,255,.7)" : T.muted }}>{sub}</div>}
-    </div>
-  );
-}
-function Sel({ label, value, onChange, children, disabled }) {
-  return (
-    <label style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={lbl}>{label}</span>
-      <select style={sel} value={value} onChange={e => onChange(e.target.value)} disabled={disabled}>{children}</select></label>
-  );
-}
 // Grupo de pestañas (mundo, vista): botones pegados, el activo en oscuro.
 function Pestanas({ opciones, value, onChange, grande }) {
   return (
@@ -84,65 +33,6 @@ function Pestanas({ opciones, value, onChange, grande }) {
         </button>
       ))}
     </div>
-  );
-}
-// Tabla con encabezado declarativo: cols = [[título, "r" si va a la derecha | "c" centrado], ...].
-function Tabla({ cols, fontSize, children }) {
-  const estilo = (al) => (al === "r" ? thR : al === "c" ? { ...th, textAlign: "center" } : th);
-  return (
-    <div style={{ overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize }}>
-        <thead><tr style={{ background: T.head }}>{cols.map(([t, al], i) => <th key={i} style={estilo(al)}>{t}</th>)}</tr></thead>
-        <tbody>{children}</tbody>
-      </table>
-    </div>
-  );
-}
-// Las celdas de ratios que comparten Por puesto, Por sede y Por persona: base → final (+mejora), promedio
-// mensual (solo coaches: para Front Desk "cobrado por mes" ya es el promedio), % incentivos.
-function CeldasRatio({ r, fmtU, esCoach }) {
-  return (<>
-    <td style={tdR}>{fmtU(r.baseUnidad)}</td>
-    <td style={{ ...tdR, fontWeight: 700 }}>{fmtU(r.finalUnidad)}{r.mejoraPct != null && <span style={{ color: T.green, fontSize: 11, fontWeight: 600 }}> {fmtPct(r.mejoraPct, true)}</span>}</td>
-    {esCoach && <td style={tdR}>{fmt(r.promedioMensual)}</td>}
-    <td style={tdR}>{fmtPct(r.pctIncentivos)}</td>
-  </>);
-}
-const colsRatio = (esCoach) => [[esCoach ? "$/h tarifa" : "Fijo / mes", "r"], [esCoach ? "$/h c/ incentivos" : "Cobrado / mes", "r"], ...(esCoach ? [["Promedio mensual", "r"]] : []), ["% incentivos", "r"]];
-// Cascada: la escalera como barras flotantes, de la base (izquierda) a lo pagado (derecha), por unidad.
-function Cascada({ pasos, W = 860, H = 280 }) {
-  const padL = 64, padR = 12, padT = 26, padB = 40;
-  const plotW = W - padL - padR, plotH = H - padT - padB;
-  const items = pasos.map((p, i) => ({ ...p, desde: i === 0 ? 0 : pasos[i - 1].acumUnidad, hasta: p.acumUnidad }));
-  const fin = pasos[pasos.length - 1]?.acumUnidad || 0;
-  items.push({ key: "__total", corto: "Con incentivos", desde: 0, hasta: fin, total: true });
-  const maxV = Math.max(1, ...items.map(i => Math.max(i.desde, i.hasta)));
-  const niceMax = (() => { const p = Math.pow(10, Math.floor(Math.log10(maxV))); const f = maxV / p; const n = f <= 1 ? 1 : f <= 1.5 ? 1.5 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10; return n * p; })();
-  const y = (v) => padT + plotH * (1 - Math.max(0, v) / niceMax);
-  const band = plotW / items.length, barW = Math.min(60, band * 0.64);
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block" }}>
-      {[0, 0.25, 0.5, 0.75, 1].map(f => (
-        <g key={f}>
-          <line x1={padL} y1={y(niceMax * f)} x2={W - padR} y2={y(niceMax * f)} stroke="#e5e7eb" strokeWidth="1" />
-          <text x={padL - 8} y={y(niceMax * f) + 3} textAnchor="end" fontSize="10" fill="#898781">{fmtN(niceMax * f)}</text>
-        </g>
-      ))}
-      {items.map((it, i) => {
-        const x = padL + i * band + (band - barW) / 2, delta = it.hasta - it.desde;
-        const top = y(Math.max(it.desde, it.hasta)), h = Math.max(1, Math.abs(y(it.desde) - y(it.hasta)));
-        const color = it.total ? T.dark : it.base ? COLOR_BASE : delta < 0 ? T.red : COLOR_INC;
-        const etiqueta = it.total || it.base ? fmtN(it.hasta) : `${delta < 0 ? "−" : "+"}${fmtN(Math.abs(delta))}`;
-        return (
-          <g key={it.key}>
-            <rect x={x} y={top} width={barW} height={h} rx={3} fill={color}><title>{`${it.label || it.corto}: ${fmtN(it.hasta)}`}</title></rect>
-            {i < items.length - 1 && <line x1={x + barW} y1={y(it.hasta)} x2={x + band} y2={y(it.hasta)} stroke="#94a3b8" strokeWidth="1" strokeDasharray="3 3" />}
-            <text x={x + barW / 2} y={top - 5} textAnchor="middle" fontSize="10" fontWeight="700" fill="#334155">{etiqueta}</text>
-            <text x={x + barW / 2} y={H - padB + 15} textAnchor="middle" fontSize="10" fill="#52514e">{it.corto}</text>
-          </g>
-        );
-      })}
-    </svg>
   );
 }
 // Barras agrupadas verticales: dos series por mes (base vs con incentivos) + tick de referencia.
@@ -350,88 +240,13 @@ export default function PantallaCompensacionSedes({ pais = "AR" }) {
   const colTotal = esc.columnas[esc.columnas.length - 1];
   const sinDatos = loading || !meses.length;
 
-  // Copiar como imagen: primero el helper compartido (SVG foreignObject → PNG → portapapeles); si el
-  // navegador no lo permite, html2canvas (el de los recibos) y, si tampoco deja escribir el portapapeles,
-  // se descarga el PNG. Así siempre queda una imagen para pegar en PowerPoint.
   const copiarFoto = async () => {
-    const node = reportRef.current;
-    if (!node) return;
-    const nombre = `Compensacion_${mundo.label.replace(/\s+/g, "")}_${pais}_${periodoLabel.replace(/[^\wÀ-ÿ]+/g, "_")}.png`;
-    try {
-      await copiarReporteComoImagen(node, { caption: `Compensación · ${mundo.label} · ${pais} · ${periodoLabel} · ${sedeLabel}` });
-      setFotoMsg(MSG_COPIADA);
-    } catch {
-      try {
-        const { default: html2canvas } = await import("html2canvas");
-        const canvas = await html2canvas(node, { backgroundColor: "#ffffff", scale: 2 });
-        const blob = await new Promise((res, rej) => canvas.toBlob(b => (b ? res(b) : rej(new Error("sin imagen"))), "image/png"));
-        try {
-          await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-          setFotoMsg(MSG_COPIADA);
-        } catch {
-          const a = document.createElement("a");
-          a.href = URL.createObjectURL(blob); a.download = nombre; a.click();
-          setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-          setFotoMsg(`El navegador no deja copiar al portapapeles: se descargó ${nombre}.`);
-        }
-      } catch { setFotoMsg("No se pudo generar la imagen en este navegador."); }
-    }
+    if (!reportRef.current) return;
+    setFotoMsg(await copiarImagenReporte(reportRef.current, {
+      nombre: `Compensacion_${mundo.label.replace(/\s+/g, "")}_${pais}_${periodoLabel.replace(/[^\wÀ-ÿ]+/g, "_")}.png`,
+      caption: `Compensación · ${mundo.label} · ${pais} · ${periodoLabel} · ${sedeLabel}`,
+    }));
     setTimeout(() => setFotoMsg(null), 4500);
-  };
-
-  // Tabla de la escalera (escalón × columna). `acumulado`: cada celda muestra el acumulado por unidad en negrita
-  // y, debajo, lo que suma el escalón (vista Mensual); si no, solo lo que suma (vista Evolución). Los escalones que
-  // no entran al $/h (coaches: clases especiales y otras novedades) van después de la línea oscura, por persona y
-  // mes, y al final el sueldo promedio que sí los incluye.
-  const signo = (v) => (v < 0 ? "−" : "+");
-  const TablaEscalera = ({ esc, acumulado }) => {
-    const enRatio = esc.pasos.filter(p => !p.fueraRatio), fuera = esc.pasos.filter(p => p.fueraRatio);
-    const idx = (key) => esc.pasos.findIndex(p => p.key === key);
-    const colKey = (c) => c.rol ?? c.key;
-    return (
-      <Tabla cols={[["Escalón"], ...esc.columnas.map(c => [c.label, "r"])]}>
-        {enRatio.map((p, i) => (
-          <tr key={p.key} style={{ background: p.base ? T.bg : undefined }}>
-            <td style={{ ...td, whiteSpace: "normal" }}><span style={{ color: T.dim, marginRight: 8, fontSize: 11 }}>{i + 1}</span>{p.label}</td>
-            {esc.columnas.map(c => {
-              const x = c.pasos[idx(p.key)];
-              return (
-                <td key={colKey(c)} style={{ ...tdR, lineHeight: 1.25 }}>
-                  <div style={{ fontWeight: acumulado || p.base ? 700 : 500, color: !acumulado && x.monto < 0 ? T.red : T.text }}>
-                    {acumulado ? fmtU(x.acumUnidad) : p.base ? fmtU(x.porUnidad) : `${signo(x.monto)}${fmtN(Math.abs(x.porUnidad))}`}
-                  </div>
-                  <div style={{ fontSize: 11, color: !acumulado || p.base ? T.muted : x.monto < 0 ? T.red : T.green }}>
-                    {p.base ? `${fmtPct(x.pctTotal)} de lo pagado` : acumulado ? `${signo(x.monto)}${fmtN(Math.abs(x.porUnidad))} · ${fmtPct(Math.abs(x.pctTotal))}` : fmtPct(Math.abs(x.pctTotal))}
-                  </div>
-                </td>
-              );
-            })}
-          </tr>
-        ))}
-        <tr style={{ background: T.dark, color: "#fff", fontWeight: 700 }}>
-          <td style={{ ...td, borderBottom: "none" }}>{esCoach ? "$/h con incentivos" : "Sueldo promedio por mes"} · mejora sobre la base</td>
-          {esc.columnas.map(c => <td key={colKey(c)} style={{ ...tdR, borderBottom: "none" }}>{fmtU(c.finalUnidad)} <span style={{ color: T.fluo }}>{fmtPct(c.mejoraPct, true)}</span></td>)}
-        </tr>
-        {fuera.length > 0 && <>
-          <tr><td colSpan={esc.columnas.length + 1} style={{ ...td, fontSize: 11, color: T.muted, paddingTop: 10, whiteSpace: "normal" }}>
-            Además cobró, por persona y mes (trabajo cuyas horas no están cargadas: no entra al $/h)</td></tr>
-          {fuera.map(p => (
-            <tr key={p.key}>
-              <td style={{ ...td, whiteSpace: "normal" }}>{p.label}</td>
-              {esc.columnas.map(c => { const x = c.pasos[idx(p.key)]; return (
-                <td key={colKey(c)} style={{ ...tdR, lineHeight: 1.25 }}>
-                  <div>{signo(x.monto)}{fmt(Math.abs(x.porPersonaMes))}</div>
-                  <div style={{ fontSize: 11, color: T.muted }}>{fmtPct(Math.abs(x.pctTotal))}</div>
-                </td>); })}
-            </tr>
-          ))}
-          <tr style={{ background: T.bg, fontWeight: 700 }}>
-            <td style={td}>Sueldo promedio por mes, con todo</td>
-            {esc.columnas.map(c => <td key={colKey(c)} style={tdR}>{fmt(c.promedioMensual)}</td>)}
-          </tr>
-        </>}
-      </Tabla>
-    );
   };
 
   return (
@@ -499,7 +314,7 @@ export default function PantallaCompensacionSedes({ pais = "AR" }) {
             {/* Escalera del mes */}
             <Seccion titulo="La escalera: de la base a los incentivos" sub={`Cómo sube el sueldo escalón por escalón, en ${unidadLabel}. Barras: ${colTotal.label.toLowerCase()}. Tabla: cada puesto.`}>
               {colTotal && <Cascada pasos={colTotal.pasos.map(p => ({ ...p, ...esc.pasos.find(e => e.key === p.key) })).filter(p => !p.fueraRatio)} />}
-              <div style={{ marginTop: 14 }}><TablaEscalera esc={esc} acumulado /></div>
+              <div style={{ marginTop: 14 }}><TablaEscalera esc={esc} acumulado fmtU={fmtU} esCoach={esCoach} /></div>
               <Lectura>{lec.escalera}</Lectura>
             </Seccion>
 
@@ -581,7 +396,7 @@ export default function PantallaCompensacionSedes({ pais = "AR" }) {
 
             {/* Escalera por mes */}
             <Seccion titulo="La escalera, mes a mes" sub={`Cuánto suma cada escalón por mes, en ${unidadLabel}, y qué parte de lo pagado es. Se ve qué escalón crece o cae.`}>
-              <TablaEscalera esc={escMes} />
+              <TablaEscalera esc={escMes} fmtU={fmtU} esCoach={esCoach} />
             </Seccion>
 
             {/* Por puesto, mes a mes */}

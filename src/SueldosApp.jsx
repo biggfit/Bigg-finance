@@ -3,6 +3,7 @@ import LOGO_SRC                  from "./assets/biggLogo";
 import PantallaLegajos          from "./sueldos/PantallaLegajos";
 import PantallaAguinaldo        from "./sueldos/PantallaAguinaldo";
 import PantallaCompensacionSedes from "./sueldos/PantallaCompensacionSedes";
+import PantallaSueldosFranquiciados from "./sueldos/PantallaSueldosFranquiciados";
 import PantallaLiquidacionSedes from "./sueldos/PantallaLiquidacionSedes";
 import PantallaLiquidacionHQ   from "./sueldos/PantallaLiquidacionHQ";
 import PantallaNovedades        from "./sueldos/PantallaNovedades";
@@ -41,6 +42,7 @@ const NAV = [
   { id: "cargas",     icon: "📋", label: "Cargas sociales" },
   { id: "legajos",    icon: "👤", label: "Legajos" },
   { id: "comp-sedes", icon: "📊", label: "Compensación · Sedes" },
+  { id: "franq-sedes", icon: "🤝", label: "Sueldos Sedes · Franquiciados" },
 ];
 
 export default function SueldosApp({ onVolver }) {
@@ -71,6 +73,7 @@ export default function SueldosApp({ onVolver }) {
     "resumen":    "Resúmenes",
     "aguinaldo":  "Aguinaldo (SAC)",
     "comp-sedes": "Compensación · Sedes",
+    "franq-sedes": "Sueldos Sedes · Franquiciados",
     "categorias": "Liquidación · Sedes › Categorías",
     "objetivos":  "Liquidación · Sedes › Objetivos",
     "liq-hq":     "Liquidación · HQ",
@@ -214,6 +217,7 @@ export default function SueldosApp({ onVolver }) {
           {activeId === "resumen"    && <PantallaResumen          pais={paisActivo} />}
           {activeId === "aguinaldo"  && <PantallaAguinaldo        pais={paisActivo} />}
           {activeId === "comp-sedes" && <PantallaCompensacionSedes pais={paisActivo} />}
+          {activeId === "franq-sedes" && <PantallaSueldosFranquiciados pais={paisActivo} />}
           {activeId === "sueldos-pagar" && <PantallaSueldosPagar  pais={paisActivo} onNavigate={handleNavigate} />}
           {activeId === "categorias" && <PantallaCategorias       pais={paisActivo} />}
           {activeId === "objetivos"  && <PantallaObjetivos        pais={paisActivo} />}
