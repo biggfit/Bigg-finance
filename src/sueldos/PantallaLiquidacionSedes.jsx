@@ -8,7 +8,7 @@ import {
   fetchCentrosCostoNumbers, fetchSociedadesNumbers, fetchCuentasBancariasNumbers,
   fetchPagos, appendPago, appendPagos, deletePago, nuevoLote, updateLegajo, fetchHorasDesdeEye, fetchCdpDesdeEye,
   fetchNovedades,
-  ROLES_COACHES, ROLES_FRONT, ROLES_LIMP, ROL_CONCEPTO, conceptoRunning,
+  ROLES_COACHES, ROLES_FRONT, ROLES_LIMP, ROL_CONCEPTO, conceptoRunning, rolRunningDe, esSedeRunning,
   FP_TIPO_LABEL, FP_TIPO_COLOR, esTransferencia,
   idLiqDe, lineaLiq, sociedadDeFormaPago, saveLiquidacionesLinesBatch, isCerrada,
   estadoPago, remanentePago, PAGO_EPS, reabrirLiquidaciones, idsLiqEnHoja,
@@ -68,7 +68,7 @@ const rowKeyDe = (legajo_id, sede_id) => `${legajo_id || ""}__${sede_id || ""}`;
 //  - Coach Senior y Coach: horas regulares + feriado + domingo + objetivos individuales (asignado).
 //  - Encargado y Ventas (front): SOLO sueldo básico. El feriado del front viene como novedad (texto
 //    libre), no como campo de la fila → se EXCLUYE a propósito (cruzarlo sería frágil, decisión del usuario).
-//  - Yoga, Huergo A/B y Limpieza: EXENTOS de la comisión grupal (base 0).
+//  - Yoga, Huergo A/B, Running A/B y Limpieza: EXENTOS de la comisión grupal (base 0).
 //  - Rol de otro ámbito (HQ, etc.) que dio clases en la sede: como coach (igual que su tarifa de hora,
 //    ver tarifaHoraRow). La fila guarda el rol del LEGAJO: Facundo Fernandez (HQ) en Recoleta sep-2026
 //    quedaba sin la grupal que en ago-2026 cobró como COACH.
@@ -76,7 +76,7 @@ function baseGrupalDe(rol, { horasMonto, feriadosMonto, domingosMonto, asignado,
   if (rol === "COACH_SENIOR" || rol === "COACH" || !ROLES_SEDES_ALL.includes(rol))
     return horasMonto + feriadosMonto + domingosMonto + asignado;
   if (rol === "ENCARGADO" || rol === "VENTAS")   return sueldoBase;
-  return 0;   // Yoga, Huergo A/B, Limpieza
+  return 0;   // Yoga, Huergo A/B, Running A/B, Limpieza
 }
 
 // Orden de visualización: primero por rol (Encargados → Vendedores → Limpieza → Coaches),
@@ -664,7 +664,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
           legajo_id: leg.id, legajo_nombre: leg.nombre,
           sociedad_id: leg.sociedad_id ?? "", sociedad_nombre: leg.sociedad_nombre ?? "",
           sede_id: sede.id, sede_nombre: sede.nombre,
-          rol: leg.rol || "COACH",
+          rol: esSedeRunning(sede) ? rolRunningDe(leg.running_categoria) : (leg.rol || "COACH"),
           // El sueldo base de Sedes solo aplica a roles de Sedes. Si quien dio la clase es
           // de otro ámbito (HQ, etc.), en Sedes cobra SOLO sus horas, no su sueldo.
           sueldo_base: !fijoAjeno && ROLES_SEDES_ALL.includes(leg.rol) ? (Number(leg.sueldo_total) || 0) : 0 };
@@ -677,12 +677,12 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
             legajo_id: legInact.id, legajo_nombre: legInact.nombre,
             sociedad_id: legInact.sociedad_id ?? "", sociedad_nombre: legInact.sociedad_nombre ?? "",
             sede_id: sede.id, sede_nombre: sede.nombre,
-            rol: legInact.rol || "COACH",
+            rol: esSedeRunning(sede) ? rolRunningDe(legInact.running_categoria) : (legInact.rol || "COACH"),
             sueldo_base: ROLES_SEDES_ALL.includes(legInact.rol) ? (Number(legInact.sueldo_total) || 0) : 0 };
         } else {
           key  = `eye__${normCoach}__${sede.id}`;
           seed = { _id: key, bucket: "sin_legajo",
-            legajo_nombre: item.coach_name, sede_id: sede.id, sede_nombre: sede.nombre, rol: "COACH" };
+            legajo_nombre: item.coach_name, sede_id: sede.id, sede_nombre: sede.nombre, rol: esSedeRunning(sede) ? "RUNNING_B" : "COACH" };
         }
       }
       if (!byKey.has(key)) byKey.set(key, baseRow(seed));

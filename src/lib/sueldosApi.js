@@ -216,6 +216,10 @@ const ROL_SHEET_MAP = {
   "BOTANICO":      "BOTANICO",
   "BOTÁNICO":      "BOTANICO",
   "YOGA":          "YOGA",
+  "HUERGO A":      "HUERGO_A",
+  "HUERGO B":      "HUERGO_B",
+  "RUNNING A":     "RUNNING_A",
+  "RUNNING B":     "RUNNING_B",
   // Códigos internos (ya normalizados) → pass-through
   "COACH_SENIOR":  "COACH_SENIOR",
   "COACH":         "COACH",
@@ -1130,8 +1134,8 @@ export async function fetchCdpDesdeEye(mes, anio, pais = "", locationIds = [], f
 
 // ── CONSTANTES ────────────────────────────────────────────────────────────────
 
-export const ROLES_SEDES   = ["COACH_SENIOR", "COACH", "YOGA", "HUERGO_A", "HUERGO_B", "ENCARGADO", "VENTAS", "LIMPIEZA"];
-export const ROLES_COACHES = ["COACH_SENIOR", "COACH", "YOGA", "HUERGO_A", "HUERGO_B"];
+export const ROLES_SEDES   = ["COACH_SENIOR", "COACH", "YOGA", "HUERGO_A", "HUERGO_B", "RUNNING_A", "RUNNING_B", "ENCARGADO", "VENTAS", "LIMPIEZA"];
+export const ROLES_COACHES = ["COACH_SENIOR", "COACH", "YOGA", "HUERGO_A", "HUERGO_B", "RUNNING_A", "RUNNING_B"];
 export const ROLES_FRONT   = ["ENCARGADO", "VENTAS"];
 export const ROLES_LIMP    = ["LIMPIEZA"];
 export const ROLES_HQ      = ["HQ", "HQ_OWNER", "HQ_EXT"];
@@ -1143,17 +1147,22 @@ export const ROL_CONCEPTO = {
   YOGA:         "YOGA",
   HUERGO_A:     "HUERGO A",   // tarifas de hora específicas de Huergo (workaround por-línea; big picture = tarifa por sede)
   HUERGO_B:     "HUERGO B",
+  RUNNING_A:    "RUNNING A",  // sede Running (Eye "Running Team"): toda clase de la sede se paga a esta tarifa (Martín, 3/11/2026)
+  RUNNING_B:    "RUNNING B",
 };
 
 // Conceptos de su_categorias que la liquidación de Sedes lee (montosDeRow / desglosarLiquidacion).
 // Categorías los separa de los "solo referencia". Si se suma un getTarifa nuevo, agregarlo acá.
 export const CONCEPTOS_CALCULO_SEDES = [
-  ...Object.values(ROL_CONCEPTO), "DOMINGO", "RUNNING A", "RUNNING B", "CDP COACHES", "CDP FRONT DESK", "ONE SHOT",
+  ...Object.values(ROL_CONCEPTO), "DOMINGO", "CDP COACHES", "CDP FRONT DESK", "ONE SHOT",
 ];
 
 // Tarifa de running por persona (independiente del rol, que define sus horas de BIGG CLASS):
 // el legajo marcado A (ej. quien además programa) cobra RUNNING A; cualquier otro, RUNNING B.
 export const conceptoRunning = (categoria) => (categoria === "A" ? "RUNNING A" : "RUNNING B");
+// Rol de fila en la sede Running según la categoría del legajo (A → RUNNING_A; el resto → RUNNING_B).
+export const rolRunningDe = (categoria) => (categoria === "A" ? "RUNNING_A" : "RUNNING_B");
+export const esSedeRunning = (sede) => /running/i.test(sede?.nombre ?? sede?.sede_nombre ?? "");
 
 // Desglose por concepto de una liquidación (para la ficha de Resumen, solo lectura).
 // Sedes persiste cantidades (horas_cant, cdp_cant) pero no sus importes → se recalculan

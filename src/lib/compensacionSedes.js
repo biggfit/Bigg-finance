@@ -15,7 +15,8 @@
 //    (running, custom, programaciones) y otras (reemplazos, feriados, eventos) pagan trabajo cuyas horas NO están
 //    cargadas: para coaches quedan FUERA del $/h (solo en el total y el sueldo promedio). Martín, 20/10.
 //  - Se usan SOLO los campos CONGELADOS de la liquidación cerrada (no se recalcula con tarifas actuales).
-//  - Fuera del reporte: Limpieza (100 % fijo, sin incentivos), roles HQ* y Huergo (sede y roles HUERGO_*).
+//  - Fuera del reporte: Limpieza (100 % fijo, sin incentivos), roles HQ*, Huergo y Running (sede y roles HUERGO_* / RUNNING_*:
+//    cobran por clase a tarifa propia, mezclarlos inflaría el $/h de coaching).
 //
 // Flujo: filtrarSedes → mesesCerrados → filtrarSedeMundo → normalizarLiqs (desglose una sola vez, fijo
 // contado una vez por legajo×mes) → rollupPersonaMes → porPuesto / porPersona / evolucionMensual → escalera;
@@ -112,7 +113,7 @@ export function desglosarLiqCongelada(liq, tarifaFallback = 0) {
 
 // ── Alcance ───────────────────────────────────────────────────────────────────────────────────────
 export const fueraDelReporte = ({ rol, sede_nombre }) =>
-  /^(HQ|HUERGO|LIMPIEZA)/i.test(rol || "") || /huergo/i.test(sede_nombre || "");
+  /^(HQ|HUERGO|RUNNING|LIMPIEZA)/i.test(rol || "") || /huergo|running/i.test(sede_nombre || "");
 export function filtrarSedes(liqs, { pais, anio, ambitoDe }) {
   return (liqs || []).filter(l =>
     ambitoDe(l) === "sedes" && !fueraDelReporte(l) && (!pais || !l.pais || l.pais === pais) && (anio == null || num(l.anio) === num(anio)));

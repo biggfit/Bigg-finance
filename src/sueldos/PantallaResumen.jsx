@@ -27,7 +27,7 @@ const ANO_DEF = hoy.getMonth() === 0 ? hoy.getFullYear() - 1 : hoy.getFullYear()
 const ROL_LABEL = {
   COACH_SENIOR: "Coach Senior", COACH: "Coach", BOTANICO: "Botánico", YOGA: "Yoga",
   ENCARGADO: "Encargado", VENTAS: "Ventas", LIMPIEZA: "Limpieza",
-  HUERGO_A: "Huergo A", HUERGO_B: "Huergo B",
+  HUERGO_A: "Huergo A", HUERGO_B: "Huergo B", RUNNING_A: "Running A", RUNNING_B: "Running B",
   HQ: "HQ", HQ_OWNER: "HQ Owner", HQ_EXT: "HQ Externo",
 };
 
