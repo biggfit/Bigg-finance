@@ -2,6 +2,7 @@ import { useState } from "react";
 import LOGO_SRC from "./assets/biggLogo";
 import PantallaReportes, { Icono } from "./numbers/PantallaReportes";
 import { TABS } from "./numbers/reportes/reportesMenu";
+import { forzarRefresco } from "./lib/cacheBust";
 
 // ─── BIGG Reportes: los mismos reportes de Numbers, con sidebar propio ──────────────────────────────
 // Solo lectura. No tiene datos propios ni escrituras: monta PantallaReportes en modo controlado (tab/onTab), que
@@ -29,7 +30,7 @@ const T = {
 // construcción va al final de su grupo, en gris, igual que en el menú de tarjetas.
 const MIRADAS = [
   { id: "comite",   label: "Comité",          hint: "Cómo nos fue, en pocos números",
-    tabs: ["pl_bigg", "an_ventas", "posicion_fin", "an_margenes", "consol_grupo"] },
+    tabs: ["pl_grupo", "pl_bigg", "an_ventas", "posicion_fin", "an_margenes", "consol_grupo"] },
   { id: "negocios", label: "Negocios",        hint: "Un P&L por operación",
     tabs: ["pl_sede", "op_espana", "op_colombia", "op_rosedal", "op_huergo", "op_puertos"] },
   { id: "partic",   label: "Participaciones", hint: "Socios, fondeo y saldos entre sociedades",
@@ -41,7 +42,7 @@ const MIRADAS = [
 const tabDe = (id) => TABS.find(t => t.id === id);
 
 export default function ReportesApp({ onVolver }) {
-  const [activeId, setActiveId] = useState("pl_bigg");
+  const [activeId, setActiveId] = useState("pl_grupo");
   const activeTab    = tabDe(activeId);
   const activeMirada = MIRADAS.find(m => m.tabs.includes(activeId));
 
@@ -109,6 +110,11 @@ export default function ReportesApp({ onVolver }) {
           <span style={{ fontSize: 12, fontWeight: 700, color: T.muted }}>{activeMirada?.label ?? ""}</span>
           <span style={{ fontSize: 12, color: T.muted }}>›</span>
           <span style={{ fontSize: 12, fontWeight: 700, color: T.bodyText }}>{activeTab?.label ?? ""}</span>
+          {/* Actualizar datos: igual que en Numbers (salta la caché de borde y recarga). */}
+          <button onClick={() => { forzarRefresco(); window.location.reload(); }} title="Actualizar datos"
+            style={{ marginLeft: "auto", background: "transparent", border: "none", cursor: "pointer", fontSize: 19, lineHeight: 1, padding: 6, borderRadius: 8, flexShrink: 0, display: "flex", alignItems: "center", color: T.muted }}
+            onMouseEnter={e => e.currentTarget.style.background = "#f1f5f9"}
+            onMouseLeave={e => e.currentTarget.style.background = "transparent"}>🔄</button>
         </div>
         <div style={{ flex: 1, overflow: "auto" }}>
           <PantallaReportes tab={activeId} onTab={setActiveId} />
