@@ -55,6 +55,12 @@ const normSinAcento = (s) => normC(s).normalize("NFD").replace(/\p{Diacritic}/gu
 const CALCULO_SET = new Set(CONCEPTOS_CALCULO_SEDES.map(normSinAcento));
 const impactaCalculo = (concepto) => CALCULO_SET.has(normSinAcento(concepto));
 const fmtMonto = fmtEntero;
+// "Firma" de lo que se guardaría (concepto + monto, sin filas vacías ni orden). Hay cambios sin
+// guardar solo si difiere de lo guardado: volver un valor a como estaba quita el cartel y el borrador.
+const firmaTarifas = (rows) => JSON.stringify(rows
+  .filter(r => String(r.concepto || "").trim())
+  .map(r => [normSinAcento(r.concepto), parseFloat(r.monto) || 0])
+  .sort((a, b) => a[0].localeCompare(b[0]) || a[1] - b[1]));
 // Borrador local de lo editado sin guardar (ver lib/borradorLocal), por país y mes.
 const draftKey = (p, a, m) => `categorias_sedes_borrador_${p}_${a}_${m}`;
 // Tildes guardados con el formato viejo (un objeto para todos los meses) → formato de useRowChecks.
@@ -74,7 +80,8 @@ export default function PantallaCategorias({ pais = "" }) {
   const [conceptos, setConceptos] = useState([]);
   const [loading,   setLoading]   = useState(true);
   const [saving,    setSaving]    = useState(false);
-  const [dirty,     setDirty]     = useState(false);
+  const [firmaGuardada, setFirmaGuardada] = useState(() => firmaTarifas([]));
+  const dirty = firmaTarifas(tarifas) !== firmaGuardada;
   const [prevPorConcepto, setPrevPorConcepto] = useState({});  // valor del mes anterior por concepto
   const [pctGlobal, setPctGlobal] = useState("");
   const [draftTs,   setDraftTs]   = useState(null);   // fecha del borrador recuperado (para el cartel)
@@ -112,6 +119,7 @@ export default function PantallaCategorias({ pais = "" }) {
       for (const c of (prevCats || [])) prevMap[normC(c.concepto)] = Number(c.monto) || 0;
       setPrevPorConcepto(prevMap);
       const draft = descartarBorrador ? null : readDraft(key);
+      setFirmaGuardada(firmaTarifas(cats.map(c => ({ concepto: c.concepto, monto: String(c.monto) }))));
       if (draft) {
         setTarifas(draft.rows.length ? draft.rows : [newRow()]);
         setPctGlobal(draft.pctGlobal ?? "");
@@ -122,7 +130,6 @@ export default function PantallaCategorias({ pais = "" }) {
         setDraftTs(null);
       }
       draftKeyRef.current = key;
-      setDirty(!!draft);
     } finally { setLoading(false); }
   }, []);
 
@@ -151,11 +158,10 @@ export default function PantallaCategorias({ pais = "" }) {
 
   const setTarifa = (idx, key, val) => {
     setTarifas(prev => prev.map((r, i) => i === idx ? { ...r, [key]: val } : r));
-    setDirty(true);
   };
-  const addTarifa = () => { setTarifas(prev => [...prev, newRow()]); setDirty(true); };
+  const addTarifa = () => { setTarifas(prev => [...prev, newRow()]); };
   const fijarGrupo = (idx) => setTarifas(prev => prev.map((r, i) => i === idx ? { ...r, _grupo: r.concepto } : r));
-  const delTarifa = (idx) => { setTarifas(prev => prev.filter((_, i) => i !== idx)); setDirty(true); };
+  const delTarifa = (idx) => { setTarifas(prev => prev.filter((_, i) => i !== idx)); };
 
   // Valor del mismo concepto el mes anterior (base del % de ajuste).
   const montoAnteriorDe = (concepto) => prevPorConcepto[normC(concepto)];
@@ -169,7 +175,6 @@ export default function PantallaCategorias({ pais = "" }) {
       const monto = (rawPct !== "" && !Number.isNaN(p)) ? String(Math.round(base * (1 + p / 100))) : r.monto;
       return { ...r, pct: rawPct, monto };
     }));
-    setDirty(true);
   };
 
   // % a todas: aplica sobre el valor del mes anterior de cada fila (las sin M-1 no se tocan).
@@ -182,7 +187,6 @@ export default function PantallaCategorias({ pais = "" }) {
       if (base == null) return r;
       return { ...r, pct: rawPct, monto: String(Math.round(base * (1 + p / 100))) };
     }));
-    setDirty(true);
   };
 
   const handleCopiarMesAnterior = async () => {
@@ -191,16 +195,16 @@ export default function PantallaCategorias({ pais = "" }) {
     const cats = await fetchCategorias(mAnt, aAnt, pais);
     if (!cats.length) { alert("No hay tarifas en el mes anterior."); return; }
     setTarifas(cats.map(c => newRow({ concepto: c.concepto, monto: String(c.monto) })));
-    setDirty(true);
   };
 
   const handleGuardar = async () => {
     if (savingRef.current) return;
     savingRef.current = true;
     setSaving(true);
+    const enviadas = tarifas;   // si se edita mientras guarda, eso queda como cambio sin guardar
     try {
-      await saveCategorias(mes, anio, pais, tarifas.map(r => ({ concepto: r.concepto, monto: parseFloat(r.monto) || 0 })));
-      setDirty(false);
+      await saveCategorias(mes, anio, pais, enviadas.map(r => ({ concepto: r.concepto, monto: parseFloat(r.monto) || 0 })));
+      setFirmaGuardada(firmaTarifas(enviadas));
       setDraftTs(null);
     } catch (e) {
       alert("Error al guardar: " + e.message);
