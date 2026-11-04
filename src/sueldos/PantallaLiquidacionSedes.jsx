@@ -989,12 +989,13 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
     const blancoVivo   = ROLES_SEDES_ALL.includes(e.legajo_rol) ? e.blanco_neto : 0;
     const habVivo      = e.cerrada ? (Number(e._habCong) || 0) : (Number(pagoDraft[e.legajo_id]?.monto_haberes ?? blancoVivo) || 0);
     const depositoCong = e.cerrada ? (Number(e._depCong)      || 0) : e.monto_deposito;
-    const transferCong = e.cerrada ? (Number(e._transferCong) || 0) : e.monto_transferencia;
+    // Borrador: monotributo = novedades en Trf. monotributo + lo cargado en Paso 4 para el sueldo.
+    const transferCong = e.cerrada ? (Number(e._transferCong) || 0) : e.monto_transferencia + (Number(pagoDraft[e.legajo_id]?.monto_transferencia) || 0);
     // Cerrada → efectivo CONGELADO (lo que se liquidó y hay que pagar en cash). Borrador →
     // efectivo en vivo = remanente del total. Evita el parcial fantasma por recálculo del roster.
     const efectivo = e.cerrada
       ? (Number(e._efCong) || 0)
-      : Math.max(0, e.total - habVivo - e.monto_deposito - e.monto_transferencia);
+      : Math.max(0, e.total - habVivo - e.monto_deposito - transferCong);
     // Cerrada → el pendiente (columna + botón Pagar) se mide contra el total CONGELADO
     // (baldes de banco + efectivo congelado), no el total del roster en vivo, que deriva y
     // muestra pendientes fantasma en coaches ya pagados. Borrador → total en vivo.
@@ -1161,7 +1162,7 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
       // trabajó ahí, la de mayor total), en un solo renglón — no se fragmenta por sede. El efectivo de
       // cada sede compensa (la casa queda con menos efectivo). Fallback robusto: si el blanco supera el
       // total de la casa, el excedente derrama a las otras sedes por total desc (no debería pasar: el
-      // coach siempre genera lo más grande en su sede casa). Monotributo se sacó del flujo de Sedes.
+      // coach siempre genera lo más grande en su sede casa).
       const habByKey = {};
       const habPorLegajo = new Map(empls.map(e => [e.legajo_id, e.monto_haberes]));   // mismo reparto que ven los pasos 4 y 5
       for (const [lid, rs] of Object.entries(rowsByLegajo)) {
@@ -1177,20 +1178,31 @@ export default function PantallaLiquidacionSedes({ pais = "", initialMes, initia
         }
         if (rem > 0.005) habByKey[casa.k] = (habByKey[casa.k] || 0) + rem;   // sobrante (blanco > Σtotales, raro) → a la casa
       }
+      // Monotributo (Trf. monotributo) del sueldo: lo que se cargó en Paso 4 para el legajo, prorrateado
+      // entre sus filas según el total de cada una (como antes del 13/8). Sin sueldo → parejo.
+      const monoByKey = {};
+      for (const [lid, rs] of Object.entries(rowsByLegajo)) {
+        const mono = Number(pagoDraft[lid]?.monto_transferencia) || 0;
+        if (!mono) continue;
+        const totLeg = rs.reduce((s, o) => s + o.tot, 0);
+        for (const o of rs) monoByKey[o.k] = mono * (totLeg > 0 ? o.tot / totLeg : 1 / rs.length);
+      }
       const entries = [];
       for (const r of rowsAbiertas) {
         const rowKey = rowKeyDe(r.legajo_id, r.sede_id);
         const { lineas, total: rowTotal, header } = rowRes[rowKey];
         const habRow   = Math.round(habByKey[rowKey] || 0);
+        const monoRow  = Math.round(monoByKey[rowKey] || 0);
         // Novedades de esta fila: las pagadas EN EFECTIVO entran al redondeo (la plata EN MANO debe quedar redonda).
         const novsR    = novsByRowKey[rowKey] || [];
         const novEfectivo = novsR.reduce((s, n) => ((n.forma_pago || "efectivo") === "efectivo" ? s + (Number(n.monto) || 0) : s), 0);
-        const eftExacto  = Math.max(0, rowTotal - habRow);     // el efectivo compensa el blanco de esta sede
+        const eftExacto  = Math.max(0, rowTotal - habRow - monoRow);   // el efectivo compensa el blanco y el monotributo de esta sede
         const cashExacto = eftExacto + novEfectivo;            // efectivo del sueldo + novedades en efectivo
         const redondeo   = Math.ceil(cashExacto / 100) * 100 - cashExacto;  // ajuste para que la plata en mano sea múltiplo de $100
         const eftRow     = eftExacto + redondeo;               // efectivo base + ajuste (sumado a las novedades en efectivo → redondo)
         const pagos = [];
         if (habRow > 0)  pagos.push(lineaLiq(header, { tipo: "pago", concepto: FP_TIPO_LABEL.haberes,     cuenta_contable: "Sueldos", forma_pago: "haberes",     sociedad_id: sociedadDeFormaPago("haberes", "", r.sociedad_id),     monto: habRow }));
+        if (monoRow > 0) pagos.push(lineaLiq(header, { tipo: "pago", concepto: FP_TIPO_LABEL.monotributo, cuenta_contable: "Sueldos", forma_pago: "monotributo", sociedad_id: sociedadDeFormaPago("monotributo", "", r.sociedad_id), monto: monoRow }));
         if (eftRow > 0)  pagos.push(lineaLiq(header, { tipo: "pago", concepto: FP_TIPO_LABEL.efectivo,    cuenta_contable: "Sueldos", forma_pago: "efectivo",    sociedad_id: "beta",                                              monto: eftRow }));
         // Novedades de esta fila (extra): se congelan como líneas tipo "novedad", cada una con
         // SU cuenta contable y forma de pago. No entran en el reparto del sueldo de arriba.
@@ -2219,6 +2231,7 @@ function PasoFormaPago({ empls, pagoDraft, onChangePago, onAtras, onContinuar, o
                 onToggle={toggleEnSet(setFSede)} onSetAll={arr => setFSede(new Set(arr))} />
               <th style={TH({ width: 110, textAlign: "right" })}>Total</th>
               <th style={TH({ width: 100, textAlign: "right" })}>Haberes</th>
+              <th style={TH({ width: 100, textAlign: "right" })}>Monotributo</th>
               <th style={TH({ width: 100, textAlign: "right" })}>Efectivo</th>
             </tr>
           </thead>
@@ -2226,11 +2239,14 @@ function PasoFormaPago({ empls, pagoDraft, onChangePago, onAtras, onContinuar, o
             {emplsFilt.map((empl, i) => {
               const habTxt = pagoDraft[empl.legajo_id]?.monto_haberes ?? empl.monto_haberes;   // override del usuario o reparto en vivo
               const hab  = Number(habTxt) || 0;
-              // Haberes es el reparto en blanco del SUELDO (input). El Efectivo es el remanente del
+              // "Monotributo" (Trf. monotributo) se persiste en la columna monto_transferencia. Cerrada → lo congelado.
+              const monoTxt = empl.cerrada ? empl.monto_transferencia : pagoDraft[empl.legajo_id]?.monto_transferencia;
+              const mono = Number(monoTxt) || 0;
+              // Haberes/Monotributo son el reparto del SUELDO (inputs). El Efectivo es el remanente del
               // TOTAL (incluye las novedades): así las columnas suman el total mostrado y la novedad
               // (que se paga en su forma, normalmente efectivo) no queda fuera del reparto.
-              const eft  = Math.max(0, Math.ceil((empl.total - hab) / 100) * 100);  // efectivo en mano → redondeado SIEMPRE hacia arriba a $100
-              const sobra = hab > empl.total;
+              const eft  = Math.max(0, Math.ceil((empl.total - hab - mono) / 100) * 100);  // efectivo en mano → redondeado SIEMPRE hacia arriba a $100
+              const sobra = hab + mono > empl.total;
               const nov  = empl.total_nov || 0;
               return (
                 <tr key={empl.legajo_id} style={{ background: i % 2 === 0 ? T.card : T.bg, borderBottom: `1px solid ${T.border}` }}>
@@ -2249,10 +2265,15 @@ function PasoFormaPago({ empls, pagoDraft, onChangePago, onAtras, onContinuar, o
                       disabled={empl.cerrada} title={empl.cerrada ? "Cerrada — reabrí (🔒) para cambiar el blanco" : undefined}
                       onChange={e => onChangePago(empl.legajo_id, "monto_haberes", e.target.value)} />
                   </td>
+                  <td style={{ padding: "4px 8px", textAlign: "right" }}>
+                    <MoneyField style={{ ...MON(), ...(empl.cerrada ? LOCKED : {}) }} value={monoTxt || ""} placeholder="0"
+                      disabled={empl.cerrada} title={empl.cerrada ? "Cerrada — reabrí (🔒) para cambiar el monotributo" : undefined}
+                      onChange={e => onChangePago(empl.legajo_id, "monto_transferencia", e.target.value)} />
+                  </td>
                   <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700,
                     color: sobra ? T.red : T.muted }}>
                     {sobra
-                      ? `⚠ ${fmtMoney(hab - empl.total)} de más`
+                      ? `⚠ ${fmtMoney(hab + mono - empl.total)} de más`
                       : fmtMoney(eft)}
                   </td>
                 </tr>
@@ -2434,7 +2455,7 @@ function statsDesdePagoDraft(empls, pagoDraft) {
     // en vivo redondeado. Así una liq cerrada no muestra pendiente fantasma por recálculo del roster.
     const eft  = empl.cerrada
       ? (Number(empl.monto_efectivo) || 0)
-      : Math.max(0, Math.ceil((empl.total - hab) / 100) * 100);   // monotributo salió de Sedes → mismo criterio que el cierre
+      : Math.max(0, Math.ceil((empl.total - hab - mono) / 100) * 100);
     s.haberes.total     += hab;
     s.monotributo.total += mono;
     s.efectivo.total    += eft;
