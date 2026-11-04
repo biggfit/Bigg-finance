@@ -82,6 +82,7 @@ export default function PantallaCategorias({ pais = "" }) {
   const [saving,    setSaving]    = useState(false);
   const [firmaGuardada, setFirmaGuardada] = useState(() => firmaTarifas([]));
   const dirty = firmaTarifas(tarifas) !== firmaGuardada;
+  const [guardadoEl, setGuardadoEl] = useState(null);   // Date del último guardado del mes (o null)
   const [prevPorConcepto, setPrevPorConcepto] = useState({});  // valor del mes anterior por concepto
   const [pctGlobal, setPctGlobal] = useState("");
   const [draftTs,   setDraftTs]   = useState(null);   // fecha del borrador recuperado (para el cartel)
@@ -120,6 +121,9 @@ export default function PantallaCategorias({ pais = "" }) {
       setPrevPorConcepto(prevMap);
       const draft = descartarBorrador ? null : readDraft(key);
       setFirmaGuardada(firmaTarifas(cats.map(c => ({ concepto: c.concepto, monto: String(c.monto) }))));
+      // Último guardado = la fecha más reciente entre las filas (al editar, saveCategorias la renueva).
+      const ts = cats.map(c => Date.parse(c.created_at)).filter(Number.isFinite);
+      setGuardadoEl(ts.length ? new Date(Math.max(...ts)) : null);
       if (draft) {
         setTarifas(draft.rows.length ? draft.rows : [newRow()]);
         setPctGlobal(draft.pctGlobal ?? "");
@@ -205,6 +209,7 @@ export default function PantallaCategorias({ pais = "" }) {
     try {
       await saveCategorias(mes, anio, pais, enviadas.map(r => ({ concepto: r.concepto, monto: parseFloat(r.monto) || 0 })));
       setFirmaGuardada(firmaTarifas(enviadas));
+      setGuardadoEl(new Date());   // también cubre "solo borré un concepto" (ninguna fila queda con fecha nueva)
       setDraftTs(null);
     } catch (e) {
       alert("Error al guardar: " + e.message);
@@ -247,6 +252,13 @@ export default function PantallaCategorias({ pais = "" }) {
             border: `1px solid ${T.border}` }}>
           Copiar mes anterior
         </button>
+
+        {/* Solo "Guardado": los cambios pendientes ya los avisa el cartel amarillo. Mes vacío → nada. */}
+        {!loading && !saving && !dirty && conConcepto.length > 0 && (
+          <span style={{ fontSize: 12, color: T.muted }}>
+            ✓ Guardado{guardadoEl ? ` el ${guardadoEl.getDate()}/${guardadoEl.getMonth() + 1}` : ""}
+          </span>
+        )}
 
         <button onClick={handleGuardar} disabled={!dirty || saving}
           style={{ ...btnStyle(), opacity: (!dirty || saving) ? 0.5 : 1 }}>

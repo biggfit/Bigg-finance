@@ -1310,7 +1310,8 @@ export async function fetchCategorias(mes, anio, pais) {
   const rows = await get("su_categorias");
   return (Array.isArray(rows) ? rows : [])
     .filter(r => Number(r.mes) === Number(mes) && Number(r.anio) === Number(anio) && r.pais === pais)
-    .map(r => ({ id: r.id, concepto: r.concepto ?? "", monto: Number(r.monto) || 0 }));
+    // created_at = último guardado de la fila (saveCategorias la renueva al editar).
+    .map(r => ({ id: r.id, concepto: r.concepto ?? "", monto: Number(r.monto) || 0, created_at: r.created_at ?? "" }));
 }
 
 export async function fetchAllConceptos(pais) {
@@ -1366,7 +1367,7 @@ export async function saveCategorias(mes, anio, pais, rows) {
     return {
       clave:  claveNorm(concepto),
       row:    { id: `CAT-${pais}-${anio}-${pad2(mes)}-${slugId(concepto)}`, mes, anio, pais, concepto, monto, created_at },
-      patch:  { monto },
+      patch:  { monto, created_at },   // created_at = último guardado (pantalla Categorías)
       cambio: (prev) => Number(prev.monto) !== monto,
     };
   });
