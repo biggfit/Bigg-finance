@@ -98,6 +98,15 @@ const draftKey = (p, a, m) => `novedades_sedes_borrador_${p}_${a}_${m}`;
 // Firma para detectar cambios entre la fila editada y la persistida.
 const rowSig = (r) => [r.legajo_id, r.sede_id, r.monto, r.forma_pago, r.nota, r.cuenta_contable_id, r.solapa].join("|");
 
+// Firma de TODO lo que se guardaría (filas con algún dato, monto como número, sin ids ni orden: el
+// orden no se persiste). Hay cambios sin guardar solo si difiere de lo cargado → volver un valor a
+// como estaba quita el cartel y el borrador.
+const tieneDatos = (r) =>
+  r.legajo_id || r.sede_id || r.cuenta_contable_id || (r.nota || "").trim() || parseFloat(r.monto) > 0;
+const firmaNovedades = (rs) => JSON.stringify(rs.filter(tieneDatos)
+  .map(r => [r.legajo_id, r.sede_id, Math.abs(parseFloat(r.monto) || 0), r.forma_pago, r.nota || "", r.cuenta_contable_id, r.solapa].join("|"))
+  .sort());
+
 const iStyle = {
   border: `1px solid ${T.border}`, borderRadius: 5, padding: "5px 8px",
   fontSize: 13, fontFamily: T.font, background: "#eceff3", color: T.text,
@@ -118,7 +127,9 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
   const [cuentas, setCuentas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving,  setSaving]  = useState(false);
-  const [dirty,   setDirty]   = useState(false);
+  const firmaGuardada = useMemo(() => firmaNovedades(loaded.map(novToRow)), [loaded]);
+  const dirty = useMemo(() => firmaNovedades(rows) !== firmaGuardada, [rows, firmaGuardada]);
+  const [guardadoEl, setGuardadoEl] = useState(null);   // Date del último guardado (novedades de Sedes del mes)
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState("asc");
   const [draftTs, setDraftTs] = useState(null);   // fecha del borrador recuperado (para el cartel)
@@ -162,13 +173,15 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
         setDraftTs(null);
       }
       setLoaded(sedesNovs);
+      // Último guardado = la fecha más reciente entre las novedades (al editar, se renueva).
+      const ts = sedesNovs.map(n => Date.parse(n.created_at)).filter(Number.isFinite);
+      setGuardadoEl(ts.length ? new Date(Math.max(...ts)) : null);
       draftKeyRef.current = key;
       setLegajos(legs
         .filter(l => l.activo && (!l.pais || l.pais === p))
         .sort((a, b) => rolRank(a.rol) - rolRank(b.rol) || a.nombre.localeCompare(b.nombre, "es")));
       setSedes(ccs.filter(c => !c.pais || c.pais === p));
       setCuentas(ctas);
-      setDirty(!!draft);
     } finally { setLoading(false); }
   }, []);
 
@@ -216,12 +229,10 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
       arr.splice(antesDelTarget ? toIdx : toIdx + 1, 0, item);
       return arr;
     });
-    setDirty(true);
   };
 
   const setRow = (rid, patch) => {
     setRows(prev => prev.map(r => r._id === rid ? { ...r, ...patch } : r));
-    setDirty(true);
   };
   const setLegajo = (rid, legId) => {
     const leg = legajos.find(l => l.id === legId);
@@ -235,8 +246,8 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
     const cc = cuentas.find(c => c.id === ccId);
     setRow(rid, { cuenta_contable_id: ccId, cuenta_contable_nombre: cc?.nombre ?? "" });
   };
-  const addRow = () => { setRows(prev => [...prev, newRow({ solapa: tab })]); setDirty(true); };
-  const delRow = (rid) => { setRows(prev => prev.filter(r => r._id !== rid)); setDirty(true); };
+  const addRow = () => { setRows(prev => [...prev, newRow({ solapa: tab })]); };
+  const delRow = (rid) => { setRows(prev => prev.filter(r => r._id !== rid)); };
 
   const handleCopiarMesAnterior = async () => {
     const mAnt = mes === 1 ? 12 : mes - 1;
@@ -244,7 +255,6 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
     const novs = novedadesDeAmbito(await fetchNovedades(mAnt, aAnt), "sedes");
     if (!novs.length) { alert("No hay novedades de Sedes en el mes anterior."); return; }
     setRows(novs.map(n => ({ ...newRow(novToRow(n)), id: null, _id: tmpRowId() })));
-    setDirty(true);
   };
 
   const handleGuardar = async () => {
@@ -285,7 +295,9 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
           nuevas.push({ tmpId: r._id, payload });
         } else {
           const orig = loadedById.get(r.id);
-          if (!orig || rowSig(r) !== rowSig(novToRow(orig))) ops.push(() => updateNovedad(r.id, payload));
+          // created_at = último guardado: al editar se renueva (lo muestra "Guardado el d/m").
+          if (!orig || rowSig(r) !== rowSig(novToRow(orig)))
+            ops.push(() => updateNovedad(r.id, { ...payload, created_at: new Date().toISOString() }));
         }
       }
 
@@ -314,6 +326,7 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
       // Secuencial: el GAS pierde escrituras concurrentes (appendRow se pisa → se "borraba" la última).
       for (const op of ops) await op();
       await load(mes, anio, pais, { descartarBorrador: true });
+      setGuardadoEl(new Date());   // también cubre "solo borré una novedad" (ninguna fila queda con fecha nueva)
     } catch (e) {
       alert("Error al guardar: " + e.message);
     } finally {
@@ -386,6 +399,13 @@ export default function PantallaNovedadesSedes({ pais = "" }) {
             border: `1px solid ${T.border}` }}>
           Copiar mes anterior
         </button>
+
+        {/* Solo "Guardado": los cambios pendientes ya los avisa el cartel amarillo. Mes vacío → nada. */}
+        {!loading && !saving && !dirty && loaded.length > 0 && (
+          <span style={{ fontSize: 12, color: T.muted }}>
+            ✓ Guardado{guardadoEl ? ` el ${guardadoEl.getDate()}/${guardadoEl.getMonth() + 1}` : ""}
+          </span>
+        )}
 
         <button onClick={handleGuardar} disabled={!dirty || saving}
           style={{ ...btnStyle(), opacity: (!dirty || saving) ? 0.5 : 1 }}>
