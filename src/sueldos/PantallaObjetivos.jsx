@@ -167,6 +167,14 @@ export default function PantallaObjetivos({ pais = "" }) {
           Copiar mes anterior
         </button>
 
+        {/* Estado de guardado: "Guardado" = lo que se ve es lo que está en la hoja. Sin filas con sede
+            (mes vacío) no se muestra nada, para no decir "Guardado" de algo que no existe. */}
+        {!loading && !saving && (dirty || conSede.length > 0) && (
+          <span style={{ fontSize: 12, color: T.muted, fontWeight: dirty ? 600 : 400 }}>
+            {dirty ? "Sin guardar" : "✓ Guardado"}
+          </span>
+        )}
+
         <button onClick={handleGuardar} disabled={!dirty || saving}
           style={{ ...btnStyle(), opacity: (!dirty || saving) ? 0.5 : 1 }}>
           {saving ? "Guardando…" : "Guardar"}
