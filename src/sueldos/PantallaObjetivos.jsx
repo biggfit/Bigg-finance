@@ -32,6 +32,16 @@ function newObjRow(overrides = {}) {
   return { _id: tmpRowId(), sede_id: "", sede_nombre: "", porcentaje: "", ...overrides };
 }
 
+// "Firma" de lo que se guardaría: solo filas con sede (las vacías no se guardan), % como número,
+// sin importar el orden. "Sin guardar" = la firma actual difiere de la última cargada/guardada,
+// así que cambiar un valor y volverlo a dejar como estaba vuelve a "Guardado".
+function firmaObjetivos(rows) {
+  return JSON.stringify(rows
+    .filter(r => r.sede_id || r.sede_nombre)
+    .map(r => [String(r.sede_id), String(r.sede_nombre), parseFloat(r.porcentaje) || 0])
+    .sort((a, b) => (a[0] + a[1]).localeCompare(b[0] + b[1])));
+}
+
 const iStyle = {
   border: `1px solid ${T.border}`, borderRadius: 5, padding: "5px 8px",
   fontSize: 13, fontFamily: T.font, background: "#eceff3", color: T.text,
@@ -46,7 +56,8 @@ export default function PantallaObjetivos({ pais = "" }) {
   const [sedes,     setSedes]     = useState([]);
   const [loading,   setLoading]   = useState(true);
   const [saving,    setSaving]    = useState(false);
-  const [dirty,     setDirty]     = useState(false);
+  const [firmaGuardada, setFirmaGuardada] = useState(() => firmaObjetivos([]));
+  const dirty = firmaObjetivos(objetivos) !== firmaGuardada;
   const [guardadoEl, setGuardadoEl] = useState(null);   // Date del último guardado del mes (o null)
   const savingRef = useRef(false);
 
@@ -72,11 +83,12 @@ export default function PantallaObjetivos({ pais = "" }) {
       const socIds = socs.filter(s => s.pais === p).map(s => s.id);
       const sedesFiltradas = ccs.filter(c => !c.sociedad || socIds.includes(c.sociedad));
       setSedes(sedesFiltradas);
-      setObjetivos(objs.length ? objs.map(o => ({ ...o, _id: o.id, porcentaje: String(o.porcentaje) })) : [newObjRow()]);
+      const filas = objs.length ? objs.map(o => ({ ...o, _id: o.id, porcentaje: String(o.porcentaje) })) : [newObjRow()];
+      setObjetivos(filas);
+      setFirmaGuardada(firmaObjetivos(filas));
       // Último guardado = la fecha más reciente entre las filas (al editar, saveObjetivos la renueva).
       const ts = objs.map(o => Date.parse(o.created_at)).filter(Number.isFinite);
       setGuardadoEl(ts.length ? new Date(Math.max(...ts)) : null);
-      setDirty(false);
     } finally { setLoading(false); }
   }, []);
 
@@ -100,10 +112,9 @@ export default function PantallaObjetivos({ pais = "" }) {
       }
       return { ...r, [key]: val };
     }));
-    setDirty(true);
   };
-  const addObjetivo = () => { setObjetivos(prev => [...prev, newObjRow()]); setDirty(true); };
-  const delObjetivo = (idx) => { setObjetivos(prev => prev.filter((_, i) => i !== idx)); setDirty(true); };
+  const addObjetivo = () => { setObjetivos(prev => [...prev, newObjRow()]); };
+  const delObjetivo = (idx) => { setObjetivos(prev => prev.filter((_, i) => i !== idx)); };
 
   const handleCopiarMesAnterior = async () => {
     const mAnt = mes === 1 ? 12 : mes - 1;
@@ -111,21 +122,21 @@ export default function PantallaObjetivos({ pais = "" }) {
     const objs = await fetchObjetivos(mAnt, aAnt, pais);
     if (!objs.length) { alert("No hay objetivos en el mes anterior."); return; }
     setObjetivos(objs.map(o => ({ ...newObjRow(), sede_id: o.sede_id, sede_nombre: o.sede_nombre, porcentaje: String(o.porcentaje) })));
-    setDirty(true);
   };
 
   const handleGuardar = async () => {
     if (savingRef.current) return;
     savingRef.current = true;
     setSaving(true);
+    const enviados = objetivos;   // lo que se guarda (si se edita mientras guarda, eso queda "Sin guardar")
     try {
-      await saveObjetivos(mes, anio, pais, objetivos.map(r => ({
+      await saveObjetivos(mes, anio, pais, enviados.map(r => ({
         sede_id:    r.sede_id,
         sede_nombre: r.sede_nombre,
         porcentaje: parseFloat(r.porcentaje) || 0,
       })));
       setGuardadoEl(new Date());   // también cubre "solo borré una sede" (ninguna fila queda con fecha nueva)
-      setDirty(false);
+      setFirmaGuardada(firmaObjetivos(enviados));
     } catch (e) {
       alert("Error al guardar: " + e.message);
     } finally {
