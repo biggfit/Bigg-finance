@@ -47,6 +47,7 @@ export default function PantallaObjetivos({ pais = "" }) {
   const [loading,   setLoading]   = useState(true);
   const [saving,    setSaving]    = useState(false);
   const [dirty,     setDirty]     = useState(false);
+  const [guardadoEl, setGuardadoEl] = useState(null);   // Date del último guardado del mes (o null)
   const savingRef = useRef(false);
 
   // Tilde personal por fila ("ya cargué / revisé este dato"): vive en este navegador
@@ -72,6 +73,9 @@ export default function PantallaObjetivos({ pais = "" }) {
       const sedesFiltradas = ccs.filter(c => !c.sociedad || socIds.includes(c.sociedad));
       setSedes(sedesFiltradas);
       setObjetivos(objs.length ? objs.map(o => ({ ...o, _id: o.id, porcentaje: String(o.porcentaje) })) : [newObjRow()]);
+      // Último guardado = la fecha más reciente entre las filas (al editar, saveObjetivos la renueva).
+      const ts = objs.map(o => Date.parse(o.created_at)).filter(Number.isFinite);
+      setGuardadoEl(ts.length ? new Date(Math.max(...ts)) : null);
       setDirty(false);
     } finally { setLoading(false); }
   }, []);
@@ -120,6 +124,7 @@ export default function PantallaObjetivos({ pais = "" }) {
         sede_nombre: r.sede_nombre,
         porcentaje: parseFloat(r.porcentaje) || 0,
       })));
+      setGuardadoEl(new Date());   // también cubre "solo borré una sede" (ninguna fila queda con fecha nueva)
       setDirty(false);
     } catch (e) {
       alert("Error al guardar: " + e.message);
@@ -171,7 +176,8 @@ export default function PantallaObjetivos({ pais = "" }) {
             (mes vacío) no se muestra nada, para no decir "Guardado" de algo que no existe. */}
         {!loading && !saving && (dirty || conSede.length > 0) && (
           <span style={{ fontSize: 12, color: T.muted, fontWeight: dirty ? 600 : 400 }}>
-            {dirty ? "Sin guardar" : "✓ Guardado"}
+            {dirty ? "Sin guardar"
+              : `✓ Guardado${guardadoEl ? ` el ${guardadoEl.getDate()}/${guardadoEl.getMonth() + 1}` : ""}`}
           </span>
         )}
 

@@ -1384,6 +1384,7 @@ export async function fetchObjetivos(mes, anio, pais) {
       sede_id:     r.sede_id     ?? "",
       sede_nombre: r.sede_nombre ?? "",
       porcentaje:  Number(r.porcentaje) || 0,
+      created_at:  r.created_at ?? "",   // fecha del último guardado de la fila (saveObjetivos la renueva al editar)
     }));
 }
 
@@ -1397,7 +1398,7 @@ export async function saveObjetivos(mes, anio, pais, rows) {
     return {
       clave:  claveNorm(sede_id),
       row:    { id: `OBJ-${pais}-${anio}-${pad2(mes)}-${slugId(sede_id)}`, mes, anio, pais, sede_id, sede_nombre, porcentaje, created_at },
-      patch:  { sede_nombre, porcentaje },
+      patch:  { sede_nombre, porcentaje, created_at },   // created_at = último guardado (pantalla Objetivos)
       cambio: (prev) => Number(prev.porcentaje) !== porcentaje || (prev.sede_nombre ?? "") !== sede_nombre,
     };
   });
