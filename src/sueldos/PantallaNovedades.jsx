@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   fetchNovedades, appendNovedadesBatch, updateNovedad, deleteNovedad,
   fetchLegajos, fetchCuentasContablesNumbers,
@@ -115,6 +115,23 @@ function sembrarFijos(rows, prevMono, nombreDe, fijos) {
 // Firma para detectar cambios entre la fila editada y la persistida.
 const rowSig = (r) => [r.legajo_id, r.monto, r.forma_pago, r.nota, r.cuenta_contable_id, r.estado].join("|");
 
+// Filas que "Guardar" persiste: con legajo; una semilla de monotributista fijo, solo si le cargaron monto.
+const filasAGuardar = (rows) => rows.filter(r => r.legajo_id && !(r._semilla && !(parseFloat(r.monto) > 0)));
+
+// ¿"Guardar" escribiría algo? Mismo diff que handleGuardar: alta (fila sin id), edición (firma distinta
+// a la guardada) o baja (id guardado que ya no está). Así, volver un valor a como estaba quita el cartel;
+// el orden y las semillas vacías no cuentan.
+function hayCambios(rows, loaded) {
+  // Fila nueva a medio cargar (monto o nota sin legajo todavía): no se guarda, pero sí va al borrador.
+  if (rows.some(r => !r.id && !r._semilla && (parseFloat(r.monto) > 0 || (r.nota || "").trim()))) return true;
+  const validas = filasAGuardar(rows);
+  const loadedById = new Map(loaded.map(n => [n.id, n]));
+  if (validas.some(r => !r.id || !loadedById.has(r.id) || rowSig(r) !== rowSig(novToRow(loadedById.get(r.id)))))
+    return true;
+  const keepIds = new Set(validas.filter(r => r.id).map(r => r.id));
+  return loaded.some(n => !keepIds.has(n.id));
+}
+
 // Borrador local de lo editado sin guardar (ver lib/borradorLocal), por país y mes.
 const draftKey = (p, a, m) => `novedades_hq_borrador_${p}_${a}_${m}`;
 // Novedad cargada por el link de Monotributo: mientras el borrador está abierto, la persona puede cargarla
@@ -175,7 +192,8 @@ export default function PantallaNovedades({ pais = "" }) {
   const [prevMono, setPrevMono] = useState([]);   // filas de Monotributo del mes anterior (siembra de los fijos)
   const [loading,  setLoading]  = useState(true);
   const [saving,   setSaving]   = useState(false);
-  const [dirty,    setDirty]    = useState(false);
+  const dirty = useMemo(() => hayCambios(rows, loaded), [rows, loaded]);
+  const [guardadoEl, setGuardadoEl] = useState(null);   // Date del último Guardar desde esta pantalla
   const [draftTs,  setDraftTs]  = useState(null);   // fecha del borrador recuperado (para el cartel)
   const savingRef = useRef(false);
   // Clave del borrador del mes YA cargado: mientras carga otro mes, las filas en pantalla siguen siendo
@@ -211,6 +229,11 @@ export default function PantallaNovedades({ pais = "" }) {
       setRows(sembrarFijos(base, pMono, nombreDe, monos.fijos));
       setDraftTs(draft ? draft.ts : null);
       setLoaded(extras);
+      // Último guardado = la fecha más reciente entre las novedades, sin las pendientes del link (esas
+      // las sube la persona, no un "Guardar"). Al editar desde acá se renueva; al aprobar también.
+      const ts = extras.filter(n => n.estado !== "pendiente")
+        .map(n => Date.parse(n.created_at)).filter(Number.isFinite);
+      setGuardadoEl(ts.length ? new Date(Math.max(...ts)) : null);
       draftKeyRef.current = key;
       // Monto del mes anterior por legajo+cuenta → alimenta la columna comparativa.
       const prev = new Map();
@@ -222,7 +245,6 @@ export default function PantallaNovedades({ pais = "" }) {
       setPrevMono(pMono);
       setLegajos(legs.filter(l => l.activo && ROLES_HQ.includes(l.rol) && l.pais === p));
       setCuentas(ccs);
-      setDirty(!!draft);
     } finally { setLoading(false); }
   }, []);
 
@@ -273,12 +295,10 @@ export default function PantallaNovedades({ pais = "" }) {
       arr.splice(antesDelTarget ? toIdx : toIdx + 1, 0, item);
       return arr;
     });
-    setDirty(true);
   };
 
   const setRow = (rid, patch) => {
     setRows(prev => prev.map(r => r._id === rid ? { ...r, ...patch } : r));
-    setDirty(true);
   };
   const setLegajo = (rid, legId) => {
     const leg = legajos.find(l => l.id === legId);
@@ -288,8 +308,8 @@ export default function PantallaNovedades({ pais = "" }) {
     const cc = cuentas.find(c => c.id === ccId);
     setRow(rid, { cuenta_contable_id: ccId, cuenta_contable_nombre: cc?.nombre ?? "" });
   };
-  const addRow = () => { setRows(prev => [...prev, { ...newRow(), concepto: tab }]); setDirty(true); };
-  const delRow = (rid) => { setRows(prev => prev.filter(r => r._id !== rid)); setDirty(true); };
+  const addRow = () => { setRows(prev => [...prev, { ...newRow(), concepto: tab }]); };
+  const delRow = (rid) => { setRows(prev => prev.filter(r => r._id !== rid)); };
 
   // Cuenta contable de una fila al persistir: la nombrada fija de la solapa, o la elegida en "Otros".
   const resolveCuenta = (row) => {
@@ -315,7 +335,6 @@ export default function PantallaNovedades({ pais = "" }) {
     const copiadas = novs.map(n => ({ ...newRow(novToRow(n)), id: null, _id: tmpRowId(), concepto: conceptoDeNovedad(n),
       estado: "", comprobante_url: "" }));
     setRows(prev => sembrarFijos([...prev.filter(r => r.id && r.comprobante_url), ...copiadas], prevMono, legajoNombre, mono.fijos));
-    setDirty(true);
   };
 
   const handleGuardar = async () => {
@@ -323,8 +342,7 @@ export default function PantallaNovedades({ pais = "" }) {
     savingRef.current = true;
     setSaving(true);
     try {
-      // Sin legajo no se persiste; una semilla de monotributista fijo, solo si le cargaron monto.
-      const validas = rows.filter(r => r.legajo_id && !(r._semilla && !(parseFloat(r.monto) > 0)));
+      const validas = filasAGuardar(rows);
       const loadedById = new Map(loaded.map(n => [n.id, n]));
 
       // Altas: todas en UN lote (una request en vez de N). Ediciones y bajas: solo las que cambiaron.
@@ -347,7 +365,9 @@ export default function PantallaNovedades({ pais = "" }) {
           nuevas.push({ tmpId: r._id, payload });
         } else {
           const orig = loadedById.get(r.id);
-          if (!orig || rowSig(r) !== rowSig(novToRow(orig))) ops.push(() => updateNovedad(r.id, payload));
+          // created_at = último guardado: al editar/aprobar se renueva (lo muestra "Guardado el d/m").
+          if (!orig || rowSig(r) !== rowSig(novToRow(orig)))
+            ops.push(() => updateNovedad(r.id, { ...payload, created_at: new Date().toISOString() }));
         }
       }
 
@@ -375,6 +395,7 @@ export default function PantallaNovedades({ pais = "" }) {
       // Secuencial: el GAS pierde escrituras concurrentes (appendRow se pisa → se "borraba" una fila).
       for (const op of ops) await op();
       await load(mes, anio, pais, { descartarBorrador: true });
+      setGuardadoEl(new Date());   // también cubre "solo borré una novedad" (ninguna fila queda con fecha nueva)
     } catch (e) {
       alert("Error al guardar: " + e.message);
     } finally {
@@ -431,7 +452,6 @@ export default function PantallaNovedades({ pais = "" }) {
   const aprobar = (rid) => setRow(rid, { estado: "aprobada" });
   const aprobarTodos = () => {
     setRows(prev => prev.map(r => r.estado === "pendiente" ? { ...r, estado: "aprobada" } : r));
-    setDirty(true);
   };
   const colsExtra = (esOtros ? 1 : 0) + (esMonotributo ? 1 : 0);
 
@@ -460,6 +480,13 @@ export default function PantallaNovedades({ pais = "" }) {
             border: `1px solid ${T.border}` }}>
           Copiar mes anterior
         </button>
+
+        {/* Solo "Guardado": los cambios pendientes ya los avisa el cartel amarillo. Mes vacío → nada. */}
+        {!loading && !saving && !dirty && guardadoEl && (
+          <span style={{ fontSize: 12, color: T.muted }}>
+            ✓ Guardado el {guardadoEl.getDate()}/{guardadoEl.getMonth() + 1}
+          </span>
+        )}
 
         <button onClick={handleGuardar} disabled={!dirty || saving}
           style={{ ...btnStyle(), opacity: (!dirty || saving) ? 0.5 : 1 }}>
