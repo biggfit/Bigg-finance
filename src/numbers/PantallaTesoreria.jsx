@@ -1084,6 +1084,71 @@ export function TabSaldos({ cuentas, aCobrar, aPagar, interco = [], filtroMoneda
   );
 }
 
+// ─── Dropdown por fila ────────────────────────────────────────────────────────
+function RowMenu({ onEditar, onVerDetalle, onEliminar, onIgnorar }) {
+  const [open, setOpen] = useState(false);
+  const [pos,  setPos]  = useState({ top:0, left:0 });
+  const btnRef  = useRef(null);
+  const menuRef = useRef(null);
+
+  const handleToggle = () => {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      setPos({ top: r.bottom + 4, left: r.left });
+    }
+    setOpen(o => !o);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = e => {
+      if (menuRef.current && !menuRef.current.contains(e.target) &&
+          btnRef.current  && !btnRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const item = (label, onClick, color) => (
+    <button onClick={() => { onClick(); setOpen(false); }} style={{
+      display:"block", width:"100%", textAlign:"left", padding:"8px 14px",
+      background:"transparent", border:"none", fontSize:13, color: color ?? T.text,
+      cursor:"pointer", fontFamily:T.font,
+    }}
+    onMouseEnter={e => e.currentTarget.style.background="#f3f4f6"}
+    onMouseLeave={e => e.currentTarget.style.background="transparent"}>
+      {label}
+    </button>
+  );
+
+  return (
+    <>
+      <button ref={btnRef} onClick={handleToggle} style={{
+        background: open ? "#e5e7eb" : "#f3f4f6",
+        border:`1px solid ${T.cardBorder}`, borderRadius:6,
+        padding:"3px 8px", cursor:"pointer", fontSize:12, color:T.muted,
+        fontFamily:T.font, lineHeight:1,
+      }}>▾</button>
+
+      {open && (
+        <div ref={menuRef} style={{
+          position:"fixed", top:pos.top, left:pos.left, zIndex:9999,
+          background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:8,
+          boxShadow:"0 8px 24px rgba(0,0,0,.15)", minWidth:150, overflow:"hidden",
+        }}>
+          {onEditar && item("Editar", onEditar)}
+          {onVerDetalle && item("Ver detalle", onVerDetalle)}
+          {(onEditar || onVerDetalle) && (onIgnorar || onEliminar) && <div style={{ height:1, background:T.cardBorder, margin:"3px 0" }} />}
+          {onIgnorar && item("Ignorar (no contabilizar)", onIgnorar, "#b45309")}
+          {onEliminar && item("Eliminar", onEliminar, T.red)}
+        </div>
+      )}
+    </>
+  );
+}
+
 // ─── Tab: Movimientos ─────────────────────────────────────────────────────────
 export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, onLimpiarFiltro, onEliminar, onEditar, onEditarDoc, onEditarInterco, onEditarCambio, onEditarPar, onIgnorar, onNuevoMov, centrosCosto = [], resetSignal = 0 }) {
   const cuentaMap = useMemo(() => {
