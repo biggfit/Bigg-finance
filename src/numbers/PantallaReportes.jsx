@@ -1163,14 +1163,6 @@ function buildPnLGrupoFilas(propsBigg, isCol) {
   // ingresos de Huergo y la cesión BN del mes. Si faltaran (no deberían), caen a 0 y el control de abajo avisa.
   const pz = sub.piezas || {}, pzP = P.piezas || {};
   const cesion = sub.cesionBN || Z, cesionP = P.cesionBN || Z;
-  // SOLO para el memo de ventas (Martín 4/11): la Red BRUTA (sin el neteo de interusos pagados, pauta y CRM
-  // comprados) y Rosedal con la venta de la sede (no el fee). Misma estructura de 4 líneas, otra fórmula.
-  // Negocios y la cascada siguen netos: el atribuible no cambia.
-  const contra = pz.contraHQ || {}, contraP = pzP.contraHQ || {};
-  const bruto  = n => MESES.map((_, m) => (Number(hqAccounts?.[n]?.[m]) || 0) + (Number(contra[n]?.[m]) || 0));
-  const brutoP = n => MESES.map((_, m) => (Number(P.hqAccounts?.[n]?.[m]) || 0) + (Number(contraP[n]?.[m]) || 0));
-  const ventasRed  = add(ingHQ, sumMap(contra)), ventasRedP = add(P.ingHQ, sumMap(contraP));
-  const ventasRos  = pz.rosedalVentas || fg || Z, ventasRosP = pzP.rosedalVentas || P.fg || Z;
   // Reubicación (Martín 4/11): en HQ estas cuentas llegan como "Costo por Venta" (categoría correcta para una
   // sede, donde van proporcionales a SU venta), pero acá son costo de mover plata y posición fiscal del grupo, no
   // costo de vender de ningún negocio → salen de la Red y bajan a Financieros / Impuestos. Solo cambia el renglón:
@@ -1192,9 +1184,7 @@ function buildPnLGrupoFilas(propsBigg, isCol) {
   const finTot  = MESES.map((_, m) => (Number(financieros?.[m]) || 0) + finExtra[m]);
   const finTotP = MESES.map((_, m) => (Number(P.financieros?.[m]) || 0) + finExtraP[m]);
 
-  // ── Cascada ──
-  const ventas   = add(pz.ventasSedes, ventasRos, pz.huergoIng, ventasRed);
-  const ventasP  = add(pzP.ventasSedes, ventasRosP, pzP.huergoIng, ventasRedP);
+  // ── Cascada ── (sin ventas: Martín 4/11, "al comité le mostré la contribución de los negocios, no la venta")
   const sedes100 = pz.sedes100 || Z, sedes100P = pzP.sedes100 || Z;
   const red      = MESES.map((_, m) => (Number(ingHQ?.[m]) || 0) - gpvRed[m]);
   const redP     = MESES.map((_, m) => (Number(P.ingHQ?.[m]) || 0) - gpvRedP[m]);
@@ -1224,29 +1214,7 @@ function buildPnLGrupoFilas(propsBigg, isCol) {
       filas.push({ kind: "cuenta", label: n, cur: accounts[n], prev: (accountsPrev?.[n]) || Z, pol });
   };
 
-  // 1. Ventas del grupo: memo de escala (no es una línea de la cascada; la cascada arranca en Negocios).
-  filas.push({ kind: "grupo", key: "sec_ventas", label: "Ventas del grupo (memo)", cur: ventas, prev: ventasP, pol: 1 });
-  if (!isCol("sec_ventas")) {
-    // Sedes: abre por sede (ventas de cada una; Σ = ventasSedes, mismo motor). Sin apertura, una sola línea.
-    const vSedes = sedesApertura && (sedesApertura.cur || []).some(s => s.ventas);
-    filas.push({ kind: "cuenta", toggleKey: vSedes ? "sec_vsedes" : undefined, label: "Sedes Propias Argentina", cur: pz.ventasSedes || Z, prev: pzP.ventasSedes || Z, pol: 1 });
-    if (vSedes && !isCol("sec_vsedes"))
-      for (const s of sedesApertura.cur) {
-        const prevV = (sedesApertura.prev || []).find(x => x.label === s.label)?.ventas || Z;
-        filas.push({ kind: "cuenta", nested: true, label: s.label, cur: s.ventas || Z, prev: prevV, pol: 1 });
-      }
-    // Rosedal: en el memo va la venta de la SEDE (de Segui); el fee es lo que entra en Negocios.
-    filas.push({ kind: "cuenta", label: "Gerenciamiento de Sedes (Rosedal)",     cur: ventasRos,           prev: ventasRosP,           pol: 1 });
-    filas.push({ kind: "cuenta", label: "Wellness Real Estate (Huergo)",         cur: pz.huergoIng || Z,   prev: pzP.huergoIng || Z,   pol: 1 });
-    // Red BRUTA, por cuenta: lo facturado antes de interusos pagados y pauta/CRM comprados.
-    filas.push({ kind: "cuenta", toggleKey: "sec_vred", label: "Red BIGG (franquicias y corporativos)",  cur: ventasRed, prev: ventasRedP, pol: 1 });
-    if (!isCol("sec_vred"))
-      for (const [n] of Object.entries(hqAccounts || {}).sort(ordCmp(BIGG_ORDEN)))
-        filas.push({ kind: "cuenta", nested: true, label: n, cur: bruto(n), prev: brutoP(n), pol: 1 });
-  }
-  filas.push({ kind: "spacer" });
-
-  // 2. Negocios, cada uno al 100% (la parte de terceros se descuenta abajo, no acá).
+  // 1. Negocios, cada uno al 100% (la parte de terceros se descuenta abajo, no acá).
   filas.push({ kind: "grupo", key: "sec_neg", label: "Negocios (contribución al 100%)", cur: contrib, prev: contribP, pol: 1 });
   if (!isCol("sec_neg")) {
     if (sedesApertura) {
@@ -1297,7 +1265,9 @@ function buildPnLGrupoFilas(propsBigg, isCol) {
   if (!isCol("sec_terc"))
     filas.push({ kind: "cuenta", label: "Barrio Norte · socios " + Math.round(CESION.pct * 100) + "%", cur: cesion, prev: cesionP, pol: -1 });
   filas.push({ kind: "result", strong: true, label: "Resultado atribuible a BIGG", cur: atribuible, prev: atribuibleP, pol: 1 });
-  filas.push(filaRatioDe("Margen sobre ventas", atribuible, ventas, atribuibleP, ventasP));
+  // Con contribución ≤ 0 (mes parcial o pérdida) el % no significa nada → denominador 0 = "—".
+  const pos = arr => arr.map(v => v > 0 ? v : 0);
+  filas.push(filaRatioDe("Margen sobre contribución", atribuible, pos(contrib), atribuibleP, pos(contribP)));
 
   // 5. Memo: inversiones y fondeo del período. NO suman al resultado (son caja). Tanda 5: fondeo fuera de acá.
   if (hayCapex) {
@@ -1320,7 +1290,7 @@ function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, pnlPrevC = null, subPrevC = 
   // modo "grupo" = P&L del grupo (buildPnLGrupoFilas): misma tabla, otras filas y otras secciones colapsables.
   const esGrupo = modo === "grupo";
   const ALLKEYS = esGrupo
-    ? ["sec_ventas", "sec_vsedes", "sec_vred", "sec_neg", "sec_sedes", "sec_red", "sec_estr", "sec_fin", "sec_imp", "sec_terc", "sec_inv"]
+    ? ["sec_neg", "sec_sedes", "sec_red", "sec_estr", "sec_fin", "sec_imp", "sec_terc", "sec_inv"]
     : ["sec_op", "sec_sedes", "sec_ing", "sec_gpv", "sec_opex", "sec_fin", "sec_imp", "sec_capex"];
   const [collapsed, setCollapsed] = useState(() => Object.fromEntries(ALLKEYS.map(k => [k, true])));   // arranca compactado
   const isCol  = k => !!collapsed[k];
@@ -2725,10 +2695,7 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
     const cesionBN = MESES.map((_, m) => CESION.pct * (Number(sBNnet?.resFinal?.[m]) || 0));
     // Piezas de la cascada "P&L del grupo" (buildPnLGrupoFilas). Viajan DENTRO de sub → prev/prevC las traen solas.
     sub.cesionBN = cesionBN;
-    // Venta de la sede Rosedal (de Segui, anillo 3): solo para el memo de ventas del P&L del grupo (Martín 4/11).
-    const rosedalCCs = ccs.filter(c => (c.grupo ?? "").toLowerCase() === "operaciones" && (c.empresa ?? "").trim() === "segui-fit" && familiaCentro(c) === "gerenciamiento").map(c => c.id);
-    const rosedalVentas = rosedalCCs.length ? computeSubtotalsSede(buildPnLSede(inR, egR, rosedalCCs, yr, moneda, sinIvaArg)).totIngresos : null;
-    sub.piezas   = { ventasSedes: sAR.totIngresos, sedes100: sAR.resFinal, huergoIng: sH.totIng, contraHQ: pnl.grupos.hqContra || {}, rosedalVentas };
+    sub.piezas   = { sedes100: sAR.resFinal };
     return { pnl, sub, cesionBN,
       // DEV-ONLY (check "P&L BIGG vs Devengado" en consola): piezas del holding para descomponer la diferencia.
       _dbg: import.meta.env.DEV ? { sAR, sBNnet, feeGer, resWRE, arNucleoCCs, bnCcId } : undefined };
@@ -2770,7 +2737,7 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
   const sedesAperturaDe = (yr) => arNucleoCCs.map(cc => ({
     label: nombreCC(cc),
     isBN: String(cc) === String(bnCcId),
-    ...(({ resFinal, totIngresos }) => ({ arr: resFinal, ventas: totIngresos }))(computeSubtotalsSede(buildPnLSede(inBigg, egBigg, [cc], yr, monedaPL, sinIva))),
+    arr: computeSubtotalsSede(buildPnLSede(inBigg, egBigg, [cc], yr, monedaPL, sinIva)).resFinal,
   }));
   const sedesApCur  = useMemo(() => (isVentasHQ || isGrupo) ? sedesAperturaDe(year)     : null,   // eslint-disable-line react-hooks/exhaustive-deps
     [isVentasHQ, isGrupo, inBigg, egBigg, arNucleoCCs, ccMap, year, monedaPL, sinIva]);
@@ -2779,7 +2746,7 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
   // Apertura por sede del año anterior en el otro lente (YTD en dos lentes de Composición de Ingresos).
   const sedesApPrevAlt = useMemo(() => ((isVentasHQ || isGrupo) && inFxAlt) ? arNucleoCCs.map(cc => ({   // eslint-disable-line react-hooks/exhaustive-deps
     label: nombreCC(cc), isBN: String(cc) === String(bnCcId),
-    ...(({ resFinal, totIngresos }) => ({ arr: resFinal, ventas: totIngresos }))(computeSubtotalsSede(buildPnLSede(inFxAlt, egFxAlt, [cc], year - 1, monedaPL, sinIva))),
+    arr: computeSubtotalsSede(buildPnLSede(inFxAlt, egFxAlt, [cc], year - 1, monedaPL, sinIva)).resFinal,
   })) : null, [isVentasHQ, isGrupo, inFxAlt, egFxAlt, arNucleoCCs, ccMap, year, monedaPL, sinIva]);
   const sedesApLente = (dosLentesBigg => dosLentesBigg
     ? (fxMode === "real" ? { cur: sedesApCur, prev: sedesApPrev, prevC: sedesApPrevAlt } : { cur: sedesApCur, prev: sedesApPrevAlt, prevC: sedesApPrev })
