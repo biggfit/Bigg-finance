@@ -699,7 +699,8 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
   const resolveCB = useMemo(() => makeResolveCB(cuentasBancarias), [cuentasBancarias]);
 
   const rows = useMemo(() => egresos.filter(e => {
-    const matchEstado = filtroEstado === "todos" || e.estado === filtroEstado;
+    // "pendiente" = a_pagar + vencido: todo lo que todavía se debe (espejo de Ventas).
+    const matchEstado = filtroEstado === "todos" || (filtroEstado === "pendiente" ? e.estado !== "pagado" : e.estado === filtroEstado);
     return matchEstado && matchBusqueda(e, busqueda, "proveedor") && filtroFecha.inRange(e.fecha);
   }).sort((a, b) => String(b.fecha ?? "").localeCompare(String(a.fecha ?? ""))), [busqueda, filtroEstado, egresos, filtroFecha.inRange]);
 
@@ -981,14 +982,14 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
           style={{ flex:1, minWidth:200, background:"#eceff3", border:`1px solid ${T.cardBorder}`,
             borderRadius:8, padding:"7px 12px", fontSize:13, color:T.text, outline:"none", fontFamily:T.font }} />
         <FiltroFecha {...filtroFecha} />
-        {["todos","pagado","a_pagar","vencido"].map(e => (
+        {["todos","pagado","pendiente"].map(e => (
           <button key={e} onClick={() => setFiltroEstado(e)} style={{
             background: filtroEstado===e ? T.accentDark : "#f3f4f6",
             color: filtroEstado===e ? T.accent : T.muted,
             border:`1px solid ${filtroEstado===e ? T.accentDark : T.cardBorder}`,
             borderRadius:999, padding:"6px 14px", fontSize:12, fontWeight:700, cursor:"pointer",
           }}>
-            {e==="todos" ? "Todos" : ESTADO_EGRESO[e]?.label}
+            {e==="todos" ? "Todos" : e==="pendiente" ? "Pendiente" : ESTADO_EGRESO[e]?.label}
           </button>
         ))}
       </div>
