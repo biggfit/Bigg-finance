@@ -12,6 +12,7 @@ import {
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto, fetchSaldoMercadoPago, esCuentaMercadoPago,
   appendGastoDirecto, esIgnorado, ignorarMovimiento, esCuentaCredito, fetchFinanciaciones,
   pagarTarjeta, fetchSocios, fetchSociosCC, fetchIntercoData, intercoLedger, primeCache, motivoNoBorrable,
+  esIntercoDeclaradaManual, piezasIntercoDeclarada, deshacerIntercoDeclarada,
 } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas } from "../lib/sueldosApi";
 import { fetchAll } from "../lib/sheetsApi";        // Franquicias (read-only)
@@ -40,6 +41,10 @@ const TIPO_CFG = {
   TRANSFERENCIA: { bg:"#dbeafe", color:"#2563eb", label:"TRF Propias"     },
   SALDO_INICIAL: { bg:"#f3f4f6", color:"#6b7280", label:"Saldo inicial"   },
 };
+// La pata de CAJA de una interco (origen interco_recibida/enviada) se muestra "Interco", no Ingreso/Gasto: es plata
+// que entró o salió por una interco, no un ingreso o gasto cualquiera (Martín 5/11/2026). Su costo FINC sigue "Gasto".
+const INTERCO_CAJA_CFG = { bg:"#f3e8ff", color:"#9333ea", label:"Interco" };
+const esIntercoCaja = (m) => m.origen === "interco_recibida" || m.origen === "interco_enviada";
 // Estilo rojo para las líneas del extracto todavía SIN conciliar (mismo texto Gasto/Ingreso, otro color).
 const TIPO_SIN_CONCILIAR = { bg:"#fee2e2", color:"#dc2626" };
 const esSinConciliar = (m) => m.origen === "extracto" && !String(m.documento_id || "");
@@ -1413,7 +1418,7 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
               </td></tr>
             )}
             {visible.map((m, i) => {
-              const base   = TIPO_CFG[m.tipo] ?? { bg:"#f3f4f6", color:"#374151", label:m.tipo };
+              const base   = esIntercoCaja(m) ? INTERCO_CAJA_CFG : TIPO_CFG[m.tipo] ?? { bg:"#f3f4f6", color:"#374151", label:m.tipo };
               const cfg    = esSinConciliar(m) ? { ...base, ...TIPO_SIN_CONCILIAR } : base;
               const monto  = Number(m.monto) || 0;
               const nombre = cuentaMap[m.cuenta_bancaria] ?? m.cuenta_bancaria ?? "—";
@@ -1795,6 +1800,32 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
       });
       return;
     }
+    // Pata de caja de una interco. Declarada a mano (IRCV-/ISND-): se deshace ENTERA → esta fila, su costo de
+    // transferencia y el desatado de la pata parkeada de la contraparte, que vuelve a pendientes de Interco para
+    // redeclararla. Si nació del extracto es la línea del banco: no se borra desde acá.
+    if (esIntercoCaja(mov)) {
+      if (!esIntercoDeclaradaManual(mov)) {
+        setConfirmAcc({ title: "Este movimiento no se borra desde acá", message: `"${mov.concepto ?? mov.id}" es la línea del banco aceptada como interco. Se deshace desde Conciliación, no desde Tesorería.`, confirmLabel: "Entendido", danger: false, run: async () => {} });
+        return;
+      }
+      piezasIntercoDeclarada(mov).then(pz => {
+        const quien = mov.contraparte_nombre || mov.contraparte_id || "la contraparte";
+        const lineas = [
+          `Es la pata de caja de una interco con ${quien} (${fmtSaldo(Number(mov.monto) || 0, mov.moneda)}, ${fmtDate(mov.fecha)}).`,
+          `Se borra este movimiento${pz.costo ? ` y su costo de transferencia (${fmtSaldo(Number(pz.costo.monto) || 0, pz.costo.moneda)})` : ""}.`,
+          pz.pata
+            ? `La pata de ${quien} (${fmtSaldo(Number(pz.pata.monto) || 0, pz.pata.moneda)}, ${fmtDate(pz.pata.fecha)}) se desata y vuelve a Conciliaciones › Interco como pendiente, para declararla de nuevo.`
+            : "No se encontró una pata parkeada atada a este movimiento: no queda nada pendiente del otro lado.",
+        ];
+        setConfirmAcc({
+          title: "¿Eliminar esta interco?",
+          message: lineas.join("\n"),
+          confirmLabel: "Sí, eliminar",
+          run: async () => { await deshacerIntercoDeclarada(mov, pz); await cargarMovimientos(); },
+        });
+      }).catch(e => setConfirmAcc({ title: "No se pudo leer la interco", message: String(e?.message || e), confirmLabel: "Entendido", danger: false, run: async () => {} }));
+      return;
+    }
     // Transferencia/interco/cambio = PAR de patas con el mismo documento_id. Hay que borrar AMBAS,
     // o la contrapartida queda huérfana y sigue sumando al saldo (la transferencia se "duplica").
     // Solo se juntan las patas cargadas en la sociedad activa (interco cross-sociedad borra su lado).
@@ -1808,7 +1839,9 @@ export default function PantallaTesoreria({ sociedad = "nako", onEditarDoc, onEd
       message: `"${mov.concepto ?? mov.id}"${extra}.`,
       confirmLabel: "Sí, eliminar",
       run: async () => {
-        await Promise.all(patas.map(m => deleteMovTesoreria(m.id)));
+        // En SERIE: el GAS borra por índice de fila y sin lock → dos `del` en paralelo pueden borrar la fila equivocada
+        // (ver deshacerIntercoDeclarada en numbersApi).
+        for (const m of patas) await deleteMovTesoreria(m.id);
         const ids = new Set(patas.map(m => m.id));
         setMovimientos(prev => prev.filter(m => !ids.has(m.id)));
       },

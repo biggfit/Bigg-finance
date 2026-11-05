@@ -1802,7 +1802,7 @@ export async function aceptarMovimiento(mov, prop = {}) {
 // Costo de transferencia/clearing de una interco (cuando la financiera lo informa). Egreso a `cuenta_contable`
 // (default Perdidas Financieras; puede ser otra, ej. Cargas Sociales si la plata iba a sueldos).
 // Con `cuenta_bancaria` → egreso PAGADO de esa caja (sale plata, no deja CxP). Sin ella ("") → P&L puro, sin caja.
-async function _addCostoFinanciero({ sociedad, fecha, monto, moneda = "ARS", centro = "", origen_nombre = "", cuenta_bancaria = "", cuenta_contable = "Perdidas Financieras" }) {
+async function _addCostoFinanciero({ sociedad, fecha, monto, moneda = "ARS", centro = "", origen_nombre = "", cuenta_bancaria = "", cuenta_contable = "Perdidas Financieras", referencia = "" }) {
   const id = newId("FINC");
   return post({ action: "add", sheet: "nb_movimientos", row: {
     id, sociedad, fecha, tipo: "EGRESO_GASTO", cuenta_bancaria,   // PAGADO desde la caja (sale plata → no deja CxP colgada)
@@ -1810,6 +1810,7 @@ async function _addCostoFinanciero({ sociedad, fecha, monto, moneda = "ARS", cen
     moneda, monto: -Math.abs(Number(monto) || 0),
     documento_id: "CONTAB-" + id, origen: "gasto_directo",
     concepto: `Costo transferencia interco${origen_nombre ? " · " + origen_nombre : ""}`,
+    referencia,   // "costo_de=<IRCV/ISND>" cuando nace de una interco declarada → deshacerIntercoDeclarada lo encuentra por id
     created_at: new Date().toISOString(), ...firma(),
   }});
 }
@@ -1828,13 +1829,14 @@ export async function declararIntercoRecibida({ sociedad, cuenta_bancaria, fecha
       documento_id: "INTERRECV-" + id, origen: "interco_recibida",
       contraparte_id: origen_sociedad || "", contraparte_nombre: origen_nombre,
       concepto: concepto || `Interco recibida${origen_nombre ? " de " + origen_nombre : ""}`,
-      referencia: "1", created_at: new Date().toISOString(), ...firma(),
+      // par=<pata parkeada>: el enganche en los DOS sentidos (la pata guarda recibida=<id>) → se puede deshacer exacto.
+      referencia: parked_leg_id ? "par=" + parked_leg_id : "1", created_at: new Date().toISOString(), ...firma(),
     }}),
     // marca la pata parkeada como reconocida (sale de pendientes)
     parked_leg_id ? post({ action: "edit", sheet: "nb_movimientos", id: parked_leg_id, patch: { referencia: "recibida=" + id } }) : null,
     // Costo = egreso PAGADO de la misma caja → tu caja neta = monto − costo, y el gasto no queda colgado.
     // cuenta_contable elegible: si la plata iba a pagar sueldos, el costo es carga social encubierta (no financiero).
-    Number(costo) > 0 ? _addCostoFinanciero({ sociedad, fecha, monto: costo, moneda, centro: costo_centro, origen_nombre, cuenta_bancaria, cuenta_contable: costo_cuenta }) : null,
+    Number(costo) > 0 ? _addCostoFinanciero({ sociedad, fecha, monto: costo, moneda, centro: costo_centro, origen_nombre, cuenta_bancaria, cuenta_contable: costo_cuenta, referencia: "costo_de=" + id }) : null,
   ]);
   return id;
 }
@@ -1853,12 +1855,52 @@ export async function declararIntercoEnviada({ sociedad, cuenta_bancaria, fecha,
       documento_id: "INTERSND-" + id, origen: "interco_enviada",
       contraparte_id: destino_sociedad || "", contraparte_nombre: destino_nombre,
       concepto: concepto || `Interco enviada${destino_nombre ? " a " + destino_nombre : ""}`,
-      referencia: "1", created_at: new Date().toISOString(), ...firma(),
+      referencia: parked_leg_id ? "par=" + parked_leg_id : "1", created_at: new Date().toISOString(), ...firma(),
     }}),
     parked_leg_id ? post({ action: "edit", sheet: "nb_movimientos", id: parked_leg_id, patch: { referencia: "recibida=" + id } }) : null,
-    Number(costo) > 0 ? _addCostoFinanciero({ sociedad, fecha, monto: costo, moneda, centro: costo_centro, origen_nombre: destino_nombre, cuenta_bancaria, cuenta_contable: costo_cuenta }) : null,
+    Number(costo) > 0 ? _addCostoFinanciero({ sociedad, fecha, monto: costo, moneda, centro: costo_centro, origen_nombre: destino_nombre, cuenta_bancaria, cuenta_contable: costo_cuenta, referencia: "costo_de=" + id }) : null,
   ]);
   return id;
+}
+
+// ── Deshacer una interco declarada a mano (IRCV-/ISND-) ─────────────────────────────────────────────
+// Una interco declarada son hasta tres filas: la pata de caja (esta), su costo de transferencia (FINC, opcional)
+// y la pata PARKEADA de la contraparte, que quedó marcada `recibida=<id>` y por eso ya no aparece en pendientes.
+// Borrar solo la fila de caja dejaba la pata atada a un fantasma (fuera de pendientes, imposible redeclarar).
+// `esIntercoDeclaradaManual` distingue la declarada a mano de la que nació del extracto (EXT-…): esa ES la
+// línea del banco y no se borra desde Tesorería.
+export const esIntercoDeclaradaManual = m => (m?.origen === "interco_recibida" || m?.origen === "interco_enviada") && /^(IRCV|ISND)-/.test(String(m?.id || ""));
+
+// Lectura previa (para el modal): qué costo y qué pata se van a tocar. La pata se busca en la sociedad contraparte
+// por `par=<id>` (declaraciones nuevas) o por `recibida=<mi id>` (las viejas, que solo guardaban el enganche de un
+// lado). El costo, por `costo_de=<id>` o, en las viejas, por misma caja + concepto "Costo transferencia interco" +
+// creado en los mismos 10 segundos (así los escribe declararIntercoRecibida).
+export async function piezasIntercoDeclarada(mov) {
+  const id = String(mov.id);
+  const [mios, deContraparte] = await Promise.all([
+    get("nb_movimientos", { sociedad: mov.sociedad }),
+    get("nb_movimientos", mov.contraparte_id ? { sociedad: mov.contraparte_id } : {}),
+  ]);
+  const parId = (String(mov.referencia || "").match(/^par=(\S+)/) || [])[1];
+  const pata = deContraparte.find(m => m.origen === "interco_park" && (String(m.id) === parId || String(m.referencia || "") === "recibida=" + id)) || null;
+  const t0 = Date.parse(mov.created_at || "") || 0;
+  const costo = mios.find(m => String(m.referencia || "") === "costo_de=" + id)
+    || mios.find(m => /^FINC-/.test(String(m.id)) && m.cuenta_bancaria === mov.cuenta_bancaria
+         && /^Costo transferencia interco/.test(String(m.concepto || "")) && Math.abs((Date.parse(m.created_at || "") || 0) - t0) < 10_000)
+    || null;
+  return { pata, costo };
+}
+
+// Ejecuta: desata la pata parkeada (referencia "" → vuelve a pendientes de Conciliaciones › Interco de la sociedad
+// receptora, para redeclararla) y recién después borra la pata de caja y su costo.
+// EN SERIE, NUNCA Promise.all: el GAS edita y borra por ÍNDICE de fila (busca el id, después escribe/borra esa fila)
+// y no tiene lock. Un `del` que corre en el medio de un `edit` corre las filas de abajo un lugar y el edit cae en la
+// fila equivocada (pasó el 5/11/2026: el desatado de EXT-76668-g1i17 borró la referencia de EXT-76668-g1i18).
+// Dos `del` en paralelo tienen el mismo problema entre sí. Los `add` (appendRow) no corren filas.
+export async function deshacerIntercoDeclarada(mov, { pata, costo } = {}) {
+  if (pata)  await post({ action: "edit", sheet: "nb_movimientos", id: pata.id, patch: { referencia: "" } });
+  if (costo) await post({ action: "del",  sheet: "nb_movimientos", id: costo.id });
+  await post({ action: "del", sheet: "nb_movimientos", id: mov.id });
 }
 
 // Patas parkeadas por OTRA sociedad hacia la activa, todavía sin declarar (lista de pendientes / semáforo).
