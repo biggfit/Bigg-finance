@@ -6,7 +6,7 @@
 export const TABS = [
   // ── Funcionando ──
   { id: "pl_sede", label: "P&L · Sedes Argentina",  icon: "🏬", ico: "store", desc: "Resultado operativo por sede: ventas, costos variables y márgenes." },
-  { id: "pl_bigg", label: "P&L · BIGG (grupo)",   icon: "🏢", ico: "building", desc: "Resultado corporativo por centro de HQ (R&D, Sales & Mkt, G&A)." },
+  { id: "pl_bigg", label: "P&L · BIGG (grupo)",   icon: "🏢", ico: "building", retirar: true, desc: "Resultado corporativo por centro de HQ (R&D, Sales & Mkt, G&A). A retirar: lo reemplaza P&L · del grupo (Martín 5/11/2026)." },
   { id: "pl_grupo", label: "P&L · del grupo", icon: "🏢", ico: "building", desc: "Para el comité: contribución de cada negocio al 100%, estructura, resultado y lo que queda para BIGG después de los socios." },
   { id: "cf",      label: "Cash Flow",  icon: "💵", ico: "flow", desc: "Por qué la caja subió o bajó cada mes (cobros, pagos, fondeo, financiación, cambio de moneda) y cómo el resultado se convirtió en caja." },
   { id: "interco", label: "Saldos entre sociedades",   icon: "🔗", ico: "link", desc: "Préstamos y saldos interco entre TODAS las sociedades: posición neta por moneda (quién le debe a quién). Filtrá por sociedad y hacé click en una fila para ver el detalle de movimientos." },
@@ -14,8 +14,8 @@ export const TABS = [
   { id: "consolidado", label: "Tesorería consolidada", icon: "🏦", ico: "bank", desc: "Cuánta plata hay hoy y dónde: saldos de cajas y bancos, cuentas a cobrar/pagar y movimientos de todas las sociedades." },
   { id: "balance_pn",  label: "Balance y Evolución del PN", icon: "⚖️", ico: "scale", desc: "Cuánto vale cada sociedad (o el grupo en USD) a una fecha y por qué cambió mes a mes: apertura + resultado + cambio de moneda = Patrimonio Neto." },
   { id: "posicion_fin", label: "Posición financiera", icon: "🎯", ico: "target", desc: "El número del board: disponible − deuda financiera = posición financiera neta; + a cobrar − a pagar = posición neta (ata con el PN). Al último cierre, consolidado en USD y por sociedad." },
-  { id: "cxp_prov", label: "Cuentas a pagar por proveedor", icon: "📋", ico: "invoice", desc: "Cuentas por pagar consolidadas por proveedor (todas las sociedades), con antigüedad." },
-  { id: "cxc_cli", label: "Cuentas a cobrar por cliente", icon: "📥", ico: "receipt", desc: "Cuentas por cobrar consolidadas por cliente (todas las sociedades), con antigüedad." },
+  { id: "cxp_prov", label: "Cuentas por pagar", icon: "📋", ico: "invoice", desc: "Cuentas por pagar consolidadas por proveedor (todas las sociedades), con antigüedad." },
+  { id: "cxc_cli", label: "Cuentas por cobrar", icon: "📥", ico: "receipt", desc: "Cuentas por cobrar consolidadas por cliente (todas las sociedades), con antigüedad." },
   { id: "socios",  label: "Socios", icon: "◎", ico: "people", desc: "Cuenta corriente de socios: dividendos, aportes y préstamos (balance, no P&L)." },
 
   // ── Detalle operativo (funcionando): el único lugar donde se ve la contabilidad de TODAS las sociedades ──

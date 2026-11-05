@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import LOGO_SRC from "./assets/biggLogo";
 import PantallaReportes, { Icono } from "./numbers/PantallaReportes";
 import { TABS } from "./numbers/reportes/reportesMenu";
@@ -25,26 +25,44 @@ const T = {
   font:     "'Inter', system-ui, sans-serif",
 };
 
-// Las cuatro miradas (Martín 3/11/2026): comité · negocios · participaciones · administración. Los ids son los
-// mismos `TABS` de PantallaReportes (label, ícono y WIP salen de ahí → una sola lista). Lo que está en
-// construcción va al final de su grupo, en gris, igual que en el menú de tarjetas.
+// Secciones del sidebar (Martín 5/11/2026): Administración PRIMERO, para que lo operativo del equipo esté a la vista; después resultados económicos y financieros; y todo lo que está en construcción junto al final, plegado.
+// Los ids son los mismos `TABS` de PantallaReportes (label, ícono, WIP y "a retirar" salen de ahí → una sola lista).
+// Cada sección se pliega con la flechita y el estado se recuerda en el navegador (cada usuario arma su vista).
 const MIRADAS = [
-  { id: "comite",   label: "Comité",          hint: "Cómo nos fue, en pocos números",
-    tabs: ["pl_grupo", "pl_bigg", "an_ventas", "posicion_fin", "an_margenes", "consol_grupo"] },
-  { id: "negocios", label: "Negocios",        hint: "Un P&L por operación",
-    tabs: ["pl_sede", "op_espana", "op_colombia", "op_rosedal", "op_huergo", "op_puertos"] },
-  { id: "partic",   label: "Participaciones", hint: "Socios, fondeo y saldos entre sociedades",
+  // Lo que se opera todos los días (Martín 5/11: la caja primero, Ingresos antes que Egresos).
+  { id: "admin",    label: "Administración",       hint: "La caja y lo que se opera todos los días",
+    tabs: ["consolidado", "inf_ingresos", "inf_egresos", "cxc_cli", "cxp_prov", "inf_pagos"] },
+  // Martín 5/11: Comité + Negocios en una sola sección; lo financiero (posición, flujo, patrimonio) en otra.
+  { id: "economico", label: "Resultados económicos",  hint: "Cómo nos fue: el grupo y cada negocio",
+    tabs: ["pl_grupo", "an_ventas", "pl_sede", "op_espana", "op_colombia", "op_rosedal", "op_huergo", "devengado"] },
+  { id: "financiero", label: "Resultados financieros", hint: "Posición, flujo de caja y patrimonio",
+    tabs: ["posicion_fin", "cf", "balance_pn"] },
+  { id: "partic",   label: "Participaciones",      hint: "Socios, fondeo y saldos entre sociedades",
     tabs: ["socios", "interco_matriz", "interco"] },
-  { id: "admin",    label: "Administración",  hint: "Tesorería, cierre y detalle",
-    tabs: ["consolidado", "cf", "balance_pn", "devengado", "inf_egresos", "inf_ingresos", "inf_pagos", "cxp_prov", "cxc_cli", "an_gastos_cc", "er_soc"] },
+  { id: "wip",      label: "En construcción",      hint: "Reportes a terminar o a retirar", plegadaInicial: true,
+    tabs: ["an_margenes", "consol_grupo", "op_puertos", "an_gastos_cc", "er_soc", "pl_bigg"] },
 ];
 
-const tabDe = (id) => TABS.find(t => t.id === id);
+const LS_PLEGADAS = "reportes.sidebar.plegadas";
+const tabDe   = (id) => TABS.find(t => t.id === id);
 
 export default function ReportesApp({ onVolver }) {
   const [activeId, setActiveId] = useState("pl_grupo");
+  const [plegadas, setPlegadas] = useState(() => {
+    try { const v = JSON.parse(localStorage.getItem(LS_PLEGADAS) || "null"); if (v && typeof v === "object") return v; } catch { /* sin storage */ }
+    return Object.fromEntries(MIRADAS.filter(m => m.plegadaInicial).map(m => [m.id, true]));
+  });
+  useEffect(() => { try { localStorage.setItem(LS_PLEGADAS, JSON.stringify(plegadas)); } catch { /* sin storage */ } }, [plegadas]);
+
   const activeTab    = tabDe(activeId);
   const activeMirada = MIRADAS.find(m => m.tabs.includes(activeId));
+  const toggle = (id) => setPlegadas(p => ({ ...p, [id]: !p[id] }));
+  // Ir a un reporte (click en el sidebar o link interno vía onTab): si su sección está plegada, se abre sola.
+  const irA = (id) => {
+    setActiveId(id);
+    const m = MIRADAS.find(x => x.tabs.includes(id));
+    if (m) setPlegadas(p => p[m.id] ? { ...p, [m.id]: false } : p);
+  };
 
   return (
     <div style={{ display: "flex", height: "100vh", fontFamily: T.font, overflow: "hidden" }}>
@@ -57,32 +75,35 @@ export default function ReportesApp({ onVolver }) {
 
         <nav style={{ flex: 1, overflowY: "auto", padding: "10px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
           {MIRADAS.map(m => {
-            const items = m.tabs.map(tabDe).filter(Boolean);
-            // WIP al final del grupo (orden estable dentro de cada mitad).
-            const ordenados = [...items.filter(t => !t.wip), ...items.filter(t => t.wip)];
+            const plegada = !!plegadas[m.id];
             return (
-              <div key={m.id} style={{ marginBottom: 10 }}>
-                <div title={m.hint} style={{ padding: "10px 12px 4px", fontSize: 10, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: T.dim }}>
-                  {m.label}
-                </div>
-                {ordenados.map(t => {
+              <div key={m.id} style={{ marginBottom: plegada ? 2 : 10 }}>
+                <button onClick={() => toggle(m.id)} title={m.hint}
+                  style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", background: "transparent", border: "none",
+                    padding: "10px 12px 4px", cursor: "pointer", color: T.dim, fontFamily: T.font, textAlign: "left" }}>
+                  <span style={{ fontSize: 9, width: 10, display: "inline-block", transform: plegada ? "rotate(0deg)" : "rotate(90deg)", transition: "transform .12s" }}>▶</span>
+                  <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase" }}>{m.label}</span>
+                </button>
+                {!plegada && m.tabs.map(tabDe).filter(Boolean).map(t => {
                   const isActive = t.id === activeId;
+                  const apagado  = t.wip || t.retirar;
                   return (
-                    <button key={t.id} onClick={() => setActiveId(t.id)} title={t.desc}
+                    <button key={t.id} onClick={() => irA(t.id)} title={t.desc}
                       style={{
                         display: "flex", alignItems: "center", gap: 10, width: "100%",
                         background: isActive ? T.activeBg : "transparent",
                         border: "none", borderRadius: 7, padding: "8px 12px",
                         cursor: "pointer", textAlign: "left",
-                        color: isActive ? T.text : t.wip ? T.dim : T.muted,
+                        color: isActive ? T.text : apagado ? T.dim : T.muted,
                         fontSize: 13, fontWeight: isActive ? 600 : 400, fontFamily: T.font,
                         transition: "background .12s",
                       }}>
                       <span style={{ width: 18, display: "inline-flex", justifyContent: "center", flexShrink: 0 }}>
-                        <Icono name={t.ico} emoji={t.icon} size={16} color={isActive ? T.accent : t.wip ? T.dim : T.muted} />
+                        <Icono name={t.ico} emoji={t.icon} size={16} color={isActive ? T.accent : apagado ? T.dim : T.muted} />
                       </span>
                       <span style={{ flex: 1, lineHeight: 1.25 }}>{t.label}</span>
-                      {t.wip && <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: ".06em", color: T.dim }}>WIP</span>}
+                      {t.retirar && <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: ".06em", color: T.dim }}>A RETIRAR</span>}
+                      {t.wip && !t.retirar && <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: ".06em", color: T.dim }}>WIP</span>}
                     </button>
                   );
                 })}
@@ -117,7 +138,7 @@ export default function ReportesApp({ onVolver }) {
             onMouseLeave={e => e.currentTarget.style.background = "transparent"}>🔄</button>
         </div>
         <div style={{ flex: 1, overflow: "auto" }}>
-          <PantallaReportes tab={activeId} onTab={setActiveId} />
+          <PantallaReportes tab={activeId} onTab={irA} />
         </div>
       </div>
     </div>
