@@ -770,7 +770,7 @@ export function PaginaIntercoLedger({ item, ledger, onBack, onGoToMov }) {
             <span style={{ fontSize: 13, color: T.muted, textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 }}>Saldo actual</span>
             <span style={{ fontSize: 22, fontFamily: "var(--mono)", fontWeight: 900, color: headerColor, whiteSpace: "nowrap" }}>{fmtSaldo(ledger.final ?? 0, mon)}</span>
           </div>
-          <span style={{ fontSize: 10, color: T.muted }}>{nosDeben ? "nos deben" : "les debemos"}</span>
+          <span style={{ fontSize: 10, color: T.muted }}>{nosDeben ? "nos deben" : "debemos"}</span>
         </div>
       </div>
       <IntercoLedgerTable entries={ledger.entries} moneda={mon} headerColor={headerColor} opening={ledger.opening ?? 0} onGoToMov={onGoToMov} />
@@ -830,32 +830,49 @@ function CeldaMonto({ valor, moneda, onClick, title, fuerte = false, color }) {
   );
 }
 
+// Las tres tablas de Saldos (cuentas, este mes, financiación) comparten anchos: layout fijo + una columna de ancho fijo por
+// moneda, la de etiqueta se queda con el resto. Así USD queda bajo USD en todos los bloques (Martín 5/11/2026).
+const COL_MON = 150;
+const TABLA_SALDOS = { width: "100%", borderCollapse: "collapse", tableLayout: "fixed" };
+const ColsSaldos = ({ monedas }) => <colgroup><col />{monedas.map(m => <col key={m} style={{ width: COL_MON }} />)}</colgroup>;
 const thMon = { padding: "6px 12px", textAlign: "right", fontSize: 10, fontWeight: 800, letterSpacing: ".08em", color: T.dim, whiteSpace: "nowrap" };
 const tdLabel = { padding: "7px 18px", fontSize: 13, color: T.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 360 };
 const trLine = { borderBottom: `1px solid ${T.cardBorder}` };   // la tabla lleva border-collapse → el borde del <tr> se dibuja en todas sus celdas
 const trSub  = { background: "#fafbfc", borderTop: `2px solid ${T.cardBorder}` };
 
-// Cabecera de bloque plegable (misma estética que el resto de Tesorería: oscuro + flúo).
-function BloqueSaldos({ titulo, detalle, plegado, onToggle, derecha, children }) {
+// Bloque plegable = UNA tabla: el header oscuro es su primera fila (título en la columna de etiqueta, el código de cada
+// moneda en su columna) → las monedas quedan clavadas sobre sus importes sin fila gris aparte (Martín 5/11/2026).
+// Los hijos (TablaCuentas / TablaItems) ponen tbody + tfoot; plegado esconde el tbody y deja el pie a la vista.
+function BloqueSaldos({ titulo, detalle, plegado, onToggle, monedas, children }) {
   return (
+    <>
     <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, boxShadow: T.shadow,
       overflow: "hidden", marginBottom: 16 }}>
-      <div onClick={onToggle} style={{ padding: "9px 18px", background: T.tableHead, display: "flex", alignItems: "center",
-        gap: 10, cursor: "pointer", userSelect: "none", borderBottom: plegado ? "none" : `1px solid ${T.cardBorder}` }}>
-        <span style={{ fontSize: 9, color: T.tableHeadText, display: "inline-block", transform: plegado ? "rotate(0deg)" : "rotate(90deg)", transition: "transform .12s" }}>▶</span>
-        <span style={{ fontSize: 11, fontWeight: 800, color: T.tableHeadText, letterSpacing: ".10em", textTransform: "uppercase" }}>{titulo}</span>
-        {detalle && <span style={{ fontSize: 11, color: "#9ca3af" }}>{detalle}</span>}
-        <span style={{ flex: 1 }} />
-        {derecha && <span style={{ fontSize: 11, color: "#9ca3af", fontStyle: "italic" }}>{derecha}</span>}
-      </div>
-      {!plegado && children}
+      <table style={TABLA_SALDOS}>
+        <ColsSaldos monedas={monedas} />
+        <thead>
+          <tr onClick={onToggle} style={{ background: T.tableHead, cursor: "pointer", userSelect: "none" }}>
+            <th style={{ padding: "9px 18px", textAlign: "left", fontWeight: 400 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                <span style={{ fontSize: 9, color: T.tableHeadText, display: "inline-block", flexShrink: 0, transform: plegado ? "rotate(0deg)" : "rotate(90deg)", transition: "transform .12s" }}>▶</span>
+                <span style={{ fontSize: 11, fontWeight: 800, color: T.tableHeadText, letterSpacing: ".10em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{titulo}</span>
+              </div>
+            </th>
+            {monedas.map(m => <th key={m} style={{ ...thMon, padding: "9px 12px", fontSize: 11, letterSpacing: ".10em", color: T.tableHeadText }}>{m}</th>)}
+          </tr>
+        </thead>
+        {children}
+      </table>
     </div>
+    {/* La ayuda va abajo como nota, AFUERA de la tarjeta, no en el header (Martín 5/11). */}
+    {!plegado && detalle && <div style={{ padding: "0 18px", margin: "-10px 0 16px", fontSize: 10.5, color: T.dim }}>* {detalle}</div>}
+    </>
   );
 }
 
 // Tabla HOY: una fila por cuenta (bancos, cajas e inversiones), agrupadas por sociedad cuando hay `_soc` (consolidado),
 // bancos → Mercado Pago → cajas → inversiones y por saldo; las que están en cero van en gris (se ven todas). Pie: disponible.
-function TablaCuentas({ cuentas, monedas, mpLive, onCuentaClick }) {
+function TablaCuentas({ cuentas, monedas, mpLive, onCuentaClick, plegado = false }) {
   const conSoc = cuentas.some(c => c.__soc);
   const grupos = [];
   for (const c of cuentas) {
@@ -869,14 +886,8 @@ function TablaCuentas({ cuentas, monedas, mpLive, onCuentaClick }) {
   const tot = {};
   for (const c of cuentas) tot[c.moneda] = (tot[c.moneda] || 0) + (Number(c.saldo) || 0);
   return (
-    <table style={{ width: "100%", borderCollapse: "collapse" }}>
-      <thead>
-        <tr style={trLine}>
-          <th style={{ ...thMon, textAlign: "left", padding: "6px 18px" }}>Cuenta</th>
-          {monedas.map(m => <th key={m} style={thMon}>{m}</th>)}
-        </tr>
-      </thead>
-      <tbody>
+    <>
+      {!plegado && <tbody>
         {grupos.map(g => (
           <Fragment key={g.soc}>
             {conSoc && (
@@ -912,39 +923,44 @@ function TablaCuentas({ cuentas, monedas, mpLive, onCuentaClick }) {
         {cuentas.length === 0 && (
           <tr><td colSpan={monedas.length + 1} style={{ padding: 16, fontSize: 12, color: T.dim, textAlign: "center" }}>Sin cuentas registradas</td></tr>
         )}
-      </tbody>
+      </tbody>}
       <tfoot>
         <tr style={{ ...trSub, borderTop: `2px solid ${T.cardBorder}` }}>
           <td style={{ ...tdLabel, fontSize: 12, fontWeight: 800, color: T.text }}>Disponible</td>
           {monedas.map(m => <CeldaMonto key={m} valor={tot[m] ?? null} moneda={m} fuerte />)}
         </tr>
       </tfoot>
-    </table>
+    </>
   );
 }
 
 // Tabla de categorías (a cobrar / a pagar / interco): una fila por label, una celda por moneda = el item de esa moneda
 // (click → su antigüedad / ledger). `secciones` = [{ titulo, color, items, signo? }]. Las líneas `_info` (MP a acreditarse)
 // se muestran en cursiva y no suman.
-function TablaItems({ secciones, monedas, onItemClick, pie = [] }) {
+function TablaItems({ secciones, monedas, onItemClick, pie = [], plegado = false }) {
   const totales = (items, signo) => {   // con `signo` (interco) el total lleva el mismo signo que las celdas
     const t = {};
     for (const it of items) { if (it._info) continue; t[it.moneda] = (t[it.moneda] || 0) + (signo ? signo(it) : (Number(it.saldo) || 0)); }
     return t;
   };
+  // Fila de total con el tono de su sección (verde cobrar / rojo pagar) para que corte con las categorías.
+  // Va al final de su sección y, con el bloque plegado y sin pie propio, es lo único que queda a la vista.
+  const filaTotal = sec => {
+    if (!sec.totalLabel || !sec.items.some(it => !it._info)) return null;
+    const tot = totales(sec.items, sec.signo);
+    return (
+      <tr key={"tot:" + sec.titulo} style={{ ...trSub, background: sec.color === T.green ? T.greenBg : sec.color === T.red ? T.redBg : "#f3f4f6" }}>
+        <td style={{ ...tdLabel, fontSize: 12.5, fontWeight: 800, color: sec.signo ? T.text : sec.color }}>{sec.totalLabel}</td>
+        {monedas.map(m => <CeldaMonto key={m} valor={tot[m] ?? null} moneda={m} color={sec.signo ? undefined : sec.color} />)}
+      </tr>
+    );
+  };
   return (
-    <table style={{ width: "100%", borderCollapse: "collapse" }}>
-      <thead>
-        <tr style={trLine}>
-          <th style={{ ...thMon, textAlign: "left", padding: "6px 18px" }}>Categoría</th>
-          {monedas.map(m => <th key={m} style={thMon}>{m}</th>)}
-        </tr>
-      </thead>
-      <tbody>
+    <>
+      {!plegado && <tbody>
         {secciones.map(sec => {
           const filaDe = it => it._fila ?? it.label;   // interco consolidado: misma contraparte desde varias sociedades → una fila por sociedad
           const labels = [...new Set(sec.items.map(filaDe))];
-          const tot = totales(sec.items, sec.signo);
           return (
             <Fragment key={sec.titulo}>
               {/* Jerarquía por sangría (Martín 5/11): el título al margen, las categorías un paso adentro. Sin bandas. */}
@@ -971,18 +987,12 @@ function TablaItems({ secciones, monedas, onItemClick, pie = [] }) {
                   </tr>
                 );
               })}
-              {sec.totalLabel && sec.items.some(it => !it._info) && (
-                // Fila de total con el tono de su sección (verde cobrar / rojo pagar) para que corte con las categorías.
-                <tr style={{ ...trSub, background: sec.color === T.green ? T.greenBg : sec.color === T.red ? T.redBg : "#f3f4f6" }}>
-                  <td style={{ ...tdLabel, fontSize: 12.5, fontWeight: 800, color: sec.signo ? T.text : sec.color }}>{sec.totalLabel}</td>
-                  {monedas.map(m => <CeldaMonto key={m} valor={tot[m] ?? null} moneda={m} color={sec.signo ? undefined : sec.color} />)}
-                </tr>
-              )}
+              {filaTotal(sec)}
             </Fragment>
           );
         })}
-      </tbody>
-      {pie.length > 0 && (
+      </tbody>}
+      {(pie.length > 0 || plegado) && (
         <tfoot>
           {pie.map(p => (
             <tr key={p.label} style={{ ...trSub, borderTop: `2px solid ${T.cardBorder}` }}>
@@ -990,9 +1000,10 @@ function TablaItems({ secciones, monedas, onItemClick, pie = [] }) {
               {monedas.map(m => <CeldaMonto key={m} valor={p.valores[m] ?? null} moneda={m} fuerte />)}
             </tr>
           ))}
+          {plegado && pie.length === 0 && secciones.map(filaTotal)}
         </tfoot>
       )}
-    </table>
+    </>
   );
 }
 
@@ -1046,7 +1057,6 @@ export function TabSaldos({ cuentas, aCobrar, aPagar, interco = [], filtroMoneda
     const desde = variasSoc ? socNom.get(String(it.sociedadId)) : "";
     return { ...it, _fila: String(it.label ?? "").replace(/^Intercompañía · /, "") + (desde ? ` · desde ${desde}` : "") };
   });
-  const resumen = (t) => monedas.filter(m => t[m] != null && !esCero(t[m])).map(m => fmtSaldo(t[m], m)).join(" · ");
   const sinNada = disponibles.length + cobrar.length + pagar.length + intercoF.length === 0;
 
   return (
@@ -1057,14 +1067,15 @@ export function TabSaldos({ cuentas, aCobrar, aPagar, interco = [], filtroMoneda
       </div>
       {sinNada && <div style={{ padding: 18, fontSize: 12, color: T.dim, textAlign: "center" }}>Sin saldos para mostrar</div>}
 
-      <BloqueSaldos titulo="Hoy · disponible" detalle="bancos, cajas e inversiones · click en la cuenta abre sus movimientos"
-        plegado={!!plegados.hoy} onToggle={() => toggle("hoy")} derecha={plegados.hoy ? resumen(dispo) : `${disponibles.length} cuenta${disponibles.length !== 1 ? "s" : ""}`}>
-        <TablaCuentas cuentas={disponibles} monedas={monedas} mpLive={mpLive} onCuentaClick={onCuentaClick} />
+      <BloqueSaldos titulo="Hoy · disponible" detalle="bancos, cajas e inversiones · click en la cuenta abre sus movimientos" monedas={monedas}
+        plegado={!!plegados.hoy} onToggle={() => toggle("hoy")}>
+        <TablaCuentas cuentas={disponibles} monedas={monedas} mpLive={mpLive} onCuentaClick={onCuentaClick} plegado={!!plegados.hoy} />
       </BloqueSaldos>
 
-      <BloqueSaldos titulo="Este mes · a cobrar y a pagar" detalle="click en el importe abre la antigüedad de esa moneda"
-        plegado={!!plegados.mes} onToggle={() => toggle("mes")} derecha={plegados.mes ? resumen(neto) : undefined}>
-        <TablaItems monedas={monedas} onItemClick={onItemClick}
+      {/* Sin "Este mes" (Martín 5/11): no es un corte temporal, es la naturaleza del pasivo/activo la que lo pone acá. */}
+      <BloqueSaldos titulo="A cobrar y a pagar" detalle="créditos y deudas corrientes: lo operativo, impuestos y financiación de corto plazo · el resto va en Financiación" monedas={monedas}
+        plegado={!!plegados.mes} onToggle={() => toggle("mes")}>
+        <TablaItems monedas={monedas} onItemClick={onItemClick} plegado={!!plegados.mes}
           secciones={[
             { titulo: "A cobrar", color: T.green, items: cobrarMes, totalLabel: "Total a cobrar" },
             { titulo: "A pagar",  color: T.red,   items: pagarMes,  totalLabel: "Total a pagar" },
@@ -1072,15 +1083,14 @@ export function TabSaldos({ cuentas, aCobrar, aPagar, interco = [], filtroMoneda
           pie={[{ label: "Disponible + a cobrar − a pagar", valores: neto }]} />
       </BloqueSaldos>
 
-      <BloqueSaldos titulo="Financiación" detalle="anticipos, créditos, planes de pago, socios e intercompañía"
-        plegado={!!plegados.fin} onToggle={() => toggle("fin")}
-        derecha={`${cobrarFin.length + pagarFin.length} partida${cobrarFin.length + pagarFin.length !== 1 ? "s" : ""} · ${intercoF.length} posici${intercoF.length !== 1 ? "ones" : "ón"} interco`}>
-        <TablaItems monedas={monedas} onItemClick={onItemClick}
+      <BloqueSaldos titulo="Financiación" detalle="anticipos, créditos, planes de pago, socios e intercompañía" monedas={monedas}
+        plegado={!!plegados.fin} onToggle={() => toggle("fin")}>
+        <TablaItems monedas={monedas} onItemClick={onItemClick} plegado={!!plegados.fin}
           secciones={[
             { titulo: "Nos deben", color: T.green, items: cobrarFin, totalLabel: "Total nos deben" },
-            { titulo: "Les debemos", color: T.red, items: pagarFin, totalLabel: "Total les debemos" },
+            { titulo: "Debemos", color: T.red, items: pagarFin, totalLabel: "Total debemos" },
             // Consolidado con todas las sociedades: el interco se netea y no hay posiciones → la sección no se muestra.
-            ...(intercoRows.length ? [{ titulo: "Intercompañía (+ nos deben / − les debemos)", color: T.muted, items: intercoRows, signo: signoInterco,
+            ...(intercoRows.length ? [{ titulo: "Intercompañía (+ nos deben / − debemos)", color: T.muted, items: intercoRows, signo: signoInterco,
               tituloClick: "ver el ledger", totalLabel: "Neto intercompañía" }] : []),
           ]} />
       </BloqueSaldos>
