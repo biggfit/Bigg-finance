@@ -803,7 +803,8 @@ export default function PantallaEgresos({ sociedad = "nako", subView = null, onS
     setBorrando(true);
     try {
       if (egreso?.pagosVinculados?.length > 0) {
-        await Promise.all(egreso.pagosVinculados.map(p => borrarPagoImputado(p)));
+        // En SERIE: el GAS borra por índice de fila y sin lock → dos `del` en paralelo pueden borrar la fila equivocada.
+        for (const p of egreso.pagosVinculados) await borrarPagoImputado(p);
       }
       await deleteEgreso(id_comp);
       setEgresos(prev => prev.filter(e => e.id !== id_comp));

@@ -611,7 +611,8 @@ export default function PantallaIngresos({ sociedad = "nako", subView = null, on
     setBorrando(true);
     try {
       if (ingreso?.pagosVinculados?.length > 0) {
-        await Promise.all(ingreso.pagosVinculados.map(c => borrarPagoImputado(c)));
+        // En SERIE: el GAS borra por índice de fila y sin lock → dos `del` en paralelo pueden borrar la fila equivocada.
+        for (const c of ingreso.pagosVinculados) await borrarPagoImputado(c);
       }
       await deleteIngreso(id_comp);
       setIngresos(prev => prev.filter(e => e.id !== id_comp));

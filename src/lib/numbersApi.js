@@ -2448,8 +2448,9 @@ function _pairMovs(movs, tipo) {
     .sort((a, b) => ((b.salida?.fecha ?? "") > (a.salida?.fecha ?? "") ? 1 : -1));
 }
 
+// En SERIE: el GAS borra por índice de fila; dos `del` en paralelo pueden borrar la fila equivocada (ver deshacerIntercoDeclarada).
 async function _deleteMovRows(rowIds) {
-  await Promise.all((rowIds ?? []).map(id => post({ action:"del", sheet:"nb_movimientos", id })));
+  for (const id of (rowIds ?? [])) await post({ action:"del", sheet:"nb_movimientos", id });
 }
 
 // ── Cambio de moneda ─────────────────────────────────────────────────────────

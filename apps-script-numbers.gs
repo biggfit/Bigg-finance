@@ -122,7 +122,20 @@ function handleMulti(e) {
 
 // ─── POST ─────────────────────────────────────────────────────────────────────
 
+// Las escrituras van de a UNA: edit/del buscan la fila por id y después escriben/borran ESE índice, así que dos
+// POST en paralelo (un `del` corriendo entre la búsqueda y la escritura de un `edit`) corren las filas y el edit
+// cae en la fila de abajo (pasó el 5/11/2026 en nb_movimientos). El lock serializa en el servidor, venga lo que
+// venga del front. 30 s de espera: un POST normal tarda 1-3 s; si se agota, el front recibe un error JSON (post() NO
+// reintenta rechazos lógicos: el usuario ve el mensaje y vuelve a intentar).
 function doPost(e) {
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); }
+  catch (err) { return nbErr("servidor ocupado (otra escritura en curso): reintentá en unos segundos"); }
+  try { return _doPostSinLock(e); }
+  finally { lock.releaseLock(); }
+}
+
+function _doPostSinLock(e) {
   const body = JSON.parse(e.postData.contents);
   if (body.token !== NUMBERS_TOKEN) return nbErr("unauthorized");
 
