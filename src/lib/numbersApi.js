@@ -3734,7 +3734,14 @@ export async function deleteFinanciacion(plan_id, sociedad = "") {
 //   · CAJA  → nb_movimientos (origen="socios", contraparte_id=socio, socio_tipo, sociedad = la
 //     que manda/recibe la plata). Autoridad del efectivo → Tesorería/Cash Flow lo ven.
 //   · DEVENGO no-cash → nb_socios_cc (dividendo declarado + saldos de apertura). Sin caja.
-// Maestro: nb_socios (group-level, con participacion % para el reparto del dividendo).
+// Maestro: nb_socios. Desde el 4/11/2026 es TAMBIÉN la tabla de participaciones (decisión Martín: una sola hoja):
+//   · fila SIN `alcance` = la persona a nivel GRUPO (participacion = % de BIGG, reparto del dividendo del grupo);
+//   · fila CON `alcance` (id de empresa, ej. "wellness", o de centro, ej. "cc-2026-88269") = participación en ESE
+//     negocio: `tipo` dueno (participacion = parte entre dueños) | cesion (participacion = % del negocio cedido),
+//     `base` (resultado_neto | resultado_final | fcf), `desde`, y auxiliares `aportado` / `retirado`.
+//   Una persona puede tener varias filas (una por alcance) con el MISMO id → la CC suma por id.
+//   fetchSocios() devuelve una fila por persona (la de grupo manda) para todo lo que ya estaba codeado;
+//   fetchParticipaciones() devuelve las filas crudas para los reportes por negocio.
 //
 // socio_tipo (nb_movimientos): prestamo | devolucion | aporte | dividendo_pago
 // tipo (nb_socios_cc):         dividendo_declarado | apertura
@@ -3746,7 +3753,24 @@ export async function deleteFinanciacion(plan_id, sociedad = "") {
 export const SOCIO_SIGNO_CAJA = { prestamo: +1, devolucion: -1, aporte: -1, dividendo_pago: +1 };
 
 export async function fetchSocios() {
-  return get("nb_socios");
+  const rows = await get("nb_socios");
+  // Una fila por PERSONA: la fila de grupo (sin alcance) manda; si solo hay filas con alcance (ej. un inversor de
+  // Wellness), la persona existe igual pero sin participacion de grupo → queda fuera del reparto del grupo.
+  const porId = new Map();
+  for (const r of (Array.isArray(rows) ? rows : [])) {
+    const id = String(r?.id ?? "").trim(); if (!id) continue;
+    const esGrupo = !String(r.alcance ?? "").trim();
+    const prev = porId.get(id);
+    if (!prev) porId.set(id, esGrupo ? { ...r } : { ...r, participacion: "" });
+    else if (esGrupo) porId.set(id, { ...prev, ...r });
+  }
+  return [...porId.values()];
+}
+
+/** Todas las filas de nb_socios, con alcance (participaciones por negocio) y sin él (grupo). */
+export async function fetchParticipaciones() {
+  const rows = await get("nb_socios");
+  return Array.isArray(rows) ? rows : [];
 }
 
 /** Filas no-cash del CC de socios (dividendos declarados + aperturas). */
