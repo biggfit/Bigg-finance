@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { Fragment, useState, useMemo, useEffect, useRef } from "react";
 import { T, Btn, Input, Select, PageHeader, fmtDate, fmtMoney, MoneyField } from "./theme";
 import ConfirmModal from "./ConfirmModal";
 import {
@@ -17,6 +17,7 @@ import { fetchLiquidacionesCerradas } from "../lib/sueldosApi";
 import { fetchAll } from "../lib/sheetsApi";        // Franquicias (read-only)
 import { derivarSaldos, sociedadNombreMap } from "./tesoreriaDerive";  // saldos + activo/pasivo (compartido con Reportes)
 import IntercoLedgerTable from "./reportes/IntercoLedgerTable";  // tabla del ledger interco (compartida con Reportes)
+import { clasificarActivo, clasificarPasivo } from "./reportes/balanceUtils";  // corriente vs financiación (misma regla que Posición financiera)
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 // Tesorería muestra montos SIN decimales (pesos enteros). Local: no toca fmtSaldo global (pdf.js).
@@ -772,417 +773,314 @@ export function PaginaIntercoLedger({ item, ledger, onBack, onGoToMov }) {
   );
 }
 
-function BalanceBlock({ title, items, headerColor, onItemClick }) {
-  // Las líneas `_info` (ej. MP a acreditarse) se muestran pero NO suman al total ni cuentan como cuenta.
-  const totals = {};
-  for (const it of items) {
-    if (it._info) continue;
-    totals[it.moneda] = (totals[it.moneda] ?? 0) + it.saldo;
-  }
-  const nReales = items.filter(i => !i._info).length;
+// ─── Tab: Saldos (Martín 5/11/2026: una tesorería, no un balance) ───────────────────────────────────
+// Orden por liquidez, de "cuánta plata hay" a "qué viene": HOY (disponible: bancos, cajas e inversiones) →
+// ESTE MES (a cobrar y a pagar corriente) → FINANCIACIÓN (anticipos, créditos, planes, socios e intercompañía).
+// Monedas en COLUMNAS: las filas se ordenan por sociedad (como se concilia) y cada moneda se lee en su columna; el
+// total por moneda queda en la fila de subtotal, sin tarjetas aparte. Nada se agrupa de verdad: cada cuenta es una
+// fila con click a sus movimientos; en cobrar/pagar el botón es la CELDA (Franquiciados ARS y Franquiciados USD son
+// dos antigüedades distintas). Los bloques se pliegan y el estado se recuerda en el navegador (por usuario).
+// Es el MISMO componente para la Tesorería de cada sociedad (Numbers) y para la consolidada (Reportes).
 
+const MON_ORDEN = ["ARS", "USD", "EUR", "COP"];
+const ordenarMonedas = (arr) => [...new Set(arr)].sort((a, b) => ((MON_ORDEN.indexOf(a) + 1) || 99) - ((MON_ORDEN.indexOf(b) + 1) || 99));
+const LS_SALDOS_PLEGADOS = "tesoreria.saldos.plegados";
+const BLOQUES_SALDOS = ["hoy", "mes", "fin"];
+const esCero = (n) => Math.abs(Number(n) || 0) < 0.5;
+
+// Datos EN VIVO de Mercado Pago para una cuenta (pill al lado del nombre). Read-only; MP no expone el saldo por API:
+//  - acreditado    = liberado del 1° del mes a hoy → plata que YA entró y aún NO está en Numbers.
+//  - a_acreditarse = por liberarse (futuro). MP real ≈ saldo contable + acreditado.
+function mpPill(cuenta, mpLive) {
+  if (!mpLive) return null;
+  if (mpLive.loading) return { txt: "MP: …", title: "Datos en vivo de Mercado Pago", neg: false };
+  if (mpLive.error) return null;   // sin token / API caída → no mostramos nada (no rompe)
+  const mon = mpLive.moneda || cuenta.moneda;
+  const estimado = (Number(cuenta.saldo) || 0) + (Number(mpLive.acreditado) || 0);
+  const title = [
+    `Acreditado del mes (ya entró, aún no conciliado en Numbers): ${fmtSaldo(Number(mpLive.acreditado) || 0, mon)}`,
+    `Por acreditarse (aún no libera; NO suma al PN): ${fmtSaldo(Number(mpLive.a_acreditarse) || 0, mon)}`,
+    `MP real ≈ saldo contable + acreditado: ${fmtSaldo(estimado, mon)}`,
+    `(dato en vivo de hoy — no es parte del Balance/PN)`,
+    (mpLive.proximos?.length ? "Próximas liberaciones:\n" + mpLive.proximos.slice(0, 6).map(p => `  ${fmtDate(p.fecha)}: ${fmtSaldo(p.monto, mon)}`).join("\n") : ""),
+    (mpLive.truncado ? "(⚠ hay más cobros que el tope; acreditado parcial)" : ""),
+  ].filter(Boolean).join("\n");
+  return { txt: `MP real ≈ ${fmtSaldo(estimado, mon)}`, title, neg: estimado < 0 };
+}
+
+// Celda de importe (una moneda). `signo` fuerza color (interco: + nos deben / − les debemos).
+function CeldaMonto({ valor, moneda, onClick, title, fuerte = false, color }) {
+  const v = Number(valor) || 0;
+  const vacia = valor == null || valor === "";
+  const col = color || (v < 0 ? T.red : vacia || esCero(v) ? T.dim : T.text);
   return (
-    <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`,
-      borderRadius:T.radius, boxShadow:T.shadow, overflow:"hidden", flex:1, minWidth:0,
-      display:"flex", flexDirection:"column" }}>
-      <div style={{ background:headerColor, padding:"10px 18px", display:"flex",
-        justifyContent:"space-between", alignItems:"center" }}>
-        <span style={{ fontSize:14, fontWeight:800, color:"#fff" }}>{title}</span>
-        <span style={{ fontSize:11, color:"rgba(255,255,255,.65)" }}>
-          {nReales} cuenta{nReales !== 1 ? "s" : ""}
-        </span>
+    <td onClick={onClick} title={onClick ? (title || `Ver detalle en ${moneda}`) : undefined}
+      style={{ padding: "7px 12px", textAlign: "right", fontFamily: "var(--mono)", fontSize: 12.5, whiteSpace: "nowrap",
+        fontWeight: fuerte ? 800 : 600, color: col, cursor: onClick ? "pointer" : "default",
+        textDecoration: "none" }}
+      onMouseEnter={e => { if (onClick) e.currentTarget.style.textDecoration = "underline"; }}
+      onMouseLeave={e => { e.currentTarget.style.textDecoration = "none"; }}>
+      {vacia ? "" : fmtSaldo(v, moneda)}
+    </td>
+  );
+}
+
+const thMon = { padding: "6px 12px", textAlign: "right", fontSize: 10, fontWeight: 800, letterSpacing: ".08em", color: T.dim, whiteSpace: "nowrap" };
+const tdLabel = { padding: "7px 18px", fontSize: 13, color: T.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 360 };
+const trLine = { borderBottom: `1px solid ${T.cardBorder}` };   // la tabla lleva border-collapse → el borde del <tr> se dibuja en todas sus celdas
+const trSub  = { background: "#fafbfc", borderTop: `2px solid ${T.cardBorder}` };
+
+// Cabecera de bloque plegable (misma estética que el resto de Tesorería: oscuro + flúo).
+function BloqueSaldos({ titulo, detalle, plegado, onToggle, derecha, children }) {
+  return (
+    <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, boxShadow: T.shadow,
+      overflow: "hidden", marginBottom: 16 }}>
+      <div onClick={onToggle} style={{ padding: "9px 18px", background: T.tableHead, display: "flex", alignItems: "center",
+        gap: 10, cursor: "pointer", userSelect: "none", borderBottom: plegado ? "none" : `1px solid ${T.cardBorder}` }}>
+        <span style={{ fontSize: 9, color: T.tableHeadText, display: "inline-block", transform: plegado ? "rotate(0deg)" : "rotate(90deg)", transition: "transform .12s" }}>▶</span>
+        <span style={{ fontSize: 11, fontWeight: 800, color: T.tableHeadText, letterSpacing: ".10em", textTransform: "uppercase" }}>{titulo}</span>
+        {detalle && <span style={{ fontSize: 11, color: "#9ca3af" }}>{detalle}</span>}
+        <span style={{ flex: 1 }} />
+        {derecha && <span style={{ fontSize: 11, color: "#9ca3af", fontStyle: "italic" }}>{derecha}</span>}
       </div>
-      <div style={{ overflowY:"auto", maxHeight:200, flex:1 }}>
-        {items.length === 0 ? (
-          <div style={{ padding:"18px", fontSize:12, color:T.dim, textAlign:"center" }}>
-            Sin pendientes
-          </div>
-        ) : items.map((item, i) => item._info ? (
-          <div key={i} title={item.title || ""}
-            style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
-              padding:"8px 18px", borderBottom:`1px solid ${T.cardBorder}`,
-              background:"#f9fafb", cursor:"default" }}>
-            <span style={{ fontSize:12, color:T.dim, fontStyle:"italic", flex:1, overflow:"hidden",
-              textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{item.label}</span>
-            <span style={{ fontSize:9, background:"#eef2f6", color:T.dim, borderRadius:4,
-              padding:"2px 6px", fontWeight:700, marginLeft:8, flexShrink:0, letterSpacing:".04em" }}>
-              NO SUMA
-            </span>
-            <span style={{ fontSize:12, fontFamily:"var(--mono)", fontWeight:700,
-              color: T.dim, flexShrink:0, minWidth:110, textAlign:"right", whiteSpace:"nowrap" }}>
-              {fmtSaldo(item.saldo, item.moneda)}
-            </span>
-          </div>
-        ) : (
-          <div key={i} onClick={() => onItemClick?.(item)}
-            style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
-              padding:"8px 18px", borderBottom:`1px solid ${T.cardBorder}`,
-              cursor: onItemClick ? "pointer" : "default", transition:"background .1s" }}
-            onMouseEnter={e => { if (onItemClick) e.currentTarget.style.background="#eceff3"; }}
-            onMouseLeave={e => { e.currentTarget.style.background=""; }}>
-            <span style={{ fontSize:13, color:T.text, flex:1, overflow:"hidden",
-              textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{item.label}</span>
-            <span style={{ fontSize:11, background:"#f3f4f6", color:T.dim, borderRadius:4,
-              padding:"2px 7px", fontWeight:700, marginLeft:8, flexShrink:0,
-              width:36, textAlign:"center" }}>{item.moneda}</span>
-            <span style={{ fontSize:13, fontFamily:"var(--mono)", fontWeight:700,
-              color: headerColor, flexShrink:0, minWidth:110, textAlign:"right", whiteSpace:"nowrap" }}>
-              {fmtSaldo(item.saldo, item.moneda)}
-            </span>
-          </div>
-        ))}
-      </div>
-      <div style={{ padding:"10px 18px", borderTop:`2px solid ${headerColor}`,
-        background:"#fafbfc",
-        display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-        <span style={{ fontSize:12, fontWeight:800, color:T.text }}>Total {title}</span>
-        <div style={{ display:"flex", gap:10 }}>
-          {Object.entries(totals).map(([mon, tot]) => (
-            <span key={mon} style={{ fontSize:13, fontFamily:"var(--mono)", fontWeight:800,
-              color: headerColor, whiteSpace:"nowrap" }}>
-              {fmtSaldo(tot, mon)}
-            </span>
-          ))}
-          {Object.keys(totals).length === 0 && (
-            <span style={{ fontSize:12, color:T.dim }}>$ 0</span>
-          )}
-        </div>
-      </div>
+      {!plegado && children}
     </div>
   );
 }
 
-// ─── Tarjeta de cuenta individual ────────────────────────────────────────────
-function CuentaRow({ cuenta, onClick, mpLive }) {
-  const tipoCfg = TIPO_CUENTA[cuenta.tipo] ?? { icon:"💳", color:T.muted };
-  const saldo   = Number(cuenta.saldo) || 0;
-  // MP en vivo (read-only, de /payments/search; MP no expone el saldo por API):
-  //  - acreditado    = liberado del 1° del mes a hoy → plata que YA entró y aún NO está en Numbers
-  //    (por eso la caja MP da negativa: los cashouts sí están cargados, las ventas del mes no).
-  //  - a_acreditarse = por liberarse (futuro).
-  const mpMon   = mpLive?.moneda || cuenta.moneda;
-  const mpReady = mpLive && !mpLive.loading && !mpLive.error;
-  const mpEstimado = saldo + (Number(mpLive?.acreditado) || 0);   // saldo contable + acreditado = caja MP real ≈
-  const mpNeg   = mpReady && mpEstimado < 0;
-  const mpTxt = mpLive == null ? null
-    : mpLive.loading ? "MP: …"
-    : mpLive.error   ? null   // sin token / API caída → no mostramos nada (no rompe)
-    : `MP real ≈ ${fmtSaldo(mpEstimado, mpMon)}`;
-  const mpTitle = mpReady
-    ? [
-        `Acreditado del mes (ya entró, aún no conciliado en Numbers): ${fmtSaldo(Number(mpLive.acreditado) || 0, mpMon)}`,
-        `Por acreditarse (aún no libera; NO suma al PN): ${fmtSaldo(Number(mpLive.a_acreditarse) || 0, mpMon)}`,
-        `MP real ≈ saldo contable + acreditado: ${fmtSaldo(mpEstimado, mpMon)}`,
-        `(dato en vivo de hoy — no es parte del Balance/PN)`,
-        (mpLive.proximos?.length ? "Próximas liberaciones:\n" + mpLive.proximos.slice(0, 6).map(p => `  ${fmtDate(p.fecha)}: ${fmtSaldo(p.monto, mpMon)}`).join("\n") : ""),
-        (mpLive.truncado ? "(⚠ hay más cobros que el tope; acreditado parcial)" : ""),
-      ].filter(Boolean).join("\n")
-    : "Datos en vivo de Mercado Pago";
+// Tabla HOY: una fila por cuenta (bancos, cajas e inversiones), agrupadas por sociedad cuando hay `_soc` (consolidado),
+// bancos → Mercado Pago → cajas → inversiones y por saldo; las que están en cero van en gris (se ven todas). Pie: disponible.
+function TablaCuentas({ cuentas, monedas, mpLive, onCuentaClick }) {
+  const conSoc = cuentas.some(c => c.__soc);
+  const grupos = [];
+  for (const c of cuentas) {
+    const k = conSoc ? (c.__soc || "—") : "";
+    let g = grupos.find(x => x.soc === k); if (!g) { g = { soc: k, cuentas: [] }; grupos.push(g); }
+    g.cuentas.push(c);
+  }
+  // Orden dentro de cada sociedad (Martín 5/11): bancos tradicionales → Mercado Pago → cajas → inversiones; y por saldo.
+  const rango = c => esCuentaMercadoPago(c) ? 1 : c.tipo === "banco" ? 0 : c.tipo === "caja" ? 2 : 3;
+  for (const g of grupos) g.cuentas.sort((a, b) => rango(a) - rango(b) || (Number(b.saldo) || 0) - (Number(a.saldo) || 0));
+  const tot = {};
+  for (const c of cuentas) tot[c.moneda] = (tot[c.moneda] || 0) + (Number(c.saldo) || 0);
   return (
-    <div onClick={onClick} style={{ display:"flex", alignItems:"center", gap:12,
-      padding:"10px 18px", borderBottom:`1px solid ${T.cardBorder}`,
-      cursor: onClick ? "pointer" : "default",
-      transition:"background .1s",
-    }}
-    onMouseEnter={e => { if (onClick) e.currentTarget.style.background="#f0f9ff"; }}
-    onMouseLeave={e => { e.currentTarget.style.background=""; }}>
-      <div style={{ flexShrink:0, maxWidth:180, fontSize:13, color:T.text, fontWeight:500,
-        overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-        {cuenta.nombre}
-      </div>
-      {/* Sociedad en gris (solo consolidado, cuando viene `_soc`): distingue cuentas homónimas sin ensuciar el nombre. */}
-      {cuenta._soc && (
-        <span style={{ flexShrink:0, fontSize:11, color:T.dim, fontWeight:600, whiteSpace:"nowrap" }}>
-          · {cuenta._soc}
-        </span>
-      )}
-      {/* pill MP fuera del nombre → no lo recorta el ellipsis; empuja con flex:1 */}
-      <div style={{ flex:1 }}>
-        {mpTxt && (
-          <span title={mpTitle}
-            style={{ fontSize:10.5, fontWeight:700,
-              color: mpNeg ? "#b91c1c" : "#059669",
-              background: mpNeg ? "#fef2f2" : "#ecfdf5",
-              border: `1px solid ${mpNeg ? "#fecaca" : "#a7f3d0"}`,
-              borderRadius:5, padding:"1px 7px", cursor:"help", whiteSpace:"nowrap" }}>
-            {mpTxt}
-          </span>
+    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <thead>
+        <tr style={trLine}>
+          <th style={{ ...thMon, textAlign: "left", padding: "6px 18px" }}>Cuenta</th>
+          {monedas.map(m => <th key={m} style={thMon}>{m}</th>)}
+        </tr>
+      </thead>
+      <tbody>
+        {grupos.map(g => (
+          <Fragment key={g.soc}>
+            {conSoc && (
+              <tr style={trLine}><td colSpan={monedas.length + 1} style={{ padding: "9px 18px 3px", fontSize: 11, fontWeight: 700, color: T.muted }}>{g.soc}</td></tr>
+            )}
+            {g.cuentas.map(c => {
+              const cfg = TIPO_CUENTA[c.tipo] ?? { icon: "💳" };
+              const mp = esCuentaMercadoPago(c) ? mpPill(c, mpLive) : null;
+              return (
+                <tr key={c.id} style={{ ...trLine, cursor: onCuentaClick ? "pointer" : "default" }}
+                  onClick={onCuentaClick ? () => onCuentaClick(c) : undefined}
+                  onMouseEnter={e => { if (onCuentaClick) e.currentTarget.style.background = "#f0f9ff"; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = ""; }}>
+                  <td style={tdLabel}>
+                    {/* la celda sigue siendo celda (bordes y anchos de la tabla); el flex va adentro */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                      <span style={{ fontSize: 13, flexShrink: 0 }}>{cfg.icon}</span>
+                      <span style={{ fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.nombre}</span>
+                      {c.tipo === "inversion" && <span style={{ fontSize: 10, color: T.dim, fontWeight: 600, flexShrink: 0 }}>inversión</span>}
+                      {mp && (
+                        <span title={mp.title} style={{ fontSize: 10.5, fontWeight: 700, color: mp.neg ? "#b91c1c" : "#059669",
+                          background: mp.neg ? "#fef2f2" : "#ecfdf5", border: `1px solid ${mp.neg ? "#fecaca" : "#a7f3d0"}`,
+                          borderRadius: 5, padding: "1px 7px", cursor: "help", whiteSpace: "nowrap", flexShrink: 0 }}>{mp.txt}</span>
+                      )}
+                    </div>
+                  </td>
+                  {monedas.map(m => <CeldaMonto key={m} valor={c.moneda === m ? (Number(c.saldo) || 0) : null} moneda={m} />)}
+                </tr>
+              );
+            })}
+          </Fragment>
+        ))}
+        {cuentas.length === 0 && (
+          <tr><td colSpan={monedas.length + 1} style={{ padding: 16, fontSize: 12, color: T.dim, textAlign: "center" }}>Sin cuentas registradas</td></tr>
         )}
-      </div>
-      <span style={{ fontSize:11, background:"#f3f4f6", color:T.dim,
-        borderRadius:4, padding:"2px 7px", fontWeight:700, flexShrink:0,
-        width:36, textAlign:"center" }}>{cuenta.moneda}</span>
-      <span style={{ fontSize:13, fontFamily:"var(--mono)", fontWeight:700,
-        color: saldo < 0 ? T.red : saldo === 0 ? T.dim : T.text,
-        minWidth:110, textAlign:"right", flexShrink:0, whiteSpace:"nowrap" }}>
-        {fmtSaldo(saldo, cuenta.moneda)}
-      </span>
-    </div>
+      </tbody>
+      <tfoot>
+        <tr style={{ ...trSub, borderTop: `2px solid ${T.cardBorder}` }}>
+          <td style={{ ...tdLabel, fontSize: 12, fontWeight: 800, color: T.text }}>Disponible</td>
+          {monedas.map(m => <CeldaMonto key={m} valor={tot[m] ?? null} moneda={m} fuerte />)}
+        </tr>
+      </tfoot>
+    </table>
   );
 }
 
-// ─── Grupo de cuentas (Bancos / Cajas / Inversiones) ─────────────────────────
-function GrupoBlock({ icon, label, cuentas, onCuentaClick, mpLive }) {
-  // Agrupar por moneda para el subtotal
-  const porMoneda = {};
-  for (const c of cuentas) {
-    if (!porMoneda[c.moneda]) porMoneda[c.moneda] = 0;
-    porMoneda[c.moneda] += Number(c.saldo) || 0;
-  }
-
+// Tabla de categorías (a cobrar / a pagar / interco): una fila por label, una celda por moneda = el item de esa moneda
+// (click → su antigüedad / ledger). `secciones` = [{ titulo, color, items, signo? }]. Las líneas `_info` (MP a acreditarse)
+// se muestran en cursiva y no suman.
+function TablaItems({ secciones, monedas, onItemClick, pie = [] }) {
+  const totales = (items, signo) => {   // con `signo` (interco) el total lleva el mismo signo que las celdas
+    const t = {};
+    for (const it of items) { if (it._info) continue; t[it.moneda] = (t[it.moneda] || 0) + (signo ? signo(it) : (Number(it.saldo) || 0)); }
+    return t;
+  };
   return (
-    <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`,
-      borderRadius:T.radius, boxShadow:T.shadow, overflow:"hidden",
-      display:"flex", flexDirection:"column" }}>
-      <div style={{ padding:"9px 18px", background:T.tableHead,
-        display:"flex", justifyContent:"space-between", alignItems:"center",
-        borderBottom:`1px solid ${T.cardBorder}` }}>
-        <span style={{ fontSize:11, fontWeight:800, color:T.tableHeadText,
-          letterSpacing:".10em", textTransform:"uppercase" }}>{label}</span>
-        <span style={{ fontSize:11, color:T.dim, fontStyle:"italic" }}>
-          {cuentas.length} cuenta{cuentas.length !== 1 ? "s" : ""}
-        </span>
-      </div>
-      <div style={{ flex:1 }}>
-        {cuentas.length === 0 ? (
-          <div style={{ padding:"16px 18px", fontSize:12, color:T.dim, textAlign:"center" }}>
-            Sin cuentas registradas
-          </div>
-        ) : cuentas.map(c => (
-          <CuentaRow key={c.id} cuenta={c}
-            mpLive={esCuentaMercadoPago(c) ? mpLive : null}
-            onClick={onCuentaClick ? () => onCuentaClick(c) : undefined} />
-        ))}
-      </div>
-      <div style={{ padding:"9px 18px", background:"#fafbfc",
-        borderTop:`2px solid ${T.cardBorder}`,
-        display:"flex", justifyContent:"space-between", alignItems:"center",
-        flexWrap:"nowrap", gap:8 }}>
-        <span style={{ fontSize:12, fontWeight:700, color:T.muted, flexShrink:0 }}>Subtotal {label}</span>
-        <div style={{ display:"flex", gap:8, flexShrink:0 }}>
-          {Object.entries(porMoneda).map(([mon, tot]) => (
-            <div key={mon} style={{ display:"flex", alignItems:"center", gap:5,
-              background:"#f3f4f6", border:`1px solid ${T.cardBorder}`,
-              borderRadius:6, padding:"2px 8px" }}>
-              <span style={{ fontSize:10, fontWeight:800, color:T.dim,
-                letterSpacing:".04em" }}>{mon}</span>
-              <span style={{ fontSize:12, fontFamily:"var(--mono)", fontWeight:700,
-                color: tot < 0 ? T.red : T.text, whiteSpace:"nowrap" }}>
-                {fmtSaldo(tot, mon)}
-              </span>
-            </div>
+    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <thead>
+        <tr style={trLine}>
+          <th style={{ ...thMon, textAlign: "left", padding: "6px 18px" }}>Categoría</th>
+          {monedas.map(m => <th key={m} style={thMon}>{m}</th>)}
+        </tr>
+      </thead>
+      <tbody>
+        {secciones.map(sec => {
+          const filaDe = it => it._fila ?? it.label;   // interco consolidado: misma contraparte desde varias sociedades → una fila por sociedad
+          const labels = [...new Set(sec.items.map(filaDe))];
+          const tot = totales(sec.items, sec.signo);
+          return (
+            <Fragment key={sec.titulo}>
+              {/* Jerarquía por sangría (Martín 5/11): el título al margen, las categorías un paso adentro. Sin bandas. */}
+              <tr style={trLine}><td colSpan={monedas.length + 1} style={{ padding: "10px 18px 4px", fontSize: 12, fontWeight: 800, color: sec.color }}>{sec.titulo}</td></tr>
+              {labels.length === 0 && (
+                <tr style={trLine}><td colSpan={monedas.length + 1} style={{ padding: "7px 36px", fontSize: 12, color: T.dim }}>Sin pendientes</td></tr>
+              )}
+              {labels.map(label => {
+                const deLabel = sec.items.filter(it => filaDe(it) === label);
+                const info = deLabel.every(it => it._info);
+                return (
+                  <tr key={label} style={trLine}>
+                    <td title={info ? deLabel[0]?.title : undefined} style={{ ...tdLabel, paddingLeft: 36, fontStyle: info ? "italic" : "normal", color: info ? T.dim : T.text }}>
+                      {label}
+                    </td>
+                    {monedas.map(m => {
+                      const its = deLabel.filter(x => x.moneda === m);
+                      if (!its.length) return <CeldaMonto key={m} valor={null} moneda={m} />;
+                      const v = its.reduce((a, it) => a + (sec.signo ? sec.signo(it) : (Number(it.saldo) || 0)), 0);
+                      const it = its[0];
+                      return <CeldaMonto key={m} valor={v} moneda={m} color={it._info ? T.dim : (sec.signo ? (v < 0 ? T.red : T.green) : sec.color)}
+                        onClick={!it._info && onItemClick ? () => onItemClick(it) : undefined} title={`${label} · ${sec.tituloClick || "ver antigüedad"} en ${m}`} />;
+                    })}
+                  </tr>
+                );
+              })}
+              {sec.totalLabel && sec.items.some(it => !it._info) && (
+                // Fila de total con el tono de su sección (verde cobrar / rojo pagar) para que corte con las categorías.
+                <tr style={{ ...trSub, background: sec.color === T.green ? T.greenBg : sec.color === T.red ? T.redBg : "#f3f4f6" }}>
+                  <td style={{ ...tdLabel, fontSize: 12.5, fontWeight: 800, color: sec.signo ? T.text : sec.color }}>{sec.totalLabel}</td>
+                  {monedas.map(m => <CeldaMonto key={m} valor={tot[m] ?? null} moneda={m} color={sec.signo ? undefined : sec.color} />)}
+                </tr>
+              )}
+            </Fragment>
+          );
+        })}
+      </tbody>
+      {pie.length > 0 && (
+        <tfoot>
+          {pie.map(p => (
+            <tr key={p.label} style={{ ...trSub, borderTop: `2px solid ${T.cardBorder}` }}>
+              <td style={{ ...tdLabel, fontSize: 12, fontWeight: 800, color: T.text }}>{p.label}</td>
+              {monedas.map(m => <CeldaMonto key={m} valor={p.valores[m] ?? null} moneda={m} fuerte />)}
+            </tr>
           ))}
-          {Object.keys(porMoneda).length === 0 && (
-            <span style={{ fontSize:12, color:T.dim }}>$ 0</span>
-          )}
-        </div>
-      </div>
-    </div>
+        </tfoot>
+      )}
+    </table>
   );
 }
 
-// ─── Resumen de saldos por moneda ─────────────────────────────────────────────
-function ResumenMonedas({ cuentas }) {
-  const porMoneda = {};
-  for (const c of cuentas) {
-    if (esCuentaCredito(c)) continue;   // la deuda de tarjeta no es disponible en caja
-    if (!porMoneda[c.moneda]) porMoneda[c.moneda] = 0;
-    porMoneda[c.moneda] += Number(c.saldo) || 0;
-  }
-  const monedas = Object.keys(porMoneda);
-  if (monedas.length === 0) return null;
-
-  return (
-    <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:20 }}>
-      {monedas.map(m => {
-        const saldo = porMoneda[m];
-        return (
-          <div key={m} style={{ background:T.card, border:`1px solid ${T.cardBorder}`,
-            borderRadius:T.radius, boxShadow:T.shadow, padding:"12px 20px",
-            display:"flex", flexDirection:"column", gap:4, minWidth:160 }}>
-            <span style={{ fontSize:10, fontWeight:800, color:T.muted,
-              letterSpacing:".12em", textTransform:"uppercase" }}>Disponible {m}</span>
-            <span style={{ fontSize:18, fontFamily:"var(--mono)", fontWeight:900,
-              color: saldo < 0 ? T.red : saldo === 0 ? T.dim : T.text, whiteSpace:"nowrap" }}>
-              {fmtSaldo(saldo, m)}
-            </span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// ─── Tab: Saldos ─────────────────────────────────────────────────────────────
 export function TabSaldos({ cuentas, aCobrar, aPagar, interco = [], filtroMoneda, mpLive, onCuentaClick, onItemClick }) {
+  const [plegados, setPlegados] = useState(() => {
+    try { const v = JSON.parse(localStorage.getItem(LS_SALDOS_PLEGADOS) || "null"); if (v && typeof v === "object") return v; } catch { /* sin storage */ }
+    return { fin: true };   // Financiación plegada por defecto: deuda real, pero no se gestiona día a día
+  });
+  useEffect(() => { try { localStorage.setItem(LS_SALDOS_PLEGADOS, JSON.stringify(plegados)); } catch { /* sin storage */ } }, [plegados]);
+  const toggle = (k) => setPlegados(p => ({ ...p, [k]: !p[k] }));
+  const todos = (v) => setPlegados(Object.fromEntries(BLOQUES_SALDOS.map(k => [k, v])));
+  const todoPlegado = BLOQUES_SALDOS.every(k => plegados[k]);
+
   const filtrar = arr => filtroMoneda === "ALL" ? arr : arr.filter(c => c.moneda === filtroMoneda);
-  const bancos      = filtrar(cuentas.filter(c => c.tipo === "banco"));
-  const cajas       = filtrar(cuentas.filter(c => c.tipo === "caja"));
-  const inversiones = filtrar(cuentas.filter(c => c.tipo === "inversion"));
+  // Disponible = bancos + cajas + inversiones (la deuda de tarjeta no es disponible: queda en a pagar).
+  const disponibles = filtrar(cuentas.filter(c => c.tipo === "banco" || c.tipo === "caja" || c.tipo === "inversion"))
+    .map(c => ({ ...c, __soc: c._soc || "" }));
 
   // MP a acreditarse = dato EN VIVO de hoy (ventas ya cobradas pero aún no asentadas; se asientan en el cierre
-  // mensual). Se muestra como línea INFORMATIVA en el Activo (`_info`) pero NO suma al Total Activo/PN: sumarlo
-  // sin asentar la venta rompería PN = resultado acumulado.
+  // mensual). Línea informativa en A cobrar (`_info`): NO suma al total ni al PN.
   const mpMoneda = mpLive?.moneda || "ARS";
   const aCobrarMP = (mpLive && !mpLive.loading && !mpLive.error && Number(mpLive.a_acreditarse) > 0
       && (filtroMoneda === "ALL" || filtroMoneda === mpMoneda))
     ? [{ label: "Mercado Pago — a acreditarse", moneda: mpMoneda, saldo: Number(mpLive.a_acreditarse),
          _info: true, title: "En vivo de hoy · ventas cobradas por liberarse. No suma al PN (se asienta en el cierre mensual)." }]
     : [];
-  const aCobrarFilt = [
-    ...(filtroMoneda === "ALL" ? aCobrar : aCobrar.filter(i => i.moneda === filtroMoneda)),
-    ...aCobrarMP,
-  ];
-  const aPagarFilt  = filtroMoneda === "ALL" ? aPagar  : aPagar.filter(i => i.moneda === filtroMoneda);
-  const intercoFilt = filtroMoneda === "ALL" ? interco : interco.filter(i => i.moneda === filtroMoneda);
+  const cobrar = filtrar(aCobrar), pagar = filtrar(aPagar), intercoF = filtrar(interco);
+  // Corriente vs financiación: misma regla que la Posición financiera (balanceUtils).
+  const cobrarMes = [...cobrar.filter(it => clasificarActivo(it) === "cxc"), ...aCobrarMP];
+  const cobrarFin = cobrar.filter(it => clasificarActivo(it) !== "cxc");
+  // Impuestos: en la Posición financiera cuentan como deuda financiable (no corriente), pero en tesorería se pagan
+  // todos los meses → acá van en "Este mes". El resto sigue la misma regla que la Posición financiera.
+  const esPagarMes = it => { const g = clasificarPasivo(it).grupo; return g === "operativo" || g === "finCorriente" || /impuesto/i.test(it?.label || ""); };
+  const pagarMes = pagar.filter(esPagarMes), pagarFin = pagar.filter(it => !esPagarMes(it));
+
+  const monedas = filtroMoneda === "ALL"
+    ? ordenarMonedas([...disponibles, ...cobrar, ...pagar, ...intercoF].map(x => x.moneda).filter(Boolean))
+    : [filtroMoneda];
+
+  // Pie de "Este mes": disponible + a cobrar − a pagar, por moneda.
+  const sumar = (items, signo = 1) => { const t = {}; for (const it of items) { if (it._info) continue; t[it.moneda] = (t[it.moneda] || 0) + signo * (Number(it.saldo) || 0); } return t; };
+  const dispo = sumar(disponibles), cobM = sumar(cobrarMes), pagM = sumar(pagarMes, -1);
+  const neto = {}; for (const m of monedas) { const v = (dispo[m] || 0) + (cobM[m] || 0) + (pagM[m] || 0); if (dispo[m] != null || cobM[m] != null || pagM[m] != null) neto[m] = v; }
+
+  const signoInterco = it => it.headerColor === "#16a34a" ? (Number(it.saldo) || 0) : -(Number(it.saldo) || 0);   // + nos deben / − les debemos
+  // Interco: el label es la CONTRAPARTE. En el consolidado la misma contraparte puede tener posiciones desde varias
+  // sociedades nuestras → una fila por sociedad ("Wellness · desde Beta"); el nombre sale de las cuentas (traen _soc).
+  const socNom = new Map(cuentas.filter(c => c._soc).map(c => [String(c.sociedad), c._soc]));
+  const variasSoc = new Set(intercoF.map(it => String(it.sociedadId ?? ""))).size > 1;
+  const intercoRows = intercoF.map(it => {
+    const desde = variasSoc ? socNom.get(String(it.sociedadId)) : "";
+    return { ...it, _fila: String(it.label ?? "").replace(/^Intercompañía · /, "") + (desde ? ` · desde ${desde}` : "") };
+  });
+  const resumen = (t) => monedas.filter(m => t[m] != null && !esCero(t[m])).map(m => fmtSaldo(t[m], m)).join(" · ");
+  const sinNada = disponibles.length + cobrar.length + pagar.length + intercoF.length === 0;
 
   return (
     <div>
-      {/* A Cobrar + A Pagar */}
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16 }}>
-        <BalanceBlock title="Activo"  items={aCobrarFilt} headerColor="#16a34a" onItemClick={onItemClick} />
-        <BalanceBlock title="Pasivo"  items={aPagarFilt}  headerColor="#dc2626" onItemClick={onItemClick} />
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginBottom: 8 }}>
+        <span onClick={() => todos(false)} style={{ fontSize: 11, color: T.muted, cursor: "pointer", textDecoration: "underline" }}>Desplegar todo</span>
+        <span onClick={() => todos(true)}  style={{ fontSize: 11, color: T.muted, cursor: "pointer", textDecoration: "underline" }}>Plegar todo</span>
       </div>
+      {sinNada && <div style={{ padding: 18, fontSize: 12, color: T.dim, textAlign: "center" }}>Sin saldos para mostrar</div>}
 
-      {/* Bancos | Caja en paralelo, Inversiones abajo */}
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16 }}>
-        <GrupoBlock icon="💵" label="Caja"   cuentas={cajas}  onCuentaClick={onCuentaClick} />
-        <GrupoBlock icon="🏦" label="Bancos" cuentas={bancos} onCuentaClick={onCuentaClick} mpLive={mpLive} />
-      </div>
-      <div style={{ marginBottom:16 }}>
-        <GrupoBlock icon="📈" label="Inversiones" cuentas={inversiones} onCuentaClick={onCuentaClick} />
-      </div>
+      <BloqueSaldos titulo="Hoy · disponible" detalle="bancos, cajas e inversiones · click en la cuenta abre sus movimientos"
+        plegado={!!plegados.hoy} onToggle={() => toggle("hoy")} derecha={plegados.hoy ? resumen(dispo) : `${disponibles.length} cuenta${disponibles.length !== 1 ? "s" : ""}`}>
+        <TablaCuentas cuentas={disponibles} monedas={monedas} mpLive={mpLive} onCuentaClick={onCuentaClick} />
+      </BloqueSaldos>
 
-      {/* Intercompañía — bloque propio abajo de Inversiones (nos deben / les debemos) */}
-      {intercoFilt.length > 0 && <IntercoBlock items={intercoFilt} onItemClick={onItemClick} />}
+      <BloqueSaldos titulo="Este mes · a cobrar y a pagar" detalle="click en el importe abre la antigüedad de esa moneda"
+        plegado={!!plegados.mes} onToggle={() => toggle("mes")} derecha={plegados.mes ? resumen(neto) : undefined}>
+        <TablaItems monedas={monedas} onItemClick={onItemClick}
+          secciones={[
+            { titulo: "A cobrar", color: T.green, items: cobrarMes, totalLabel: "Total a cobrar" },
+            { titulo: "A pagar",  color: T.red,   items: pagarMes,  totalLabel: "Total a pagar" },
+          ]}
+          pie={[{ label: "Disponible + a cobrar − a pagar", valores: neto }]} />
+      </BloqueSaldos>
+
+      <BloqueSaldos titulo="Financiación" detalle="anticipos, créditos, planes de pago, socios e intercompañía"
+        plegado={!!plegados.fin} onToggle={() => toggle("fin")}
+        derecha={`${cobrarFin.length + pagarFin.length} partida${cobrarFin.length + pagarFin.length !== 1 ? "s" : ""} · ${intercoF.length} posici${intercoF.length !== 1 ? "ones" : "ón"} interco`}>
+        <TablaItems monedas={monedas} onItemClick={onItemClick}
+          secciones={[
+            { titulo: "Nos deben", color: T.green, items: cobrarFin, totalLabel: "Total nos deben" },
+            { titulo: "Les debemos", color: T.red, items: pagarFin, totalLabel: "Total les debemos" },
+            // Consolidado con todas las sociedades: el interco se netea y no hay posiciones → la sección no se muestra.
+            ...(intercoRows.length ? [{ titulo: "Intercompañía (+ nos deben / − les debemos)", color: T.muted, items: intercoRows, signo: signoInterco,
+              tituloClick: "ver el ledger", totalLabel: "Neto intercompañía" }] : []),
+          ]} />
+      </BloqueSaldos>
+      {todoPlegado && <div style={{ fontSize: 11, color: T.dim, textAlign: "center", marginTop: -6 }}>Todo plegado · abrí un bloque con la flechita</div>}
     </div>
-  );
-}
-
-// ─── Bloque Intercompañía (posiciones netas: nos deben verde / les debemos rojo) ─────────────
-function IntercoBlock({ items, onItemClick }) {
-  const porMoneda = {};
-  for (const it of items) {
-    const signed = it.headerColor === "#16a34a" ? it.saldo : -it.saldo;   // + nos deben / − les debemos
-    porMoneda[it.moneda] = (porMoneda[it.moneda] ?? 0) + signed;
-  }
-  return (
-    <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:T.radius,
-      boxShadow:T.shadow, overflow:"hidden", display:"flex", flexDirection:"column" }}>
-      <div style={{ padding:"9px 18px", background:T.tableHead, display:"flex",
-        justifyContent:"space-between", alignItems:"center", borderBottom:`1px solid ${T.cardBorder}` }}>
-        <span style={{ fontSize:11, fontWeight:800, color:T.tableHeadText, letterSpacing:".10em",
-          textTransform:"uppercase" }}>🔗 Intercompañía</span>
-        <span style={{ fontSize:11, color:T.dim, fontStyle:"italic" }}>
-          {items.length} posici{items.length !== 1 ? "ones" : "ón"}
-        </span>
-      </div>
-      <div style={{ flex:1 }}>
-        {items.map((it, i) => {
-          const nosDeben = it.headerColor === "#16a34a";
-          const nombre = (it.label ?? "").replace(/^Intercompañía · /, "");
-          return (
-            <div key={i} onClick={onItemClick ? () => onItemClick(it) : undefined}
-              style={{ display:"flex", alignItems:"center", justifyContent:"space-between",
-                padding:"10px 18px", borderBottom:`1px solid ${T.cardBorder}`,
-                cursor: onItemClick ? "pointer" : "default", transition:"background .1s" }}
-              onMouseEnter={e => { if (onItemClick) e.currentTarget.style.background="#eceff3"; }}
-              onMouseLeave={e => { e.currentTarget.style.background=""; }}>
-              <span style={{ fontSize:13, color:T.text, flex:1, overflow:"hidden",
-                textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{nombre}</span>
-              <span style={{ fontSize:11, background:"#f3f4f6", color:T.dim, borderRadius:4,
-                padding:"2px 7px", fontWeight:700, marginLeft:8, flexShrink:0, width:36, textAlign:"center" }}>{it.moneda}</span>
-              <span style={{ fontSize:13, fontFamily:"var(--mono)", fontWeight:700,
-                color: nosDeben ? "#16a34a" : "#dc2626", flexShrink:0, minWidth:120, textAlign:"right", whiteSpace:"nowrap" }}>
-                {fmtSaldo(it.saldo, it.moneda)}
-                <span style={{ fontSize:10, fontWeight:400, color:T.muted, marginLeft:5 }}>
-                  {nosDeben ? "nos deben" : "les debemos"}
-                </span>
-              </span>
-            </div>
-          );
-        })}
-      </div>
-      <div style={{ padding:"9px 18px", background:"#fafbfc", borderTop:`2px solid ${T.cardBorder}`,
-        display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"nowrap", gap:8 }}>
-        <span style={{ fontSize:12, fontWeight:700, color:T.muted, flexShrink:0 }}>Neto intercompañía</span>
-        <div style={{ display:"flex", gap:8, flexShrink:0 }}>
-          {Object.entries(porMoneda).map(([mon, tot]) => (
-            <div key={mon} style={{ display:"flex", alignItems:"center", gap:5, background:"#f3f4f6",
-              border:`1px solid ${T.cardBorder}`, borderRadius:6, padding:"2px 8px" }}>
-              <span style={{ fontSize:10, fontWeight:800, color:T.dim, letterSpacing:".04em" }}>{mon}</span>
-              <span style={{ fontSize:12, fontFamily:"var(--mono)", fontWeight:700,
-                color: tot < 0 ? T.red : T.text, whiteSpace:"nowrap" }}>{fmtSaldo(tot, mon)}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Dropdown por fila ────────────────────────────────────────────────────────
-function RowMenu({ onEditar, onVerDetalle, onEliminar, onIgnorar }) {
-  const [open, setOpen] = useState(false);
-  const [pos,  setPos]  = useState({ top:0, left:0 });
-  const btnRef  = useRef(null);
-  const menuRef = useRef(null);
-
-  const handleToggle = () => {
-    if (!open && btnRef.current) {
-      const r = btnRef.current.getBoundingClientRect();
-      setPos({ top: r.bottom + 4, left: r.left });
-    }
-    setOpen(o => !o);
-  };
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = e => {
-      if (menuRef.current && !menuRef.current.contains(e.target) &&
-          btnRef.current  && !btnRef.current.contains(e.target)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  const item = (label, onClick, color) => (
-    <button onClick={() => { onClick(); setOpen(false); }} style={{
-      display:"block", width:"100%", textAlign:"left", padding:"8px 14px",
-      background:"transparent", border:"none", fontSize:13, color: color ?? T.text,
-      cursor:"pointer", fontFamily:T.font,
-    }}
-    onMouseEnter={e => e.currentTarget.style.background="#f3f4f6"}
-    onMouseLeave={e => e.currentTarget.style.background="transparent"}>
-      {label}
-    </button>
-  );
-
-  return (
-    <>
-      <button ref={btnRef} onClick={handleToggle} style={{
-        background: open ? "#e5e7eb" : "#f3f4f6",
-        border:`1px solid ${T.cardBorder}`, borderRadius:6,
-        padding:"3px 8px", cursor:"pointer", fontSize:12, color:T.muted,
-        fontFamily:T.font, lineHeight:1,
-      }}>▾</button>
-
-      {open && (
-        <div ref={menuRef} style={{
-          position:"fixed", top:pos.top, left:pos.left, zIndex:9999,
-          background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:8,
-          boxShadow:"0 8px 24px rgba(0,0,0,.15)", minWidth:150, overflow:"hidden",
-        }}>
-          {onEditar && item("Editar", onEditar)}
-          {onVerDetalle && item("Ver detalle", onVerDetalle)}
-          {(onEditar || onVerDetalle) && (onIgnorar || onEliminar) && <div style={{ height:1, background:T.cardBorder, margin:"3px 0" }} />}
-          {onIgnorar && item("Ignorar (no contabilizar)", onIgnorar, "#b45309")}
-          {onEliminar && item("Eliminar", onEliminar, T.red)}
-        </div>
-      )}
-    </>
   );
 }
 
