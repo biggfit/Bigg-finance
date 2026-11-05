@@ -1697,7 +1697,7 @@ const REGLA_MATCH_TIPOS = [
   // Comercio del resumen de TARJETA (no del extracto): lo consume Mundo Tarjeta para prellenar
   // cuenta y centro de cada consumo. Matchea por igualdad, prefijo o "contiene", ganando la regla
   // más larga → "PERCEPCION IVA R.G. 3337" le gana a "PERCEPCION".
-  { value:"comercio",        label:"Comercio del resumen de tarjeta (texto)" },
+  { value:"comercio",        label:"Comercio del resumen de tarjeta (texto; opcional [tit:NOMBRE] para un solo titular)" },
 ];
 const REGLA_TIPOS = [
   { value:"impuesto", label:"Impuesto" }, { value:"comision", label:"Comisión" },

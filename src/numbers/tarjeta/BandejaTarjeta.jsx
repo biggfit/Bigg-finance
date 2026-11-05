@@ -82,14 +82,26 @@ export default function BandejaTarjeta({ sociedad, tarjetaId = "", periodo = "",
 
   // Reglas por COMERCIO (Maestros › Reglas de banco, match_tipo="comercio"): comercio → cuenta/centro.
   // Se ordenan por largo desc para que gane la coincidencia más específica (prefijo/contiene).
+  // Calificador opcional `[tit:NOMBRE]` en el texto: la regla solo aplica si el titular del consumo contiene
+  // NOMBRE. Sirve cuando el MISMO comercio se imputa distinto según quién lo paga (ej. FACEBK: la tarjeta de
+  // Martín Guill Miauro es CRM —WhatsApp, reemplazó a Twilio— y la de Pablo es pauta de Tigre Loco). A igual
+  // largo gana la regla con titular.
+  const normU = s => String(s || "").toUpperCase().replace(/\s+/g, " ").trim();
   const reglasComercio = useMemo(() => (reglas || [])
     .filter(r => String(r.match_tipo) === "comercio" && r.activo !== false && r.match_valor)
-    .map(r => ({ valor: String(r.match_valor).toUpperCase().replace(/\s+/g, " ").trim(), cuentaId: r.cuenta_contable || "", centroId: r.centro_costo || "" }))
-    .sort((a, b) => b.valor.length - a.valor.length), [reglas]);
-  const matchRegla = (comercio) => {
-    const c = String(comercio || "").toUpperCase().replace(/\s+/g, " ").trim();
+    .map(r => {
+      const raw = String(r.match_valor);
+      const tit = (raw.match(/\[\s*tit\s*:\s*([^\]]+)\]/i) || [])[1] || "";
+      return { valor: normU(raw.replace(/\[\s*tit\s*:[^\]]*\]/i, "")), tit: normU(tit), cuentaId: r.cuenta_contable || "", centroId: r.centro_costo || "" };
+    })
+    .filter(r => r.valor)
+    .sort((a, b) => (b.valor.length - a.valor.length) || ((b.tit ? 1 : 0) - (a.tit ? 1 : 0))), [reglas]);
+  const matchRegla = (comercio, titular = "") => {
+    const c = normU(comercio);
     if (!c) return null;
-    return reglasComercio.find(r => c === r.valor || c.startsWith(r.valor) || c.includes(r.valor)) || null;
+    const t = normU(titular);
+    return reglasComercio.find(r => (c === r.valor || c.startsWith(r.valor) || c.includes(r.valor))
+      && (!r.tit || t.includes(r.tit))) || null;
   };
 
   // `notify`: avisar a la pantalla padre que la hoja cambió (no en la carga inicial).
@@ -176,7 +188,7 @@ export default function BandejaTarjeta({ sociedad, tarjetaId = "", periodo = "",
         const hit = pool.find(p => !p.used && Math.abs(p.monto - monto) <= 0.5);
         if (hit) { hit.used = true; reconocidas++; continue; }   // ya es un pago de FC → no recargar
         const card = cardAccountFor(moneda);
-        const reg = matchRegla(x.comercio);   // regla por comercio (Maestros): cuenta + centro default
+        const reg = matchRegla(x.comercio, x.titular);   // regla por comercio (Maestros): cuenta + centro default
         const c  = memoria.porComercio[normCom(x.comercio)];
         // Cuenta: regla por comercio → memoria → vacío. Centro: regla por comercio → legajo del titular → memoria.
         const cuentaNom = (reg?.cuentaId ? cuentaNombreDe(reg.cuentaId) : "") || c?.cuenta || "";
@@ -259,13 +271,13 @@ export default function BandejaTarjeta({ sociedad, tarjetaId = "", periodo = "",
   const cuentaDe = m => {
     const v = edits[m.id]?.cuenta_contable ?? m.cuenta_contable ?? "";
     if (v) return v;
-    const reg = matchRegla(comercioDe(m));
+    const reg = matchRegla(comercioDe(m), metaVal(m.referencia, "tit"));
     return reg?.cuentaId ? cuentaNombreDe(reg.cuentaId) : "";
   };
   const centroDe = m => {
     const v = edits[m.id]?.centro_costo ?? m.centro_costo ?? "";
     if (v) return v;
-    return matchRegla(comercioDe(m))?.centroId || centroDeLegajo(metaVal(m.referencia, "tit")) || "";
+    return matchRegla(comercioDe(m), metaVal(m.referencia, "tit"))?.centroId || centroDeLegajo(metaVal(m.referencia, "tit")) || "";
   };
   // Período P&L = fecha del consumo (la fija el importador: fecha real, o 1° del período del resumen si la línea
   // es una cuota/consumo de más de un mes atrás). Ya NO es editable acá: separar P&L de deuda rompía el cierre del PN.
