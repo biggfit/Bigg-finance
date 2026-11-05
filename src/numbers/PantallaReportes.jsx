@@ -3,7 +3,7 @@ import { T, PageHeader, fmtDate } from "./theme";
 import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, fetchFinanciaciones, fetchIntercoData, fondeoFondeadasMensual, intercoConsolidadoMensual, calcSaldoPendiente, primeCache, fetchTiposCambio, tcDelMes, montoAUSD, montoAMoneda, fetchPnLHistorico, fetchProveedores, fetchClientes, RETDEP_TAG } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows } from "../lib/sueldosApi";
 import { tolerante } from "../lib/http";
-import { BIGG_ORDEN, BIGG_ORDEN_FIN, BIGG_ORDEN_GHQ, BIGG_ORDEN_GPV, BIGG_ORDEN_IMP, CESION, CESION_CUENTA, COM_ENC_RATE, ING_CONTRA_HQ, MESES, PNL_INICIO, SEDE_GRUPOS, SEDE_HDR, SEDE_ING_ACCTS, SEDE_OCULTAR_SI_VACIA, SEDE_OPEX_GRUPOS, VENTAS_EXCL_PRORR, _nkSede, buildPnLBigg, buildPnLHuergo, buildPnLSede, ccKey, computeCesion, computeSubtotalsHolding, computeSubtotalsHuergo, computeSubtotalsSede, comisionBaseResOp, familiaCentro, fechaFiscalDe, financiacionToPnLRows, grupoSede, montoPnL, movimientoToPnLRows, normCat, ordCmp, rellenarMesesSinActivas, sumVentasSede } from "./reportes/pnlDerive";
+import { BIGG_ORDEN, BIGG_ORDEN_FIN, BIGG_ORDEN_GHQ, BIGG_ORDEN_GPV, BIGG_ORDEN_IMP, CESION, CESION_CUENTA, COM_ENC_RATE, MESES, PNL_INICIO, SEDE_GRUPOS, SEDE_HDR, SEDE_ING_ACCTS, SEDE_OCULTAR_SI_VACIA, SEDE_OPEX_GRUPOS, VENTAS_EXCL_PRORR, _nkSede, buildPnLBigg, buildPnLHuergo, buildPnLSede, ccKey, computeCesion, computeSubtotalsHolding, computeSubtotalsHuergo, computeSubtotalsSede, comisionBaseResOp, familiaCentro, fechaFiscalDe, financiacionToPnLRows, grupoSede, montoPnL, movimientoToPnLRows, normCat, ordCmp, rellenarMesesSinActivas, sumVentasSede } from "./reportes/pnlDerive";
 import { fmtN, fmtSigned, selStyle, MultiSelect, DATE_PRESETS, rangoDePreset } from "./reportes/reportesUi";
 import { TABS, LENTES } from "./reportes/reportesMenu";
 import { MONEDA_SYM } from "../data/tesoreriaData";
@@ -503,7 +503,7 @@ function celdasSede(cols, cur, prev, pol, o) {
 function celdasRatio(cols, f, o) {
   const val = (g) => {
     const n = g(f.num, f.numPrev, f.numPrevC), d = g(f.den, f.denPrev, f.denPrevC);
-    return d ? n / d * 100 : null;
+    return d > 0 ? n / d * 100 : null;   // base ≤ 0 (mes parcial, pérdida): el % no significa nada → "—"
   };
   const base = { padding: o.pad, fontSize: o.fs || 12, textAlign: "right", fontFamily: "var(--mono)", fontStyle: "italic",
     whiteSpace: "nowrap" };
@@ -1148,7 +1148,7 @@ const GRUPO_REUBICAR = Object.fromEntries([
 function buildPnLGrupoFilas(propsBigg, isCol) {
   const { pnl, sub, pnlPrev, subPrev, year, vista = "evolucion", mes = 0, hayHistorico = false, mesMax = null, sedesApertura = null,
           pnlPrevC = null, subPrevC = null, _alt = false } = propsBigg;
-  const { fg, wre, hqAccounts, ghqAccounts, gpvAccounts, capexAccounts, ingHQ, opexHQ, financieros, resGrupo, activeMonths: _amRaw } = sub;
+  const { fg, wre, sar, hqAccounts, ghqAccounts, gpvAccounts, capexAccounts, ingHQ, opexHQ, financieros, resGrupo, activeMonths: _amRaw } = sub;
   const activeMonths = mesesVisibles(_amRaw, year, hayHistorico, mesMax);
   const hayCapex = Object.keys(capexAccounts || {}).length > 0;
   const cols = vista === "evolucion" ? colsEvolucion(activeMonths) : colsSedeVista(vista, mes, year, !!pnlPrevC);
@@ -1159,9 +1159,7 @@ function buildPnLGrupoFilas(propsBigg, isCol) {
   const add = (...arrs) => MESES.map((_, m) => arrs.reduce((s, a) => s + (Number(a?.[m]) || 0), 0));
   const sumMap  = obj => MESES.map((_, m) => Object.values(obj || {}).reduce((s, a) => s + (a[m] || 0), 0));
   const sumList = list => MESES.map((_, m) => (list || []).reduce((a, s) => a + (Number(s.arr?.[m]) || 0), 0));
-  // Piezas del holding (viajan dentro de `sub`, ver holdingDe): ventas de sedes, resultado de sedes al 100%,
-  // ingresos de Huergo y la cesión BN del mes. Si faltaran (no deberían), caen a 0 y el control de abajo avisa.
-  const pz = sub.piezas || {}, pzP = P.piezas || {};
+  // Cesión BN del mes (viaja dentro de `sub`, ver holdingDe). Si faltara (no debería), cae a 0 y el control de abajo avisa.
   const cesion = sub.cesionBN || Z, cesionP = P.cesionBN || Z;
   // Reubicación (Martín 4/11): en HQ estas cuentas llegan como "Costo por Venta" (categoría correcta para una
   // sede, donde van proporcionales a SU venta), pero acá son costo de mover plata y posición fiscal del grupo, no
@@ -1185,7 +1183,7 @@ function buildPnLGrupoFilas(propsBigg, isCol) {
   const finTotP = MESES.map((_, m) => (Number(P.financieros?.[m]) || 0) + finExtraP[m]);
 
   // ── Cascada ── (sin ventas: Martín 4/11, "al comité le mostré la contribución de los negocios, no la venta")
-  const sedes100 = pz.sedes100 || Z, sedes100P = pzP.sedes100 || Z;
+  const sedes100 = add(sar, cesion), sedes100P = add(P.sar, cesionP);   // resultado de sedes al 100% = neto del holding + cesión BN
   const red      = MESES.map((_, m) => (Number(ingHQ?.[m]) || 0) - gpvRed[m]);
   const redP     = MESES.map((_, m) => (Number(P.ingHQ?.[m]) || 0) - gpvRedP[m]);
   const contrib  = add(sedes100, fg, wre, red);
@@ -1245,7 +1243,7 @@ function buildPnLGrupoFilas(propsBigg, isCol) {
   }
   filas.push({ kind: "subtotal", strong: true, label: "Contribución de los negocios", cur: contrib, prev: contribP, pol: 1 });
 
-  // 3. Estructura y resultado.
+  // 2. Estructura y resultado.
   secc("sec_estr", "Estructura HQ", ghqAccounts, P.ghqAccounts, BIGG_ORDEN_GHQ, -1);
   filas.push({ kind: "result", label: "Resultado Operativo del Grupo", cur: resOp, prev: resOpP, pol: 1 });
   secc("sec_fin", "Financieros", finAccounts, finAccountsP, BIGG_ORDEN_FIN, -1);
@@ -1260,16 +1258,14 @@ function buildPnLGrupoFilas(propsBigg, isCol) {
   }
   filas.push({ kind: "result", strong: true, label: "Resultado del Grupo (100%)", cur: resGrupo100, prev: resGrupo100P, pol: 1 });
 
-  // 4. Terceros → atribuible. (Tanda 4: esta sección pasa a leer de la tabla de participaciones.)
+  // 3. Terceros → atribuible. (Tanda 4: esta sección pasa a leer de la tabla de participaciones.)
   filas.push({ kind: "grupo", key: "sec_terc", label: "Participación de terceros", cur: cesion, prev: cesionP, pol: -1 });
   if (!isCol("sec_terc"))
     filas.push({ kind: "cuenta", label: "Barrio Norte · socios " + Math.round(CESION.pct * 100) + "%", cur: cesion, prev: cesionP, pol: -1 });
   filas.push({ kind: "result", strong: true, label: "Resultado atribuible a BIGG", cur: atribuible, prev: atribuibleP, pol: 1 });
-  // Con contribución ≤ 0 (mes parcial o pérdida) el % no significa nada → denominador 0 = "—".
-  const pos = arr => arr.map(v => v > 0 ? v : 0);
-  filas.push(filaRatioDe("Margen sobre contribución", atribuible, pos(contrib), atribuibleP, pos(contribP)));
+  filas.push(filaRatioDe("Margen sobre contribución", atribuible, contrib, atribuibleP, contribP));
 
-  // 5. Memo: inversiones y fondeo del período. NO suman al resultado (son caja). Tanda 5: fondeo fuera de acá.
+  // 4. Memo: inversiones y fondeo del período. NO suman al resultado (son caja). Tanda 5: fondeo fuera de acá.
   if (hayCapex) {
     filas.push({ kind: "spacer" });
     secc("sec_inv", "Inversiones del período (memo, no suma)", capexAccounts, P.capexAccounts, null, -1);
@@ -2693,9 +2689,8 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
     const sub = computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE });
     // Cesión BN 49% por mes (lo que el holding le restó a Sedes Propias): la usa el puente del Devengado.
     const cesionBN = MESES.map((_, m) => CESION.pct * (Number(sBNnet?.resFinal?.[m]) || 0));
-    // Piezas de la cascada "P&L del grupo" (buildPnLGrupoFilas). Viajan DENTRO de sub → prev/prevC las traen solas.
+    // La lee también la cascada "P&L del grupo" (buildPnLGrupoFilas). Viaja DENTRO de sub → prev/prevC la traen sola.
     sub.cesionBN = cesionBN;
-    sub.piezas   = { sedes100: sAR.resFinal };
     return { pnl, sub, cesionBN,
       // DEV-ONLY (check "P&L BIGG vs Devengado" en consola): piezas del holding para descomponer la diferencia.
       _dbg: import.meta.env.DEV ? { sAR, sBNnet, feeGer, resWRE, arNucleoCCs, bnCcId } : undefined };
@@ -2734,20 +2729,18 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
       || ccs.find(c => String(c.id).toLowerCase() === s.toLowerCase());
     return hit?.nombre || s;
   };
-  const sedesAperturaDe = (yr) => arNucleoCCs.map(cc => ({
+  const sedesAperturaDe = (yr, inRows = inBigg, egRows = egBigg) => arNucleoCCs.map(cc => ({
     label: nombreCC(cc),
     isBN: String(cc) === String(bnCcId),
-    arr: computeSubtotalsSede(buildPnLSede(inBigg, egBigg, [cc], yr, monedaPL, sinIva)).resFinal,
+    arr: computeSubtotalsSede(buildPnLSede(inRows, egRows, [cc], yr, monedaPL, sinIva)).resFinal,
   }));
   const sedesApCur  = useMemo(() => (isVentasHQ || isGrupo) ? sedesAperturaDe(year)     : null,   // eslint-disable-line react-hooks/exhaustive-deps
     [isVentasHQ, isGrupo, inBigg, egBigg, arNucleoCCs, ccMap, year, monedaPL, sinIva]);
   const sedesApPrev = useMemo(() => (isVentasHQ || isGrupo) ? sedesAperturaDe(year - 1) : null,   // eslint-disable-line react-hooks/exhaustive-deps
     [isVentasHQ, isGrupo, inBigg, egBigg, arNucleoCCs, ccMap, year, monedaPL, sinIva]);
   // Apertura por sede del año anterior en el otro lente (YTD en dos lentes de Composición de Ingresos).
-  const sedesApPrevAlt = useMemo(() => ((isVentasHQ || isGrupo) && inFxAlt) ? arNucleoCCs.map(cc => ({   // eslint-disable-line react-hooks/exhaustive-deps
-    label: nombreCC(cc), isBN: String(cc) === String(bnCcId),
-    arr: computeSubtotalsSede(buildPnLSede(inFxAlt, egFxAlt, [cc], year - 1, monedaPL, sinIva)).resFinal,
-  })) : null, [isVentasHQ, isGrupo, inFxAlt, egFxAlt, arNucleoCCs, ccMap, year, monedaPL, sinIva]);
+  const sedesApPrevAlt = useMemo(() => ((isVentasHQ || isGrupo) && inFxAlt) ? sedesAperturaDe(year - 1, inFxAlt, egFxAlt) : null,   // eslint-disable-line react-hooks/exhaustive-deps
+    [isVentasHQ, isGrupo, inFxAlt, egFxAlt, arNucleoCCs, ccMap, year, monedaPL, sinIva]);
   const sedesApLente = (dosLentesBigg => dosLentesBigg
     ? (fxMode === "real" ? { cur: sedesApCur, prev: sedesApPrev, prevC: sedesApPrevAlt } : { cur: sedesApCur, prev: sedesApPrevAlt, prevC: sedesApPrev })
     : { cur: sedesApCur, prev: sedesApPrev })(fxMode !== "native" && vistaPnl === "ytd" && !!sedesApPrevAlt);

@@ -7,7 +7,7 @@ export const TABS = [
   // ── Funcionando ──
   { id: "pl_sede", label: "P&L · Sedes Argentina",  icon: "🏬", ico: "store", desc: "Resultado operativo por sede: ventas, costos variables y márgenes." },
   { id: "pl_bigg", label: "P&L · BIGG (grupo)",   icon: "🏢", ico: "building", desc: "Resultado corporativo por centro de HQ (R&D, Sales & Mkt, G&A)." },
-  { id: "pl_grupo", label: "P&L · del grupo", icon: "🏢", ico: "building", desc: "Para el comité: ventas, contribución de cada negocio al 100%, estructura, resultado y lo que queda para BIGG después de los socios." },
+  { id: "pl_grupo", label: "P&L · del grupo", icon: "🏢", ico: "building", desc: "Para el comité: contribución de cada negocio al 100%, estructura, resultado y lo que queda para BIGG después de los socios." },
   { id: "cf",      label: "Cash Flow",  icon: "💵", ico: "flow", desc: "Por qué la caja subió o bajó cada mes (cobros, pagos, fondeo, financiación, cambio de moneda) y cómo el resultado se convirtió en caja." },
   { id: "interco", label: "Saldos entre sociedades",   icon: "🔗", ico: "link", desc: "Préstamos y saldos interco entre TODAS las sociedades: posición neta por moneda (quién le debe a quién). Filtrá por sociedad y hacé click en una fila para ver el detalle de movimientos." },
   { id: "interco_matriz", label: "Fondeo por negocio", icon: "🧮", ico: "grid", desc: "Fondeo del grupo a cada negocio (CAPEX), consolidado en USD · meses × negocio/tipo. Click en una celda = los movimientos que la componen. Ata al Fondeo del P&L." },

@@ -3753,16 +3753,14 @@ export async function deleteFinanciacion(plan_id, sociedad = "") {
 export const SOCIO_SIGNO_CAJA = { prestamo: +1, devolucion: -1, aporte: -1, dividendo_pago: +1 };
 
 export async function fetchSocios() {
-  const rows = await get("nb_socios");
-  // Una fila por PERSONA: la fila de grupo (sin alcance) manda; si solo hay filas con alcance (ej. un inversor de
-  // Wellness), la persona existe igual pero sin participacion de grupo → queda fuera del reparto del grupo.
+  // Una fila por PERSONA: la fila de grupo (sin alcance) es la persona tal cual y manda, venga en el orden que venga;
+  // si solo hay filas con alcance (ej. un inversor de Wellness), la persona existe igual pero sin participacion de
+  // grupo → queda fuera del reparto del grupo.
   const porId = new Map();
-  for (const r of (Array.isArray(rows) ? rows : [])) {
+  for (const r of await fetchParticipaciones()) {
     const id = String(r?.id ?? "").trim(); if (!id) continue;
     const esGrupo = !String(r.alcance ?? "").trim();
-    const prev = porId.get(id);
-    if (!prev) porId.set(id, esGrupo ? { ...r } : { ...r, participacion: "" });
-    else if (esGrupo) porId.set(id, { ...prev, ...r });
+    if (esGrupo || !porId.has(id)) porId.set(id, esGrupo ? r : { ...r, participacion: "" });
   }
   return [...porId.values()];
 }
