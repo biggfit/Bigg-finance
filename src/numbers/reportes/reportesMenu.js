@@ -16,7 +16,7 @@ export const TABS = [
   { id: "posicion_fin", label: "Posición financiera", icon: "🎯", ico: "target", desc: "El número del board: disponible − deuda financiera = posición financiera neta; + a cobrar − a pagar = posición neta (ata con el PN). Al último cierre, consolidado en USD y por sociedad." },
   { id: "cxp_prov", label: "Cuentas por pagar", icon: "📋", ico: "invoice", desc: "Cuentas por pagar consolidadas por proveedor (todas las sociedades), con antigüedad." },
   { id: "cxc_cli", label: "Cuentas por cobrar", icon: "📥", ico: "receipt", desc: "Cuentas por cobrar consolidadas por cliente (todas las sociedades), con antigüedad." },
-  { id: "socios",  label: "Socios", icon: "◎", ico: "people", desc: "Cuenta corriente de socios: dividendos, aportes y préstamos (balance, no P&L)." },
+  { id: "socios",  label: "Participaciones", icon: "◎", ico: "people", desc: "Quién es socio de cada negocio, qué puso y qué le debemos: socios, cesiones y cuenta corriente (balance, no P&L)." },
 
   // ── Detalle operativo (funcionando): el único lugar donde se ve la contabilidad de TODAS las sociedades ──
   { id: "inf_egresos",  label: "Egresos en detalle",  icon: "🔎", ico: "out", desc: "Listar y filtrar compras por cuenta · centro · proveedor · moneda · período." },

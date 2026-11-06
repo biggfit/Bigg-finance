@@ -3780,7 +3780,7 @@ export async function deleteFinanciacion(plan_id, sociedad = "") {
 // Maestro: nb_socios. Desde el 4/11/2026 es TAMBIÉN la tabla de participaciones (decisión Martín: una sola hoja):
 //   · fila SIN `alcance` = la persona a nivel GRUPO (participacion = % de BIGG, reparto del dividendo del grupo);
 //   · fila CON `alcance` (id de empresa, ej. "wellness", o de centro, ej. "cc-2026-88269") = participación en ESE
-//     negocio: `tipo` dueno (participacion = parte entre dueños) | cesion (participacion = % del negocio cedido),
+//     negocio: `tipo` socio (participacion = parte entre socios; era "dueno" hasta el 6/11/2026) | cesion (participacion = % del negocio cedido),
 //     `base` (resultado_neto | resultado_final | fcf), `desde`, y auxiliares `aportado` / `retirado`.
 //   Una persona puede tener varias filas (una por alcance) con el MISMO id → la CC suma por id.
 //   fetchSocios() devuelve una fila por persona (la de grupo manda) para todo lo que ya estaba codeado;

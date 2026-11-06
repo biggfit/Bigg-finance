@@ -2,14 +2,16 @@
 // Módulo especial group-level (transversal a las sociedades). Un socio es una contraparte
 // bidireccional: saldo neto deudor (nos debe → Activo) o acreedor (le debemos → Pasivo).
 // NUNCA toca el P&L — es balance puro (reparto de patrimonio / cuenta particular).
-// Dos modos: tablero de los 5 socios + detalle/status por socio con su ledger.
+// Dos modos: tablero de participaciones por negocio (ParticipacionesTablero, T4 6/11/2026) + detalle/status por
+// persona con su ledger.
 import { useState, useEffect, useMemo } from "react";
 import { T, PageHeader, Btn, Badge, Select, Input, fmtMoney, fmtDate } from "./theme";
 import {
-  fetchSocios, fetchSociosCC, fetchMovSocios, fetchSociedades, fetchCuentasBancarias,
+  fetchSocios, fetchParticipaciones, fetchSociosCC, fetchMovSocios, fetchSociedades, fetchCentrosCosto, fetchCuentasBancarias,
   appendMovSocio, declararDividendo, aperturaSocio, repartirDividendo, SOCIO_SIGNO_CAJA,
 } from "../lib/numbersApi";
 import { MONEDA_OPTS } from "../data/tesoreriaData";
+import { ParticipacionesTablero } from "./ParticipacionesTablero";
 
 // Parser de montos: el punto SIEMPRE es separador de miles y la coma es decimal (formato AR).
 // Los valores numéricos del Sheet llegan como number (se devuelven tal cual); solo los strings
@@ -55,21 +57,6 @@ function Field({ label, children }) {
   );
 }
 
-// Layout de la tabla: Socio | Nos debe | Le debemos | Saldo neto
-const GRID = "1.6fr 1fr 1fr 1fr";
-// Celda de importes por moneda (chips = [[moneda, valor], …]). neto = muestra el signo con color;
-// abs = un solo color (columna nos debe / le debemos).
-function MonCell({ chips, color, abs = false, neto = false, bold = false }) {
-  const base = { textAlign: "right", fontFamily: T.mono, fontSize: 13, fontWeight: bold ? 800 : 400 };
-  if (!chips || chips.length === 0) return <span style={{ ...base, color: T.dim }}>—</span>;
-  if (neto) return (
-    <span style={base}>{chips.map(([m, v], i) => (
-      <span key={m} style={{ color: v >= 0 ? T.green : T.red }}>{i ? " · " : ""}{v < 0 ? "−" : ""}{fmtMoney(v, m)}</span>
-    ))}</span>
-  );
-  return <span style={{ ...base, color }}>{chips.map(([m, v]) => fmtMoney(v, m)).join(" · ")}</span>;
-}
-
 // Ledger de un socio: une nb_socios_cc (no-cash) + nb_movimientos (caja). delta firmado
 // (+ nos debe / − le debemos). Ordenado por fecha para el saldo corriente.
 function socioLedger(socioId, ccRows, movs) {
@@ -111,10 +98,12 @@ function saldosPorSocio(socios, ccRows, movs) {
 const saldoChips = (porMon) => Object.entries(porMon || {}).filter(([, v]) => Math.abs(v) > 0.01);
 
 export default function PantallaSocios() {
-  const [socios, setSocios]     = useState([]);
+  const [socios, setSocios]     = useState([]);          // una fila por persona (para el modal y el detalle)
+  const [partic, setPartic]     = useState([]);          // nb_socios crudo: una fila por persona y negocio
   const [ccRows, setCcRows]     = useState([]);
   const [movs, setMovs]         = useState([]);
   const [sociedades, setSociedades] = useState([]);
+  const [centros, setCentros]   = useState([]);
   const [bancos, setBancos]     = useState([]);
   const [loading, setLoading]   = useState(true);
   const [sel, setSel]           = useState(null);      // socio_id del detalle (null = tablero)
@@ -125,29 +114,17 @@ export default function PantallaSocios() {
   async function load() {
     setLoading(true);
     try {
-      const [s, cc, mv, soc, ban] = await Promise.all([
-        fetchSocios(), fetchSociosCC(), fetchMovSocios(), fetchSociedades(), fetchCuentasBancarias(),
+      const [s, pt, cc, mv, soc, ccs, ban] = await Promise.all([
+        fetchSocios(), fetchParticipaciones(), fetchSociosCC(), fetchMovSocios(), fetchSociedades(), fetchCentrosCosto(), fetchCuentasBancarias(),
       ]);
-      setSocios(s || []); setCcRows(cc || []); setMovs(mv || []);
-      setSociedades(soc || []); setBancos(ban || []);
+      setSocios(s || []); setPartic(pt || []); setCcRows(cc || []); setMovs(mv || []);
+      setSociedades(soc || []); setCentros(ccs || []); setBancos(ban || []);
     } catch (e) { setErr(String(e.message || e)); }
     setLoading(false);
   }
   useEffect(() => { load(); }, []);
 
   const saldos   = useMemo(() => saldosPorSocio(socios, ccRows, movs), [socios, ccRows, movs]);
-  const totales  = useMemo(() => {
-    const deben = {}, debemos = {}, neto = {};
-    for (const porMon of Object.values(saldos)) {
-      for (const [m, v] of Object.entries(porMon)) {
-        if (Math.abs(v) < 0.01) continue;
-        neto[m] = (neto[m] || 0) + v;
-        if (v > 0) deben[m] = (deben[m] || 0) + v;
-        else debemos[m] = (debemos[m] || 0) + (-v);
-      }
-    }
-    return { deben, debemos, neto };
-  }, [saldos]);
   const socioSel = socios.find(s => String(s.id) === String(sel));
   const sociedadNombre = id => sociedades.find(x => String(x.id) === String(id))?.nombre || id || "—";
 
@@ -167,43 +144,12 @@ export default function PantallaSocios() {
       ) : (
         <>
           <PageHeader
-            title="Socios"
-            subtitle="Cuenta corriente de socios — dividendos y préstamos (balance, no afecta P&L)"
+            title="Participaciones"
+            subtitle="Quién es socio de cada negocio, qué puso y qué le debemos (balance, no afecta P&L)"
             action={<Btn variant="accent" onClick={() => setModal({ tipo: null })}>+ Nuevo movimiento</Btn>}
           />
           {err && <div style={{ background: T.redBg, color: T.red, padding: "8px 12px", borderRadius: 8, fontSize: 12, marginBottom: 14 }}>{err}</div>}
-          <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, boxShadow: T.shadow, overflow: "hidden" }}>
-            <div style={{ display: "grid", gridTemplateColumns: GRID, padding: "10px 18px", background: T.tableHead, color: T.tableHeadText, fontSize: 11, fontWeight: 800, letterSpacing: ".05em", textTransform: "uppercase" }}>
-              <span>Socio</span><span style={{ textAlign: "right" }}>Nos deben</span><span style={{ textAlign: "right" }}>Les debemos</span><span style={{ textAlign: "right" }}>Saldo neto</span>
-            </div>
-            {socios.length === 0 && (
-              <div style={{ padding: 24, color: T.dim, fontSize: 13, textAlign: "center" }}>
-                No hay socios cargados. Creá el maestro <code>nb_socios</code> y cargá los socios (con su % de participación).
-              </div>
-            )}
-            {socios.map(s => {
-              const chips = saldoChips(saldos[s.id]);
-              const deben   = chips.filter(([, v]) => v > 0);
-              const debemos = chips.filter(([, v]) => v < 0);
-              return (
-                <div key={s.id} onClick={() => setSel(s.id)}
-                  style={{ display: "grid", gridTemplateColumns: GRID, padding: "12px 18px", borderTop: `1px solid ${T.cardBorder}`, cursor: "pointer", alignItems: "center" }}>
-                  <span style={{ fontWeight: 700, color: T.text, fontSize: 13 }}>{s.nombre}</span>
-                  <MonCell chips={deben} color={T.green} abs />
-                  <MonCell chips={debemos} color={T.red} abs />
-                  <MonCell chips={chips} neto />
-                </div>
-              );
-            })}
-            {socios.length > 0 && (
-              <div style={{ display: "grid", gridTemplateColumns: GRID, padding: "12px 18px", borderTop: `2px solid ${T.tableHead}`, alignItems: "center", background: "#f8fafc" }}>
-                <span style={{ fontWeight: 900, color: T.text, fontSize: 12, textTransform: "uppercase", letterSpacing: ".05em" }}>Total</span>
-                <MonCell chips={saldoChips(totales.deben)} color={T.green} abs bold />
-                <MonCell chips={saldoChips(totales.debemos)} color={T.red} abs bold />
-                <MonCell chips={saldoChips(totales.neto)} neto bold />
-              </div>
-            )}
-          </div>
+          <ParticipacionesTablero participaciones={partic} ccRows={ccRows} movs={movs} sociedades={sociedades} centros={centros} onSel={setSel} />
         </>
       )}
 
@@ -226,7 +172,7 @@ function DetalleSocio({ socio, porMon, ledger, sociedadNombre, onBack, onNuevo }
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
-        <button onClick={onBack} style={{ ...inputStyle, width: "auto", cursor: "pointer", padding: "6px 14px", fontWeight: 700 }}>← Socios</button>
+        <button onClick={onBack} style={{ ...inputStyle, width: "auto", cursor: "pointer", padding: "6px 14px", fontWeight: 700 }}>← Participaciones</button>
         <h1 style={{ fontSize: 22, fontWeight: 900, color: T.text, margin: 0 }}>{socio.nombre}</h1>
         {socio.participacion ? <Badge estado="p" cfg={{ p: { label: `${num(socio.participacion)}%`, bg: T.purpleBg, color: T.purple } }} /> : null}
         <div style={{ marginLeft: "auto" }}><Btn variant="accent" onClick={onNuevo}>+ Nuevo movimiento</Btn></div>
@@ -321,7 +267,7 @@ function MovimientoModal({ modal, socios, sociedades, bancos, busy, setBusy, onC
         await aperturaSocio({ socio_id: socioId, socio_nombre: s?.nombre || "", sociedad, moneda: moneda || "ARS", monto: num(monto), direccion, fecha, nota });
       } else if (meta.cash) {
         if (!socioId) throw new Error("Elegí el socio.");
-        if (!cuentaId) throw new Error("Elegí la cuenta origen.");
+        if (!cuentaId) throw new Error(`Elegí la cuenta ${meta.salida ? "de salida" : "de entrada"}.`);
         if (num(monto) <= 0) throw new Error("Importe inválido.");
         const s = socios.find(x => String(x.id) === String(socioId));
         await appendMovSocio({ socio_id: socioId, socio_nombre: s?.nombre || "", socio_tipo: tipo, sociedad: socEfectiva, cuenta_bancaria: cuentaId, moneda: monEfectiva, monto: num(monto), fecha, nota });
@@ -395,7 +341,7 @@ function MovimientoModal({ modal, socios, sociedades, bancos, busy, setBusy, onC
               /* TIPOS CON CAJA */
               <>
                 <Field label="Socio"><select value={socioId} onChange={e => setSocioId(e.target.value)} style={inputStyle}><option value="">—</option>{socioOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</select></Field>
-                <Field label="Cuenta origen (define sociedad y moneda)">
+                <Field label={`${meta.salida ? "Cuenta de la que sale la plata" : "Cuenta a la que entra la plata"} (define sociedad y moneda)`}>
                   <select value={cuentaId} onChange={e => setCuentaId(e.target.value)} style={inputStyle}><option value="">—</option>{cuentaOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</select>
                 </Field>
                 {cta && <div style={{ fontSize: 11, color: T.dim, marginTop: -6 }}>{meta.salida ? "Sale de" : "Entra a"} {sociedades.find(s => String(s.id) === String(cta.sociedad))?.nombre || cta.sociedad} · {cta.moneda || "ARS"}</div>}

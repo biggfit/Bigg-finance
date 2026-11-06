@@ -2810,7 +2810,7 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
 
   // Socios: cuenta corriente de socios (pantalla propia embebida como reporte). Página limpia + volver al menú.
   if (activeTab === "socios") return (
-    <div style={{ padding: "28px 32px" }} className="fade">
+    <div style={{ padding: controlado ? 0 : "28px 32px" }} className="fade">   {/* PantallaSocios ya trae su padding */}
       {!controlado && <button onClick={() => setActiveTab(null)} style={{
         display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 16,
         background: "#f3f4f6", border: `1px solid ${T.cardBorder}`, borderRadius: 8,
