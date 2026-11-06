@@ -1,5 +1,5 @@
 // Helpers compartidos por las vistas de Tesorería consolidada (Balance, Evolución PN, Cash Flow, Resultado → Caja).
-// Viven aparte para que TabTesoreriaConsolidada y CashFlowViews los importen sin ciclos.
+// Viven aparte para que TabTesoreriaConsolidada, CajaView y PosicionFinancieraView los importen sin ciclos.
 import { T } from "../theme";
 import { tcDelMes, montoAUSD } from "../../lib/numbersApi";
 

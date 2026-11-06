@@ -1376,8 +1376,8 @@ function PnLTableBigg({ pnl, sub, pnlPrev, subPrev, pnlPrevC = null, subPrevC = 
   );
 }
 
-// ─── Cash Flow: vive en reportes/cashflowDerive.js + reportes/CashFlowViews.jsx y se muestra dentro de
-// TabTesoreriaConsolidada (vistas "cf" y "flujo"), con las mismas cajas, sociedades y moneda que el Balance (19/9/2026).
+// ─── Cash Flow: motor en reportes/cashflowDerive.js, vista reportes/CajaView.jsx (la Caja en pocas líneas, 5/11/2026),
+// montada dentro de TabTesoreriaConsolidada (vista "cf") con las mismas cajas, sociedades y moneda que el Balance.
 // Orden de anillos en el filtro de sociedades (los que no matcheen van al final, alfabético).
 const CF_ANILLO_ORDEN = ["cleo", "fond", "extern"];
 const anilloRank = (a) => { const x = String(a || "").toLowerCase(); const i = CF_ANILLO_ORDEN.findIndex(k => x.includes(k)); return i === -1 ? 99 : i; };
@@ -3270,10 +3270,10 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
         </div>
       )}
 
-      {/* ── Cash Flow: dentro del consolidado de Tesorería (mismas cajas, sociedades y moneda que el Balance).
-             Arranca con el núcleo tildado. Vista "cf" = por qué se movió la caja; "flujo" = del resultado a la caja. ── */}
+      {/* ── Caja: dentro del consolidado de Tesorería (mismas cajas, sociedades y moneda que el Balance). Arranca con el
+             núcleo tildado. Una sola vista, en pocas líneas (Martín 5/11/2026); "Del resultado a la caja" se retira. ── */}
       {activeTab === "cf" && (
-        <TabTesoreriaConsolidada vistas={["cf", "flujo"]} socInicial="nucleo" monedaInicial="ARS"
+        <TabTesoreriaConsolidada vistas={["cf"]} socInicial="nucleo" monedaInicial="ARS"
           pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
       )}
 

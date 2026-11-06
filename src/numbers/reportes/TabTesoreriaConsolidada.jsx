@@ -21,7 +21,7 @@ import { buildPuente, printPuente } from "./puenteDerive";   // DEV-ONLY diagnó
 import { GO_LIVE_APERTURA, MESES_CORTOS as _MESES, sumSaldo, esCorriente, fmtBal, crearTraductor, AvisosTC, ordenarDetalle,
   hoyISO as _hoyISO, finMesAnterior as _finMesAnterior, esFinDeMes as _esFinDeMes, finMesAnteriorReal as _finMesAnteriorReal } from "./balanceUtils";
 import { computeCashFlow } from "./cashflowDerive";
-import { CashFlowDirectoView, ResultadoACajaView } from "./CashFlowViews";
+import { CajaView } from "./CajaView";
 import { PosicionFinancieraView } from "./PosicionFinancieraView";
 
 // Fusiona los items de Activo/Pasivo de varias sociedades por label+moneda (suma saldo, une docs).
@@ -35,7 +35,7 @@ function mergeItems(arrays) {
   return [...map.values()].sort(franqFirst);
 }
 
-// sumSaldo / esCorriente / fmtBal / crearTraductor / AvisosTC: en ./balanceUtils (compartidos con CashFlowViews).
+// sumSaldo / esCorriente / fmtBal / crearTraductor / AvisosTC: en ./balanceUtils (compartidos con CajaView / PosicionFinancieraView).
 
 // `pnl` = { inRows, egRows, cuentaMap, ccMap } del P&L (lo pasa PantallaReportes) → el Balance concilia el PN contra el
 // resultado acumulado. `tiposCambio` = mapa YYYY-MM → tasas (nb_tipos_cambio) → Balance consolidado en USD con "Todas".
@@ -43,10 +43,11 @@ function mergeItems(arrays) {
 //  · "Tesorería consolidada" (operar el día a día) = saldos + movimientos: ¿cuánta plata hay hoy y dónde?
 //  · "Balance y Evolución del PN" (control y cierre) = balance + evpn: ¿cuánto vale la empresa y por qué cambió?
 // Comparten motor, carga y filtros; por eso es un solo componente y no dos.
-//  · "Cash Flow" (operar) = cf + flujo: ¿por qué se movió la caja? y ¿cómo el resultado se volvió caja? (19/9 noche)
+//  · "Cash Flow" = cf: la Caja en pocas líneas (CajaView, Martín 5/11/2026). La vista indirecta "Del resultado a la caja"
+//    se retiró: lo que explicaba (sin explicar, control cruzado) pasa a "Del resultado al patrimonio".
 //  · "Posición financiera" (reporte propio, Martín 24/9) = posicion: disponible − deuda financiera = posición financiera
 //    neta; + CxC − CxP = posición neta (≡ PN). Abre en el último cierre de mes.
-const VISTAS_TODAS = ["saldos", "balance", "evpn", "movimientos", "cf", "flujo", "posicion"];
+const VISTAS_TODAS = ["saldos", "balance", "evpn", "movimientos", "cf", "posicion"];
 
 // `socInicial`: "nucleo" → arranca con las sociedades del núcleo tildadas (el Cash Flow se mira así); null → todas.
 // `monedaInicial`: moneda con la que abre ("ALL" = consolidado USD). El Cash Flow abre en ARS (Martín 19/9: la historia
@@ -246,7 +247,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
   useEffect(() => { onMeta?.({ vista: activeTab, fecha: fechaCorte || _hoyISO(), moneda: filtroMoneda }); }, [onMeta, activeTab, fechaCorte, filtroMoneda]);
 
   const eepn = useMemo(() => {
-    if (activeTab !== "evpn" && activeTab !== "flujo") return null;   // "flujo" (Resultado → Caja) usa los mismos cierres
+    if (activeTab !== "evpn") return null;
     const idsSel = socsIncluidas.map(s => s.id);   // set de sociedades (no depende de la fecha)
     const year = new Date().getFullYear();
     const GO = year === 2026 ? 6 : 0;   // julio go-live (columna inicial = junio)
@@ -277,7 +278,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
   //    sociedad de un movimiento es la de su CUENTA (como derivarSaldos) → la variación de caja ata con los saldos.
   //    Moneda: la elegida (nativo) o consolidado USD al TC del mes de cada movimiento ("Todas"). ──
   const cfDirecto = useMemo(() => {
-    if (activeTab !== "cf" && activeTab !== "flujo") return null;
+    if (activeTab !== "cf") return null;
     const consolidado = filtroMoneda === "ALL";
     const { aUSD, faltaTC, tcSuplente } = crearTraductor(tiposCambio);
     const fx = consolidado ? (monto, mo, anio, mes) => aUSD(monto, mo, `${anio}-${String(mes).padStart(2, "0")}-01`) : null;
@@ -292,7 +293,6 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
     });
     return { ...cf, faltaTC, tcSuplente };
   }, [activeTab, filtroMoneda, tiposCambio, data, pnl, socsIncluidas]);
-  const socSetLC = useMemo(() => new Set(socsIncluidas.map(s => String(s.id).toLowerCase())), [socsIncluidas]);
 
   const toggleSoc = id => setSocSel(prev => {
     const full = prev.length === 0 ? sociedades.map(s => s.id) : prev;
@@ -326,7 +326,6 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
     { id: "evpn", label: "Evolución PN" },
     { id: "movimientos", label: `Movimientos${movimientos.length ? ` (${movimientos.length})` : ""}` },
     { id: "cf",    label: "Por qué se movió la caja" },
-    { id: "flujo", label: "Del resultado a la caja" },
     { id: "posicion", label: "Posición financiera" },
   ].filter(t => vistasOn.includes(t.id));
   const nSel = socSel.length === 0 ? sociedades.length : socSel.length;
@@ -437,7 +436,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
         </div>
 
         {/* Fecha corte — solo Saldos/Balance/Movimientos (EEPN y Cash Flow son mensuales, no usan corte) */}
-        {!["evpn", "cf", "flujo"].includes(activeTab) && (
+        {!["evpn", "cf"].includes(activeTab) && (
           <>
           <div style={{ width: 1, height: 24, background: T.cardBorder, flexShrink: 0 }} />
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -529,12 +528,9 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
         <EEPNView eepn={eepn} filtroMoneda={filtroMoneda} tiposCambio={tiposCambio} />
       )}
       {!loading && !error && activeTab === "cf" && (
-        <CashFlowDirectoView cf={cfDirecto} consolidado={filtroMoneda === "ALL"} mon={filtroMoneda}
+        <CajaView cf={cfDirecto} consolidado={filtroMoneda === "ALL"} mon={filtroMoneda} cuentasBancarias={data.cuentasBancarias}
+          docs={[...data.egresos, ...data.ingresos]}
           avisosTC={cfDirecto ? <AvisosTC tcSuplente={cfDirecto.tcSuplente} faltaTC={cfDirecto.faltaTC} /> : null} />
-      )}
-      {!loading && !error && activeTab === "flujo" && (
-        <ResultadoACajaView eepn={eepn} consolidado={filtroMoneda === "ALL"} mon={filtroMoneda === "ALL" ? "USD" : filtroMoneda}
-          tiposCambio={tiposCambio} pnl={pnl} socSet={socSetLC} movimientos={data.movimientos} cfDirecto={cfDirecto} />
       )}
       {!loading && !error && activeTab === "movimientos" && (
         <TabMovimientos movimientos={movimientos} cuentas={cuentas} filtroCuenta={filtroCuenta} filtroRef={filtroRef}
