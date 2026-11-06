@@ -7,8 +7,10 @@
 // cierre siga atando.
 import { useState, Fragment } from "react";
 import { T, fmtDate } from "../theme";
-import { MESES_CORTOS, fmtBal, AvisosTC } from "./balanceUtils";
+import { MESES_CORTOS, AvisosTC } from "./balanceUtils";
 import { CF_CONCEPTO_ORDEN } from "./cashflowDerive";
+import { Celda, Fila, TablaMeses } from "./TablaMeses";
+import { trLine, tdLabel } from "./tablaMesesEstilos";
 
 const BLOQUES = [
   { key: "operativo",    label: "La operación" },
@@ -16,46 +18,6 @@ const BLOQUES = [
   { key: "financiacion", label: "Financiación" },
   { key: "cambio",       label: "Cambio de moneda" },
 ];
-
-const COL_MES = 118, COL_TOT = 132;
-const TABLA = { width: "100%", borderCollapse: "collapse", tableLayout: "fixed" };
-const trLine = { borderBottom: `1px solid ${T.cardBorder}` };
-const tdLabel = { padding: "7px 18px", fontSize: 13, color: T.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
-const thMes = { padding: "9px 12px", textAlign: "right", fontSize: 11, fontWeight: 800, letterSpacing: ".10em", color: T.tableHeadText, whiteSpace: "nowrap" };
-
-function Celda({ valor, fuerte = false, color, dim = false, onClick, title }) {
-  const v = Number(valor) || 0;
-  const col = color || (v < 0 ? T.red : Math.abs(v) < 0.5 ? T.dim : T.text);
-  return (
-    <td onClick={onClick} title={title}
-      style={{ padding: "7px 12px", textAlign: "right", fontFamily: "var(--mono)", fontSize: 12.5, whiteSpace: "nowrap",
-        fontWeight: fuerte ? 800 : 600, color: col, opacity: dim ? .55 : 1, cursor: onClick ? "pointer" : "default" }}
-      onMouseEnter={e => { if (onClick) e.currentTarget.style.textDecoration = "underline"; }}
-      onMouseLeave={e => { e.currentTarget.style.textDecoration = "none"; }}>
-      {fmtBal(v)}
-    </td>
-  );
-}
-
-// `get(m)` por mes. Total: la suma de los meses cerrados (el mes en curso se ve en gris y no entra), o el primero /
-// el último cerrado para las filas de saldo.
-function Fila({ label, get, meses, cerrados, mesEnCurso, style = {}, labelStyle = {}, fuerte = false, color, total = "suma", onCelda, sangria = 0, flecha = null, onToggle }) {
-  const tot = total === "primero" ? (meses.length ? get(meses[0]) : 0)
-    : total === "ultimo" ? (cerrados.length ? get(cerrados[cerrados.length - 1]) : 0)
-    : cerrados.reduce((s, m) => s + get(m), 0);
-  return (
-    <tr style={{ ...trLine, ...style }}>
-      <td style={{ ...tdLabel, paddingLeft: 18 + sangria, fontWeight: fuerte ? 800 : 500, ...labelStyle, cursor: onToggle ? "pointer" : "default", userSelect: onToggle ? "none" : "auto" }}
-        onClick={onToggle}>
-        {flecha != null && <span style={{ display: "inline-block", width: 14, fontSize: 9, color: T.dim, transform: flecha ? "rotate(90deg)" : "none", transition: "transform .12s" }}>▶</span>}
-        {label}
-      </td>
-      {meses.map(m => <Celda key={m} valor={get(m)} fuerte={fuerte} color={color} dim={m === mesEnCurso}
-        onClick={onCelda ? () => onCelda(m) : undefined} title={onCelda ? `${label} · ${MESES_CORTOS[m]}: ver movimientos` : undefined} />)}
-      <Celda valor={tot} fuerte color={color} />
-    </tr>
-  );
-}
 
 const cmpDesc = (a, b) => (a < b) - (a > b);   // ISO yyyy-mm-dd: comparación de strings, la más nueva primero
 
@@ -126,17 +88,8 @@ export function CajaView({ cf, consolidado, mon, cuentasBancarias = [], docs = [
   return (
     <div className="fade">
       <AvisosTC tcSuplente={cf.tcSuplente} faltaTC={cf.faltaTC} />
-      <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, boxShadow: T.shadow, overflowX: "auto", marginBottom: 16 }}>
-        <table style={{ ...TABLA, minWidth: 320 + meses.length * COL_MES + COL_TOT }}>
-          <colgroup><col />{meses.map(m => <col key={m} style={{ width: COL_MES }} />)}<col style={{ width: COL_TOT }} /></colgroup>
-          <thead>
-            <tr style={{ background: T.tableHead }}>
-              <th style={{ padding: "9px 18px", textAlign: "left", fontSize: 11, fontWeight: 800, color: T.tableHeadText, letterSpacing: ".10em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{titulo}</th>
-              {meses.map(m => <th key={m} style={{ ...thMes, opacity: m === mesEnCurso ? .55 : 1 }}>{MESES_CORTOS[m].toUpperCase()}{m === mesEnCurso ? " · EN CURSO" : ""}</th>)}
-              <th style={{ ...thMes, borderLeft: "1px solid rgba(255,255,255,.15)" }}>TOTAL</th>
-            </tr>
-          </thead>
-          <tbody>
+      <TablaMeses titulo={titulo} meses={meses} mesEnCurso={mesEnCurso}>
+        <tbody>
             <Fila label="Caja al inicio" get={m => cf.saldoInicioMes[m]} {...p} total="primero" labelStyle={{ color: T.muted }} color={T.muted} />
             {BLOQUES.map(b => {
               const conceptos = conceptosDe(b.key);
@@ -155,14 +108,13 @@ export function CajaView({ cf, consolidado, mon, cuentasBancarias = [], docs = [
             {hayControl && (
               <Fila label="Pendiente de conciliar" get={m => control[m]} {...p} labelStyle={{ color: T.orange }} color={T.orange} />
             )}
-          </tbody>
-          <tfoot>
+        </tbody>
+        <tfoot>
             <Fila label="Variación de caja" get={m => cf.flujoNeto[m]} {...p} fuerte
               style={{ background: "#f3f4f6", borderTop: `2px solid ${T.cardBorder}` }} />
             <Fila label="Caja al cierre" get={m => cf.saldoFinal[m]} {...p} fuerte total="ultimo" style={{ background: "#f3f4f6" }} />
-          </tfoot>
-        </table>
-      </div>
+        </tfoot>
+      </TablaMeses>
 
       {drill && (
         <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, boxShadow: T.shadow, overflow: "hidden", marginBottom: 16 }}>

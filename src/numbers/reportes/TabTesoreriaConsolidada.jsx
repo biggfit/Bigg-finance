@@ -22,6 +22,7 @@ import { GO_LIVE_APERTURA, MESES_CORTOS as _MESES, sumSaldo, esCorriente, fmtBal
   hoyISO as _hoyISO, finMesAnterior as _finMesAnterior, esFinDeMes as _esFinDeMes, finMesAnteriorReal as _finMesAnteriorReal } from "./balanceUtils";
 import { computeCashFlow } from "./cashflowDerive";
 import { CajaView } from "./CajaView";
+import { PatrimonioView } from "./PatrimonioView";
 import { PosicionFinancieraView } from "./PosicionFinancieraView";
 
 // Fusiona los items de Activo/Pasivo de varias sociedades por label+moneda (suma saldo, une docs).
@@ -41,7 +42,8 @@ function mergeItems(arrays) {
 // resultado acumulado. `tiposCambio` = mapa YYYY-MM → tasas (nb_tipos_cambio) → Balance consolidado en USD con "Todas".
 // Vistas del componente. El menú de Reportes lo monta DOS veces con distinto recorte (Martín 19/9):
 //  · "Tesorería consolidada" (operar el día a día) = saldos + movimientos: ¿cuánta plata hay hoy y dónde?
-//  · "Balance y Evolución del PN" (control y cierre) = balance + evpn: ¿cuánto vale la empresa y por qué cambió?
+//  · "Balance y patrimonio" (control y cierre) = balance + evpn: ¿cuánto vale la empresa? y "Del resultado al patrimonio":
+//    por qué cambió cada mes, en pocas líneas (PatrimonioView, reemplaza a la Evolución del PN desde el 5/11/2026).
 // Comparten motor, carga y filtros; por eso es un solo componente y no dos.
 //  · "Cash Flow" = cf: la Caja en pocas líneas (CajaView, Martín 5/11/2026). La vista indirecta "Del resultado a la caja"
 //    se retiró: lo que explicaba (sin explicar, control cruzado) pasa a "Del resultado al patrimonio".
@@ -266,15 +268,12 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
       for (const mv of cambios) if ((mv.fecha ?? "") <= hasta) { const c = mv.moneda || "ARS"; if (c in acc) acc[c] += Number(mv.monto) || 0; }
       cambioAcum[m] = acc;
     }
-    // Etiquetas presentes (unión de todos los meses) para armar las filas de detalle.
-    const uniq = (getArr, filt = () => true) => { const s = new Set(); for (let m = GO - 1; m <= upto; m++) getArr(balMes[m]).forEach(it => filt(it) && s.add(it.label)); return [...s]; };
-    const cxcLabels  = uniq(b => b.aCobrar);
-    const corrLabels = uniq(b => b.aPagar, it => esCorriente(it.label));
-    const otrosLabels = uniq(b => b.aPagar, it => !esCorriente(it.label));
-    return { year, GO, upto, balMes, cambioAcum, cxcLabels, corrLabels, otrosLabels };
+    return { year, GO, upto, balMes, cambioAcum };
   }, [activeTab, data, socsIncluidas, intercoData, sociedades, sociedadesMap, deriveAsOf]);
 
-  // ── Cash Flow directo (método directo por naturaleza) sobre las MISMAS cajas y sociedades que el Balance: la
+  const socSetLC = useMemo(() => new Set(socsIncluidas.map(s => String(s.id).toLowerCase())), [socsIncluidas]);
+
+  // ── Caja (método directo por naturaleza) sobre las MISMAS cajas y sociedades que el Balance: la
   //    sociedad de un movimiento es la de su CUENTA (como derivarSaldos) → la variación de caja ata con los saldos.
   //    Moneda: la elegida (nativo) o consolidado USD al TC del mes de cada movimiento ("Todas"). ──
   // Comprobantes para la Caja (centro/cuenta del pago y nombre del cliente/proveedor en el detalle): una sola lista estable.
@@ -325,7 +324,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
   const TABS = [
     { id: "saldos", label: "Saldos" },
     { id: "balance", label: "Balance" },
-    { id: "evpn", label: "Evolución PN" },
+    { id: "evpn", label: "Del resultado al patrimonio" },
     { id: "movimientos", label: `Movimientos${movimientos.length ? ` (${movimientos.length})` : ""}` },
     { id: "cf",    label: "Por qué se movió la caja" },
     { id: "posicion", label: "Posición financiera" },
@@ -527,7 +526,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
           tiposCambio={tiposCambio} pnl={pnl} socsIncluidas={socsIncluidas} movimientos={data.movimientos} />
       )}
       {!loading && !error && activeTab === "evpn" && (
-        <EEPNView eepn={eepn} filtroMoneda={filtroMoneda} tiposCambio={tiposCambio} />
+        <PatrimonioView eepn={eepn} filtroMoneda={filtroMoneda} tiposCambio={tiposCambio} pnl={pnl} socSet={socSetLC} sociosCC={data.sociosCC} />
       )}
       {!loading && !error && activeTab === "cf" && (
         <CajaView cf={cfDirecto} consolidado={filtroMoneda === "ALL"} mon={filtroMoneda} cuentasBancarias={data.cuentasBancarias}
@@ -791,82 +790,6 @@ function BalanceView({ deriveAsOf, filtroMoneda, fechaCorte, tiposCambio = null,
           Mismos saldos que la vista <b>Saldos</b>. Cambiá la <b>fecha</b> arriba para ver la foto a otra fecha.
         </div>
       )}
-    </div>
-  );
-}
-
-// ── Evolución del Patrimonio Neto (EEPN), mes a mes: el Balance con MESES en columnas (cada línea a fin de
-//    cada mes, hasta el PN) + fila de variación. La variación del PN es el TEST del P&L (debería coincidir
-//    con el Resultado del P&L de ese mes/moneda). Una moneda (chip) = circuito cerrado nativo. "Todas" =
-//    CONSOLIDADO EN USD mes a mes (mismo criterio que el Balance: cada saldo al TC del cierre de su mes), con
-//    una fila extra "Diferencia de conversión" = lo que el PN en USD se movió solo porque cambió el TC entre
-//    un cierre y el siguiente (no es negocio). Hasta el 19/9/2026 "Todas" mostraba solo ARS sin decirlo. ──
-function EEPNView({ eepn, filtroMoneda, tiposCambio = null }) {
-  if (!eepn) return null;
-  const { year, GO, upto, balMes, cambioAcum, cxcLabels, corrLabels, otrosLabels } = eepn;
-  const consolidado = !filtroMoneda || filtroMoneda === "ALL";
-  const mon = consolidado ? "USD" : filtroMoneda;
-  const meses = []; for (let m = GO - 1; m <= upto; m++) meses.push(m);   // columna inicial = mes previo al go-live
-  const bd = m => balMes[m] || { cuentas: [], aCobrar: [], aPagar: [], intercoAct: [], intercoPas: [] };
-  const finDeMes = (m) => `${year}-${String(m + 1).padStart(2, "0")}-31`;
-  const { aUSD, faltaTC, tcSuplente } = crearTraductor(tiposCambio);
-  const monedasDe = (arrs) => { const st = new Set(); arrs.forEach(a => a.forEach(it => it.moneda && st.add(it.moneda))); return [...st]; };
-  // Suma de una lista al cierre del mes m: nativa (una moneda) o consolidada en USD al TC de ese cierre.
-  const suma = (arr, m, pred = () => true) => consolidado
-    ? monedasDe([arr]).reduce((s, mo) => s + aUSD(sumSaldo(arr, mo, pred), mo, finDeMes(m)), 0)
-    : sumSaldo(arr, mon, pred);
-  const sumLbl = (arrName, m, L) => suma(bd(m)[arrName], m, it => it.label === L);
-  const caja   = m => suma(bd(m).cuentas, m, c => (c.tipo || "") === "caja");
-  const bancos = m => suma(bd(m).cuentas, m, c => { const t = (c.tipo || ""); return t !== "caja" && t !== "tarjeta"; });
-  const cxcTot = m => suma(bd(m).aCobrar, m) + suma(bd(m).intercoAct, m);
-  const corrTot  = m => corrLabels.reduce((s, L) => s + sumLbl("aPagar", m, L), 0);
-  const otrosTot = m => otrosLabels.reduce((s, L) => s + sumLbl("aPagar", m, L), 0) + suma(bd(m).intercoPas, m);
-  const activo = m => caja(m) + bancos(m) + cxcTot(m);
-  const pasivo = m => corrTot(m) + otrosTot(m);
-  const pn     = m => activo(m) - pasivo(m);
-  const someNZ = get => meses.some(m => Math.abs(get(m)) > 0.5);
-  const details = {
-    cxc:   ordenarDetalle([...cxcLabels.map(L => ({ label: L, get: m => sumLbl("aCobrar", m, L) })), { label: "Intercompañía (nos deben)", get: m => suma(bd(m).intercoAct, m) }].filter(d => someNZ(d.get))),
-    corr:  ordenarDetalle(corrLabels.map(L => ({ label: L, get: m => sumLbl("aPagar", m, L) })).filter(d => someNZ(d.get))),
-    otros: ordenarDetalle([...otrosLabels.map(L => ({ label: L, get: m => sumLbl("aPagar", m, L) })), { label: "Intercompañía (les debemos)", get: m => suma(bd(m).intercoPas, m) }].filter(d => someNZ(d.get))),
-  };
-
-  // ── Ajustes NO económicos que se separan de la variación del PN (cada uno: efecto acumulado; la tabla muestra
-  //    su Δ mensual y lo resta). Convención: `acum(m)` tal que restar su Δ limpia el PN.
-  //    · Cambio de moneda: plata movida entre cajas de distinta moneda (origen "cambio"). Nativo: la pata que se ve.
-  //      Consolidado: las dos patas al TC del mes (≈ spread/costo de cambio).
-  //    · Diferencia de conversión (solo consolidado): PN nativo de cada moneda al cierre anterior, valuado al TC
-  //      nuevo menos al TC viejo. Acumulado desde el go-live.
-  const cambioAcumUSD = (m) => Object.entries(cambioAcum?.[m] || {}).reduce((s, [mo, v]) => s + aUSD(v, mo, finDeMes(m)), 0);
-  const ajustes = [
-    // Nativo: la pata del cambio que se ve en esta moneda (ajuste técnico). Consolidado: las dos patas al TC del mes
-    // NO dan cero: la diferencia es el TC operado vs el TC maestro = RESULTADO por cambio de moneda, que el P&L todavía
-    // no reconoce → se separa para que la variación limpia siga comparable con el P&L (Martín 19/9/2026).
-    { label: consolidado ? "Resultado por cambio de moneda (TC operado vs TC maestro)" : "Cambio de moneda", acum: m => consolidado ? cambioAcumUSD(m) : (cambioAcum?.[m]?.[mon] || 0) },
-  ];
-  if (consolidado) {
-    const monedasPN = monedasDe(meses.flatMap(m => [bd(m).cuentas, bd(m).aCobrar, bd(m).aPagar, bd(m).intercoAct, bd(m).intercoPas]));
-    const pnNativo = (m, mo) => {
-      const b = bd(m), act = sumSaldo(b.cuentas, mo, c => (c.tipo || "") !== "tarjeta") + sumSaldo(b.aCobrar, mo) + sumSaldo(b.intercoAct, mo);
-      return act - sumSaldo(b.aPagar, mo) - sumSaldo(b.intercoPas, mo);
-    };
-    const convMes = (m) => m <= GO - 1 ? 0 : monedasPN.reduce((s, mo) => s + aUSD(pnNativo(m - 1, mo), mo, finDeMes(m)) - aUSD(pnNativo(m - 1, mo), mo, finDeMes(m - 1)), 0);
-    const convAcum = {}; let acc = 0;
-    for (const m of meses) { acc += convMes(m); convAcum[m] = acc; }
-    ajustes.push({ label: "Diferencia de conversión (TC)", acum: m => convAcum[m] || 0 });
-  }
-
-  return (
-    <div className="fade">
-      <div style={{ fontSize: 12, color: T.muted, margin: "2px 0 12px", lineHeight: 1.5 }}>
-        {consolidado
-          ? <><b>Consolidado del grupo en USD</b>, mes a mes: cada saldo al tipo de cambio del cierre de su mes. La variación se limpia del resultado por cambio de moneda (lo que se ganó o perdió operando a un TC distinto del maestro, línea que el P&L aún no reconoce) y de la diferencia de conversión por TC; lo que queda es comparable con el P&L en "USD · TC Real". Elegí una moneda arriba para el circuito cerrado nativo.</>
-          : <>Evolución en <b>{mon}</b>: solo lo que existe en esa moneda. La "Variación sin cambio de moneda" es la que debe coincidir con el Resultado del P&L de ese mes.</>}
-      </div>
-      <AvisosTC tcSuplente={tcSuplente} faltaTC={faltaTC} />
-      <BalanceTable cols={meses} colLabel={m => _MESES[m]} minBase={320} colW={92}
-        getters={{ caja, bancos, cxcTot, activo, corrTot, otrosTot, pasivo, pn }} details={details}
-        showVariacion ajustes={ajustes} ajusteLabel={consolidado ? "= Variación sin cambio de moneda ni conversión" : "= Variación sin cambio de moneda"} />
     </div>
   );
 }
