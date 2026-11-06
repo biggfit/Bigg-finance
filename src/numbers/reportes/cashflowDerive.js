@@ -2,35 +2,39 @@
 // de la caja: qué cobró, qué pagó y a quién (naturaleza), qué fondeó, qué financió y cuánta plata cambió de moneda.
 // Rediseño 19/9/2026 (Martín: "necesito entender si tengo caja positiva o negativa y por qué"):
 //  · Operación por NATURALEZA (cobros de clientes, franquicias, sueldos, impuestos, tarjeta, proveedores), no por centro.
+//  · La naturaleza sale del RUBRO DE BALANCE de la cuenta (`cuenta_pasivo` del plan de cuentas, editable en Maestros):
+//    la misma clave con la que Tesorería arma "a cobrar / a pagar". Nada se adivina por el nombre de la cuenta (5/11/2026).
 //  · Cambio de moneda como bloque PROPIO (en una moneda sola es la fuente/destino de plata más grande del núcleo).
 //  · Transferencias sin par y extracto sin conciliar = CONTROLES (deberían dar cero), separados de la operación.
 // Lo consumen la vista directa ("Por qué se movió la caja") y la indirecta ("Del resultado a la caja") que usa
 // `flujoNeto` como control cruzado contra la variación de saldos del Balance.
-import { esIgnorado } from "../../lib/numbersApi";
+import { esIgnorado, esExtractoSinConciliar } from "../../lib/numbersApi";
 import { ccKey, normCat } from "./pnlDerive";   // mismas claves de centro/categoría que el P&L
 
-export const CF_ACT = [
-  { key: "operativo",    label: "Operación (cobros y pagos del negocio)" },
-  { key: "inversion",    label: "Fondeo e inversión" },
-  { key: "financiacion", label: "Financiación (plata que no es resultado)" },
-  { key: "cambio",       label: "Cambio de moneda" },
-  { key: "control",      label: "Controles (deberían dar cero)" },
-];
-// Orden fijo de conceptos por actividad (orden de negocio, no por magnitud).
+// Actividades (= claves de CF_CONCEPTO_ORDEN, en ese orden) y orden fijo de conceptos dentro de cada una (orden de
+// negocio, no por magnitud). Las etiquetas de los bloques las pone la vista (CajaView.BLOQUES).
 export const CF_CONCEPTO_ORDEN = {
   operativo:    ["Cobros de clientes · Sedes", "Cobros de clientes · HQ", "Franquicias (cobros − pagos)",
                  "Sueldos", "Impuestos y cargas sociales", "Tarjeta de crédito (pago del resumen)",
                  "Pagos a proveedores · Sedes", "Pagos a proveedores · HQ"],
-  inversion:    ["Fondeo a otros negocios", "Movimientos intercompañía"],
-  financiacion: ["Préstamos recibidos", "Cuotas de planes y préstamos", "Anticipos de clientes", "Socios (aportes, préstamos, dividendos)"],
+  inversion:    ["Fondeo a otros negocios", "Compra de activos", "Movimientos intercompañía"],
+  financiacion: ["Préstamos recibidos", "Cuotas de planes y préstamos", "Anticipos de clientes", "Socios e inversores"],
   cambio:       ["Cambio de moneda"],
   control:      ["Transferencias entre cuentas (sin par)", "Sin conciliar (pendiente)"],
 };
+const ACTS = Object.keys(CF_CONCEPTO_ORDEN);
 export const CF_GO_LIVE_YEAR = 2026;   // año del go-live
 export const CF_START_MES = 6;         // Julio (0-indexed): el Cash Flow arranca acá SOLO el año de go-live (1/7/2026).
 
-const RE_SUELDO   = /sueldo|haber|aguinaldo|honorario.*coach/i;
-const RE_IMPUESTO = /impuesto|imp\.|iva|ganancia|ingresos brutos|iibb|afip|agip|arba|abl|carga|931|monotributo|sicore|percep|retenc|tasa|sellos|seguridad social|tgss|dian|ica\b/i;
+// Rubro de balance de la cuenta (`cuenta_pasivo`, en minúsculas) → fila de la Caja. "cobros" y "proveedores" se abren
+// después en Sedes / HQ por el grupo del centro. Un rubro que no esté acá cae en el "por signo" del final.
+const FILA_POR_RUBRO = {
+  ventas: "cobros", coorporativos: "cobros",
+  sueldos: "Sueldos",
+  "cargas sociales": "Impuestos y cargas sociales", impuestos: "Impuestos y cargas sociales", "plan de facilidades": "Impuestos y cargas sociales",
+  proveedores: "proveedores", financieros: "proveedores", financiero: "proveedores", interusos: "proveedores",
+  inversores: "inversores",
+};
 
 // Clasifica un movimiento de caja por ACTIVIDAD + concepto. Resuelve la cuenta contable del propio movimiento o del
 // comprobante que paga/cobra (docCuenta) y el centro (propio o del comprobante, docCentro). `perimetro` = set de
@@ -43,8 +47,11 @@ export function clasificarFlujo(m, { ccMap, perimetro, docCentro, docCuenta, cue
   // Controles / cambio (plata entre cajas propias: no es flujo del negocio)
   if (tipo === "TRANSFERENCIA") return { act: "control", concepto: "Transferencias entre cuentas (sin par)" };
   if (tipo === "CAMBIO")        return { act: "cambio",  concepto: "Cambio de moneda" };
+  // Línea del extracto que nadie aceptó todavía: es caja real pero sin imputar = backlog de conciliación, aunque la regla
+  // le haya propuesto una cuenta (esa cuenta no vale hasta que alguien la acepte).
+  if (esExtractoSinConciliar(m)) return { act: "control", concepto: "Sin conciliar (pendiente)" };
   // Financiación
-  if (origen === "socios") return { act: "financiacion", concepto: "Socios (aportes, préstamos, dividendos)" };
+  if (origen === "socios") return { act: "financiacion", concepto: "Socios e inversores" };
   if (origen.startsWith("financiacion") || origen === "cuota" || doc.startsWith("FIN-"))
     return { act: "financiacion", concepto: entra ? "Préstamos recibidos" : "Cuotas de planes y préstamos" };
   if (origen === "anticipo_alta") return { act: "financiacion", concepto: "Anticipos de clientes" };   // el cliente te financia
@@ -62,24 +69,20 @@ export function clasificarFlujo(m, { ccMap, perimetro, docCentro, docCuenta, cue
   // Fondeo: gasto/ingreso a un centro cuya sociedad dueña está FUERA del perímetro elegido.
   if (empresa && perimetro && perimetro.size > 0 && !perimetro.has(empresa))
     return { act: "inversion", concepto: "Fondeo a otros negocios" };
-  // Naturaleza por cuenta contable (del movimiento o del comprobante)
+  // Sueldos por origen (liquidaciones), compras de activos por categoría del P&L, y el resto por el rubro de balance
+  // de la cuenta contable (la del movimiento o la del comprobante que paga/cobra).
+  if (tipo === "SUELDO" || origen === "sueldos" || doc.startsWith("LIQ-")) return { act: "operativo", concepto: "Sueldos" };
   const ctaRaw = String(m.cuenta_contable || "").trim() || (doc && docCuenta ? (docCuenta.get(doc) || "") : "");
   const cta = ctaRaw && cuentaMap ? (cuentaMap.get(ctaRaw) || cuentaMap.get(ctaRaw.toLowerCase())) : null;
-  const ctaNombre = String(cta?.nombre || ctaRaw);
-  const ctaCat = normCat(cta?.categoria_pnl);
-  if (tipo === "SUELDO" || origen === "sueldos" || doc.startsWith("LIQ-") || RE_SUELDO.test(ctaNombre))
-    return { act: "operativo", concepto: "Sueldos" };
-  if (!entra && (ctaCat === "impuestos" || RE_IMPUESTO.test(ctaNombre)))
-    return { act: "operativo", concepto: "Impuestos y cargas sociales" };
-  // Cobros / pagos por negocio: HQ = todo lo que NO es sede (sueldos HQ ya salieron arriba).
-  if (grupo === "hq")
-    return { act: "operativo", concepto: entra ? "Cobros de clientes · HQ" : "Pagos a proveedores · HQ" };
-  if (cc && grupo !== "inversiones")
-    return { act: "operativo", concepto: entra ? "Cobros de clientes · Sedes" : "Pagos a proveedores · Sedes" };
-  // Línea del extracto TODAVÍA no aceptada en la bandeja (caja real, aún sin imputar) = backlog de conciliación.
-  if (origen === "extracto" && !doc)
-    return { act: "control", concepto: "Sin conciliar (pendiente)" };
-  return { act: "operativo", concepto: entra ? "Cobros de clientes · HQ" : "Pagos a proveedores · HQ" };
+  if (normCat(cta?.categoria_pnl) === "capex") return { act: "inversion", concepto: "Compra de activos" };
+  const fila = FILA_POR_RUBRO[String(cta?.cuenta_pasivo || "").trim().toLowerCase()];
+  if (fila === "inversores") return { act: "financiacion", concepto: "Socios e inversores" };
+  if (fila === "Sueldos" || fila === "Impuestos y cargas sociales") return { act: "operativo", concepto: fila };
+  // Cobros / pagos por negocio: Sedes = centro de un negocio; HQ = todo lo demás (sin centro incluido). Sin cuenta
+  // resuelta (movimiento sin cuenta ni comprobante, o plan de cuentas aún no cargado): por signo.
+  const lado = cc && grupo !== "hq" && grupo !== "inversiones" ? "Sedes" : "HQ";
+  const esCobro = fila ? fila === "cobros" : entra;
+  return { act: "operativo", concepto: esCobro ? `Cobros de clientes · ${lado}` : `Pagos a proveedores · ${lado}` };
 }
 
 // `fx(monto, moneda, anio, mes)` → monto en la moneda de vista (null si falta TC). Sin `fx` → nativo en `moneda`.
@@ -129,18 +132,18 @@ export function computeCashFlow({ rawMovs = [], rawIn = [], rawEg = [], docs = [
     const [aY, aM] = cfStartMes === 0 ? [year - 1, 12] : [year, cfStartMes];   // mes anterior al arranque (1-based)
     return Object.entries(porMon).reduce((s, [mo, v]) => s + (fx(v, mo, aY, aM) ?? 0), 0);
   })();
-  const porAct = Object.fromEntries(CF_ACT.map(a => [a.key, {}]));
-  const detalle = {};   // concepto → movimientos (para drill / diagnóstico)
+  const porAct = Object.fromEntries(ACTS.map(k => [k, {}]));
+  const detalle = {};   // concepto → [12 meses] → movimientos (el panel de detalle de CajaView lee una celda)
   for (const m of movsFilt) {
     const mes = parseInt(m.fecha.slice(5, 7), 10) - 1; if (mes < 0 || mes > 11) continue;
     const { act, concepto } = clasificarFlujo(m, ctx);
     (porAct[act][concepto] ??= new Array(12).fill(0))[mes] += montoDe(m);
-    (detalle[concepto] ??= []).push(m);
+    (detalle[concepto] ??= Array.from({ length: 12 }, () => []))[mes].push(m);
   }
   const Z = () => new Array(12).fill(0);
   const actTot = {};
   for (const k of Object.keys(porAct)) actTot[k] = Z().map((_, m) => Object.values(porAct[k]).reduce((s, a) => s + a[m], 0));
-  const flujoNeto = Z().map((_, m) => CF_ACT.reduce((s, a) => s + actTot[a.key][m], 0));
+  const flujoNeto = Z().map((_, m) => ACTS.reduce((s, k) => s + actTot[k][m], 0));
   let cum = openingCash;
   const saldoFinal = flujoNeto.map(v => { cum += v; return cum; });
   const saldoInicioMes = Z().map((_, m) => saldoFinal[m] - flujoNeto[m]);

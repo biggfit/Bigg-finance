@@ -1,20 +1,20 @@
 // Caja en pocas líneas (Martín 5/11/2026: "entro al cash flow y me cuesta entenderlo"). Mismo molde que Tesorería › Saldos:
-// header negro con los meses como primera fila, layout fijo con una columna por mes, la ayuda como nota afuera de la
-// tarjeta. Seis filas: Caja al inicio → La operación → Inversiones y fondeo → Financiación → Cambio de moneda →
-// = Variación de caja → Caja al cierre (ata con Saldos). Cada bloque se abre por su naturaleza (los conceptos de
-// cashflowDerive) y una celda de concepto abre los movimientos de ese mes debajo de la tabla.
-// Lo que debería dar cero (extracto sin imputar, transferencias con una sola pata) va en una fila "Pendiente de
-// conciliar" solo cuando no da cero, para que la caja al cierre siga atando.
+// header negro con los meses como primera fila, layout fijo con una columna por mes, sin notas ni chips ("la tabla sola").
+// Seis filas: Caja al inicio → La operación → Inversiones y fondeo → Financiación → Cambio de moneda → = Variación de caja
+// → Caja al cierre (ata con Saldos). Cada bloque se abre por su naturaleza (los conceptos de cashflowDerive) y una celda
+// de concepto abre los movimientos de ese mes debajo de la tabla. Lo que debería dar cero (extracto sin imputar,
+// transferencias con una sola pata) va en una fila "Pendiente de conciliar" solo cuando no da cero, para que la caja al
+// cierre siga atando.
 import { useState, Fragment } from "react";
 import { T, fmtDate } from "../theme";
-import { MESES_CORTOS, fmtBal } from "./balanceUtils";
+import { MESES_CORTOS, fmtBal, AvisosTC } from "./balanceUtils";
 import { CF_CONCEPTO_ORDEN } from "./cashflowDerive";
 
 const BLOQUES = [
-  { key: "operativo",    label: "La operación",         nota: "cobros de clientes − sueldos − proveedores − impuestos" },
-  { key: "inversion",    label: "Inversiones y fondeo", nota: "plata a negocios de otras sociedades e intercompañía" },
-  { key: "financiacion", label: "Financiación",         nota: "préstamos, cuotas, anticipos de clientes y socios" },
-  { key: "cambio",       label: "Cambio de moneda",     nota: null },
+  { key: "operativo",    label: "La operación" },
+  { key: "inversion",    label: "Inversiones y fondeo" },
+  { key: "financiacion", label: "Financiación" },
+  { key: "cambio",       label: "Cambio de moneda" },
 ];
 
 const COL_MES = 118, COL_TOT = 132;
@@ -27,7 +27,7 @@ function Celda({ valor, fuerte = false, color, dim = false, onClick, title }) {
   const v = Number(valor) || 0;
   const col = color || (v < 0 ? T.red : Math.abs(v) < 0.5 ? T.dim : T.text);
   return (
-    <td onClick={onClick} title={onClick ? title : undefined}
+    <td onClick={onClick} title={title}
       style={{ padding: "7px 12px", textAlign: "right", fontFamily: "var(--mono)", fontSize: 12.5, whiteSpace: "nowrap",
         fontWeight: fuerte ? 800 : 600, color: col, opacity: dim ? .55 : 1, cursor: onClick ? "pointer" : "default" }}
       onMouseEnter={e => { if (onClick) e.currentTarget.style.textDecoration = "underline"; }}
@@ -37,11 +37,12 @@ function Celda({ valor, fuerte = false, color, dim = false, onClick, title }) {
   );
 }
 
-// `get(m)` por mes; el total suma SOLO meses cerrados (el mes en curso se ve en gris y no entra).
+// `get(m)` por mes. Total: la suma de los meses cerrados (el mes en curso se ve en gris y no entra), o el primero /
+// el último cerrado para las filas de saldo.
 function Fila({ label, get, meses, cerrados, mesEnCurso, style = {}, labelStyle = {}, fuerte = false, color, total = "suma", onCelda, sangria = 0, flecha = null, onToggle }) {
-  const tot = total === "suma" ? cerrados.reduce((s, m) => s + get(m), 0)
-    : total === "primero" ? (meses.length ? get(meses[0]) : 0)
-    : total === "ultimo" ? (cerrados.length ? get(cerrados[cerrados.length - 1]) : 0) : null;
+  const tot = total === "primero" ? (meses.length ? get(meses[0]) : 0)
+    : total === "ultimo" ? (cerrados.length ? get(cerrados[cerrados.length - 1]) : 0)
+    : cerrados.reduce((s, m) => s + get(m), 0);
   return (
     <tr style={{ ...trLine, ...style }}>
       <td style={{ ...tdLabel, paddingLeft: 18 + sangria, fontWeight: fuerte ? 800 : 500, ...labelStyle, cursor: onToggle ? "pointer" : "default", userSelect: onToggle ? "none" : "auto" }}
@@ -51,12 +52,60 @@ function Fila({ label, get, meses, cerrados, mesEnCurso, style = {}, labelStyle 
       </td>
       {meses.map(m => <Celda key={m} valor={get(m)} fuerte={fuerte} color={color} dim={m === mesEnCurso}
         onClick={onCelda ? () => onCelda(m) : undefined} title={onCelda ? `${label} · ${MESES_CORTOS[m]}: ver movimientos` : undefined} />)}
-      <Celda valor={tot ?? 0} fuerte color={tot == null ? "transparent" : color} />
+      <Celda valor={tot} fuerte color={color} />
     </tr>
   );
 }
 
-export function CajaView({ cf, consolidado, mon, cuentasBancarias = [], docs = [], avisosTC = null }) {
+const cmpDesc = (a, b) => (a < b) - (a > b);   // ISO yyyy-mm-dd: comparación de strings, la más nueva primero
+
+// Líneas del panel de detalle: los movimientos del concepto en ese mes, con QUIÉN está del otro lado.
+//  · con comprobante de Numbers (`docs`): nombre del cliente/proveedor, número y fecha; los pagos/cobros de un mismo
+//    comprobante se agrupan (Gympass paga su factura en 42 transferencias el mismo día → UNA línea);
+//  · préstamos y planes (`financiaciones`, una fila por plan): el alta apunta al plan "FIN-xxxx" y cada cuota a
+//    "FIN-<plan>#<n>" (en documento_id u origen_id) → acreedor y cuota;
+//  · franquicias: el comprobante vive en el módulo de Franquicias; el movimiento trae el id de la franquicia en
+//    contraparte_id → el nombre de la sede (no la razón social: acá lee Martín, no el estudio);
+//  · lo demás, una línea por movimiento con lo que diga el movimiento (contraparte o texto del extracto).
+function lineasDetalle(movs, { docs, franquicias, financiaciones, cuentasBancarias }) {
+  const docMap = new Map(docs.map(d => [String(d.id ?? ""), d]));
+  const planMap = new Map(financiaciones.map(f => [String(f.plan_id), f]));
+  const frMap = new Map(franquicias.map(f => [String(f.id), f]));
+  const ctaMap = new Map(cuentasBancarias.map(c => [String(c.id), c]));
+  const finDe = ref => {
+    if (!ref.startsWith("FIN-")) return null;
+    const [plan, cuota] = ref.replace(/^FIN-FIN-/, "FIN-").split("#");
+    const f = planMap.get(plan); if (!f) return null;
+    const que = f.tipo === "plan_afip" ? `plan de pago${f.nro_plan ? " " + f.nro_plan : ""}` : "préstamo";
+    return { nombre: f.acreedor_nombre || plan, detalle: cuota ? `${que} · cuota ${cuota}` : `alta ${que}` };
+  };
+  const frDe = m => {
+    if (String(m.origen) !== "franquicias" || !m.contraparte_id) return null;
+    const f = frMap.get(String(m.contraparte_id));
+    return { nombre: f?.name || f?.razonSocial || `Franquicia ${m.contraparte_id}`, detalle: "franquicia" };
+  };
+  const grupos = new Map();
+  for (const m of movs) {
+    const docId = String(m.documento_id || "").replace(/-L\d+$/i, "");
+    const doc = docId ? docMap.get(docId) : null;
+    const key = docId ? `doc:${docId}:${m.moneda || ""}` : `mov:${m.id}`;
+    let g = grupos.get(key);
+    if (!g) {
+      const quien = doc
+        ? { nombre: doc.cliente || doc.proveedor || m.contraparte_nombre || docId, detalle: `comprobante ${doc.nroComp ? doc.nroComp + " " : ""}del ${fmtDate(doc.fecha)}` }
+        : finDe(String(m.origen_id || docId)) || frDe(m)
+        || { nombre: m.contraparte_nombre || m.concepto || m.descripcion || "—", detalle: docId ? `comprobante ${docId}` : "" };
+      g = { key, n: 0, monto: 0, moneda: m.moneda || "", desde: m.fecha, hasta: m.fecha, cuentas: new Set(), ...quien };
+      grupos.set(key, g);
+    }
+    g.n += 1; g.monto += Number(m.monto) || 0; g.cuentas.add(ctaMap.get(String(m.cuenta_bancaria))?.nombre || m.cuenta_bancaria);
+    if (m.fecha < g.desde) g.desde = m.fecha; if (m.fecha > g.hasta) g.hasta = m.fecha;
+  }
+  // Por fecha, la más nueva arriba (Martín 5/11); a igual fecha, por importe.
+  return [...grupos.values()].sort((a, b) => cmpDesc(a.desde, b.desde) || Math.abs(b.monto) - Math.abs(a.monto));
+}
+
+export function CajaView({ cf, consolidado, mon, cuentasBancarias = [], docs = [], franquicias = [], financiaciones = [] }) {
   const [abiertos, setAbiertos] = useState({});
   const [drill, setDrill] = useState(null);   // { concepto, mes }
   if (!cf) return null;
@@ -71,36 +120,12 @@ export function CajaView({ cf, consolidado, mon, cuentasBancarias = [], docs = [
   const control = tot("control");
   const hayControl = control.some(x => Math.abs(x) > 0.5);
   const toggle = k => setAbiertos(o => ({ ...o, [k]: !o[k] }));
-  const nombreCuenta = (() => { const mp = new Map(cuentasBancarias.map(c => [String(c.id), c])); return id => mp.get(String(id))?.nombre || id; })();
   const titulo = consolidado ? "Caja · USD consolidado" : `Caja · ${mon}`;
-
-  // Movimientos de un concepto en un mes (nativos, con su moneda), AGRUPADOS por comprobante: una factura cobrada en
-  // 42 transferencias es UNA fila con el nombre del cliente, no 42 líneas con el texto del extracto del banco.
-  const docMap = (() => { const mp = new Map(); for (const d of docs) { const id = String(d.id ?? ""); if (id && !mp.has(id)) mp.set(id, d); } return mp; })();
-  const movsDrill = (() => {
-    if (!drill) return [];
-    const grupos = new Map();
-    for (const m of (cf.detalle[drill.concepto] || [])) {
-      if (parseInt(m.fecha.slice(5, 7), 10) - 1 !== drill.mes) continue;
-      const docId = String(m.documento_id || "").replace(/-L\d+$/i, "");
-      const doc = docId ? docMap.get(docId) : null;
-      const key = docId ? `doc:${docId}:${m.moneda || ""}` : `mov:${m.id}`;
-      let g = grupos.get(key);
-      if (!g) {
-        g = { key, n: 0, monto: 0, moneda: m.moneda || "", desde: m.fecha, hasta: m.fecha, cuentas: new Set(),
-          nombre: doc ? (doc.cliente || doc.proveedor || m.contraparte || docId) : (m.contraparte || m.concepto || m.descripcion || "—"),
-          detalle: doc ? `comprobante ${doc.nroComp ? doc.nroComp + " " : ""}del ${fmtDate(doc.fecha)}` : (docId ? `comprobante ${docId}` : "") };
-        grupos.set(key, g);
-      }
-      g.n += 1; g.monto += Number(m.monto) || 0; g.cuentas.add(nombreCuenta(m.cuenta_bancaria));
-      if (m.fecha < g.desde) g.desde = m.fecha; if (m.fecha > g.hasta) g.hasta = m.fecha;
-    }
-    return [...grupos.values()].sort((a, b) => Math.abs(b.monto) - Math.abs(a.monto));
-  })();
+  const movsDrill = drill ? lineasDetalle(cf.detalle[drill.concepto]?.[drill.mes] ?? [], { docs, franquicias, financiaciones, cuentasBancarias }) : [];
 
   return (
     <div className="fade">
-      {avisosTC}
+      <AvisosTC tcSuplente={cf.tcSuplente} faltaTC={cf.faltaTC} />
       <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, boxShadow: T.shadow, overflowX: "auto", marginBottom: 16 }}>
         <table style={{ ...TABLA, minWidth: 320 + meses.length * COL_MES + COL_TOT }}>
           <colgroup><col />{meses.map(m => <col key={m} style={{ width: COL_MES }} />)}<col style={{ width: COL_TOT }} /></colgroup>
@@ -128,7 +153,7 @@ export function CajaView({ cf, consolidado, mon, cuentasBancarias = [], docs = [
               );
             })}
             {hayControl && (
-              <Fila label="Pendiente de conciliar *" get={m => control[m]} {...p} labelStyle={{ color: T.orange }} color={T.orange} />
+              <Fila label="Pendiente de conciliar" get={m => control[m]} {...p} labelStyle={{ color: T.orange }} color={T.orange} />
             )}
           </tbody>
           <tfoot>
@@ -137,15 +162,6 @@ export function CajaView({ cf, consolidado, mon, cuentasBancarias = [], docs = [
             <Fila label="Caja al cierre" get={m => cf.saldoFinal[m]} {...p} fuerte total="ultimo" style={{ background: "#f3f4f6" }} />
           </tfoot>
         </table>
-      </div>
-      <div style={{ padding: "0 18px", margin: "-8px 0 16px", fontSize: 10.5, color: T.dim, lineHeight: 1.6, maxWidth: 980 }}>
-        {consolidado
-          ? <>Caja de todas las monedas de las sociedades tildadas, cada movimiento al tipo de cambio de su mes. </>
-          : <>Caja en {mon} de las sociedades tildadas: bancos, cajas y Mercado Pago de esa moneda, sin tarjetas. </>}
-        {BLOQUES.filter(b => b.nota).map(b => <Fragment key={b.key}><b>{b.label}</b> = {b.nota} · </Fragment>)}
-        <b>Cambio de moneda</b> = {consolidado ? "neto de las dos patas al TC del mes" : `lo que entró o salió de ${mon} por compra-venta de moneda`}.
-        Los totales son de meses cerrados; el mes en curso va en gris. La caja al cierre ata con Tesorería › Saldos.
-        {hayControl && <> <b>* Pendiente de conciliar</b>: líneas del extracto sin imputar o transferencias entre cuentas propias con una sola pata. Debería dar cero: se arregla en Conciliación.</>}
       </div>
 
       {drill && (

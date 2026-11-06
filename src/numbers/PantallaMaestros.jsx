@@ -687,6 +687,11 @@ const PASIVO_CFG = {
   financiero:  { bg:"#e0f2fe", color:"#0369a1", label:"Financiero"  },
   financieros: { bg:"#e0f2fe", color:"#0369a1", label:"Financieros" },
   ventas:      { bg:"#dcfce7", color:"#16a34a", label:"Ventas"      },
+  "cargas sociales":     { bg:"#ede9fe", color:"#7c3aed", label:"Cargas Sociales"     },
+  "plan de facilidades": { bg:"#fee2e2", color:"#dc2626", label:"Plan de Facilidades" },
+  inversores:            { bg:"#e0f2fe", color:"#0369a1", label:"Inversores"          },
+  interusos:             { bg:"#fef3c7", color:"#b45309", label:"Interusos"           },
+  coorporativos:         { bg:"#dcfce7", color:"#16a34a", label:"Coorporativos"       },
 };
 function PasivoChip({ value }) {
   if (!value) return <span style={{ color:"#9ca3af", fontStyle:"italic", fontSize:11 }}>—</span>;
@@ -712,7 +717,10 @@ const esBaseAguinaldo = (c) => String(c?.base_aguinaldo ?? "").toLowerCase() ===
 const TIPO_OPCIONES   = [["Gasto", "Gasto"], ["Venta", "Ingreso / Venta"], ["Financieros", "Financieros"], ["Activo", "Activo"], ["Pasivo", "Pasivo"]];
 const CAT_OPCIONES    = [["Ventas", "Ventas"], ["Costo por Venta", "Costo por Venta"], ["Gastos Operativos", "Gastos Operativos"],
                          ["Financieros", "Financieros"], ["Impuestos", "Impuestos"], ["capex", "Inversiones / Capex"]];
-const PASIVO_OPCIONES = [["Proveedores", "Proveedores"], ["Sueldos", "Sueldos"], ["Impuestos", "Impuestos"], ["Financieros", "Financieros"], ["Ventas", "Ventas"]];
+// Rubro de balance de la cuenta: lo usan Tesorería (a cobrar / a pagar), el Balance y la Caja (fila de cada pago). Los 10 que
+// existen en nb_cuentas (5/11/2026), para que cualquier cuenta pueda moverse desde acá sin tocar código.
+const PASIVO_OPCIONES = ["Proveedores", "Sueldos", "Cargas Sociales", "Impuestos", "Plan de Facilidades", "Financieros", "Inversores",
+  "Interusos", "Ventas", "Coorporativos"].map(v => [v, v]);
 const SINONIMOS = { ingreso: "Venta", ingresos: "Venta", ventas: "Venta", gastos: "Gasto", financiero: "Financieros",
                     "costo venta": "Costo por Venta", "gastos financieros": "Financieros", impuesto: "Impuestos", inversiones: "capex" };
 const canon = (v, opciones) => {

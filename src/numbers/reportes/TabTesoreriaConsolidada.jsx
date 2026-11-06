@@ -277,13 +277,15 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
   // ── Cash Flow directo (método directo por naturaleza) sobre las MISMAS cajas y sociedades que el Balance: la
   //    sociedad de un movimiento es la de su CUENTA (como derivarSaldos) → la variación de caja ata con los saldos.
   //    Moneda: la elegida (nativo) o consolidado USD al TC del mes de cada movimiento ("Todas"). ──
+  // Comprobantes para la Caja (centro/cuenta del pago y nombre del cliente/proveedor en el detalle): una sola lista estable.
+  const docsCaja = useMemo(() => [...data.egresos, ...data.ingresos], [data.egresos, data.ingresos]);
   const cfDirecto = useMemo(() => {
     if (activeTab !== "cf") return null;
     const consolidado = filtroMoneda === "ALL";
     const { aUSD, faltaTC, tcSuplente } = crearTraductor(tiposCambio);
     const fx = consolidado ? (monto, mo, anio, mes) => aUSD(monto, mo, `${anio}-${String(mes).padStart(2, "0")}-01`) : null;
     const cf = computeCashFlow({
-      rawMovs: data.movimientos, rawIn: pnl?.inRows || [], rawEg: pnl?.egRows || [], docs: [...data.egresos, ...data.ingresos],
+      rawMovs: data.movimientos, rawIn: pnl?.inRows || [], rawEg: pnl?.egRows || [], docs: docsCaja,
       ccMap: pnl?.ccMap || new Map(data.centrosCosto.map(c => [String(c.id ?? "").trim().toLowerCase(), c])),
       cuentaMap: pnl?.cuentaMap || null,
       perimetro: new Set(socsIncluidas.map(s => s.id)),
@@ -292,7 +294,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
       cuentasBancarias: data.cuentasBancarias,
     });
     return { ...cf, faltaTC, tcSuplente };
-  }, [activeTab, filtroMoneda, tiposCambio, data, pnl, socsIncluidas]);
+  }, [activeTab, filtroMoneda, tiposCambio, data, pnl, socsIncluidas, docsCaja]);
 
   const toggleSoc = id => setSocSel(prev => {
     const full = prev.length === 0 ? sociedades.map(s => s.id) : prev;
@@ -529,8 +531,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
       )}
       {!loading && !error && activeTab === "cf" && (
         <CajaView cf={cfDirecto} consolidado={filtroMoneda === "ALL"} mon={filtroMoneda} cuentasBancarias={data.cuentasBancarias}
-          docs={[...data.egresos, ...data.ingresos]}
-          avisosTC={cfDirecto ? <AvisosTC tcSuplente={cfDirecto.tcSuplente} faltaTC={cfDirecto.faltaTC} /> : null} />
+          docs={docsCaja} franquicias={data.franqData.franchises} financiaciones={data.financiaciones} />
       )}
       {!loading && !error && activeTab === "movimientos" && (
         <TabMovimientos movimientos={movimientos} cuentas={cuentas} filtroCuenta={filtroCuenta} filtroRef={filtroRef}
