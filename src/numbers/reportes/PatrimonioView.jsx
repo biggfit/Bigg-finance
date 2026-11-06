@@ -25,7 +25,7 @@ export function PatrimonioView({ eepn, filtroMoneda, tiposCambio = null, pnl = n
   const p = { meses, cerrados, mesEnCurso };
   const { aUSD, faltaTC, tcSuplente } = crearTraductor(tiposCambio);
   const finDeMes = m => `${year}-${String(m + 1).padStart(2, "0")}-31`;
-  const bd = m => balMes[m] || { cuentas: [], aCobrar: [], aPagar: [], intercoAct: [], intercoPas: [] };
+  const bd = m => balMes[m] || { cuentas: [], aCobrar: [], aPagar: [], intercoAct: [], intercoPas: [], participaciones: [] };
   const monedasDe = arrs => { const st = new Set(); arrs.forEach(a => a.forEach(it => it.moneda && st.add(it.moneda))); return [...st]; };
   // Suma de una lista al cierre del mes m: nativa (una moneda) o consolidada en USD al TC de ese cierre (como el Balance).
   const suma = (arr, m, pred = () => true) => consolidado
@@ -33,7 +33,7 @@ export function PatrimonioView({ eepn, filtroMoneda, tiposCambio = null, pnl = n
     : sumSaldo(arr, mon, pred);
   const pn = m => {
     const b = bd(m);
-    return suma(b.cuentas, m, c => (c.tipo || "") !== "tarjeta") + suma(b.aCobrar, m) + suma(b.intercoAct, m)
+    return suma(b.cuentas, m, c => (c.tipo || "") !== "tarjeta") + suma(b.aCobrar, m) + suma(b.intercoAct, m) + suma(b.participaciones || [], m)
       - suma(b.aPagar, m) - suma(b.intercoPas, m);
   };
   const dPN = m => pn(m) - pn(m - 1);
@@ -54,10 +54,10 @@ export function PatrimonioView({ eepn, filtroMoneda, tiposCambio = null, pnl = n
   // menos al TC viejo. No es negocio: es el dólar moviéndose.
   const conv = (() => {
     if (!consolidado) return () => 0;
-    const monedasPN = monedasDe(meses.flatMap(m => [bd(m).cuentas, bd(m).aCobrar, bd(m).aPagar, bd(m).intercoAct, bd(m).intercoPas]));
+    const monedasPN = monedasDe(meses.flatMap(m => [bd(m).cuentas, bd(m).aCobrar, bd(m).aPagar, bd(m).intercoAct, bd(m).intercoPas, bd(m).participaciones || []]));
     const pnNativo = (m, mo) => {
       const b = bd(m);
-      return sumSaldo(b.cuentas, mo, c => (c.tipo || "") !== "tarjeta") + sumSaldo(b.aCobrar, mo) + sumSaldo(b.intercoAct, mo)
+      return sumSaldo(b.cuentas, mo, c => (c.tipo || "") !== "tarjeta") + sumSaldo(b.aCobrar, mo) + sumSaldo(b.intercoAct, mo) + sumSaldo(b.participaciones || [], mo)
         - sumSaldo(b.aPagar, mo) - sumSaldo(b.intercoPas, mo);
     };
     return m => monedasPN.reduce((s, mo) => s + aUSD(pnNativo(m - 1, mo), mo, finDeMes(m)) - aUSD(pnNativo(m - 1, mo), mo, finDeMes(m - 1)), 0);

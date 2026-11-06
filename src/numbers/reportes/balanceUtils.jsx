@@ -40,6 +40,27 @@ export function clasificarActivo(it) {
   return "cxc";
 }
 
+// ── Participaciones en negocios (T4 tanda B, Martín 6/11/2026) ──
+// Lo que una sociedad del set APORTÓ como socia de otra sociedad del grupo (nb_socios: fila con id = sociedad inversora
+// y alcance = sociedad invertida, `aportado`). Es un activo de la inversora ("Participación en X") y patrimonio de la
+// invertida, así que vale como item solo cuando la invertida NO está en el set: con las dos adentro se elimina
+// (consolidación), igual que el interco. En la moneda de la invertida (la hoja no trae moneda). Vive en el balance as-of
+// (Balance, Posición financiera, Del resultado al patrimonio), NO en Tesorería ("Tesorería es tesorería", Martín 5/11).
+export function participacionesAsOf(participaciones = [], sociedades = [], idsSel = [], fecha = "9999-12-31") {
+  const sel = new Set(idsSel.map(x => String(x).toLowerCase()));
+  const socMap = new Map(sociedades.map(s => [String(s.id).toLowerCase(), s]));
+  const out = [];
+  for (const r of participaciones || []) {
+    const inv = String(r.id ?? "").toLowerCase(), neg = String(r.alcance ?? "").toLowerCase();
+    const aportado = Number(r.aportado) || 0;
+    if (!aportado || !socMap.has(inv) || !socMap.has(neg) || !sel.has(inv) || sel.has(neg)) continue;
+    if (r.desde && String(r.desde).slice(0, 10) > fecha) continue;
+    const s = socMap.get(neg);
+    out.push({ label: `Participación en ${s.nombre || neg}`, moneda: s.moneda || "ARS", saldo: aportado, sociedad: inv, invertida: neg });
+  }
+  return out;
+}
+
 // Formato de monto redondeado es-AR (— para cero, − para negativos).
 export const fmtBal = (n) => { const v = Math.round(Number(n) || 0); return v === 0 ? "—" : (v < 0 ? "−" : "") + Math.abs(v).toLocaleString("es-AR"); };
 

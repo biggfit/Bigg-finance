@@ -8,7 +8,7 @@ import {
   fetchSociedades,
   fetchMovTesoreria, fetchEgresos, fetchIngresos, fetchPagosCobros,
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto,
-  fetchFinanciaciones, fetchSocios, fetchSociosCC, fetchIntercoData, intercoLedger, primeCache,
+  fetchFinanciaciones, fetchSocios, fetchParticipaciones, fetchSociosCC, fetchIntercoData, intercoLedger, primeCache,
   esCuentaCredito,
 } from "../../lib/numbersApi";
 import { fetchLiquidacionesCerradas } from "../../lib/sueldosApi";
@@ -18,7 +18,7 @@ import { derivarSaldos, franqFirst, intercoConsolidado, sociedadNombreMap } from
 import { resultadoDevengadoMensual } from "./TabDevengado";   // resultado por mes (misma función que el reporte Devengado) → conciliación del PN
 import { TabSaldos, TabMovimientos, PaginaAging, PaginaIntercoLedger } from "../PantallaTesoreria";
 import { buildPuente, printPuente } from "./puenteDerive";   // DEV-ONLY diagnóstico (descartable)
-import { GO_LIVE_APERTURA, MESES_CORTOS as _MESES, sumSaldo, esCorriente, fmtBal, crearTraductor, AvisosTC, ordenarDetalle,
+import { GO_LIVE_APERTURA, MESES_CORTOS as _MESES, sumSaldo, esCorriente, fmtBal, crearTraductor, AvisosTC, ordenarDetalle, participacionesAsOf,
   hoyISO as _hoyISO, finMesAnterior as _finMesAnterior, esFinDeMes as _esFinDeMes, finMesAnteriorReal as _finMesAnteriorReal } from "./balanceUtils";
 import { computeCashFlow } from "./cashflowDerive";
 import { CajaView } from "./CajaView";
@@ -74,7 +74,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
   const [data, setData] = useState({
     movimientos: [], egresos: [], ingresos: [], pagosCobros: [],
     cuentasBancarias: [], cuentasContables: [], centrosCosto: [],
-    liqsSueldos: [], financiaciones: [], socios: [], sociosCC: [],
+    liqsSueldos: [], financiaciones: [], socios: [], sociosCC: [], participaciones: [],
     franqData: { comps: {}, saldos: {}, franchises: [] },
   });
   // Interco aparte de `data` (NO se spreadea a derivarSaldos por-sociedad, para no duplicar;
@@ -120,7 +120,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
           { resource: "nb_socios" },
           { resource: "nb_socios_cc" },
         ]);
-        const [socs, movs, egs, ings, pcs, cbList, ctaList, ccList, fin, sos, sosCC] = await Promise.all([
+        const [socs, movs, egs, ings, pcs, cbList, ctaList, ccList, fin, sos, sosCC, partic] = await Promise.all([
           tol("sociedades",              fetchSociedades()),
           tol("movimientos",             fetchMovTesoreria()),
           tol("comprobantes de egreso",  fetchEgresos()),
@@ -132,6 +132,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
           tol("financiaciones",          fetchFinanciaciones()),
           tol("socios",                  fetchSocios()),
           tol("cuenta corriente de socios", fetchSociosCC()),
+          tol("participaciones",         fetchParticipaciones()),   // nb_socios crudo: aportes entre sociedades del grupo
         ]);
         const liqsS = await liqsP;
         if (cancelled) return;
@@ -149,7 +150,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
           ...d,
           movimientos: arr(movs), egresos: arr(egs), ingresos: arr(ings), pagosCobros: arr(pcs),
           cuentasBancarias: arr(cbList), cuentasContables: arr(ctaList), centrosCosto: arr(ccList),
-          liqsSueldos: arr(liqsS), financiaciones: arr(fin), socios: arr(sos), sociosCC: arr(sosCC),
+          liqsSueldos: arr(liqsS), financiaciones: arr(fin), socios: arr(sos), sociosCC: arr(sosCC), participaciones: arr(partic),
         }));
         // Franquicias (read-only) — fuera del Promise.all para no bloquear el consolidado.
         fetchAll()
@@ -231,9 +232,12 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
   // Balance derivado A UNA FECHA (as-of) para el set de sociedades elegido: lo usan el Balance (corte, cierre
   // anterior, apertura) y el EEPN (fin de cada mes). Interco consolidado también as-of.
   // Devuelve además `porSociedad` (Map id → derivación de esa sociedad) → la Posición financiera abre por sociedad.
+  // `participaciones` = lo aportado por una sociedad del set a otra del grupo que NO está en el set (activo de la
+  // inversora; con las dos adentro se elimina). Por sociedad, cada una mirada sola (la invertida nunca es ella misma).
   const deriveAsOf = useCallback((fecha) => {
     const idsSel = socsIncluidas.map(s => s.id);
-    const porSociedad = new Map(socsIncluidas.map(s => [s.id, derivarSocAsOf(s.id, fecha)]));
+    const porSociedad = new Map(socsIncluidas.map(s => [s.id, { ...derivarSocAsOf(s.id, fecha),
+      participaciones: participacionesAsOf(data.participaciones, sociedades, [s.id], fecha) }]));
     const perSoc = [...porSociedad.values()];
     const ic = intercoData ? intercoConsolidado(intercoData, idsSel, sociedades, fecha) : { activo: [], pasivo: [] };
     return {
@@ -241,9 +245,10 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
       aCobrar: mergeItems(perSoc.map(r => r.aCobrar)),
       aPagar:  mergeItems(perSoc.map(r => r.aPagar)),
       intercoAct: ic.activo, intercoPas: ic.pasivo,
+      participaciones: participacionesAsOf(data.participaciones, sociedades, idsSel, fecha),
       porSociedad,
     };
-  }, [derivarSocAsOf, socsIncluidas, intercoData, sociedades]);
+  }, [derivarSocAsOf, socsIncluidas, intercoData, sociedades, data.participaciones]);
 
   // Avisar al padre qué se está mirando (caption de la foto "Copiar imagen").
   useEffect(() => { onMeta?.({ vista: activeTab, fecha: fechaCorte || _hoyISO(), moneda: filtroMoneda }); }, [onMeta, activeTab, fechaCorte, filtroMoneda]);
@@ -552,7 +557,8 @@ function BalanceTable({ cols, colLabel, minBase = 320, colW = 100, getters, deta
   const KEYS = ["activo", "pasivo", "cxc", "corr", "otros"];
   const allOpen = KEYS.every(k => open[k]);
   const toggleAll = () => { const v = !allOpen; setOpen(Object.fromEntries(KEYS.map(k => [k, v]))); };
-  const { caja, bancos, cxcTot, activo, corrTot, otrosTot, pasivo, pn } = getters;
+  const { caja, bancos, cxcTot, partic = null, activo, corrTot, otrosTot, pasivo, pn } = getters;
+  const hayPartic = !!partic && cols.some(c => Math.abs(partic(c)) > 0.5);
 
   const th = { padding: "9px 12px", fontSize: 11, fontWeight: 800, color: T.tableHeadText, textAlign: "right", whiteSpace: "nowrap" };
   const cell = (get, c, bold, color) => <td key={c} style={{ padding: "8px 12px", fontSize: 13, textAlign: "right", fontFamily: "var(--mono)", fontWeight: bold ? 800 : 500, color: color || (get(c) < 0 ? "#dc2626" : T.text), whiteSpace: "nowrap" }}>{fmtBal(get(c))}</td>;
@@ -597,6 +603,7 @@ function BalanceTable({ cols, colLabel, minBase = 320, colW = 100, getters, deta
             <Fila label="Caja" get={caja} />
             <Fila label="Bancos" get={bancos} />
             <SubGrupo label="Cuentas por cobrar" get={cxcTot} k="cxc" detail={details.cxc} />
+            {hayPartic && <Fila label="Participaciones en negocios" get={partic} />}
           </>}
           <Fila label="Total Activo" get={activo} indent={14} bold color="#16a34a" />
 
@@ -667,7 +674,7 @@ function BalanceView({ deriveAsOf, filtroMoneda, fechaCorte, tiposCambio = null,
   const balAper  = useMemo(() => deriveAsOf(GO_LIVE_APERTURA), [deriveAsOf]);
 
   const { aUSD, tcPara, faltaTC, tcSuplente } = crearTraductor(tiposCambio);
-  const monedasDe = (bal) => { const st = new Set(); [bal.cuentas, bal.aCobrar, bal.aPagar, bal.intercoAct, bal.intercoPas].forEach(a => a.forEach(it => it.moneda && st.add(it.moneda))); return [...st]; };
+  const monedasDe = (bal) => { const st = new Set(); [bal.cuentas, bal.aCobrar, bal.aPagar, bal.intercoAct, bal.intercoPas, bal.participaciones || []].forEach(a => a.forEach(it => it.moneda && st.add(it.moneda))); return [...st]; };
   // Suma de una lista para la vista: nativa (una moneda) o consolidada (todas → USD al TC de `fecha`).
   const suma = (items, fecha, pred = () => true) => consolidado
     ? monedasDe({ cuentas: items, aCobrar: [], aPagar: [], intercoAct: [], intercoPas: [] }).reduce((s, mo) => s + aUSD(sumSaldo(items, mo, pred), mo, fecha), 0)
@@ -680,7 +687,8 @@ function BalanceView({ deriveAsOf, filtroMoneda, fechaCorte, tiposCambio = null,
   const caja   = g(c => suma(balDe[c].cuentas, fechaDe[c], x => (x.tipo || "") === "caja"));
   const bancos = g(c => suma(balDe[c].cuentas, fechaDe[c], x => { const t = (x.tipo || ""); return t !== "caja" && t !== "tarjeta"; }));
   const cxcTot = g(c => suma(balDe[c].aCobrar, fechaDe[c]) + suma(balDe[c].intercoAct, fechaDe[c]));
-  const activo = g(c => caja(c) + bancos(c) + cxcTot(c));
+  const partic = g(c => suma(balDe[c].participaciones || [], fechaDe[c]));   // participaciones en negocios (T4 tanda B)
+  const activo = g(c => caja(c) + bancos(c) + cxcTot(c) + partic(c));
   const corrTot  = g(c => suma(balDe[c].aPagar, fechaDe[c], x => esCorriente(x.label)));
   const otrosTot = g(c => suma(balDe[c].aPagar, fechaDe[c], x => !esCorriente(x.label)) + suma(balDe[c].intercoPas, fechaDe[c]));
   const pasivo = g(c => corrTot(c) + otrosTot(c));
@@ -699,7 +707,7 @@ function BalanceView({ deriveAsOf, filtroMoneda, fechaCorte, tiposCambio = null,
   // ── Conciliación del PN: apertura + resultado acumulado − cambio de moneda = PN explicado ──
   const pnAper = (() => {
     const b = balAper, f = GO_LIVE_APERTURA;
-    const act = suma(b.cuentas, f, x => (x.tipo || "") !== "tarjeta") + suma(b.aCobrar, f) + suma(b.intercoAct, f);
+    const act = suma(b.cuentas, f, x => (x.tipo || "") !== "tarjeta") + suma(b.aCobrar, f) + suma(b.intercoAct, f) + suma(b.participaciones || [], f);
     const pas = suma(b.aPagar, f) + suma(b.intercoPas, f);
     return act - pas;
   })();
@@ -752,7 +760,7 @@ function BalanceView({ deriveAsOf, filtroMoneda, fechaCorte, tiposCambio = null,
       {tcTxt && <div style={{ fontSize: 11, color: T.muted, marginBottom: 10 }}>{tcTxt}</div>}
       <AvisosTC tcSuplente={tcSuplente} faltaTC={faltaTC} />
       <BalanceTable cols={COLS} colLabel={colLabel} minBase={380} colW={140}
-        getters={{ caja, bancos, cxcTot, activo, corrTot, otrosTot, pasivo, pn }} details={details} />
+        getters={{ caja, bancos, cxcTot, partic, activo, corrTot, otrosTot, pasivo, pn }} details={details} />
 
       {/* Conciliación del PN */}
       {resultadoAcum && (

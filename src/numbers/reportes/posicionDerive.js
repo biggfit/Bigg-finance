@@ -7,7 +7,8 @@
 //   − Inversores y financieros (corriente)
 //   = POSICIÓN CORRIENTE  (lo que queda si cobro y pago todo lo corriente)
 //   − No corriente neto (créditos y préstamos, planes de pago, impuestos, socios, anticipos y cobros a cuenta de
-//                        clientes − préstamos a socios − intercompañía neto ∓ CC comercial del grupo)
+//                        clientes − préstamos a socios − intercompañía neto ∓ CC comercial del grupo
+//                        − participaciones en negocios: lo aportado a sociedades del grupo fuera del set)
 //   = POSICIÓN NETA TOTAL  (≡ Patrimonio Neto del Balance: mismas fórmulas, otra agrupación → control cruzado)
 //
 // `suma(items, fecha, pred)` es el sumador de la vista (nativo en una moneda o consolidado en USD al TC del mes de
@@ -39,7 +40,7 @@ const labelNoCorriente = it => /impuesto|planes? de pago/i.test(it?.label || "")
 
 export function armarPosicion(bal, suma, fecha) {
   const cuentas = bal?.cuentas || [], aCobrar = bal?.aCobrar || [], aPagar = bal?.aPagar || [];
-  const intercoAct = bal?.intercoAct || [], intercoPas = bal?.intercoPas || [];
+  const intercoAct = bal?.intercoAct || [], intercoPas = bal?.intercoPas || [], participacionesItems = bal?.participaciones || [];
   const noTarjeta = c => tipoDe(c) !== "tarjeta";     // las tarjetas ya viven en aPagar/aCobrar como items
 
   // ── Liquidez: el saldo de cada caja/banco/inversión tal cual (los negativos —descubierto, MP del mes sin asentar—
@@ -75,19 +76,22 @@ export function armarPosicion(bal, suma, fecha) {
   const capitalTrabajo = cxc - cxpOpNeto - finCorr;
   const posCorriente = disponible + capitalTrabajo;
 
+  // ── Participaciones en negocios (T4 tanda B): activo no corriente de la inversora, en la moneda de la invertida ──
+  const participaciones = suma(participacionesItems, fecha);
+
   // ── No corriente (deuda que se refinancia + anticipos de clientes + CC comercial entre sociedades; Martín 24/9) ──
-  const deudaNoCorrNeta = noCorr + anticipos - prestamosSocios - intercoNeto - ccGrupoNeto;
+  const deudaNoCorrNeta = noCorr + anticipos - prestamosSocios - intercoNeto - ccGrupoNeto - participaciones;
   const posicionNeta = posCorriente - deudaNoCorrNeta;
 
   // PN del Balance con las MISMAS fórmulas que BalanceView (activo = caja + no-caja-no-tarjeta + aCobrar + intercoAct;
   // pasivo = aPagar + intercoPas). Si la cascada clasifica cada item en exactamente un grupo, diferencia = 0.
-  const pnBalance = suma(cuentas, fecha, noTarjeta) + suma(aCobrar, fecha) + intercoNosDeben - suma(aPagar, fecha) - intercoLesDebemos;
+  const pnBalance = suma(cuentas, fecha, noTarjeta) + suma(aCobrar, fecha) + intercoNosDeben + participaciones - suma(aPagar, fecha) - intercoLesDebemos;
 
   return {
     caja, bancos, inversiones, disponible,
     cxc, cxpOp, cxpOpNeto, anticipos, finCorr, favorTarjeta, ccGrupoAct, ccGrupoPas, ccGrupoNeto, capitalTrabajo,
     posCorriente,
-    noCorr, prestamosSocios, intercoNosDeben, intercoLesDebemos, intercoNeto, deudaNoCorrNeta,
+    noCorr, prestamosSocios, intercoNosDeben, intercoLesDebemos, intercoNeto, participaciones, deudaNoCorrNeta,
     posicionNeta, pnBalance, diferencia: posicionNeta - pnBalance,
     det: {
       cxc:         porLabel(aCobrar, fecha, suma, it => gA(it) === "cxc"),
@@ -101,6 +105,7 @@ export function armarPosicion(bal, suma, fecha) {
       anticipo:    porLabel(aPagar, fecha, suma, it => gP(it) === "anticipo"),
       finCorriente: porLabel(aPagar, fecha, suma, it => gP(it) === "finCorriente"),
       noCorriente: porLabel(aPagar, fecha, suma, it => gP(it) === "noCorriente", labelNoCorriente),
+      participaciones: porLabel(participacionesItems, fecha, suma, () => true),
     },
     desconocidos,
   };

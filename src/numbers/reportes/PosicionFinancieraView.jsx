@@ -1,7 +1,8 @@
 // Reportes › Posición financiera — EL número del board (Martín 24/9/2026): cuánta plata hay disponible, qué queda si
 // cobro y pago todo lo corriente, y cuánta deuda refinanciable hay detrás. Orden Martín: primero lo CORRIENTE.
 //   Disponible → + CxC − CxP operativa (incl. tarjetas) − Inversores y financieros ± CC grupo
-//   = POSICIÓN CORRIENTE → − No corriente neto (créditos, planes, socios, anticipos de clientes − préstamos a socios − interco)
+//   = POSICIÓN CORRIENTE → − No corriente neto (créditos, planes, socios, anticipos de clientes − préstamos a socios − interco
+//                            − participaciones en negocios: lo aportado a sociedades del grupo fuera del filtro, T4 tanda B)
 //   = POSICIÓN NETA TOTAL (≡ Patrimonio Neto del Balance; control cruzado abajo).
 // Columnas cierre anterior · corte · variación, como el Balance. Una moneda nativa o "Todas" = consolidado USD al TC del
 // mes de cada fecha. Default de fecha = último cierre de mes: la foto a HOY es provisoria (las ventas de Mercado Pago del
@@ -10,8 +11,8 @@
 import { Fragment, useMemo, useState } from "react";
 import { T, fmtDate } from "../theme";
 import { esCuentaMercadoPago } from "../../lib/numbersApi";
-import { sumSaldo, fmtBal, crearTraductor, crearSumador, AvisosTC, ordenarDetalle, KpiTile,
-  hoyISO, finMesAnterior, esFinDeMes } from "./balanceUtils";
+import { sumSaldo, fmtBal, crearTraductor, crearSumador, AvisosTC, ordenarDetalle,
+  hoyISO, finMesAnterior } from "./balanceUtils";
 import { armarPosicion, cuentasNegativas } from "./posicionDerive";
 
 const nz = v => Math.abs(v) > 0.5;
@@ -26,13 +27,14 @@ export function PosicionFinancieraView({ deriveAsOf, filtroMoneda, fechaCorte, t
   const consolidado = !filtroMoneda || filtroMoneda === "ALL";
   const mon = consolidado ? "USD" : filtroMoneda;
   const [verNativos, setVerNativos] = useState(false);
+  const [verPorSociedad, setVerPorSociedad] = useState(false);   // tabla por sociedad detrás de un toggle (Martín 6/11, hasta analizarla)
   const [open, setOpen] = useState({ cxc: false, cxp: false, finc: true, nocorr: true });
   const toggle = k => setOpen(o => ({ ...o, [k]: !o[k] }));
 
   const balCorte = useMemo(() => deriveAsOf(corte), [deriveAsOf, corte]);
   const balPrev  = useMemo(() => deriveAsOf(prev),  [deriveAsOf, prev]);
 
-  const { aUSD, tcPara, faltaTC, tcSuplente } = crearTraductor(tiposCambio);
+  const { aUSD, faltaTC, tcSuplente } = crearTraductor(tiposCambio);
   const suma = crearSumador({ consolidado, mon, aUSD });
   const posC = useMemo(() => armarPosicion(balCorte, suma, corte), [balCorte, consolidado, mon, tiposCambio]);   // eslint-disable-line react-hooks/exhaustive-deps
   const posP = useMemo(() => armarPosicion(balPrev,  suma, prev),  [balPrev,  consolidado, mon, tiposCambio]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -40,7 +42,7 @@ export function PosicionFinancieraView({ deriveAsOf, filtroMoneda, fechaCorte, t
   // Nativos por moneda (solo en consolidado, para la sub-fila "por moneda"): misma cascada con un sumador nativo.
   const monedas = useMemo(() => {
     const st = new Set();
-    [balCorte, balPrev].forEach(b => [b.cuentas, b.aCobrar, b.aPagar, b.intercoAct, b.intercoPas].forEach(a => a.forEach(it => it.moneda && st.add(it.moneda))));
+    [balCorte, balPrev].forEach(b => [b.cuentas, b.aCobrar, b.aPagar, b.intercoAct, b.intercoPas, b.participaciones || []].forEach(a => a.forEach(it => it.moneda && st.add(it.moneda))));
     return MONEDAS_ORDEN.filter(m => st.has(m)).concat([...st].filter(m => !MONEDAS_ORDEN.includes(m)));
   }, [balCorte, balPrev]);
   const nativos = useMemo(() => {
@@ -75,10 +77,11 @@ export function PosicionFinancieraView({ deriveAsOf, filtroMoneda, fechaCorte, t
   filas.push({ key: "ct", label: "= Capital de trabajo (a cobrar − a pagar corriente)", get: p => p.capitalTrabajo, kind: "total", color: T.text });
   filas.push({ key: "pcorr", label: "= POSICIÓN CORRIENTE (disponible + capital de trabajo)", get: p => p.posCorriente, kind: "hero" });
 
-  filas.push({ kind: "banda", label: "No corriente (deuda que se refinancia: créditos, planes, impuestos; anticipos de clientes)", k: "nocorr" });
+  filas.push({ kind: "banda", label: "No corriente (deuda que se refinancia: créditos, planes, impuestos; anticipos de clientes; participaciones en negocios)", k: "nocorr" });
   if (open.nocorr) {
     filas.push(...labelsDe("noCorriente", -1));
     filas.push(...labelsDe("anticipo", -1));
+    filas.push(...labelsDe("participaciones"));   // lo aportado a sociedades del grupo fuera del filtro (suma: es un activo)
     if (nz(posC.prestamosSocios) || nz(posP.prestamosSocios)) filas.push({ key: "pSoc", label: "Préstamos a socios (nos deben)", get: p => p.prestamosSocios, indent: 44 });
     if (!esTodas || nz(posC.intercoNeto) || nz(posP.intercoNeto)) filas.push({ key: "ic", label: "Intercompañía neto (nos deben − les debemos)", get: p => p.intercoNeto, indent: 44 });
     if (nz(posC.ccGrupoNeto) || nz(posP.ccGrupoNeto)) filas.push({ key: "ccg", label: "CC comercial entre sociedades (nos deben − les debemos)", get: p => p.ccGrupoNeto, indent: 44 });
@@ -90,14 +93,6 @@ export function PosicionFinancieraView({ deriveAsOf, filtroMoneda, fechaCorte, t
   const COLS = ["prev", "corte", "var"];
   const colLabel = c => c === "prev" ? `Cierre ${fmtDate(prev.slice(0, 8) + String(new Date(+prev.slice(0, 4), +prev.slice(5, 7), 0).getDate()).padStart(2, "0"))}`
     : c === "corte" ? (esHoy ? "Hoy (provisorio)" : `Al ${fmtDate(corte)}`) : (esHoy ? "Variación (mes en curso)" : "Variación");
-
-  const tcTxt = (() => {
-    if (!consolidado) return null;
-    const tc = tcPara(corte);
-    if (!tc) return "Sin tipo de cambio cargado para el mes del corte ni los anteriores.";
-    const parts = [tc.arsUSD ? `1 USD = ${Math.round(tc.arsUSD).toLocaleString("es-AR")} ARS` : null, tc.eurUSD ? `1 EUR = ${tc.eurUSD.toFixed(2)} USD` : null, tc.copUSD ? `1 USD = ${Math.round(tc.copUSD).toLocaleString("es-AR")} COP` : null].filter(Boolean);
-    return `TC usado para el corte (${tc.yearMonth}): ${parts.join(" · ")}. Cada columna usa el TC de su propio mes.`;
-  })();
 
   // Cuentas negativas a hoy (MP del mes sin asentar es el caso típico) → aviso de foto provisoria.
   const socNombre = id => sociedades.find(s => String(s.id) === String(id))?.nombre || "";
@@ -129,30 +124,28 @@ export function PosicionFinancieraView({ deriveAsOf, filtroMoneda, fechaCorte, t
         </div>
       )}
 
-      {/* ── KPI ── */}
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-        <KpiTile label="Disponible" value={posC.disponible} delta={posC.disponible - posP.disponible} />
-        <KpiTile label="Posición corriente" value={posC.posCorriente} delta={posC.posCorriente - posP.posCorriente} destacado
-          sub="Disponible + a cobrar − a pagar corriente" />
-        <KpiTile label="No corriente neto (resta)" value={-posC.deudaNoCorrNeta} delta={-(posC.deudaNoCorrNeta - posP.deudaNoCorrNeta)}
-          sub="Créditos, planes de pago, impuestos, socios, anticipos" />
-        <KpiTile label="Posición neta total" value={posC.posicionNeta} delta={posC.posicionNeta - posP.posicionNeta}
-          sub={`= Patrimonio Neto del Balance${nz(posC.diferencia) ? ` (dif. ${fmtBal(posC.diferencia)})` : ""}`} />
-      </div>
 
       {/* ── Cascada ── */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, gap: 10, flexWrap: "wrap" }}>
         <span style={{ fontSize: 11, fontWeight: 800, color: T.muted, letterSpacing: ".08em", textTransform: "uppercase" }}>
           Cascada{consolidado ? " · USD consolidado" : ` · ${mon}`}{socsIncluidas.length ? ` · ${socsIncluidas.length} sociedad${socsIncluidas.length > 1 ? "es" : ""}` : ""}
         </span>
-        {consolidado && monedas.length > 0 && (
-          <button type="button" onClick={() => setVerNativos(v => !v)} style={{
-            background: verNativos ? T.accentDark : "#eceff3", color: verNativos ? T.accent : T.muted,
-            border: `1px solid ${verNativos ? T.accentDark : T.cardBorder}`, borderRadius: 999,
+        <div style={{ display: "flex", gap: 6 }}>
+          {consolidado && monedas.length > 0 && (
+            <button type="button" onClick={() => setVerNativos(v => !v)} style={{
+              background: verNativos ? T.accentDark : "#eceff3", color: verNativos ? T.accent : T.muted,
+              border: `1px solid ${verNativos ? T.accentDark : T.cardBorder}`, borderRadius: 999,
+              padding: "4px 12px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: T.font }}>
+              {verNativos ? "Ocultar nativos por moneda" : "Ver nativos por moneda"}
+            </button>
+          )}
+          <button type="button" onClick={() => setVerPorSociedad(v => !v)} style={{
+            background: verPorSociedad ? T.accentDark : "#eceff3", color: verPorSociedad ? T.accent : T.muted,
+            border: `1px solid ${verPorSociedad ? T.accentDark : T.cardBorder}`, borderRadius: 999,
             padding: "4px 12px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: T.font }}>
-            {verNativos ? "Ocultar nativos por moneda" : "Ver nativos por moneda"}
+            {verPorSociedad ? "Ocultar por sociedad" : "Ver por sociedad"}
           </button>
-        )}
+        </div>
       </div>
       <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius, boxShadow: T.shadow, overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 380 + COLS.length * 140 }}>
@@ -227,20 +220,9 @@ export function PosicionFinancieraView({ deriveAsOf, filtroMoneda, fechaCorte, t
           </tfoot>
         </table>
       </div>
-      {/* Explicación de lectura, DEBAJO de la cascada (Martín 24/9: arriba molestaba). */}
-      <div style={{ fontSize: 11, color: T.muted, margin: "8px 0 18px", lineHeight: 1.5 }}>
-        {consolidado
-          ? <><b>Consolidado del grupo en USD</b>: cada saldo traducido al tipo de cambio del mes de su fecha. Elegí una moneda arriba para ver la posición nativa de esa moneda. </>
-          : <>Posición en <b>{mon}</b>: solo lo que existe en esa moneda (circuito cerrado, como el Balance). </>}
-        {tcTxt ? <>{tcTxt} </> : null}
-        {!esFinDeMes(corte) && !esHoy ? <>El corte no es fin de mes: la variación compara contra el cierre anterior con un mes parcial. </> : null}
-        <br />
-        Caja y Bancos llevan el saldo de cada cuenta con su signo (un banco en descubierto resta). Cuentas por pagar operativas = proveedores, sueldos y cargas sociales, franquiciados y tarjetas de crédito; aparte, inversores y financieros (corriente).
-        No corriente = créditos y préstamos, impuestos y planes de pago (deuda financiable), socios, anticipos de clientes y la cuenta corriente comercial entre sociedades; se le restan los préstamos a socios y el neto intercompañía. La Posición neta total es el Patrimonio Neto del Balance.
-      </div>
 
       {/* ── Apertura por sociedad (Núcleo / Fondeadas) ── */}
-      <AperturaSociedades balCorte={balCorte} suma={suma} corte={corte} socsIncluidas={socsIncluidas} posTotal={posC} consolidado={consolidado} mon={mon} />
+      {verPorSociedad && <AperturaSociedades balCorte={balCorte} suma={suma} corte={corte} socsIncluidas={socsIncluidas} posTotal={posC} consolidado={consolidado} mon={mon} />}
 
       <div style={{ fontSize: 11, color: T.dim, marginTop: 10, fontStyle: "italic" }}>
         Próximamente: compromisos de los próximos 30 / 60 / 90 días (cuotas de planes de pago y sueldos a pagar).
@@ -251,6 +233,7 @@ export function PosicionFinancieraView({ deriveAsOf, filtroMoneda, fechaCorte, t
 
 // Misma cascada por sociedad a la fecha de corte. La CC comercial entre sociedades va en "No corriente" (como en la
 // cascada); el intercompañía se netea a nivel del set y aparece solo como fila de conciliación.
+// Se muestra solo con el toggle "Ver por sociedad" de arriba (Martín 6/11: "hasta que lo analicemos").
 function AperturaSociedades({ balCorte, suma, corte, socsIncluidas, posTotal, consolidado, mon }) {
   const porSoc = balCorte?.porSociedad;
   if (!porSoc || !socsIncluidas.length) return null;
@@ -263,13 +246,17 @@ function AperturaSociedades({ balCorte, suma, corte, socsIncluidas, posTotal, co
     const d = porSoc.get(s.id) || { cuentas: [], aCobrar: [], aPagar: [] };
     const p = armarPosicion({ ...d, intercoAct: [], intercoPas: [] }, suma, corte);
     // Con signo (lo que resta, en negativo): Disponible + A cobrar + A pagar = Posición corriente; + No corriente = Posición neta.
-    return { disponible: p.disponible, cxc: p.cxc, cxp: -(p.cxpOpNeto + p.finCorr), pcorr: p.posCorriente, deuda: -p.deudaNoCorrNeta, neta: p.posicionNeta };
+    return { disponible: p.disponible, cxc: p.cxc, cxp: -(p.cxpOpNeto + p.finCorr), pcorr: p.posCorriente, deuda: -p.deudaNoCorrNeta, neta: p.posicionNeta, part: p.participaciones };
   };
   const COLS = [["disponible", "Disponible"], ["cxc", "+ A cobrar"], ["cxp", "− A pagar corriente"], ["pcorr", "= Posición corriente"], ["deuda", "− No corriente"], ["neta", "= Posición neta"]];
   const sumar = rows => COLS.reduce((acc, [k]) => ({ ...acc, [k]: rows.reduce((s, r) => s + r[k], 0) }), {});
   const filasG = grupos.map(g => { const rows = g.socs.map(s => ({ s, r: filaDe(s) })); return { ...g, rows, sub: sumar(rows.map(x => x.r)) }; });
   const total = sumar(filasG.map(g => g.sub));
   const interco = posTotal.intercoNeto;
+  // Participaciones: cada sociedad mirada sola lleva lo que aportó a otras del grupo; en el set se eliminan las que
+  // apuntan a una sociedad que también está adentro → la diferencia (≤ 0) concilia la suma con el total del set.
+  const partElim = posTotal.participaciones - filasG.flatMap(g => g.rows).reduce((s, x) => s + (x.r.part || 0), 0);
+  const ajuste = interco + partElim;
   const th = { padding: "9px 12px", fontSize: 11, fontWeight: 800, color: T.tableHeadText, textAlign: "right", whiteSpace: "nowrap" };
   const td = (k, v, bold = false, color = null) => <td key={k} style={{ padding: "8px 12px", fontSize: 13, textAlign: "right", fontFamily: "var(--mono)", fontWeight: bold ? 800 : 500, color: color || (v < 0 ? "#dc2626" : T.text), whiteSpace: "nowrap" }}>{v == null ? "" : fmtBal(v)}</td>;
   return (
@@ -305,25 +292,33 @@ function AperturaSociedades({ balCorte, suma, corte, socsIncluidas, posTotal, co
             </Fragment>))}
           </tbody>
           <tfoot>
-            {nz(interco) && (<>
+            {(nz(interco) || nz(partElim)) && (
               <tr style={{ borderTop: `2px solid ${T.cardBorder}` }}>
                 <td style={{ padding: "8px 14px", fontSize: 13, fontWeight: 700, color: T.text }}>Suma de sociedades</td>
                 {COLS.map(([k]) => td(k, total[k], true))}
               </tr>
+            )}
+            {nz(interco) && (
               <tr style={{ borderTop: `1px solid ${T.cardBorder}` }}>
                 <td style={{ padding: "8px 14px 8px 28px", fontSize: 12.5, color: T.muted }}>+ Intercompañía con sociedades fuera del set (nos deben − les debemos)</td>
-                {COLS.map(([k]) => td(k, k === "deuda" ? interco : k === "neta" ? interco : null))}
+                {COLS.map(([k]) => td(k, k === "deuda" || k === "neta" ? interco : null))}
               </tr>
-            </>)}
+            )}
+            {nz(partElim) && (
+              <tr style={{ borderTop: `1px solid ${T.cardBorder}` }}>
+                <td style={{ padding: "8px 14px 8px 28px", fontSize: 12.5, color: T.muted }}>− Participaciones en sociedades del set (se eliminan: la invertida ya está adentro)</td>
+                {COLS.map(([k]) => td(k, k === "deuda" || k === "neta" ? partElim : null))}
+              </tr>
+            )}
             <tr style={{ background: "#0e7490", color: "#fff", borderTop: `2px solid ${T.cardBorder}` }}>
               <td style={{ padding: "10px 14px", fontSize: 13.5, fontWeight: 900 }}>= Total del set</td>
-              {COLS.map(([k]) => td(k, total[k] + (k === "deuda" || k === "neta" ? interco : 0), true, "#fff"))}
+              {COLS.map(([k]) => td(k, total[k] + (k === "deuda" || k === "neta" ? ajuste : 0), true, "#fff"))}
             </tr>
           </tfoot>
         </table>
       </div>
-      {nz((total.neta + interco) - posTotal.posicionNeta) && (
-        <div style={{ fontSize: 11.5, color: "#991b1b", marginTop: 6 }}>Control: la suma por sociedad ({fmtBal(total.neta + interco)}) no ata con la Posición neta total ({fmtBal(posTotal.posicionNeta)}).</div>
+      {nz((total.neta + ajuste) - posTotal.posicionNeta) && (
+        <div style={{ fontSize: 11.5, color: "#991b1b", marginTop: 6 }}>Control: la suma por sociedad ({fmtBal(total.neta + ajuste)}) no ata con la Posición neta total ({fmtBal(posTotal.posicionNeta)}).</div>
       )}
     </div>
   );
