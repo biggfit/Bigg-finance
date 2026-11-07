@@ -15,7 +15,8 @@ import { armarMaestroContrapartes } from "./reportes/contrapartes";
 import { copiarReporteComoImagen, clonarParaFoto, medirContenido } from "./fotoReporte";
 import TabTesoreriaConsolidada from "./reportes/TabTesoreriaConsolidada";
 import { finMesAnteriorReal, hoyISO } from "./reportes/balanceUtils";   // Posición financiera abre en el último cierre de mes
-import { cesionesDe, provisionCesionRows } from "./reportes/cesionDerive";   // cesión BN derivada: % de la tabla + provisión virtual
+import { cesionesDe, cesionesSociedadDe, provisionCesionRows } from "./reportes/cesionDerive";   // cesiones derivadas: % de la tabla + provisión virtual
+import { FONDEADAS, DESARROLLO, IMPUESTOS_FOND, FINANCIEROS_FOND, computeImpuestos, resultadoFondeada } from "./reportes/fondeadasDerive";
 import TabDevengado from "./reportes/TabDevengado";
 import TabIntercoConsolidado from "./reportes/TabIntercoConsolidado";
 import TabSaldosInterco from "./reportes/TabSaldosInterco";
@@ -65,38 +66,7 @@ function Spinner({ size = 32, color = T.accentDark }) {
   );
 }
 
-// Cola de impuestos (Fondeadas/Rosedal): cuentas de "Sin clasificar" cuyo nombre matchea `matchers`
-// (IVA, Ganancias…) → líneas de impuesto + Resultado Neto/FCF = resFinal − Σ impuestos. null si no hay.
-function computeImpuestos(sinClasificar, matchers, resFinal) {
-  const keys = Object.keys(sinClasificar).filter(k => matchers.some(m => _nkSede(k).includes(_nkSede(m))));
-  if (!keys.length) return null;
-  const byAcc = keys.map(k => ({ name: k, cur: sinClasificar[k] }));
-  const total = Array.from({ length: 12 }, (_, m) => byAcc.reduce((s, a) => s + (Number(a.cur[m]) || 0), 0));
-  const resNeto = resFinal.map((v, m) => (Number(v) || 0) - total[m]);
-  return { keys, byAcc, total, resNeto };
-}
-
-// ─── Negocios por sociedad (además de Argentina núcleo): mismo P&L de sede, scopeado a UNA sociedad
-// (por `empresa` + `familia` del centro) y su moneda, + una cola de IMPUESTOS debajo del Resultado
-// Operativo → línea final (`netoLabel`). Los impuestos salen de "Sin clasificar". Empezamos por IVA + Ganancias.
-//   · Fondeadas (anillo 2, familia "propios"): España/Colombia/Puertos → "Resultado Neto".
-//   · Administrada (anillo 3, familia "gerenciamiento"): Rosedal → "Free Cash Flow" (base del reparto con Segui).
-// (Huergo NO entra acá: es anillo 1, sin cola de impuestos.)
-const FONDEADAS = {
-  op_espana:   { empresa: "wellness",   moneda: "EUR", label: "España",   familia: "propios", estructuraCC: "cc-2026-88271" },
-  op_colombia: { empresa: "tigre-loco", moneda: "USD", label: "Colombia", familia: "propios", estructuraCuenta: "Estructura Tigre Loco" },   // USD consolidado; estructura = cuenta, no centro
-  op_puertos:  { empresa: "puertos",    moneda: "USD", label: "Puertos",  familia: "propios" },
-  op_rosedal:  { empresa: "segui-fit",  moneda: "ARS", label: "Rosedal",  familia: "gerenciamiento", netoLabel: "Free Cash Flow" },
-};
-// Match por nombre de cuenta (incluye). "Retenciones" son las retenciones sufridas en la fondeada
-// (en Colombia: RteFte / RteICA) — la cuenta declara categoria_pnl="impuestos", igual que IVA, así
-// que pertenece a esta cola. Sin esto quedaban en "Sin clasificar", fuera de todo total.
-// TODO: esta lista curada por nombre debería salir de categoria_pnl="impuestos" en maestros —
-// hoy cada cuenta de impuesto nueva hay que acordarse de agregarla acá o desaparece del resultado.
-const IMPUESTOS_FOND = ["IVA", "Ganancias", "Retenciones", "RTEFTE", "RTEICA"];   // RTEFTE/RTEICA = retenciones Colombia
-// Cola de resultado financiero (Fondeadas/Rosedal): cuentas de "Sin clasificar" que son financieras
-// (intereses ganados suma, pérdidas financieras resta) → línea debajo de impuestos, antes del neto/FCF.
-const FINANCIEROS_FOND = ["Intereses Ganados", "Perdidas Financieras"];
+// Fondeadas (config, colas de impuestos/financieros, resultado neto): ./reportes/fondeadasDerive (T5).
 // Distribución de resultados de Rosedal (Segui Fit): cuenta corriente por parte (Socios / Ñako-BIGG) debajo
 // del Free Cash Flow. INTERINO/hardcodeado del Excel del usuario (el módulo socios/inversores todavía no lleva
 // esto). Reparto ~50/50 salvo el arranque (ago-2025 = 100% Socios, hasta consumir el saldo de apertura).
@@ -1160,8 +1130,17 @@ function buildPnLGrupoFilas(propsBigg, isCol) {
   const add = (...arrs) => MESES.map((_, m) => arrs.reduce((s, a) => s + (Number(a?.[m]) || 0), 0));
   const sumMap  = obj => MESES.map((_, m) => Object.values(obj || {}).reduce((s, a) => s + (a[m] || 0), 0));
   const sumList = list => MESES.map((_, m) => (list || []).reduce((a, s) => a + (Number(s.arr?.[m]) || 0), 0));
-  // Cesión BN del mes (viaja dentro de `sub`, ver holdingDe). Si faltara (no debería), cae a 0 y el control de abajo avisa.
-  const cesion = sub.cesionBN || Z, cesionP = P.cesionBN || Z;
+  // Distribución de utilidades (T5): Barrio Norte + inversores de los negocios en desarrollo (viaja dentro de `sub`, ver
+  // holdingDe). `cesion` = el total que se descuenta del Resultado del Grupo para llegar al atribuible.
+  const distrib = sub.distribucion || [], distribP = P.distribucion || [];
+  const cesion = add(...distrib.map(d => d.arr)), cesionP = add(...distribP.map(d => d.arr));
+  const desarrollo = sub.desarrollo || [], desarrolloP = P.desarrollo || [];
+  const desTot = add(...desarrollo.map(d => d.res)), desTotP = add(...desarrolloP.map(d => d.res));
+  const enP = (list, key) => list.find(d => d.key === key);
+  const bnArr = enP(distrib, "bn")?.arr || Z, bnArrP = enP(distribP, "bn")?.arr || Z;   // solo la cesión BN (vuelve a Sedes al 100 %)
+  // IVA del grupo (modo Sin IVA): el de los negocios del holding + el de los negocios en desarrollo (crédito ya en negativo).
+  const ivaDebG  = add(sub.ivaDeb, ...desarrollo.map(d => d.ivaDeb)),  ivaDebGP  = add(P.ivaDeb, ...desarrolloP.map(d => d.ivaDeb));
+  const ivaCredG = add(sub.ivaCred, ...desarrollo.map(d => (d.ivaCred || Z).map(v => -v))), ivaCredGP = add(P.ivaCred, ...desarrolloP.map(d => (d.ivaCred || Z).map(v => -v)));
   // Reubicación (Martín 4/11): en HQ estas cuentas llegan como "Costo por Venta" (categoría correcta para una
   // sede, donde van proporcionales a SU venta), pero acá son costo de mover plata y posición fiscal del grupo, no
   // costo de vender de ningún negocio → salen de la Red y bajan a Financieros / Impuestos. Solo cambia el renglón:
@@ -1184,26 +1163,28 @@ function buildPnLGrupoFilas(propsBigg, isCol) {
   const finTotP = MESES.map((_, m) => (Number(P.financieros?.[m]) || 0) + finExtraP[m]);
 
   // ── Cascada ── (sin ventas: Martín 4/11, "al comité le mostré la contribución de los negocios, no la venta")
-  const sedes100 = add(sar, cesion), sedes100P = add(P.sar, cesionP);   // resultado de sedes al 100% = neto del holding + cesión BN
+  const sedes100 = add(sar, bnArr), sedes100P = add(P.sar, bnArrP);   // resultado de sedes al 100% = neto del holding + cesión BN
   const red      = MESES.map((_, m) => (Number(ingHQ?.[m]) || 0) - gpvRed[m]);
   const redP     = MESES.map((_, m) => (Number(P.ingHQ?.[m]) || 0) - gpvRedP[m]);
-  const contrib  = add(sedes100, fg, wre, red);
-  const contribP = add(sedes100P, P.fg, P.wre, redP);
+  const contrib  = add(sedes100, fg, wre, red, desTot);
+  const contribP = add(sedes100P, P.fg, P.wre, redP, desTotP);
   const resOp    = MESES.map((_, m) => contrib[m]  - (Number(opexHQ?.[m]) || 0));
   const resOpP   = MESES.map((_, m) => contribP[m] - (Number(P.opexHQ?.[m]) || 0));
   const resAI    = MESES.map((_, m) => resOp[m]  - finTot[m]);
   const resAIP   = MESES.map((_, m) => resOpP[m] - finTotP[m]);
   const ivaOn = sub.ivaDeb?.some(v => v) || sub.ivaCred?.some(v => v);
-  const impBlockTot     = MESES.map((_, m) => (sub.ivaDeb?.[m] || 0) + (sub.ivaCred?.[m] || 0) - (sub.impuestos?.[m] || 0) - impExtra[m]);
-  const impBlockTotPrev = MESES.map((_, m) => ((P.ivaDeb?.[m]) || 0) + ((P.ivaCred?.[m]) || 0) - ((P.impuestos?.[m]) || 0) - impExtraP[m]);
+  const impBlockTot     = MESES.map((_, m) => ivaDebG[m] + ivaCredG[m] - (sub.impuestos?.[m] || 0) - impExtra[m]);
+  const impBlockTotPrev = MESES.map((_, m) => ivaDebGP[m] + ivaCredGP[m] - ((P.impuestos?.[m]) || 0) - impExtraP[m]);
   const resGrupo100  = MESES.map((_, m) => resAI[m]  + impBlockTot[m]);
   const resGrupo100P = MESES.map((_, m) => resAIP[m] + impBlockTotPrev[m]);
   const atribuible   = MESES.map((_, m) => resGrupo100[m]  - (Number(cesion[m])  || 0));
   const atribuibleP  = MESES.map((_, m) => resGrupo100P[m] - (Number(cesionP[m]) || 0));
-  // Control: el atribuible TIENE que ser el Resultado del Grupo del P&L BIGG (misma data, otro orden).
+  // Control: sin los negocios en desarrollo y su distribución (T5), el atribuible TIENE que ser el Resultado del Grupo
+  // del P&L BIGG (misma data, otro orden).
   if (import.meta.env.DEV && !_alt) {
-    const dif = Math.max(...MESES.map((_, m) => Math.abs(atribuible[m] - (Number(resGrupo?.[m]) || 0))));
-    if (dif > 1) console.warn("[P&L del grupo] Resultado atribuible ≠ Resultado del Grupo del P&L BIGG · dif máx:", Math.round(dif));
+    const viejo = MESES.map((_, m) => atribuible[m] - desTot[m] + (cesion[m] - (Number(bnArr[m]) || 0)));
+    const dif = Math.max(...MESES.map((_, m) => Math.abs(viejo[m] - (Number(resGrupo?.[m]) || 0))));
+    if (dif > 1) console.warn("[P&L del grupo] Resultado atribuible (sin desarrollo) ≠ Resultado del Grupo del P&L BIGG · dif máx:", Math.round(dif));
   }
 
   const filas = [];
@@ -1232,6 +1213,10 @@ function buildPnLGrupoFilas(propsBigg, isCol) {
     } else {
       filas.push({ kind: "cuenta", label: "Sedes Propias Argentina", cur: sedes100, prev: sedes100P, pol: 1 });
     }
+    // Sedes propias España / Colombia (T5): su resultado neto al 100 %, como Argentina; lo de los inversores se descuenta
+    // abajo, en Distribución. (Martín 6/11: "igual que Argentina, arriba de Red BIGG".)
+    for (const d of desarrollo)
+      filas.push({ kind: "cuenta", label: d.label, cur: d.res, prev: enP(desarrolloP, d.key)?.res || Z, pol: 1 });
     filas.push({ kind: "cuenta", label: "Gerenciamiento de Sedes (Rosedal)", cur: fg || Z,  prev: P.fg || Z,  pol: 1 });
     filas.push({ kind: "cuenta", label: "Wellness Real Estate (Huergo)",     cur: wre || Z, prev: P.wre || Z, pol: 1 });
     filas.push({ kind: "cuenta", toggleKey: "sec_red", label: "Red BIGG (franquicias y corporativos)", cur: red, prev: redP, pol: 1 });
@@ -1251,18 +1236,19 @@ function buildPnLGrupoFilas(propsBigg, isCol) {
   filas.push({ kind: "grupo", key: "sec_imp", label: "Impuestos", cur: impBlockTot, prev: impBlockTotPrev, pol: 1 });
   if (!isCol("sec_imp")) {
     if (ivaOn) {
-      filas.push({ kind: "cuenta", label: "IVA Débito (ventas)",   cur: sub.ivaDeb,  prev: P.ivaDeb,  pol: 1 });
-      filas.push({ kind: "cuenta", label: "IVA Crédito (compras)", cur: sub.ivaCred, prev: P.ivaCred, pol: 1 });
+      filas.push({ kind: "cuenta", label: "IVA Débito (ventas)",   cur: ivaDebG,  prev: ivaDebGP,  pol: 1 });
+      filas.push({ kind: "cuenta", label: "IVA Crédito (compras)", cur: ivaCredG, prev: ivaCredGP, pol: 1 });
     }
     for (const [n, v] of Object.entries(impAccounts).sort(ordCmp(BIGG_ORDEN_IMP)))
       filas.push({ kind: "cuenta", label: n, cur: v, prev: (impAccountsP[n]) || Z, pol: -1 });
   }
   filas.push({ kind: "result", strong: true, label: "Resultado del Grupo (100%)", cur: resGrupo100, prev: resGrupo100P, pol: 1 });
 
-  // 3. Terceros → atribuible. (Tanda 4: esta sección pasa a leer de la tabla de participaciones.)
-  filas.push({ kind: "grupo", key: "sec_terc", label: "Participación de terceros", cur: cesion, prev: cesionP, pol: -1 });
+  // 3. Distribución de utilidades → atribuible (T4/T5: una línea por negocio, con el % de la tabla de participaciones).
+  filas.push({ kind: "grupo", key: "sec_terc", label: "Distribución de utilidades", cur: cesion, prev: cesionP, pol: -1 });
   if (!isCol("sec_terc"))
-    filas.push({ kind: "cuenta", label: "Barrio Norte · socios " + Math.round((sub.cesionPct ?? CESION.pct) * 100) + "%", cur: cesion, prev: cesionP, pol: -1 });
+    for (const d of distrib)
+      filas.push({ kind: "cuenta", label: d.label, cur: d.arr, prev: enP(distribP, d.key)?.arr || Z, pol: -1 });
   filas.push({ kind: "result", strong: true, label: "Resultado atribuible a BIGG", cur: atribuible, prev: atribuibleP, pol: 1 });
   filas.push(filaRatioDe("Margen sobre contribución", atribuible, contrib, atribuibleP, contribP));
 
@@ -2191,6 +2177,7 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
   // centro BN); CESION.pct queda de respaldo si la tabla no cargó. Trae también quién es el socio-cesión y la sociedad,
   // para provisionar desde Participaciones (T4 tanda C).
   const cesiones = useMemo(() => cesionesDe(partic, ccs), [partic, ccs]);
+  const cesionesSoc = useMemo(() => cesionesSociedadDe(partic, intercoData?.sociedades || []), [partic, intercoData]);   // Wellness: inversores terceros
   const cesionCfg = useMemo(() => cesiones.find(c => _nkSede(c.nombre).includes(_nkSede(CESION.matchNombre))) || CESION, [cesiones]);
   const cesionSede = useMemo(() => {
     if (resolvedCCSede.length !== 1) return null;
@@ -2396,7 +2383,8 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
   // Provisión de la cesión (T4 tanda C), DERIVADA del P&L: filas virtuales de nb_socios_cc (apertura al 30/6 + una por
   // mes) para la pantalla de Participaciones. Solo con esa pestaña abierta; el Balance las calcula por su lado.
   const provisionesSocios = useMemo(() => activeTab !== "socios" ? []
-    : provisionCesionRows({ cesiones, inRows: inConFranq, egRows: egConSueldos, year }), [activeTab, cesiones, inConFranq, egConSueldos, year]);
+    : provisionCesionRows({ cesiones, cesionesSoc, inRows: inConFranq, egRows: egConSueldos, year, ccs, tiposCambio }),
+    [activeTab, cesiones, cesionesSoc, inConFranq, egConSueldos, year, ccs, tiposCambio]);
   // ── El OTRO lente (TC real) para la vista YTD "en dos lentes", que existe SOLO con moneda comparable: el año
   // anterior se muestra a TC real y reexpresado al TC del año en curso, lado a lado. El año en curso es idéntico
   // en los dos lentes (ver modo "comp") → solo hace falta traducir y construir el año anterior una segunda vez.
@@ -2687,6 +2675,16 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
     // Wellness Real Estate = margen de Huergo (+ Puertos a futuro).
     const sH = computeSubtotalsHuergo(buildPnLHuergo(inR, egR, huergoCCs, yr, moneda, sinIvaArg));
     const resWRE = { res: sH.margen, ivaDeb: sH.ivaDeb, ivaCred: sH.ivaCred };
+    // Negocios en desarrollo (T5): España y Colombia por su resultado NETO al 100 %, mismo motor que su pestaña (sedes +
+    // estructura + impuestos + financieros). Solo existen con filas traducidas (modos con TC): en nativo ARS quedan en 0.
+    // La distribución a inversores se calcula sobre ESE mismo resultado (el de la fila, en el modo elegido): en España la
+    // cola de IVA ya es la posición, así que Con IVA es el resultado real; el modo Sin IVA de España queda para revisar.
+    const desarrollo = !fx ? [] : DESARROLLO.map(k => {   // nativo (sin fx): se vería solo lo que pagan en esa moneda → afuera
+      const cfg = FONDEADAS[k];
+      const r = resultadoFondeada(inR, egR, ccs, cfg, yr, moneda, sinIvaArg);
+      if (!r) return null;
+      return { key: k, empresa: cfg.empresa, label: `Sedes Propias ${cfg.label}`, nombre: cfg.label, res: r.res, ivaDeb: r.ivaDeb, ivaCred: r.ivaCred, neto: r.res };
+    }).filter(Boolean);
     // HQ + fondeo de las fondeadas (anillo 2) dentro de Inversiones/Capex. En modo consolidado se traduce a USD
     // con fx (antes filtraba por moneda y descartaba el fondeo en ARS/EUR → subcontaba la línea Fondeo).
     const pnl = buildPnLBigg(inR, egR, ccMap, cuentaMap, nucleoEmpresas, yr, moneda, sinIvaArg);
@@ -2706,6 +2704,20 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
     // La lee también la cascada "P&L del grupo" (buildPnLGrupoFilas). Viaja DENTRO de sub → prev/prevC la traen sola.
     sub.cesionBN = cesionBN;
     sub.cesionPct = cesionCfg.pct;
+    sub.desarrollo = desarrollo;
+    // Distribución de utilidades (T5): Barrio Norte + los inversores terceros de cada negocio en desarrollo, con el % de
+    // la tabla de participaciones (sin Bigg Fit, que es nuestro), sobre su resultado neto tal cual venga (pérdidas incluidas).
+    sub.distribucion = [
+      { key: "bn", label: `Barrio Norte · socios ${Math.round(cesionCfg.pct * 100)}%`, arr: cesionBN },
+      ...cesionesSoc.flatMap(c => {
+        const d = desarrollo.find(x => x.empresa === c.sociedad);
+        if (!d) return [];
+        const pctTxt = v => (v * 100).toLocaleString("es-AR", { maximumFractionDigits: 2 }) + "%";
+        // Solo los terceros: la parte de Bigg Fit (12,96 %) es nuestra y ya está dentro del resultado al 100 % (Martín 6/11:
+        // "mejor saquemos nuestra pata como inversores"); en Participaciones sigue como dato.
+        return [{ key: c.sociedad, label: `${d.nombre} · inversores ${pctTxt(c.pctTerceros)}`, arr: MESES.map((_, m) => c.pctTerceros * (Number(d.neto[m]) || 0)) }];
+      }),
+    ];
     return { pnl, sub, cesionBN,
       // DEV-ONLY (check "P&L BIGG vs Devengado" en consola): piezas del holding para descomponer la diferencia.
       _dbg: import.meta.env.DEV ? { sAR, sBNnet, feeGer, resWRE, arNucleoCCs, bnCcId } : undefined };

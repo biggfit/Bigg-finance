@@ -24,7 +24,7 @@ import { computeCashFlow } from "./cashflowDerive";
 import { CajaView } from "./CajaView";
 import { PatrimonioView } from "./PatrimonioView";
 import { PosicionFinancieraView } from "./PosicionFinancieraView";
-import { cesionesDe, provisionCesionRows } from "./cesionDerive";   // provisión de la cesión BN, derivada del P&L (T4 tanda C)
+import { cesionesDe, cesionesSociedadDe, provisionCesionRows } from "./cesionDerive";   // provisiones derivadas del P&L (T4 tanda C / T5)
 
 // Fusiona los items de Activo/Pasivo de varias sociedades por label+moneda (suma saldo, une docs).
 function mergeItems(arrays) {
@@ -199,8 +199,9 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
   // de nb_socios_cc que se suman a la CC real → pasivo "Socios (les debemos)" de Hektor en Balance/Posición y fila
   // "Dividendos declarados" en Del resultado al patrimonio. Sin `pnl` (Tesorería sola) no hay provisión.
   const provisiones = useMemo(() => pnl
-    ? provisionCesionRows({ cesiones: cesionesDe(data.participaciones, data.centrosCosto), inRows: pnl.inRows || [], egRows: pnl.egRows || [], year: new Date().getFullYear() })
-    : [], [pnl, data.participaciones, data.centrosCosto]);
+    ? provisionCesionRows({ cesiones: cesionesDe(data.participaciones, data.centrosCosto), cesionesSoc: cesionesSociedadDe(data.participaciones, sociedades),
+        inRows: pnl.inRows || [], egRows: pnl.egRows || [], year: new Date().getFullYear(), ccs: data.centrosCosto, tiposCambio })
+    : [], [pnl, data.participaciones, data.centrosCosto, sociedades, tiposCambio]);
   const dataDeriv = useMemo(() => provisiones.length ? { ...data, sociosCC: [...(data.sociosCC || []), ...provisiones] } : data, [data, provisiones]);
   const derivCache = useMemo(() => new Map(), [dataDeriv, sociedadesMap]);
   const derivarSocAsOf = useCallback((socId, fecha) => {
