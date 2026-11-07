@@ -70,7 +70,7 @@ export function provisionCesionRows({ cesiones = [], cesionesSoc = [], inRows = 
   for (const c of cesionesSoc || []) {
     const cfg = Object.values(FONDEADAS).find(f => f.empresa === c.sociedad);
     if (!cfg || !c.socios.length) continue;
-    // Con IVA: en España la cola de IVA ya es la posición → es el resultado real (el Sin IVA de España queda para revisar).
+    // Con IVA (da lo mismo: desde el 6/11 el resultado de una fondeada no cambia con el toggle).
     const r = resultadoFondeada(traducirFilas(inRows, tiposCambio, c.moneda), traducirFilas(egRows, tiposCambio, c.moneda), ccs, cfg, year, c.moneda, false);
     if (!r) continue;
     const desde = year === 2026 ? mesAper + 1 : 0;   // go-live: desde julio 2026

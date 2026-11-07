@@ -530,8 +530,17 @@ export function buildPnLSedeFilas(props, isCol) {
           cesionResFinal = null, cesionRetiros = null, comBaseResOp = null,
           estructuraCuota = null, estructuraEnOpex = false, estructuraLabel = "Estructura Wellness",
           estructuraDetalle = null, estructuraCuotaPrev = null,
-          estructuraImpuestos = null, estructuraImpuestosPrev = null } = props;
+          estructuraImpuestos = null, estructuraImpuestosPrev = null, estructuraIvaPos = null, estructuraIvaPosPrev = null } = props;
   const { totIngresos, margenContrib, totGastosOp, resOp, resFinal, activeMonths: _amRaw } = sub;
+  // IVA en las líneas (solo Sin IVA, solo fondeadas): débito − crédito que el modo Sin IVA les sacó a las líneas del
+  // scope (+ la parte de la estructura prorrateada cuando queda fuera del scope). Vuelve como línea de la cola de
+  // impuestos para que el Resultado Final sea el MISMO Con y Sin IVA: la cuenta "IVA" (CxP a Hacienda) es la que
+  // carga Martín, no se toca; el neto de las dos es el desfasaje entre la posición del mes y lo que se paga
+  // (una factura que entra tarde). Martín 6/11/2026: "no puede variar cuando cambio el toggle".
+  const ivaPosDe = (s, extra) => MESES.map((_, m) => (Number(s?.ivaDeb?.[m]) || 0) - (Number(s?.ivaCred?.[m]) || 0) + (Number(extra?.[m]) || 0));
+  const ivaPos = impuestos ? ivaPosDe(sub, estructuraIvaPos) : null;
+  const ivaPosPrev = impuestos ? ivaPosDe(subPrev, estructuraIvaPosPrev) : null;
+  const ivaPosOn = !!ivaPos && (ivaPos.some(v => Math.abs(v) >= 0.5) || ivaPosPrev.some(v => Math.abs(v) >= 0.5));
   const activeMonths = mesesVisibles(_amRaw, year, hayHistorico, mesMax);
 
   // ── Provisión de comisión de encargados (AFECTA el Resultado Final; solo sedes elegibles) ────────
@@ -672,19 +681,20 @@ export function buildPnLSedeFilas(props, isCol) {
     filas.push({ kind: "result", label: "Resultado Operativo", cur: resOpEff, prev: resOpPrevEff, pol: 1 });
 
     let fcfArr = resFinalEff;   // FCF (o Resultado Final sin cola) → base de la ganancia viva de la distribución
-    if (impData || finData) {
+    if (impData || finData || ivaPosOn) {
       // Vista con cola (Fondeadas/Rosedal): Op → Financiero → Impuestos → Resultado Final → Comisión/Inversiones
       // → Free Cash Flow. El FCF es el mismo valor de siempre; solo cambia dónde caen las líneas.
       if (finData) {
         filas.push({ kind: "banda", label: "Resultado Financiero" });
         for (const a of finData.byAcc) filas.push({ kind: "cuenta", label: a.name, cur: a.cur, prev: prevDe(finPrev, a.name), pol: 1 });
       }
-      if (impData) {
+      if (impData || ivaPosOn) {
         filas.push({ kind: "banda", label: "Impuestos" });
-        for (const a of impData.byAcc) filas.push({ kind: "cuenta", label: a.name, cur: a.cur, prev: prevDe(impPrev, a.name), pol: -1 });
+        if (ivaPosOn) filas.push({ kind: "cuenta", label: "IVA en las líneas (débito − crédito)", cur: ivaPos, prev: ivaPosPrev, pol: 1 });
+        for (const a of impData?.byAcc || []) filas.push({ kind: "cuenta", label: a.name, cur: a.cur, prev: prevDe(impPrev, a.name), pol: -1 });
       }
-      const resFin = resOpEff.map((v, m) => (Number(v) || 0) + (finData?.total[m] || 0) - (impData?.total[m] || 0));
-      const resFinPrev = resOpPrevEff.map((v, m) => (Number(v) || 0) + (finPrev?.total[m] || 0) - (impPrev?.total[m] || 0));
+      const resFin = resOpEff.map((v, m) => (Number(v) || 0) + (finData?.total[m] || 0) + (ivaPosOn ? ivaPos[m] : 0) - (impData?.total[m] || 0));
+      const resFinPrev = resOpPrevEff.map((v, m) => (Number(v) || 0) + (finPrev?.total[m] || 0) + (ivaPosOn ? ivaPosPrev[m] : 0) - (impPrev?.total[m] || 0));
       filas.push({ kind: "result", label: "Resultado Final", cur: resFin, prev: resFinPrev, pol: 1 });
       // Comisión/Inversiones solo si tienen dato (España no las usa → no ensuciar). Si ambas vacías y no hay
       // distribución (Rosedal), el Resultado Final YA es el final → no repetir una línea "Neto" idéntica.
@@ -1138,9 +1148,10 @@ function buildPnLGrupoFilas(propsBigg, isCol) {
   const desTot = add(...desarrollo.map(d => d.res)), desTotP = add(...desarrolloP.map(d => d.res));
   const enP = (list, key) => list.find(d => d.key === key);
   const bnArr = enP(distrib, "bn")?.arr || Z, bnArrP = enP(distribP, "bn")?.arr || Z;   // solo la cesión BN (vuelve a Sedes al 100 %)
-  // IVA del grupo (modo Sin IVA): el de los negocios del holding + el de los negocios en desarrollo (crédito ya en negativo).
-  const ivaDebG  = add(sub.ivaDeb, ...desarrollo.map(d => d.ivaDeb)),  ivaDebGP  = add(P.ivaDeb, ...desarrolloP.map(d => d.ivaDeb));
-  const ivaCredG = add(sub.ivaCred, ...desarrollo.map(d => (d.ivaCred || Z).map(v => -v))), ivaCredGP = add(P.ivaCred, ...desarrolloP.map(d => (d.ivaCred || Z).map(v => -v)));
+  // IVA del grupo (modo Sin IVA): solo el de los negocios del holding. Los negocios en desarrollo (España/Colombia)
+  // liquidan su IVA adentro: su fila ya es el resultado neto con el IVA restituido (resultadoFondeada), igual Con y Sin IVA.
+  const ivaDebG  = sub.ivaDeb || Z,  ivaDebGP  = P.ivaDeb || Z;
+  const ivaCredG = sub.ivaCred || Z, ivaCredGP = P.ivaCred || Z;
   // Reubicación (Martín 4/11): en HQ estas cuentas llegan como "Costo por Venta" (categoría correcta para una
   // sede, donde van proporcionales a SU venta), pero acá son costo de mover plata y posición fiscal del grupo, no
   // costo de vender de ningún negocio → salen de la Red y bajan a Financieros / Impuestos. Solo cambia el renglón:
@@ -2568,6 +2579,21 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
     () => (estructuraPnl && factorIvaEstructura) ? prorratearImpuestos(estructuraPnl.sinClasificar, factorIvaEstructura) : null,
     [estructuraPnl, factorIvaEstructura]   // eslint-disable-line react-hooks/exhaustive-deps
   );
+  // IVA en las líneas del centro de estructura (solo Sin IVA, una sede sola): el crédito que Sin IVA le sacó a SU OPEX
+  // (OPEX bruto − OPEX neto: solo los grupos de la cuota; sus ingresos propios quedan fuera del scope y no cuentan) × el
+  // mismo factor que la cuota, en negativo. Con Wellness en el scope ya viaja en subSede.
+  const ivaPosEstructura = (pnlNeto, inR, egR, yr, factor) => {
+    if (!sinIva || wellnessEnScope || !pnlNeto || !factor || !inR) return null;
+    const bruto = computeSubtotalsSede(buildPnLSede(inR, egR, [estructuraCCId], yr, monedaPL, false)).totGastosOp;
+    const neto  = computeSubtotalsSede(pnlNeto).totGastosOp;
+    return MESES.map((_, m) => ((Number(neto[m]) || 0) - (Number(bruto[m]) || 0)) * factor[m]);
+  };
+  const estructuraIvaPos = useMemo(() => ivaPosEstructura(estructuraPnl, inFx, egFx, year, factorEstructura),
+    [estructuraPnl, inFx, egFx, year, factorEstructura, sinIva, wellnessEnScope, monedaPL, estructuraCCId]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const estructuraIvaPosPrev = useMemo(() => ivaPosEstructura(estructuraPnlPrev, inFx, egFx, year - 1, factorEstructuraPrev),
+    [estructuraPnlPrev, inFx, egFx, year, factorEstructuraPrev, sinIva, wellnessEnScope, monedaPL, estructuraCCId]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const estructuraIvaPosPrevAlt = useMemo(() => ivaPosEstructura(estructuraPnlPrevAlt, inFxAlt, egFxAlt, year - 1, factorEstructuraPrev),
+    [estructuraPnlPrevAlt, inFxAlt, egFxAlt, year, factorEstructuraPrev, sinIva, wellnessEnScope, monedaPL, estructuraCCId]);   // eslint-disable-line react-hooks/exhaustive-deps
   // Año anterior: mismo reparto con las posiciones de IVA de year-1 (comparativas Mensual/YTD).
   const estructuraImpuestosPrev = useMemo(() => {
     if (!estructuraPnlPrev || !statsPorSedePrev || !factorEstructuraPrev) return null;
@@ -2591,12 +2617,12 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
   // (la vista muestra los dos). En TC real, Mensual o Evolución: `prev` = el lente del selector, sin `prevC`.
   const dosLentes = fxMode !== "native" && vistaPnl === "ytd" && !!pnlSedePrevAlt;
   const lenteSede = useMemo(() => {
-    const sel = { pnlPrev: pnlSedePrev, subPrev: subSedePrev, estructuraCuotaPrev: estructuraCuotaPrevEff, estructuraImpuestosPrev };
-    if (!dosLentes) return { ...sel, pnlPrevC: null, subPrevC: null, estructuraCuotaPrevC: null, estructuraImpuestosPrevC: null };
-    const alt = { pnlPrev: pnlSedePrevAlt, subPrev: subSedePrevAlt, estructuraCuotaPrev: estructuraCuotaPrevAltEff, estructuraImpuestosPrev: estructuraImpuestosPrevAlt };
+    const sel = { pnlPrev: pnlSedePrev, subPrev: subSedePrev, estructuraCuotaPrev: estructuraCuotaPrevEff, estructuraImpuestosPrev, estructuraIvaPosPrev };
+    if (!dosLentes) return { ...sel, pnlPrevC: null, subPrevC: null, estructuraCuotaPrevC: null, estructuraImpuestosPrevC: null, estructuraIvaPosPrevC: null };
+    const alt = { pnlPrev: pnlSedePrevAlt, subPrev: subSedePrevAlt, estructuraCuotaPrev: estructuraCuotaPrevAltEff, estructuraImpuestosPrev: estructuraImpuestosPrevAlt, estructuraIvaPosPrev: estructuraIvaPosPrevAlt };
     const real = fxMode === "real" ? sel : alt, comp = fxMode === "real" ? alt : sel;
-    return { ...real, pnlPrevC: comp.pnlPrev, subPrevC: comp.subPrev, estructuraCuotaPrevC: comp.estructuraCuotaPrev, estructuraImpuestosPrevC: comp.estructuraImpuestosPrev };
-  }, [dosLentes, fxMode, pnlSedePrev, subSedePrev, estructuraCuotaPrevEff, estructuraImpuestosPrev, pnlSedePrevAlt, subSedePrevAlt, estructuraCuotaPrevAltEff, estructuraImpuestosPrevAlt]);
+    return { ...real, pnlPrevC: comp.pnlPrev, subPrevC: comp.subPrev, estructuraCuotaPrevC: comp.estructuraCuotaPrev, estructuraImpuestosPrevC: comp.estructuraImpuestosPrev, estructuraIvaPosPrevC: comp.estructuraIvaPosPrev };
+  }, [dosLentes, fxMode, pnlSedePrev, subSedePrev, estructuraCuotaPrevEff, estructuraImpuestosPrev, estructuraIvaPosPrev, pnlSedePrevAlt, subSedePrevAlt, estructuraCuotaPrevAltEff, estructuraImpuestosPrevAlt, estructuraIvaPosPrevAlt]);
 
   // Retiros de la cesión (cuenta "Inversores") SIEMPRE con IVA (total), independiente del toggle: el retiro es
   // el efectivo real pagado al inversor. Tomo la versión Con IVA del pnl de sede.
@@ -2677,13 +2703,13 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
     const resWRE = { res: sH.margen, ivaDeb: sH.ivaDeb, ivaCred: sH.ivaCred };
     // Negocios en desarrollo (T5): España y Colombia por su resultado NETO al 100 %, mismo motor que su pestaña (sedes +
     // estructura + impuestos + financieros). Solo existen con filas traducidas (modos con TC): en nativo ARS quedan en 0.
-    // La distribución a inversores se calcula sobre ESE mismo resultado (el de la fila, en el modo elegido): en España la
-    // cola de IVA ya es la posición, así que Con IVA es el resultado real; el modo Sin IVA de España queda para revisar.
+    // La distribución a inversores se calcula sobre ESE mismo resultado (el de la fila). El resultado de una fondeada no
+    // cambia con el toggle de IVA (Sin IVA restituye la posición de las líneas en su cola; la CxP "IVA" es la que se cargó).
     const desarrollo = !fx ? [] : DESARROLLO.map(k => {   // nativo (sin fx): se vería solo lo que pagan en esa moneda → afuera
       const cfg = FONDEADAS[k];
       const r = resultadoFondeada(inR, egR, ccs, cfg, yr, moneda, sinIvaArg);
       if (!r) return null;
-      return { key: k, empresa: cfg.empresa, label: `Sedes Propias ${cfg.label}`, nombre: cfg.label, res: r.res, ivaDeb: r.ivaDeb, ivaCred: r.ivaCred, neto: r.res };
+      return { key: k, empresa: cfg.empresa, label: `Sedes Propias ${cfg.label}`, nombre: cfg.label, res: r.res, neto: r.res };
     }).filter(Boolean);
     // HQ + fondeo de las fondeadas (anillo 2) dentro de Inversiones/Capex. En modo consolidado se traduce a USD
     // con fx (antes filtraba por moneda y descartaba el fondeo en ARS/EUR → subcontaba la línea Fondeo).
@@ -2888,7 +2914,7 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
       nombreCuenta, cesion: cesionSede, cesionResFinal: subSedeNet?.resFinal, cesionRetiros: cesionRetirosCI,
       comBaseResOp, estructuraCuota: estructuraCuotaEff, estructuraEnOpex: estructuraEnOpexEff, estructuraLabel: estructuraLabelEff,
       estructuraDetalle, estructuraCuotaPrev: estructuraCuotaPrevEff,
-      estructuraImpuestos, estructuraImpuestosPrev,
+      estructuraImpuestos, estructuraImpuestosPrev, estructuraIvaPos, estructuraIvaPosPrev,
       impuestos: isFond ? IMPUESTOS_FOND : null, financieros: isFond ? FINANCIEROS_FOND : null,
       distribucion: activeTab === "op_rosedal" ? distribRosedalFx : null,
       retirosVivos: activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null,
@@ -3265,7 +3291,7 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
           cesion={cesionSede} cesionResFinal={subSedeNet?.resFinal} cesionRetiros={cesionRetirosCI}
           comBaseResOp={comBaseResOp} estructuraCuota={estructuraCuotaEff} estructuraEnOpex={estructuraEnOpexEff} estructuraLabel={estructuraLabelEff}
           estructuraDetalle={estructuraDetalle}
-          estructuraImpuestos={estructuraImpuestos}
+          estructuraImpuestos={estructuraImpuestos} estructuraIvaPos={estructuraIvaPos}
           impuestos={isFond ? IMPUESTOS_FOND : null} financieros={isFond ? FINANCIEROS_FOND : null}
           distribucion={activeTab === "op_rosedal" ? distribRosedalFx : null}
           retirosVivos={activeTab === "op_rosedal" ? (retirosRosedal[year] || null) : null}

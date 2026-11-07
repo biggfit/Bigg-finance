@@ -52,8 +52,11 @@ export function centrosDeFondeada(ccs, cfg) {
 //   resultado final de sus sedes (buildPnLSede + computeSubtotalsSede)
 //   − opex del centro de estructura (España) o la cuenta de estructura (Colombia)
 //   − impuestos (IMPUESTOS_FOND) − financieros (FINANCIEROS_FOND), ambos leídos de "Sin clasificar".
+//   + IVA en las líneas (solo Sin IVA): débito − crédito que se les sacó a las líneas. La cuenta "IVA" (pago a Hacienda /
+//     DIAN) es la CxP que carga Martín y vale lo que vale; Sin IVA solo cambia cómo se leen las líneas, NO el resultado
+//     (Martín 6/11/2026: "no puede variar cuando cambio el toggle"). Sin esta línea España restaba el IVA dos veces.
 // Es el "Resultado Neto" de su pestaña con TODA la estructura (sin prorrateo: acá se mira el negocio entero).
-// Devuelve null si la fondeada no tiene centros. ivaDeb/ivaCred acompañan para el modo Sin IVA del grupo.
+// Devuelve null si la fondeada no tiene centros. ivaPos (= débito − crédito, 0 Con IVA) acompaña para mostrarlo.
 export function resultadoFondeada(inRows, egRows, ccs, cfg, year, moneda, sinIva = false) {
   const { sedes, estructura } = centrosDeFondeada(ccs, cfg);
   if (!sedes.length && !estructura) return null;
@@ -69,12 +72,9 @@ export function resultadoFondeada(inRows, egRows, ccs, cfg, year, moneda, sinIva
     const k = Object.keys(p.sinClasificar || {}).find(x => _nkSede(x) === _nkSede(cfg.estructuraCuenta));
     if (k) estr = p.sinClasificar[k];
   }
-  const res = MESES.map((_, m) => (Number(s.resFinal[m]) || 0) - (Number(estr[m]) || 0) - (imp?.total[m] || 0) - (fin?.total[m] || 0));
-  return {
-    res, resOp: s.resFinal, estructura: estr, impuestos: imp?.total || ZERO(), financieros: fin?.total || ZERO(),
-    ivaDeb: MESES.map((_, m) => (Number(s.ivaDeb?.[m]) || 0) + (Number(estrDeb[m]) || 0)),
-    ivaCred: MESES.map((_, m) => (Number(s.ivaCred?.[m]) || 0) + (Number(estrCred[m]) || 0)),
-  };
+  const ivaPos = MESES.map((_, m) => (Number(s.ivaDeb?.[m]) || 0) + (Number(estrDeb[m]) || 0) - (Number(s.ivaCred?.[m]) || 0) - (Number(estrCred[m]) || 0));
+  const res = MESES.map((_, m) => (Number(s.resFinal[m]) || 0) - (Number(estr[m]) || 0) + ivaPos[m] - (imp?.total[m] || 0) - (fin?.total[m] || 0));
+  return { res, resOp: s.resFinal, estructura: estr, ivaPos, impuestos: imp?.total || ZERO(), financieros: fin?.total || ZERO() };
 }
 
 // Traduce filas del P&L a `destino` con el TC del mes de cada fila (nb_tipos_cambio). Las filas sin TC se descartan
