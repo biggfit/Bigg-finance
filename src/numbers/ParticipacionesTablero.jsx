@@ -21,13 +21,23 @@ const numCell = { ...cell, textAlign: "right", fontFamily: T.mono };
 
 // Saldo de CC por socio y moneda. `sociedad` acota a esa sociedad (el bloque de Wellness mira solo lo de Wellness);
 // sin filtro, todo el grupo (bloque BIGG).
-function saldosCC(ccRows, movs, sociedad = null) {
+function saldosCC(ccRows, movs, sociedad = null, retiros = []) {
   const acc = {};
   const add = (sid, mon, d) => { if (!sid) return; (acc[sid] ??= {}); acc[sid][mon] = (acc[sid][mon] || 0) + d; };
   for (const r of ccRows) if (!sociedad || String(r.sociedad) === sociedad) add(r.socio_id, r.moneda || "ARS", n(r.monto));
+  for (const r of retiros) if (!sociedad || String(r.sociedad) === sociedad) add(r.socio_id, r.moneda || "ARS", Math.abs(n(r.monto)));   // factura del cesionario
   for (const m of movs) {
     const signo = SOCIO_SIGNO_CAJA[m.socio_tipo] ?? 0;
     if (signo && (!sociedad || String(m.sociedad) === sociedad)) add(m.contraparte_id, m.moneda || "ARS", signo * Math.abs(n(m.monto)));
+  }
+  return acc;
+}
+// Facturas de los cesionarios (retiros de cesión, ver retirosCesion) por socio y moneda, acotadas igual que el saldo.
+function retiradoCC(retiros, sociedad = null) {
+  const acc = {};
+  for (const r of retiros || []) {
+    if (sociedad && String(r.sociedad) !== sociedad) continue;
+    (acc[r.socio_id] ??= {}); acc[r.socio_id][r.moneda || "ARS"] = (acc[r.socio_id][r.moneda || "ARS"] || 0) + Math.abs(n(r.monto));
   }
   return acc;
 }
@@ -55,7 +65,7 @@ function negociosDe(participaciones, sociedades, centros) {
   const bloques = [];
   for (const [k, filas] of porAlcance) {
     const soc = socMap.get(k), cc = ccMap.get(k);
-    const sociedadId = k === "" ? null : soc ? k : (cc?.sociedad ? String(cc.sociedad) : null);
+    const sociedadId = k === "" ? null : soc ? k : ((cc?.empresa || cc?.sociedad) ? String(cc.empresa || cc.sociedad) : null);
     const moneda = (soc || socMap.get(sociedadId || ""))?.moneda || "ARS";
     const nombre = k === "" ? "BIGG · grupo" : soc?.nombre || (cc?.nombre || k).replace(/^\d+\s*-\s*/, "");
     const orden = k === "" ? 0 : soc ? 1 + sociedades.findIndex(s => String(s.id) === k) : 100 + centros.findIndex(c => String(c.id) === k);
@@ -79,7 +89,7 @@ function Montos({ porMon, signo = false, bold = false }) {
   return <span style={numCell}>{cs.map(([m, v], i) => <span key={m}>{i ? " · " : ""}<Monto v={v} moneda={m} signo={signo} bold={bold} /></span>)}</span>;
 }
 
-export function ParticipacionesTablero({ participaciones, ccRows, movs, sociedades, centros, onSel }) {
+export function ParticipacionesTablero({ participaciones, ccRows, movs, retiros = [], sociedades, centros, onSel }) {
   const bloques = negociosDe(participaciones, sociedades, centros);
   const [negocio, setNegocio] = useState(null);
   const esDelGrupo = id => sociedades.some(s => String(s.id) === String(id));
@@ -106,8 +116,9 @@ export function ParticipacionesTablero({ participaciones, ccRows, movs, sociedad
         })}
       </div>
       {[bloque].map(b => {
-        const saldos = saldosCC(ccRows, movs, b.sociedadId);
+        const saldos = saldosCC(ccRows, movs, b.sociedadId, retiros);
         const declarados = declaradosCC(ccRows, b.sociedadId);
+        const retirado = retiradoCC(retiros, b.sociedadId);
         const filas = [...b.socios, ...b.cesiones];
         const sum = f => filas.reduce((s, r) => s + n(r[f]), 0);
         // La CC es por persona: quien es socio Y cesionario (Gonzalo en Wellness) aparece en dos filas pero suma una vez.
@@ -144,7 +155,7 @@ export function ParticipacionesTablero({ participaciones, ccRows, movs, sociedad
                   </span>
                   <span style={{ ...numCell, fontWeight: 700, color: n(r.participacion) ? T.text : T.dim }}>{n(r.participacion) ? fmtPct(n(r.participacion)) : "—"}</span>
                   <Monto v={n(r.aportado)} moneda={b.moneda} />
-                  <Monto v={n(r.retirado)} moneda={b.moneda} dim />
+                  {retirado[r.id] ? <Montos porMon={retirado[r.id]} /> : <Monto v={n(r.retirado)} moneda={b.moneda} dim />}
                   <Montos porMon={conCC ? declarados[r.id] : null} />
                   <Montos porMon={conCC ? saldos[r.id] : null} signo />
                 </div>
@@ -157,7 +168,7 @@ export function ParticipacionesTablero({ participaciones, ccRows, movs, sociedad
               <span style={{ ...numCell, fontWeight: 800, color: !b.socios.length || Math.abs(b.pctSocios - 100) < 0.01 ? T.text : T.orange }}
                 title={b.socios.length ? "Los socios deberían sumar 100 %" : "Cedido"}>{fmtPct(b.socios.length ? b.pctSocios : b.pctCedido)}</span>
               <Monto v={sum("aportado")} moneda={b.moneda} bold />
-              <Monto v={sum("retirado")} moneda={b.moneda} dim bold />
+              {Object.keys(retirado).length ? <Montos porMon={sumPorMon(retirado)} bold /> : <Monto v={sum("retirado")} moneda={b.moneda} dim bold />}
               <Montos porMon={sumPorMon(declarados)} bold />
               <Montos porMon={sumPorMon(saldos)} signo bold />
             </div>

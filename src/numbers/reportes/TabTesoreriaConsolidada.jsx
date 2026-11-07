@@ -24,6 +24,7 @@ import { computeCashFlow } from "./cashflowDerive";
 import { CajaView } from "./CajaView";
 import { PatrimonioView } from "./PatrimonioView";
 import { PosicionFinancieraView } from "./PosicionFinancieraView";
+import { cesionesDe, provisionCesionRows } from "./cesionDerive";   // provisión de la cesión BN, derivada del P&L (T4 tanda C)
 
 // Fusiona los items de Activo/Pasivo de varias sociedades por label+moneda (suma saldo, une docs).
 function mergeItems(arrays) {
@@ -194,13 +195,20 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
   //    otras fechas → togglear sociedades, cambiar moneda o de vista no recalcula lo ya derivado; Saldos, Balance, EEPN
   //    y Posición financiera comparten la misma derivación. Se vacía al cambiar los datos. Regla: NADIE muta lo
   //    cacheado (mergeItems copia los items; el sufijo _soc copia las cuentas). ──
-  const derivCache = useMemo(() => new Map(), [data, sociedadesMap]);
+  // Provisión de la cesión (Barrio Norte 49 %), derivada del P&L (`pnl` = filas en ARS con histórico): filas virtuales
+  // de nb_socios_cc que se suman a la CC real → pasivo "Socios (les debemos)" de Hektor en Balance/Posición y fila
+  // "Dividendos declarados" en Del resultado al patrimonio. Sin `pnl` (Tesorería sola) no hay provisión.
+  const provisiones = useMemo(() => pnl
+    ? provisionCesionRows({ cesiones: cesionesDe(data.participaciones, data.centrosCosto), inRows: pnl.inRows || [], egRows: pnl.egRows || [], year: new Date().getFullYear() })
+    : [], [pnl, data.participaciones, data.centrosCosto]);
+  const dataDeriv = useMemo(() => provisiones.length ? { ...data, sociosCC: [...(data.sociosCC || []), ...provisiones] } : data, [data, provisiones]);
+  const derivCache = useMemo(() => new Map(), [dataDeriv, sociedadesMap]);
   const derivarSocAsOf = useCallback((socId, fecha) => {
     const k = `${socId}||${fecha || ""}`;
     let r = derivCache.get(k);
-    if (!r) { r = derivarSaldos({ ...data, sociedad: socId, fechaCorte: fecha, sociedadesMap }); derivCache.set(k, r); }
+    if (!r) { r = derivarSaldos({ ...dataDeriv, sociedad: socId, fechaCorte: fecha, sociedadesMap }); derivCache.set(k, r); }
     return r;
-  }, [derivCache, data, sociedadesMap]);
+  }, [derivCache, dataDeriv, sociedadesMap]);
 
   // ── Derivar por sociedad y consolidar ──
   const { cuentas, aCobrar, aPagar, interco, intercoAct, intercoPas, movimientos } = useMemo(() => {
@@ -528,10 +536,10 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
       )}
       {!loading && !error && activeTab === "balance" && (
         <BalanceView deriveAsOf={deriveAsOf} filtroMoneda={filtroMoneda} fechaCorte={fechaCorte}
-          tiposCambio={tiposCambio} pnl={pnl} socsIncluidas={socsIncluidas} movimientos={data.movimientos} />
+          tiposCambio={tiposCambio} pnl={pnl} socsIncluidas={socsIncluidas} movimientos={data.movimientos} sociosCC={dataDeriv.sociosCC} />
       )}
       {!loading && !error && activeTab === "evpn" && (
-        <PatrimonioView eepn={eepn} filtroMoneda={filtroMoneda} tiposCambio={tiposCambio} pnl={pnl} socSet={socSetLC} sociosCC={data.sociosCC} />
+        <PatrimonioView eepn={eepn} filtroMoneda={filtroMoneda} tiposCambio={tiposCambio} pnl={pnl} socSet={socSetLC} sociosCC={dataDeriv.sociosCC} />
       )}
       {!loading && !error && activeTab === "cf" && (
         <CajaView cf={cfDirecto} consolidado={filtroMoneda === "ALL"} mon={filtroMoneda} cuentasBancarias={data.cuentasBancarias}
@@ -663,7 +671,7 @@ function BalanceTable({ cols, colLabel, minBase = 320, colW = 100, getters, deta
 // Decisión Martín 19/9/2026 ("las monedas por columna me hacen ruido").
 // GO_LIVE_APERTURA, crearTraductor, AvisosTC, ordenarDetalle, _hoyISO/_finMesAnterior/_esFinDeMes: en ./balanceUtils.
 
-function BalanceView({ deriveAsOf, filtroMoneda, fechaCorte, tiposCambio = null, pnl = null, socsIncluidas = [], movimientos = [] }) {
+function BalanceView({ deriveAsOf, filtroMoneda, fechaCorte, tiposCambio = null, pnl = null, socsIncluidas = [], movimientos = [], sociosCC = [] }) {
   const corte = fechaCorte || _hoyISO();
   const prev  = _finMesAnterior(corte);
   const consolidado = !filtroMoneda || filtroMoneda === "ALL";
@@ -733,10 +741,23 @@ function BalanceView({ deriveAsOf, filtroMoneda, fechaCorte, tiposCambio = null,
     }
     return acc;
   })();
+  // Dividendos declarados y provisión de las cesiones (nb_socios_cc + filas virtuales de cesionDerive): bajan el PN sin
+  // pasar por el resultado (misma fila que en Del resultado al patrimonio). Monto negativo = le debemos.
+  const dividendosAcum = (() => {
+    let acc = 0;
+    for (const r of sociosCC || []) {
+      if (r.tipo !== "dividendo_declarado" || !socSet.has(String(r.sociedad || "").toLowerCase())) continue;
+      const f = String(r.fecha || "").slice(0, 10);
+      if (f <= GO_LIVE_APERTURA || f > corte) continue;
+      const mo = r.moneda || "ARS", v = Number(r.monto) || 0;
+      if (consolidado) acc += aUSD(v, mo, f); else if (mo === mon) acc += v;
+    }
+    return acc;
+  })();
   const pnCorte = pn("corte");
-  // Identidad (misma que el puente): PN = PN apertura + Resultado + Cambio de moneda (la pata que entra/sale de ESTA
-  // moneda no es resultado pero sí mueve su PN) + lo que falte explicar.
-  const explicado = resultadoAcum ? pnAper + resultadoAcum.tot + cambioAcum : null;
+  // Identidad (misma que el puente): PN = PN apertura + Resultado + Dividendos (−) + Cambio de moneda (la pata que
+  // entra/sale de ESTA moneda no es resultado pero sí mueve su PN) + lo que falte explicar.
+  const explicado = resultadoAcum ? pnAper + resultadoAcum.tot + dividendosAcum + cambioAcum : null;
   const sinExplicar = explicado == null ? null : pnCorte - explicado;
 
   const tcTxt = (() => {
@@ -773,6 +794,7 @@ function BalanceView({ deriveAsOf, filtroMoneda, fechaCorte, tiposCambio = null,
               {[
                 ["Patrimonio Neto de apertura (30/06/2026)", pnAper, false],
                 [`+ Resultado acumulado julio → ${_MESES[mCorte]} (P&L devengado)`, resultadoAcum.tot, false],
+                ...(Math.abs(dividendosAcum) > 0.5 ? [["− Dividendos declarados y provisión a socios de negocios", dividendosAcum, false]] : []),
                 ["+ Cambio de moneda (plata que entró o salió de esta moneda)", cambioAcum, false],
                 ["= Patrimonio Neto explicado", explicado, true],
                 ["Patrimonio Neto del balance", pnCorte, true],

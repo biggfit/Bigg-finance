@@ -7,8 +7,8 @@
 import { useState, useEffect, useMemo } from "react";
 import { T, PageHeader, Btn, Badge, Select, Input, fmtMoney, fmtDate } from "./theme";
 import {
-  fetchSocios, fetchParticipaciones, fetchSociosCC, fetchMovSocios, fetchSociedades, fetchCentrosCosto, fetchCuentasBancarias,
-  appendMovSocio, declararDividendo, aperturaSocio, repartirDividendo, SOCIO_SIGNO_CAJA,
+  fetchSocios, fetchParticipaciones, fetchSociosCC, fetchMovSocios, fetchSociedades, fetchCentrosCosto, fetchCuentasBancarias, fetchEgresos,
+  appendMovSocio, declararDividendo, aperturaSocio, repartirDividendo, retirosCesion, SOCIO_SIGNO_CAJA,
 } from "../lib/numbersApi";
 import { MONEDA_OPTS } from "../data/tesoreriaData";
 import { ParticipacionesTablero } from "./ParticipacionesTablero";
@@ -59,13 +59,17 @@ function Field({ label, children }) {
 
 // Ledger de un socio: une nb_socios_cc (no-cash) + nb_movimientos (caja). delta firmado
 // (+ nos debe / − le debemos). Ordenado por fecha para el saldo corriente.
-function socioLedger(socioId, ccRows, movs) {
+function socioLedger(socioId, ccRows, movs, retiros = []) {
   const out = [];
+  for (const r of retiros) {
+    if (String(r.socio_id) !== String(socioId)) continue;
+    out.push({ fecha: r.fecha, sociedad: r.sociedad, moneda: r.moneda || "ARS", label: "Factura del cesionario", delta: Math.abs(num(r.monto)), concepto: [r.contraparte, r.comp].filter(Boolean).join(" · ") });
+  }
   for (const r of ccRows) {
     if (String(r.socio_id) !== String(socioId)) continue;
     out.push({
       fecha: r.fecha, sociedad: r.sociedad, moneda: r.moneda || "ARS",
-      label: r.tipo === "apertura" ? "Apertura" : "Dividendo declarado",
+      label: r.label || (r.tipo === "apertura" ? "Apertura" : "Dividendo declarado"),   // las virtuales (provisión) traen su label
       delta: num(r.monto), concepto: r.nota || "",
     });
   }
@@ -84,10 +88,11 @@ function socioLedger(socioId, ccRows, movs) {
 }
 
 // Saldo neto por socio y moneda → { [socioId]: { ARS, USD, EUR } } (+ nos debe / − le debemos).
-function saldosPorSocio(socios, ccRows, movs) {
+function saldosPorSocio(socios, ccRows, movs, retiros = []) {
   const acc = {};
   const add = (sid, mon, d) => { if (!sid) return; (acc[sid] ??= {}); acc[sid][mon] = (acc[sid][mon] || 0) + d; };
   for (const r of ccRows) add(r.socio_id, r.moneda || "ARS", num(r.monto));
+  for (const r of retiros) add(r.socio_id, r.moneda || "ARS", Math.abs(num(r.monto)));   // factura del cesionario: baja lo que le debemos
   for (const m of movs) {
     const signo = SOCIO_SIGNO_CAJA[m.socio_tipo] ?? 0;
     if (signo) add(m.contraparte_id, m.moneda || "ARS", signo * Math.abs(num(m.monto)));
@@ -97,11 +102,15 @@ function saldosPorSocio(socios, ccRows, movs) {
 
 const saldoChips = (porMon) => Object.entries(porMon || {}).filter(([, v]) => Math.abs(v) > 0.01);
 
-export default function PantallaSocios() {
+// `provisiones` (de PantallaReportes, cesionDerive): filas VIRTUALES de nb_socios_cc con la provisión de cada cesión
+// sobre un centro (apertura al 30/6 + una por mes), calculadas del P&L y nunca escritas (T4 tanda C, Martín 6/11:
+// "un cálculo por diferencia, no un botón"). Se suman a la CC real para el tablero y el ledger.
+export default function PantallaSocios({ provisiones = [] }) {
   const [socios, setSocios]     = useState([]);          // una fila por persona (para el modal y el detalle)
   const [partic, setPartic]     = useState([]);          // nb_socios crudo: una fila por persona y negocio
   const [ccRows, setCcRows]     = useState([]);
   const [movs, setMovs]         = useState([]);
+  const [egresos, setEgresos]   = useState([]);          // comprobantes de egreso: facturas de los cesionarios (cuenta Inversores)
   const [sociedades, setSociedades] = useState([]);
   const [centros, setCentros]   = useState([]);
   const [bancos, setBancos]     = useState([]);
@@ -114,17 +123,20 @@ export default function PantallaSocios() {
   async function load() {
     setLoading(true);
     try {
-      const [s, pt, cc, mv, soc, ccs, ban] = await Promise.all([
+      const [s, pt, cc, mv, soc, ccs, ban, eg] = await Promise.all([
         fetchSocios(), fetchParticipaciones(), fetchSociosCC(), fetchMovSocios(), fetchSociedades(), fetchCentrosCosto(), fetchCuentasBancarias(),
+        fetchEgresos().catch(() => []),
       ]);
       setSocios(s || []); setPartic(pt || []); setCcRows(cc || []); setMovs(mv || []);
-      setSociedades(soc || []); setCentros(ccs || []); setBancos(ban || []);
+      setSociedades(soc || []); setCentros(ccs || []); setBancos(ban || []); setEgresos(Array.isArray(eg) ? eg : []);
     } catch (e) { setErr(String(e.message || e)); }
     setLoading(false);
   }
   useEffect(() => { load(); }, []);
 
-  const saldos   = useMemo(() => saldosPorSocio(socios, ccRows, movs), [socios, ccRows, movs]);
+  const retiros  = useMemo(() => retirosCesion(egresos, partic), [egresos, partic]);   // facturas de los cesionarios
+  const ccTot    = useMemo(() => [...ccRows, ...(provisiones || [])], [ccRows, provisiones]);   // CC real + provisión virtual
+  const saldos   = useMemo(() => saldosPorSocio(socios, ccTot, movs, retiros), [socios, ccTot, movs, retiros]);
   const socioSel = socios.find(s => String(s.id) === String(sel));
   const sociedadNombre = id => sociedades.find(x => String(x.id) === String(id))?.nombre || id || "—";
 
@@ -137,7 +149,7 @@ export default function PantallaSocios() {
       {sel ? (
         <DetalleSocio
           socio={socioSel} porMon={saldos[sel] || {}}
-          ledger={socioLedger(sel, ccRows, movs)} sociedadNombre={sociedadNombre}
+          ledger={socioLedger(sel, ccTot, movs, retiros)} sociedadNombre={sociedadNombre}
           onBack={() => setSel(null)}
           onNuevo={() => setModal({ tipo: null, socioId: sel })}
         />
@@ -149,7 +161,7 @@ export default function PantallaSocios() {
             action={<Btn variant="accent" onClick={() => setModal({ tipo: null })}>+ Nuevo movimiento</Btn>}
           />
           {err && <div style={{ background: T.redBg, color: T.red, padding: "8px 12px", borderRadius: 8, fontSize: 12, marginBottom: 14 }}>{err}</div>}
-          <ParticipacionesTablero participaciones={partic} ccRows={ccRows} movs={movs} sociedades={sociedades} centros={centros} onSel={setSel} />
+          <ParticipacionesTablero participaciones={partic} ccRows={ccTot} movs={movs} retiros={retiros} sociedades={sociedades} centros={centros} onSel={setSel} />
         </>
       )}
 

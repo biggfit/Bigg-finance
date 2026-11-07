@@ -3892,9 +3892,44 @@ export async function aperturaSocio({ socio_id, socio_nombre, sociedad, moneda =
 // Saldos por socio → { activo:[], pasivo:[] } (presentación bruta, como franquiciados):
 //   neto > 0 (nos debe)  → Activo "Socios"
 //   neto < 0 (le debemos) → Pasivo "Socios (les debemos)"
-// Une nb_socios_cc (no-cash) + nb_movimientos origen="socios" (caja), por socio y moneda.
+// ── Cesión de utilidades por negocio (T4 tanda C, Martín 6/11/2026) ──
+// La PROVISIÓN mensual (pct × resultado final del negocio) es un dividendo_declarado al socio-cesión (ej. BN-SOCIOS en
+// hektor): sube la deuda con ellos sin tocar el P&L. Las FACTURAS de los cesionarios (comprobantes de egreso con la
+// cuenta "Inversores" en el centro del negocio) bajan esa deuda y pasan a ser cuenta a pagar al proveedor; el pago las
+// cancela desde Tesorería como a cualquier proveedor. Saldo CC del socio-cesión = provisión − facturado.
+export const CUENTA_CESION = "Inversores";   // = CESION_CUENTA de pnlDerive (la cuenta de los retiros)
+const _nkCes = s => String(s || "").trim().toLowerCase();
+/** Facturas de los cesionarios → retiros por socio-cesión [{socio_id, socio_nombre, sociedad, moneda, monto(+), fecha, comp}]. Puro.
+ *  Solo las posteriores a `desde` (default: la apertura del go-live, 30/6/2026): las anteriores ya están dentro del saldo
+ *  de apertura de la cesión (cesionDerive), contarlas de nuevo las duplicaría. */
+export function retirosCesion(egresos = [], participaciones = [], { desde = "2026-06-30" } = {}) {
+  const porCentro = new Map();
+  for (const r of participaciones || []) {
+    if (r.tipo !== "cesion" || !_nkCes(r.alcance)) continue;
+    porCentro.set(_nkCes(r.alcance), { socio_id: String(r.id), socio_nombre: r.nombre || String(r.id) });
+  }
+  if (!porCentro.size) return [];
+  // Acepta comprobantes agrupados (fetchEgresos: `lineas` con cuenta/cc/total_linea) o filas crudas de nb_comprobantes.
+  const out = [];
+  for (const c of egresos || []) {
+    const lineas = Array.isArray(c.lineas) && c.lineas.length
+      ? c.lineas.map(l => ({ cuenta: l.cuenta, cc: l.cc, monto: l.total_linea ?? l.total ?? l.subtotal }))
+      : [{ cuenta: c.cuenta_contable ?? c.cuenta, cc: c.centro_costo ?? c.cc, monto: c.total ?? c.subtotal }];
+    for (const l of lineas) {
+      if (_nkCes(l.cuenta) !== _nkCes(CUENTA_CESION)) continue;
+      const ces = porCentro.get(_nkCes(l.cc)); if (!ces) continue;
+      const monto = Math.abs(toNum(l.monto)); if (!monto) continue;
+      const fecha = String(c.fecha || "").slice(0, 10); if (desde && fecha <= desde) continue;
+      out.push({ ...ces, sociedad: c.sociedad, moneda: c.moneda || "ARS", monto, fecha,
+        comp: c.id_comp || c.id, contraparte: c.contraparte_nombre || c.proveedor || c.contraparte || "" });
+    }
+  }
+  return out;
+}
+// Une nb_socios_cc (no-cash) + nb_movimientos origen="socios" (caja) + retiros de cesión (facturas de los cesionarios,
+// ver retirosCesion), por socio y moneda.
 // Si `sociedad` viene → filtra a esa (slice del Balance por sociedad); si null → group-level.
-export function sociosSaldos(socios = [], ccRows = [], movs = [], { sociedad = null, soloMoneda = null } = {}) {
+export function sociosSaldos(socios = [], ccRows = [], movs = [], { sociedad = null, soloMoneda = null, retiros = [] } = {}) {
   const soc = sociedad ? String(sociedad).toLowerCase() : null;
   const nombreDe = id => (socios.find(s => String(s.id) === String(id))?.nombre) || id;
   // acc[socio_id][moneda] = neto (+ nos debe / − le debemos)
@@ -3914,6 +3949,10 @@ export function sociosSaldos(socios = [], ccRows = [], movs = [], { sociedad = n
     const signo = SOCIO_SIGNO_CAJA[m.socio_tipo] ?? 0;
     if (!signo) continue;
     add(m.contraparte_id, m.moneda || "ARS", signo * Math.abs(toNum(m.monto)));
+  }
+  for (const r of (retiros || [])) {   // factura del cesionario: baja lo que le debemos (+)
+    if (soc && String(r.sociedad ?? "").toLowerCase() !== soc) continue;
+    add(r.socio_id, r.moneda || "ARS", Math.abs(toNum(r.monto)));
   }
   const MON = ["ARS", "USD", "EUR"];
   const activo = [], pasivo = [];

@@ -5,7 +5,7 @@
 // de Reportes (loop por sociedad sobre datasets de todas). Sin React, sin I/O.
 import {
   calcSaldoNeto, esCuentaCredito, esIgnorado, metaVal,
-  financiacionPasivoBuckets, financiacionLedger, remanenteCuota, agruparAnticipos, anticipoPasivo, sociosSaldos, lecturaInterco,
+  financiacionPasivoBuckets, financiacionLedger, remanenteCuota, agruparAnticipos, anticipoPasivo, sociosSaldos, retirosCesion, lecturaInterco,
 } from "../lib/numbersApi";
 import { parsePagoFromMov, normSoc, pendienteSueldosPorLegajo, adelantoSueldosPorLegajo } from "../lib/sueldosApi";
 import { franquiciasSaldosCxC } from "../lib/franquiciasAdapter";
@@ -111,7 +111,7 @@ export function derivarSaldos({
   sociedad, fechaCorte = "",
   movimientos = [], egresos = [], ingresos = [], pagosCobros = [],
   cuentasBancarias = [], cuentasContables = [],
-  liqsSueldos = [], financiaciones = [], socios = [], sociosCC = [],
+  liqsSueldos = [], financiaciones = [], socios = [], sociosCC = [], participaciones = [],   // participaciones: nb_socios crudo (cesiones → sus facturas netean la CC)
   franqData = { comps: {}, saldos: {}, franchises: [] },
   movsFranq = null,   // cobros de franquicia GROUP-WIDE (independientes de la sociedad de la caja); si null → usa `movimientos`
   intercoData = null, sociedadesMap = null,   // si vienen → agrega la posición interco de ESTA sociedad
@@ -256,7 +256,8 @@ export function derivarSaldos({
   const franqCC = franquiciasSaldosCxC(franqData, sociedad, franqY, franqM, movsFranq ?? movimientos);
 
   // ── Socios (dividendos + préstamos): slice de esta sociedad, balance puro (as-of por corte) ──
-  const sociosCCsld = sociosSaldos(socios, corte ? sociosCC.filter(r => (r.fecha ?? "") <= corte) : sociosCC, movHasta, { sociedad });
+  const retirosCes = retirosCesion(egresos, participaciones).filter(r => !corte || r.fecha <= corte);
+  const sociosCCsld = sociosSaldos(socios, corte ? sociosCC.filter(r => (r.fecha ?? "") <= corte) : sociosCC, movHasta, { sociedad, retiros: retirosCes });
 
   // ── Sueldos: neto devengado−pagado por legajo/mes. Positivo → PASIVO (deuda); negativo →
   //    ACTIVO (adelanto: pago sin liquidación cerrada aún). Se compensa al cerrar la liquidación. ──

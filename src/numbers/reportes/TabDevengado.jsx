@@ -106,7 +106,9 @@ export function resultadoDevengadoMensual(pnl, { year, consolidado, mon, socSet,
   for (const mo of monedas) {
     const dev = buildDevengado(pnl.inRows || [], pnl.egRows || [], { cuentaMap: pnl.cuentaMap, ccMap: pnl.ccMap, year, moneda: mo, socSet, ccSet: null, sinIva: false });
     for (let m = desde; m <= hasta; m++) {
-      const v = dev.resultado[m] || 0;
+      // Sin los retiros a inversores: desde la tanda C de Participaciones (6/11/2026) la factura del cesionario cancela
+      // la provisión (pasivo), no es resultado; el PN baja con la provisión (fila "Dividendos declarados" del puente).
+      const v = (dev.resultadoAntes?.[m] ?? dev.resultado[m]) || 0;
       porMes[m] += consolidado ? aUSD(v, mo, `${year}-${String(m + 1).padStart(2, "0")}-01`) : v;
     }
   }

@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { T, PageHeader, fmtDate } from "./theme";
-import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, fetchFinanciaciones, fetchIntercoData, fondeoFondeadasMensual, intercoConsolidadoMensual, calcSaldoPendiente, primeCache, fetchTiposCambio, tcDelMes, montoAUSD, montoAMoneda, fetchPnLHistorico, fetchProveedores, fetchClientes, RETDEP_TAG } from "../lib/numbersApi";
+import { fetchCentrosCosto, fetchMovTesoreria, fetchCuentasBancarias, fetchLineasEnriquecidas, fetchCuentas, fetchFinanciaciones, fetchIntercoData, fondeoFondeadasMensual, intercoConsolidadoMensual, calcSaldoPendiente, primeCache, fetchTiposCambio, tcDelMes, montoAUSD, montoAMoneda, fetchPnLHistorico, fetchProveedores, fetchClientes, fetchParticipaciones, RETDEP_TAG } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas, liquidacionToPnLRows } from "../lib/sueldosApi";
 import { tolerante } from "../lib/http";
 import { BIGG_ORDEN, BIGG_ORDEN_FIN, BIGG_ORDEN_GHQ, BIGG_ORDEN_GPV, BIGG_ORDEN_IMP, CESION, CESION_CUENTA, COM_ENC_RATE, MESES, PNL_INICIO, SEDE_GRUPOS, SEDE_HDR, SEDE_ING_ACCTS, SEDE_OCULTAR_SI_VACIA, SEDE_OPEX_GRUPOS, VENTAS_EXCL_PRORR, _nkSede, buildPnLBigg, buildPnLHuergo, buildPnLSede, ccKey, computeCesion, computeSubtotalsHolding, computeSubtotalsHuergo, computeSubtotalsSede, comisionBaseResOp, familiaCentro, fechaFiscalDe, financiacionToPnLRows, grupoSede, montoPnL, movimientoToPnLRows, normCat, ordCmp, rellenarMesesSinActivas, sumVentasSede } from "./reportes/pnlDerive";
@@ -15,6 +15,7 @@ import { armarMaestroContrapartes } from "./reportes/contrapartes";
 import { copiarReporteComoImagen, clonarParaFoto, medirContenido } from "./fotoReporte";
 import TabTesoreriaConsolidada from "./reportes/TabTesoreriaConsolidada";
 import { finMesAnteriorReal, hoyISO } from "./reportes/balanceUtils";   // Posición financiera abre en el último cierre de mes
+import { cesionesDe, provisionCesionRows } from "./reportes/cesionDerive";   // cesión BN derivada: % de la tabla + provisión virtual
 import TabDevengado from "./reportes/TabDevengado";
 import TabIntercoConsolidado from "./reportes/TabIntercoConsolidado";
 import TabSaldosInterco from "./reportes/TabSaldosInterco";
@@ -1261,7 +1262,7 @@ function buildPnLGrupoFilas(propsBigg, isCol) {
   // 3. Terceros → atribuible. (Tanda 4: esta sección pasa a leer de la tabla de participaciones.)
   filas.push({ kind: "grupo", key: "sec_terc", label: "Participación de terceros", cur: cesion, prev: cesionP, pol: -1 });
   if (!isCol("sec_terc"))
-    filas.push({ kind: "cuenta", label: "Barrio Norte · socios " + Math.round(CESION.pct * 100) + "%", cur: cesion, prev: cesionP, pol: -1 });
+    filas.push({ kind: "cuenta", label: "Barrio Norte · socios " + Math.round((sub.cesionPct ?? CESION.pct) * 100) + "%", cur: cesion, prev: cesionP, pol: -1 });
   filas.push({ kind: "result", strong: true, label: "Resultado atribuible a BIGG", cur: atribuible, prev: atribuibleP, pol: 1 });
   filas.push(filaRatioDe("Margen sobre contribución", atribuible, contrib, atribuibleP, contribP));
 
@@ -1956,6 +1957,7 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
   const [ccs,       setCcs]       = useState([]);
   const [liqsCerradas, setLiqsCerradas] = useState([]);  // su_liquidaciones cerradas (devengado sueldos)
   const [rawFin,    setRawFin]    = useState([]);        // financiaciones (planes AFIP + créditos)
+  const [partic,    setPartic]    = useState([]);        // nb_socios crudo: participaciones por negocio (% de la cesión BN)
   const [rawFranq,  setRawFranq]  = useState({});        // comprobantes de Franquicias (read-only)
   const [franquicias, setFranquicias] = useState([]);    // maestro de Franquicias (razón social, NIF, domicilio)
   const [intercoData,  setIntercoData]  = useState({ movs: [], comps: [], centros: [] });  // fuentes interco (read-only, todas las sociedades)
@@ -2006,7 +2008,7 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
         // (antes `.catch(() => [])` y el P&L salía sin comprobantes o sin movimientos, en silencio).
         const fallas = [];
         const tol = tolerante(fallas);
-        const [eg, ing, movs, cbs, ccList, ctaList, fin] = await Promise.all([
+        const [eg, ing, movs, cbs, ccList, ctaList, fin, pt] = await Promise.all([
           // P&L Sedes/BIGG son group-level (todas las sociedades). Cash Flow (por sociedad) filtra client-side.
           tol("comprobantes de egreso",  fetchLineasEnriquecidas(null, ["EGRESO", "GASTO"])),
           tol("comprobantes de ingreso", fetchLineasEnriquecidas(null, "INGRESO")),
@@ -2015,6 +2017,7 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
           tol("centros de costo",        fetchCentrosCosto()),
           tol("plan de cuentas",         fetchCuentas()),
           tol("financiaciones",          fetchFinanciaciones()),
+          tol("participaciones",         fetchParticipaciones()),
         ]);
         const liqsR = await liqsP;
         const liqsC = liqsR.v;
@@ -2029,6 +2032,7 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
         setCuentas(Array.isArray(ctaList) ? ctaList : []);
         setLiqsCerradas(Array.isArray(liqsC) ? liqsC : []);
         setRawFin(Array.isArray(fin) ? fin : []);
+        setPartic(Array.isArray(pt) ? pt : []);
         // Franquicias (read-only) — fuera del Promise.all para NO bloquear Reportes si ese backend tarda.
         // "all" en vez de "comps": el maestro de franquicias (razón social, NIF, domicilio) va al libro de
         // Facturas Emitidas del estudio (8/10/2026).
@@ -2183,11 +2187,16 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
 
   // Cesión de utilidades: se activa solo cuando el scope es EXACTAMENTE la sede con cesión (Barrio Norte);
   // aplicar el % sobre un agregado de varias sedes sería incorrecto.
+  // Config de la cesión de Barrio Norte: el % sale de la tabla de participaciones (nb_socios, fila cesión con alcance =
+  // centro BN); CESION.pct queda de respaldo si la tabla no cargó. Trae también quién es el socio-cesión y la sociedad,
+  // para provisionar desde Participaciones (T4 tanda C).
+  const cesiones = useMemo(() => cesionesDe(partic, ccs), [partic, ccs]);
+  const cesionCfg = useMemo(() => cesiones.find(c => _nkSede(c.nombre).includes(_nkSede(CESION.matchNombre))) || CESION, [cesiones]);
   const cesionSede = useMemo(() => {
     if (resolvedCCSede.length !== 1) return null;
     const cc = ccMap.get(ccKey(resolvedCCSede[0]));
-    return cc && _nkSede(cc.nombre).includes(_nkSede(CESION.matchNombre)) ? CESION : null;
-  }, [resolvedCCSede, ccMap]);
+    return cc && _nkSede(cc.nombre).includes(_nkSede(CESION.matchNombre)) ? cesionCfg : null;
+  }, [resolvedCCSede, ccMap, cesionCfg]);
 
   // Toggle de un grupo (operación) entero: agrega/saca todas sus sedes de la selección.
   const toggleGrupoSede = (opId) => {
@@ -2383,6 +2392,11 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
   const inFxRows = useMemo(() => traducirFilasFx(inConFranq, fxConv, fxTarget), [inConFranq, fxConv, fxTarget]);
   const egFxRows = useMemo(() => traducirFilasFx(egConSueldos, fxConv, fxTarget), [egConSueldos, fxConv, fxTarget]);
   const inFx = inFxRows.rows, egFx = egFxRows.rows;
+
+  // Provisión de la cesión (T4 tanda C), DERIVADA del P&L: filas virtuales de nb_socios_cc (apertura al 30/6 + una por
+  // mes) para la pantalla de Participaciones. Solo con esa pestaña abierta; el Balance las calcula por su lado.
+  const provisionesSocios = useMemo(() => activeTab !== "socios" ? []
+    : provisionCesionRows({ cesiones, inRows: inConFranq, egRows: egConSueldos, year }), [activeTab, cesiones, inConFranq, egConSueldos, year]);
   // ── El OTRO lente (TC real) para la vista YTD "en dos lentes", que existe SOLO con moneda comparable: el año
   // anterior se muestra a TC real y reexpresado al TC del año en curso, lado a lado. El año en curso es idéntico
   // en los dos lentes (ver modo "comp") → solo hace falta traducir y construir el año anterior una segunda vez.
@@ -2656,7 +2670,7 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
     // único IVA de compra que no contaba como costo → Resultado del Grupo inflado ~1,07M ARS jul / 1,16M ago 2026
     // (≈700/755 USD), y ~540-690 USD/mes en el histórico (donde se estimaba al 21% del bruto). Sacada con OK Martín.
     const resSedesAR = {
-      res:    sAR.resFinal.map((v, m) => v - CESION.pct * (Number(sBNnet?.resFinal?.[m]) || 0)),
+      res:    sAR.resFinal.map((v, m) => v - cesionCfg.pct * (Number(sBNnet?.resFinal?.[m]) || 0)),
       ivaDeb: sAR.ivaDeb, ivaCred: sAR.ivaCred,
     };
     // Gerenciamiento (Rosedal) = fee Ñako→Segui (cuenta "Fee de Gestion y Adm" exacta, núcleo; venta → IVA débito).
@@ -2688,9 +2702,10 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
     }
     const sub = computeSubtotalsHolding(pnl, { resSedesAR, feeGer, resWRE });
     // Cesión BN 49% por mes (lo que el holding le restó a Sedes Propias): la usa el puente del Devengado.
-    const cesionBN = MESES.map((_, m) => CESION.pct * (Number(sBNnet?.resFinal?.[m]) || 0));
+    const cesionBN = MESES.map((_, m) => cesionCfg.pct * (Number(sBNnet?.resFinal?.[m]) || 0));
     // La lee también la cascada "P&L del grupo" (buildPnLGrupoFilas). Viaja DENTRO de sub → prev/prevC la traen sola.
     sub.cesionBN = cesionBN;
+    sub.cesionPct = cesionCfg.pct;
     return { pnl, sub, cesionBN,
       // DEV-ONLY (check "P&L BIGG vs Devengado" en consola): piezas del holding para descomponer la diferencia.
       _dbg: import.meta.env.DEV ? { sAR, sBNnet, feeGer, resWRE, arNucleoCCs, bnCcId } : undefined };
@@ -2820,7 +2835,7 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
         onMouseLeave={e => e.currentTarget.style.background = "#f3f4f6"}>
         ← Reportes
       </button>}
-      <PantallaSocios />
+      <PantallaSocios provisiones={provisionesSocios} />
     </div>
   );
 
