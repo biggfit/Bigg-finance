@@ -321,6 +321,22 @@ export default function PantallaNovedades({ pais = "" }) {
     return { cuenta_contable_id: row.cuenta_contable_id, cuenta_contable_nombre: row.cuenta_contable_nombre };
   };
 
+  // Lo que se escribe en su_novedades por una fila (Guardar y Aprobar).
+  const payloadDe = (r) => {
+    const cc = resolveCuenta(r);
+    return {
+      mes, anio,
+      legajo_id: r.legajo_id, legajo_nombre: r.legajo_nombre,
+      tipo: "extra",
+      descripcion: r.nota,
+      monto: parseFloat(r.monto) || 0,
+      forma_pago: r.forma_pago,
+      cuenta_contable_id: cc.cuenta_contable_id,
+      cuenta_contable_nombre: cc.cuenta_contable_nombre,
+      estado: r.estado || "", comprobante_url: r.comprobante_url || "",
+    };
+  };
+
   const handleCopiarMesAnterior = async () => {
     const mAnt = mes === 1 ? 12 : mes - 1;
     const aAnt = mes === 1 ? anio - 1 : anio;
@@ -349,18 +365,7 @@ export default function PantallaNovedades({ pais = "" }) {
       const nuevas = [];
       const ops = [];
       for (const r of validas) {
-        const cc = resolveCuenta(r);
-        const payload = {
-          mes, anio,
-          legajo_id: r.legajo_id, legajo_nombre: r.legajo_nombre,
-          tipo: "extra",
-          descripcion: r.nota,
-          monto: parseFloat(r.monto) || 0,
-          forma_pago: r.forma_pago,
-          cuenta_contable_id: cc.cuenta_contable_id,
-          cuenta_contable_nombre: cc.cuenta_contable_nombre,
-          estado: r.estado || "", comprobante_url: r.comprobante_url || "",
-        };
+        const payload = payloadDe(r);
         if (!r.id) {
           nuevas.push({ tmpId: r._id, payload });
         } else {
@@ -447,11 +452,74 @@ export default function PantallaNovedades({ pais = "" }) {
     .filter(id => !(montoMonotributoPorLegajo.get(ALIAS_MONOTRIBUTO[id] ?? id) > 0))
     .map(legajoNombre);
 
-  // Cargas por link pendientes de aprobar (no entran en la liquidación hasta aprobarlas + Guardar).
+  // Cargas por link pendientes de aprobar (no entran en la liquidación hasta aprobarlas).
   const pendientes = rows.filter(r => r.estado === "pendiente");
-  const aprobar = (rid) => setRow(rid, { estado: "aprobada" });
-  const aprobarTodos = () => {
-    setRows(prev => prev.map(r => r.estado === "pendiente" ? { ...r, estado: "aprobada" } : r));
+
+  // Aprobar se guarda en el momento, sin esperar a "Guardar": desde ahí el link ya no acepta correcciones
+  // (el Apps Script rechaza las aprobadas). Antes relee la planilla: si la persona corrigió la carga por el
+  // link desde que se abrió la pantalla, no aprueba a ciegas el monto viejo.
+  // Devuelve "ok" | "cambio" (fresca distinta a la de pantalla) | "falta" (ya no está en la planilla).
+  const aprobarFila = async (r, frescas, { aceptarCambio = false } = {}) => {
+    const fresca = frescas.find(n => n.id === r.id);
+    if (!r.id || !fresca) return "falta";
+    const aFila = (n) => ({ ...novToRow(n), concepto: conceptoDeNovedad(n), _id: r._id });
+    const ponerFresca = (n) => {
+      setRows(prev => prev.map(x => x._id === r._id ? aFila(n) : x));
+      setLoaded(prev => prev.map(x => x.id === n.id ? n : x));
+    };
+    if (fresca.estado === "aprobada") { ponerFresca(fresca); return "ok"; }   // ya la aprobó otro
+    const orig = loaded.find(n => n.id === r.id);
+    const cambio = orig && firmaLink(fresca) !== firmaLink(orig);
+    if (cambio && !aceptarCambio) { ponerFresca(fresca); return "cambio"; }
+    const fila = cambio ? aFila(fresca) : r;
+    const payload = { ...payloadDe(fila), estado: "aprobada", created_at: new Date().toISOString() };
+    await updateNovedad(r.id, payload);
+    setRows(prev => prev.map(x => x._id === r._id ? { ...fila, estado: "aprobada" } : x));
+    setLoaded(prev => prev.map(x => x.id === r.id ? { ...fresca, ...payload } : x));
+    setGuardadoEl(new Date());
+    return "ok";
+  };
+
+  const [aprobando, setAprobando] = useState(false);
+  const releerFrescas = () => fetchNovedades(mes, anio, { conPendientes: true });
+  const fmtPesos = (v) => `$${fmtEntero(Number(v) || 0)}`;
+
+  const aprobar = async (r) => {
+    if (aprobando) return;
+    setAprobando(true);
+    try {
+      const frescas = await releerFrescas();
+      let res = await aprobarFila(r, frescas);
+      if (res === "cambio") {
+        const f = frescas.find(n => n.id === r.id);
+        const msg = `${r.legajo_nombre} corrigió la carga por el link: ${fmtPesos(r.monto)} → ${fmtPesos(f.monto)}` +
+          (f.comprobante_url !== r.comprobante_url ? " (con comprobante nuevo)" : "") +
+          `.\n\n¿Aprobar ${fmtPesos(f.monto)}?`;
+        if (confirm(msg)) res = await aprobarFila(r, frescas, { aceptarCambio: true });
+      }
+      if (res === "falta") alert(`La carga de ${r.legajo_nombre} ya no está en la planilla. Recargá el mes.`);
+    } catch (e) {
+      alert("Error al aprobar: " + e.message);
+    } finally { setAprobando(false); }
+  };
+
+  const aprobarTodos = async () => {
+    if (aprobando) return;
+    setAprobando(true);
+    try {
+      const frescas = await releerFrescas();
+      const cambiadas = [];
+      // Secuencial: el GAS pierde escrituras concurrentes.
+      for (const r of pendientes) {
+        const res = await aprobarFila(r, frescas);
+        if (res !== "ok") cambiadas.push(r.legajo_nombre);
+      }
+      if (cambiadas.length)
+        alert("Estas cargas cambiaron por el link (o ya no están) y NO se aprobaron; quedan en pantalla " +
+          "con lo nuevo para que las revises:\n\n" + cambiadas.join("\n"));
+    } catch (e) {
+      alert("Error al aprobar: " + e.message + "\n\nLas que llegaron a aprobarse quedan aprobadas.");
+    } finally { setAprobando(false); }
   };
   const colsExtra = (esOtros ? 1 : 0) + (esMonotributo ? 1 : 0);
 
@@ -550,9 +618,12 @@ export default function PantallaNovedades({ pais = "" }) {
           padding: "8px 12px", fontSize: 13, marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <span style={{ flexGrow: 1 }}>
             ⏳ {pendientes.length === 1 ? "1 carga pendiente" : `${pendientes.length} cargas pendientes`} de aprobar.
-            No entran en la liquidación hasta aprobarlas y guardar.
+            No entran en la liquidación hasta aprobarlas (se guarda al aprobar).
           </span>
-          <button onClick={aprobarTodos} style={{ ...btnStyle(T.green), padding: "5px 12px" }}>Aprobar todos</button>
+          <button onClick={aprobarTodos} disabled={aprobando}
+            style={{ ...btnStyle(T.green), padding: "5px 12px", opacity: aprobando ? 0.6 : 1 }}>
+            {aprobando ? "Aprobando…" : "Aprobar todos"}
+          </button>
         </div>
       )}
 
@@ -633,9 +704,10 @@ export default function PantallaNovedades({ pais = "" }) {
                           style={{ textDecoration: "none", fontSize: 15, marginRight: 8 }}>📎</a>
                       )}
                       {r.estado === "pendiente" ? (
-                        <button onClick={() => aprobar(r._id)}
+                        <button onClick={() => aprobar(r)} disabled={aprobando}
                           style={{ background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a", borderRadius: 5,
-                            padding: "3px 9px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>
+                            padding: "3px 9px", fontSize: 12, fontWeight: 600, cursor: aprobando ? "wait" : "pointer",
+                            fontFamily: T.font, opacity: aprobando ? 0.6 : 1 }}>
                           Aprobar
                         </button>
                       ) : r.estado === "aprobada" ? (

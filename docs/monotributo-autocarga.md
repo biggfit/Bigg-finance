@@ -2,7 +2,9 @@
 
 Cada mes, el día 12, los monotributistas que cargan solos (legajo con `monotributo` = `link`) reciben un mail con un link personal.
 Ahí cargan el importe y adjuntan el comprobante. La carga aparece en **Novedades HQ → Monotributo** como
-**pendiente**. Se aprueba (de a uno o con "Aprobar todos") y se toca **Guardar**: recién ahí entra en la liquidación.
+**pendiente**. Se aprueba (de a uno o con "Aprobar todos") y queda guardada al instante: desde ahí entra en la
+liquidación y el link ya no deja corregirla. Si la persona la corrigió por el link mientras tenías la pantalla
+abierta, al aprobar te avisa el monto nuevo antes de aprobarlo.
 Los días 24 y 27 sale un recordatorio solo a quien todavía no cargó. El link sirve todo el mes: quien paga a mano carga apenas paga; quien tiene débito automático, después del 20 (o del hábil siguiente).
 
 Quién carga por link lo dice el campo `monotributo` del legajo (hoja **su_legajos**, se edita en **Sueldos → Legajos**):
@@ -76,5 +78,5 @@ con tu propio link. Abrí el link y probá la carga; después aparece en la sola
   3. No hace falta tocar las propiedades ni volver a correr `instalar`.
   4. Probar con `vistaPreviaMail` y abrir el link. La primera carga puede tardar unos 10 segundos mientras arranca el Apps Script.
 - **Corregir un importe:** mientras está pendiente, la persona puede volver a entrar al link y corregirlo.
-  Una vez aprobado, se corrige desde la solapa.
+  Una vez aprobado (se guarda al tocar Aprobar), se corrige desde la solapa.
 - **Los comprobantes** quedan en Drive → Comprobantes Monotributo → una carpeta por mes.
