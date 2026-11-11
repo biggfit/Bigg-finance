@@ -12,7 +12,7 @@ import {
   fetchCuentasBancarias, fetchCuentas, fetchCentrosCosto, fetchSaldoMercadoPago, esCuentaMercadoPago,
   appendGastoDirecto, esIgnorado, ignorarMovimiento, esCuentaCredito, fetchFinanciaciones,
   pagarTarjeta, fetchSocios, fetchSociosCC, fetchIntercoData, intercoLedger, primeCache, motivoNoBorrable,
-  esIntercoDeclaradaManual, piezasIntercoDeclarada, deshacerIntercoDeclarada,
+  esIntercoDeclaradaManual, piezasIntercoDeclarada, deshacerIntercoDeclarada, notaUsuario,
 } from "../lib/numbersApi";
 import { fetchLiquidacionesCerradas } from "../lib/sueldosApi";
 import { fetchAll } from "../lib/sheetsApi";        // Franquicias (read-only)
@@ -1232,6 +1232,7 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
     const max = montoMax !== "" ? Number(montoMax) : null;
     return sorted.filter(m => {
       if (q && !((m.concepto ?? "").toLowerCase().includes(q) ||
+          notaUsuario(m).toLowerCase().includes(q) ||
           String(m.cuenta_contable || m.cuenta || "").replace(/^CUENTA_/, "").toLowerCase().includes(q))) return false;
       const monto = Number(m.monto) || 0;
       if (signo === "pos" && monto < 0) return false;
@@ -1254,6 +1255,7 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
         case "fecha":    return m.fecha ?? "";
         case "cuenta":   return cuentaMap[m.cuenta_bancaria] ?? m.cuenta_bancaria ?? "";
         case "concepto": return m.concepto ?? "";
+        case "nota":     return notaUsuario(m);
         case "ctaCont":  return String(m.cuenta_contable || m.cuenta || "").replace(/^CUENTA_/, "");
         case "centro":   return m.centro_costo ? (ccMap[m.centro_costo] ?? m.centro_costo) : "";
         case "moneda":   return m.moneda ?? "";
@@ -1336,7 +1338,7 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
           <input value={busqueda} onChange={e => setBusqueda(e.target.value)}
-            placeholder="Buscar por concepto o cuenta contable…" style={{
+            placeholder="Buscar por concepto, nota o cuenta contable…" style={{
               fontSize:12, color:T.text, background:T.card, border:`1px solid ${T.cardBorder}`,
               borderRadius:6, padding:"5px 10px", fontFamily:T.font, width:240 }} />
           {busqueda && (
@@ -1362,7 +1364,7 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
             <tr style={{ background:T.tableHead }}>
               <th style={{ width:36 }} />
               {[
-                ["Tipo", "tipo"], ["Fecha", "fecha"], ["Cuenta", "cuenta"], ["Concepto", "concepto"],
+                ["Tipo", "tipo"], ["Fecha", "fecha"], ["Cuenta", "cuenta"], ["Concepto", "concepto"], ["Nota", "nota"],
                 ["Cta. Contable", "ctaCont"], ["C. Costo", "centro"], ["Moneda", "moneda"],
                 ["Importe", "importe"], ["Saldo", "saldo"], ["Registró", "registro"],
               ].map(([h, key]) => key === "importe" ? (
@@ -1423,7 +1425,7 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
           </thead>
           <tbody>
             {ordenado.length === 0 && (
-              <tr><td colSpan={11} style={{ padding:"32px 14px", textAlign:"center", color:T.dim, fontSize:13 }}>
+              <tr><td colSpan={12} style={{ padding:"32px 14px", textAlign:"center", color:T.dim, fontSize:13 }}>
                 Sin resultados con los filtros aplicados
               </td></tr>
             )}
@@ -1481,6 +1483,10 @@ export function TabMovimientos({ movimientos, cuentas, filtroCuenta, filtroRef, 
                   <td style={{ padding:"10px 14px", fontSize:13, color:T.text }}>
                     <div style={{ maxWidth:280, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}
                       title={m.concepto || undefined}>{m.concepto ?? "—"}</div>
+                  </td>
+                  <td style={{ padding:"10px 14px", fontSize:12, color: notaUsuario(m) ? "#92400e" : T.dim }}>
+                    <div style={{ maxWidth:220, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}
+                      title={notaUsuario(m) || undefined}>{notaUsuario(m) || "—"}</div>
                   </td>
                   <td style={{ padding:"10px 14px", fontSize:11, color:T.muted }}>
                     {String(m.cuenta_contable || m.cuenta || "").replace(/^CUENTA_/, "") || "—"}

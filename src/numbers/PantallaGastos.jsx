@@ -352,6 +352,7 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
         (g.proveedor ?? "").toLowerCase().includes(q) ||
         (g.cuenta_contable ?? "").toLowerCase().includes(q) ||
         (g.nota ?? "").toLowerCase().includes(q) ||
+        (g.notaUsuario ?? "").toLowerCase().includes(q) ||
         resolveCC(g.cc).toLowerCase().includes(q) ||
         resolveCB(g.cuentaBancaria).toLowerCase().includes(q);
       return matchQ && filtroFecha.inRange(g.fecha);
@@ -454,6 +455,8 @@ export default function PantallaGastos({ sociedad = "nako", subView = null, onSu
                   <td style={{ padding:"9px 14px", fontSize:12, color:T.text, fontWeight:500,
                     maxWidth:160, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
                     {g.proveedor || g.nota || <span style={{ color:T.dim }}>—</span>}
+                    {g.notaUsuario && <div title={g.notaUsuario} style={{ fontSize:11, color:"#92400e", fontWeight:400,
+                      overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>✎ {g.notaUsuario}</div>}
                   </td>
 
                   <td style={{ padding:"9px 14px", fontSize:12, color:T.text, fontWeight:500 }}>

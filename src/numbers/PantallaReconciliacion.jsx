@@ -7,6 +7,7 @@ import {
   ignorarMovimiento, restaurarMovimiento, fetchMovimientosIgnorados, fetchPagosSueldos,
   fetchEgresos, fetchPagosCobros, calcSaldoPendiente, imputarPagoFC,
   pagarFacturasDesdeExtracto, cobrarFacturasDesdeExtracto,
+  notaUsuario, guardarNotaMovimiento,
   appendEgreso, appendProveedor, appendCuenta,
   appendIngreso, fetchClientes, appendCliente,
   appendBancoRegla, fetchIngresos, imputarCobroIngreso,
@@ -382,6 +383,8 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const [descTxt,  setDescTxt]  = useState("");       // texto "contiene" — columna Descripción (concepto o contraparte)
   const [descSel,  setDescSel]  = useState(null);     // null = todas | Set de conceptos tildados (lista estilo Excel)
   const [colMenu,  setColMenu]  = useState(null);     // null | { key: "fecha"|"desc", x, y } popover abierto (position:fixed)
+  // Nota del usuario (✎) — editor en línea: { id, texto, guardando } de la fila que se está anotando.
+  const [notaEdit, setNotaEdit] = useState(null);
   const [panelBanco, setPanelBanco] = useState(null); // null | "ignorados" | "conciliados": acordeón — abrir uno cierra el otro
   const [concDesde,  setConcDesde]  = useState("");   // filtro de fecha del histórico "Conciliados"
   const [concHasta,  setConcHasta]  = useState("");
@@ -1466,16 +1469,57 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     const r = e.currentTarget.getBoundingClientRect();
     setColMenu(c => c?.key === key ? null : { key, x: Math.min(r.left, window.innerWidth - 290), y: r.bottom + 4 });
   };
+  // ── Nota del usuario (✎): se guarda al toque en `nota` del movimiento (no espera al Aceptar, así
+  // sobrevive a cualquier tipo de imputación y también sirve en Conciliados sin desimputar).
+  const abrirNota = (m) => { setMenuFor(null); setNotaEdit({ id: m.id, texto: notaUsuario(m), guardando: false }); };
+  const guardarNota = async (m) => {
+    if (!notaEdit || notaEdit.id !== m.id) return;
+    setNotaEdit(n => ({ ...n, guardando: true }));
+    try {
+      const nota = await guardarNotaMovimiento(m, notaEdit.texto);
+      const upd = list => list.map(x => x.id === m.id ? { ...x, nota } : x);
+      setPendientes(upd); setMovsCuenta(upd); setIgnorados(upd);
+      setNotaEdit(null);
+      setMsg(notaUsuario({ nota }) ? "✎ Nota guardada." : "Nota borrada.");
+    } catch (e) {
+      setNotaEdit(n => n && ({ ...n, guardando: false }));
+      setMsg("Error al guardar la nota: " + e.message);
+    }
+  };
+  // Editor en línea (input + Guardar/Cancelar) o la nota guardada, debajo de la descripción.
+  const notaCelda = (m) => {
+    if (notaEdit?.id === m.id) return (
+      <div style={{ display: "flex", gap: 4, marginTop: 4 }} onClick={e => e.stopPropagation()}>
+        <input autoFocus value={notaEdit.texto} disabled={notaEdit.guardando} placeholder="Nota (ej. compra de insumos sede X)"
+          onChange={e => setNotaEdit(n => ({ ...n, texto: e.target.value }))}
+          onKeyDown={e => { if (e.key === "Enter") guardarNota(m); if (e.key === "Escape") setNotaEdit(null); }}
+          style={{ flex: 1, minWidth: 150, fontSize: 11, padding: "3px 6px", borderRadius: 5, border: `1px solid ${T.accentDark}`, fontFamily: T.font, color: "#111827", background: "#fff" }} />
+        <button onClick={() => guardarNota(m)} disabled={notaEdit.guardando} title="Guardar (Enter)"
+          style={{ fontSize: 11, fontWeight: 700, border: "none", borderRadius: 5, padding: "3px 8px", background: T.accentDark, color: T.accent, cursor: "pointer", fontFamily: T.font }}>
+          {notaEdit.guardando ? "…" : "✓"}</button>
+        <button onClick={() => setNotaEdit(null)} disabled={notaEdit.guardando} title="Cancelar (Esc)"
+          style={{ fontSize: 11, border: `1px solid ${T.cardBorder}`, borderRadius: 5, padding: "3px 7px", background: "#fff", color: T.muted, cursor: "pointer", fontFamily: T.font }}>✕</button>
+      </div>
+    );
+    const n = notaUsuario(m);
+    return n ? (
+      <div onClick={() => abrirNota(m)} title={`${n} — click para editar`}
+        style={{ fontSize: 10.5, color: "#92400e", background: "#fef3c7", borderRadius: 4, padding: "1px 6px", marginTop: 3, cursor: "pointer",
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%", display: "inline-block", boxSizing: "border-box" }}>✎ {n}</div>
+    ) : null;
+  };
   const filtered = useMemo(() => {
     let list = filtroTipo ? pendCuenta.filter(m => grupoDe(m) === filtroTipo) : pendCuenta;
     const q = busqueda.trim().toLowerCase();
     if (q) list = list.filter(m =>
-      (m.concepto ?? "").toLowerCase().includes(q) || (m.contraparte_nombre ?? "").toLowerCase().includes(q));
+      (m.concepto ?? "").toLowerCase().includes(q) || (m.contraparte_nombre ?? "").toLowerCase().includes(q) ||
+      notaUsuario(m).toLowerCase().includes(q));
     if (fDesde) list = list.filter(m => fechaComprobanteISO(m.fecha) >= fDesde);
     if (fHasta) list = list.filter(m => fechaComprobanteISO(m.fecha) <= fHasta);
     const dq = descTxt.trim().toLowerCase();
     if (dq) list = list.filter(m =>
-      (m.concepto ?? "").toLowerCase().includes(dq) || (m.contraparte_nombre ?? "").toLowerCase().includes(dq));
+      (m.concepto ?? "").toLowerCase().includes(dq) || (m.contraparte_nombre ?? "").toLowerCase().includes(dq) ||
+      notaUsuario(m).toLowerCase().includes(dq));
     if (descSel) list = list.filter(m => descSel.has(String(m.concepto ?? "").trim() || "(vacío)"));
     // Ordenado por fecha (default: más recientes arriba) — la ingesta del extracto no garantiza
     // orden. Se compara en ISO (fechaComprobanteISO tolera DD/MM/YYYY e ISO); copia nueva para no mutar.
@@ -2247,6 +2291,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                     <td style={{ padding: "8px 12px", maxWidth: 220 }}>
                       <div style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.concepto}</div>
                       {m.contraparte_nombre && <div style={{ fontSize: 10, color: T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={m.contraparte_nombre}>{m.contraparte_nombre}</div>}
+                      {notaCelda(m)}
                     </td>
                     <td style={{ padding: "8px 12px", fontWeight: 700, textAlign: "right", whiteSpace: "nowrap", color: "#dc2626" }}>
                       {neg ? fmt(total) : ""}
@@ -2485,6 +2530,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                       {menuFor === m.id && (
                         <div onClick={(e) => e.stopPropagation()} style={{ position: "absolute", right: 6, top: "calc(100% - 2px)", zIndex: 30,
                           background: "#fff", border: "1px solid #cbd5e1", borderRadius: 8, boxShadow: "0 6px 18px rgba(0,0,0,.14)", minWidth: 220, overflow: "hidden" }}>
+                          <button style={MENU_ITEM} onClick={() => abrirNota(m)}>{notaUsuario(m) ? "✎ Editar nota" : "📝 Agregar nota"}</button>
                           {/* Posible duplicado: la acción primaria es Ignorar (botón rojo), así que Aceptar vive acá. */}
                           {dupTransfer(m) && (
                             <button style={{ ...MENU_ITEM, color: "#16a34a", fontWeight: 700 }} disabled={!puedeAceptar}
@@ -2765,7 +2811,16 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                           return (
                             <tr key={m.id} style={{ background: i % 2 ? "#eef2f7" : "#ffffff", borderBottom: "1px solid #f1f5f9" }}>
                               <td style={{ padding: "7px 12px", color: T.muted, whiteSpace: "nowrap" }}>{fmtDate(m.fecha)}</td>
-                              <td style={{ padding: "7px 12px", color: T.text, maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.concepto || "—"}</td>
+                              <td style={{ padding: "7px 12px", color: T.text, maxWidth: 280 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                  <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.concepto || "—"}</span>
+                                  {notaEdit?.id !== m.id && !notaUsuario(m) && (
+                                    <button onClick={() => abrirNota(m)} title="Agregar nota"
+                                      style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: 12, padding: 0, opacity: .45 }}>📝</button>
+                                  )}
+                                </div>
+                                {notaCelda(m)}
+                              </td>
                               <td style={{ padding: "7px 12px", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap", color: neg ? "#dc2626" : "#16a34a" }}>{fmt(Math.abs(Number(m.monto) || 0))}</td>
                               <td style={{ padding: "7px 12px", whiteSpace: "nowrap" }}>
                                 <span style={{ fontSize: 10, fontWeight: 800, color: est.color, background: `${est.color}18`, borderRadius: 6, padding: "2px 8px" }}>{est.label}</span>

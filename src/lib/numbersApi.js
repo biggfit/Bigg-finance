@@ -697,7 +697,8 @@ async function _imputarVariasDesdeExtracto(mov, partes, appendFn) {
     throw new Error(`La suma de las partes (${suma.toLocaleString("es-AR")}) no coincide con la transferencia (${total.toLocaleString("es-AR")}).`);
   const grupo    = mov.id;
   const fechaTxt = String(mov.fecha || "").split("-").reverse().join("/");   // YYYY-MM-DD → DD/MM/YYYY
-  const nota     = `Parte de transferencia $${total.toLocaleString("es-AR")} · ${fechaTxt}`;
+  // La nota del usuario de la línea del extracto (si la puso) viaja a cada parte: la línea se ignora.
+  const nota     = conNotaUsuario(`Parte de transferencia $${total.toLocaleString("es-AR")} · ${fechaTxt}`, notaUsuario(mov));
   for (const p of partes) {
     await appendFn({
       documento_id:    p.documento_id,
@@ -1416,6 +1417,33 @@ export async function appendIngresosDirectos({ sociedad, items = [] }) {
 // documento_id "IGN-…". Sale de pendientes y NO cuenta en Tesorería ni Cash Flow (evita
 // el doble conteo, ej. el débito del pago de haberes que ya está en los movs origen=sueldos).
 export const esIgnorado = m => String(m?.documento_id || "").startsWith("IGN-");
+
+// ── Nota del usuario en un movimiento (motor de Conciliación) ──
+// `nota` de nb_movimientos ya trae datos del sistema en algunos flujos (dato crudo del extracto de MP,
+// "Parte de transferencia…", retenciones depositadas, interco_ref=…). La nota que escribe el usuario
+// NO los pisa: va al final marcada con "✎" → "<sistema> · ✎ <usuario>". Los parsers del sistema
+// (regex sobre `interco_ref=`, RETDEP_TAG con includes) siguen funcionando con el sufijo.
+const NOTA_MARCA = "✎";
+export const notaUsuario = m => {
+  const s = String(m?.nota ?? "");
+  const i = s.indexOf(NOTA_MARCA);
+  return i < 0 ? "" : s.slice(i + NOTA_MARCA.length).trim();
+};
+export const conNotaUsuario = (nota, texto) => {
+  const s = String(nota ?? "");
+  const i = s.indexOf(NOTA_MARCA);
+  const sistema = (i < 0 ? s : s.slice(0, i)).replace(/\s*·\s*$/, "").trim();
+  const t = String(texto ?? "").replace(/\s+/g, " ").trim();
+  if (!t) return sistema;
+  return sistema ? `${sistema} · ${NOTA_MARCA} ${t}` : `${NOTA_MARCA} ${t}`;
+};
+// Guarda (o borra, con texto vacío) la nota del usuario. Solo toca `nota`: no desimputa ni cambia
+// nada contable → sirve igual para una línea pendiente que para una ya conciliada.
+export async function guardarNotaMovimiento(mov, texto) {
+  const nota = conNotaUsuario(mov?.nota, texto);
+  await post({ action: "edit", sheet: "nb_movimientos", id: mov.id, patch: { nota } });
+  return nota;
+}
 // Línea del extracto que nadie aceptó todavía: conserva el tipo crudo del parser (EGRESO/INGRESO) y la cuenta
 // que PROPUSO la regla, sin documento_id. Es la condición de `fetchMovimientosPendientes`.
 export const esExtractoSinConciliar = m => String(m?.origen || "") === "extracto" && !m?.documento_id;
@@ -2302,7 +2330,8 @@ export async function fetchGastos(sociedad) {
         ivaRate:         toNum(m.iva_rate),
         total,
         proveedor:       m.contraparte_nombre ?? "",
-        nota:            m.concepto ?? "",
+        nota:            m.concepto ?? "",   // en Gastos "nota" = concepto (ida y vuelta con updateGastoDirecto)
+        notaUsuario:     notaUsuario(m),     // la nota ✎ cargada desde Conciliación (solo lectura acá)
         cuentaBancaria:  m.cuenta_bancaria ?? "",
         registrado_por:  m.registrado_por ?? "",
       };
@@ -2361,7 +2390,8 @@ export async function fetchIngresosDirectos(sociedad) {
         ivaRate:         toNum(m.iva_rate),
         total,
         proveedor:       m.contraparte_nombre ?? "",
-        nota:            m.concepto ?? "",
+        nota:            m.concepto ?? "",   // idem fetchGastos: "nota" = concepto
+        notaUsuario:     notaUsuario(m),     // la nota ✎ cargada desde Conciliación
         cuentaBancaria:  m.cuenta_bancaria ?? "",
         registrado_por:  m.registrado_por ?? "",
       };
