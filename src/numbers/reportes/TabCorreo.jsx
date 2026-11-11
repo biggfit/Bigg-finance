@@ -25,11 +25,11 @@ const gmailUrl  = (ref, buzon) => !ref ? null
 // Una solapa por casilla de pagos. `lector` = tiene Apps Script propio (apps-script-lector-correo.gs); el de
 // Argentina se habilita cuando exista. Un borrador sin `buzon=` en la nota (parkeado a mano, antes del lector) va a pagos@.
 const BUZONES = [
-  { id: "es", label: "España",    mail: "pagos.es@bigg.fit", lector: true },
   { id: "ar", label: "Argentina", mail: "pagos@bigg.fit",    lector: false },
+  { id: "es", label: "España",    mail: "pagos.es@bigg.fit", lector: true },
 ];
 const buzonDe = nota => BUZONES.find(b => b.mail === metaBuzon(nota)) || null;
-const solapaDe = nota => (buzonDe(nota) || BUZONES[1]).id;
+const solapaDe = nota => (buzonDe(nota) || BUZONES.find(b => b.id === "ar")).id;
 
 export default function TabCorreo({ onPend } = {}) {
   const [confirm, confirmUI] = useConfirm();
@@ -131,10 +131,31 @@ export default function TabCorreo({ onPend } = {}) {
   const pendientesDebito = useMemo(() =>
     movs.filter(m => m.origen === "extracto" && !String(m.documento_id || "") && toNum(m.monto) < 0),
     [movs]);
-  const pagoPendiente = (row) => pendientesDebito.find(m => Math.abs(Math.abs(toNum(m.monto)) - toNum(row.total)) < 0.5) || null;
-  // Posible duplicado: ya existe un EGRESO real del mismo proveedor por el mismo monto.
-  const posibleDup = (row) => egresos.some(e => String(e.proveedorId || "") === String(row.proveedorId || "")
-    && row.proveedorId && Math.abs(toNum(e.total) - toNum(row.total)) < 0.01);
+  // Importe exacto (al centavo): con ±0,50 un débito de Prosegur de 59,44 se "pegaba" a una factura de Grenke de 59,29.
+  // Y el débito tiene que ser posterior a la emisión de la factura: uno anterior es el pago de la factura del mes
+  // pasado (recurrentes de importe fijo). Es solo una pista: el match real se hace en Conciliaciones.
+  const pagoPendiente = (row) => {
+    const emision = String(row.fechaFiscal || row.fecha || "");
+    return pendientesDebito.find(m => Math.abs(Math.abs(toNum(m.monto)) - toNum(row.total)) < 0.015
+      && (!emision || String(m.fecha || "") >= emision)) || null;
+  };
+  // Duplicado contra los EGRESO reales del mismo proveedor, con la misma lógica que el lector:
+  //   "dup" = mismo nº de factura (normalizado: "26/219518" ≡ "26-219518", sin ceros a la izquierda) → ya cargada.
+  //   "mes" = mismo importe y mismo mes de servicio, con otro nº → mirar. Mismo importe de otro mes = recurrente, nada.
+  // Devuelve el egreso que se parece, para mostrarlo en el tooltip sin abrir otra pestaña.
+  const normNro = s => String(s ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/^0+/, "");
+  const mismoNro = (a, b) => { a = normNro(a); b = normNro(b); if (a.length < 4 || b.length < 4) return false;
+    return a === b || a.endsWith(b) || b.endsWith(a) || (a.length >= 6 && b.includes(a)) || (b.length >= 6 && a.includes(b)); };
+  const duplicado = (row) => {
+    if (!row.proveedorId) return null;
+    const mios = egresos.filter(e => String(e.proveedorId || "") === String(row.proveedorId));
+    const porNro = mios.find(e => row.nroComp && e.nroComp && mismoNro(row.nroComp, e.nroComp));
+    if (porNro) return { nivel: "dup", egreso: porNro };
+    const mes = String(row.fecha || "").slice(0, 7);
+    const porMes = mios.find(e => Math.abs(toNum(e.total) - toNum(row.total)) < 0.01 && mes && String(e.fecha || "").slice(0, 7) === mes);
+    return porMes ? { nivel: "mes", egreso: porMes } : null;
+  };
+  const descEgreso = e => `${e.id} · nº ${e.nroComp || "(sin nº)"} · ${fmtDate(e.fecha)} · ${fmtMoney(e.total, e.moneda || "EUR")}`;
 
   const ed = (row) => edits[row.id] || { sociedad: row.sociedad || "", cuentaId: row.cuentaId || "", centro: row.cc || "", fechaServicio: row.fecha || "", nroComp: row.nroComp || "" };
   const setEd = (id, patch) => setEdits(e => ({ ...e, [id]: { ...(edits[id] || {}), ...patch } }));
@@ -329,7 +350,7 @@ export default function TabCorreo({ onPend } = {}) {
                 const linea = (row.lineas && row.lineas[0]) || {};
                 const enCurso = busy === row.id;
                 const pago = pagoPendiente(row);
-                const dup  = posibleDup(row);
+                const dup  = duplicado(row);
                 // Vto: si el pago ya se debitó en el banco, mostramos esa fecha; si no, la de la factura.
                 const vtoMostrar = pago ? pago.fecha : row.vto;
                 return (
@@ -339,7 +360,8 @@ export default function TabCorreo({ onPend } = {}) {
                       <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:13, fontWeight:700, color:T.text }}>
                         <span>{row.proveedor || "—"}</span>
                         {pago && <span style={{ fontSize:13, cursor:"help" }} title={`Pago ya realizado — falta matchearlo contra esta factura.\nDébito en Banco: ${pago.cuenta_bancaria} · ${fmtDate(pago.fecha)} · ${fmtMoney(Math.abs(toNum(pago.monto)), row.moneda||"ARS")}`}>💳</span>}
-                        {dup && <span style={{ fontSize:13, cursor:"help" }} title="Posible duplicado: ya hay un EGRESO del mismo proveedor por el mismo monto.">⚠️</span>}
+                        {dup?.nivel === "dup" && <span style={{ fontSize:13, cursor:"help" }} title={`YA CARGADA: existe un egreso con el mismo número.\n${descEgreso(dup.egreso)}`}>⛔</span>}
+                        {dup?.nivel === "mes" && <span style={{ fontSize:13, cursor:"help" }} title={`Mismo importe y mismo mes que un egreso ya cargado, con otro número: revisá.\n${descEgreso(dup.egreso)}`}>⚠️</span>}
                       </div>
                     </td>
                     <td style={{ padding:"9px 12px" }}>

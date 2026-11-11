@@ -473,6 +473,11 @@ function leerBuzon_(opts) {
   }
   const rafagaVista = {};
   const etiquetados = {};                                        // hilos ya etiquetados en esta corrida
+  const hilosConFactura = {};                                    // hilos con alguna factura parkeada/pendiente: nunca llevan Descartado
+  // Reproceso: si alguien le SACÓ la etiqueta Descartado a un mail en Gmail (ej. era una factura y se cargó la regla),
+  // se vuelve a mirar aunque esté en el memo. Se consulta una vez por hilo.
+  const labelsDe = {};
+  const tieneDescartado = th => { const id = th.getId(); if (!(id in labelsDe)) { try { labelsDe[id] = th.getLabels().some(l => l.getName() === ETIQUETAS.descartado); } catch (e) { labelsDe[id] = true; } } return labelsDe[id]; };
 
   // Recorrido por páginas de 100 hilos (más nuevos primero). Si la corrida anterior quedó parcial, se retoma desde
   // la página donde se cortó (CURSOR); con el memo, un hilo repetido no hace daño.
@@ -487,7 +492,7 @@ function leerBuzon_(opts) {
         if (Date.now() - t0 > maxMs) { res.parcial = true; seguir = false; break; }
         const mailId = msg.getId();
         if (msg.getDate() < desdeTs || msg.isInTrash()) continue;
-        if (memo[mailId]) continue;
+        if (memo[mailId] && !(memo[mailId] === "descartado" && !dry && !tieneDescartado(th))) continue;
         res.revisados++;
         const b = bucketDe(msg.getFrom(), msg.getDate());
         if (porBucket[b] > maxRafaga) {
@@ -510,6 +515,7 @@ function leerBuzon_(opts) {
             res.parkeadas.push({ proveedor: f.proveedor || f.remitente, nro: f.nro, total: f.total, centro: f.centro, archivo: f.archivo, sin_regla: !f.proveedor_id, diag: dry ? f.diag : undefined });
             if (!dry) filas.push(f.fila); else todoResuelto = false;
           }
+          if (r.facturas.length) hilosConFactura[th.getId()] = th;   // tuvo factura (parkeada, ya cargada o vieja)
           if (todoResuelto && !dry) memo[mailId] = "ok";
         } catch (e) {
           res.errores.push({ mail: msg.getSubject(), error: e.message });
@@ -524,6 +530,8 @@ function leerBuzon_(opts) {
   if (filas.length) nbPost_({ action: "add_batch", sheet: "nb_comprobantes", rows: filas });
   if (!dry) {
     guardarMemo_(memo);
+    // La etiqueta es por hilo: si un hilo tiene factura y además respuestas descartadas, gana la factura.
+    quitarDescartadoDe_(Object.keys(hilosConFactura).map(k => hilosConFactura[k]));
     // Parcial: se guarda la página para retomar; completa: se olvida el cursor y la próxima ventana arranca
     // dos días antes de hoy (lo ya procesado queda en el memo).
     if (res.parcial) props.setProperty("CURSOR", String(start)); else { props.deleteProperty("CURSOR"); props.setProperty("COMPLETA_EN", new Date().toISOString()); }
@@ -709,14 +717,27 @@ function instalar() {
 function etiquetarRetroactivo() {
   const memo = memo_();
   const etiquetados = {};
+  const conFactura = {};
   let n = 0, fallas = 0;
   Object.keys(memo).forEach(mailId => {
     const clave = memo[mailId] === "descartado" ? "descartado" : memo[mailId] === "lote" ? "lote" : "";
-    if (!clave) return;
-    try { etiquetarHilo_(GmailApp.getMessageById(mailId).getThread(), clave, etiquetados); n++; }
-    catch (e) { fallas++; }
+    try {
+      const th = GmailApp.getMessageById(mailId).getThread();
+      if (clave) { etiquetarHilo_(th, clave, etiquetados); n++; }
+      else conFactura[th.getId()] = th;               // "ok" = tuvo factura (parkeada o ya cargada)
+    } catch (e) { fallas++; }
   });
-  console.log("Etiquetados: " + n + " · sin encontrar: " + fallas + " (hilos distintos: " + Object.keys(etiquetados).length + ")");
+  // Un hilo con factura no lleva Descartado aunque otros mensajes del mismo hilo (respuestas) se hayan descartado.
+  const quitadas = quitarDescartadoDe_(Object.keys(conFactura).map(k => conFactura[k]));
+  console.log("Etiquetados: " + n + " · sin encontrar: " + fallas + " (hilos distintos: " + Object.keys(etiquetados).length + ") · Descartado quitado de " + quitadas + " hilos con factura");
+}
+
+function quitarDescartadoDe_(hilos) {
+  const l = GmailApp.getUserLabelByName(ETIQUETAS.descartado);
+  if (!l) return 0;
+  let n = 0;
+  hilos.forEach(th => { try { if (th.getLabels().some(x => x.getName() === ETIQUETAS.descartado)) { th.removeLabel(l); n++; } } catch (e) { /* nada */ } });
+  return n;
 }
 
 // Simulacro: lee y muestra qué parkearía, sin escribir nada. Correr desde el editor y mirar el registro.

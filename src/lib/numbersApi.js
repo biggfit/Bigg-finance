@@ -1493,6 +1493,7 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
   // columna que guarda nombres. Se canoniza en el alta, que es el único lugar por el que pasan
   // TODAS las líneas del extracto.
   const nc = await resolverCuenta();
+  let contabilizados = 0;
   for (const l of lineas) {
     const ref = String(l.saldo);   // identidad estable = saldo (NO fecha: el banco re-fecha entre descargas)
     const key = _refKey(ref);      // ...pero se COMPARA normalizado a centavos (ver _refKey)
@@ -1501,12 +1502,23 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
     const m = buscarMatch(l);
     if (m) { usados.add(m.id); matches.push({ mov: m, ref, linea: l }); continue; }
     const p = l.propuesta || {};
+    const id = newId("EXT");
+    const cuentaNombre = nc(p.cuenta_contable);
+    // Regla con acción AUTO e imputación completa (cuenta + centro, sin contraparte que matchear ni
+    // transferencia) → la línea nace CONTABILIZADA, igual que si se aceptara en la bandeja (mismo
+    // documento_id CONTAB-, mismo tipo, misma firma): no pasa por Conciliaciones. Decisión Martín 11/11/2026,
+    // por ahora solo los cobros de datáfono (REG-CX-27…32). Todo lo demás sigue a la bandeja.
+    const auto = p.accion === "auto" && cuentaNombre && p.centro_costo
+      && !p.cuenta_destino && !p.proveedor_id && !p.cliente_id && !p.franquicia_id && !p.plan_id
+      && ["ingreso", "gasto", "impuesto", "comision", "interes", "servicio"].includes(p.tipo);
+    if (auto) contabilizados++;
     nuevas.push({ linea: l, row: {
-      id: newId("EXT"), sociedad, fecha: l.fecha,
-      tipo: (Number(l.monto) || 0) > 0 ? "INGRESO" : "EGRESO",
+      id, sociedad, fecha: l.fecha,
+      tipo: (Number(l.monto) || 0) > 0 ? "INGRESO" : (auto ? "EGRESO_GASTO" : "EGRESO"),
       cuenta_bancaria, cuenta_destino: p.cuenta_destino || "",
-      cuenta_contable: nc(p.cuenta_contable), centro_costo: p.centro_costo || "",
-      moneda, monto: Number(l.monto) || 0, documento_id: "",
+      cuenta_contable: cuentaNombre, centro_costo: p.centro_costo || "",
+      moneda, monto: Number(l.monto) || 0, documento_id: auto ? "CONTAB-" + id : "",
+      ...(auto ? firma() : {}),
       iva_rate: Number(l.iva_rate) || 0, iva_monto: Number(l.iva_monto) || 0,
       concepto: l.descripcion || "",
       // Contraparte: razón social del banco (Leyenda 1) o la del archivo; si no hay, la `nota` del
@@ -1541,7 +1553,7 @@ export async function ingestarExtracto({ sociedad, cuenta_bancaria, moneda = "AR
     }
     if (onProgress) onProgress(Math.min(i + CHUNK, nuevas.length), nuevas.length);
   }
-  return { creados, matcheados, dups, errores: fallidas.length, fallidas };
+  return { creados, matcheados, contabilizados, dups, errores: fallidas.length, fallidas };
 }
 
 // Trae los movimientos del extracto que faltan conciliar.

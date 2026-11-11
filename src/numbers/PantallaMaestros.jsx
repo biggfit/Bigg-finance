@@ -1725,7 +1725,7 @@ export function BancoReglaModal({ initial, prefill, onClose, onSave, cuentas, ce
   const [form, setForm] = useState(initial ?? prefill ?? {
     prioridad:10, match_tipo:"codigo", match_valor:"", banco:"Banco Galicia", pais:"AR",
     tipo:"impuesto", cuenta_contable:"", centro_costo:"", cuenta_destino:"",
-    sociedad:"", proveedor_id:"", accion:"auto", nota:"",
+    sociedad:"", proveedor_id:"", accion:"escala", nota:"",   // auto = se postea sola al importar: se elige a propósito
   });
   const set = (k,v) => setForm(f => ({ ...f, [k]:v }));
   const canSave = !!String(form.match_valor).trim() && !!form.match_tipo;
@@ -1754,7 +1754,7 @@ export function BancoReglaModal({ initial, prefill, onClose, onSave, cuentas, ce
             options={[{value:"",label:"Todos"},{value:"AR",label:"AR"},{value:"ES",label:"ES"},{value:"CO",label:"CO"}]} />
           <Select label="Tipo de movimiento" value={form.tipo} onChange={v=>set("tipo",v)} options={REGLA_TIPOS} />
           <Select label="Acción" value={form.accion} onChange={v=>set("accion",v)}
-            options={[{value:"auto",label:"Auto (contabiliza solo)"},{value:"escala",label:"Escala (a la bandeja)"},
+            options={[{value:"escala",label:"Escala (a la bandeja de Conciliaciones)"},{value:"auto",label:"Auto (al importar el extracto se contabiliza sola, sin pasar por la bandeja)"},
                       {value:"ignorar",label:"Ignorar (lector de correo: descarta el mail)"}]} />
           <Select label="Cuenta contable" value={form.cuenta_contable} onChange={v=>set("cuenta_contable",v)}
             options={[{value:"",label:"—"}, ...(cuentas||[]).map(c=>({value:c.id,label:c.nombre}))]} />

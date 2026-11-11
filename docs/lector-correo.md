@@ -110,6 +110,16 @@ Si la corrida supera los 45 segundos (muchos PDF), el botón la continúa solo h
 La nota del borrador guarda `mail_ref`, `fecha_correo`, `remitente`, `buzon`, `archivo`, la regla aplicada y las
 marcas `sin_regla`, `sin_total` o `sedes` cuando corresponde. "Ver mail" abre el hilo en la casilla correcta.
 
+## Control: revisar los descartados
+
+Cada tanto, en Gmail, filtrar `label:Numbers-Descartado has:attachment` y pasar la vista por los asuntos: si
+hay una factura ahí, es que al remitente le falta regla. Corrección en dos pasos:
+1. Cargar la regla (`remitente` o `asunto`) en Maestros › Reglas de banco, o el `remitenteMail` del proveedor.
+2. En Gmail, **sacarle la etiqueta Numbers/Descartado** a ese mail y tocar **Leer el buzón**: el lector lo vuelve
+   a procesar (sin la etiqueta deja de valer el memo) y lo parkea.
+La etiqueta es por hilo: un hilo con una factura pendiente nunca queda con Descartado, aunque tenga respuestas
+descartadas; el lector la quita en cada corrida y `etiquetarRetroactivo` también.
+
 ## Mantenimiento
 
 - Proveedor nuevo: alta en Maestros › Proveedores con `remitenteMail`, o una regla `remitente` en Reglas de banco.

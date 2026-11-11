@@ -176,7 +176,9 @@ export function clasificarLinea(linea, reglas, proveedores = [], ctx = {}) {
         cuenta_destino: r.cuenta_destino || "",
         proveedor_id,
         cliente_id,
-        accion: (cliente_id || escalaProveedor) ? "escala" : (r.accion || "auto"),
+        // "auto" es opt-in explícito en la regla (desde 11/11/2026 el importador postea solas esas líneas:
+        // ingestarExtracto). Regla sin acción = escala, como todo lo que no se decidió regla por regla.
+        accion: (cliente_id || escalaProveedor) ? "escala" : (r.accion === "auto" ? "auto" : "escala"),
         motivo: `Regla ${r.id} (${r.match_tipo}: ${r.match_valor})`,
         confianza: "alta",
       };
