@@ -85,19 +85,22 @@ function reconocerSociedadPropia(linea, sociedades, cuentas, sociedadActual, mon
 // no se almacena): sus cuotas cuentan como match por Nº de plan. cuotasPendientes: lista plana.
 const centavos = v => Math.round((Number(v) || 0) * 100) / 100;
 const masVieja = (a, b) => String(a.vto || "").localeCompare(String(b.vto || "")) || (Number(a.nro_cuota) || 0) - (Number(b.nro_cuota) || 0);
+// La cuota más vieja de una lista (vto, después nº): la que el acreedor debita primero. Es la ÚNICA definición de
+// "más vieja": la usan el motor (abajo) y el fallback de la pantalla de Conciliación.
+export const cuotaMasVieja = cuotas => (cuotas || []).reduce((b, c) => (!b || masVieja(c, b) < 0) ? c : b, null);
 export function reconocerCuota(linea, cuotasPendientes, moneda, { planId = "" } = {}) {
   if (!cuotasPendientes?.length) return null;
   const monto = Math.abs(Number(linea.monto) || 0);
   if (monto <= 0 || (Number(linea.monto) || 0) > 0) return null;   // solo débitos
   const cuit = normNum(linea.ley2 || linea.cuit);
-  const hay  = [linea.descripcion, linea.ley1, linea.ley2, linea.ley3, linea.ley4].map(normTxt).join(" ");
+  const hayNum = normNum([linea.descripcion, linea.ley1, linea.ley2, linea.ley3, linea.ley4].map(normTxt).join(" "));   // una vez por línea, no por cuota
   const tol  = Math.max(500, monto * 0.02);
   const cands = [];   // cuotas pendientes con señal real (plan o CUIT) y dentro de la ventana de monto
   for (const c of cuotasPendientes) {
     if (moneda && c.moneda && c.moneda !== moneda) continue;
     const planNum = normNum(c.nro_plan);
     const byPlan  = (!!planId && String(c.plan_id) === String(planId))
-      || (planNum && planNum.length >= 4 && normNum(hay).includes(planNum));
+      || (planNum && planNum.length >= 4 && hayNum.includes(planNum));
     const byCuit  = cuit && c.acreedor_cuit && normNum(c.acreedor_cuit) === cuit;
     if (!byPlan && !byCuit) continue;
     const dT   = centavos(Math.abs(monto - (Number(c.total) || 0)));
@@ -113,8 +116,9 @@ export function reconocerCuota(linea, cuotasPendientes, moneda, { planId = "" } 
   // 1) el PLAN: el de la cuota que mejor pega (a igual puntaje, la más vieja);
   // 2) la CUOTA: la pendiente más vieja de ese plan entre las que entraron en la ventana.
   const mejor = cands.reduce((b, x) => (!b || x.score < b.score || (x.score === b.score && masVieja(x.c, b.c) < 0)) ? x : b, null);
-  const best = mejor && cands.filter(x => String(x.c.plan_id) === String(mejor.c.plan_id) && x.byPlan === mejor.byPlan)
-    .reduce((b, x) => (!b || masVieja(x.c, b.c) < 0) ? x : b, null);
+  const delPlan = mejor ? cands.filter(x => String(x.c.plan_id) === String(mejor.c.plan_id) && x.byPlan === mejor.byPlan) : [];
+  const vieja = cuotaMasVieja(delPlan.map(x => x.c));
+  const best = delPlan.find(x => x.c === vieja) || null;
   // SIN fallback por monto: sólo se propone una cuota si hay señal real (Nº de plan en la glosa
   // o CUIT en la leyenda). El match por importe suelto era peligroso — un débito ajeno (ej. IIBB
   // del banco de $24.078) coincidía con una cuota de plan de $24.077,83 y proponía consumirla,

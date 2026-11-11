@@ -3899,15 +3899,22 @@ export async function aperturaSocio({ socio_id, socio_nombre, sociedad, moneda =
 // cancela desde Tesorería como a cualquier proveedor. Saldo CC del socio-cesión = provisión − facturado.
 export const CUENTA_CESION = "Inversores";   // = CESION_CUENTA de pnlDerive (la cuenta de los retiros)
 const _nkCes = s => String(s || "").trim().toLowerCase();
-/** Facturas de los cesionarios → retiros por socio-cesión [{socio_id, socio_nombre, sociedad, moneda, monto(+), fecha, comp}]. Puro.
- *  Solo las posteriores a `desde` (default: la apertura del go-live, 30/6/2026): las anteriores ya están dentro del saldo
- *  de apertura de la cesión (cesionDerive), contarlas de nuevo las duplicaría. */
-export function retirosCesion(egresos = [], participaciones = [], { desde = "2026-06-30" } = {}) {
+/** Centros (o sociedades) con una cesión de utilidades en nb_socios → Map(alcance normalizado → socio-cesión). Es la ÚNICA
+ *  definición de "este negocio tiene cesionario": la usan retirosCesion (la factura del cesionario baja la deuda con el
+ *  socio) y devengadoMensual (esa misma factura NO vuelve a bajar el patrimonio en el puente). Tienen que coincidir. */
+export function centrosConCesion(participaciones = []) {
   const porCentro = new Map();
   for (const r of participaciones || []) {
     if (r.tipo !== "cesion" || !_nkCes(r.alcance)) continue;
     porCentro.set(_nkCes(r.alcance), { socio_id: String(r.id), socio_nombre: r.nombre || String(r.id) });
   }
+  return porCentro;
+}
+/** Facturas de los cesionarios → retiros por socio-cesión [{socio_id, socio_nombre, sociedad, moneda, monto(+), fecha, comp}]. Puro.
+ *  Solo las posteriores a `desde` (default: la apertura del go-live, 30/6/2026): las anteriores ya están dentro del saldo
+ *  de apertura de la cesión (cesionDerive), contarlas de nuevo las duplicaría. */
+export function retirosCesion(egresos = [], participaciones = [], { desde = "2026-06-30" } = {}) {
+  const porCentro = centrosConCesion(participaciones);
   if (!porCentro.size) return [];
   // Acepta comprobantes agrupados (fetchEgresos: `lineas` con cuenta/cc/total_linea) o filas crudas de nb_comprobantes.
   const out = [];

@@ -1277,16 +1277,16 @@ function buildPnLGrupoFilas(propsBigg, isCol) {
       sedesApertura: sedesApertura ? { cur: sedesApertura.cur, prev: sedesApertura.prevC || sedesApertura.prev } : null }, isCol);
     zipPrevC(filas, alt.filas);
   }
-  // Líneas grandes de la cascada con su signo de aporte al resultado (año y año anterior): las lee la Valuación para
-  // multiplicar exactamente lo que muestra este P&L. `servicio` = contrato revocable (la Valuación lo deja en cero).
+  // Líneas grandes de la cascada hasta el resultado antes de impuestos, con su signo de aporte (año y año anterior):
+  // las lee la Valuación para multiplicar exactamente lo que muestra este P&L. Acá no hay política de valuación (qué
+  // es un servicio, qué múltiplo lleva cada una): eso vive en valuacionDerive (VAL), por `key`.
   const neg = a => (a || Z).map(v => -(Number(v) || 0));
   const lineas = [
-    { key: "rosedal",    label: "Gerenciamiento de Sedes (Rosedal)",     cur: fg || Z,  prev: P.fg || Z,  servicio: true },
-    { key: "huergo",     label: "Wellness Real Estate (Huergo)",         cur: wre || Z, prev: P.wre || Z, servicio: true },
+    { key: "rosedal",    label: "Gerenciamiento de Sedes (Rosedal)",     cur: fg || Z,  prev: P.fg || Z },
+    { key: "huergo",     label: "Wellness Real Estate (Huergo)",         cur: wre || Z, prev: P.wre || Z },
     { key: "red",        label: "Red BIGG (franquicias y corporativos)", cur: red, prev: redP },
     { key: "estructura", label: "Estructura HQ",                         cur: neg(opexHQ), prev: neg(P.opexHQ) },
     { key: "fin",        label: "Financieros",                           cur: neg(finTot), prev: neg(finTotP) },
-    { key: "imp",        label: "Impuestos",                             cur: impBlockTot, prev: impBlockTotPrev, impuestos: true },
   ];
   return { cols, filas, lastM, activeMonths, lineas };
 }
@@ -2795,17 +2795,18 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
       || ccs.find(c => String(c.id).toLowerCase() === s.toLowerCase());
     return hit?.nombre || s;
   };
-  const sedesAperturaDe = (yr, inRows = inBigg, egRows = egBigg, moneda = monedaPL, sinIvaArg = sinIva) => arNucleoCCs.map(cc => ({
+  // Mismas opciones que holdingDe (filas, moneda, IVA); por defecto, las del selector del P&L.
+  const sedesAperturaDe = (yr, { inR = inBigg, egR = egBigg, moneda = monedaPL, sinIvaArg = sinIva } = {}) => arNucleoCCs.map(cc => ({
     label: nombreCC(cc),
     isBN: String(cc) === String(bnCcId),
-    arr: computeSubtotalsSede(buildPnLSede(inRows, egRows, [cc], yr, moneda, sinIvaArg)).resFinal,
+    arr: computeSubtotalsSede(buildPnLSede(inR, egR, [cc], yr, moneda, sinIvaArg)).resFinal,
   }));
   const sedesApCur  = useMemo(() => (isVentasHQ || isGrupo) ? sedesAperturaDe(year)     : null,   // eslint-disable-line react-hooks/exhaustive-deps
     [isVentasHQ, isGrupo, inBigg, egBigg, arNucleoCCs, ccMap, year, monedaPL, sinIva]);
   const sedesApPrev = useMemo(() => (isVentasHQ || isGrupo) ? sedesAperturaDe(year - 1) : null,   // eslint-disable-line react-hooks/exhaustive-deps
     [isVentasHQ, isGrupo, inBigg, egBigg, arNucleoCCs, ccMap, year, monedaPL, sinIva]);
   // Apertura por sede del año anterior en el otro lente (YTD en dos lentes de Composición de Ingresos).
-  const sedesApPrevAlt = useMemo(() => ((isVentasHQ || isGrupo) && inFxAlt) ? sedesAperturaDe(year - 1, inFxAlt, egFxAlt) : null,   // eslint-disable-line react-hooks/exhaustive-deps
+  const sedesApPrevAlt = useMemo(() => ((isVentasHQ || isGrupo) && inFxAlt) ? sedesAperturaDe(year - 1, { inR: inFxAlt, egR: egFxAlt }) : null,   // eslint-disable-line react-hooks/exhaustive-deps
     [isVentasHQ, isGrupo, inFxAlt, egFxAlt, arNucleoCCs, ccMap, year, monedaPL, sinIva]);
   const sedesApLente = (dosLentesBigg => dosLentesBigg
     ? (fxMode === "real" ? { cur: sedesApCur, prev: sedesApPrev, prevC: sedesApPrevAlt } : { cur: sedesApCur, prev: sedesApPrevAlt, prevC: sedesApPrev })
@@ -2818,18 +2819,21 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
   const mesesVal = useMemo(() => mesesValuacion(year), [year]);
   const valuacion = useMemo(() => {
     if (activeTab !== "valuacion") return null;
-    const fx = (monto, moneda, anio, mes) => montoAMoneda(monto, moneda, tcDelMes(tiposCambio, anio, mes), "USD");
-    const inR = traducirFilasFx(inConFranq, fx, "USD").rows, egR = traducirFilasFx(egConSueldos, fx, "USD").rows;
-    const opts = { inR, egR, fx, moneda: "USD", sinIvaArg: true };
+    const fx = intercoFx;   // a USD con el TC de cierre del mes de cada fila (= "USD · TC Real")
+    const opts = { inR: traducirFilasFx(inConFranq, fx, "USD").rows, egR: traducirFilasFx(egConSueldos, fx, "USD").rows, fx, moneda: "USD", sinIvaArg: true };
     const cur = holdingDe(year, opts), prev = holdingDe(year - 1, opts);
     const { lineas } = buildPnLGrupoFilas({ pnl: cur.pnl, sub: cur.sub, pnlPrev: prev.pnl, subPrev: prev.sub, year }, () => true);
-    const sedesPrev = sedesAperturaDe(year - 1, inR, egR, "USD", true);
-    const sedes = sedesAperturaDe(year, inR, egR, "USD", true)
-      .map(s => ({ label: s.label, isBN: s.isBN, cur: s.arr, prev: sedesPrev.find(x => x.label === s.label)?.arr || null }));
-    const puesto = puestoEnFondeadas({ intercoData, participaciones: partic, nucleo: nucleoEmpresas, year, tiposCambio, hasta: mesesVal.length ? mesesVal[mesesVal.length - 1] : -1,
+    const sedesPrev = sedesAperturaDe(year - 1, opts);   // mismo orden que el año (arNucleoCCs) → se aparean por índice
+    const sedes = sedesAperturaDe(year, opts).map((s, i) => ({ label: s.label, isBN: s.isBN, cur: s.arr, prev: sedesPrev[i]?.arr || null }));
+    const puesto = puestoEnFondeadas({ intercoData, participaciones: partic, nucleo: nucleoEmpresas, year, meses: mesesVal, tiposCambio,
       fondeadas: DESARROLLO.map(k => ({ key: k, empresa: FONDEADAS[k].empresa, label: `Sedes Propias ${FONDEADAS[k].label}` })) });
     return armarValuacion({ year, sedes, parteBN: 1 - (Number(cesionCfg.pct) || 0), lineas, puesto });
-  }, [activeTab, inConFranq, egConSueldos, tiposCambio, year, mesesVal, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, intercoData, partic, cesionCfg, cesionesSoc, ccs]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeTab, inConFranq, egConSueldos, intercoFx, tiposCambio, year, mesesVal, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, intercoData, partic, cesionCfg, cesionesSoc, ccs]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // P&L en libros para las pantallas de tesorería / balance / posición (TabTesoreriaConsolidada). Un solo objeto
+  // estable: pasado como literal cambiaba de identidad en cada render y allá invalidaba la provisión de la cesión, la
+  // caché de saldos as-of y, con ella, todos los cierres mensuales del Balance.
+  const pnlLibros = useMemo(() => ({ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }), [inConFranq, egConSueldos, cuentaMap, ccMap]);
 
   const toggleSedeCC = (id) => {
     setSelectedSedeCCs(prev => {
@@ -3360,7 +3364,7 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
              núcleo tildado. Una sola vista, en pocas líneas (Martín 5/11/2026); "Del resultado a la caja" se retira. ── */}
       {activeTab === "cf" && (
         <TabTesoreriaConsolidada vistas={["cf"]} socInicial="nucleo" monedaInicial="ARS"
-          pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
+          pnl={pnlLibros} tiposCambio={tiposCambio} />
       )}
 
       {activeTab === "interco" && (
@@ -3384,23 +3388,23 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
 
       {activeTab === "consolidado" && (
         <TabTesoreriaConsolidada vistas={["saldos", "movimientos"]}
-          pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
+          pnl={pnlLibros} tiposCambio={tiposCambio} />
       )}
       {activeTab === "balance_pn" && (
         <TabTesoreriaConsolidada vistas={["balance"]}
-          pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
+          pnl={pnlLibros} tiposCambio={tiposCambio} />
       )}
       {/* Del resultado al patrimonio: reporte propio en "Control de cierre" (10/11/2026); mismos cierres que el Balance. */}
       {activeTab === "patrimonio_ctrl" && (
         <TabTesoreriaConsolidada vistas={["evpn"]}
-          pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
+          pnl={pnlLibros} tiposCambio={tiposCambio} />
       )}
       {/* Posición financiera: mismo motor que Tesorería consolidada, una sola vista, abre en el último cierre de mes.
           El contenido va en reportRef → menú ⋮ Ampliar / Copiar imagen. */}
       {activeTab === "posicion_fin" && (
         <TabTesoreriaConsolidada vistas={["posicion"]} fechaInicial={finMesAnteriorReal(hoyISO())}
           contentRef={reportRef} onMeta={setPosMeta}
-          pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
+          pnl={pnlLibros} tiposCambio={tiposCambio} />
       )}
 
       {activeTab === "valuacion" && <ValuacionView val={valuacion} meses={mesesVal} />}

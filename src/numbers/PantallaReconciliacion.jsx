@@ -29,7 +29,7 @@ import { parseCaixa } from "./parsers/caixa";
 import { parseBBVA } from "./parsers/bbva";
 import { parseSantander } from "./parsers/santander";
 import { parseMercadoPago } from "./parsers/mercadopago";
-import { clasificarLineas, clasificarLinea, reconocerCuota } from "./reconciliacion/ruleEngine";
+import { clasificarLineas, clasificarLinea, reconocerCuota, cuotaMasVieja } from "./reconciliacion/ruleEngine";
 
 // Fecha de comprobante → ISO (YYYY-MM-DD). Los pendientes de Franquicias vienen DD/MM/YYYY; guardarlos así
 // rompe el filtro de fecha del P&L (que compara ISO). Ya-ISO se respeta; vacío/inválido → hoy.
@@ -1047,7 +1047,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       // almacena) queda empacado en `referencia` → el re-match en vivo lo recibe como pista (arriba).
       // Fallback si igual no pega: ese plan con su cuota pendiente MÁS VIEJA (no la `pcuota` guardada
       // al ingerir, que pudo elegirse por importe o ya estar pagada — ver reconocerCuota, 10/11/2026).
-      if (!auto && meta.plan) auto = { plan_id: meta.plan, cuota_row_id: String(cuotasDePlan(meta.plan)[0]?.row_id || meta.pcuota || "") };
+      if (!auto && meta.plan) auto = { plan_id: meta.plan, cuota_row_id: String(cuotaMasVieja(cuotasDePlan(meta.plan))?.row_id || meta.pcuota || "") };
       if (!auto) return { es: false };
     }
     const planSel = ed.cuota_plan ?? auto?.plan_id ?? "";

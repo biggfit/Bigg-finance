@@ -11,6 +11,7 @@
 // − 9.768 sin explicar (9.042 € Wellness → Bigg Fit en tránsito 29/9 → 1/10) = 22.929 ΔPN.
 import { T } from "../theme";
 import { sumSaldo, crearTraductor, AvisosTC } from "./balanceUtils";
+import { finDeMes as finDeMesDe } from "./mesesUtils";
 import { devengadoMensual } from "./TabDevengado";
 import { Fila, TablaMeses } from "./TablaMeses";
 
@@ -24,7 +25,7 @@ export function PatrimonioView({ eepn, filtroMoneda, tiposCambio = null, pnl = n
   const cerrados = meses.filter(m => m !== mesEnCurso);
   const p = { meses, cerrados, mesEnCurso };
   const { aUSD, faltaTC, tcSuplente } = crearTraductor(tiposCambio);
-  const finDeMes = m => `${year}-${String(m + 1).padStart(2, "0")}-31`;
+  const finDeMes = m => finDeMesDe(year, m);
   const bd = m => balMes[m] || { cuentas: [], aCobrar: [], aPagar: [], intercoAct: [], intercoPas: [], participaciones: [] };
   const monedasDe = arrs => { const st = new Set(); arrs.forEach(a => a.forEach(it => it.moneda && st.add(it.moneda))); return [...st]; };
   // Suma de una lista al cierre del mes m: nativa (una moneda) o consolidada en USD al TC de ese cierre (como el Balance).
@@ -45,7 +46,7 @@ export function PatrimonioView({ eepn, filtroMoneda, tiposCambio = null, pnl = n
   const { res, retiros } = (pnl && year === 2026)
     ? devengadoMensual(pnl, { year, consolidado, mon, socSet, tiposCambio, desde: GO, hasta: upto, participaciones })
     : { res: new Array(12).fill(0), retiros: new Array(12).fill(0) };
-  const retirosDe = m => retiros[m] || 0;
+  const retirosDe = m => retiros[m];
 
   // Cambio de moneda (origen "cambio"): nativo = la pata que entra o sale de esta moneda (mueve su PN sin ser
   // resultado); consolidado = las dos patas al TC del mes = resultado por operar a un TC distinto del maestro.

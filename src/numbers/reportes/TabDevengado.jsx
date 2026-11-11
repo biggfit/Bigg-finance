@@ -4,6 +4,7 @@ import { MONEDA_SYM } from "../../data/tesoreriaData";
 import { normCat, ccKey, MESES, ING_CONTRA_HQ, CESION_CUENTA } from "./pnlDerive";
 import { MultiSelect, selStyle, fmtSigned } from "./reportesUi";
 import { crearTraductor } from "./balanceUtils";
+import { centrosConCesion } from "../../lib/numbersApi";
 
 // ─── Reporte de DEVENGADO CRUDO (diagnóstico) ─────────────────────────────────
 // Objetivo: ver el devengado lo más simple posible (cuenta × mes) para cruzarlo
@@ -96,17 +97,17 @@ const GO_LIVE = "2026-07-01";
 const GO_LIVE_ANIO = 2026, GO_LIVE_MES = 6;   // julio (0-based)
 
 // Resultado devengado POR MES (misma función y perímetro `socSet` que este reporte), nativo en `mon` o consolidado
-// en USD sumando cada moneda del P&L al TC del 1° del mes (`tiposCambio`). Lo usan el Balance ("De dónde viene el PN") y
-// el Cash Flow indirecto ("Del resultado a la caja"): un solo loop, no dos copias. Meses fuera de [desde, hasta] = 0.
+// en USD sumando cada moneda del P&L al TC del 1° del mes (`tiposCambio`). Lo usa Del resultado al patrimonio
+// (PatrimonioView). Meses fuera de [desde, hasta] = 0.
 // Devuelve { res, retiros }: `res` = resultado del mes SIN los retiros a inversores; `retiros` = esos retiros (cuenta
 // "Inversores", en negativo) para el puente Del resultado al patrimonio, donde bajan el patrimonio por su propia fila.
-// `participaciones` (nb_socios) dice qué centros tienen una cesión que se PROVISIONA (Barrio Norte): ahí la factura del
-// cesionario cancela un pasivo ya registrado por la fila "Dividendos declarados" y NO vuelve a bajar el patrimonio →
-// esos retiros no cuentan. Lo usan Del resultado al patrimonio y el recuadro "De dónde viene el PN" del Balance.
+// `participaciones` (nb_socios) dice qué centros tienen una cesión que se PROVISIONA (Barrio Norte, centrosConCesion):
+// ahí la factura del cesionario cancela un pasivo ya registrado por la fila "Dividendos declarados" y NO vuelve a bajar
+// el patrimonio → esos retiros no cuentan.
 export function devengadoMensual(pnl, { year, consolidado, mon, socSet, tiposCambio = null, desde = GO_LIVE_MES, hasta = 11, participaciones = [] }) {
   const porMes = new Array(12).fill(0), retiros = new Array(12).fill(0);
   if (!pnl) return { res: porMes, retiros };
-  const centrosConProvision = new Set((participaciones || []).filter(r => r.tipo === "cesion" && r.alcance).map(r => ccKey(r.alcance)));
+  const centrosConProvision = centrosConCesion(participaciones);   // clave = ccKey del centro (misma normalización)
   const { aUSD } = crearTraductor(tiposCambio);
   const monedas = consolidado ? [...new Set([...(pnl.inRows || []), ...(pnl.egRows || [])].map(r => r.moneda || "ARS"))] : [mon];
   for (const mo of monedas) {

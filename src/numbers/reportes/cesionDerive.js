@@ -8,6 +8,7 @@
 // retirosCesion en numbersApi. Saldo CC = apertura + provisiones − facturado.
 import { CESION, CESION_CUENTA, _nkSede, buildPnLSede, computeSubtotalsSede, computeCesion } from "./pnlDerive";
 import { GO_LIVE_APERTURA, MESES_CORTOS } from "./balanceUtils";
+import { ultimoMesCerrado } from "./mesesUtils";
 import { FONDEADAS, resultadoFondeada, traducirFilas } from "./fondeadasDerive";
 
 // Config por cesión sobre un CENTRO (las cesiones sobre sociedades, Wellness, llevan su CC real y no se provisionan
@@ -64,8 +65,7 @@ export function provisionCesionRows({ cesiones = [], cesionesSoc = [], inRows = 
   const rows = [];
   const mesAper = +GO_LIVE_APERTURA.slice(5, 7) - 1;   // junio (0-based)
   // Solo meses cerrados: el mes en curso no se provisiona hasta que cierra (en el año actual, hasta el mes anterior).
-  const hoy = new Date();
-  const hasta = year < hoy.getFullYear() ? 11 : year > hoy.getFullYear() ? -1 : hoy.getMonth() - 1;
+  const hasta = ultimoMesCerrado(year);
   const finDe = m => `${year}-${String(m + 1).padStart(2, "0")}-${String(new Date(year, m + 1, 0).getDate()).padStart(2, "0")}`;
   for (const c of cesionesSoc || []) {
     const cfg = Object.values(FONDEADAS).find(f => f.empresa === c.sociedad);

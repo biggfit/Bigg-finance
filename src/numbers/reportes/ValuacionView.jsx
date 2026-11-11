@@ -13,14 +13,14 @@ const btn = on => ({ background: on ? "#e5e7eb" : "#f3f4f6", border: `1px solid 
 const nota = { color: T.dim, fontWeight: 500, fontSize: 11.5 };
 
 export function ValuacionView({ val, meses = [] }) {
-  const [abierto, setAbierto] = useState({ sedes: true });
+  const [sedesAbiertas, setSedesAbiertas] = useState(true);
   const [verProm, setVerProm] = useState(false);
   if (!val) return null;
   if (!meses.length) return <div style={{ color: T.muted, fontSize: 13, padding: "18px 4px" }}>Todavía no hay meses cerrados para valuar en este año.</div>;
   const ult = meses[meses.length - 1];
   const p = { meses, cerrados: meses, mesEnCurso: null };
   const de = g => val.filas.filter(f => f.grupo === g);
-  const sedes = de("sedes"), puesto = de("puesto"), negocios = de("negocios"), resto = de("resto");
+  const sedes = de("sedes"), puesto = de("puesto"), lineas = de("lineas");   // lineas = servicios y la Red neta de HQ
   const suma = fs => m => fs.reduce((t, f) => t + (Number(f.valor[m]) || 0), 0);
   const total = m => val.total[m] || 0;
   // Variación contra el cierre anterior. El primer mes valuado (julio 2026) no compara: antes no hay promedio.
@@ -32,7 +32,6 @@ export function ValuacionView({ val, meses = [] }) {
     if (f.corta?.[ult]) extras.push(`últimos ${f.ventana[ult]} meses`);
     return extras.length ? <>{f.label} <span style={nota}>· {extras.join(" · ")}</span></> : f.label;
   };
-  const toggle = k => () => setAbierto(a => ({ ...a, [k]: !a[k] }));
   const filasValor = (fs) => fs.map(f => <Fila key={f.key} label={etiqueta(f)} get={m => f.valor[m] || 0} {...p} total="ultimo" sangria={18} />);
   const filasProm = (fs) => fs.map(f => <Fila key={f.key} label={<>{f.label} <span style={nota}>· × {f.multiplo}</span></>} get={m => f.promedio?.[m] || 0} {...p} total="ultimo" sangria={18} />);
   const grupoStyle = { background: "#fafafa" };
@@ -42,11 +41,10 @@ export function ValuacionView({ val, meses = [] }) {
       <TablaMeses titulo="Valuación · USD" meses={meses} mesEnCurso={null}>
         <tbody>
           <Fila label={<>Sedes argentinas <span style={nota}>· promedio × {VAL.mesesNegocio}</span></>} get={suma(sedes)} {...p} total="ultimo" fuerte
-            flecha={!!abierto.sedes} onToggle={toggle("sedes")} style={grupoStyle} />
-          {abierto.sedes && filasValor(sedes)}
+            flecha={sedesAbiertas} onToggle={() => setSedesAbiertas(a => !a)} style={grupoStyle} />
+          {sedesAbiertas && filasValor(sedes)}
           {puesto.map(f => <Fila key={f.key} label={<>{f.label} <span style={nota}>· lo que pusimos</span></>} get={m => f.valor[m] || 0} {...p} total="ultimo" fuerte style={grupoStyle} />)}
-          {negocios.map(f => <Fila key={f.key} label={<>{f.label} <span style={nota}>· {f.detalle ? `${f.detalle} · ` : ""}× {f.multiplo}</span></>} get={m => f.valor[m] || 0} {...p} total="ultimo" fuerte style={grupoStyle} />)}
-          {resto.map(f => <Fila key={f.key} label={<>{f.label} <span style={nota}>· {f.detalle ? `${f.detalle} · ` : ""}× {f.multiplo}</span></>} get={m => f.valor[m] || 0} {...p} total="ultimo" fuerte style={grupoStyle} />)}
+          {lineas.map(f => <Fila key={f.key} label={<>{f.label} <span style={nota}>· {f.detalle} · × {f.multiplo}</span></>} get={m => f.valor[m] || 0} {...p} total="ultimo" fuerte style={grupoStyle} />)}
         </tbody>
         <tfoot>
           <Fila label="Valor del grupo" get={total} {...p} total="ultimo" fuerte style={{ background: "#f3f4f6", borderTop: `2px solid ${T.cardBorder}` }} />
@@ -65,8 +63,7 @@ export function ValuacionView({ val, meses = [] }) {
         <TablaMeses titulo="Resultado promedio mensual que se multiplica · USD" meses={meses} mesEnCurso={null}>
           <tbody>
             {filasProm(sedes)}
-            {filasProm(negocios)}
-            {filasProm(resto)}
+            {filasProm(lineas)}
           </tbody>
         </TablaMeses>
       )}
