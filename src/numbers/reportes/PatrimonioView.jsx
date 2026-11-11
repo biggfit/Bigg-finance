@@ -1,7 +1,7 @@
 // Del resultado al patrimonio (Martín 5/11/2026: el puente Resultado ↔ ΔPN "es muy difícil de leer como reporte").
 // Reemplaza a la Evolución del PN: en vez del Balance con meses en columnas, la cascada corta que explica por qué el
 // patrimonio cambió cada mes, con el mismo molde que la Caja (TablaMeses):
-//   Patrimonio al inicio → + Resultado en los libros → − Dividendos declarados → − Retiros de socios → ± Cambio de moneda
+//   Patrimonio al inicio → + Resultado contable → − Dividendos declarados → − Retiros de socios → ± Cambio de moneda
 //   → ± Diferencia de conversión (solo consolidado) → ± Sin explicar → = Variación del patrimonio → Patrimonio al cierre.
 // Piezas: cierres mensuales del Balance (`eepn.balMes`, deriveAsOf a fin de cada mes), resultado devengado por mes
 // (devengadoMensual, misma función que el Devengado), cambio de moneda acumulado (`eepn.cambioAcum`) y la
@@ -91,7 +91,9 @@ export function PatrimonioView({ eepn, filtroMoneda, tiposCambio = null, pnl = n
       <TablaMeses titulo={titulo} meses={meses} mesEnCurso={mesEnCurso}>
         <tbody>
           <Fila label="Patrimonio al inicio" get={m => pn(m - 1)} {...p} total="primero" labelStyle={{ color: T.muted }} color={T.muted} />
-          <Fila label="Resultado en los libros" get={m => res[m]} {...p} fuerte />
+          {/* "Resultado contable" (antes "Resultado en los libros", Martín 10/11/2026: se confundía con el P&L): el
+              devengado de la sociedad tal como está contabilizado, el mismo de "Resultado devengado por cuenta". */}
+          <Fila label="Resultado contable" get={m => res[m]} {...p} fuerte />
           {hayDividendos && <Fila label="Dividendos declarados" get={dividendos} {...p} />}
           {hayRetiros && <Fila label="Retiros de socios" get={retirosDe} {...p} />}
           <Fila label={consolidado ? "Resultado por cambio de moneda" : "Cambio de moneda"} get={cambio} {...p} />
