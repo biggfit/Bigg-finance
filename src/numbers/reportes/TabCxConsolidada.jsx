@@ -9,6 +9,7 @@ import { T, fmtDate, fmtMoney } from "../theme";
 import { fetchEgresos, fetchIngresos, fetchPagosCobros, fetchSociedades, calcSaldoNeto, fetchCuentasBancarias,
   appendPago, appendCobro } from "../../lib/numbersApi";
 import { exportarCxPExcel } from "./exportCxP";
+import { SelectInline } from "./reportesUi";
 import AgregarPagoModal from "../pagos/AgregarPagoModal";
 import RegistrarCobroModal from "../pagos/RegistrarCobroModal";
 
@@ -361,23 +362,13 @@ export default function TabCxConsolidada({ lado = "cxp", onBack, onVerComprobant
       {/* Toolbar: moneda + fecha de corte */}
       <div style={{ display:"flex", gap:16, margin:"4px 0 20px", flexWrap:"wrap", alignItems:"center",
         background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:T.radius, padding:"12px 16px", boxShadow:"0 1px 3px rgba(0,0,0,.04)" }}>
-        <div style={{ display:"flex", gap:6, alignItems:"center", flexWrap:"wrap" }}>
-          <span style={{ fontSize:10, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".08em", marginRight:4 }}>Moneda</span>
-          {monedas.map(m => {
-            const on = filtroMoneda === m;
-            return (
-              <button key={m} type="button" onClick={() => setFiltroMoneda(m)} style={{
-                background: on ? T.accentDark : "#eceff3", color: on ? T.accent : T.muted,
-                border:`1px solid ${on ? T.accentDark : T.cardBorder}`, borderRadius:999,
-                padding:"5px 14px", fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:T.font }}>{m}</button>
-            );
-          })}
-        </div>
+        <SelectInline label="Moneda" value={filtroMoneda} onChange={setFiltroMoneda}
+          options={[...new Set([...monedas, filtroMoneda])].map(m => ({ value: m, label: m }))} />
         <div style={{ width:1, height:24, background:T.cardBorder }} />
         <div style={{ display:"flex", alignItems:"center", gap:8, position:"relative" }}>
           <span style={{ fontSize:10, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".08em" }}>Al día</span>
           <button type="button" onClick={() => { dateRef.current?.showPicker?.(); dateRef.current?.click(); }}
-            style={{ border:`1px solid ${T.cardBorder}`, borderRadius:8, padding:"6px 12px", fontSize:12, fontFamily:T.font,
+            style={{ border:`1px solid ${T.cardBorder}`, borderRadius:8, padding:"0 12px", height:30, fontSize:12, fontFamily:T.font,
               background:"#eceff3", color: fechaCorte ? T.text : T.dim, cursor:"pointer", whiteSpace:"nowrap",
               display:"inline-flex", alignItems:"center", gap:6, minWidth:124, justifyContent:"center", fontWeight:600 }}>
             <span style={{ opacity:.75 }} aria-hidden>📅</span>

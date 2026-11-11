@@ -20,6 +20,7 @@ import { buildPuente, printPuente } from "./puenteDerive";   // DEV-ONLY diagnó
 import { GO_LIVE_APERTURA, MESES_CORTOS as _MESES, esCorriente, fmtBal, crearTraductor, crearSumador, AvisosTC, ordenarDetalle, participacionesAsOf,
   hoyISO as _hoyISO, finMesAnteriorReal as _finMesAnteriorReal } from "./balanceUtils";
 import { finDeMes } from "./mesesUtils";
+import { MultiSelect, SelectInline } from "./reportesUi";
 import { computeCashFlow } from "./cashflowDerive";
 import { CajaView } from "./CajaView";
 import { PatrimonioView } from "./PatrimonioView";
@@ -66,7 +67,6 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
   const vistasOn = Array.isArray(vistas) && vistas.length ? vistas : VISTAS_TODAS;
   const [sociedades, setSociedades] = useState([]);
   const [socSel,     setSocSel]     = useState([]);   // [] = todas
-  const [socOpen,    setSocOpen]    = useState(false);
   const [activeTab,  setActiveTab]  = useState(vistasOn[0]);
   const [vistaBalance, setVistaBalance] = useState("evolucion");   // Balance: "evolucion" | "mensual" (molde del P&L)
   const [mesBalance,   setMesBalance]   = useState(null);          // mes de la vista Mensual (null = último cierre)
@@ -94,15 +94,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
   const [secPend, setSecPend] = useState({ franq: true, interco: true });
   const [loadKey, setLoadKey] = useState(0);
 
-  const socRef = useRef(null);
   const dateRef = useRef(null);
-
-  useEffect(() => {
-    if (!socOpen) return;
-    const h = e => { if (socRef.current && !socRef.current.contains(e.target)) setSocOpen(false); };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, [socOpen]);
 
   // ── Fetch todo, sin scope de sociedad (una sola pasada) ──
   useEffect(() => {
@@ -190,6 +182,14 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
     () => socSel.length === 0 ? sociedades : sociedades.filter(s => socSel.includes(s.id)),
     [sociedades, socSel]
   );
+  // Filtro de sociedades: las opciones por anillo y la selección como Set, para el desplegable compartido (MultiSelect).
+  const socGrupos = useMemo(() => {
+    const esNucleo = s => /cleo/i.test(String(s.anillo || ""));
+    const items = f => sociedades.filter(f).map(s => ({ value: s.id, label: s.nombre }));
+    return [{ key: "nucleo", label: "Núcleo", items: items(esNucleo) },
+            { key: "fondeadas", label: "Fondeadas / Inversión", items: items(s => !esNucleo(s)) }].filter(g => g.items.length);
+  }, [sociedades]);
+  const socSelSet = useMemo(() => new Set(socSel), [socSel]);
 
   // Mapa id→nombre de TODAS las sociedades → `derivarSaldos` reconoce cuando el contraparte de un
   // comprobante es otra sociedad (no un cliente) y lo separa como CC comercial entre sociedades
@@ -324,12 +324,6 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
     return { ...cf, faltaTC, tcSuplente };
   }, [activeTab, filtroMoneda, tiposCambio, data, pnl, socsIncluidas, docsCaja]);
 
-  const toggleSoc = id => setSocSel(prev => {
-    const full = prev.length === 0 ? sociedades.map(s => s.id) : prev;
-    const next = full.includes(id) ? full.filter(x => x !== id) : [...full, id];
-    return next.length === sociedades.length ? [] : next;   // todas → []
-  });
-
   if (drillDownItem) {
     // Interco → estado de cuenta corriente con saldo (mismo modelo que la Tesorería por sociedad),
     // no un aging. Cada posición consolidada es un par (sociedad, contraparte) → su ledger directo.
@@ -358,7 +352,6 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
     { id: "cf",    label: "Por qué se movió la caja" },
     { id: "posicion", label: "Posición financiera" },
   ].filter(t => vistasOn.includes(t.id));
-  const nSel = socSel.length === 0 ? sociedades.length : socSel.length;
   const ultimoCierre = _finMesAnteriorReal(_hoyISO());
 
   // Pastillas de un grupo de botones (las pestañas de la pantalla y las vistas del Balance comparten el molde).
@@ -398,94 +391,23 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
         background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: T.radius,
         padding: "12px 16px", boxShadow: "0 1px 3px rgba(0,0,0,.04)" }}>
 
-        {/* Multi-select de sociedades */}
-        <div ref={socRef} style={{ position: "relative" }}>
-          <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase",
-            letterSpacing: ".08em", marginRight: 8 }}>Sociedades</span>
-          <button type="button" onClick={() => setSocOpen(o => !o)} style={{
-            border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "6px 12px", fontSize: 12,
-            fontFamily: T.font, background: socOpen ? "#f0f2f5" : "#eceff3", color: T.text,
-            cursor: "pointer", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 8, minWidth: 150 }}>
-            <span style={{ flex: 1, textAlign: "left" }}>
-              {socSel.length === 0 ? "Todas las sociedades" : `${nSel} sociedad${nSel > 1 ? "es" : ""}`}
-            </span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={T.muted} strokeWidth="2.5"
-              strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transition: "transform .15s", transform: socOpen ? "rotate(180deg)" : "rotate(0)" }}>
-              <path d="M6 9l6 6 6-6"/>
-            </svg>
-          </button>
-          {socOpen && (
-            <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 100,
-              border: `1px solid ${T.cardBorder}`, borderRadius: 10, background: T.card,
-              boxShadow: T.shadowMd, minWidth: 220, fontSize: 13, color: T.text,
-              padding: "4px 0", maxHeight: 300, overflowY: "auto" }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px",
-                borderBottom: `1px solid ${T.cardBorder}`, cursor: "pointer", userSelect: "none", fontWeight: 600 }}>
-                <input type="checkbox" checked={socSel.length === 0} onChange={() => setSocSel([])}
-                  style={{ cursor: "pointer", accentColor: T.accentDark }} />
-                Todas
-              </label>
-              {[{ label: "Núcleo", socs: sociedades.filter(s => /cleo/i.test(String(s.anillo || ""))) },
-                { label: "Fondeadas / Inversión", socs: sociedades.filter(s => !/cleo/i.test(String(s.anillo || ""))) }]
-                .filter(g => g.socs.length).map(g => (
-                <div key={g.label}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px 3px", borderTop: `1px solid ${T.cardBorder}` }}>
-                    <span style={{ fontSize: 9.5, fontWeight: 800, color: T.muted, textTransform: "uppercase", letterSpacing: ".08em" }}>{g.label}</span>
-                    <button type="button" onClick={() => setSocSel(g.socs.map(s => s.id))}
-                      style={{ background: "transparent", border: "none", color: T.accentDark, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: T.font, padding: 0 }}>solo</button>
-                  </div>
-                  {g.socs.map(s => {
-                    const checked = socSel.length === 0 || socSel.includes(s.id);
-                    return (
-                      <label key={s.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 14px",
-                        cursor: "pointer", userSelect: "none" }}
-                        onMouseEnter={e => e.currentTarget.style.background = "#eceff3"}
-                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                        <input type="checkbox" checked={checked} onChange={() => toggleSoc(s.id)}
-                          style={{ cursor: "pointer", accentColor: T.accentDark }} />
-                        <span style={{ fontSize: 13 }}>{s.bandera ?? ""}</span>
-                        {s.nombre}
-                      </label>
-                    );
-                  })}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        {/* Sociedades: el desplegable compartido de Reportes. Sin nada tildado = todas; un clic deja solo esa y el
+             título del anillo lo tilda entero (Martín 11/11/2026: el "solo" por grupo no dejaba elegir con libertad). */}
+        <MultiSelect inline label="Sociedades" groups={socGrupos} selected={socSelSet} onChange={s => setSocSel([...s])}
+          allLabel="Todas las sociedades" plural="sociedades" width={170} />
 
         <div style={{ width: 1, height: 24, background: T.cardBorder, flexShrink: 0 }} />
 
-        {/* Moneda */}
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-          <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase",
-            letterSpacing: ".08em", marginRight: 4 }}>Moneda</span>
-          {["ALL", ...monedas].map(m => {
-            const on = filtroMoneda === m;
-            return (
-              <button key={m} type="button" onClick={() => setFiltroMoneda(m)} style={{
-                background: on ? T.accentDark : "#eceff3", color: on ? T.accent : T.muted,
-                border: `1px solid ${on ? T.accentDark : T.cardBorder}`, borderRadius: 999,
-                padding: "5px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: T.font }}>
-                {m === "ALL" ? "Todas" : m}
-              </button>
-            );
-          })}
-        </div>
+        {/* Moneda: desplegable de una opción, como en los P&L (antes pastillas: ocupaban media barra). */}
+        <SelectInline label="Moneda" value={filtroMoneda} onChange={setFiltroMoneda}
+          options={["ALL", ...new Set([...monedas, filtroMoneda].filter(m => m && m !== "ALL"))].map(m => ({ value: m, label: m === "ALL" ? "Todas" : m }))} />
 
         {/* Mes — Balance en vista Mensual: el cierre que se compara contra el del mes anterior. */}
         {activeTab === "balance" && vistaBalance === "mensual" && balMeses && (
           <>
           <div style={{ width: 1, height: 24, background: T.cardBorder, flexShrink: 0 }} />
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 10, fontWeight: 700, color: T.muted,
-            textTransform: "uppercase", letterSpacing: ".08em" }}>
-            Mes
-            <select value={mesBalanceEff} onChange={e => setMesBalance(Number(e.target.value))}
-              style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "6px 10px", fontSize: 12.5, fontFamily: T.font,
-                background: "#eceff3", color: T.text, cursor: "pointer", fontWeight: 600 }}>
-              {balMeses.elegibles.map(m => <option key={m} value={m}>{_MESES[(m + 12) % 12]}{m === balMeses.enCurso ? " · hoy" : ""}</option>)}
-            </select>
-          </label>
+          <SelectInline label="Mes" value={mesBalanceEff} onChange={v => setMesBalance(Number(v))}
+            options={balMeses.elegibles.map(m => ({ value: m, label: `${_MESES[(m + 12) % 12]}${m === balMeses.enCurso ? " · hoy" : ""}` }))} />
           </>
         )}
 
@@ -497,7 +419,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
             <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase",
               letterSpacing: ".08em" }}>Al día</span>
             <button type="button" onClick={() => { dateRef.current?.showPicker?.(); dateRef.current?.click(); }}
-              style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "6px 12px", fontSize: 12,
+              style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "0 12px", height: 30, fontSize: 12,
                 fontFamily: T.font, background: "#eceff3", color: fechaCorte ? T.text : T.dim, cursor: "pointer",
                 whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", gap: 6, minWidth: 124,
                 justifyContent: "center", fontWeight: 600 }}>
@@ -567,7 +489,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
       <div ref={contentRef}>
       {!loading && !error && activeTab === "posicion" && (
         <PosicionFinancieraView deriveAsOf={deriveAsOf} filtroMoneda={filtroMoneda} fechaCorte={fechaCorte}
-          tiposCambio={tiposCambio} socsIncluidas={socsIncluidas} sociedades={sociedades} esTodas={socSel.length === 0} />
+          tiposCambio={tiposCambio} socsIncluidas={socsIncluidas} sociedades={sociedades} esTodas={socsIncluidas.length === sociedades.length} />
       )}
       {!loading && !error && activeTab === "saldos" && (
         <TabSaldos cuentas={cuentas} aCobrar={aCobrar} aPagar={aPagar} interco={interco}
