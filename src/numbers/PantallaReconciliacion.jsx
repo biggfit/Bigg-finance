@@ -2530,7 +2530,6 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                       {menuFor === m.id && (
                         <div onClick={(e) => e.stopPropagation()} style={{ position: "absolute", right: 6, top: "calc(100% - 2px)", zIndex: 30,
                           background: "#fff", border: "1px solid #cbd5e1", borderRadius: 8, boxShadow: "0 6px 18px rgba(0,0,0,.14)", minWidth: 220, overflow: "hidden" }}>
-                          <button style={MENU_ITEM} onClick={() => abrirNota(m)}>{notaUsuario(m) ? "✎ Editar nota" : "📝 Agregar nota"}</button>
                           {/* Posible duplicado: la acción primaria es Ignorar (botón rojo), así que Aceptar vive acá. */}
                           {dupTransfer(m) && (
                             <button style={{ ...MENU_ITEM, color: "#16a34a", fontWeight: 700 }} disabled={!puedeAceptar}
@@ -2609,6 +2608,7 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                             <button style={{ ...MENU_ITEM, color: "#7c3aed", fontWeight: 700 }} onClick={() => { ignorar(m, `haberes:${hMatch.lote}`); setMenuFor(null); }}>✓ Ya está en Sueldos — descartar</button>
                           )}
                           <button style={MENU_ITEM} onClick={() => { setReglaModal({ prefill: prefillRegla(m) }); setMenuFor(null); }}>⚙ Crear regla</button>
+                          <button style={MENU_ITEM} onClick={() => abrirNota(m)}>{notaUsuario(m) ? "✎ Editar nota" : "📝 Agregar nota"}</button>
                           {/* Ignorar en el menú solo si NO es duplicado (en duplicados el botón rojo de afuera ya es Ignorar). */}
                           {!dupTransfer(m) && (
                             <button style={{ ...MENU_ITEM, color: "#b45309" }} onClick={() => { setMenuFor(null); ignorar(m); }}>🚫 Ignorar</button>
