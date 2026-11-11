@@ -375,6 +375,13 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
   const [progreso,   setProgreso]   = useState(null); // { done, total } mientras sube el extracto
   const [filtroTipo, setFiltroTipo] = useState("");   // filtro por grupo de Propuesta (para aprobar por grupos)
   const [busqueda,   setBusqueda]   = useState("");   // texto libre: filtra por descripción/proveedor (ej. juntar todo un proveedor)
+  // Filtros de columna estilo Excel (▾ en el header de Fecha y Descripción). Solo de visualización.
+  const [fDesde,   setFDesde]   = useState("");       // fecha desde (ISO) — columna Fecha
+  const [fHasta,   setFHasta]   = useState("");       // fecha hasta (ISO)
+  const [ordFecha, setOrdFecha] = useState("desc");   // "desc" = más recientes arriba (default histórico) | "asc"
+  const [descTxt,  setDescTxt]  = useState("");       // texto "contiene" — columna Descripción (concepto o contraparte)
+  const [descSel,  setDescSel]  = useState(null);     // null = todas | Set de conceptos tildados (lista estilo Excel)
+  const [colMenu,  setColMenu]  = useState(null);     // null | { key: "fecha"|"desc", x, y } popover abierto (position:fixed)
   const [panelBanco, setPanelBanco] = useState(null); // null | "ignorados" | "conciliados": acordeón — abrir uno cierra el otro
   const [concDesde,  setConcDesde]  = useState("");   // filtro de fecha del histórico "Conciliados"
   const [concHasta,  setConcHasta]  = useState("");
@@ -1444,15 +1451,37 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
     const o = {}; pendCuenta.forEach(m => { const g = grupoDe(m); o[g] = (o[g] || 0) + 1; });
     return Object.entries(o).sort((a, b) => b[1] - a[1]);
   }, [pendCuenta, franquicias, pagosSueldos, cuotasPendientes, edits]);
+  // Valores de la columna Descripción (concepto del banco) con conteo, para la lista estilo Excel.
+  const descValores = useMemo(() => {
+    const o = {}; pendCuenta.forEach(m => { const d = String(m.concepto ?? "").trim() || "(vacío)"; o[d] = (o[d] || 0) + 1; });
+    return Object.entries(o).sort((a, b) => a[0].localeCompare(b[0], "es"));
+  }, [pendCuenta]);
+  const fechaFiltrada = !!(fDesde || fHasta) || ordFecha !== "desc";
+  const descFiltrada  = !!descTxt.trim() || descSel !== null;
+  const limpiarFecha  = () => { setFDesde(""); setFHasta(""); setOrdFecha("desc"); };
+  const limpiarDesc   = () => { setDescTxt(""); setDescSel(null); };
+  // Al cambiar de cuenta los conceptos son otros → la lista tildada no aplica.
+  useEffect(() => { setDescSel(null); setColMenu(null); }, [cuentaTab]);
+  const abrirColMenu = (key, e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    setColMenu(c => c?.key === key ? null : { key, x: Math.min(r.left, window.innerWidth - 290), y: r.bottom + 4 });
+  };
   const filtered = useMemo(() => {
     let list = filtroTipo ? pendCuenta.filter(m => grupoDe(m) === filtroTipo) : pendCuenta;
     const q = busqueda.trim().toLowerCase();
     if (q) list = list.filter(m =>
       (m.concepto ?? "").toLowerCase().includes(q) || (m.contraparte_nombre ?? "").toLowerCase().includes(q));
-    // Ordenado por fecha, más recientes arriba (descendente) — la ingesta del extracto no garantiza
+    if (fDesde) list = list.filter(m => fechaComprobanteISO(m.fecha) >= fDesde);
+    if (fHasta) list = list.filter(m => fechaComprobanteISO(m.fecha) <= fHasta);
+    const dq = descTxt.trim().toLowerCase();
+    if (dq) list = list.filter(m =>
+      (m.concepto ?? "").toLowerCase().includes(dq) || (m.contraparte_nombre ?? "").toLowerCase().includes(dq));
+    if (descSel) list = list.filter(m => descSel.has(String(m.concepto ?? "").trim() || "(vacío)"));
+    // Ordenado por fecha (default: más recientes arriba) — la ingesta del extracto no garantiza
     // orden. Se compara en ISO (fechaComprobanteISO tolera DD/MM/YYYY e ISO); copia nueva para no mutar.
-    return [...list].sort((a, b) => fechaComprobanteISO(b.fecha).localeCompare(fechaComprobanteISO(a.fecha)));
-  }, [pendCuenta, filtroTipo, busqueda, franquicias, pagosSueldos, cuotasPendientes, edits]);
+    const dir = ordFecha === "asc" ? 1 : -1;
+    return [...list].sort((a, b) => dir * fechaComprobanteISO(a.fecha).localeCompare(fechaComprobanteISO(b.fecha)));
+  }, [pendCuenta, filtroTipo, busqueda, fDesde, fHasta, ordFecha, descTxt, descSel, franquicias, pagosSueldos, cuotasPendientes, edits]);
   const countByCuenta = useMemo(() => {
     const o = {}; pendientes.forEach(m => { o[m.cuenta_bancaria] = (o[m.cuenta_bancaria] || 0) + 1; }); return o;
   }, [pendientes]);
@@ -2021,13 +2050,83 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
         </div>
       )}
 
+      {/* Popover de filtro de columna (Fecha / Descripción). position:fixed para que no lo recorte el scroll de la tabla. */}
+      {colMenu && (() => {
+        const lbl = { fontSize: 10, fontWeight: 800, color: T.muted, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 6 };
+        const inp = { fontSize: 12, padding: "5px 8px", borderRadius: 6, border: `1px solid ${T.cardBorder}`, fontFamily: T.font, color: "#111827", background: "#fff", boxSizing: "border-box" };
+        const ord = on => ({ flex: 1, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: T.font, borderRadius: 6, padding: "5px 8px",
+          border: `1px solid ${on ? T.accentDark : T.cardBorder}`, background: on ? T.accentDark : "#fff", color: on ? T.accent : "#111827" });
+        const esFecha = colMenu.key === "fecha";
+        const activo = esFecha ? fechaFiltrada : descFiltrada;
+        const visibles = descValores.filter(([d]) => !descTxt.trim() || d.toLowerCase().includes(descTxt.trim().toLowerCase()));
+        const tildado = d => descSel === null || descSel.has(d);
+        const toggle = d => setDescSel(prev => {
+          const s = new Set(prev === null ? descValores.map(([x]) => x) : prev);
+          s.has(d) ? s.delete(d) : s.add(d);
+          return s.size === descValores.length ? null : s;
+        });
+        return (
+          <>
+            <div onClick={() => setColMenu(null)} style={{ position: "fixed", inset: 0, zIndex: 60 }} />
+            <div style={{ position: "fixed", left: colMenu.x, top: colMenu.y, zIndex: 61, background: T.card, border: `1px solid ${T.cardBorder}`,
+              borderRadius: 8, boxShadow: "0 10px 30px rgba(0,0,0,.18)", padding: 12, width: 270, color: T.text, fontFamily: T.font }}>
+              {esFecha ? (
+                <>
+                  <div style={lbl}>Ordenar</div>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                    <button onClick={() => setOrdFecha("asc")}  style={ord(ordFecha === "asc")}>▲ Más viejas</button>
+                    <button onClick={() => setOrdFecha("desc")} style={ord(ordFecha === "desc")}>▼ Más recientes</button>
+                  </div>
+                  <div style={lbl}>Rango</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
+                    <input type="date" value={fDesde} max={fHasta || undefined} onChange={e => setFDesde(e.target.value)} style={{ ...inp, width: "50%" }} />
+                    <span style={{ fontSize: 11, color: T.muted }}>a</span>
+                    <input type="date" value={fHasta} min={fDesde || undefined} onChange={e => setFHasta(e.target.value)} style={{ ...inp, width: "50%" }} />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div style={lbl}>Contiene</div>
+                  <input autoFocus value={descTxt} onChange={e => setDescTxt(e.target.value)} placeholder="texto o proveedor…"
+                    style={{ ...inp, width: "100%", marginBottom: 10 }} />
+                  <div style={lbl}>Valores</div>
+                  <div style={{ maxHeight: 220, overflowY: "auto", border: `1px solid ${T.cardBorder}`, borderRadius: 6, padding: "4px 0", marginBottom: 12 }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 8px", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>
+                      <input type="checkbox" checked={descSel === null}
+                        ref={el => { if (el) el.indeterminate = descSel !== null && descSel.size > 0; }}
+                        onChange={() => setDescSel(descSel === null ? new Set() : null)} />
+                      (Seleccionar todo)
+                    </label>
+                    {visibles.map(([d, n]) => (
+                      <label key={d} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 8px", fontSize: 12, cursor: "pointer" }}>
+                        <input type="checkbox" checked={tildado(d)} onChange={() => toggle(d)} />
+                        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d}</span>
+                        <span style={{ color: T.muted, fontSize: 11 }}>{n}</span>
+                      </label>
+                    ))}
+                    {!visibles.length && <div style={{ padding: "4px 8px", fontSize: 11, color: T.muted }}>Sin coincidencias</div>}
+                  </div>
+                </>
+              )}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <button onClick={esFecha ? limpiarFecha : limpiarDesc} disabled={!activo} style={{ fontSize: 11, fontWeight: 700,
+                  cursor: activo ? "pointer" : "default", fontFamily: T.font, borderRadius: 6, padding: "5px 12px",
+                  border: `1px solid ${T.cardBorder}`, background: "#f3f4f6", color: activo ? T.muted : T.dim }}>Limpiar</button>
+                <button onClick={() => setColMenu(null)} style={{ fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: T.font,
+                  borderRadius: 6, padding: "5px 14px", border: "none", background: T.accentDark, color: T.accent }}>Listo</button>
+              </div>
+            </div>
+          </>
+        );
+      })()}
+
       {/* overflowX:"scroll" (no "auto"): en Chrome/Windows con "overlay scrollbars" la barra con "auto"
           solo se dibuja mientras se scrollea/hoverea (aunque el scroll ya funciona) — "scroll" reserva
           el track siempre, así el estilo de .nb-hscroll (barra gruesa y con contraste) queda visible. */}
       <div className="nb-hscroll" style={{ flex: 1, overflowX: "scroll", overflowY: "auto", background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 10 }}>
         {loading ? (
           <div style={{ padding: 50, textAlign: "center", color: T.muted }}>Cargando…</div>
-        ) : filtered.length === 0 ? (
+        ) : pendCuenta.length === 0 ? (
           <div style={{ padding: 50, textAlign: "center", color: T.muted, fontSize: 14 }}>
             No hay movimientos pendientes en esta cuenta. Subí un extracto para empezar.
           </div>
@@ -2049,7 +2148,20 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
                 {[["Fecha","left"],["Descripción","left"],["Débitos","right"],["Créditos","right"],["Propuesta","left"],["Imputación","center"],["Acción","left"]].map(([h, al]) => (
                   <th key={h} style={{ padding: "9px 12px", textAlign: al, fontSize: 10, fontWeight: 700,
                     color: T.tableHeadText, letterSpacing: ".06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>
-                    {h === "Propuesta" ? (
+                    {(h === "Fecha" || h === "Descripción") ? (() => {
+                      const key = h === "Fecha" ? "fecha" : "desc";
+                      const activo = key === "fecha" ? fechaFiltrada : descFiltrada;
+                      return (
+                        <button onClick={e => abrirColMenu(key, e)} title="Ordenar y filtrar" style={{
+                          background: "transparent", border: "none", cursor: "pointer", color: "inherit", fontFamily: T.font, padding: 0,
+                          fontSize: 10, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase",
+                          display: "inline-flex", alignItems: "center", gap: 4 }}>
+                          {h}{key === "fecha" && (ordFecha === "asc" ? " ▲" : " ▼")}
+                          <span style={{ fontWeight: 900, opacity: activo ? 1 : .55, color: activo ? "#fff" : "inherit",
+                            background: activo ? "#16a34a" : "transparent", borderRadius: 4, padding: activo ? "0 4px" : 0 }}>▾</span>
+                        </button>
+                      );
+                    })() : h === "Propuesta" ? (
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <span>{h}</span>
                         <select value={filtroTipo} onChange={e => setFiltroTipo(e.target.value)} title="Filtrar por tipo"
@@ -2065,6 +2177,14 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
               </tr>
             </thead>
             <tbody>
+              {filtered.length === 0 && (
+                <tr><td colSpan={8} style={{ padding: 40, textAlign: "center", color: T.muted, fontSize: 13 }}>
+                  Ningún movimiento coincide con los filtros.{" "}
+                  <button onClick={() => { limpiarFecha(); limpiarDesc(); setFiltroTipo(""); setBusqueda(""); }}
+                    style={{ background: "none", border: "none", color: "#2563eb", cursor: "pointer", fontFamily: T.font, fontSize: 13, textDecoration: "underline" }}>
+                    Borrar filtros</button>
+                </td></tr>
+              )}
               {filtered.map((m, i) => {
                 const meta = parseMeta(m.referencia);
                 const tipo = meta.tipo || (Number(m.monto) > 0 ? "ingreso" : "");
