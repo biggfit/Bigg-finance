@@ -70,33 +70,51 @@ function reconocerSociedadPropia(linea, sociedades, cuentas, sociedadActual, mon
 
 // Reconoce el pago de una cuota de financiación (planes AFIP / créditos). Solo débitos.
 // Match fuerte por Nº de plan en la glosa/leyendas; si no, por CUIT del acreedor + ventana
-// de monto. La cuota se identifica por importe: acepta `total` (en término) o `total_tardio`
-// (con resarcitorio) → marca esTardio. cuotasPendientes: lista plana de cuotas pendientes.
-export function reconocerCuota(linea, cuotasPendientes, moneda) {
+// de monto. El IMPORTE identifica el PLAN (acepta `total` en término o `total_tardio` con
+// resarcitorio → marca esTardio), pero NO la cuota: dentro del plan se toma SIEMPRE la cuota
+// pendiente MÁS VIEJA de las que entran en la ventana, porque el acreedor debita en orden.
+// Hasta el 10/11/2026 se elegía la de importe más parecido y eso corrió 9 pagos de 7 planes AFIP:
+//  · planes de cuota fija: los totales son sumas con ruido de punto flotante (489725.56999999995
+//    vs 489725.57) y una cuota posterior ganaba por 6e-11 → el débito del 16/9 fue a la #4 con la
+//    #3 pendiente;
+//  · planes de interés decreciente con el cronograma desactualizado: el débito real quedaba más
+//    cerca de la cuota 14 que de la 4.
+// El interés (y el capital, en planes con capital por cuota) va al resultado en el vto de la cuota,
+// así que una cuota mal elegida descuadra el resultado contra el patrimonio.
+// `planId` (opcional) = plan ya identificado al INGERIR el extracto (la leyenda con el Nº de plan
+// no se almacena): sus cuotas cuentan como match por Nº de plan. cuotasPendientes: lista plana.
+const centavos = v => Math.round((Number(v) || 0) * 100) / 100;
+const masVieja = (a, b) => String(a.vto || "").localeCompare(String(b.vto || "")) || (Number(a.nro_cuota) || 0) - (Number(b.nro_cuota) || 0);
+export function reconocerCuota(linea, cuotasPendientes, moneda, { planId = "" } = {}) {
   if (!cuotasPendientes?.length) return null;
   const monto = Math.abs(Number(linea.monto) || 0);
   if (monto <= 0 || (Number(linea.monto) || 0) > 0) return null;   // solo débitos
   const cuit = normNum(linea.ley2 || linea.cuit);
   const hay  = [linea.descripcion, linea.ley1, linea.ley2, linea.ley3, linea.ley4].map(normTxt).join(" ");
   const tol  = Math.max(500, monto * 0.02);
-  let best = null;
+  const cands = [];   // cuotas pendientes con señal real (plan o CUIT) y dentro de la ventana de monto
   for (const c of cuotasPendientes) {
     if (moneda && c.moneda && c.moneda !== moneda) continue;
     const planNum = normNum(c.nro_plan);
-    const byPlan  = planNum && planNum.length >= 4 && normNum(hay).includes(planNum);
+    const byPlan  = (!!planId && String(c.plan_id) === String(planId))
+      || (planNum && planNum.length >= 4 && normNum(hay).includes(planNum));
     const byCuit  = cuit && c.acreedor_cuit && normNum(c.acreedor_cuit) === cuit;
     if (!byPlan && !byCuit) continue;
-    const dT   = Math.abs(monto - (Number(c.total) || 0));
-    const dTT  = (Number(c.total_tardio) || 0) > 0 ? Math.abs(monto - Number(c.total_tardio)) : Infinity;
+    const dT   = centavos(Math.abs(monto - (Number(c.total) || 0)));
+    const dTT  = (Number(c.total_tardio) || 0) > 0 ? centavos(Math.abs(monto - Number(c.total_tardio))) : Infinity;
     const diff = Math.min(dT, dTT);
     // Ventana de monto: por CUIT es estricta; por Nº de plan es amplia (cuotas variables de
     // crédito) pero NO ilimitada → un débito de $31k con nº de plan en la glosa NO se pega a
     // una cuota de $2,5M (era un impuesto IIBB con "Cuota N°18" en el texto).
     const maxDiff = byPlan ? Math.max(tol, monto * 0.5) : tol;
     if (diff > maxDiff) continue;
-    const score = (byPlan ? 0 : 1e9) + diff;         // prioriza match por nº de plan
-    if (!best || score < best.score) best = { c, esTardio: dTT < dT, byPlan, score };
+    cands.push({ c, esTardio: dTT < dT, byPlan, score: (byPlan ? 0 : 1e9) + diff });   // prioriza match por nº de plan
   }
+  // 1) el PLAN: el de la cuota que mejor pega (a igual puntaje, la más vieja);
+  // 2) la CUOTA: la pendiente más vieja de ese plan entre las que entraron en la ventana.
+  const mejor = cands.reduce((b, x) => (!b || x.score < b.score || (x.score === b.score && masVieja(x.c, b.c) < 0)) ? x : b, null);
+  const best = mejor && cands.filter(x => String(x.c.plan_id) === String(mejor.c.plan_id) && x.byPlan === mejor.byPlan)
+    .reduce((b, x) => (!b || masVieja(x.c, b.c) < 0) ? x : b, null);
   // SIN fallback por monto: sólo se propone una cuota si hay señal real (Nº de plan en la glosa
   // o CUIT en la leyenda). El match por importe suelto era peligroso — un débito ajeno (ej. IIBB
   // del banco de $24.078) coincidía con una cuota de plan de $24.077,83 y proponía consumirla,

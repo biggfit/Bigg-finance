@@ -1042,11 +1042,12 @@ export default function PantallaReconciliacion({ sociedad, onPendientes, mundo =
       const meta = parseMeta(mov.referencia);
       auto = reconocerCuota(
         { monto: Number(mov.monto) || 0, descripcion: mov.concepto || "", ley1: mov.contraparte_nombre || "", ley2: meta.cuit || "", cuit: meta.cuit || "" },
-        cuotasPendientes, monedaCuenta);
-      // Fallback: el plan que el motor identificó al INGERIR (por la leyenda con el Nº de
-      // plan, que no se almacena) queda empacado en `referencia` → lo usamos aunque el
-      // re-match en vivo falle (ej. cuotas de monto decreciente que no pegan exacto).
-      if (!auto && meta.plan) auto = { plan_id: meta.plan, cuota_row_id: meta.pcuota || "" };
+        cuotasPendientes, monedaCuenta, { planId: meta.plan || "" });
+      // El plan que el motor identificó al INGERIR (por la leyenda con el Nº de plan, que no se
+      // almacena) queda empacado en `referencia` → el re-match en vivo lo recibe como pista (arriba).
+      // Fallback si igual no pega: ese plan con su cuota pendiente MÁS VIEJA (no la `pcuota` guardada
+      // al ingerir, que pudo elegirse por importe o ya estar pagada — ver reconocerCuota, 10/11/2026).
+      if (!auto && meta.plan) auto = { plan_id: meta.plan, cuota_row_id: String(cuotasDePlan(meta.plan)[0]?.row_id || meta.pcuota || "") };
       if (!auto) return { es: false };
     }
     const planSel = ed.cuota_plan ?? auto?.plan_id ?? "";
