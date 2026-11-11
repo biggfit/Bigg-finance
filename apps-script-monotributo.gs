@@ -25,7 +25,6 @@
 
 const TZ = "America/Argentina/Buenos_Aires";
 
-// Quienes cargan solos. Gigio, Guido, Ignacio y Victoria NO: los carga administración a mano.
 // Quién carga por link lo dice el LEGAJO: campo `monotributo` = "link" (se edita en Sueldos → Legajos).
 // Misma fuente que la solapa Monotributo de Novedades HQ. Dar de alta o baja a alguien = cambiar el legajo.
 function autocarga_(legs) {
