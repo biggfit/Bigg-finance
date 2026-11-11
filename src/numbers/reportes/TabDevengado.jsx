@@ -100,12 +100,13 @@ const GO_LIVE_ANIO = 2026, GO_LIVE_MES = 6;   // julio (0-based)
 // el Cash Flow indirecto ("Del resultado a la caja"): un solo loop, no dos copias. Meses fuera de [desde, hasta] = 0.
 // Devuelve { res, retiros }: `res` = resultado del mes SIN los retiros a inversores; `retiros` = esos retiros (cuenta
 // "Inversores", en negativo) para el puente Del resultado al patrimonio, donde bajan el patrimonio por su propia fila.
-// `centrosConProvision`
-// (Set de ccKey) = centros cuya cesión se provisiona (Barrio Norte): ahí la factura del cesionario cancela un pasivo
-// ya registrado por la fila "Dividendos declarados" y NO vuelve a bajar el patrimonio → esos retiros no cuentan.
-export function devengadoMensual(pnl, { year, consolidado, mon, socSet, tiposCambio = null, desde = GO_LIVE_MES, hasta = 11, centrosConProvision = null }) {
+// `participaciones` (nb_socios) dice qué centros tienen una cesión que se PROVISIONA (Barrio Norte): ahí la factura del
+// cesionario cancela un pasivo ya registrado por la fila "Dividendos declarados" y NO vuelve a bajar el patrimonio →
+// esos retiros no cuentan. Lo usan Del resultado al patrimonio y el recuadro "De dónde viene el PN" del Balance.
+export function devengadoMensual(pnl, { year, consolidado, mon, socSet, tiposCambio = null, desde = GO_LIVE_MES, hasta = 11, participaciones = [] }) {
   const porMes = new Array(12).fill(0), retiros = new Array(12).fill(0);
   if (!pnl) return { res: porMes, retiros };
+  const centrosConProvision = new Set((participaciones || []).filter(r => r.tipo === "cesion" && r.alcance).map(r => ccKey(r.alcance)));
   const { aUSD } = crearTraductor(tiposCambio);
   const monedas = consolidado ? [...new Set([...(pnl.inRows || []), ...(pnl.egRows || [])].map(r => r.moneda || "ARS"))] : [mon];
   for (const mo of monedas) {
@@ -117,7 +118,7 @@ export function devengadoMensual(pnl, { year, consolidado, mon, socSet, tiposCam
       const f1 = `${year}-${String(m + 1).padStart(2, "0")}-01`;
       porMes[m] += consolidado ? aUSD(v, mo, f1) : v;
       let r = 0;
-      for (const [cc, arr] of dev.distPorCentro || []) if (!centrosConProvision?.has(cc)) r += arr[m] || 0;
+      for (const [cc, arr] of dev.distPorCentro || []) if (!centrosConProvision.has(cc)) r += arr[m] || 0;
       retiros[m] += consolidado ? aUSD(r, mo, f1) : r;
     }
   }

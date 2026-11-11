@@ -15,11 +15,10 @@ import { fetchLiquidacionesCerradas } from "../../lib/sueldosApi";
 import { tolerante } from "../../lib/http";
 import { fetchAll } from "../../lib/sheetsApi";        // Franquicias (read-only)
 import { derivarSaldos, franqFirst, intercoConsolidado, sociedadNombreMap } from "../tesoreriaDerive";
-import { devengadoMensual } from "./TabDevengado";   // resultado por mes (misma función que el reporte Devengado) → conciliación del PN
 import { TabSaldos, TabMovimientos, PaginaAging, PaginaIntercoLedger } from "../PantallaTesoreria";
 import { buildPuente, printPuente } from "./puenteDerive";   // DEV-ONLY diagnóstico (descartable)
 import { GO_LIVE_APERTURA, MESES_CORTOS as _MESES, sumSaldo, esCorriente, fmtBal, crearTraductor, AvisosTC, ordenarDetalle, participacionesAsOf,
-  hoyISO as _hoyISO, finMesAnterior as _finMesAnterior, esFinDeMes as _esFinDeMes, finMesAnteriorReal as _finMesAnteriorReal } from "./balanceUtils";
+  hoyISO as _hoyISO, finMesAnteriorReal as _finMesAnteriorReal } from "./balanceUtils";
 import { computeCashFlow } from "./cashflowDerive";
 import { CajaView } from "./CajaView";
 import { PatrimonioView } from "./PatrimonioView";
@@ -64,6 +63,8 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
   const [socSel,     setSocSel]     = useState([]);   // [] = todas
   const [socOpen,    setSocOpen]    = useState(false);
   const [activeTab,  setActiveTab]  = useState(vistasOn[0]);
+  const [vistaBalance, setVistaBalance] = useState("evolucion");   // Balance: "evolucion" | "mensual" (molde del P&L)
+  const [mesBalance,   setMesBalance]   = useState(null);          // mes de la vista Mensual (null = último cierre)
   const [filtroMoneda, setFiltroMoneda] = useState(monedaInicial || "ALL");
   const [fechaCorte,   setFechaCorte]   = useState(fechaInicial || "");
   const [filtroCuenta, setFiltroCuenta] = useState(null);
@@ -263,7 +264,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
   useEffect(() => { onMeta?.({ vista: activeTab, fecha: fechaCorte || _hoyISO(), moneda: filtroMoneda }); }, [onMeta, activeTab, fechaCorte, filtroMoneda]);
 
   const eepn = useMemo(() => {
-    if (activeTab !== "evpn") return null;
+    if (activeTab !== "evpn" && activeTab !== "balance") return null;   // Balance mes a mes + Del resultado al patrimonio
     const idsSel = socsIncluidas.map(s => s.id);   // set de sociedades (no depende de la fecha)
     const year = new Date().getFullYear();
     const GO = year === 2026 ? 6 : 0;   // julio go-live (columna inicial = junio)
@@ -284,6 +285,16 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
     }
     return { year, GO, upto, balMes, cambioAcum };
   }, [activeTab, data, socsIncluidas, intercoData, sociedades, sociedadesMap, deriveAsOf]);
+
+  // Meses que el Balance puede mirar en vista Mensual (julio … mes en curso) y el último cierre, que es el default.
+  const balMeses = useMemo(() => {
+    if (!eepn) return null;
+    const enCurso = new Date().getFullYear() === eepn.year ? new Date().getMonth() : null;
+    const elegibles = []; for (let m = eepn.GO; m <= eepn.upto; m++) elegibles.push(m);
+    const ultimo = [...elegibles].reverse().find(m => m !== enCurso) ?? elegibles[elegibles.length - 1] ?? eepn.GO - 1;
+    return { elegibles, enCurso, ultimo };
+  }, [eepn]);
+  const mesBalanceEff = balMeses ? ((mesBalance != null && balMeses.elegibles.includes(mesBalance)) ? mesBalance : balMeses.ultimo) : null;
 
   const socSetLC = useMemo(() => new Set(socsIncluidas.map(s => String(s.id).toLowerCase())), [socsIncluidas]);
 
@@ -346,27 +357,40 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
   const nSel = socSel.length === 0 ? sociedades.length : socSel.length;
   const ultimoCierre = _finMesAnteriorReal(_hoyISO());
 
+  // Pastillas de un grupo de botones (las pestañas de la pantalla y las vistas del Balance comparten el molde).
+  const pastillas = (items, activo, onSel, ariaLabel) => (
+    <div role="tablist" aria-label={ariaLabel}
+      style={{ display: "inline-flex", gap: 2, background: "#f3f4f6", borderRadius: 10, padding: 3 }}>
+      {items.map(it => {
+        const active = activo === it.id;
+        return (
+          <button key={it.id} type="button" role="tab" aria-selected={active} onClick={() => onSel(it.id)}
+            style={{ background: active ? T.accentDark : "transparent", border: "none", borderRadius: 8,
+              color: active ? T.accent : T.muted, fontFamily: T.font, fontSize: 13,
+              fontWeight: active ? 800 : 500, padding: "7px 18px", cursor: "pointer", transition: "all .15s" }}>
+            {it.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+  const tabsPills = TABS.length > 1 ? pastillas(TABS, activeTab, setActiveTab, "Vista consolidada") : null;
+  // Balance (Martín 10/11/2026): arriba a la derecha va la VISTA del Balance, como en los P&L (Evolución mensual /
+  // Mensual). Si la pantalla trae más de una pestaña, bajan debajo de la barra. (Del resultado al patrimonio dejó de
+  // ser pestaña del Balance ese mismo día: es un reporte propio en "Control de cierre".)
+  const tabsAbajo = vistasOn.includes("balance");
+  const arribaDerecha = tabsAbajo
+    ? (activeTab === "balance" ? pastillas(VISTAS_BALANCE, vistaBalance, setVistaBalance, "Vista del Balance") : null)
+    : tabsPills;
+  const consolidadoSel = !filtroMoneda || filtroMoneda === "ALL";
+
   return (
     <div className="fade">
-      {/* ── Selector de vista — en la primera línea (a la altura del título), a la derecha. Con una sola vista no hay
-           nada que elegir → no se pinta (y no tapa el "← Reportes" en pantallas angostas). ── */}
-      {TABS.length > 1 && (
+      {/* ── Primera línea (a la altura del título), a la derecha: las pestañas de la pantalla o, en Balance y
+           patrimonio, la vista del Balance. Sin nada que elegir no se pinta (no tapa el "← Reportes"). ── */}
+      {arribaDerecha && (
       <div style={{ display: "flex", justifyContent: "flex-end", marginTop: -57, marginBottom: 22 }}>
-        <div role="tablist" aria-label="Vista consolidada"
-          style={{ display: "inline-flex", gap: 2, background: "#f3f4f6", borderRadius: 10, padding: 3 }}>
-          {TABS.map(tab => {
-            const active = activeTab === tab.id;
-            return (
-              <button key={tab.id} type="button" role="tab" aria-selected={active}
-                onClick={() => setActiveTab(tab.id)}
-                style={{ background: active ? T.accentDark : "transparent", border: "none", borderRadius: 8,
-                  color: active ? T.accent : T.muted, fontFamily: T.font, fontSize: 13,
-                  fontWeight: active ? 800 : 500, padding: "7px 18px", cursor: "pointer", transition: "all .15s" }}>
-                {tab.label}
-              </button>
-            );
-          })}
-        </div>
+        {arribaDerecha}
       </div>
       )}
 
@@ -450,8 +474,24 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
           })}
         </div>
 
-        {/* Fecha corte — solo Saldos/Balance/Movimientos (EEPN y Cash Flow son mensuales, no usan corte) */}
-        {!["evpn", "cf"].includes(activeTab) && (
+        {/* Mes — Balance en vista Mensual: el cierre que se compara contra el del mes anterior. */}
+        {activeTab === "balance" && vistaBalance === "mensual" && balMeses && (
+          <>
+          <div style={{ width: 1, height: 24, background: T.cardBorder, flexShrink: 0 }} />
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 10, fontWeight: 700, color: T.muted,
+            textTransform: "uppercase", letterSpacing: ".08em" }}>
+            Mes
+            <select value={mesBalanceEff} onChange={e => setMesBalance(Number(e.target.value))}
+              style={{ border: `1px solid ${T.cardBorder}`, borderRadius: 8, padding: "6px 10px", fontSize: 12.5, fontFamily: T.font,
+                background: "#eceff3", color: T.text, cursor: "pointer", fontWeight: 600 }}>
+              {balMeses.elegibles.map(m => <option key={m} value={m}>{_MESES[(m + 12) % 12]}{m === balMeses.enCurso ? " · hoy" : ""}</option>)}
+            </select>
+          </label>
+          </>
+        )}
+
+        {/* Fecha corte — solo Saldos/Movimientos/Posición (Balance, Patrimonio y Caja son mensuales, no usan corte) */}
+        {!["evpn", "cf", "balance"].includes(activeTab) && (
           <>
           <div style={{ width: 1, height: 24, background: T.cardBorder, flexShrink: 0 }} />
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -488,6 +528,19 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
           </>
         )}
       </div>
+
+      {tabsAbajo && (tabsPills || activeTab === "balance") && (
+        <div style={{ display: "flex", alignItems: "center", gap: 14, margin: "-6px 0 14px", flexWrap: "wrap" }}>
+          {tabsPills}
+          {activeTab === "balance" && (
+            <span style={{ fontSize: 12, color: T.muted, lineHeight: 1.5 }}>
+              {consolidadoSel
+                ? <><b>Consolidado en USD</b>: cada cierre al tipo de cambio de su mes.</>
+                : <>Balance en <b>{filtroMoneda}</b>: solo lo que existe en esa moneda.</>}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Aviso SUAVE: franquicias / intercompañía cargan fuera del batch principal → mientras falten, la CxC de
            franquiciados y la posición interco pueden completarse en unos segundos. No bloquea. */}
@@ -536,8 +589,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
           onItemClick={setDrillDownItem} />
       )}
       {!loading && !error && activeTab === "balance" && (
-        <BalanceView deriveAsOf={deriveAsOf} filtroMoneda={filtroMoneda} fechaCorte={fechaCorte}
-          tiposCambio={tiposCambio} pnl={pnl} socsIncluidas={socsIncluidas} movimientos={data.movimientos} sociosCC={dataDeriv.sociosCC} />
+        <BalanceView eepn={eepn} filtroMoneda={filtroMoneda} tiposCambio={tiposCambio} vista={vistaBalance} mes={mesBalanceEff} />
       )}
       {!loading && !error && activeTab === "evpn" && (
         <PatrimonioView eepn={eepn} filtroMoneda={filtroMoneda} tiposCambio={tiposCambio} pnl={pnl} socSet={socSetLC} sociosCC={dataDeriv.sociosCC} participaciones={data.participaciones} />
@@ -560,7 +612,7 @@ const arr = x => Array.isArray(x) ? x : [];
 // ── Tabla de Balance (Activo / Pasivo / PN) compartida por la vista Balance (columnas = monedas) y la
 //    vista Evolución PN (columnas = meses). El padre arma columnas + getters + detalle; la tabla sólo
 //    renderiza (bandas colapsables Activo/Pasivo, subgrupos CxC/Corriente/Otros, foot PN [+ variación]). ──
-function BalanceTable({ cols, colLabel, minBase = 320, colW = 100, getters, details, showVariacion = false, ajustes = null, ajusteLabel = "= Variación ajustada" }) {
+function BalanceTable({ cols, colLabel, minBase = 320, colW = 100, getters, details, showVariacion = false, ajustes = null, ajusteLabel = "= Variación ajustada", fmt = (c, v) => fmtBal(v) }) {
   const [open, setOpen] = useState({ activo: true, pasivo: true, cxc: true, corr: true, otros: true });
   const toggle = k => setOpen(o => ({ ...o, [k]: !o[k] }));
   const KEYS = ["activo", "pasivo", "cxc", "corr", "otros"];
@@ -570,7 +622,7 @@ function BalanceTable({ cols, colLabel, minBase = 320, colW = 100, getters, deta
   const hayPartic = !!partic && cols.some(c => Math.abs(partic(c)) > 0.5);
 
   const th = { padding: "9px 12px", fontSize: 11, fontWeight: 800, color: T.tableHeadText, textAlign: "right", whiteSpace: "nowrap" };
-  const cell = (get, c, bold, color) => <td key={c} style={{ padding: "8px 12px", fontSize: 13, textAlign: "right", fontFamily: "var(--mono)", fontWeight: bold ? 800 : 500, color: color || (get(c) < 0 ? "#dc2626" : T.text), whiteSpace: "nowrap" }}>{fmtBal(get(c))}</td>;
+  const cell = (get, c, bold, color) => <td key={c} style={{ padding: "8px 12px", fontSize: 13, textAlign: "right", fontFamily: "var(--mono)", fontWeight: bold ? 800 : 500, color: color || (get(c) < 0 ? "#dc2626" : T.text), whiteSpace: "nowrap" }}>{fmt(c, get(c))}</td>;
   const Fila = ({ label, get, indent = 28, bold, color }) => (
     <tr style={{ borderTop: `1px solid ${T.cardBorder}` }}>
       <td style={{ padding: `8px 14px 8px ${indent}px`, fontSize: 13, color: color || T.text, fontWeight: bold ? 800 : 500, whiteSpace: "nowrap" }}>{label}</td>
@@ -626,7 +678,7 @@ function BalanceTable({ cols, colLabel, minBase = 320, colW = 100, getters, deta
         <tfoot>
           <tr style={{ background: "#0e7490", color: "#fff", borderTop: `2px solid ${T.cardBorder}` }}>
             <td style={{ padding: "11px 14px", fontSize: 14, fontWeight: 900 }}>Patrimonio Neto</td>
-            {cols.map(c => <td key={c} style={{ padding: "11px 12px", fontSize: 14, textAlign: "right", fontFamily: "var(--mono)", fontWeight: 900 }}>{fmtBal(pn(c))}</td>)}
+            {cols.map(c => <td key={c} style={{ padding: "11px 12px", fontSize: 14, textAlign: "right", fontFamily: "var(--mono)", fontWeight: 900 }}>{fmt(c, pn(c))}</td>)}
           </tr>
           {showVariacion && (<>
             <tr style={{ background: "#083344", color: "#fff" }}>
@@ -662,165 +714,78 @@ function BalanceTable({ cols, colLabel, minBase = 320, colW = 100, getters, deta
   );
 }
 
-// ── Balance (Estado de Situación) a una fecha, en UNA moneda ──
-//   · Moneda elegida (ARS/USD/EUR/COP) → el balance nativo de esa moneda (circuito cerrado, como el EEPN).
-//   · "Todas" → CONSOLIDADO DEL GRUPO EN USD: cada saldo se traduce al TC del mes de su fecha (nb_tipos_cambio,
-//     misma convención que el P&L "USD · TC Real"). Sin TC de un mes/moneda → se avisa y esa parte no se suma.
-//   · Columnas: cierre del mes anterior · fecha de corte · variación (misma historia que el EEPN).
-//   · Debajo del PN, su explicación: PN apertura (30/6) + resultado acumulado (P&L, buildDevengado) − cambio de
-//     moneda = PN explicado; la diferencia con el PN real es lo que queda sin explicar (el "puente" hecho reporte).
-// Decisión Martín 19/9/2026 ("las monedas por columna me hacen ruido").
-// GO_LIVE_APERTURA, crearTraductor, AvisosTC, ordenarDetalle, _hoyISO/_finMesAnterior/_esFinDeMes: en ./balanceUtils.
-
-function BalanceView({ deriveAsOf, filtroMoneda, fechaCorte, tiposCambio = null, pnl = null, socsIncluidas = [], movimientos = [], sociosCC = [] }) {
-  const corte = fechaCorte || _hoyISO();
-  const prev  = _finMesAnterior(corte);
+// ── Balance (Estado de Situación) MES A MES, en UNA moneda (Martín 10/11/2026) ──
+//   Dos vistas, con el molde del P&L ("copialo de P&L"):
+//   · Evolución mensual: la apertura (30/6) y el cierre de cada mes en columnas; el mes en curso = a hoy.
+//   · Mensual: el cierre del mes elegido contra el del mes anterior, con Δ y Var%.
+//   Moneda elegida (ARS/USD/EUR/COP) → el balance nativo de esa moneda (circuito cerrado). "Todas" → CONSOLIDADO DEL
+//   GRUPO EN USD: cada cierre traducido al TC de su mes (nb_tipos_cambio, misma convención que el P&L "USD · TC Real").
+//   Los cierres vienen de `eepn.balMes` (deriveAsOf a fin de cada mes): los MISMOS que usa Del resultado al patrimonio,
+//   que es la pestaña que explica por qué cambia el PN. Por eso acá ya no va el recuadro "De dónde viene el PN" ni el
+//   selector de fecha libre (la foto a un día puntual sigue en Posición financiera). La vista y el mes los maneja el
+//   padre: el toggle va arriba a la derecha (como en los P&L) y el mes en la barra.
+const VISTAS_BALANCE = [{ id: "evolucion", label: "Evolución mensual" }, { id: "mensual", label: "Mensual" }];
+const fmtPct = v => v == null ? "—" : `${v < 0 ? "−" : ""}${Math.abs(v * 100).toLocaleString("es-AR", { maximumFractionDigits: 1 })}%`;   // mismo signo menos que fmtBal
+function BalanceView({ eepn, filtroMoneda, tiposCambio = null, vista = "evolucion", mes = null }) {
+  if (!eepn) return null;
+  const { year, GO, upto, balMes } = eepn;
   const consolidado = !filtroMoneda || filtroMoneda === "ALL";
   const mon = consolidado ? "USD" : filtroMoneda;
+  const hoy = new Date(); const mesEnCurso = hoy.getFullYear() === year ? hoy.getMonth() : null;
+  const meses = []; for (let m = GO - 1; m <= upto; m++) meses.push(m);            // columnas de Evolución (la 1ª = apertura)
+  const elegibles = meses.slice(1);                                                  // meses que se pueden mirar en Mensual
+  const ultimoCierre = [...elegibles].reverse().find(m => m !== mesEnCurso) ?? elegibles[elegibles.length - 1] ?? GO - 1;
+  const M = (mes != null && elegibles.includes(mes)) ? mes : ultimoCierre;
+  const nombreMes = m => _MESES[(m + 12) % 12];
+  const finDeMes = m => `${year}-${String(m + 1).padStart(2, "0")}-31`;
+  const bd = m => balMes[m] || { cuentas: [], aCobrar: [], aPagar: [], intercoAct: [], intercoPas: [], participaciones: [] };
 
-  const balCorte = useMemo(() => deriveAsOf(corte), [deriveAsOf, corte]);
-  const balPrev  = useMemo(() => deriveAsOf(prev),  [deriveAsOf, prev]);
-  const balAper  = useMemo(() => deriveAsOf(GO_LIVE_APERTURA), [deriveAsOf]);
-
-  const { aUSD, tcPara, faltaTC, tcSuplente } = crearTraductor(tiposCambio);
-  const monedasDe = (bal) => { const st = new Set(); [bal.cuentas, bal.aCobrar, bal.aPagar, bal.intercoAct, bal.intercoPas, bal.participaciones || []].forEach(a => a.forEach(it => it.moneda && st.add(it.moneda))); return [...st]; };
-  // Suma de una lista para la vista: nativa (una moneda) o consolidada (todas → USD al TC de `fecha`).
-  const suma = (items, fecha, pred = () => true) => consolidado
-    ? monedasDe({ cuentas: items, aCobrar: [], aPagar: [], intercoAct: [], intercoPas: [] }).reduce((s, mo) => s + aUSD(sumSaldo(items, mo, pred), mo, fecha), 0)
+  const { aUSD, faltaTC, tcSuplente } = crearTraductor(tiposCambio);
+  const monedasDe = items => [...new Set(items.map(it => it.moneda).filter(Boolean))];
+  // Suma de una lista al cierre del mes m: nativa (una moneda) o consolidada (todas → USD al TC de ese cierre).
+  const suma = (items, m, pred = () => true) => consolidado
+    ? monedasDe(items).reduce((t, mo) => t + aUSD(sumSaldo(items, mo, pred), mo, finDeMes(m)), 0)
     : sumSaldo(items, mon, pred);
 
-  const COLS = ["prev", "corte", "var"];
-  const balDe = { prev: balPrev, corte: balCorte };
-  const fechaDe = { prev, corte };
-  const g = (fn) => (c) => c === "var" ? fn("corte") - fn("prev") : fn(c);
-  const caja   = g(c => suma(balDe[c].cuentas, fechaDe[c], x => (x.tipo || "") === "caja"));
-  const bancos = g(c => suma(balDe[c].cuentas, fechaDe[c], x => { const t = (x.tipo || ""); return t !== "caja" && t !== "tarjeta"; }));
-  const cxcTot = g(c => suma(balDe[c].aCobrar, fechaDe[c]) + suma(balDe[c].intercoAct, fechaDe[c]));
-  const partic = g(c => suma(balDe[c].participaciones || [], fechaDe[c]));   // participaciones en negocios (T4 tanda B)
-  const activo = g(c => caja(c) + bancos(c) + cxcTot(c) + partic(c));
-  const corrTot  = g(c => suma(balDe[c].aPagar, fechaDe[c], x => esCorriente(x.label)));
-  const otrosTot = g(c => suma(balDe[c].aPagar, fechaDe[c], x => !esCorriente(x.label)) + suma(balDe[c].intercoPas, fechaDe[c]));
-  const pasivo = g(c => corrTot(c) + otrosTot(c));
-  const pn     = g(c => activo(c) - pasivo(c));
+  // Columnas: en Evolución la clave ES el mes; en Mensual son "mes" · "ant" · "delta" · "pct" sobre el mes elegido.
+  const COLS = vista === "evolucion" ? meses : ["mes", "ant", "delta", "pct"];
+  const g = fn => c => {
+    if (typeof c === "number") return fn(c);
+    const a = fn(M), b = fn(M - 1);
+    return c === "mes" ? a : c === "ant" ? b : c === "delta" ? a - b : (Math.abs(b) < 0.5 ? null : (a - b) / Math.abs(b));
+  };
+  const caja   = g(m => suma(bd(m).cuentas, m, x => (x.tipo || "") === "caja"));
+  const bancos = g(m => suma(bd(m).cuentas, m, x => { const t = (x.tipo || ""); return t !== "caja" && t !== "tarjeta"; }));
+  const cxcTot = g(m => suma(bd(m).aCobrar, m) + suma(bd(m).intercoAct, m));
+  const partic = g(m => suma(bd(m).participaciones || [], m));   // participaciones en negocios (T4 tanda B)
+  const activo = g(m => suma(bd(m).cuentas, m, x => (x.tipo || "") !== "tarjeta") + suma(bd(m).aCobrar, m) + suma(bd(m).intercoAct, m) + suma(bd(m).participaciones || [], m));
+  const corrTot  = g(m => suma(bd(m).aPagar, m, x => esCorriente(x.label)));
+  const otrosTot = g(m => suma(bd(m).aPagar, m, x => !esCorriente(x.label)) + suma(bd(m).intercoPas, m));
+  const pasivoDe = m => suma(bd(m).aPagar, m) + suma(bd(m).intercoPas, m);
+  const pasivo = g(pasivoDe);
+  const pn     = g(m => suma(bd(m).cuentas, m, x => (x.tipo || "") !== "tarjeta") + suma(bd(m).aCobrar, m) + suma(bd(m).intercoAct, m) + suma(bd(m).participaciones || [], m) - pasivoDe(m));
 
-  // Detalle: unión de etiquetas presentes en las dos fechas.
-  const labels = (arrName, pred = () => true) => [...new Set([...balPrev[arrName], ...balCorte[arrName]].filter(it => pred(it)).map(it => it.label))];
-  const porLabel = (arrName, L) => g(c => suma(balDe[c][arrName], fechaDe[c], x => x.label === L));
-  const nz = (get) => COLS.some(c => Math.abs(get(c)) > 0.5);
+  // Detalle: unión de etiquetas presentes en los meses que se están mirando.
+  const mesesVista = vista === "evolucion" ? meses : [M - 1, M];
+  const labels = (arrName, pred = () => true) => [...new Set(mesesVista.flatMap(m => bd(m)[arrName] || []).filter(pred).map(it => it.label))];
+  const porLabel = (arrName, L) => g(m => suma(bd(m)[arrName] || [], m, x => x.label === L));
+  const nz = get => mesesVista.some(m => Math.abs(get(m)) > 0.5);
   const details = {
-    cxc:   ordenarDetalle([...labels("aCobrar").map(L => ({ label: L, get: porLabel("aCobrar", L) })), { label: "Intercompañía (nos deben)", get: g(c => suma(balDe[c].intercoAct, fechaDe[c])) }].filter(d => nz(d.get))),
+    cxc:   ordenarDetalle([...labels("aCobrar").map(L => ({ label: L, get: porLabel("aCobrar", L) })), { label: "Intercompañía (nos deben)", get: g(m => suma(bd(m).intercoAct, m)) }].filter(d => nz(d.get))),
     corr:  ordenarDetalle(labels("aPagar", it => esCorriente(it.label)).map(L => ({ label: L, get: porLabel("aPagar", L) })).filter(d => nz(d.get))),
-    otros: ordenarDetalle([...labels("aPagar", it => !esCorriente(it.label)).map(L => ({ label: L, get: porLabel("aPagar", L) })), { label: "Intercompañía (les debemos)", get: g(c => suma(balDe[c].intercoPas, fechaDe[c])) }].filter(d => nz(d.get))),
+    otros: ordenarDetalle([...labels("aPagar", it => !esCorriente(it.label)).map(L => ({ label: L, get: porLabel("aPagar", L) })), { label: "Intercompañía (les debemos)", get: g(m => suma(bd(m).intercoPas, m)) }].filter(d => nz(d.get))),
   };
 
-  // ── Conciliación del PN: apertura + resultado acumulado − cambio de moneda = PN explicado ──
-  const pnAper = (() => {
-    const b = balAper, f = GO_LIVE_APERTURA;
-    const act = suma(b.cuentas, f, x => (x.tipo || "") !== "tarjeta") + suma(b.aCobrar, f) + suma(b.intercoAct, f) + suma(b.participaciones || [], f);
-    const pas = suma(b.aPagar, f) + suma(b.intercoPas, f);
-    return act - pas;
-  })();
-  const yCorte = +corte.slice(0, 4), mCorte = +corte.slice(5, 7) - 1;   // mes 0-based del corte
-  const socSet = useMemo(() => new Set(socsIncluidas.map(s => String(s.id).toLowerCase())), [socsIncluidas]);
-  const resultadoAcum = useMemo(() => {
-    if (!pnl || yCorte !== 2026) return null;
-    // julio (go-live) … mes del corte
-    const porMes = devengadoMensual(pnl, { year: yCorte, consolidado, mon, socSet, tiposCambio, hasta: mCorte }).res;
-    return { tot: porMes.reduce((s, v) => s + v, 0), porMes };
-  }, [pnl, yCorte, mCorte, consolidado, mon, socSet, tiposCambio]);
-  // Cambio de moneda: plata movida entre cajas de distinta moneda (origen "cambio"). En una moneda sola es la
-  // pata que se ve; consolidado en USD, la diferencia entre las dos patas al TC del mes (costo de cambio).
-  const cambioAcum = (() => {
-    let acc = 0;
-    for (const mv of movimientos || []) {
-      if (mv.origen !== "cambio" || !socSet.has(String(mv.sociedad || "").toLowerCase())) continue;
-      const f = String(mv.fecha || "").slice(0, 10);
-      if (f <= GO_LIVE_APERTURA || f > corte) continue;
-      const mo = mv.moneda || "ARS";
-      if (consolidado) acc += aUSD(Number(mv.monto) || 0, mo, f);
-      else if (mo === mon) acc += Number(mv.monto) || 0;
-    }
-    return acc;
-  })();
-  // Dividendos declarados y provisión de las cesiones (nb_socios_cc + filas virtuales de cesionDerive): bajan el PN sin
-  // pasar por el resultado (misma fila que en Del resultado al patrimonio). Monto negativo = le debemos.
-  const dividendosAcum = (() => {
-    let acc = 0;
-    for (const r of sociosCC || []) {
-      if (r.tipo !== "dividendo_declarado" || !socSet.has(String(r.sociedad || "").toLowerCase())) continue;
-      const f = String(r.fecha || "").slice(0, 10);
-      if (f <= GO_LIVE_APERTURA || f > corte) continue;
-      const mo = r.moneda || "ARS", v = Number(r.monto) || 0;
-      if (consolidado) acc += aUSD(v, mo, f); else if (mo === mon) acc += v;
-    }
-    return acc;
-  })();
-  const pnCorte = pn("corte");
-  // Identidad (misma que el puente): PN = PN apertura + Resultado + Dividendos (−) + Cambio de moneda (la pata que
-  // entra/sale de ESTA moneda no es resultado pero sí mueve su PN) + lo que falte explicar.
-  const explicado = resultadoAcum ? pnAper + resultadoAcum.tot + dividendosAcum + cambioAcum : null;
-  const sinExplicar = explicado == null ? null : pnCorte - explicado;
-
-  const tcTxt = (() => {
-    if (!consolidado) return null;
-    const tc = tcPara(corte);
-    if (!tc) return "Sin tipo de cambio cargado para el mes del corte ni los anteriores.";
-    const parts = [tc.arsUSD ? `1 USD = ${Math.round(tc.arsUSD).toLocaleString("es-AR")} ARS` : null, tc.eurUSD ? `1 EUR = ${tc.eurUSD.toFixed(2)} USD` : null, tc.copUSD ? `1 USD = ${Math.round(tc.copUSD).toLocaleString("es-AR")} COP` : null].filter(Boolean);
-    return `TC usado para el corte (${tc.yearMonth}): ${parts.join(" · ")}. Cada columna usa el TC de su propio mes.`;
-  })();
-  const colLabel = (c) => c === "prev" ? `Cierre ${fmtDate(prev.slice(0, 8) + String(new Date(+prev.slice(0, 4), +prev.slice(5, 7), 0).getDate()).padStart(2, "0"))}` : c === "corte" ? (fechaCorte ? `Al ${fmtDate(corte)}` : "Hoy") : "Variación";
-  const rowS = (bold, color) => ({ padding: "8px 12px", fontSize: 13, textAlign: "right", fontFamily: "var(--mono)", fontWeight: bold ? 800 : 500, color: color || T.text, whiteSpace: "nowrap" });
+  const colLabel = c => typeof c === "number"
+    ? (c === GO - 1 ? `${nombreMes(c)} · apertura` : c === mesEnCurso ? `${nombreMes(c)} · hoy` : nombreMes(c))
+    : c === "mes" ? (M === mesEnCurso ? `${nombreMes(M)} · hoy` : nombreMes(M)) : c === "ant" ? (M - 1 === GO - 1 ? `${nombreMes(M - 1)} · apertura` : nombreMes(M - 1)) : c === "delta" ? "Δ" : "Var%";
+  const fmt = (c, v) => c === "pct" ? fmtPct(v) : fmtBal(v);
 
   return (
     <div className="fade">
-      <div style={{ fontSize: 12, color: T.muted, margin: "2px 0 12px", lineHeight: 1.5 }}>
-        {consolidado
-          ? <><b>Consolidado del grupo en USD</b>: cada saldo traducido al tipo de cambio del mes de su fecha. Elegí una moneda arriba para ver el balance nativo de esa moneda.</>
-          : <>Balance en <b>{mon}</b>: solo lo que existe en esa moneda (circuito cerrado, como Evolución PN). "Todas" = consolidado del grupo en USD.</>}
-        {" "}<b>Activo = Pasivo + Patrimonio Neto</b>; el PN sale por diferencia y abajo se explica.
-      </div>
-      {tcTxt && <div style={{ fontSize: 11, color: T.muted, marginBottom: 10 }}>{tcTxt}</div>}
       <AvisosTC tcSuplente={tcSuplente} faltaTC={faltaTC} />
-      <BalanceTable cols={COLS} colLabel={colLabel} minBase={380} colW={140}
+      <BalanceTable cols={COLS} colLabel={colLabel} minBase={380} colW={vista === "evolucion" ? 118 : 140} fmt={fmt}
         getters={{ caja, bancos, cxcTot, partic, activo, corrTot, otrosTot, pasivo, pn }} details={details} />
-
-      {/* Conciliación del PN */}
-      {resultadoAcum && (
-        <div style={{ marginTop: 18, background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 12, overflow: "hidden", boxShadow: T.shadow }}>
-          <div style={{ background: T.tableHead, color: T.tableHeadText, padding: "8px 14px", fontSize: 11, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase" }}>
-            De dónde viene el Patrimonio Neto{fechaCorte ? ` al ${fmtDate(corte)}` : " a hoy"} · {consolidado ? "USD consolidado" : mon}
-          </div>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <tbody>
-              {[
-                ["Patrimonio Neto de apertura (30/06/2026)", pnAper, false],
-                [`+ Resultado acumulado julio → ${_MESES[mCorte]} (P&L devengado)`, resultadoAcum.tot, false],
-                ...(Math.abs(dividendosAcum) > 0.5 ? [["− Dividendos declarados y provisión a socios de negocios", dividendosAcum, false]] : []),
-                ["+ Cambio de moneda (plata que entró o salió de esta moneda)", cambioAcum, false],
-                ["= Patrimonio Neto explicado", explicado, true],
-                ["Patrimonio Neto del balance", pnCorte, true],
-                [consolidado ? "Diferencia de conversión + sin explicar" : "Sin explicar", sinExplicar, true, true],
-              ].map(([label, val, bold, esResto], i) => (
-                <tr key={i} style={{ borderTop: `1px solid ${T.cardBorder}`, background: esResto ? (consolidado ? "#f8fafc" : (Math.abs(val) > 0.5 ? "#fef2f2" : "#f0fdf4")) : "transparent" }}>
-                  <td style={{ padding: "8px 14px", fontSize: 13, color: T.text, fontWeight: bold ? 800 : 500 }}>{label}</td>
-                  <td style={rowS(bold, esResto && !consolidado ? (Math.abs(val) > 0.5 ? "#dc2626" : "#16a34a") : (val < 0 ? "#dc2626" : T.text))}>{fmtBal(val)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div style={{ fontSize: 11, color: T.muted, padding: "8px 14px", lineHeight: 1.5 }}>
-            {_esFinDeMes(corte) ? null : <>El corte no es fin de mes: el resultado incluye el mes de {_MESES[mCorte]} completo, así que el resto puede mostrar timing dentro del mes. </>}
-            {consolidado
-              ? <>En USD cada línea está al tipo de cambio de su mes (apertura a junio, resultados a su mes, el PN de hoy al TC del corte), así que el resto incluye la <b>diferencia de conversión</b> por la devaluación de cada moneda. Para la conciliación exacta elegí una moneda arriba.</>
-              : <>Lo que queda sin explicar es caja sin imputar, pagos sin comprobante o timing entre sociedades; el detalle está en <b>Control de cierre · devengado</b>.</>}
-          </div>
-        </div>
-      )}
-      {!resultadoAcum && (
-        <div style={{ fontSize: 11, color: T.muted, marginTop: 8 }}>
-          Mismos saldos que la vista <b>Saldos</b>. Cambiá la <b>fecha</b> arriba para ver la foto a otra fecha.
-        </div>
-      )}
     </div>
   );
 }

@@ -1397,7 +1397,7 @@ const anilloRank = (a) => { const x = String(a || "").toLowerCase(); const i = C
 // Año de la barra común). Si un reporte está acá y NO trae barra propia, se queda sin filtros; si falta acá,
 // le aparece un "Año" que su vista ignora — que es lo que pasaba con Pagos y cobros.
 const TABS_CON_BARRA_PROPIA = new Set([
-  "consolidado", "balance_pn", "cf", "posicion_fin", "cxp_prov", "cxc_cli",
+  "consolidado", "balance_pn", "patrimonio_ctrl", "cf", "posicion_fin", "cxp_prov", "cxc_cli",
   "inf_egresos", "inf_ingresos", "inf_pagos", "devengado",
 ]);
 
@@ -3038,7 +3038,7 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
       {activeTab !== "cxp_prov" && activeTab !== "cxc_cli" && !((activeTab === "interco_matriz" || activeTab === "interco") && intercoDrilling) && (
       <PageHeader
         title={curTab?.label ?? "Reporte"}
-        subtitle={(isPnlTiempo || isBigg || isVentasHQ || activeTab === "cxp_prov" || activeTab === "cxc_cli" || activeTab === "consolidado" || activeTab === "balance_pn" || activeTab === "cf" || activeTab === "posicion_fin") ? undefined : (activeTab === "interco_matriz" || activeTab === "interco") ? curTab?.desc : curLente?.label}
+        subtitle={(isPnlTiempo || isBigg || isVentasHQ || activeTab === "cxp_prov" || activeTab === "cxc_cli" || activeTab === "consolidado" || activeTab === "balance_pn" || activeTab === "patrimonio_ctrl" || activeTab === "cf" || activeTab === "posicion_fin") ? undefined : (activeTab === "interco_matriz" || activeTab === "interco") ? curTab?.desc : curLente?.label}
         back={controlado ? null :
           <button onClick={() => setActiveTab(null)} style={{
             display: "inline-flex", alignItems: "center", gap: 6,
@@ -3387,7 +3387,12 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
           pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
       )}
       {activeTab === "balance_pn" && (
-        <TabTesoreriaConsolidada vistas={["balance", "evpn"]}
+        <TabTesoreriaConsolidada vistas={["balance"]}
+          pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
+      )}
+      {/* Del resultado al patrimonio: reporte propio en "Control de cierre" (10/11/2026); mismos cierres que el Balance. */}
+      {activeTab === "patrimonio_ctrl" && (
+        <TabTesoreriaConsolidada vistas={["evpn"]}
           pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
       )}
       {/* Posición financiera: mismo motor que Tesorería consolidada, una sola vista, abre en el último cierre de mes.

@@ -12,7 +12,6 @@
 import { T } from "../theme";
 import { sumSaldo, crearTraductor, AvisosTC } from "./balanceUtils";
 import { devengadoMensual } from "./TabDevengado";
-import { ccKey } from "./pnlDerive";
 import { Fila, TablaMeses } from "./TablaMeses";
 
 export function PatrimonioView({ eepn, filtroMoneda, tiposCambio = null, pnl = null, socSet, sociosCC = [], participaciones = [] }) {
@@ -43,9 +42,8 @@ export function PatrimonioView({ eepn, filtroMoneda, tiposCambio = null, pnl = n
   // Además, los retiros de socios del mes (cuenta "Inversores": Rosedal reparte a sus socios y a Ñako): no son
   // resultado pero bajan el patrimonio → fila propia (antes caían en "Sin explicar", Martín 10/11/2026). Los centros
   // con cesión provisionada (Barrio Norte) no entran: ahí el patrimonio ya bajó por "Dividendos declarados".
-  const centrosConProvision = new Set((participaciones || []).filter(r => r.tipo === "cesion" && r.alcance).map(r => ccKey(r.alcance)));
   const { res, retiros } = (pnl && year === 2026)
-    ? devengadoMensual(pnl, { year, consolidado, mon, socSet, tiposCambio, desde: GO, hasta: upto, centrosConProvision })
+    ? devengadoMensual(pnl, { year, consolidado, mon, socSet, tiposCambio, desde: GO, hasta: upto, participaciones })
     : { res: new Array(12).fill(0), retiros: new Array(12).fill(0) };
   const retirosDe = m => retiros[m] || 0;
 

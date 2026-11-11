@@ -34,11 +34,15 @@ const MIRADAS = [
     tabs: ["consolidado", "inf_ingresos", "inf_egresos", "cxc_cli", "cxp_prov", "inf_pagos"] },
   // Martín 5/11: Comité + Negocios en una sola sección; lo financiero (posición, flujo, patrimonio) en otra.
   { id: "economico", label: "Resultados económicos",  hint: "Cómo nos fue: el grupo y cada negocio",
-    tabs: ["pl_grupo", "an_ventas", "pl_sede", "op_espana", "op_colombia", "op_rosedal", "op_huergo", "devengado"] },
+    tabs: ["pl_grupo", "an_ventas", "pl_sede", "op_espana", "op_colombia", "op_rosedal", "op_huergo"] },
   { id: "financiero", label: "Resultados financieros", hint: "Posición, flujo de caja y patrimonio",
     tabs: ["posicion_fin", "cf", "balance_pn", "valuacion"] },
   { id: "partic",   label: "Participaciones",      hint: "Socios, fondeo y saldos entre sociedades",
     tabs: ["socios", "interco_matriz", "interco"] },
+  // Martín 10/11/2026: lo que NO es para leer el negocio sino para dar el mes por cerrado va aparte. "Del resultado al
+  // patrimonio" se abre una vez por mes: si "Sin explicar" da cero, resultado, caja y balance dicen lo mismo.
+  { id: "control",  label: "Control de cierre",    hint: "Para dar el mes por cerrado: que resultado, caja y balance digan lo mismo",
+    tabs: ["patrimonio_ctrl", "devengado"] },
   { id: "wip",      label: "En construcción",      hint: "Reportes a terminar o a retirar", plegadaInicial: true,
     tabs: ["an_margenes", "consol_grupo", "op_puertos", "an_gastos_cc", "er_soc", "pl_bigg"] },
 ];

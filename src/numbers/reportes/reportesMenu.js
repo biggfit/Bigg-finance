@@ -12,7 +12,8 @@ export const TABS = [
   { id: "interco", label: "Saldos entre sociedades",   icon: "🔗", ico: "link", desc: "Préstamos y saldos interco entre TODAS las sociedades: posición neta por moneda (quién le debe a quién). Filtrá por sociedad y hacé click en una fila para ver el detalle de movimientos." },
   { id: "interco_matriz", label: "Fondeo por negocio", icon: "🧮", ico: "grid", desc: "Fondeo del grupo a cada negocio (CAPEX), consolidado en USD · meses × negocio/tipo. Click en una celda = los movimientos que la componen. Ata al Fondeo del P&L." },
   { id: "consolidado", label: "Tesorería consolidada", icon: "🏦", ico: "bank", desc: "Cuánta plata hay hoy y dónde: saldos de cajas y bancos, cuentas a cobrar/pagar y movimientos de todas las sociedades." },
-  { id: "balance_pn",  label: "Balance y patrimonio", icon: "⚖️", ico: "scale", desc: "Cuánto vale cada sociedad (o el grupo en USD) a una fecha, y del resultado al patrimonio: por qué cambió cada mes, en pocas líneas." },
+  { id: "balance_pn",  label: "Balance", icon: "⚖️", ico: "scale", desc: "Qué tiene y qué debe cada sociedad (o el grupo en USD) al cierre de cada mes: la evolución mensual, o un mes contra el anterior." },
+  { id: "patrimonio_ctrl", label: "Del resultado al patrimonio", icon: "🧭", ico: "puzzle", desc: "Control de cierre: por qué cambió el patrimonio cada mes. Si \"Sin explicar\" da cero, el resultado, la caja y el balance dicen lo mismo; si no, hay un dato por corregir antes de cerrar el mes." },
   { id: "posicion_fin", label: "Posición financiera", icon: "🎯", ico: "target", desc: "El número del board: disponible − deuda financiera = posición financiera neta; + a cobrar − a pagar = posición neta (ata con el PN). Al último cierre, consolidado en USD y por sociedad." },
   { id: "cxp_prov", label: "Cuentas por pagar", icon: "📋", ico: "invoice", desc: "Cuentas por pagar consolidadas por proveedor (todas las sociedades), con antigüedad." },
   { id: "cxc_cli", label: "Cuentas por cobrar", icon: "📥", ico: "receipt", desc: "Cuentas por cobrar consolidadas por cliente (todas las sociedades), con antigüedad." },
@@ -58,5 +59,5 @@ export const LENTES = [
     tabs: ["interco", "interco_matriz", "socios"] },
   { id: "control",    label: "Control y cierre",          hint: "Para atar el resultado contra el patrimonio",
     // Trilogía de cierre: Balance/EEPN (afuera de Tesorería desde 19/9, pedido Martín) + devengado que ata contra el PN.
-    tabs: ["balance_pn", "valuacion", "devengado", "an_gastos_cc", "er_soc"] },
+    tabs: ["balance_pn", "patrimonio_ctrl", "valuacion", "devengado", "an_gastos_cc", "er_soc"] },
 ];
