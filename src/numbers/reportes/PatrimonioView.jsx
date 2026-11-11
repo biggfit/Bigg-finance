@@ -1,20 +1,21 @@
 // Del resultado al patrimonio (Martín 5/11/2026: el puente Resultado ↔ ΔPN "es muy difícil de leer como reporte").
 // Reemplaza a la Evolución del PN: en vez del Balance con meses en columnas, la cascada corta que explica por qué el
 // patrimonio cambió cada mes, con el mismo molde que la Caja (TablaMeses):
-//   Patrimonio al inicio → + Resultado en los libros → − Dividendos declarados → ± Cambio de moneda
+//   Patrimonio al inicio → + Resultado en los libros → − Dividendos declarados → − Retiros de socios → ± Cambio de moneda
 //   → ± Diferencia de conversión (solo consolidado) → ± Sin explicar → = Variación del patrimonio → Patrimonio al cierre.
 // Piezas: cierres mensuales del Balance (`eepn.balMes`, deriveAsOf a fin de cada mes), resultado devengado por mes
-// (resultadoDevengadoMensual, misma función que el Devengado), cambio de moneda acumulado (`eepn.cambioAcum`) y la
+// (devengadoMensual, misma función que el Devengado), cambio de moneda acumulado (`eepn.cambioAcum`) y la
 // conversión por TC entre cierres. "Sin explicar" es el residuo: dinero en tránsito que cruza el mes, timing entre
 // sociedades, imputaciones pendientes. Debería tender a cero; es la fila que hay que mirar.
 // Receta validada a mano para sep-2026, núcleo en USD (20/10): 37.043 libros − 2.312 cambio − 2.034 conversión
 // − 9.768 sin explicar (9.042 € Wellness → Bigg Fit en tránsito 29/9 → 1/10) = 22.929 ΔPN.
 import { T } from "../theme";
 import { sumSaldo, crearTraductor, AvisosTC } from "./balanceUtils";
-import { resultadoDevengadoMensual } from "./TabDevengado";
+import { devengadoMensual } from "./TabDevengado";
+import { ccKey } from "./pnlDerive";
 import { Fila, TablaMeses } from "./TablaMeses";
 
-export function PatrimonioView({ eepn, filtroMoneda, tiposCambio = null, pnl = null, socSet, sociosCC = [] }) {
+export function PatrimonioView({ eepn, filtroMoneda, tiposCambio = null, pnl = null, socSet, sociosCC = [], participaciones = [] }) {
   if (!eepn) return null;
   const { year, GO, upto, balMes, cambioAcum } = eepn;
   const consolidado = !filtroMoneda || filtroMoneda === "ALL";
@@ -39,9 +40,14 @@ export function PatrimonioView({ eepn, filtroMoneda, tiposCambio = null, pnl = n
   const dPN = m => pn(m) - pn(m - 1);
 
   // Resultado del mes según los libros (devengado crudo, mismo perímetro y moneda que el Balance).
-  const res = (pnl && year === 2026)
-    ? resultadoDevengadoMensual(pnl, { year, consolidado, mon, socSet, tiposCambio, desde: GO, hasta: upto })
-    : new Array(12).fill(0);
+  // Además, los retiros de socios del mes (cuenta "Inversores": Rosedal reparte a sus socios y a Ñako): no son
+  // resultado pero bajan el patrimonio → fila propia (antes caían en "Sin explicar", Martín 10/11/2026). Los centros
+  // con cesión provisionada (Barrio Norte) no entran: ahí el patrimonio ya bajó por "Dividendos declarados".
+  const centrosConProvision = new Set((participaciones || []).filter(r => r.tipo === "cesion" && r.alcance).map(r => ccKey(r.alcance)));
+  const { res, retiros } = (pnl && year === 2026)
+    ? devengadoMensual(pnl, { year, consolidado, mon, socSet, tiposCambio, desde: GO, hasta: upto, centrosConProvision })
+    : { res: new Array(12).fill(0), retiros: new Array(12).fill(0) };
+  const retirosDe = m => retiros[m] || 0;
 
   // Cambio de moneda (origen "cambio"): nativo = la pata que entra o sale de esta moneda (mueve su PN sin ser
   // resultado); consolidado = las dos patas al TC del mes = resultado por operar a un TC distinto del maestro.
@@ -75,8 +81,9 @@ export function PatrimonioView({ eepn, filtroMoneda, tiposCambio = null, pnl = n
     }
     return acc;
   };
-  const sinExplicar = m => dPN(m) - res[m] - dividendos(m) - cambio(m) - conv(m);
+  const sinExplicar = m => dPN(m) - res[m] - dividendos(m) - retirosDe(m) - cambio(m) - conv(m);
   const hayDividendos = meses.some(m => Math.abs(dividendos(m)) > 0.5);
+  const hayRetiros = meses.some(m => Math.abs(retirosDe(m)) > 0.5);
   const haySinExplicar = cerrados.some(m => Math.abs(sinExplicar(m)) > 0.5);
   const titulo = consolidado ? "Patrimonio · USD consolidado" : `Patrimonio · ${mon}`;
 
@@ -88,6 +95,7 @@ export function PatrimonioView({ eepn, filtroMoneda, tiposCambio = null, pnl = n
           <Fila label="Patrimonio al inicio" get={m => pn(m - 1)} {...p} total="primero" labelStyle={{ color: T.muted }} color={T.muted} />
           <Fila label="Resultado en los libros" get={m => res[m]} {...p} fuerte />
           {hayDividendos && <Fila label="Dividendos declarados" get={dividendos} {...p} />}
+          {hayRetiros && <Fila label="Retiros de socios" get={retirosDe} {...p} />}
           <Fila label={consolidado ? "Resultado por cambio de moneda" : "Cambio de moneda"} get={cambio} {...p} />
           {consolidado && <Fila label="Diferencia de conversión" get={conv} {...p} />}
           <Fila label="Sin explicar" get={sinExplicar} {...p} labelStyle={{ color: haySinExplicar ? T.orange : T.dim }} color={haySinExplicar ? T.orange : T.dim} />

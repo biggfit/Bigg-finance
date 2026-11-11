@@ -98,9 +98,14 @@ const GO_LIVE_ANIO = 2026, GO_LIVE_MES = 6;   // julio (0-based)
 // Resultado devengado POR MES (misma función y perímetro `socSet` que este reporte), nativo en `mon` o consolidado
 // en USD sumando cada moneda del P&L al TC del 1° del mes (`tiposCambio`). Lo usan el Balance ("De dónde viene el PN") y
 // el Cash Flow indirecto ("Del resultado a la caja"): un solo loop, no dos copias. Meses fuera de [desde, hasta] = 0.
-export function resultadoDevengadoMensual(pnl, { year, consolidado, mon, socSet, tiposCambio = null, desde = GO_LIVE_MES, hasta = 11 }) {
-  const porMes = new Array(12).fill(0);
-  if (!pnl) return porMes;
+// Devuelve { res, retiros }: `res` = resultado del mes SIN los retiros a inversores; `retiros` = esos retiros (cuenta
+// "Inversores", en negativo) para el puente Del resultado al patrimonio, donde bajan el patrimonio por su propia fila.
+// `centrosConProvision`
+// (Set de ccKey) = centros cuya cesión se provisiona (Barrio Norte): ahí la factura del cesionario cancela un pasivo
+// ya registrado por la fila "Dividendos declarados" y NO vuelve a bajar el patrimonio → esos retiros no cuentan.
+export function devengadoMensual(pnl, { year, consolidado, mon, socSet, tiposCambio = null, desde = GO_LIVE_MES, hasta = 11, centrosConProvision = null }) {
+  const porMes = new Array(12).fill(0), retiros = new Array(12).fill(0);
+  if (!pnl) return { res: porMes, retiros };
   const { aUSD } = crearTraductor(tiposCambio);
   const monedas = consolidado ? [...new Set([...(pnl.inRows || []), ...(pnl.egRows || [])].map(r => r.moneda || "ARS"))] : [mon];
   for (const mo of monedas) {
@@ -109,10 +114,14 @@ export function resultadoDevengadoMensual(pnl, { year, consolidado, mon, socSet,
       // Sin los retiros a inversores: desde la tanda C de Participaciones (6/11/2026) la factura del cesionario cancela
       // la provisión (pasivo), no es resultado; el PN baja con la provisión (fila "Dividendos declarados" del puente).
       const v = (dev.resultadoAntes?.[m] ?? dev.resultado[m]) || 0;
-      porMes[m] += consolidado ? aUSD(v, mo, `${year}-${String(m + 1).padStart(2, "0")}-01`) : v;
+      const f1 = `${year}-${String(m + 1).padStart(2, "0")}-01`;
+      porMes[m] += consolidado ? aUSD(v, mo, f1) : v;
+      let r = 0;
+      for (const [cc, arr] of dev.distPorCentro || []) if (!centrosConProvision?.has(cc)) r += arr[m] || 0;
+      retiros[m] += consolidado ? aUSD(r, mo, f1) : r;
     }
   }
-  return porMes;
+  return { res: porMes, retiros };
 }
 
 // Resuelve la CUENTA real de una fila. Prioridad: el id que trae el comprobante (`cuenta_contable_id`);
@@ -133,6 +142,7 @@ function resolveCuenta(row, ladoIngreso, byId, byNombre) {
 export function buildDevengado(inRows, egRows, { cuentaMap, ccMap, year, moneda, socSet, ccSet, sinIva }) {
   // grupo → Map(key → { id, nombre, meses:number[12] })
   const grupos = Object.fromEntries(GRUPOS.map(g => [g.key, new Map()]));
+  const distPorCentro = new Map();   // retiros a inversores por centro (ccKey → [12]) → fila "Retiros de socios" del puente
   const diag = { sinCuenta: 0, sinCentro: 0, sinCuentaMonto: 0, sinCentroMonto: 0 };
   // Maestro de cuentas indexado (cuentaMap viene con claves por id Y por nombre → deduplico por id).
   const cuentas = [...new Map([...cuentaMap.values()].filter(c => c?.id).map(c => [c.id, c])).values()];
@@ -182,6 +192,11 @@ export function buildDevengado(inRows, egRows, { cuentaMap, ccMap, year, moneda,
       const map = grupos[grupo];
       if (!map.has(key)) map.set(key, { id: acc?.id || "", nombre: label, meses: new Array(12).fill(0) });
       map.get(key).meses[m] += val;
+      if (grupo === "distribuciones") {
+        const k = ccKey(cc);
+        if (!distPorCentro.has(k)) distPorCentro.set(k, new Array(12).fill(0));
+        distPorCentro.get(k)[m] += val;
+      }
 
       // Diagnóstico: asientos que pasan el filtro pero les falta cuenta o centro.
       if (!raw)  { diag.sinCuenta++;  diag.sinCuentaMonto  += Math.abs(val); }
@@ -215,7 +230,7 @@ export function buildDevengado(inRows, egRows, { cuentaMap, ccMap, year, moneda,
   for (const g of out) for (let i = 0; i < 12; i++) resultadoAntes[i] += g.sub[i];
   const resultado = resultadoAntes.map((v, i) => v + distribuciones.sub[i]);
 
-  return { grupos: out.filter(g => g.filas.length), distribuciones, meses, mesParcial, cerrados,
+  return { grupos: out.filter(g => g.filas.length), distribuciones, distPorCentro, meses, mesParcial, cerrados,
     resultadoAntes, resultadoAntesTotal: totalDe(resultadoAntes),
     resultado, resultadoTotal: totalDe(resultado), totalDe, diag };
 }

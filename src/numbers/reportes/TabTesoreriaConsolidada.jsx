@@ -15,7 +15,7 @@ import { fetchLiquidacionesCerradas } from "../../lib/sueldosApi";
 import { tolerante } from "../../lib/http";
 import { fetchAll } from "../../lib/sheetsApi";        // Franquicias (read-only)
 import { derivarSaldos, franqFirst, intercoConsolidado, sociedadNombreMap } from "../tesoreriaDerive";
-import { resultadoDevengadoMensual } from "./TabDevengado";   // resultado por mes (misma función que el reporte Devengado) → conciliación del PN
+import { devengadoMensual } from "./TabDevengado";   // resultado por mes (misma función que el reporte Devengado) → conciliación del PN
 import { TabSaldos, TabMovimientos, PaginaAging, PaginaIntercoLedger } from "../PantallaTesoreria";
 import { buildPuente, printPuente } from "./puenteDerive";   // DEV-ONLY diagnóstico (descartable)
 import { GO_LIVE_APERTURA, MESES_CORTOS as _MESES, sumSaldo, esCorriente, fmtBal, crearTraductor, AvisosTC, ordenarDetalle, participacionesAsOf,
@@ -540,7 +540,7 @@ export default function TabTesoreriaConsolidada({ pnl = null, tiposCambio = null
           tiposCambio={tiposCambio} pnl={pnl} socsIncluidas={socsIncluidas} movimientos={data.movimientos} sociosCC={dataDeriv.sociosCC} />
       )}
       {!loading && !error && activeTab === "evpn" && (
-        <PatrimonioView eepn={eepn} filtroMoneda={filtroMoneda} tiposCambio={tiposCambio} pnl={pnl} socSet={socSetLC} sociosCC={dataDeriv.sociosCC} />
+        <PatrimonioView eepn={eepn} filtroMoneda={filtroMoneda} tiposCambio={tiposCambio} pnl={pnl} socSet={socSetLC} sociosCC={dataDeriv.sociosCC} participaciones={data.participaciones} />
       )}
       {!loading && !error && activeTab === "cf" && (
         <CajaView cf={cfDirecto} consolidado={filtroMoneda === "ALL"} mon={filtroMoneda} cuentasBancarias={data.cuentasBancarias}
@@ -725,7 +725,7 @@ function BalanceView({ deriveAsOf, filtroMoneda, fechaCorte, tiposCambio = null,
   const resultadoAcum = useMemo(() => {
     if (!pnl || yCorte !== 2026) return null;
     // julio (go-live) … mes del corte
-    const porMes = resultadoDevengadoMensual(pnl, { year: yCorte, consolidado, mon, socSet, tiposCambio, hasta: mCorte });
+    const porMes = devengadoMensual(pnl, { year: yCorte, consolidado, mon, socSet, tiposCambio, hasta: mCorte }).res;
     return { tot: porMes.reduce((s, v) => s + v, 0), porMes };
   }, [pnl, yCorte, mCorte, consolidado, mon, socSet, tiposCambio]);
   // Cambio de moneda: plata movida entre cajas de distinta moneda (origen "cambio"). En una moneda sola es la
