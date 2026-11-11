@@ -1706,6 +1706,12 @@ const REGLA_MATCH_TIPOS = [
   // cuenta y centro de cada consumo. Matchea por igualdad, prefijo o "contiene", ganando la regla
   // más larga → "PERCEPCION IVA R.G. 3337" le gana a "PERCEPCION".
   { value:"comercio",        label:"Comercio del resumen de tarjeta (texto; opcional [tit:NOMBRE] para un solo titular)" },
+  // Lector de correo (apps-script-lector-correo.gs): clasifica facturas que llegan por mail. `remitente` se
+  // compara con el mail del remitente REAL (en un reenvío, el "De:" original); `asunto` con el asunto sin
+  // Fwd/RV; `sede` es un texto que identifica la sede en asunto/cuerpo/PDF → centro de costo.
+  { value:"remitente",       label:"Mail del remitente (lector de correo; dominio o dirección)" },
+  { value:"asunto",          label:"Asunto del mail (lector de correo; texto)" },
+  { value:"sede",            label:"Texto que identifica la sede en el mail/PDF (lector de correo → centro)" },
 ];
 const REGLA_TIPOS = [
   { value:"impuesto", label:"Impuesto" }, { value:"comision", label:"Comisión" },
@@ -1748,7 +1754,8 @@ export function BancoReglaModal({ initial, prefill, onClose, onSave, cuentas, ce
             options={[{value:"",label:"Todos"},{value:"AR",label:"AR"},{value:"ES",label:"ES"},{value:"CO",label:"CO"}]} />
           <Select label="Tipo de movimiento" value={form.tipo} onChange={v=>set("tipo",v)} options={REGLA_TIPOS} />
           <Select label="Acción" value={form.accion} onChange={v=>set("accion",v)}
-            options={[{value:"auto",label:"Auto (contabiliza solo)"},{value:"escala",label:"Escala (a la bandeja)"}]} />
+            options={[{value:"auto",label:"Auto (contabiliza solo)"},{value:"escala",label:"Escala (a la bandeja)"},
+                      {value:"ignorar",label:"Ignorar (lector de correo: descarta el mail)"}]} />
           <Select label="Cuenta contable" value={form.cuenta_contable} onChange={v=>set("cuenta_contable",v)}
             options={[{value:"",label:"—"}, ...(cuentas||[]).map(c=>({value:c.id,label:c.nombre}))]} />
           <Select label="Centro de costo (sede)" value={form.centro_costo} onChange={v=>set("centro_costo",v)}

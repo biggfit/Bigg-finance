@@ -474,6 +474,29 @@ export async function fetchCorreoBorradores() {
 }
 
 /**
+ * Dispara el lector de correo de un buzón (apps-script-lector-correo.gs, un Apps Script por casilla, vía
+ * /api/lector). El script lee la casilla, aplica las reglas de nb_banco_reglas y parkea los borradores él
+ * mismo; acá solo se pide la corrida y se invalida la caché. Si el script se queda sin tiempo devuelve
+ * `parcial: true` → el llamador vuelve a pedir hasta que termine (el script recuerda lo ya procesado).
+ */
+export async function leerBuzonCorreo({ buzon = "es", desde = "", accion = "leer" } = {}) {
+  const qs = new URLSearchParams({ buzon, accion, token: TOKEN, ...(desde ? { desde } : {}) }).toString();
+  const data = await fetchJsonWithRetry(`/api/lector?${qs}`, { retries: 0, requireOk: true, init: { cache: "no-store" } });
+  if (accion === "leer") { _invalidate("nb_comprobantes"); forzarRefresco(); }
+  return data;
+}
+
+/**
+ * Estado en Gmail de una factura que vino del lector: al contabilizar o ignorar el borrador, el hilo queda
+ * leído y con la etiqueta Numbers/Contabilizada o Numbers/Ignorada (reversible; nunca archiva ni borra).
+ * `ref` = mail_ref de la nota del borrador (id del hilo). Un reintento; el error lo maneja el llamador.
+ */
+export async function marcarCorreo({ buzon = "es", ref, estado }) {
+  const qs = new URLSearchParams({ buzon, accion: "marcar", ref, estado, token: TOKEN }).toString();
+  return fetchJsonWithRetry(`/api/lector?${qs}`, { retries: 1, requireOk: true, init: { cache: "no-store" } });
+}
+
+/**
  * Parkea una factura leída del mail. Idempotente por id_comp=COR-<mailId>. Dedup: si ya existe una fila con ese
  * id_comp (borrador/ignorado), o un EGRESO real con el mismo nº+proveedor, NO duplica (devuelve dedup).
  */

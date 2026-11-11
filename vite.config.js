@@ -27,6 +27,8 @@ const sheetsUrl  = localEnv['VITE_SHEETS_API_URL'];
 const numbersUrl = localEnv['VITE_NUMBERS_API_URL'];
 const sueldosUrl = localEnv['VITE_SUELDOS_API_URL'];
 const monoUrl    = localEnv['VITE_MONOTRIBUTO_API_URL'];
+// Lector de correo: un Apps Script por casilla (apps-script-lector-correo.gs). `?buzon=es|ar` elige la URL.
+const lectorUrls = { es: localEnv['VITE_LECTOR_ES_URL'], ar: localEnv['VITE_LECTOR_AR_URL'] };
 
 // Inyectar todas las vars de .env.local en process.env para que los handlers
 // de /api/* (que corren en Node dentro de Vite) puedan leerlas con process.env
@@ -235,6 +237,24 @@ export default defineConfig({
             }
           });
         }
+
+        // ── Proxy /api/lector → Apps Script del lector de correo de la casilla pedida (sin caché) ──
+        // Mismo contrato que api/lector.js: `buzon` elige la URL y no se reenvía; sin URL → error JSON.
+        server.middlewares.use((req, res, next) => {
+          if (!req.url || !req.url.startsWith('/api/lector')) { next(); return; }
+          const u     = new URL(req.url, 'http://x');
+          const buzon = u.searchParams.get('buzon') || 'es';
+          const base  = lectorUrls[buzon];
+          if (!base) {
+            res.setHeader('Content-Type', 'application/json');
+            res.statusCode = 500;
+            res.end(JSON.stringify({ error: `Lector del buzón "${buzon}" no configurado (falta VITE_LECTOR_${buzon.toUpperCase()}_URL en .env.local)` }));
+            return;
+          }
+          u.searchParams.delete('buzon');
+          devCacheClear();   // la corrida parkea en nb_comprobantes
+          proxyToSheets(base + u.search, 'GET', null, res);
+        });
 
         server.middlewares.use((req, res, next) => {
           // ── Proxy /api/facturante → serverless handler local ──────────────

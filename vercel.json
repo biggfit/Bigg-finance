@@ -4,6 +4,7 @@
     "api/sheets.js": { "maxDuration": 30 },
     "api/numbers.js": { "maxDuration": 30 },
     "api/sueldos.js": { "maxDuration": 30 },
-    "api/monotributo.js": { "maxDuration": 60 }
+    "api/monotributo.js": { "maxDuration": 60 },
+    "api/lector.js": { "maxDuration": 60 }
   }
 }

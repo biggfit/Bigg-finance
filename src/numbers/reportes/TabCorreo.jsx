@@ -4,7 +4,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, PageHeader, fmtDate, fmtMoney } from "../theme";
 import {
-  fetchCorreoBorradores, contabilizarBorrador, ignorarBorrador,
+  fetchCorreoBorradores, contabilizarBorrador, ignorarBorrador, leerBuzonCorreo, marcarCorreo,
   fetchSociedades, fetchCuentas, fetchCentrosCosto, fetchProveedores,
   fetchEgresos, fetchMovTesoreria, toNum,
 } from "../../lib/numbersApi";
@@ -13,9 +13,23 @@ import { formatNroComp, ccActivos } from "../formUtils";
 import { useConfirm } from "../useConfirm";
 
 const arr = x => Array.isArray(x) ? x : [];
-const metaRef   = nota => (String(nota || "").match(/mail_ref=([^\s;]+)/) || [])[1] || "";
-const metaFecha = nota => (String(nota || "").match(/fecha_correo=([^\s;]+)/) || [])[1] || "";
-const gmailUrl  = ref => ref ? `https://mail.google.com/mail/u/0/#all/${ref}` : null;
+const meta      = (nota, k) => (String(nota || "").match(new RegExp(`(?:^|;)${k}=([^;]+)`)) || [])[1] || "";
+const metaRef   = nota => meta(nota, "mail_ref");
+const metaFecha = nota => meta(nota, "fecha_correo");
+const metaBuzon = nota => meta(nota, "buzon");
+// "Ver mail": si el borrador trae el buzón (lector por casilla), abre esa cuenta de Google; si no, la activa.
+const gmailUrl  = (ref, buzon) => !ref ? null
+  : buzon ? `https://mail.google.com/mail/?authuser=${encodeURIComponent(buzon)}#all/${ref}`
+  : `https://mail.google.com/mail/u/0/#all/${ref}`;
+
+// Una solapa por casilla de pagos. `lector` = tiene Apps Script propio (apps-script-lector-correo.gs); el de
+// Argentina se habilita cuando exista. Un borrador sin `buzon=` en la nota (parkeado a mano, antes del lector) va a pagos@.
+const BUZONES = [
+  { id: "es", label: "España",    mail: "pagos.es@bigg.fit", lector: true },
+  { id: "ar", label: "Argentina", mail: "pagos@bigg.fit",    lector: false },
+];
+const buzonDe = nota => BUZONES.find(b => b.mail === metaBuzon(nota)) || null;
+const solapaDe = nota => (buzonDe(nota) || BUZONES[1]).id;
 
 export default function TabCorreo({ onPend } = {}) {
   const [confirm, confirmUI] = useConfirm();
@@ -32,7 +46,24 @@ export default function TabCorreo({ onPend } = {}) {
   const [editar,     setEditar]     = useState(null);  // row abierto en NuevoEgresoModal
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState(null);
+  const [lectura,    setLectura]    = useState(null);  // resumen de la última corrida del lector (o su error)
+  const [leyendo,    setLeyendo]    = useState(null);  // id del buzón que se está leyendo
+  const [avisoMail,  setAvisoMail]  = useState(null);  // si no se pudo marcar el mail en Gmail (la contabilización ya quedó hecha)
+  const [solapa,     setSolapa]     = useState(() => localStorage.getItem("nb_correo_solapa") || "es");   // buzón visible
   const menuRef = useRef(null);
+  useEffect(() => { localStorage.setItem("nb_correo_solapa", solapa); }, [solapa]);
+  const buzonActivo = BUZONES.find(b => b.id === solapa) || BUZONES[0];
+  const visibles = useMemo(() => borradores.filter(r => solapaDe(r.nota) === solapa), [borradores, solapa]);
+  const porSolapa = useMemo(() => Object.fromEntries(BUZONES.map(b => [b.id, borradores.filter(r => solapaDe(r.nota) === b.id).length])), [borradores]);
+
+  // Estado en Gmail: tras contabilizar o ignorar un borrador que vino del lector, el hilo queda leído y etiquetado.
+  // Si falla, la operación en Numbers NO se deshace: se avisa y se puede marcar a mano en el mail.
+  const marcarEnGmail = async (row, estado) => {
+    const bz = buzonDe(row.nota); const ref = metaRef(row.nota);
+    if (!bz || !ref) return;
+    try { await marcarCorreo({ buzon: bz.id, ref, estado }); }
+    catch (e) { setAvisoMail(`${row.proveedor}: contabilizado en Numbers, pero no se pudo marcar el mail en ${bz.mail} (${e?.message || e}). Marcalo a mano.`); }
+  };
 
   async function cargar() {
     setLoading(true); setError(null);
@@ -53,6 +84,36 @@ export default function TabCorreo({ onPend } = {}) {
     finally { setLoading(false); }
   }
   useEffect(() => { cargar(); }, []);
+
+  // "Leer el buzón": el script corre dentro de la casilla y parkea él mismo. Si se queda sin tiempo
+  // devuelve parcial=true → se lo vuelve a llamar hasta que termine, acumulando el resumen.
+  const leerBuzon = async (bz) => {
+    setLeyendo(bz.id); setLectura(null);
+    const acc = { buzon: bz, revisados: 0, parkeadas: [], ya_cargadas: [], viejas: [], sin_regla: 0, descartados: 0, lotes: [], errores: [], error_pdf: "", vueltas: 0 };
+    try {
+      let r;
+      do {
+        r = await leerBuzonCorreo({ buzon: bz.id });
+        acc.vueltas++;
+        acc.revisados   += r.revisados || 0;
+        acc.sin_regla   += r.sin_regla || 0;
+        acc.descartados += r.descartados || 0;
+        acc.parkeadas.push(...arr(r.parkeadas));
+        acc.ya_cargadas.push(...arr(r.ya_cargadas));
+        acc.lotes.push(...arr(r.lotes));
+        acc.viejas.push(...arr(r.viejas));
+        acc.errores.push(...arr(r.errores));
+        if (r.error_pdf) acc.error_pdf = r.error_pdf;
+      } while (r.parcial && acc.vueltas < 12);
+      acc.parcial = !!r.parcial;
+      setLectura(acc);
+      if (acc.parkeadas.length) await cargar();
+    } catch (e) {
+      // Las vueltas anteriores ya parkearon: se muestra lo que entró junto con el error, y se refresca la bandeja.
+      setLectura({ ...acc, error: e?.message || String(e) });
+      if (acc.parkeadas.length) await cargar();
+    } finally { setLeyendo(null); }
+  };
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -94,7 +155,7 @@ export default function TabCorreo({ onPend } = {}) {
     const e = ed(row);
     if (!e.sociedad || !e.cuentaId || !e.centro) return;
     setBusy(row.id); setMenuOpen(null);
-    try { await contabilizarBorrador(row.id, payloadDe(row, e)); await cargar(); }
+    try { await contabilizarBorrador(row.id, payloadDe(row, e)); await marcarEnGmail(row, "contabilizada"); await cargar(); }
     catch (err) { alert("Error al contabilizar: " + (err?.message || err)); }
     finally { setBusy(null); }
   };
@@ -103,7 +164,7 @@ export default function TabCorreo({ onPend } = {}) {
     setMenuOpen(null);
     if (!(await confirm(`¿Ignorar la factura de ${row.proveedor} ($${Math.round(row.total)})? No se contabiliza.`))) return;
     setBusy(row.id);
-    try { await ignorarBorrador(row.id, "correo"); await cargar(); }
+    try { await ignorarBorrador(row.id, "correo"); await marcarEnGmail(row, "ignorada"); await cargar(); }
     catch (err) { alert("Error: " + (err?.message || err)); }
     finally { setBusy(null); }
   };
@@ -121,6 +182,7 @@ export default function TabCorreo({ onPend } = {}) {
   const guardarEditado = async (payload) => {
     if (!editar) return;
     await contabilizarBorrador(editar.id, payload);
+    await marcarEnGmail(editar, "contabilizada");
     setEditar(null);
     await cargar();
   };
@@ -154,7 +216,92 @@ export default function TabCorreo({ onPend } = {}) {
       {confirmUI}
       <PageHeader
         title="Correo — facturas"
-        subtitle="Facturas leídas del mail (pagos@bigg.fit), parkeadas sin contabilizar. Revisá y Contabilizá (crea la factura/CxP en su sociedad) o Ignorá. Consolidado: todas las sociedades. El mail no se toca." />
+        back={
+          <span title={`Facturas leídas de ${buzonActivo.mail}, parkeadas sin contabilizar. Revisá y Contabilizá (crea la factura/CxP en su sociedad) o Ignorá. El mail no se toca.`}
+            style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:20, height:20, borderRadius:"50%",
+              border:`1.5px solid ${T.muted}`, color:T.muted, fontSize:12, fontWeight:800, cursor:"help", userSelect:"none" }}>?</span>
+        }
+        action={(() => {
+          const bz = buzonActivo;
+          const puede = bz.lector && !leyendo && !loading;
+          return (
+            <button onClick={() => puede && leerBuzon(bz)} disabled={!puede}
+              title={bz.lector ? `Lee ${bz.mail} y parkea las facturas nuevas. No toca el mail.` : `${bz.mail} todavía no tiene lector: las facturas se parkean a mano.`}
+              style={{ background: puede ? T.accentDark : "#e5e7eb", color: puede ? T.accent : T.muted, flexShrink:0,
+                border:"none", borderRadius:8, padding:"9px 16px", fontSize:13, fontWeight:800, cursor: puede ? "pointer" : "default", fontFamily:T.font, whiteSpace:"nowrap" }}>
+              {leyendo === bz.id ? "Leyendo el buzón…" : bz.lector ? `✉ Leer el buzón (${bz.label})` : "✉ Sin lector todavía"}
+            </button>
+          );
+        })()} />
+
+      {/* Solapas: una por casilla. El conteo es lo pendiente de cada buzón. */}
+      <div style={{ display:"flex", gap:6, marginBottom:16, borderBottom:`1px solid ${T.cardBorder}` }}>
+        {BUZONES.map(bz => {
+          const on = bz.id === solapa;
+          return (
+            <button key={bz.id} onClick={() => setSolapa(bz.id)}
+              style={{ background:"transparent", border:"none", borderBottom:`2px solid ${on ? T.accentDark : "transparent"}`, marginBottom:-1,
+                padding:"8px 14px", fontSize:13, fontWeight: on ? 800 : 600, color: on ? T.text : T.muted, cursor:"pointer", fontFamily:T.font }}>
+              {bz.label} · {bz.mail}
+              {porSolapa[bz.id] > 0 && (
+                <span style={{ marginLeft:8, background: on ? T.accentDark : "#e5e7eb", color: on ? T.accent : T.muted, borderRadius:10, padding:"1px 7px", fontSize:11, fontWeight:800 }}>
+                  {porSolapa[bz.id]}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {avisoMail && (
+        <div role="alert" style={{ background:"#fffbeb", border:"1px solid #f59e0b", borderRadius:T.radius, padding:"10px 16px", marginBottom:12, fontSize:13, color:"#92400e",
+          display:"flex", justifyContent:"space-between", gap:12 }}>
+          <span>{avisoMail}</span>
+          <button onClick={() => setAvisoMail(null)} style={{ background:"transparent", border:"none", color:"#92400e", cursor:"pointer", fontSize:16 }}>✕</button>
+        </div>
+      )}
+
+      {lectura && (
+        <div role="status" style={{ background: lectura.error ? T.redBg : T.card, border:`1px solid ${lectura.error ? T.red : T.cardBorder}`,
+          borderRadius:T.radius, padding:"12px 16px", marginBottom:16, fontSize:13, color: lectura.error ? "#991b1b" : T.text }}>
+          {lectura.error ? (
+            <span>
+              No se pudo terminar de leer {lectura.buzon.mail}: {lectura.error}
+              {lectura.parkeadas.length > 0 && <> · Antes del error entraron {lectura.parkeadas.length} factura{lectura.parkeadas.length === 1 ? "" : "s"}. Volvé a tocar el botón para seguir.</>}
+            </span>
+          ) : (
+            <>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+                <span>
+                  <b>{lectura.buzon.mail}</b>: {lectura.revisados} mails revisados ·{" "}
+                  <b>{lectura.parkeadas.length} factura{lectura.parkeadas.length === 1 ? "" : "s"} parkeada{lectura.parkeadas.length === 1 ? "" : "s"}</b>
+                  {lectura.sin_regla > 0 && <> ({lectura.sin_regla} sin regla: revisá proveedor y centro)</>}
+                  {" "}· {lectura.ya_cargadas.length} ya estaban cargadas · {lectura.descartados} descartados (sin factura)
+                  {lectura.viejas.length > 0 && <> · {lectura.viejas.length} anteriores al corte (no se parkean)</>}
+                  {lectura.parcial && <> · <span style={{ color:"#b45309" }}>corrida incompleta, volvé a tocar el botón</span></>}
+                </span>
+                <button onClick={() => setLectura(null)} style={{ background:"transparent", border:"none", color:T.muted, cursor:"pointer", fontSize:16 }}>✕</button>
+              </div>
+              {lectura.parkeadas.length > 0 && (
+                <ul style={{ margin:"8px 0 0", paddingLeft:18, color:T.muted, columns:2, columnGap:24 }}>
+                  {lectura.parkeadas.map((p, i) => (
+                    <li key={i}>{p.proveedor || "?"}{p.nro ? ` · ${p.nro}` : ""}{p.total != null ? ` · ${fmtMoney(p.total, "EUR")}` : " · sin total"}{p.sin_regla ? " · sin regla" : ""}</li>
+                  ))}
+                </ul>
+              )}
+              {lectura.lotes.length > 0 && (
+                <div style={{ marginTop:8, color:"#b45309" }}>
+                  Lotes sin parkear (muchos PDF en un mail, revisar a mano): {lectura.lotes.map(l => `${l.remitente} · ${l.mail} (${l.pdfs.length} PDF, ${fmtDate(l.fecha)})`).join(" · ")}
+                </div>
+              )}
+              {lectura.error_pdf && <div style={{ marginTop:8, color:"#991b1b" }}>{lectura.error_pdf}</div>}
+              {lectura.errores.length > 0 && (
+                <div style={{ marginTop:8, color:"#991b1b" }}>Con error: {lectura.errores.map(e => `${e.mail} (${e.error})`).join(" · ")}</div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
 
       {loading && <div style={{ padding:"50px", textAlign:"center", color:T.muted, fontSize:14 }}>Cargando bandeja de correo…</div>}
@@ -162,22 +309,22 @@ export default function TabCorreo({ onPend } = {}) {
         <div role="alert" style={{ background:T.redBg, border:`1px solid ${T.red}`, borderRadius:T.radius, padding:"16px 20px", color:"#991b1b", fontSize:13 }}>{error}</div>
       )}
 
-      {!loading && !error && (borradores.length === 0 ? (
+      {!loading && !error && (visibles.length === 0 ? (
         <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:T.radius, padding:"56px 24px", textAlign:"center" }}>
           <div style={{ fontSize:28, marginBottom:10 }}>📭</div>
-          <div style={{ fontSize:14, color:T.muted }}>No hay facturas por contabilizar en la bandeja.</div>
+          <div style={{ fontSize:14, color:T.muted }}>No hay facturas de {buzonActivo.mail} por contabilizar.</div>
         </div>
       ) : (
         <div style={{ background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:T.radius, boxShadow:T.shadow, overflow:"visible" }}>
           <div style={{ overflowX:"auto" }}>
           <table style={{ width:"100%", borderCollapse:"collapse", minWidth:1360 }}>
             <thead><tr style={{ background:"#0e7490" }}>
-              {[["Proveedor","left"],["N°","left"],["Fecha correo","left"],["Sociedad","left"],["Fecha servicio","left"],["Vto","left"],
+              {[["Fecha correo","left"],["Proveedor","left"],["N°","left"],["Sociedad","left"],["Fecha servicio","left"],["Vto","left"],
                 ["Cuenta contable","left"],["Centro","left"],["Subtotal","right"],["IVA","right"],["Total","right"],["",""]]
                 .map(([h,a],i) => <th key={i} style={{ ...thS, textAlign:a }}>{h}</th>)}
             </tr></thead>
             <tbody>
-              {borradores.map((row, i) => {
+              {visibles.map((row, i) => {
                 const e = ed(row);
                 const linea = (row.lineas && row.lineas[0]) || {};
                 const enCurso = busy === row.id;
@@ -187,6 +334,7 @@ export default function TabCorreo({ onPend } = {}) {
                 const vtoMostrar = pago ? pago.fecha : row.vto;
                 return (
                   <tr key={row.id} style={{ borderBottom:`1px solid ${T.cardBorder}`, background: i%2===0 ? T.card : "#fafbfc" }}>
+                    <td style={{ padding:"9px 12px", fontSize:12, color:T.muted, whiteSpace:"nowrap" }}>{metaFecha(row.nota) ? fmtDate(metaFecha(row.nota)) : "—"}</td>
                     <td style={{ padding:"9px 12px", whiteSpace:"nowrap" }}>
                       <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:13, fontWeight:700, color:T.text }}>
                         <span>{row.proveedor || "—"}</span>
@@ -198,7 +346,6 @@ export default function TabCorreo({ onPend } = {}) {
                       <input value={e.nroComp} onChange={ev => setEd(row.id, { nroComp: formatNroComp(ev.target.value) })}
                         placeholder="" style={{ ...sel, maxWidth:130 }} />
                     </td>
-                    <td style={{ padding:"9px 12px", fontSize:12, color:T.muted, whiteSpace:"nowrap" }}>{metaFecha(row.nota) ? fmtDate(metaFecha(row.nota)) : "—"}</td>
                     <td style={{ padding:"9px 12px" }}>
                       <select value={e.sociedad} onChange={ev => setEd(row.id, { sociedad: ev.target.value })}
                         style={{ ...sel, borderColor: e.sociedad ? T.cardBorder : "#f59e0b", background: e.sociedad ? "#fff" : "#fffbeb" }}>
@@ -254,14 +401,14 @@ export default function TabCorreo({ onPend } = {}) {
       {menuOpen && (() => {
         const row = borradores.find(r => r.id === menuOpen.id);
         if (!row) return null;
-        const e = ed(row); const ref = metaRef(row.nota);
+        const e = ed(row); const ref = metaRef(row.nota); const buzon = metaBuzon(row.nota);
         const listo = e.sociedad && e.cuentaId && e.centro;
         return (
           <div ref={menuRef} style={{ position:"fixed", top:menuOpen.top, left:menuOpen.left, zIndex:9999,
             background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:8, boxShadow:"0 8px 24px rgba(0,0,0,.15)", minWidth:200, overflow:"hidden" }}>
             {item("Contabilizar ✓", () => contabilizar(row), "#16a34a", !listo)}
             {item("Abrir para editar (varios centros)", () => setEditar(row))}
-            {ref && item("Ver mail", () => window.open(gmailUrl(ref), "_blank"))}
+            {ref && item("Ver mail", () => window.open(gmailUrl(ref, buzon), "_blank"))}
             <div style={{ height:1, background:T.cardBorder, margin:"3px 0" }} />
             {item("Ignorar", () => ignorar(row), T.red)}
           </div>
