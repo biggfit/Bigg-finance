@@ -17,6 +17,8 @@ import TabTesoreriaConsolidada from "./reportes/TabTesoreriaConsolidada";
 import { finMesAnteriorReal, hoyISO } from "./reportes/balanceUtils";   // Posición financiera abre en el último cierre de mes
 import { cesionesDe, cesionesSociedadDe, provisionCesionRows } from "./reportes/cesionDerive";   // cesiones derivadas: % de la tabla + provisión virtual
 import { FONDEADAS, DESARROLLO, IMPUESTOS_FOND, FINANCIEROS_FOND, computeImpuestos, resultadoFondeada } from "./reportes/fondeadasDerive";
+import { armarValuacion, mesesValuacion, puestoEnFondeadas } from "./reportes/valuacionDerive";   // tablero de Valuación (10/11/2026)
+import { ValuacionView } from "./reportes/ValuacionView";
 import TabDevengado from "./reportes/TabDevengado";
 import TabIntercoConsolidado from "./reportes/TabIntercoConsolidado";
 import TabSaldosInterco from "./reportes/TabSaldosInterco";
@@ -1275,7 +1277,18 @@ function buildPnLGrupoFilas(propsBigg, isCol) {
       sedesApertura: sedesApertura ? { cur: sedesApertura.cur, prev: sedesApertura.prevC || sedesApertura.prev } : null }, isCol);
     zipPrevC(filas, alt.filas);
   }
-  return { cols, filas, lastM, activeMonths };
+  // Líneas grandes de la cascada con su signo de aporte al resultado (año y año anterior): las lee la Valuación para
+  // multiplicar exactamente lo que muestra este P&L. `servicio` = contrato revocable (la Valuación lo deja en cero).
+  const neg = a => (a || Z).map(v => -(Number(v) || 0));
+  const lineas = [
+    { key: "rosedal",    label: "Gerenciamiento de Sedes (Rosedal)",     cur: fg || Z,  prev: P.fg || Z,  servicio: true },
+    { key: "huergo",     label: "Wellness Real Estate (Huergo)",         cur: wre || Z, prev: P.wre || Z, servicio: true },
+    { key: "red",        label: "Red BIGG (franquicias y corporativos)", cur: red, prev: redP },
+    { key: "estructura", label: "Estructura HQ",                         cur: neg(opexHQ), prev: neg(P.opexHQ) },
+    { key: "fin",        label: "Financieros",                           cur: neg(finTot), prev: neg(finTotP) },
+    { key: "imp",        label: "Impuestos",                             cur: impBlockTot, prev: impBlockTotPrev, impuestos: true },
+  ];
+  return { cols, filas, lastM, activeMonths, lineas };
 }
 
 // P&L BIGG = P&L de HOLDING. Arriba el RESULTADO de cada negocio operativo (no la venta); después HQ
@@ -2782,10 +2795,10 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
       || ccs.find(c => String(c.id).toLowerCase() === s.toLowerCase());
     return hit?.nombre || s;
   };
-  const sedesAperturaDe = (yr, inRows = inBigg, egRows = egBigg) => arNucleoCCs.map(cc => ({
+  const sedesAperturaDe = (yr, inRows = inBigg, egRows = egBigg, moneda = monedaPL, sinIvaArg = sinIva) => arNucleoCCs.map(cc => ({
     label: nombreCC(cc),
     isBN: String(cc) === String(bnCcId),
-    arr: computeSubtotalsSede(buildPnLSede(inRows, egRows, [cc], yr, monedaPL, sinIva)).resFinal,
+    arr: computeSubtotalsSede(buildPnLSede(inRows, egRows, [cc], yr, moneda, sinIvaArg)).resFinal,
   }));
   const sedesApCur  = useMemo(() => (isVentasHQ || isGrupo) ? sedesAperturaDe(year)     : null,   // eslint-disable-line react-hooks/exhaustive-deps
     [isVentasHQ, isGrupo, inBigg, egBigg, arNucleoCCs, ccMap, year, monedaPL, sinIva]);
@@ -2797,6 +2810,26 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
   const sedesApLente = (dosLentesBigg => dosLentesBigg
     ? (fxMode === "real" ? { cur: sedesApCur, prev: sedesApPrev, prevC: sedesApPrevAlt } : { cur: sedesApCur, prev: sedesApPrevAlt, prevC: sedesApPrev })
     : { cur: sedesApCur, prev: sedesApPrev })(fxMode !== "native" && vistaPnl === "ytd" && !!sedesApPrevAlt);
+
+  // ── Valuación (10/11/2026): el P&L del grupo SIEMPRE en USD a TC real y SIN IVA (no sigue los selectores: tiene que
+  // calcularse igual todos los meses; "EBITDA por múltiplo"), año y año anterior para el promedio; sedes una por una;
+  // España y Colombia por lo que pusimos (participación + saldo interco al cierre). Reglas en valuacionDerive. Solo con
+  // el tab abierto.
+  const mesesVal = useMemo(() => mesesValuacion(year), [year]);
+  const valuacion = useMemo(() => {
+    if (activeTab !== "valuacion") return null;
+    const fx = (monto, moneda, anio, mes) => montoAMoneda(monto, moneda, tcDelMes(tiposCambio, anio, mes), "USD");
+    const inR = traducirFilasFx(inConFranq, fx, "USD").rows, egR = traducirFilasFx(egConSueldos, fx, "USD").rows;
+    const opts = { inR, egR, fx, moneda: "USD", sinIvaArg: true };
+    const cur = holdingDe(year, opts), prev = holdingDe(year - 1, opts);
+    const { lineas } = buildPnLGrupoFilas({ pnl: cur.pnl, sub: cur.sub, pnlPrev: prev.pnl, subPrev: prev.sub, year }, () => true);
+    const sedesPrev = sedesAperturaDe(year - 1, inR, egR, "USD", true);
+    const sedes = sedesAperturaDe(year, inR, egR, "USD", true)
+      .map(s => ({ label: s.label, isBN: s.isBN, cur: s.arr, prev: sedesPrev.find(x => x.label === s.label)?.arr || null }));
+    const puesto = puestoEnFondeadas({ intercoData, participaciones: partic, nucleo: nucleoEmpresas, year, tiposCambio, hasta: mesesVal.length ? mesesVal[mesesVal.length - 1] : -1,
+      fondeadas: DESARROLLO.map(k => ({ key: k, empresa: FONDEADAS[k].empresa, label: `Sedes Propias ${FONDEADAS[k].label}` })) });
+    return armarValuacion({ year, sedes, parteBN: 1 - (Number(cesionCfg.pct) || 0), lineas, puesto });
+  }, [activeTab, inConFranq, egConSueldos, tiposCambio, year, mesesVal, arNucleoCCs, bnCcId, huergoCCs, ccMap, cuentaMap, nucleoEmpresas, intercoData, partic, cesionCfg, cesionesSoc, ccs]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleSedeCC = (id) => {
     setSelectedSedeCCs(prev => {
@@ -3364,6 +3397,8 @@ export default function PantallaReportes({ onVerComprobante, tab, onTab }) {
           contentRef={reportRef} onMeta={setPosMeta}
           pnl={{ inRows: inConFranq, egRows: egConSueldos, cuentaMap, ccMap }} tiposCambio={tiposCambio} />
       )}
+
+      {activeTab === "valuacion" && <ValuacionView val={valuacion} meses={mesesVal} />}
 
       {activeTab === "devengado" && (
         <TabDevengado

@@ -36,7 +36,7 @@ const MIRADAS = [
   { id: "economico", label: "Resultados económicos",  hint: "Cómo nos fue: el grupo y cada negocio",
     tabs: ["pl_grupo", "an_ventas", "pl_sede", "op_espana", "op_colombia", "op_rosedal", "op_huergo", "devengado"] },
   { id: "financiero", label: "Resultados financieros", hint: "Posición, flujo de caja y patrimonio",
-    tabs: ["posicion_fin", "cf", "balance_pn"] },
+    tabs: ["posicion_fin", "cf", "balance_pn", "valuacion"] },
   { id: "partic",   label: "Participaciones",      hint: "Socios, fondeo y saldos entre sociedades",
     tabs: ["socios", "interco_matriz", "interco"] },
   { id: "wip",      label: "En construcción",      hint: "Reportes a terminar o a retirar", plegadaInicial: true,

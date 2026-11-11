@@ -17,6 +17,7 @@ export const TABS = [
   { id: "cxp_prov", label: "Cuentas por pagar", icon: "📋", ico: "invoice", desc: "Cuentas por pagar consolidadas por proveedor (todas las sociedades), con antigüedad." },
   { id: "cxc_cli", label: "Cuentas por cobrar", icon: "📥", ico: "receipt", desc: "Cuentas por cobrar consolidadas por cliente (todas las sociedades), con antigüedad." },
   { id: "socios",  label: "Participaciones", icon: "◎", ico: "people", desc: "Quién es socio de cada negocio, qué puso y qué le debemos: socios, cesiones y cuenta corriente (balance, no P&L)." },
+  { id: "valuacion", label: "Valuación", icon: "📐", ico: "pie", desc: "Cuánto vale el grupo con una regla fija, mes a mes: cada sede y negocio por su resultado promedio, España y Colombia por lo que pusimos. Para ver si sube o baja, no como valor de mercado." },
 
   // ── Detalle operativo (funcionando): el único lugar donde se ve la contabilidad de TODAS las sociedades ──
   { id: "inf_egresos",  label: "Egresos en detalle",  icon: "🔎", ico: "out", desc: "Listar y filtrar compras por cuenta · centro · proveedor · moneda · período." },
@@ -57,5 +58,5 @@ export const LENTES = [
     tabs: ["interco", "interco_matriz", "socios"] },
   { id: "control",    label: "Control y cierre",          hint: "Para atar el resultado contra el patrimonio",
     // Trilogía de cierre: Balance/EEPN (afuera de Tesorería desde 19/9, pedido Martín) + devengado que ata contra el PN.
-    tabs: ["balance_pn", "devengado", "an_gastos_cc", "er_soc"] },
+    tabs: ["balance_pn", "valuacion", "devengado", "an_gastos_cc", "er_soc"] },
 ];
