@@ -1,59 +1,14 @@
 import { useState, useEffect } from "react";
 import { fmtMiles, limpiarMonto } from "../lib/sueldosApi";
 import { fmtEntero } from "./sueldosUi";
+import { T, prepararArchivo, llamar } from "./cargaPublica";
 
 // Página PÚBLICA (sin login) a la que llega cada monotributista desde el mail del día 12:
 //   /?monotributo=1&l=<legajo>&p=<yyyy-mm>&t=<firma>
 // Carga el importe + comprobante → novedad "pendiente" en la solapa Monotributo de Novedades HQ.
 // Backend: apps-script-monotributo.gs vía /api/monotributo.
 
-const T = {
-  bg: "#f8fafc", card: "#ffffff", border: "#e2e8f0", text: "#1e293b",
-  muted: "#64748b", blue: "#2563eb", red: "#dc2626", green: "#16a34a",
-  font: "'Inter', system-ui, sans-serif",
-};
-
 const API = "/api/monotributo";
-// Vercel corta los requests de más de 4,5 MB; en base64 un archivo crece ~33%.
-const MAX_BYTES = 3 * 1024 * 1024;
-const MAX_LADO  = 1800;   // px: una foto del celular queda en ~300-600 KB y se lee perfecto
-
-const aBase64 = (blob) => new Promise((ok, mal) => {
-  const r = new FileReader();
-  r.onload  = () => ok(String(r.result).split(",")[1] || "");
-  r.onerror = () => mal(new Error("No se pudo leer el archivo."));
-  r.readAsDataURL(blob);
-});
-
-// Fotos → JPEG reducido. Si el navegador no puede abrir la imagen (HEIC en Chrome/Windows) se manda tal cual.
-async function prepararArchivo(file) {
-  if (file.type.startsWith("image/")) {
-    try {
-      const bmp   = await createImageBitmap(file);
-      const k     = Math.min(1, MAX_LADO / Math.max(bmp.width, bmp.height));
-      const cv    = document.createElement("canvas");
-      cv.width    = Math.round(bmp.width * k);
-      cv.height   = Math.round(bmp.height * k);
-      cv.getContext("2d").drawImage(bmp, 0, 0, cv.width, cv.height);
-      const blob  = await new Promise(ok => cv.toBlob(ok, "image/jpeg", 0.82));
-      if (blob) return { nombre: file.name.replace(/\.[^.]+$/, "") + ".jpg", mime: "image/jpeg", base64: await aBase64(blob) };
-    } catch { /* formato que el navegador no decodifica: va el original */ }
-  }
-  if (file.size > MAX_BYTES)
-    throw new Error("El archivo pesa más de 3 MB. Probá con una captura de pantalla o una foto del comprobante.");
-  return { nombre: file.name, mime: file.type || "application/octet-stream", base64: await aBase64(file) };
-}
-
-async function llamar(opts) {
-  const res  = await fetch(opts.body ? API : `${API}?${opts.qs}`, opts.body
-    ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts.body) }
-    : undefined);
-  const text = await res.text();
-  let data;
-  try { data = JSON.parse(text); } catch { throw new Error("No se pudo conectar. Probá de nuevo en un rato."); }
-  if (data?.error) throw new Error(data.error);
-  return data;
-}
 
 export default function PantallaMonotributoCarga() {
   const q = new URLSearchParams(window.location.search);
@@ -67,7 +22,7 @@ export default function PantallaMonotributoCarga() {
   const [listo,   setListo]   = useState(false);
 
   useEffect(() => {
-    llamar({ qs: new URLSearchParams({ accion: "info", ...link }).toString() })
+    llamar(API, { qs: new URLSearchParams({ accion: "info", ...link }).toString() })
       .then(d => { setInfo(d); if (d.carga) setMonto(String(d.carga.monto || "")); })
       .catch(e => setError(e.message));
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -81,7 +36,7 @@ export default function PantallaMonotributoCarga() {
     setEnviando(true); setError("");
     try {
       const arch = archivo ? await prepararArchivo(archivo) : null;
-      await llamar({ body: { accion: "cargar", ...link, monto: parseFloat(monto), archivo: arch } });
+      await llamar(API, { body: { accion: "cargar", ...link, monto: parseFloat(monto), archivo: arch } });
       setListo(true);
     } catch (e) {
       setError(e.message);

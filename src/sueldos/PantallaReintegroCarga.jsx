@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { fmtMiles, limpiarMonto } from "../lib/sueldosApi";
 import { fmtEntero } from "./sueldosUi";
+import { T, prepararArchivo, llamar } from "./cargaPublica";
 
 // Página PÚBLICA (sin login) — formulario de REINTEGRO. Link personal permanente que llega por
 // WhatsApp/mail:  /?reintegro=1&l=<legajo>&t=<firma>
@@ -8,52 +9,7 @@ import { fmtEntero } from "./sueldosUi";
 // crea una novedad "Otros" PENDIENTE en Novedades HQ; administración le asigna la cuenta al aprobar.
 // Backend: apps-script-reintegro.gs vía /api/reintegro.
 
-const T = {
-  bg: "#f8fafc", card: "#ffffff", border: "#e2e8f0", text: "#1e293b",
-  muted: "#64748b", blue: "#2563eb", red: "#dc2626", green: "#16a34a",
-  font: "'Inter', system-ui, sans-serif",
-};
-
 const API = "/api/reintegro";
-const MAX_BYTES = 3 * 1024 * 1024;   // Vercel corta >4,5 MB; base64 crece ~33%
-const MAX_LADO  = 1800;              // px: una foto del celular queda en ~300-600 KB
-
-const aBase64 = (blob) => new Promise((ok, mal) => {
-  const r = new FileReader();
-  r.onload  = () => ok(String(r.result).split(",")[1] || "");
-  r.onerror = () => mal(new Error("No se pudo leer el archivo."));
-  r.readAsDataURL(blob);
-});
-
-// Fotos → JPEG reducido. Si el navegador no puede abrir la imagen (HEIC en Chrome/Windows) va tal cual.
-async function prepararArchivo(file) {
-  if (file.type.startsWith("image/")) {
-    try {
-      const bmp   = await createImageBitmap(file);
-      const k     = Math.min(1, MAX_LADO / Math.max(bmp.width, bmp.height));
-      const cv    = document.createElement("canvas");
-      cv.width    = Math.round(bmp.width * k);
-      cv.height   = Math.round(bmp.height * k);
-      cv.getContext("2d").drawImage(bmp, 0, 0, cv.width, cv.height);
-      const blob  = await new Promise(ok => cv.toBlob(ok, "image/jpeg", 0.82));
-      if (blob) return { nombre: file.name.replace(/\.[^.]+$/, "") + ".jpg", mime: "image/jpeg", base64: await aBase64(blob) };
-    } catch { /* formato que el navegador no decodifica: va el original */ }
-  }
-  if (file.size > MAX_BYTES)
-    throw new Error("El archivo pesa más de 3 MB. Probá con una captura de pantalla o una foto más chica.");
-  return { nombre: file.name, mime: file.type || "application/octet-stream", base64: await aBase64(file) };
-}
-
-async function llamar(opts) {
-  const res  = await fetch(opts.body ? API : `${API}?${opts.qs}`, opts.body
-    ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts.body) }
-    : undefined);
-  const text = await res.text();
-  let data;
-  try { data = JSON.parse(text); } catch { throw new Error("No se pudo conectar. Probá de nuevo en un rato."); }
-  if (data?.error) throw new Error(data.error);
-  return data;
-}
 
 let _uid = 0;
 const nuevaLinea = () => ({ _id: ++_uid, descripcion: "", monto: "", archivos: [] });
@@ -69,7 +25,7 @@ export default function PantallaReintegroCarga() {
   const [listo,    setListo]    = useState(null);   // { n, total } al terminar
 
   useEffect(() => {
-    llamar({ qs: new URLSearchParams({ accion: "info", ...link }).toString() })
+    llamar(API, { qs: new URLSearchParams({ accion: "info", ...link }).toString() })
       .then(setInfo)
       .catch(e => setError(e.message));
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -92,13 +48,14 @@ export default function PantallaReintegroCarga() {
   const enviar = async () => {
     setEnviando(true); setError("");
     try {
-      const payloadLineas = [];
-      for (const l of lineasOk) {
-        const comprobantes = [];
-        for (const f of l.archivos) comprobantes.push(await prepararArchivo(f));
-        payloadLineas.push({ descripcion: l.descripcion.trim(), monto: parseFloat(l.monto), comprobantes });
-      }
-      const r = await llamar({ body: { accion: "cargar", ...link, lineas: payloadLineas } });
+      // Preparar (comprimir + base64) todos los comprobantes en paralelo: el decode/encode es async y
+      // se solapa; una carga de varias fotos no espera una por una. Mantiene el orden por línea.
+      const payloadLineas = await Promise.all(lineasOk.map(async (l) => ({
+        descripcion: l.descripcion.trim(),
+        monto: parseFloat(l.monto),
+        comprobantes: await Promise.all(l.archivos.map(prepararArchivo)),
+      })));
+      const r = await llamar(API, { body: { accion: "cargar", ...link, lineas: payloadLineas } });
       setListo({ n: r.n ?? payloadLineas.length, total: payloadLineas.reduce((s, x) => s + x.monto, 0) });
     } catch (e) {
       setError(e.message);

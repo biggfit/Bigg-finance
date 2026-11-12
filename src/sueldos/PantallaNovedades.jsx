@@ -134,6 +134,9 @@ function hayCambios(rows, loaded) {
 
 // Borrador local de lo editado sin guardar (ver lib/borradorLocal), por país y mes.
 const draftKey = (p, a, m) => `novedades_hq_borrador_${p}_${a}_${m}`;
+// Reintegros guardan varios comprobantes en el único campo comprobante_url, unidos por este separador.
+// Tiene que coincidir con SEP_URLS de apps-script-reintegro.gs (el productor); las URLs de Drive nunca lo contienen.
+const SEP_COMPROBANTES = " | ";
 // Novedad cargada por el link de Monotributo: mientras el borrador está abierto, la persona puede cargarla
 // o corregirla (solo estando pendiente), así que al recuperar el borrador manda la versión de la planilla.
 const esDeLink = (n) => n.estado === "pendiente" || !!n.comprobante_url;
@@ -702,7 +705,7 @@ export default function PantallaNovedades({ pais = "" }) {
                   </td>
                   {conLink && (
                     <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>
-                      {r.comprobante_url && String(r.comprobante_url).split(" | ").filter(Boolean).map((u, i) => (
+                      {r.comprobante_url && String(r.comprobante_url).split(SEP_COMPROBANTES).filter(Boolean).map((u, i) => (
                         <a key={i} href={u} target="_blank" rel="noreferrer" title={`Ver comprobante ${i + 1}`}
                           style={{ textDecoration: "none", fontSize: 15, marginRight: 8 }}>📎</a>
                       ))}

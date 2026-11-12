@@ -134,11 +134,11 @@ function doPost(e) {
     lock.waitLock(30000);
     const periodo = periodoActual_();
     const [a, m] = periodo.split("-");
-    const creadas = [];
+    const carpeta = carpetaDelPeriodo_(periodo);   // una sola vez: evita re-resolver Drive por cada archivo
     for (const ln of validas) {
       const urls = (ln.comprobantes || [])
         .filter(c => c && c.base64)
-        .map(c => guardarComprobante_(periodo, leg.nombre, c));
+        .map(c => guardarComprobante_(carpeta, periodo, leg.nombre, c));
       sueldosPost_({ action: "add", sheet: "su_novedades", row: {
         id: "NOV-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7).toUpperCase(),
         mes: Number(m), anio: Number(a),
@@ -151,9 +151,8 @@ function doPost(e) {
         estado: "pendiente", comprobante_url: urls.join(SEP_URLS),
         created_at: new Date().toISOString(),
       } });
-      creadas.push(1);
     }
-    return json_({ ok: true, n: creadas.length });
+    return json_({ ok: true, n: validas.length });
   } catch (err) {
     return json_({ error: err.message });
   } finally {
@@ -163,12 +162,17 @@ function doPost(e) {
 
 // ── Drive ─────────────────────────────────────────────────────────────────────
 
-// Carpeta raíz → subcarpeta por período → "2026-11 - Ana Leber - 173...-ab.pdf".
-// Un sufijo único por archivo evita pisar comprobantes cuando hay varios en el mismo mes.
-function guardarComprobante_(periodo, nombre, archivo) {
+// Subcarpeta del período dentro de la carpeta raíz (la crea si falta). Se resuelve UNA vez por request
+// y se reutiliza para todos los comprobantes (antes se re-resolvía Drive por cada archivo).
+function carpetaDelPeriodo_(periodo) {
   const raiz = DriveApp.getFolderById(cfg_("FOLDER_ID"));
   const it = raiz.getFoldersByName(periodo);
-  const carpeta = it.hasNext() ? it.next() : raiz.createFolder(periodo);
+  return it.hasNext() ? it.next() : raiz.createFolder(periodo);
+}
+
+// Guarda un comprobante en la carpeta ya resuelta → "2026-11 - Ana Leber - 173...-ab.pdf".
+// Un sufijo único por archivo evita pisar comprobantes cuando hay varios en el mismo mes.
+function guardarComprobante_(carpeta, periodo, nombre, archivo) {
   const ext = (String(archivo.nombre || "").match(/\.[a-z0-9]{1,5}$/i) || [""])[0].toLowerCase();
   const sufijo = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 5);
   const blob = Utilities.newBlob(Utilities.base64Decode(archivo.base64), archivo.mime || "application/octet-stream",
