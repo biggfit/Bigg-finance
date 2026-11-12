@@ -3,12 +3,6 @@
 @font-face { font-family: 'Messina Sans'; src: url('./assets/fonts/MessinaSansWeb-Bold.ttf') format('truetype'); font-weight: 700; font-style: normal; }
 @font-face { font-family: 'Messina Sans'; src: url('./assets/fonts/MessinaSansWeb-Black.ttf') format('truetype'); font-weight: 900; font-style: normal; }
 
-/* Números (var(--mono)): Inter, una escala más liviana que el peso pedido.
-   Los montos piden 700–900 en todas las pantallas; acá se mapean a 500/600 para que no queden tan en negrita. */
-@font-face { font-family: 'Numeros'; src: url('./assets/fonts/Inter-latin-400.woff2') format('woff2'); font-weight: 100 500; font-style: normal; }
-@font-face { font-family: 'Numeros'; src: url('./assets/fonts/Inter-latin-500.woff2') format('woff2'); font-weight: 600 800; font-style: normal; }
-@font-face { font-family: 'Numeros'; src: url('./assets/fonts/Inter-latin-600.woff2') format('woff2'); font-weight: 900; font-style: normal; }
-
 :root {
   font-family: 'Messina Sans', system-ui, sans-serif;
   line-height: 1.5;
