@@ -497,6 +497,20 @@ export async function marcarCorreo({ buzon = "es", ref, estado }) {
 }
 
 /**
+ * PDF de una factura que vino del lector, para la vista previa. El script lo lee del mail (única copia) y lo
+ * devuelve en base64; acá se convierte en un Blob listo para un <iframe> o window.open. `mail` = id del
+ * mensaje (del id_comp COR-<mail>[-k]), `archivo` = nombre del adjunto (nota archivo=).
+ */
+export async function fetchPdfCorreo({ buzon = "es", mail, archivo }) {
+  const qs = new URLSearchParams({ buzon, accion: "pdf", mail, archivo, token: TOKEN }).toString();
+  const data = await fetchJsonWithRetry(`/api/lector?${qs}`, { retries: 0, requireOk: true, init: { cache: "no-store" } });
+  const bin = atob(data.base64 || "");
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return { nombre: data.nombre || archivo || "factura.pdf", blob: new Blob([bytes], { type: "application/pdf" }) };
+}
+
+/**
  * Parkea una factura leída del mail. Idempotente por id_comp=COR-<mailId>. Dedup: si ya existe una fila con ese
  * id_comp (borrador/ignorado), o un EGRESO real con el mismo nº+proveedor, NO duplica (devuelve dedup).
  */

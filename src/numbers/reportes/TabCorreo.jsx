@@ -4,7 +4,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, PageHeader, fmtDate, fmtMoney } from "../theme";
 import {
-  fetchCorreoBorradores, contabilizarBorrador, ignorarBorrador, leerBuzonCorreo, marcarCorreo,
+  fetchCorreoBorradores, contabilizarBorrador, ignorarBorrador, leerBuzonCorreo, marcarCorreo, fetchPdfCorreo,
   fetchSociedades, fetchCuentas, fetchCentrosCosto, fetchProveedores,
   fetchEgresos, fetchMovTesoreria, toNum,
 } from "../../lib/numbersApi";
@@ -17,6 +17,15 @@ const meta      = (nota, k) => (String(nota || "").match(new RegExp(`(?:^|;)${k}
 const metaRef   = nota => meta(nota, "mail_ref");
 const metaFecha = nota => meta(nota, "fecha_correo");
 const metaBuzon = nota => meta(nota, "buzon");
+const metaArchivo = nota => meta(nota, "archivo");
+// Marcas `revisar=` que deja el lector cuando la extracción no cierra (base + IVA ≠ total, sin nº, documento que no
+// parece factura…): la fila lleva 🔎 con el motivo. No bloquea: el equipo mira el PDF y decide.
+const TEXTO_REVISAR = { sin_total: "no encontró el total", no_cuadra: "base + IVA no suma el total", sin_nro: "sin número de factura",
+  sin_fecha: "sin fecha de emisión", confianza: "el lector no está seguro de los datos", abono: "es una rectificativa / abono: revisá el signo" };
+const motivosRevisar = nota => meta(nota, "revisar").split("|").filter(Boolean)
+  .map(m => TEXTO_REVISAR[m] || (m.startsWith("tipo:") ? `parece ser "${m.slice(5).replace(/_/g, " ")}", no una factura` : m)).join(" · ");
+// id del mensaje de Gmail: el borrador del lector se parkea como COR-<mailId>[-k]
+const mailIdDe = id_comp => (String(id_comp || "").match(/^COR-([0-9a-f]+)/i) || [])[1] || "";
 // "Ver mail": si el borrador trae el buzón (lector por casilla), abre esa cuenta de Google; si no, la activa.
 const gmailUrl  = (ref, buzon) => !ref ? null
   : buzon ? `https://mail.google.com/mail/?authuser=${encodeURIComponent(buzon)}#all/${ref}`
@@ -44,6 +53,19 @@ export default function TabCorreo({ onPend } = {}) {
   const [busy,       setBusy]       = useState(null);
   const [menuOpen,   setMenuOpen]   = useState(null);  // id_comp del dropdown abierto
   const [editar,     setEditar]     = useState(null);  // row abierto en NuevoEgresoModal
+  const [pdf,        setPdf]        = useState(null);  // vista previa: { row, url, nombre } | { row, cargando } | { row, error }
+
+  // Vista previa del PDF: el script lo lee del mail y lo devuelve; acá se muestra en un visor flotante.
+  const verPdf = async (row) => {
+    const bz = buzonDe(row.nota); const mail = mailIdDe(row.id); const archivo = metaArchivo(row.nota);
+    if (!bz || !mail) return;
+    setPdf({ row, cargando: true, nombre: archivo });
+    try {
+      const { blob, nombre } = await fetchPdfCorreo({ buzon: bz.id, mail, archivo });
+      setPdf({ row, url: URL.createObjectURL(blob), nombre });
+    } catch (e) { setPdf({ row, error: e?.message || String(e), nombre: archivo }); }
+  };
+  const cerrarPdf = () => { if (pdf?.url) URL.revokeObjectURL(pdf.url); setPdf(null); };
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState(null);
   const [lectura,    setLectura]    = useState(null);  // resumen de la última corrida del lector (o su error)
@@ -157,24 +179,30 @@ export default function TabCorreo({ onPend } = {}) {
   };
   const descEgreso = e => `${e.id} · nº ${e.nroComp || "(sin nº)"} · ${fmtDate(e.fecha)} · ${fmtMoney(e.total, e.moneda || "EUR")}`;
 
-  const ed = (row) => edits[row.id] || { sociedad: row.sociedad || "", cuentaId: row.cuentaId || "", centro: row.cc || "", fechaServicio: row.fecha || "", nroComp: row.nroComp || "" };
+  // fechaServicio = devengado (fin del período que factura); fechaFiscal = emisión de la factura (libro de IVA).
+  const ed = (row) => edits[row.id] || { sociedad: row.sociedad || "", cuentaId: row.cuentaId || "", centro: row.cc || "",
+    fechaServicio: row.fecha || "", fechaFiscal: row.fechaFiscal || row.fecha || "", nroComp: row.nroComp || "" };
   const setEd = (id, patch) => setEdits(e => ({ ...e, [id]: { ...(edits[id] || {}), ...patch } }));
 
+  // Un borrador puede venir ya repartido en varios centros (el lector abre una línea por sede cuando la factura
+  // las trae, ej. Scentair): se contabiliza con todas sus líneas; el selector de centro solo aplica a una línea.
+  const esMulti = row => arr(row.lineas).length > 1;
   const payloadDe = (row, e) => {
     const cuentaNombre = (cuentas.find(c => c.id === e.cuentaId)?.nombre) || e.cuentaId;
     const linea = (row.lineas && row.lineas[0]) || {};
     return {
-      sociedad: e.sociedad, fecha: e.fechaServicio || row.fecha || "", vto: row.vto || "",
+      sociedad: e.sociedad, fecha: e.fechaServicio || row.fecha || "", fechaFiscal: e.fechaFiscal || row.fechaFiscal || e.fechaServicio || row.fecha || "", vto: row.vto || "",
       proveedor: row.proveedor, proveedorId: row.proveedorId,
       cuenta: cuentaNombre, cuentaId: e.cuentaId, moneda: row.moneda || "ARS",
       nroComp: e.nroComp || "", nota: row.nota || "",
-      lineas: [{ cc: e.centro, subtotal: linea.subtotal ?? row.total, ivaRate: linea.ivaRate ?? 0 }],
+      lineas: esMulti(row) ? row.lineas.map(l => ({ cc: l.cc, subtotal: l.subtotal, ivaRate: l.ivaRate ?? 0 }))
+                           : [{ cc: e.centro, subtotal: linea.subtotal ?? row.total, ivaRate: linea.ivaRate ?? 0 }],
     };
   };
 
   const contabilizar = async (row) => {
     const e = ed(row);
-    if (!e.sociedad || !e.cuentaId || !e.centro) return;
+    if (!e.sociedad || !e.cuentaId || (esMulti(row) ? row.lineas.some(l => !l.cc) : !e.centro)) return;
     setBusy(row.id); setMenuOpen(null);
     try { await contabilizarBorrador(row.id, payloadDe(row, e)); await marcarEnGmail(row, "contabilizada"); await cargar(); }
     catch (err) { alert("Error al contabilizar: " + (err?.message || err)); }
@@ -235,10 +263,31 @@ export default function TabCorreo({ onPend } = {}) {
   return (
     <div className="fade" style={{ padding:"28px 32px" }}>
       {confirmUI}
+
+      {/* Visor de PDF: panel flotante a la derecha, la bandeja sigue visible y editable al lado. */}
+      {pdf && (
+        <div style={{ position:"fixed", top:0, right:0, bottom:0, width:"min(720px, 60vw)", zIndex:600, background:T.card,
+          borderLeft:`1px solid ${T.cardBorder}`, boxShadow:"-12px 0 32px rgba(0,0,0,.18)", display:"flex", flexDirection:"column" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10, padding:"12px 16px", borderBottom:`1px solid ${T.cardBorder}` }}>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontSize:13, fontWeight:800, color:T.text, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{pdf.row.proveedor} · {pdf.row.nroComp || "sin nº"}</div>
+              <div style={{ fontSize:11, color:T.muted, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{pdf.nombre}</div>
+            </div>
+            {pdf.url && (
+              <a href={pdf.url} target="_blank" rel="noreferrer" download={pdf.nombre}
+                style={{ fontSize:12, color:T.muted, textDecoration:"none", border:`1px solid ${T.cardBorder}`, borderRadius:6, padding:"4px 10px", whiteSpace:"nowrap" }}>Abrir en pestaña</a>
+            )}
+            <button onClick={cerrarPdf} style={{ background:"transparent", border:"none", color:T.muted, cursor:"pointer", fontSize:18 }} title="Cerrar">✕</button>
+          </div>
+          {pdf.cargando && <div style={{ padding:40, textAlign:"center", color:T.muted, fontSize:13 }}>Trayendo el PDF del mail…</div>}
+          {pdf.error && <div role="alert" style={{ margin:16, background:T.redBg, border:`1px solid ${T.red}`, borderRadius:T.radius, padding:"12px 16px", color:"#991b1b", fontSize:13 }}>No se pudo traer el PDF: {pdf.error}</div>}
+          {pdf.url && <iframe title={pdf.nombre} src={pdf.url} style={{ flex:1, border:"none", width:"100%" }} />}
+        </div>
+      )}
       <PageHeader
         title="Correo — facturas"
         back={
-          <span title={`Facturas leídas de ${buzonActivo.mail}, parkeadas sin contabilizar. Revisá y Contabilizá (crea la factura/CxP en su sociedad) o Ignorá. El mail no se toca.`}
+          <span title={`Facturas leídas de ${buzonActivo.mail}, parkeadas sin contabilizar. El lector lee cada PDF con Gemini (número, fechas, importes, sede) y propone proveedor, cuenta y centro por las reglas del Sheet. Revisá y Contabilizá (crea la factura/CxP en su sociedad) o Ignorá. 🔎 = el lector no está seguro de algún dato. El mail no se toca.`}
             style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:20, height:20, borderRadius:"50%",
               border:`1.5px solid ${T.muted}`, color:T.muted, fontSize:12, fontWeight:800, cursor:"help", userSelect:"none" }}>?</span>
         }
@@ -340,7 +389,7 @@ export default function TabCorreo({ onPend } = {}) {
           <div style={{ overflowX:"auto" }}>
           <table style={{ width:"100%", borderCollapse:"collapse", minWidth:1360 }}>
             <thead><tr style={{ background:"#0e7490" }}>
-              {[["Fecha correo","left"],["Proveedor","left"],["N°","left"],["Sociedad","left"],["Fecha servicio","left"],["Vto","left"],
+              {[["Fecha correo","left"],["Proveedor","left"],["N°","left"],["Sociedad","left"],["Emisión","left"],["Fecha servicio","left"],["Vto","left"],
                 ["Cuenta contable","left"],["Centro","left"],["Subtotal","right"],["IVA","right"],["Total","right"],["",""]]
                 .map(([h,a],i) => <th key={i} style={{ ...thS, textAlign:a }}>{h}</th>)}
             </tr></thead>
@@ -351,6 +400,8 @@ export default function TabCorreo({ onPend } = {}) {
                 const enCurso = busy === row.id;
                 const pago = pagoPendiente(row);
                 const dup  = duplicado(row);
+                const revisar = motivosRevisar(row.nota);
+                const multi = esMulti(row);
                 // Vto: si el pago ya se debitó en el banco, mostramos esa fecha; si no, la de la factura.
                 const vtoMostrar = pago ? pago.fecha : row.vto;
                 return (
@@ -362,10 +413,12 @@ export default function TabCorreo({ onPend } = {}) {
                         {pago && <span style={{ fontSize:13, cursor:"help" }} title={`Pago ya realizado — falta matchearlo contra esta factura.\nDébito en Banco: ${pago.cuenta_bancaria} · ${fmtDate(pago.fecha)} · ${fmtMoney(Math.abs(toNum(pago.monto)), row.moneda||"ARS")}`}>💳</span>}
                         {dup?.nivel === "dup" && <span style={{ fontSize:13, cursor:"help" }} title={`YA CARGADA: existe un egreso con el mismo número.\n${descEgreso(dup.egreso)}`}>⛔</span>}
                         {dup?.nivel === "mes" && <span style={{ fontSize:13, cursor:"help" }} title={`Mismo importe y mismo mes que un egreso ya cargado, con otro número: revisá.\n${descEgreso(dup.egreso)}`}>⚠️</span>}
+                        {revisar && <span style={{ fontSize:13, cursor:"help" }} title={`El lector no está seguro de esta factura:\n${revisar}\nAbrí el PDF y revisá antes de contabilizar.`}>🔎</span>}
                       </div>
                     </td>
                     <td style={{ padding:"9px 12px" }}>
-                      <input value={e.nroComp} onChange={ev => setEd(row.id, { nroComp: formatNroComp(ev.target.value) })}
+                      {/* Máscara AFIP (FC-A 00001-00001234) sólo para Argentina; en España el nº es libre (FAC-2026-175, 26/219518). */}
+                      <input value={e.nroComp} onChange={ev => setEd(row.id, { nroComp: solapa === "ar" ? formatNroComp(ev.target.value) : ev.target.value })}
                         placeholder="" style={{ ...sel, maxWidth:130 }} />
                     </td>
                     <td style={{ padding:"9px 12px" }}>
@@ -375,7 +428,11 @@ export default function TabCorreo({ onPend } = {}) {
                         {sociedades.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
                       </select>
                     </td>
-                    <td style={{ padding:"9px 12px" }}>
+                    <td style={{ padding:"9px 12px" }} title="Fecha de emisión de la factura (fecha fiscal: libro de IVA)">
+                      <input type="date" value={e.fechaFiscal} onChange={ev => setEd(row.id, { fechaFiscal: ev.target.value })}
+                        style={{ ...sel, maxWidth:140 }} />
+                    </td>
+                    <td style={{ padding:"9px 12px" }} title="Fecha del servicio (devengado: fin del período facturado)">
                       <input type="date" value={e.fechaServicio} onChange={ev => setEd(row.id, { fechaServicio: ev.target.value })}
                         style={{ ...sel, maxWidth:140 }} />
                     </td>
@@ -390,14 +447,21 @@ export default function TabCorreo({ onPend } = {}) {
                       </select>
                     </td>
                     <td style={{ padding:"9px 12px" }}>
-                      <select value={e.centro} onChange={ev => setEd(row.id, { centro: ev.target.value })}
-                        style={{ ...sel, borderColor: e.centro ? T.cardBorder : "#f59e0b", background: e.centro ? "#fff" : "#fffbeb" }}>
-                        <option value="">⚠ centro</option>
-                        {ccActivos(centros, e.centro).map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-                      </select>
+                      {multi ? (
+                        <span style={{ fontSize:12, color:T.text, cursor:"help", whiteSpace:"nowrap" }}
+                          title={`La factura ya viene repartida en ${row.lineas.length} centros:\n${row.lineas.map(l => `${(centros.find(c => c.id === l.cc)?.nombre) || l.cc || "(sin centro)"} · ${fmtMoney(l.total_linea, row.moneda || "ARS")}`).join("\n")}\nPara cambiar el reparto: Abrir para editar.`}>
+                          Varios ({row.lineas.length}) ▾
+                        </span>
+                      ) : (
+                        <select value={e.centro} onChange={ev => setEd(row.id, { centro: ev.target.value })}
+                          style={{ ...sel, borderColor: e.centro ? T.cardBorder : "#f59e0b", background: e.centro ? "#fff" : "#fffbeb" }}>
+                          <option value="">⚠ centro</option>
+                          {ccActivos(centros, e.centro).map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                        </select>
+                      )}
                     </td>
-                    <td style={num(false)}>{fmtMoney(linea.subtotal ?? row.total, row.moneda || "ARS")}</td>
-                    <td style={{ ...num(false), color:T.muted }}>{(linea.iva_monto || 0) > 0 ? fmtMoney(linea.iva_monto, row.moneda || "ARS") : "—"}</td>
+                    <td style={num(false)}>{fmtMoney(multi ? row.lineas.reduce((a, l) => a + (l.subtotal || 0), 0) : (linea.subtotal ?? row.total), row.moneda || "ARS")}</td>
+                    <td style={{ ...num(false), color:T.muted }}>{(() => { const iva = multi ? row.lineas.reduce((a, l) => a + (l.iva_monto || 0), 0) : (linea.iva_monto || 0); return iva > 0 ? fmtMoney(iva, row.moneda || "ARS") : "—"; })()}</td>
                     <td style={num(true)}>{fmtMoney(row.total, row.moneda || "ARS")}</td>
                     <td style={{ padding:"9px 10px", whiteSpace:"nowrap", textAlign:"right" }}>
                       <button onClick={(ev) => {
@@ -430,6 +494,7 @@ export default function TabCorreo({ onPend } = {}) {
             background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:8, boxShadow:"0 8px 24px rgba(0,0,0,.15)", minWidth:200, overflow:"hidden" }}>
             {item("Contabilizar ✓", () => contabilizar(row), "#16a34a", !listo)}
             {item("Abrir para editar (varios centros)", () => setEditar(row))}
+            {buzon && metaArchivo(row.nota) && item("Ver PDF", () => verPdf(row))}
             {ref && item("Ver mail", () => window.open(gmailUrl(ref, buzon), "_blank"))}
             <div style={{ height:1, background:T.cardBorder, margin:"3px 0" }} />
             {item("Ignorar", () => ignorar(row), T.red)}

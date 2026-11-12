@@ -7,8 +7,12 @@
 //     bandeja con permiso de solo lectura. Sin delegación, sin reenvíos, sin cron: se dispara con el
 //     botón "Leer el buzón" de Reportes › Correo (GET ?accion=leer).
 //   - Por cada mail con factura (PDF adjunto o remitente conocido): identifica al proveedor, extrae
-//     número, fecha, vencimiento, total e IVA (del cuerpo y del texto del PDF) y la sede, y la PARKEA en
-//     nb_comprobantes como subtipo EGRESO_BORRADOR. El equipo la contabiliza o ignora desde la bandeja.
+//     número, fecha, vencimiento, total e IVA y la sede, y la PARKEA en nb_comprobantes como subtipo
+//     EGRESO_BORRADOR. El equipo la contabiliza o ignora desde la bandeja.
+//   - Extracción (v6): Gemini lee el PDF entero y devuelve un JSON con esquema (las facturas de España no son
+//     electrónicas y cada proveedor cambia de plantilla: los patrones no escalan). El modelo SOLO extrae datos;
+//     proveedor, cuenta y centro siguen saliendo de las reglas del Sheet. Sin GEMINI_KEY, o si la API falla,
+//     se usa la extracción por patrones sobre el texto del PDF (Drive) y el cuerpo del mail, como antes.
 //   - NUNCA contabiliza, NUNCA marca leído, etiqueta, archiva ni borra nada del mail.
 //
 // De dónde salen las reglas: SIEMPRE del Sheet, el script no tiene ninguna adentro.
@@ -48,7 +52,9 @@
 //   PARKEAR_SIN_PDF    "1" para parkear también mails sin PDF de proveedores conocidos (por defecto no:
 //                      avisos, pedidos y conversaciones del proveedor no son facturas)
 //   MAX_PDFS_POR_MAIL  más PDF que esto en un mail = lote (históricos, regularizaciones): se reporta, no se parkea ("6")
-// Servicio avanzado requerido: Drive API (v2) — se usa para sacar el texto de los PDF (conversión a Doc).
+//   GEMINI_KEY         clave de la API de Gemini (Google AI Studio). Sin clave → extracción por patrones.
+//   GEMINI_MODEL       modelo ("gemini-3.1-flash-lite"). Se cambia acá, sin tocar el código.
+// Servicio avanzado requerido: Drive API (v2/v3) — solo para el fallback por patrones (texto del PDF vía Doc).
 // ─────────────────────────────────────────────────────────────────────────────
 
 const TZ = "Europe/Madrid";
@@ -158,11 +164,31 @@ function cargarContexto_() {
   const proveedores = nbGet_("nb_proveedores", {});
   const cuentas = {};
   nbGet_("nb_cuentas", {}).forEach(c => { cuentas[String(c.id)] = String(c.nombre || c.id); });
+  // Centros de costo de esta sociedad (id → nombre): validan la sede que elige el modelo y arman su diccionario.
+  const sociedad = cfg_("SOCIEDAD");
+  const centros = {};
+  nbGet_("nb_centros_costo", {}).forEach(c => {
+    if (String(c.activo) === "false") return;
+    if (lc_(c.empresa) === lc_(sociedad) || (!c.empresa && String(c.pais || "").toUpperCase() === pais)) centros[String(c.id)] = String(c.nombre || c.id);
+  });
   return {
     remitente: porTipo("remitente"), asunto: porTipo("asunto"), sedes,
     proveedores, provPorId: Object.fromEntries(proveedores.map(p => [String(p.id), p])),
-    cuentas,
+    cuentas, centros,
   };
+}
+
+// Proveedor por CIF/NIF que figura en la factura (nb_proveedores.cuit), cuando ninguna regla ni remitente lo dio.
+const normCif_ = s => up_(s).replace(/[^A-Z0-9]/g, "");
+function proveedorPorCif_(ctx, cif, imp) {
+  const c = normCif_(cif);
+  if (c.length < 8) return imp;
+  const prov = ctx.proveedores.find(p => String(p.activo) !== "false" && normCif_(p.cuit) === c);
+  if (!prov) return imp;
+  return Object.assign({}, imp, {
+    proveedor_id: String(prov.id), proveedor: String(prov.nombre || ""),
+    cuentaId: imp.cuentaId || String(prov.cuentaDefault || ""), centro: imp.centro || String(prov.ccDefault || ""), por_cif: true,
+  });
 }
 
 // Regla que matchea: la de valor más largo; a igual largo, menor `prioridad`.
@@ -205,8 +231,177 @@ function imputar_(ctx, remitente, asunto) {
 function sedesEnTexto_(ctx, texto) {
   const t = up_(texto);
   const hits = {};
-  for (const [frag, centro] of ctx.sedes) if (frag && t.indexOf(frag) !== -1) hits[centro] = true;
+  for (const [frag, centro] of ctx.sedes) {
+    if (!frag) continue;
+    if (t.indexOf(frag) !== -1) { hits[centro] = true; continue; }
+    // Nº de contrato / CUPS / nº de cliente ("134-31369"): el proveedor lo imprime distinto en cada sitio
+    // ("134031369", "134/31369", "13431369") → grupos de dígitos en orden, separador y ceros opcionales entre ellos.
+    const grupos = frag.match(/\d+/g) || [];
+    if (grupos.join("").length >= 6 && new RegExp("(?:^|\\D)" + grupos.map(g => g.replace(/^0+/, "")).join("\\D{0,3}0*") + "(?!\\d)").test(t)) hits[centro] = true;
+  }
   return Object.keys(hits);
+}
+
+// ── Extracción con Gemini ─────────────────────────────────────────────────────
+// El modelo recibe el PDF entero (lee también escaneados) y devuelve JSON con este esquema. Solo extrae: no decide
+// cuenta ni centro. El diccionario de sedes del prompt son las reglas `sede` del Sheet (fragmento → centro), así
+// que una sede nueva o un nº de contrato nuevo se agregan desde Maestros, no acá.
+
+let ultimoErrorGemini_ = "";
+const geminiActivo_ = () => !!cfg_("GEMINI_KEY", "");
+
+const ESQUEMA_FACTURA = {
+  type: "OBJECT",
+  properties: {
+    tipo_documento: { type: "STRING", enum: ["factura", "factura_rectificativa_o_abono", "recibo", "presupuesto_o_pedido", "albaran", "certificado_o_aviso", "otro"] },
+    emisor_nombre: { type: "STRING" },
+    emisor_cif: { type: "STRING", nullable: true },
+    numero_factura: { type: "STRING", nullable: true },
+    fecha_emision: { type: "STRING", nullable: true, description: "YYYY-MM-DD" },
+    periodo_desde: { type: "STRING", nullable: true, description: "YYYY-MM-DD, inicio del período de servicio facturado, si lo indica" },
+    periodo_hasta: { type: "STRING", nullable: true, description: "YYYY-MM-DD, fin del período de servicio facturado, si lo indica" },
+    fecha_vencimiento: { type: "STRING", nullable: true, description: "YYYY-MM-DD" },
+    moneda: { type: "STRING" },
+    base_imponible: { type: "NUMBER", nullable: true },
+    iva_porcentaje: { type: "NUMBER", nullable: true },
+    iva_importe: { type: "NUMBER", nullable: true },
+    otros_impuestos_o_retenciones: { type: "NUMBER", nullable: true, description: "IRPF, tasas, etc., con signo (retención negativa)" },
+    total: { type: "NUMBER", nullable: true, description: "importe total a pagar" },
+    ya_pagada: { type: "BOOLEAN", nullable: true, description: "true si el documento dice que ya está pagada/cobrada o domiciliada" },
+    concepto: { type: "STRING", description: "qué se factura, en una línea" },
+    sede_texto: { type: "STRING", nullable: true, description: "nombre o dirección del local/gimnasio al que corresponde el servicio, tal como figura" },
+    sede_id: { type: "STRING", nullable: true, description: "id de sede de la lista; null si no se puede determinar" },
+    lineas_por_sede: { type: "ARRAY", nullable: true, description: "si la factura reparte importes entre varias sedes, una entrada por sede con su total con IVA",
+      items: { type: "OBJECT", properties: { sede_id: { type: "STRING", nullable: true }, sede_texto: { type: "STRING" }, total: { type: "NUMBER" } }, required: ["sede_texto", "total"] } },
+    referencias: { type: "ARRAY", items: { type: "STRING" }, description: "nº de contrato, CUPS, póliza, nº de cliente, etc." },
+    confianza: { type: "NUMBER", description: "0 a 1" },
+    dudas: { type: "STRING", nullable: true, description: "qué no quedó claro" },
+  },
+  required: ["tipo_documento", "emisor_nombre", "moneda", "concepto", "confianza", "referencias"],
+};
+
+function promptFactura_(ctx, pistas) {
+  // Diccionario de sedes: centro → fragmentos de las reglas `sede` (direcciones, nombres, nº de contrato).
+  const porCentro = {};
+  ctx.sedes.forEach(([frag, centro]) => { (porCentro[centro] = porCentro[centro] || []).push(frag); });
+  const sedes = Object.keys(porCentro).map(c => c + " = " + (ctx.centros[c] || c) + " (" + porCentro[c].join(", ") + ")");
+  return [
+    "Sos el asistente contable de BIGG, una cadena de gimnasios. Leé el documento adjunto y devolvé los datos en JSON según el esquema.",
+    "- Fechas YYYY-MM-DD. Importes como números con punto decimal, sin símbolo. \"total\" es el importe final a pagar (con IVA); \"base_imponible\" sin impuestos.",
+    "- Si el documento no es una factura (presupuesto, pedido, albarán, certificado, aviso, recibo de cobro), marcá tipo_documento igual.",
+    sedes.length ? "- Sedes (id = nombre (pistas: direcciones, nombres, nº de contrato)): " + sedes.join("; ") + "." : "- No hay lista de sedes: sede_id siempre null.",
+    "- sede_id se elige por la dirección de suministro/entrega/local del servicio o por el nº de contrato, NUNCA por el domicilio fiscal del cliente. Si la factura reparte entre varias sedes, llená lineas_por_sede. Si no se puede saber, null.",
+    "- Si hay período de servicio (consumo del 1 al 31, alquiler de un mes), llená periodo_desde/hasta.",
+    "- numero_factura: exactamente como está impreso en el documento (no el nombre del archivo ni el asunto del mail). Si el documento no lo tiene, null.",
+    "- No inventes: si un dato no está, null.",
+    "Contexto del mail (solo orientativo): asunto \"" + String(pistas.asunto || "") + "\" · archivo \"" + String(pistas.archivo || "") + "\" · remitente " + String(pistas.remitente || ""),
+  ].join("\n");
+}
+
+// Llama a la API. Devuelve la extracción normalizada (ver validarExtraccion_) o null si no hay clave o falló (el
+// motivo queda en ultimoErrorGemini_ y se informa en la corrida; el mail sigue por el camino de patrones).
+function extraerGemini_(ctx, blob, pistas) {
+  const key = cfg_("GEMINI_KEY", "");
+  if (!key) return null;
+  const model = cfg_("GEMINI_MODEL", "gemini-3.1-flash-lite");
+  const body = {
+    contents: [{ parts: [
+      { inlineData: { mimeType: "application/pdf", data: Utilities.base64Encode(blob.getBytes()) } },
+      { text: promptFactura_(ctx, pistas) },
+    ] }],
+    generationConfig: { responseMimeType: "application/json", responseSchema: ESQUEMA_FACTURA, temperature: 0 },
+  };
+  try {
+    const res = UrlFetchApp.fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
+      method: "post", contentType: "application/json", headers: { "x-goog-api-key": key },
+      payload: JSON.stringify(body), muteHttpExceptions: true,
+    });
+    const d = JSON.parse(res.getContentText());
+    if (d.error) throw new Error(d.error.message || JSON.stringify(d.error));
+    const cand = (d.candidates || [])[0];
+    const txt = ((cand && cand.content && cand.content.parts) || []).map(p => p.text || "").join("");
+    if (!txt) throw new Error("respuesta vacía" + (cand && cand.finishReason ? " (" + cand.finishReason + ")" : ""));
+    return validarExtraccion_(ctx, JSON.parse(txt), pistas);
+  } catch (e) {
+    ultimoErrorGemini_ = String(e && e.message || e);
+    return null;
+  }
+}
+
+// Chequeos antes de confiar en el modelo. No descarta: lo que no cierra se parkea igual, con `revisar=` en la
+// nota para que el equipo lo mire (base+IVA ≠ total, sin nº, sin fecha, vto anterior a la emisión, confianza baja).
+const fechaIso_ = s => (/^\d{4}-\d{2}-\d{2}$/.test(String(s || "")) ? String(s) : "");
+const numOrNull_ = v => (v === null || v === undefined || v === "" || isNaN(Number(v)) ? null : round2_(Number(v)));
+function validarExtraccion_(ctx, j, pistas) {
+  const revisar = [];
+  const emision = fechaIso_(j.fecha_emision);
+  let hasta = fechaIso_(j.periodo_hasta), vto = fechaIso_(j.fecha_vencimiento);
+  // Período: vale si termina como mucho 75 días antes de la emisión (más viejo = una línea suelta, no la factura)
+  // y no más de 45 días después (alquiler del mes que empieza).
+  if (hasta && emision) { const d = (new Date(emision + "T00:00:00") - new Date(hasta + "T00:00:00")) / 864e5; if (d > 75 || d < -45) hasta = ""; }
+  if (vto && emision && vto < emision) vto = "";
+  const total = numOrNull_(j.total), base = numOrNull_(j.base_imponible), ivaImp = numOrNull_(j.iva_importe), otros = numOrNull_(j.otros_impuestos_o_retenciones) || 0;
+  let ivaPct = numOrNull_(j.iva_porcentaje);
+  if (ivaPct === null && base > 0 && ivaImp !== null) ivaPct = Math.round(ivaImp / base * 100);
+  if (ivaPct === null) ivaPct = Number(cfg_("IVA_DEFAULT", "21")) || 0;
+  if (total === null || total <= 0) revisar.push("sin_total");
+  else if (base !== null && ivaImp !== null && Math.abs(round2_(base + ivaImp + otros) - total) > 0.05) revisar.push("no_cuadra");
+  // Nº: el del modelo; si no lo dio, los códigos fuertes del asunto/archivo (Disbere, Scentair) como siempre.
+  const nro = String(j.numero_factura || "").trim() || extraerNro_("", pistas.asunto, pistas.archivo);
+  if (!nro) revisar.push("sin_nro");
+  if (!emision) revisar.push("sin_fecha");
+  const conf = Number(j.confianza);
+  if (!isNaN(conf) && conf < 0.6) revisar.push("confianza");
+  const tipo = String(j.tipo_documento || "");
+  if (tipo === "factura_rectificativa_o_abono") revisar.push("abono");
+  const lineas = Array.isArray(j.lineas_por_sede) ? j.lineas_por_sede.map(l => ({ sede_id: String(l.sede_id || ""), sede_texto: String(l.sede_texto || ""), total: numOrNull_(l.total) })).filter(l => l.total !== null) : [];
+  return {
+    fuente: "gemini", tipo, nro, total, base, iva: ivaPct, moneda: String(j.moneda || ""),
+    fechaFactura: emision, fechaServicio: hasta || emision, vto,
+    emisor: String(j.emisor_nombre || ""), cif: String(j.emisor_cif || ""), concepto: String(j.concepto || ""),
+    sedeId: String(j.sede_id || ""), sedeTexto: String(j.sede_texto || ""), refs: Array.isArray(j.referencias) ? j.referencias.map(String) : [],
+    lineas, pagada: j.ya_pagada === true, confianza: isNaN(conf) ? null : conf, dudas: String(j.dudas || ""), revisar, texto: "",
+  };
+}
+
+// Reparto por sede que trae la propia factura (ej. Scentair: una línea por gimnasio) → una línea por centro.
+// Solo si no hay centro fijo por regla, hay 2+ líneas, suman el total y TODAS resuelven a un centro (por las
+// reglas `sede` sobre el texto de la línea, o por la sede elegida por el modelo). Si no, se parkea entera.
+function lineasPorSede_(ctx, ex, centroFijo) {
+  const ls = ex.lineas || [];
+  if (centroFijo || ls.length < 2 || ex.total === null) return [];
+  const suma = ls.reduce((a, l) => a + l.total, 0);
+  if (Math.abs(round2_(suma) - ex.total) > 0.05) return [];
+  const out = [];
+  for (const l of ls) {
+    const hits = sedesEnTexto_(ctx, l.sede_texto);
+    const c = hits.length === 1 ? hits[0] : (l.sede_id && ctx.centros[l.sede_id] ? l.sede_id : "");
+    if (!c) return [];
+    out.push({ centro: c, total: round2_(l.total) });
+  }
+  return out;
+}
+
+// Fallback: extracción por patrones sobre el texto del PDF (Drive → Doc) y el cuerpo del mail. Misma salida que Gemini.
+function extraerPatrones_(src, cuerpo, asunto, totalCuerpoFuerte, totalCuerpo, fechaMail) {
+  if (src.texto === null) src.texto = textoPdf_(src.blob);
+  const nro = extraerNro_(src.texto || cuerpo, asunto, src.archivo);
+  // Total: clave inequívoca en el PDF y/o en el cuerpo del mail (si hay dos, la mayor: la menor suele ser un
+  // subtotal) → "Total" genérico del PDF → del cuerpo.
+  const totalPdfFuerte = src.texto ? totalFuerte_(src.texto) : null;
+  const totalPdfGen = src.texto ? totalGenerico_(src.texto) : null;
+  const total = (totalPdfFuerte !== null || totalCuerpoFuerte !== null) ? Math.max(totalPdfFuerte || 0, totalCuerpoFuerte || 0)
+    : totalPdfGen !== null ? totalPdfGen : totalCuerpo;
+  const fe = extraerFechas_(src.texto || cuerpo, fechaMail);
+  const ex = {
+    fuente: "patrones", tipo: "", nro, total, base: null, iva: extraerIva_(src.texto || cuerpo), moneda: "",
+    fechaFactura: fe.fechaFactura, fechaServicio: fe.fechaServicio, vto: fe.vto || "",
+    emisor: "", cif: "", concepto: "", sedeId: "", sedeTexto: "", refs: [], lineas: [], pagada: false, confianza: null, dudas: "",
+    revisar: total === null ? ["sin_total"] : [], texto: (src.texto || "") + "\n" + cuerpo,
+  };
+  // Diagnóstico para el simulacro: si faltó el total o la fecha salió del mail (no del PDF), un pedazo del texto.
+  if (total === null || fe.fechaFactura === fmtFecha_(fechaMail)) ex.diag = plano_(src.texto || "").replace(/\n+/g, " ⏎ ").slice(0, 500);
+  return ex;
 }
 
 // ── Texto del PDF (Drive API: conversión a Google Doc temporal, lee la capa de texto; OCR si es imagen) ──
@@ -360,9 +555,11 @@ function primeraFechaRazonable_(t, fechaMail) {
 function extraerFechas_(texto, fechaMail) {
   const t = plano_(texto);
   const fFact = fecha_((/Fecha\s*(?:de\s+)?(?:la\s+)?(?:factura|emisi[oó]n|expedici[oó]n)\s*[:\s]*([^\n]{6,30})/i.exec(t) || [])[1])
+             || fecha_((/Fecha\s*(?:de\s+)?(?:la\s+)?(?:factura|emisi[oó]n)\s*:?[\s\S]{0,80}?(\d{1,2}[\/\.\-]\d{1,2}[\/\.\-]\d{2,4}|\d{1,2} de \w+ de \d{4})/i.exec(t) || [])[1])   // rótulo y valor en líneas distintas (PDF a columnas)
              || fecha_((/Invoice\s+Date\s*[:\s]*([^\n]{6,20})/i.exec(t) || [])[1])
              || fecha_((/(?:^|\n)\s*Fecha\s*[:\s]+([^\n]{6,20})/i.exec(t) || [])[1])
-             || fecha_((/,\s*(?:el|a)\s+(\d{1,2}\/\d{1,2}\/\d{4})/i.exec(t) || [])[1])          // "Las Rozas, el 01/11/2026"
+             // "Las Rozas (Madrid), el 01/11/2026" · "Madrid, 06.11.2026": ciudad + coma + fecha es la fecha de emisión
+             || fecha_((/\b[A-ZÁÉÍÓÚ][a-záéíóúñ]{2,20}(?:\s\([^)]{2,20}\))?,\s*(?:el\s+|a\s+)?(\d{1,2}[\.\/]\d{1,2}[\.\/]\d{4})/.exec(t) || [])[1])
              || fecha_((/\bFecha\b[^\n]*\n[^\n]*?(\d{1,2}[\/\.\-]\d{1,2}[\/\.\-]\d{2,4})/i.exec(t) || [])[1])   // cabecera "Fecha | …" y valor abajo
              || primeraFechaRazonable_(t, fechaMail)
              || fmtFecha_(fechaMail);
@@ -440,14 +637,16 @@ function leerBuzon_(opts) {
     return "";
   };
 
-  const res = { ok: true, buzon, sociedad, desde, revisados: 0, parkeadas: [], ya_cargadas: [], viejas: [], sin_regla: 0, descartados: 0, lotes: [], errores: [], parcial: false, dry };
+  const res = { ok: true, buzon, sociedad, desde, revisados: 0, parkeadas: [], ya_cargadas: [], ya_parkeadas: [], viejas: [], sin_regla: 0, descartados: 0, lotes: [], errores: [], parcial: false, dry,
+    gemini: { activo: geminiActivo_(), gemini: 0, fallback: 0 } };   // PDFs leídos por el modelo / que cayeron a patrones
   const filas = [];
-  ultimoErrorPdf_ = "";
+  ultimoErrorPdf_ = ""; ultimoErrorGemini_ = "";
   const vistos = {};                                              // PDFs ya tomados en esta corrida (proveedor|archivo|bytes)
   const maxMs = dry ? 300000 : MAX_MS_POR_CORRIDA;                // desde el editor (simulacro) hay 6 min; desde el botón, 45 s
   const [y, mo, d] = desde.split("-");
   // En un simulacro, la propiedad SIMULACRO_FILTRO acota la búsqueda (ej. "from:grupovoldis.es") para probar un proveedor.
   const filtro = dry ? cfg_("SIMULACRO_FILTRO", "") : "";
+  const ignorarMemo = dry && !!filtro;
   const query = "after:" + y + "/" + mo + "/" + d + " -in:sent -in:trash -in:spam -in:draft" + (filtro ? " " + filtro : "");
   const desdeTs = new Date(desde + "T00:00:00");
 
@@ -492,7 +691,8 @@ function leerBuzon_(opts) {
         if (Date.now() - t0 > maxMs) { res.parcial = true; seguir = false; break; }
         const mailId = msg.getId();
         if (msg.getDate() < desdeTs || msg.isInTrash()) continue;
-        if (memo[mailId] && !(memo[mailId] === "descartado" && !dry && !tieneDescartado(th))) continue;
+        // Simulacro acotado (SIMULACRO_FILTRO): se ignora el memo para poder re-leer mails ya procesados y comparar.
+        if (memo[mailId] && !ignorarMemo && !(memo[mailId] === "descartado" && !dry && !tieneDescartado(th))) continue;
         res.revisados++;
         const b = bucketDe(msg.getFrom(), msg.getDate());
         if (porBucket[b] > maxRafaga) {
@@ -502,7 +702,7 @@ function leerBuzon_(opts) {
           continue;
         }
         try {
-          const r = procesarMail_(ctx, msg, th, { sociedad, moneda, buzon, ids, yaCargada, yaParkeada, vistos, corte });
+          const r = procesarMail_(ctx, msg, th, { sociedad, moneda, buzon, ids, yaCargada, yaParkeada, vistos, corte, stats: res.gemini });
           if (r.descartado) { memo[mailId] = "descartado"; res.descartados++; if (!dry) etiquetarHilo_(th, "descartado", etiquetados); continue; }
           // Lote (muchos PDF en un mail: históricos, regularizaciones): no se parkea, se avisa para mirarlo a mano.
           if (r.lote) { res.lotes.push({ mail: msg.getSubject(), remitente: r.remitente, pdfs: r.lote, fecha: fmtFecha_(msg.getDate()) }); memo[mailId] = "lote"; if (!dry) etiquetarHilo_(th, "lote", etiquetados); continue; }
@@ -510,10 +710,14 @@ function leerBuzon_(opts) {
           for (const f of r.facturas) {
             if (f.vieja) { res.viejas.push({ proveedor: f.proveedor, nro: f.nro, total: f.total, fecha: f.vieja, archivo: f.archivo }); continue; }
             if (f.ya_cargada) { res.ya_cargadas.push({ proveedor: f.proveedor, nro: f.nro, total: f.total, egreso: f.ya_cargada }); continue; }
-            if (f.duplicado) continue;    // ya parkeada antes (candado 1)
+            if (f.duplicado) {            // ya parkeada antes (candado 1); en un simulacro se muestra igual lo extraído, para comparar
+              if (dry) res.ya_parkeadas.push({ proveedor: f.proveedor || f.remitente, nro: f.nro, total: f.total, centro: f.centro, archivo: f.archivo, fuente: f.fuente, revisar: f.revisar && f.revisar.length ? f.revisar.join("|") : "", diag: f.diag });
+              continue;
+            }
             if (!f.proveedor_id) res.sin_regla++;
-            res.parkeadas.push({ proveedor: f.proveedor || f.remitente, nro: f.nro, total: f.total, centro: f.centro, archivo: f.archivo, sin_regla: !f.proveedor_id, diag: dry ? f.diag : undefined });
-            if (!dry) filas.push(f.fila); else todoResuelto = false;
+            res.parkeadas.push({ proveedor: f.proveedor || f.remitente, nro: f.nro, total: f.total, centro: f.centro, archivo: f.archivo, sin_regla: !f.proveedor_id,
+              fuente: f.fuente, revisar: f.revisar && f.revisar.length ? f.revisar.join("|") : "", diag: dry ? f.diag : undefined });
+            if (!dry) f.filas.forEach(x => filas.push(x)); else todoResuelto = false;
           }
           if (r.facturas.length) hilosConFactura[th.getId()] = th;   // tuvo factura (parkeada, ya cargada o vieja)
           if (todoResuelto && !dry) memo[mailId] = "ok";
@@ -537,6 +741,7 @@ function leerBuzon_(opts) {
     if (res.parcial) props.setProperty("CURSOR", String(start)); else { props.deleteProperty("CURSOR"); props.setProperty("COMPLETA_EN", new Date().toISOString()); }
   }
   if (ultimoErrorPdf_) res.error_pdf = "No se pudo leer el texto de los PDF: " + ultimoErrorPdf_;
+  if (ultimoErrorGemini_) res.error_gemini = "Gemini falló en algún PDF (se usaron patrones): " + ultimoErrorGemini_;
   res.duracion_ms = Date.now() - t0;
   props.setProperty("ULTIMA", JSON.stringify({ cuando: new Date().toISOString(), desde, parcial: res.parcial, parkeadas: res.parkeadas.length, ya_cargadas: res.ya_cargadas.length, revisados: res.revisados }));
   return res;
@@ -575,55 +780,68 @@ function procesarMail_(ctx, msg, th, env) {
 
   const facturas = [];
   const fuentes = pdfs.length ? pdfs.map((a, k) => ({ k, archivo: a.getName(), bytes: a.getSize(), texto: null, blob: a })) : [{ k: 0, archivo: "", bytes: 0, texto: "" }];
+  let noFactura = 0;
   fuentes.forEach(src => {
     // Mismo PDF (proveedor + nombre + tamaño) ya visto en esta corrida (ej. un hilo con el mail repetido) → no se duplica.
     const firma = (imp.proveedor_id || remitente) + "|" + src.archivo + "|" + src.bytes;
     if (src.archivo && env.vistos[firma]) return;
     env.vistos[firma] = true;
-    if (src.texto === null) src.texto = textoPdf_(src.blob);
     const id_comp = "COR-" + msg.getId() + (src.k ? "-" + src.k : "");
-    const textoTot = (src.texto || "") + "\n" + cuerpo;
-    const nro   = extraerNro_(src.texto || cuerpo, asunto, src.archivo);
-    // Total: clave inequívoca en el PDF y/o en el cuerpo del mail (si hay dos, la mayor: la menor suele ser un
-    // subtotal) → "Total" genérico del PDF → del cuerpo.
-    const totalPdfFuerte = src.texto ? totalFuerte_(src.texto) : null;
-    const totalPdfGen = src.texto ? totalGenerico_(src.texto) : null;
-    const total = (totalPdfFuerte !== null || totalCuerpoFuerte !== null) ? Math.max(totalPdfFuerte || 0, totalCuerpoFuerte || 0)
-      : totalPdfGen !== null ? totalPdfGen : totalCuerpo;
-    const fe    = extraerFechas_(src.texto || cuerpo, msg.getDate());
-    const iva   = extraerIva_(src.texto || cuerpo);
-    const sedes = imp.centro ? [imp.centro] : sedesEnTexto_(ctx, asunto + "\n" + textoTot);
-    const centro = sedes.length === 1 ? sedes[0] : "";
-    const f = { archivo: src.archivo, remitente, proveedor_id: imp.proveedor_id, proveedor: imp.proveedor, nro, total, centro, duplicado: false, ya_cargada: "", vieja: "" };
-    // Diagnóstico para el simulacro: si faltó el total o la fecha salió del mail (no del PDF), un pedazo del texto.
-    if (total === null || fe.fechaFactura === fmtFecha_(msg.getDate())) f.diag = plano_(src.texto || "").replace(/\n+/g, " ⏎ ").slice(0, 500);
-    if (fe.fechaFactura && new Date(fe.fechaFactura + "T00:00:00") < limiteVieja) { f.vieja = fe.fechaFactura; facturas.push(f); return; }   // histórico reenviado
-    if (env.ids[id_comp]) { f.duplicado = true; facturas.push(f); return; }                     // candado 1
-    if (env.yaParkeada(imp, nro, src.archivo)) { f.duplicado = true; facturas.push(f); return; } // mismo nº o mismo PDF ya en la bandeja (otro mail del hilo)
-    f.ya_cargada = env.yaCargada(imp, nro, total, (fe.fechaServicio || "").slice(0, 7));          // candados 2 y 3
+    // 1) Datos de la factura: Gemini lee el PDF entero; sin clave o si falla, patrones (texto del PDF + cuerpo).
+    let ex = src.blob ? extraerGemini_(ctx, src.blob, { asunto, archivo: src.archivo, remitente }) : null;
+    if (ex) env.stats.gemini++;
+    else { if (src.blob && geminiActivo_()) env.stats.fallback++; ex = extraerPatrones_(src, cuerpo, asunto, totalCuerpoFuerte, totalCuerpo, msg.getDate()); }
+    // 2) Proveedor: regla o remitente (imputar_) → si no, por el CIF que figura en el PDF.
+    const impS = (!imp.proveedor_id && ex.cif) ? proveedorPorCif_(ctx, ex.cif, imp) : imp;
+    // Lo que el modelo dice que NO es factura (pedido, albarán, presupuesto, certificado): de un remitente sin regla
+    // se descarta; de un proveedor conocido se parkea marcado para revisar (una duda del modelo nunca pierde una factura).
+    if (ex.tipo && !/^factura/.test(ex.tipo)) { if (!impS.proveedor_id) { noFactura++; return; } ex.revisar.push("tipo:" + ex.tipo); }
+    const nro = ex.nro, total = ex.total, iva = ex.iva;
+    // 3) Sede: centro de la regla → fragmentos de sede del Sheet en asunto, cuerpo, dirección/referencias del PDF
+    //    (patrones: texto entero del PDF) → sede elegida por el modelo (validada contra los centros de la sociedad).
+    const textoSede = [asunto, cuerpo.slice(0, 3000), ex.sedeTexto, ex.refs.join("\n"), ex.lineas.map(l => l.sede_texto).join("\n"), ex.texto].join("\n");
+    const sedes = impS.centro ? [impS.centro] : sedesEnTexto_(ctx, textoSede);
+    let centro = sedes.length === 1 ? sedes[0] : "";
+    if (!centro && !sedes.length && ex.sedeId && ctx.centros[ex.sedeId]) centro = ex.sedeId;
+    const lineas = lineasPorSede_(ctx, ex, impS.centro);          // reparto por sede que trae la propia factura
+    const f = { archivo: src.archivo, remitente, proveedor_id: impS.proveedor_id, proveedor: impS.proveedor || ex.emisor, nro, total,
+      centro: lineas.length ? lineas.map(l => l.centro).join("+") : centro, fuente: ex.fuente, revisar: ex.revisar, duplicado: false, ya_cargada: "", vieja: "" };
+    if (ex.diag) f.diag = ex.diag;
+    else if (ex.revisar.length) f.diag = "revisar " + ex.revisar.join("|") + (ex.dudas ? " · " + ex.dudas : "") + " · conf " + ex.confianza;
+    if (ex.fechaFactura && new Date(ex.fechaFactura + "T00:00:00") < limiteVieja) { f.vieja = ex.fechaFactura; facturas.push(f); return; }   // histórico reenviado
+    if (env.ids[id_comp]) { f.duplicado = true; facturas.push(f); return; }                      // candado 1
+    if (env.yaParkeada(impS, nro, src.archivo)) { f.duplicado = true; facturas.push(f); return; } // mismo nº o mismo PDF ya en la bandeja (otro mail del hilo)
+    f.ya_cargada = env.yaCargada(impS, nro, total, (ex.fechaServicio || "").slice(0, 7));          // candados 2 y 3
     if (f.ya_cargada) { facturas.push(f); return; }
 
-    const t = total !== null ? total : 0;
-    const sub = iva > 0 ? round2_(t / (1 + iva / 100)) : t;
     const notas = [
       "mail_ref=" + th.getId(), "fecha_correo=" + fmtFecha_(msg.getDate()), "remitente=" + remitente, "buzon=" + env.buzon,
-      src.archivo ? "archivo=" + src.archivo.replace(/[;=]/g, "_") : "", imp.regla_id ? "regla=" + imp.regla_id : "",
-      !imp.proveedor_id ? "sin_regla=1" : "", sedes.length > 1 ? "sedes=" + sedes.join("|") : "", total === null ? "sin_total=1" : "",
+      src.archivo ? "archivo=" + src.archivo.replace(/[;=]/g, "_") : "", impS.regla_id ? "regla=" + impS.regla_id : "", impS.por_cif ? "por_cif=1" : "",
+      !impS.proveedor_id ? "sin_regla=1" : "", sedes.length > 1 && !lineas.length ? "sedes=" + sedes.join("|") : "", total === null ? "sin_total=1" : "",
+      ex.fuente === "gemini" ? "fuente=gemini" : "", ex.revisar.length ? "revisar=" + ex.revisar.join("|").replace(/[;=]/g, "_") : "", ex.pagada ? "pagada=1" : "",
     ].filter(Boolean).join(";");
-    f.fila = {
-      id: id_comp + "-L01", id_comp, sociedad: env.sociedad,
-      fecha: fe.fechaServicio || fe.fechaFactura || "", vto: fe.vto || "",
+    const base = {
+      id_comp, sociedad: env.sociedad,
+      fecha: ex.fechaServicio || ex.fechaFactura || "", vto: ex.vto || "",
       subtipo: "EGRESO_BORRADOR",
-      contraparte_id: imp.proveedor_id, contraparte_nombre: imp.proveedor || remitente,
-      cuenta_contable: imp.cuentaId ? (ctx.cuentas[imp.cuentaId] || imp.cuentaId) : "", cuenta_contable_id: imp.cuentaId,
-      moneda: env.moneda, centro_costo: centro,
-      subtotal: sub, iva_rate: iva, iva_monto: round2_(t - sub), total: t,
-      nro_comp: nro, fecha_fiscal: fe.fechaFactura || "",
+      contraparte_id: impS.proveedor_id, contraparte_nombre: impS.proveedor || ex.emisor || remitente,
+      cuenta_contable: impS.cuentaId ? (ctx.cuentas[impS.cuentaId] || impS.cuentaId) : "", cuenta_contable_id: impS.cuentaId,
+      moneda: env.moneda, iva_rate: iva,
+      nro_comp: nro, fecha_fiscal: ex.fechaFactura || "",
       nota: notas, registrado_por: "lector-correo", created_at: new Date().toISOString(),
     };
+    // Una línea por centro (reparto que trae la factura) o una sola línea. Subtotal: la base imponible que dice la
+    // factura si cuadra con el total (IVA mixto 10/21, retenciones); si no, total / (1 + IVA).
+    const linea = (i, cc, t, sub) => Object.assign({ id: id_comp + "-L" + ("0" + i).slice(-2), centro_costo: cc, subtotal: sub, iva_monto: round2_(t - sub), total: t }, base);
+    const subDe = t => (iva > 0 ? round2_(t / (1 + iva / 100)) : t);
+    const baseOk = total !== null && ex.base !== null && ex.base > 0 && ex.base <= total && ex.revisar.indexOf("no_cuadra") === -1;
+    f.filas = lineas.length ? lineas.map((l, i) => linea(i + 1, l.centro, l.total, baseOk ? round2_(l.total * ex.base / total) : subDe(l.total)))
+      : [linea(1, centro, total !== null ? total : 0, baseOk ? ex.base : subDe(total !== null ? total : 0))];
     env.ids[id_comp] = true;
     facturas.push(f);
   });
+  // Todos los PDF del mail eran "no factura" de un remitente desconocido → el mail se descarta (como un aviso cualquiera).
+  if (!facturas.length && noFactura && noFactura === fuentes.length) return { descartado: true };
   return { facturas };
 }
 
@@ -666,7 +884,22 @@ function marcar_(ref, estado) {
   return { ok: true, etiqueta: nombre, asunto: th.getFirstMessageSubject() };
 }
 
+// ── Vista previa: devuelve el PDF de una factura parkeada (el mail es la única copia; no se guarda en Drive) ──
+// `mail` = id del mensaje (el id_comp del borrador es COR-<mail>[-k]); `archivo` = nombre del adjunto (nota archivo=).
+function pdfDe_(mailId, archivo) {
+  let msg = null;
+  try { msg = GmailApp.getMessageById(mailId); } catch (e) { msg = null; }
+  if (!msg) throw new Error("No se encontró el mail " + mailId + " en " + cfg_("BUZON", ""));
+  const quiero = String(archivo || "").replace(/[;=]/g, "_");
+  const pdfs = msg.getAttachments({ includeInlineImages: false, includeAttachments: true })
+    .filter(a => /pdf/i.test(a.getContentType()) || /\.pdf$/i.test(a.getName()));
+  const a = pdfs.find(x => x.getName().replace(/[;=]/g, "_") === quiero) || (pdfs.length === 1 ? pdfs[0] : null);
+  if (!a) throw new Error("El mail no tiene el PDF " + (archivo || "") + " (adjuntos: " + pdfs.map(x => x.getName()).join(", ") + ")");
+  return { ok: true, nombre: a.getName(), mime: "application/pdf", bytes: a.getSize(), base64: Utilities.base64Encode(a.getBytes()) };
+}
+
 // GET ?accion=leer[&desde=YYYY-MM-DD][&dry=1]  → corre el lector.   ?accion=estado → config y última corrida.
+// ?accion=pdf&mail=<id de mensaje>&archivo=<nombre> → el PDF en base64 (vista previa desde la bandeja).
 // ?accion=reset → olvida el memo (vuelve a mirar todo desde la fecha de corte; los parkeados no se duplican).
 // ?accion=marcar&ref=<id de hilo>&estado=contabilizada|ignorada → leído + etiqueta Numbers/… en Gmail.
 function doGet(e) {
@@ -675,9 +908,11 @@ function doGet(e) {
     const q = e.parameter || {};
     if (q.token !== cfg_("NUMBERS_TOKEN")) return json_({ error: "unauthorized" });
     if (q.accion === "marcar") return json_(marcar_(q.ref, q.estado));
+    if (q.accion === "pdf") return json_(pdfDe_(q.mail, q.archivo));
     if (q.accion === "retro") { etiquetarRetroactivo(); return json_({ ok: true }); }
     if (q.accion === "estado") {
       return json_({ ok: true, buzon: cfg_("BUZON", ""), sociedad: cfg_("SOCIEDAD"), moneda: cfg_("MONEDA", "EUR"), corte: cfg_("FECHA_CORTE", ""),
+        gemini: geminiActivo_() ? cfg_("GEMINI_MODEL", "gemini-3.1-flash-lite") : "", version: 6,
         ultima: JSON.parse(PropertiesService.getScriptProperties().getProperty("ULTIMA") || "null"), memo: Object.keys(memo_()).length });
     }
     if (q.accion === "reset") {
@@ -710,6 +945,7 @@ function instalar() {
   console.log("Reglas del lector en el Sheet: remitente " + ctx.remitente.length + " · asunto " + ctx.asunto.length + " · sede " + ctx.sedes.length);
   console.log("Hilos en la bandeja (7 días): " + GmailApp.search("newer_than:7d", 0, 50).length);
   console.log("Buzón: " + props.getProperty("BUZON") + " → sociedad " + props.getProperty("SOCIEDAD"));
+  console.log("Centros de la sociedad: " + Object.keys(ctx.centros).length + " · Gemini: " + (geminiActivo_() ? cfg_("GEMINI_MODEL", "gemini-3.1-flash-lite") : "SIN CLAVE (se usan patrones)"));
 }
 
 // Etiqueta en Gmail, de una vez, los mails que el lector YA descartó o apartó como lote en corridas anteriores
@@ -747,13 +983,21 @@ function simulacro() {
   console.log("RESUMEN: revisados " + r.revisados + " · parkearía " + r.parkeadas.length + " (sin total " + r.parkeadas.filter(p => p.total === null).length +
     ", sin centro " + r.parkeadas.filter(p => !p.centro).length + ") · ya cargadas " + r.ya_cargadas.length + " · sin regla " + r.sin_regla +
     " · descartados " + r.descartados + " · lotes " + r.lotes.length + " · viejas " + r.viejas.length + " · errores " + r.errores.length + (r.parcial ? " · PARCIAL" : "") +
-    (r.error_pdf ? "\nPDF: " + r.error_pdf : "\nPDF: texto leído OK"));
+    "\nGemini: " + (r.gemini.activo ? r.gemini.gemini + " PDF leídos por el modelo · " + r.gemini.fallback + " a patrones" : "sin clave (patrones)") + (r.error_gemini ? " · " + r.error_gemini : "") +
+    (r.error_pdf ? "\nPDF: " + r.error_pdf : ""));
+  const rev = r.parkeadas.filter(p => p.revisar);
+  if (rev.length) console.log("PARA REVISAR: " + rev.map(p => p.proveedor + " " + (p.nro || "(sin nro)") + " → " + p.revisar).join(" | "));
   if (r.lotes.length) console.log("LOTES (no se parkean): " + r.lotes.map(l => l.remitente + " · " + l.mail + " (" + l.pdfs.length + " PDF)").join(" | "));
   if (r.viejas.length) console.log("VIEJAS (fecha de factura muy anterior al corte, no se parkean): " + r.viejas.map(v => v.proveedor + " " + v.nro + " " + v.fecha).join(" | "));
   if (r.ya_cargadas.length) console.log("YA CARGADAS: " + r.ya_cargadas.map(v => v.proveedor + " " + v.nro + " → " + v.egreso).join(" | "));
+  // Con SIMULACRO_FILTRO se re-leen mails ya procesados: lo que ya está en la bandeja se muestra con lo que el modelo
+  // extrajo ahora (proveedor · nº · total · centro · fuente · revisar), para comparar contra lo parkeado antes.
+  if (r.ya_parkeadas.length) console.log("YA EN BANDEJA (re-leídas para comparar):\n" + r.ya_parkeadas.map(p =>
+    [p.proveedor, p.nro || "(sin nro)", p.total === null ? "(sin total)" : p.total, p.centro || "(sin centro)", p.fuente, p.revisar || "", p.archivo].join(" · ")).join("\n"));
   console.log(r.parkeadas.map(p => [p.proveedor, p.nro || "(sin nro)", p.total === null ? "(sin total)" : p.total, p.centro || "(sin centro)", p.archivo].join(" · ")).join("\n"));
   if (r.errores.length) console.log("ERRORES: " + JSON.stringify(r.errores));
-  // Texto de los PDF que quedaron sin total o sin fecha propia (solo los 6 primeros distintos por proveedor), para afinar la extracción.
+  // Diagnóstico de lo que quedó para revisar (solo los 6 primeros distintos por proveedor): dudas del modelo, o el
+  // texto del PDF cuando fue por patrones y faltó el total o la fecha.
   const vistos = {}; const diag = r.parkeadas.filter(p => p.diag && !vistos[p.proveedor] && (vistos[p.proveedor] = true)).slice(0, 6);
-  if (diag.length) console.log("DIAGNÓSTICO (texto del PDF):\n" + diag.map(p => "— " + p.proveedor + " · " + p.archivo + "\n" + p.diag).join("\n"));
+  if (diag.length) console.log("DIAGNÓSTICO:\n" + diag.map(p => "— " + p.proveedor + " · " + p.archivo + "\n" + p.diag).join("\n"));
 }
