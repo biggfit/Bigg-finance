@@ -17,6 +17,7 @@ No hay delegación de casillas, ni reenvíos, ni cron. Lo único que el script e
 | `Numbers/Ignorada` | la bandeja, al Ignorar (y marca leído) | se decidió no contabilizar |
 | `Numbers/Descartado` | el lector, en cada corrida | no es una factura (newsletter, aviso, pedido, catálogo) |
 | `Numbers/Lote` | el lector, en cada corrida | ráfaga o lote de históricos, no se parkea |
+| `Numbers/Respondida` | la bandeja, al enviar el acuse de recibo | se le respondió al proveedor desde la casilla |
 | sin etiqueta | — | pendiente: está en la bandeja de Numbers esperando decisión |
 
 Así en Gmail se filtra por etiqueta (`label:Numbers-Descartado`) y se borra o archiva en bloque lo que no sirve;
@@ -140,6 +141,12 @@ descartadas; el lector la quita en cada corrida y `etiquetarRetroactivo` tambié
 - `?accion=estado` (desde `/api/lector?buzon=es&accion=estado&token=…`) muestra la configuración y la última corrida.
 - `?accion=reset` hace que vuelva a mirar todo desde la fecha de corte; lo ya parkeado no se duplica (candado 1).
 - `?accion=marcar&ref=<hilo>&estado=contabilizada|ignorada` es lo que llama la bandeja al decidir; se puede usar a mano.
+- **Contabilizar y responder** (menú ⋯ de la bandeja): contabiliza igual que Contabilizar y abre un modal con el acuse
+  de recibo precargado (destinatario = remitente real del mail; texto con nº, importe y vencimiento), editable. Al
+  confirmar, `?accion=responder&ref=<hilo>&para=<mail>&texto=…`: el script responde desde la casilla al último mensaje
+  del proveedor en el hilo (si llegó reenviado por alguien de BIGG, manda un mail nuevo "Re: <asunto>") y etiqueta
+  `Numbers/Respondida`. Nunca se manda nada sin que una persona confirme. El nombre del remitente sale de la propiedad
+  `NOMBRE_REMITENTE` (`Administración BIGG España`). Ojo con remitentes máquina (noreply, emailpdf.es): cambiá el "Para".
 - Simulacro acotado: propiedad `SIMULACRO_FILTRO` (ej. `from:grupovoldis.es`, `newer_than:3d has:attachment`); solo
   afecta al simulacro. Con filtro, el simulacro **ignora el memo**: re-lee mails ya procesados y lista "YA EN BANDEJA"
   con lo que el modelo extrajo ahora, para comparar contra lo parkeado. Sin filtro, solo mira mails nuevos.

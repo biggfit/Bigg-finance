@@ -54,6 +54,7 @@
 //   MAX_PDFS_POR_MAIL  más PDF que esto en un mail = lote (históricos, regularizaciones): se reporta, no se parkea ("6")
 //   GEMINI_KEY         clave de la API de Gemini (Google AI Studio). Sin clave → extracción por patrones.
 //   GEMINI_MODEL       modelo ("gemini-3.1-flash-lite"). Se cambia acá, sin tocar el código.
+//   NOMBRE_REMITENTE   nombre con el que salen los acuses de recibo ("Administración BIGG España").
 // Servicio avanzado requerido: Drive API (v2/v3) — solo para el fallback por patrones (texto del PDF vía Doc).
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -855,7 +856,7 @@ function json_(obj) { return ContentService.createTextOutput(JSON.stringify(obj)
 //   Lote → ráfagas y lotes de históricos que no se parkean.
 //   Sin etiqueta = pendiente (está en la bandeja de Numbers esperando decisión). Borrar lo descartado lo decide
 //   una persona en Gmail, filtrando por etiqueta.
-const ETIQUETAS = { contabilizada: "Numbers/Contabilizada", ignorada: "Numbers/Ignorada", descartado: "Numbers/Descartado", lote: "Numbers/Lote" };
+const ETIQUETAS = { contabilizada: "Numbers/Contabilizada", ignorada: "Numbers/Ignorada", descartado: "Numbers/Descartado", lote: "Numbers/Lote", respondida: "Numbers/Respondida" };
 
 const _labelCache = {};
 function etiqueta_(nombre) {
@@ -878,10 +879,32 @@ function marcar_(ref, estado) {
   try { th = GmailApp.getThreadById(ref); } catch (e) { th = null; }
   if (!th) { try { th = GmailApp.getMessageById(ref).getThread(); } catch (e) { th = null; } }
   if (!th) throw new Error("No se encontró el mail " + ref + " en " + cfg_("BUZON", ""));
-  Object.keys(ETIQUETAS).forEach(k => { if (k !== estado) { const l = GmailApp.getUserLabelByName(ETIQUETAS[k]); if (l) th.removeLabel(l); } });
+  Object.keys(ETIQUETAS).forEach(k => { if (k !== estado && k !== "respondida") { const l = GmailApp.getUserLabelByName(ETIQUETAS[k]); if (l) th.removeLabel(l); } });
   th.addLabel(etiqueta_(nombre));
   th.markRead();
   return { ok: true, etiqueta: nombre, asunto: th.getFirstMessageSubject() };
+}
+
+// ── Acuse de recibo: responde el hilo de la factura desde esta casilla ("Contabilizar y responder" en la bandeja). ──
+// `ref` = id del hilo (mail_ref), `para` = destinatario (el remitente real de la nota, editable en el modal),
+// `texto` = cuerpo ya confirmado por una persona. Responde al último mensaje del hilo que mandó `para` (queda en
+// el mismo hilo); si en el hilo no hay ningún mensaje suyo (llegó reenviado por alguien de BIGG), manda un mail
+// nuevo "Re: <asunto>". Deja la etiqueta Numbers/Respondida. Nunca manda nada sin que la bandeja lo pida.
+function responder_(ref, para, texto) {
+  para = lc_(para).trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(para)) throw new Error("Destinatario inválido: " + para);
+  if (!String(texto || "").trim()) throw new Error("El texto de la respuesta está vacío");
+  let th = null;
+  try { th = GmailApp.getThreadById(ref); } catch (e) { th = null; }
+  if (!th) { try { th = GmailApp.getMessageById(ref).getThread(); } catch (e) { th = null; } }
+  if (!th) throw new Error("No se encontró el mail " + ref + " en " + cfg_("BUZON", ""));
+  const asunto = th.getFirstMessageSubject();
+  const opciones = { name: cfg_("NOMBRE_REMITENTE", "Administración BIGG España") };
+  const suyo = th.getMessages().filter(m => mailDe_(m.getFrom()) === para).pop();
+  if (suyo) suyo.reply(texto, opciones);
+  else GmailApp.sendEmail(para, "Re: " + asuntoLimpio_(asunto), texto, opciones);
+  try { th.addLabel(etiqueta_(ETIQUETAS.respondida)); } catch (e) { /* sin etiqueta no pasa nada */ }
+  return { ok: true, para, asunto, en_hilo: !!suyo };
 }
 
 // ── Vista previa: devuelve el PDF de una factura parkeada (el mail es la única copia; no se guarda en Drive) ──
@@ -902,12 +925,14 @@ function pdfDe_(mailId, archivo) {
 // ?accion=pdf&mail=<id de mensaje>&archivo=<nombre> → el PDF en base64 (vista previa desde la bandeja).
 // ?accion=reset → olvida el memo (vuelve a mirar todo desde la fecha de corte; los parkeados no se duplican).
 // ?accion=marcar&ref=<id de hilo>&estado=contabilizada|ignorada → leído + etiqueta Numbers/… en Gmail.
+// ?accion=responder&ref=<id de hilo>&para=<mail>&texto=<cuerpo> → acuse de recibo en el hilo (lo confirma una persona).
 function doGet(e) {
   const lock = LockService.getScriptLock();
   try {
     const q = e.parameter || {};
     if (q.token !== cfg_("NUMBERS_TOKEN")) return json_({ error: "unauthorized" });
     if (q.accion === "marcar") return json_(marcar_(q.ref, q.estado));
+    if (q.accion === "responder") return json_(responder_(q.ref, q.para, q.texto));
     if (q.accion === "pdf") return json_(pdfDe_(q.mail, q.archivo));
     if (q.accion === "retro") { etiquetarRetroactivo(); return json_({ ok: true }); }
     if (q.accion === "estado") {

@@ -48,7 +48,7 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
   const [vto, setVto] = useState(initialData?.vto ?? addDays(todayISO(), 30));
   const [nroComp, setNroComp] = useState(initialData?.nroComp ?? "");
   const [nota, setNota] = useState(initialData?.nota ?? "");
-  const { lineas, setLineas, updLinea, addLinea, delLinea } = useLineas(initLineas, ivaDefault);
+  const { lineas, setLineas, updLinea, addLinea, delLinea, dividirLinea } = useLineas(initLineas, ivaDefault);
 
   const ccGroups = useCcGroups(CC_LIST);
 
@@ -173,6 +173,7 @@ export default function NuevoEgresoModal({ onClose, onSave, sociedad, proveedore
         updLinea={updLinea}
         delLinea={delLinea}
         addLinea={addLinea}
+        dividirLinea={dividirLinea}
         headerLeft={
           <select value={moneda} onChange={e => setMoneda(e.target.value)} title="Moneda de la factura"
             style={{ ...inputStyle, width: 96, padding: "6px 8px", fontSize: 12 }}>

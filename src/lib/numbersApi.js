@@ -497,6 +497,16 @@ export async function marcarCorreo({ buzon = "es", ref, estado }) {
 }
 
 /**
+ * Acuse de recibo de una factura que vino del lector ("Contabilizar y responder"): el script responde el hilo
+ * desde la casilla (pagos.es@) al destinatario `para` con el `texto` que una persona confirmó en el modal.
+ * Sin reintento: un mail no se manda dos veces. `ref` = mail_ref de la nota (id del hilo).
+ */
+export async function responderCorreo({ buzon = "es", ref, para, texto }) {
+  const qs = new URLSearchParams({ buzon, accion: "responder", ref, para, texto, token: TOKEN }).toString();
+  return fetchJsonWithRetry(`/api/lector?${qs}`, { retries: 0, requireOk: true, init: { cache: "no-store" } });
+}
+
+/**
  * PDF de una factura que vino del lector, para la vista previa. El script lo lee del mail (única copia) y lo
  * devuelve en base64; acá se convierte en un Blob listo para un <iframe> o window.open. `mail` = id del
  * mensaje (del id_comp COR-<mail>[-k]), `archivo` = nombre del adjunto (nota archivo=).
@@ -3275,7 +3285,7 @@ export async function contarUsosMaestro({ contraparteId = "", centroId = "", soc
  * @param {string|null} excludeId      — id_comp a ignorar (para modo edición)
  */
 export async function checkDuplicateComp(sociedad, subtipo, nroComp, contraparteId, excludeId = null) {
-  const nro = (nroComp ?? "").trim();
+  const nro = String(nroComp ?? "").trim();   // la hoja guarda "149" como número → String antes de trim
   if (!nro) return null;
   const rows = await get("nb_comprobantes", { sociedad });
   const nroNorm = nro.toLowerCase();

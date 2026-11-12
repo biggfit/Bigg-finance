@@ -578,9 +578,28 @@ export function InvoiceLineasTable({
   updLinea,
   delLinea,
   addLinea,
+  dividirLinea, // opcional: "Dividir costo" (useLineas.dividirLinea) → agrega una línea y reparte el total en partes iguales
   headerLeft,   // nodo opcional a la IZQUIERDA de "Subtotal" (ej. selector de Moneda). null → label "Centro de costo".
 }) {
   const cur = moneySym(moneda);
+  const sumaSub = lineas.reduce((a, l) => a + (Number(l.subtotal) || 0), 0);
+  const botonPunteado = {
+    background: "transparent", border: "1.5px dashed rgba(17, 24, 39, 0.18)",
+    borderRadius: 8, padding: "8px 18px", fontSize: 12, color: T.muted,
+    cursor: "pointer", fontFamily: T.font, fontWeight: 600,
+    display: "inline-flex", alignItems: "center", gap: 8,
+    transition: "border-color .15s, color .15s, background .15s",
+  };
+  const hoverOn = e => {
+    e.currentTarget.style.borderColor = T.accent;
+    e.currentTarget.style.color = T.accentDark;
+    e.currentTarget.style.background = "rgba(173,255,25,.08)";
+  };
+  const hoverOff = e => {
+    e.currentTarget.style.borderColor = "rgba(17, 24, 39, 0.18)";
+    e.currentTarget.style.color = T.muted;
+    e.currentTarget.style.background = "transparent";
+  };
   return (
     <div style={{
       background: "#fff", border: `1px solid ${T.cardBorder}`,
@@ -670,26 +689,17 @@ export function InvoiceLineasTable({
         );
       })}
 
-      <div style={{ borderTop: `1px solid ${T.cardBorder}`, padding: "10px 14px", background: "#eceff3" }}>
-        <button type="button" onClick={addLinea} style={{
-          background: "transparent", border: "1.5px dashed rgba(17, 24, 39, 0.18)",
-          borderRadius: 8, padding: "8px 18px", fontSize: 12, color: T.muted,
-          cursor: "pointer", fontFamily: T.font, fontWeight: 600,
-          display: "inline-flex", alignItems: "center", gap: 8,
-          transition: "border-color .15s, color .15s, background .15s",
-        }}
-        onMouseEnter={e => {
-          e.currentTarget.style.borderColor = T.accent;
-          e.currentTarget.style.color = T.accentDark;
-          e.currentTarget.style.background = "rgba(173,255,25,.08)";
-        }}
-        onMouseLeave={e => {
-          e.currentTarget.style.borderColor = "rgba(17, 24, 39, 0.18)";
-          e.currentTarget.style.color = T.muted;
-          e.currentTarget.style.background = "transparent";
-        }}>
+      <div style={{ borderTop: `1px solid ${T.cardBorder}`, padding: "10px 14px", background: "#eceff3", display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button type="button" onClick={addLinea} style={botonPunteado} onMouseEnter={hoverOn} onMouseLeave={hoverOff}>
           + Agregar línea
         </button>
+        {dividirLinea && (
+          <button type="button" onClick={dividirLinea} disabled={!(sumaSub > 0)} style={{ ...botonPunteado, opacity: sumaSub > 0 ? 1 : .5, cursor: sumaSub > 0 ? "pointer" : "default" }}
+            title={`Agrega una línea y reparte ${cur} ${fmtNum(sumaSub)} en partes iguales entre las ${lineas.length + 1} líneas`}
+            onMouseEnter={sumaSub > 0 ? hoverOn : undefined} onMouseLeave={sumaSub > 0 ? hoverOff : undefined}>
+            ÷ Dividir costo en {lineas.length + 1}
+          </button>
+        )}
       </div>
 
     </div>

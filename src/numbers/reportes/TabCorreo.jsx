@@ -4,7 +4,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { T, PageHeader, fmtDate, fmtMoney } from "../theme";
 import {
-  fetchCorreoBorradores, contabilizarBorrador, ignorarBorrador, leerBuzonCorreo, marcarCorreo, fetchPdfCorreo,
+  fetchCorreoBorradores, contabilizarBorrador, ignorarBorrador, leerBuzonCorreo, marcarCorreo, fetchPdfCorreo, responderCorreo,
   fetchSociedades, fetchCuentas, fetchCentrosCosto, fetchProveedores,
   fetchEgresos, fetchMovTesoreria, toNum,
 } from "../../lib/numbersApi";
@@ -203,13 +203,36 @@ export default function TabCorreo({ onPend } = {}) {
     };
   };
 
-  const contabilizar = async (row) => {
+  // "Contabilizar y responder": lo mismo que Contabilizar y, si salió bien, abre el modal del acuse de recibo con
+  // destinatario (remitente real del mail) y texto precargados. No se manda nada hasta que una persona confirma.
+  const contabilizar = async (row, { responder = false } = {}) => {
     const e = ed(row);
     if (!e.sociedad || !e.cuentaId || (esMulti(row) ? row.lineas.some(l => !l.cc) : !e.centro)) return;
     setBusy(row.id); setMenuOpen(null);
-    try { await contabilizarBorrador(row.id, payloadDe(row, e)); await marcarEnGmail(row, "contabilizada"); await cargar(); }
+    try {
+      await contabilizarBorrador(row.id, payloadDe(row, e));
+      await marcarEnGmail(row, "contabilizada");
+      if (responder) setRespuesta(acuseDe(row, e));
+      await cargar();
+    }
     catch (err) { alert("Error al contabilizar: " + (err?.message || err)); }
     finally { setBusy(null); }
+  };
+
+  // Acuse de recibo precargado. Se responde desde la casilla del buzón (el script responde en el hilo).
+  const [respuesta, setRespuesta] = useState(null);   // { proveedor, buzon, ref, para, texto, enviando }
+  const acuseDe = (row, e) => {
+    const bz = buzonDe(row.nota);
+    const vto = row.vto ? `, con vencimiento el ${fmtDate(row.vto)}` : "";
+    const texto = `Buenos días,\n\nConfirmamos la recepción de la factura nº ${e.nroComp || row.nroComp || "(sin número)"} por ${fmtMoney(row.total, row.moneda || "EUR")}, que ha quedado registrada${vto}.\n\nUn saludo,\nAdministración · BIGG España\n${bz?.mail || ""}`;
+    return { proveedor: row.proveedor, buzon: bz, ref: metaRef(row.nota), para: meta(row.nota, "remitente"), texto, enviando: false };
+  };
+  const enviarRespuesta = async () => {
+    const r = respuesta;
+    if (!r || r.enviando) return;
+    setRespuesta({ ...r, enviando: true });
+    try { await responderCorreo({ buzon: r.buzon.id, ref: r.ref, para: r.para.trim(), texto: r.texto }); setRespuesta(null); }
+    catch (err) { setRespuesta({ ...r, enviando: false }); alert("No se pudo enviar la respuesta: " + (err?.message || err)); }
   };
 
   const ignorar = async (row) => {
@@ -267,6 +290,36 @@ export default function TabCorreo({ onPend } = {}) {
   return (
     <div className="fade" style={{ padding:"28px 32px" }}>
       {confirmUI}
+
+      {/* Acuse de recibo tras "Contabilizar y responder": destinatario y texto editables; se manda desde la casilla. */}
+      {respuesta && (
+        <div onClick={() => !respuesta.enviando && setRespuesta(null)}
+          style={{ position:"fixed", inset:0, zIndex:700, background:"rgba(0,0,0,.35)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+          <div onClick={ev => ev.stopPropagation()}
+            style={{ background:T.card, borderRadius:12, width:"min(600px, 100%)", boxShadow:"0 16px 48px rgba(0,0,0,.25)", padding:"20px 22px", fontFamily:T.font }}>
+            <div style={{ fontSize:15, fontWeight:800, color:T.text, marginBottom:2 }}>Responder al proveedor</div>
+            <div style={{ fontSize:12, color:T.muted, marginBottom:14 }}>
+              {respuesta.proveedor} · ya contabilizada. El acuse sale desde {respuesta.buzon?.mail} como respuesta al hilo del mail.
+            </div>
+            <label style={{ display:"block", fontSize:11, fontWeight:800, color:T.muted, textTransform:"uppercase", letterSpacing:".04em", marginBottom:4 }}>Para</label>
+            <input value={respuesta.para} onChange={ev => setRespuesta({ ...respuesta, para: ev.target.value })} disabled={respuesta.enviando}
+              style={{ ...sel, width:"100%", maxWidth:"none", boxSizing:"border-box", marginBottom:12 }} />
+            <label style={{ display:"block", fontSize:11, fontWeight:800, color:T.muted, textTransform:"uppercase", letterSpacing:".04em", marginBottom:4 }}>Mensaje</label>
+            <textarea value={respuesta.texto} onChange={ev => setRespuesta({ ...respuesta, texto: ev.target.value })} disabled={respuesta.enviando} rows={9}
+              style={{ ...sel, width:"100%", maxWidth:"none", boxSizing:"border-box", resize:"vertical", lineHeight:1.45, fontSize:13 }} />
+            <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:14 }}>
+              <button onClick={() => setRespuesta(null)} disabled={respuesta.enviando}
+                style={{ background:"#f3f4f6", color:T.text, border:`1px solid ${T.cardBorder}`, borderRadius:8, padding:"9px 14px", fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:T.font }}>
+                No responder
+              </button>
+              <button onClick={enviarRespuesta} disabled={respuesta.enviando || !respuesta.para.trim() || !respuesta.texto.trim()}
+                style={{ background:T.accentDark, color:T.accent, border:"none", borderRadius:8, padding:"9px 16px", fontSize:13, fontWeight:800, cursor:"pointer", fontFamily:T.font, opacity: respuesta.enviando ? .7 : 1 }}>
+                {respuesta.enviando ? "Enviando…" : "✉ Enviar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Visor de PDF: panel flotante a la derecha, la bandeja sigue visible y editable al lado. */}
       {pdf && (
@@ -471,7 +524,10 @@ export default function TabCorreo({ onPend } = {}) {
                       <button onClick={(ev) => {
                           if (menuOpen?.id === row.id) { setMenuOpen(null); return; }
                           const r = ev.currentTarget.getBoundingClientRect();
-                          setMenuOpen({ id: row.id, top: r.bottom + 4, left: Math.max(8, r.right - 210) });
+                          // Si abajo no entra (última fila), el menú se abre hacia arriba.
+                          const ALTO_MENU = 260;
+                          const arriba = r.bottom + ALTO_MENU > window.innerHeight && r.top > ALTO_MENU;
+                          setMenuOpen({ id: row.id, left: Math.max(8, r.right - 210), ...(arriba ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }) });
                         }} disabled={enCurso}
                         style={{ background: menuOpen?.id===row.id ? "#e5e7eb" : "#f3f4f6", border:`1px solid ${T.cardBorder}`,
                           borderRadius:6, padding:"4px 10px", cursor:"pointer", fontSize:13, color:T.muted, fontFamily:T.font }}>
@@ -492,11 +548,12 @@ export default function TabCorreo({ onPend } = {}) {
         const row = borradores.find(r => r.id === menuOpen.id);
         if (!row) return null;
         const e = ed(row); const ref = metaRef(row.nota); const buzon = metaBuzon(row.nota);
-        const listo = e.sociedad && e.cuentaId && e.centro;
+        const listo = e.sociedad && e.cuentaId && (esMulti(row) ? row.lineas.every(l => l.cc) : e.centro);
         return (
-          <div ref={menuRef} style={{ position:"fixed", top:menuOpen.top, left:menuOpen.left, zIndex:9999,
+          <div ref={menuRef} style={{ position:"fixed", top:menuOpen.top, bottom:menuOpen.bottom, left:menuOpen.left, zIndex:9999,
             background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:8, boxShadow:"0 8px 24px rgba(0,0,0,.15)", minWidth:200, overflow:"hidden" }}>
             {item("Contabilizar ✓", () => contabilizar(row), "#16a34a", !listo)}
+            {buzon && ref && item("Contabilizar y responder ✓ ✉", () => contabilizar(row, { responder: true }), "#16a34a", !listo)}
             {item("Abrir para editar (varios centros)", () => setEditar(row))}
             {buzon && metaArchivo(row.nota) && item("Ver PDF", () => verPdf(row))}
             {ref && item("Ver mail", () => window.open(gmailUrl(ref, buzon), "_blank"))}
