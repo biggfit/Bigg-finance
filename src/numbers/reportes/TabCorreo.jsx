@@ -180,9 +180,12 @@ export default function TabCorreo({ onPend } = {}) {
   const descEgreso = e => `${e.id} · nº ${e.nroComp || "(sin nº)"} · ${fmtDate(e.fecha)} · ${fmtMoney(e.total, e.moneda || "EUR")}`;
 
   // fechaServicio = devengado (fin del período que factura); fechaFiscal = emisión de la factura (libro de IVA).
-  const ed = (row) => edits[row.id] || { sociedad: row.sociedad || "", cuentaId: row.cuentaId || "", centro: row.cc || "",
-    fechaServicio: row.fecha || "", fechaFiscal: row.fechaFiscal || row.fecha || "", nroComp: row.nroComp || "" };
-  const setEd = (id, patch) => setEdits(e => ({ ...e, [id]: { ...(edits[id] || {}), ...patch } }));
+  const propuestaDe = (row) => ({ sociedad: row.sociedad || "", cuentaId: row.cuentaId || "", centro: row.cc || "",
+    fechaServicio: row.fecha || "", fechaFiscal: row.fechaFiscal || row.fecha || "", nroComp: row.nroComp || "" });
+  const ed = (row) => edits[row.id] || propuestaDe(row);
+  // La primera edición de una fila parte de lo propuesto por el lector (antes arrancaba de {} y perdía sociedad,
+  // cuenta, centro y fechas: los selectores quedaban en amarillo y Contabilizar no hacía nada).
+  const setEd = (row, patch) => setEdits(prev => ({ ...prev, [row.id]: { ...(prev[row.id] || propuestaDe(row)), ...patch } }));
 
   // Un borrador puede venir ya repartido en varios centros (el lector abre una línea por sede cuando la factura
   // las trae, ej. Scentair): se contabiliza con todas sus líneas; el selector de centro solo aplica a una línea.
@@ -238,7 +241,8 @@ export default function TabCorreo({ onPend } = {}) {
 
   const thS = { padding:"10px 12px", fontSize:11, fontWeight:800, color:"rgba(255,255,255,.9)",
     textAlign:"left", letterSpacing:".04em", textTransform:"uppercase", whiteSpace:"nowrap" };
-  const sel = { background:"#fff", border:`1px solid ${T.cardBorder}`, borderRadius:6, padding:"5px 7px",
+  // borde sin shorthand: los selectores de sociedad/centro pisan borderColor y React avisa si se mezcla con `border`
+  const sel = { background:"#fff", borderWidth:1, borderStyle:"solid", borderColor:T.cardBorder, borderRadius:6, padding:"5px 7px",
     fontSize:12, color:T.text, fontFamily:T.font, outline:"none", maxWidth:150 };
   const num = (bold) => ({ padding:"9px 12px", fontSize:13, fontWeight: bold?800:600, color:T.text,
     fontFamily:"var(--mono)", textAlign:"right", whiteSpace:"nowrap" });
@@ -418,22 +422,22 @@ export default function TabCorreo({ onPend } = {}) {
                     </td>
                     <td style={{ padding:"9px 12px" }}>
                       {/* Máscara AFIP (FC-A 00001-00001234) sólo para Argentina; en España el nº es libre (FAC-2026-175, 26/219518). */}
-                      <input value={e.nroComp} onChange={ev => setEd(row.id, { nroComp: solapa === "ar" ? formatNroComp(ev.target.value) : ev.target.value })}
+                      <input value={e.nroComp} onChange={ev => setEd(row, { nroComp: solapa === "ar" ? formatNroComp(ev.target.value) : ev.target.value })}
                         placeholder="" style={{ ...sel, maxWidth:130 }} />
                     </td>
                     <td style={{ padding:"9px 12px" }}>
-                      <select value={e.sociedad} onChange={ev => setEd(row.id, { sociedad: ev.target.value })}
+                      <select value={e.sociedad} onChange={ev => setEd(row, { sociedad: ev.target.value })}
                         style={{ ...sel, borderColor: e.sociedad ? T.cardBorder : "#f59e0b", background: e.sociedad ? "#fff" : "#fffbeb" }}>
                         <option value="">⚠ Falta sociedad</option>
                         {sociedades.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
                       </select>
                     </td>
                     <td style={{ padding:"9px 12px" }} title="Fecha de emisión de la factura (fecha fiscal: libro de IVA)">
-                      <input type="date" value={e.fechaFiscal} onChange={ev => setEd(row.id, { fechaFiscal: ev.target.value })}
+                      <input type="date" value={e.fechaFiscal} onChange={ev => setEd(row, { fechaFiscal: ev.target.value })}
                         style={{ ...sel, maxWidth:140 }} />
                     </td>
                     <td style={{ padding:"9px 12px" }} title="Fecha del servicio (devengado: fin del período facturado)">
-                      <input type="date" value={e.fechaServicio} onChange={ev => setEd(row.id, { fechaServicio: ev.target.value })}
+                      <input type="date" value={e.fechaServicio} onChange={ev => setEd(row, { fechaServicio: ev.target.value })}
                         style={{ ...sel, maxWidth:140 }} />
                     </td>
                     <td style={{ padding:"9px 12px", fontSize:12, color: pago ? "#059669" : T.muted, whiteSpace:"nowrap", fontWeight: pago ? 700 : 400 }}
@@ -441,7 +445,7 @@ export default function TabCorreo({ onPend } = {}) {
                       {vtoMostrar ? fmtDate(vtoMostrar) : "—"}
                     </td>
                     <td style={{ padding:"9px 12px" }}>
-                      <select value={e.cuentaId} onChange={ev => setEd(row.id, { cuentaId: ev.target.value })} style={sel}>
+                      <select value={e.cuentaId} onChange={ev => setEd(row, { cuentaId: ev.target.value })} style={sel}>
                         <option value="">— cuenta —</option>
                         {cuentasEgreso.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                       </select>
@@ -453,7 +457,7 @@ export default function TabCorreo({ onPend } = {}) {
                           Varios ({row.lineas.length}) ▾
                         </span>
                       ) : (
-                        <select value={e.centro} onChange={ev => setEd(row.id, { centro: ev.target.value })}
+                        <select value={e.centro} onChange={ev => setEd(row, { centro: ev.target.value })}
                           style={{ ...sel, borderColor: e.centro ? T.cardBorder : "#f59e0b", background: e.centro ? "#fff" : "#fffbeb" }}>
                           <option value="">⚠ centro</option>
                           {ccActivos(centros, e.centro).map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
