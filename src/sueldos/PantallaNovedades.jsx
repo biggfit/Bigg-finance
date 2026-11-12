@@ -452,8 +452,11 @@ export default function PantallaNovedades({ pais = "" }) {
     .filter(id => !(montoMonotributoPorLegajo.get(ALIAS_MONOTRIBUTO[id] ?? id) > 0))
     .map(legajoNombre);
 
+  // Solapas con carga por link: Monotributo (link del mail) y Otros (reintegros, link del formulario).
+  const conLink = esMonotributo || esOtros;
   // Cargas por link pendientes de aprobar (no entran en la liquidación hasta aprobarlas).
-  const pendientes = rows.filter(r => r.estado === "pendiente");
+  // Scopeado a la solapa actual: cada solapa aprueba lo suyo.
+  const pendientes = tabRows.filter(r => r.estado === "pendiente");
 
   // Aprobar se guarda en el momento, sin esperar a "Guardar": desde ahí el link ya no acepta correcciones
   // (el Apps Script rechaza las aprobadas). Antes relee la planilla: si la persona corrigió la carga por el
@@ -521,7 +524,7 @@ export default function PantallaNovedades({ pais = "" }) {
       alert("Error al aprobar: " + e.message + "\n\nLas que llegaron a aprobarse quedan aprobadas.");
     } finally { setAprobando(false); }
   };
-  const colsExtra = (esOtros ? 1 : 0) + (esMonotributo ? 1 : 0);
+  const colsExtra = (esOtros ? 1 : 0) + (conLink ? 1 : 0);
 
   // Semilla de autocarga todavía vacía: la persona no cargó por el link.
   const esperaLink = (r) => r._semilla && mono.link.has(r.legajo_id) && !(parseFloat(r.monto) > 0);
@@ -613,7 +616,7 @@ export default function PantallaNovedades({ pais = "" }) {
         )
       )}
 
-      {esMonotributo && !loading && pendientes.length > 0 && (
+      {conLink && !loading && pendientes.length > 0 && (
         <div style={{ background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 7,
           padding: "8px 12px", fontSize: 13, marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <span style={{ flexGrow: 1 }}>
@@ -643,7 +646,7 @@ export default function PantallaNovedades({ pais = "" }) {
                 <th style={{ ...thStyle, width: 150 }}>Forma de pago</th>
                 {esOtros && <th style={{ ...thStyle, width: 170 }}>Cuenta contable</th>}
                 <th style={thStyle}>Nota</th>
-                {esMonotributo && <th style={{ ...thStyle, width: 150 }}>Carga por link</th>}
+                {conLink && <th style={{ ...thStyle, width: 150 }}>Carga por link</th>}
                 <th style={{ ...thStyle, width: 40 }}></th>
                 <th style={{ ...thStyle, width: 40, textAlign: "center" }}>
                   <HeaderCheckTodas checked={todosMarcados} onToggle={() => setManyChecked(idsConDatos, !todosMarcados)} accent={T.green} />
@@ -697,12 +700,12 @@ export default function PantallaNovedades({ pais = "" }) {
                     <input style={iStyle} value={r.nota} placeholder="Nota"
                       onChange={e => setRow(r._id, { nota: e.target.value })} />
                   </td>
-                  {esMonotributo && (
+                  {conLink && (
                     <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>
-                      {r.comprobante_url && (
-                        <a href={r.comprobante_url} target="_blank" rel="noreferrer" title="Ver comprobante"
+                      {r.comprobante_url && String(r.comprobante_url).split(" | ").filter(Boolean).map((u, i) => (
+                        <a key={i} href={u} target="_blank" rel="noreferrer" title={`Ver comprobante ${i + 1}`}
                           style={{ textDecoration: "none", fontSize: 15, marginRight: 8 }}>📎</a>
-                      )}
+                      ))}
                       {r.estado === "pendiente" ? (
                         <button onClick={() => aprobar(r)} disabled={aprobando}
                           style={{ background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a", borderRadius: 5,

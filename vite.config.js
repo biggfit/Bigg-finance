@@ -27,6 +27,7 @@ const sheetsUrl  = localEnv['VITE_SHEETS_API_URL'];
 const numbersUrl = localEnv['VITE_NUMBERS_API_URL'];
 const sueldosUrl = localEnv['VITE_SUELDOS_API_URL'];
 const monoUrl    = localEnv['VITE_MONOTRIBUTO_API_URL'];
+const reintUrl   = localEnv['VITE_REINTEGRO_API_URL'];
 // Lector de correo: un Apps Script por casilla (apps-script-lector-correo.gs). `?buzon=es|ar` elige la URL.
 const lectorUrls = { es: localEnv['VITE_LECTOR_ES_URL'], ar: localEnv['VITE_LECTOR_AR_URL'] };
 
@@ -237,6 +238,28 @@ export default defineConfig({
             }
           });
         }
+
+        // ── Proxy /api/reintegro → Apps Script BIGG Reintegros (sin caché) ──
+        // Registrado siempre (aunque falte la URL) para que /api/reintegro nunca caiga al transform
+        // de módulos de Vite (que no resuelve `https` de api/reintegro.js). Sin URL → error JSON claro.
+        server.middlewares.use((req, res, next) => {
+          if (!req.url || !req.url.startsWith('/api/reintegro')) { next(); return; }
+          if (!reintUrl) {
+            res.setHeader('Content-Type', 'application/json');
+            res.statusCode = 500;
+            res.end(JSON.stringify({ error: 'VITE_REINTEGRO_API_URL no configurada en .env.local' }));
+            return;
+          }
+          const target = reintUrl + req.url.replace('/api/reintegro', '');
+          if (req.method === 'POST') {
+            devCacheClear();   // la carga escribe su_novedades
+            let body = '';
+            req.on('data', chunk => { body += chunk; });
+            req.on('end',  () => { proxyToSheets(target, 'POST', body, res); });
+          } else {
+            proxyToSheets(target, 'GET', null, res);
+          }
+        });
 
         // ── Proxy /api/lector → Apps Script del lector de correo de la casilla pedida (sin caché) ──
         // Mismo contrato que api/lector.js: `buzon` elige la URL y no se reenvía; sin URL → error JSON.
