@@ -9,7 +9,8 @@ import {
   fetchEgresos, fetchMovTesoreria, toNum,
 } from "../../lib/numbersApi";
 import NuevoEgresoModal from "../NuevoEgresoModal";
-import { formatNroComp, ccActivos } from "../formUtils";
+import { formatNroComp, ccActivos, Label } from "../formUtils";
+import { RowMenu } from "../comprobantesUi";
 import { useConfirm } from "../useConfirm";
 
 const arr = x => Array.isArray(x) ? x : [];
@@ -33,9 +34,10 @@ const gmailUrl  = (ref, buzon) => !ref ? null
 
 // Una solapa por casilla de pagos. `lector` = tiene Apps Script propio (apps-script-lector-correo.gs); el de
 // Argentina se habilita cuando exista. Un borrador sin `buzon=` en la nota (parkeado a mano, antes del lector) va a pagos@.
+// `firma` = cómo se despide el acuse de recibo que sale desde esa casilla.
 const BUZONES = [
-  { id: "ar", label: "Argentina", mail: "pagos@bigg.fit",    lector: false },
-  { id: "es", label: "España",    mail: "pagos.es@bigg.fit", lector: true },
+  { id: "ar", label: "Argentina", mail: "pagos@bigg.fit",    lector: false, firma: "Administración · BIGG" },
+  { id: "es", label: "España",    mail: "pagos.es@bigg.fit", lector: true,  firma: "Administración · BIGG España" },
 ];
 const buzonDe = nota => BUZONES.find(b => b.mail === metaBuzon(nota)) || null;
 const solapaDe = nota => (buzonDe(nota) || BUZONES.find(b => b.id === "ar")).id;
@@ -51,28 +53,33 @@ export default function TabCorreo({ onPend } = {}) {
   const [movs,       setMovs]       = useState([]);   // para flag "débito pendiente en banco"
   const [edits,      setEdits]      = useState({});
   const [busy,       setBusy]       = useState(null);
-  const [menuOpen,   setMenuOpen]   = useState(null);  // id_comp del dropdown abierto
   const [editar,     setEditar]     = useState(null);  // row abierto en NuevoEgresoModal
   const [pdf,        setPdf]        = useState(null);  // vista previa: { row, url, nombre } | { row, cargando } | { row, error }
 
-  // Vista previa del PDF: el script lo lee del mail y lo devuelve; acá se muestra en un visor flotante.
+  // Vista previa del PDF: el script lo lee del mail (2-5 s) y se muestra en un visor flotante. Los ya traídos quedan
+  // en memoria por borrador hasta salir de la pantalla: reabrir el mismo PDF es instantáneo.
+  const pdfCache = useRef(new Map());
+  useEffect(() => () => { pdfCache.current.forEach(p => URL.revokeObjectURL(p.url)); }, []);
   const verPdf = async (row) => {
     const bz = buzonDe(row.nota); const mail = mailIdDe(row.id); const archivo = metaArchivo(row.nota);
     if (!bz || !mail) return;
+    const visto = pdfCache.current.get(row.id);
+    if (visto) { setPdf({ row, ...visto }); return; }
     setPdf({ row, cargando: true, nombre: archivo });
     try {
       const { blob, nombre } = await fetchPdfCorreo({ buzon: bz.id, mail, archivo });
-      setPdf({ row, url: URL.createObjectURL(blob), nombre });
+      const p = { url: URL.createObjectURL(blob), nombre };
+      pdfCache.current.set(row.id, p);
+      setPdf({ row, ...p });
     } catch (e) { setPdf({ row, error: e?.message || String(e), nombre: archivo }); }
   };
-  const cerrarPdf = () => { if (pdf?.url) URL.revokeObjectURL(pdf.url); setPdf(null); };
+  const cerrarPdf = () => setPdf(null);
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState(null);
   const [lectura,    setLectura]    = useState(null);  // resumen de la última corrida del lector (o su error)
   const [leyendo,    setLeyendo]    = useState(null);  // id del buzón que se está leyendo
   const [avisoMail,  setAvisoMail]  = useState(null);  // si no se pudo marcar el mail en Gmail (la contabilización ya quedó hecha)
   const [solapa,     setSolapa]     = useState(() => localStorage.getItem("nb_correo_solapa") || "es");   // buzón visible
-  const menuRef = useRef(null);
   useEffect(() => { localStorage.setItem("nb_correo_solapa", solapa); }, [solapa]);
   const buzonActivo = BUZONES.find(b => b.id === solapa) || BUZONES[0];
   const visibles = useMemo(() => borradores.filter(r => solapaDe(r.nota) === solapa), [borradores, solapa]);
@@ -137,13 +144,6 @@ export default function TabCorreo({ onPend } = {}) {
     } finally { setLeyendo(null); }
   };
 
-  useEffect(() => {
-    if (!menuOpen) return;
-    const h = e => { if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(null); };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, [menuOpen]);
-
   const cuentasEgreso = useMemo(() => cuentas.filter(c => {
     const t = (c.tipo ?? "").toLowerCase();
     return !(t === "venta" || t === "ventas" || t === "ingreso" || t === "ingresos");
@@ -178,6 +178,11 @@ export default function TabCorreo({ onPend } = {}) {
     return porMes ? { nivel: "mes", egreso: porMes } : null;
   };
   const descEgreso = e => `${e.id} · nº ${e.nroComp || "(sin nº)"} · ${fmtDate(e.fecha)} · ${fmtMoney(e.total, e.moneda || "EUR")}`;
+  // Pistas por fila (pago ya debitado, duplicado, motivos de revisión, fecha del mail): se calculan cuando cambian los
+  // datos, no en cada tecla de edición (duplicado recorre todos los egresos por fila).
+  const pistas = useMemo(() => new Map(visibles.map(r => [r.id, { pago: pagoPendiente(r), dup: duplicado(r), revisar: motivosRevisar(r.nota), fechaCorreo: metaFecha(r.nota) }])),
+    [visibles, egresos, pendientesDebito]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const nombreCentro = id => (centros.find(c => c.id === id)?.nombre) || id || "(sin centro)";
 
   // fechaServicio = devengado (fin del período que factura); fechaFiscal = emisión de la factura (libro de IVA).
   const propuestaDe = (row) => ({ sociedad: row.sociedad || "", cuentaId: row.cuentaId || "", centro: row.cc || "",
@@ -187,33 +192,37 @@ export default function TabCorreo({ onPend } = {}) {
   // cuenta, centro y fechas: los selectores quedaban en amarillo y Contabilizar no hacía nada).
   const setEd = (row, patch) => setEdits(prev => ({ ...prev, [row.id]: { ...(prev[row.id] || propuestaDe(row)), ...patch } }));
 
-  // Un borrador puede venir ya repartido en varios centros (el lector abre una línea por sede cuando la factura
-  // las trae, ej. Scentair): se contabiliza con todas sus líneas; el selector de centro solo aplica a una línea.
+  // Líneas con las que se contabiliza un borrador. Si vino repartido en varios centros (el lector abre una línea por
+  // sede cuando la factura las trae, ej. Scentair) van todas tal cual; si es una sola, el centro es el del selector.
+  // Es la única fuente para el payload, el chequeo de "listo" y las sumas de la fila.
   const esMulti = row => arr(row.lineas).length > 1;
-  const payloadDe = (row, e) => {
-    const cuentaNombre = (cuentas.find(c => c.id === e.cuentaId)?.nombre) || e.cuentaId;
-    const linea = (row.lineas && row.lineas[0]) || {};
-    return {
-      sociedad: e.sociedad, fecha: e.fechaServicio || row.fecha || "", fechaFiscal: e.fechaFiscal || row.fechaFiscal || e.fechaServicio || row.fecha || "", vto: row.vto || "",
-      proveedor: row.proveedor, proveedorId: row.proveedorId,
-      cuenta: cuentaNombre, cuentaId: e.cuentaId, moneda: row.moneda || "ARS",
-      nroComp: e.nroComp || "", nota: row.nota || "",
-      lineas: esMulti(row) ? row.lineas.map(l => ({ cc: l.cc, subtotal: l.subtotal, ivaRate: l.ivaRate ?? 0 }))
-                           : [{ cc: e.centro, subtotal: linea.subtotal ?? row.total, ivaRate: linea.ivaRate ?? 0 }],
-    };
+  const lineasDe = (row, e) => {
+    if (esMulti(row)) return row.lineas.map(l => ({ cc: l.cc, subtotal: l.subtotal, ivaRate: l.ivaRate ?? 0, iva_monto: l.iva_monto || 0, total: l.total_linea }));
+    const l = arr(row.lineas)[0] || {};
+    return [{ cc: e.centro, subtotal: l.subtotal ?? row.total, ivaRate: l.ivaRate ?? 0, iva_monto: l.iva_monto || 0, total: row.total }];
   };
+  const puedeContabilizar = (row, e) => !!(e.sociedad && e.cuentaId && lineasDe(row, e).every(l => l.cc));
+  const payloadDe = (row, e) => ({
+    sociedad: e.sociedad, fecha: e.fechaServicio || row.fecha || "", fechaFiscal: e.fechaFiscal || row.fechaFiscal || e.fechaServicio || row.fecha || "", vto: row.vto || "",
+    proveedor: row.proveedor, proveedorId: row.proveedorId,
+    cuenta: (cuentas.find(c => c.id === e.cuentaId)?.nombre) || e.cuentaId, cuentaId: e.cuentaId, moneda: row.moneda || "ARS",
+    nroComp: e.nroComp || "", nota: row.nota || "",
+    lineas: lineasDe(row, e).map(l => ({ cc: l.cc, subtotal: l.subtotal, ivaRate: l.ivaRate })),
+  });
+
+  // Tras escribir en Numbers, marcar el mail y recargar la bandeja no dependen entre sí: van en paralelo.
+  const marcarYRecargar = (row, estado) => Promise.all([marcarEnGmail(row, estado), cargar()]);
 
   // "Contabilizar y responder": lo mismo que Contabilizar y, si salió bien, abre el modal del acuse de recibo con
   // destinatario (remitente real del mail) y texto precargados. No se manda nada hasta que una persona confirma.
   const contabilizar = async (row, { responder = false } = {}) => {
     const e = ed(row);
-    if (!e.sociedad || !e.cuentaId || (esMulti(row) ? row.lineas.some(l => !l.cc) : !e.centro)) return;
-    setBusy(row.id); setMenuOpen(null);
+    if (!puedeContabilizar(row, e)) return;
+    setBusy(row.id);
     try {
       await contabilizarBorrador(row.id, payloadDe(row, e));
-      await marcarEnGmail(row, "contabilizada");
       if (responder) setRespuesta(acuseDe(row, e));
-      await cargar();
+      await marcarYRecargar(row, "contabilizada");
     }
     catch (err) { alert("Error al contabilizar: " + (err?.message || err)); }
     finally { setBusy(null); }
@@ -224,9 +233,10 @@ export default function TabCorreo({ onPend } = {}) {
   const acuseDe = (row, e) => {
     const bz = buzonDe(row.nota);
     const vto = row.vto ? `, con vencimiento el ${fmtDate(row.vto)}` : "";
-    const texto = `Buenos días,\n\nConfirmamos la recepción de la factura nº ${e.nroComp || row.nroComp || "(sin número)"} por ${fmtMoney(row.total, row.moneda || "EUR")}, que ha quedado registrada${vto}.\n\nUn saludo,\nAdministración · BIGG España\n${bz?.mail || ""}`;
+    const texto = `Buenos días,\n\nConfirmamos la recepción de la factura nº ${e.nroComp || "(sin número)"} por ${fmtMoney(row.total, row.moneda || "EUR")}, que ha quedado registrada${vto}.\n\nUn saludo,\n${bz?.firma || "Administración · BIGG"}\n${bz?.mail || ""}`;
     return { proveedor: row.proveedor, buzon: bz, ref: metaRef(row.nota), para: meta(row.nota, "remitente"), texto, enviando: false };
   };
+  const patchRespuesta = p => setRespuesta(r => (r ? { ...r, ...p } : r));
   const enviarRespuesta = async () => {
     const r = respuesta;
     if (!r || r.enviando) return;
@@ -236,10 +246,9 @@ export default function TabCorreo({ onPend } = {}) {
   };
 
   const ignorar = async (row) => {
-    setMenuOpen(null);
     if (!(await confirm(`¿Ignorar la factura de ${row.proveedor} ($${Math.round(row.total)})? No se contabiliza.`))) return;
     setBusy(row.id);
-    try { await ignorarBorrador(row.id, "correo"); await marcarEnGmail(row, "ignorada"); await cargar(); }
+    try { await ignorarBorrador(row.id, "correo"); await marcarYRecargar(row, "ignorada"); }
     catch (err) { alert("Error: " + (err?.message || err)); }
     finally { setBusy(null); }
   };
@@ -257,9 +266,8 @@ export default function TabCorreo({ onPend } = {}) {
   const guardarEditado = async (payload) => {
     if (!editar) return;
     await contabilizarBorrador(editar.id, payload);
-    await marcarEnGmail(editar, "contabilizada");
     setEditar(null);
-    await cargar();
+    await marcarYRecargar(editar, "contabilizada");
   };
 
   const thS = { padding:"10px 12px", fontSize:11, fontWeight:800, color:"rgba(255,255,255,.9)",
@@ -267,6 +275,7 @@ export default function TabCorreo({ onPend } = {}) {
   // borde sin shorthand: los selectores de sociedad/centro pisan borderColor y React avisa si se mezcla con `border`
   const sel = { background:"#fff", borderWidth:1, borderStyle:"solid", borderColor:T.cardBorder, borderRadius:6, padding:"5px 7px",
     fontSize:12, color:T.text, fontFamily:T.font, outline:"none", maxWidth:150 };
+  const selFalta = ok => (ok ? sel : { ...sel, borderColor:"#f59e0b", background:"#fffbeb" });   // ámbar = falta elegir
   const num = (bold) => ({ padding:"9px 12px", fontSize:13, fontWeight: bold?800:600, color:T.text,
     fontFamily:"var(--mono)", textAlign:"right", whiteSpace:"nowrap" });
 
@@ -279,51 +288,46 @@ export default function TabCorreo({ onPend } = {}) {
     );
   }
 
-  const item = (label, onClick, color, disabled) => (
-    <button onClick={() => { if (!disabled) { setMenuOpen(null); onClick(); } }} disabled={disabled}
-      style={{ display:"block", width:"100%", textAlign:"left", padding:"8px 14px", background:"transparent",
-        border:"none", fontSize:13, color: disabled ? T.dim : (color || T.text), cursor: disabled?"default":"pointer", fontFamily:T.font }}
-      onMouseEnter={e => { if (!disabled) e.currentTarget.style.background = "#f3f4f6"; }}
-      onMouseLeave={e => e.currentTarget.style.background = "transparent"}>{label}</button>
-  );
-
   return (
     <div className="fade" style={{ padding:"28px 32px" }}>
       {confirmUI}
 
       {/* Acuse de recibo tras "Contabilizar y responder": destinatario y texto editables; se manda desde la casilla. */}
-      {respuesta && (
-        <div onClick={() => !respuesta.enviando && setRespuesta(null)}
-          style={{ position:"fixed", inset:0, zIndex:700, background:"rgba(0,0,0,.35)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
-          <div onClick={ev => ev.stopPropagation()}
-            style={{ background:T.card, borderRadius:12, width:"min(600px, 100%)", boxShadow:"0 16px 48px rgba(0,0,0,.25)", padding:"20px 22px", fontFamily:T.font }}>
-            <div style={{ fontSize:15, fontWeight:800, color:T.text, marginBottom:2 }}>Responder al proveedor</div>
-            <div style={{ fontSize:12, color:T.muted, marginBottom:14 }}>
-              {respuesta.proveedor} · ya contabilizada. El acuse sale desde {respuesta.buzon?.mail} como respuesta al hilo del mail.
-            </div>
-            <label style={{ display:"block", fontSize:11, fontWeight:800, color:T.muted, textTransform:"uppercase", letterSpacing:".04em", marginBottom:4 }}>Para</label>
-            <input value={respuesta.para} onChange={ev => setRespuesta({ ...respuesta, para: ev.target.value })} disabled={respuesta.enviando}
-              style={{ ...sel, width:"100%", maxWidth:"none", boxSizing:"border-box", marginBottom:12 }} />
-            <label style={{ display:"block", fontSize:11, fontWeight:800, color:T.muted, textTransform:"uppercase", letterSpacing:".04em", marginBottom:4 }}>Mensaje</label>
-            <textarea value={respuesta.texto} onChange={ev => setRespuesta({ ...respuesta, texto: ev.target.value })} disabled={respuesta.enviando} rows={9}
-              style={{ ...sel, width:"100%", maxWidth:"none", boxSizing:"border-box", resize:"vertical", lineHeight:1.45, fontSize:13 }} />
-            <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:14 }}>
-              <button onClick={() => setRespuesta(null)} disabled={respuesta.enviando}
-                style={{ background:"#f3f4f6", color:T.text, border:`1px solid ${T.cardBorder}`, borderRadius:8, padding:"9px 14px", fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:T.font }}>
-                No responder
-              </button>
-              <button onClick={enviarRespuesta} disabled={respuesta.enviando || !respuesta.para.trim() || !respuesta.texto.trim()}
-                style={{ background:T.accentDark, color:T.accent, border:"none", borderRadius:8, padding:"9px 16px", fontSize:13, fontWeight:800, cursor:"pointer", fontFamily:T.font, opacity: respuesta.enviando ? .7 : 1 }}>
-                {respuesta.enviando ? "Enviando…" : "✉ Enviar"}
-              </button>
+      {respuesta && (() => {
+        const enviando = respuesta.enviando;
+        const campo = { ...sel, width:"100%", maxWidth:"none", boxSizing:"border-box" };
+        return (
+          <div onClick={() => !enviando && setRespuesta(null)}
+            style={{ position:"fixed", inset:0, zIndex:700, background:"rgba(0,0,0,.35)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+            <div onClick={ev => ev.stopPropagation()}
+              style={{ background:T.card, borderRadius:12, width:"min(600px, 100%)", boxShadow:"0 16px 48px rgba(0,0,0,.25)", padding:"20px 22px", fontFamily:T.font }}>
+              <div style={{ fontSize:15, fontWeight:800, color:T.text, marginBottom:2 }}>Responder al proveedor</div>
+              <div style={{ fontSize:12, color:T.muted, marginBottom:14 }}>
+                {respuesta.proveedor} · ya contabilizada. El acuse sale desde {respuesta.buzon?.mail} como respuesta al hilo del mail.
+              </div>
+              <Label>Para</Label>
+              <input value={respuesta.para} onChange={ev => patchRespuesta({ para: ev.target.value })} disabled={enviando} style={{ ...campo, marginBottom:12 }} />
+              <Label>Mensaje</Label>
+              <textarea value={respuesta.texto} onChange={ev => patchRespuesta({ texto: ev.target.value })} disabled={enviando} rows={9}
+                style={{ ...campo, resize:"vertical", lineHeight:1.45, fontSize:13 }} />
+              <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:14 }}>
+                <button onClick={() => setRespuesta(null)} disabled={enviando}
+                  style={{ background:"#f3f4f6", color:T.text, border:`1px solid ${T.cardBorder}`, borderRadius:8, padding:"9px 14px", fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:T.font }}>
+                  No responder
+                </button>
+                <button onClick={enviarRespuesta} disabled={enviando || !respuesta.para.trim() || !respuesta.texto.trim()}
+                  style={{ background:T.accentDark, color:T.accent, border:"none", borderRadius:8, padding:"9px 16px", fontSize:13, fontWeight:800, cursor:"pointer", fontFamily:T.font, opacity: enviando ? .7 : 1 }}>
+                  {enviando ? "Enviando…" : "✉ Enviar"}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Visor de PDF: panel flotante a la derecha, la bandeja sigue visible y editable al lado. */}
       {pdf && (
-        <div style={{ position:"fixed", top:0, right:0, bottom:0, left:210 /* ancho del sidebar de Numbers */, zIndex:600, background:T.card,
+        <div style={{ position:"fixed", top:0, right:0, bottom:0, left:T.sidebarW, zIndex:600, background:T.card,
           borderLeft:`1px solid ${T.cardBorder}`, boxShadow:"-12px 0 32px rgba(0,0,0,.18)", display:"flex", flexDirection:"column" }}>
           <div style={{ display:"flex", alignItems:"center", gap:10, padding:"12px 16px", borderBottom:`1px solid ${T.cardBorder}` }}>
             <div style={{ flex:1, minWidth:0 }}>
@@ -454,21 +458,24 @@ export default function TabCorreo({ onPend } = {}) {
             <tbody>
               {visibles.map((row, i) => {
                 const e = ed(row);
-                const linea = (row.lineas && row.lineas[0]) || {};
                 const enCurso = busy === row.id;
-                const pago = pagoPendiente(row);
-                const dup  = duplicado(row);
-                const revisar = motivosRevisar(row.nota);
+                const { pago, dup, revisar, fechaCorreo } = pistas.get(row.id) || {};
                 const multi = esMulti(row);
+                const mon = row.moneda || "ARS";
+                const lineas = lineasDe(row, e);
+                const subRow = lineas.reduce((a, l) => a + (toNum(l.subtotal) || 0), 0);
+                const ivaRow = lineas.reduce((a, l) => a + (toNum(l.iva_monto) || 0), 0);
+                const listo = puedeContabilizar(row, e);
+                const ref = metaRef(row.nota); const buzon = metaBuzon(row.nota);
                 // Vto: si el pago ya se debitó en el banco, mostramos esa fecha; si no, la de la factura.
                 const vtoMostrar = pago ? pago.fecha : row.vto;
                 return (
                   <tr key={row.id} style={{ borderBottom:`1px solid ${T.cardBorder}`, background: i%2===0 ? T.card : "#fafbfc" }}>
-                    <td style={{ padding:"9px 12px", fontSize:12, color:T.muted, whiteSpace:"nowrap" }}>{metaFecha(row.nota) ? fmtDate(metaFecha(row.nota)) : "—"}</td>
+                    <td style={{ padding:"9px 12px", fontSize:12, color:T.muted, whiteSpace:"nowrap" }}>{fechaCorreo ? fmtDate(fechaCorreo) : "—"}</td>
                     <td style={{ padding:"9px 12px", whiteSpace:"nowrap" }}>
                       <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:13, fontWeight:700, color:T.text }}>
                         <span>{row.proveedor || "—"}</span>
-                        {pago && <span style={{ fontSize:13, cursor:"help" }} title={`Pago ya realizado — falta matchearlo contra esta factura.\nDébito en Banco: ${pago.cuenta_bancaria} · ${fmtDate(pago.fecha)} · ${fmtMoney(Math.abs(toNum(pago.monto)), row.moneda||"ARS")}`}>💳</span>}
+                        {pago && <span style={{ fontSize:13, cursor:"help" }} title={`Pago ya realizado — falta matchearlo contra esta factura.\nDébito en Banco: ${pago.cuenta_bancaria} · ${fmtDate(pago.fecha)} · ${fmtMoney(Math.abs(toNum(pago.monto)), mon)}`}>💳</span>}
                         {dup?.nivel === "dup" && <span style={{ fontSize:13, cursor:"help" }} title={`YA CARGADA: existe un egreso con el mismo número.\n${descEgreso(dup.egreso)}`}>⛔</span>}
                         {dup?.nivel === "mes" && <span style={{ fontSize:13, cursor:"help" }} title={`Mismo importe y mismo mes que un egreso ya cargado, con otro número: revisá.\n${descEgreso(dup.egreso)}`}>⚠️</span>}
                         {revisar && <span style={{ fontSize:13, cursor:"help" }} title={`El lector no está seguro de esta factura:\n${revisar}\nAbrí el PDF y revisá antes de contabilizar.`}>🔎</span>}
@@ -480,8 +487,7 @@ export default function TabCorreo({ onPend } = {}) {
                         placeholder="" style={{ ...sel, maxWidth:130 }} />
                     </td>
                     <td style={{ padding:"9px 12px" }}>
-                      <select value={e.sociedad} onChange={ev => setEd(row, { sociedad: ev.target.value })}
-                        style={{ ...sel, borderColor: e.sociedad ? T.cardBorder : "#f59e0b", background: e.sociedad ? "#fff" : "#fffbeb" }}>
+                      <select value={e.sociedad} onChange={ev => setEd(row, { sociedad: ev.target.value })} style={selFalta(e.sociedad)}>
                         <option value="">⚠ Falta sociedad</option>
                         {sociedades.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
                       </select>
@@ -507,33 +513,30 @@ export default function TabCorreo({ onPend } = {}) {
                     <td style={{ padding:"9px 12px" }}>
                       {multi ? (
                         <span style={{ fontSize:12, color:T.text, cursor:"help", whiteSpace:"nowrap" }}
-                          title={`La factura ya viene repartida en ${row.lineas.length} centros:\n${row.lineas.map(l => `${(centros.find(c => c.id === l.cc)?.nombre) || l.cc || "(sin centro)"} · ${fmtMoney(l.total_linea, row.moneda || "ARS")}`).join("\n")}\nPara cambiar el reparto: Abrir para editar.`}>
-                          Varios ({row.lineas.length}) ▾
+                          title={`La factura ya viene repartida en ${lineas.length} centros:\n${lineas.map(l => `${nombreCentro(l.cc)} · ${fmtMoney(l.total, mon)}`).join("\n")}\nPara cambiar el reparto: Abrir para editar.`}>
+                          Varios ({lineas.length}) ▾
                         </span>
                       ) : (
-                        <select value={e.centro} onChange={ev => setEd(row, { centro: ev.target.value })}
-                          style={{ ...sel, borderColor: e.centro ? T.cardBorder : "#f59e0b", background: e.centro ? "#fff" : "#fffbeb" }}>
+                        <select value={e.centro} onChange={ev => setEd(row, { centro: ev.target.value })} style={selFalta(e.centro)}>
                           <option value="">⚠ centro</option>
                           {ccActivos(centros, e.centro).map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                         </select>
                       )}
                     </td>
-                    <td style={num(false)}>{fmtMoney(multi ? row.lineas.reduce((a, l) => a + (l.subtotal || 0), 0) : (linea.subtotal ?? row.total), row.moneda || "ARS")}</td>
-                    <td style={{ ...num(false), color:T.muted }}>{(() => { const iva = multi ? row.lineas.reduce((a, l) => a + (l.iva_monto || 0), 0) : (linea.iva_monto || 0); return iva > 0 ? fmtMoney(iva, row.moneda || "ARS") : "—"; })()}</td>
-                    <td style={num(true)}>{fmtMoney(row.total, row.moneda || "ARS")}</td>
+                    <td style={num(false)}>{fmtMoney(subRow, mon)}</td>
+                    <td style={{ ...num(false), color:T.muted }}>{ivaRow > 0 ? fmtMoney(ivaRow, mon) : "—"}</td>
+                    <td style={num(true)}>{fmtMoney(row.total, mon)}</td>
                     <td style={{ padding:"9px 10px", whiteSpace:"nowrap", textAlign:"right" }}>
-                      <button onClick={(ev) => {
-                          if (menuOpen?.id === row.id) { setMenuOpen(null); return; }
-                          const r = ev.currentTarget.getBoundingClientRect();
-                          // Si abajo no entra (última fila), el menú se abre hacia arriba.
-                          const ALTO_MENU = 260;
-                          const arriba = r.bottom + ALTO_MENU > window.innerHeight && r.top > ALTO_MENU;
-                          setMenuOpen({ id: row.id, left: Math.max(8, r.right - 210), ...(arriba ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }) });
-                        }} disabled={enCurso}
-                        style={{ background: menuOpen?.id===row.id ? "#e5e7eb" : "#f3f4f6", border:`1px solid ${T.cardBorder}`,
-                          borderRadius:6, padding:"4px 10px", cursor:"pointer", fontSize:13, color:T.muted, fontFamily:T.font }}>
-                        {enCurso ? "…" : "⋯"}
-                      </button>
+                      {/* Menú de acciones compartido (se abre hacia arriba solo si abajo no entra). */}
+                      <RowMenu align="right" label={enCurso ? "…" : "⋯"} disabled={enCurso} items={[
+                        { label: "Contabilizar ✓", onClick: () => contabilizar(row), color: "#16a34a", disabled: !listo, hint: listo ? "" : "Falta sociedad, cuenta o centro" },
+                        buzon && ref && { label: "Contabilizar y responder ✓ ✉", onClick: () => contabilizar(row, { responder: true }), color: "#16a34a", disabled: !listo, hint: listo ? "" : "Falta sociedad, cuenta o centro" },
+                        { label: "Abrir para editar (varios centros)", onClick: () => setEditar(row) },
+                        buzon && metaArchivo(row.nota) && { label: "Ver PDF", onClick: () => verPdf(row) },
+                        ref && { label: "Ver mail", onClick: () => window.open(gmailUrl(ref, buzon), "_blank") },
+                        "divider",
+                        { label: "Ignorar", onClick: () => ignorar(row), color: T.red },
+                      ]} />
                     </td>
                   </tr>
                 );
@@ -543,26 +546,6 @@ export default function TabCorreo({ onPend } = {}) {
           </div>
         </div>
       ))}
-
-      {/* Dropdown de acciones — position:fixed para no cortarse dentro del contenedor con overflow. */}
-      {menuOpen && (() => {
-        const row = borradores.find(r => r.id === menuOpen.id);
-        if (!row) return null;
-        const e = ed(row); const ref = metaRef(row.nota); const buzon = metaBuzon(row.nota);
-        const listo = e.sociedad && e.cuentaId && (esMulti(row) ? row.lineas.every(l => l.cc) : e.centro);
-        return (
-          <div ref={menuRef} style={{ position:"fixed", top:menuOpen.top, bottom:menuOpen.bottom, left:menuOpen.left, zIndex:9999,
-            background:T.card, border:`1px solid ${T.cardBorder}`, borderRadius:8, boxShadow:"0 8px 24px rgba(0,0,0,.15)", minWidth:200, overflow:"hidden" }}>
-            {item("Contabilizar ✓", () => contabilizar(row), "#16a34a", !listo)}
-            {buzon && ref && item("Contabilizar y responder ✓ ✉", () => contabilizar(row, { responder: true }), "#16a34a", !listo)}
-            {item("Abrir para editar (varios centros)", () => setEditar(row))}
-            {buzon && metaArchivo(row.nota) && item("Ver PDF", () => verPdf(row))}
-            {ref && item("Ver mail", () => window.open(gmailUrl(ref, buzon), "_blank"))}
-            <div style={{ height:1, background:T.cardBorder, margin:"3px 0" }} />
-            {item("Ignorar", () => ignorar(row), T.red)}
-          </div>
-        );
-      })()}
     </div>
   );
 }

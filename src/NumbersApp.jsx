@@ -262,7 +262,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, onGoToRep
       {/* ── SIDEBAR ── */}
       {showMaestros ? (
         /* ── Sidebar Maestros ── */
-        <div className="numbers-sidebar" style={{ width:210, flexShrink:0, background:"#0f172a",
+        <div className="numbers-sidebar" style={{ width:T.sidebarW, flexShrink:0, background:"#0f172a",
           borderRight:"2px solid rgba(99,102,241,.35)",
           display:"flex", flexDirection:"column", overflow:"hidden" }}>
 
@@ -303,7 +303,7 @@ export default function NumbersApp({ onGoToFranquicias, onGoToSueldos, onGoToRep
         </div>
       ) : (
         /* ── Sidebar principal ── */
-        <div className="numbers-sidebar" style={{ width:210, flexShrink:0, background:T.sidebar,
+        <div className="numbers-sidebar" style={{ width:T.sidebarW, flexShrink:0, background:T.sidebar,
           borderRight:`2px solid ${T.sidebarBorder}`,
           display:"flex", flexDirection:"column", overflow:"hidden" }}>
 

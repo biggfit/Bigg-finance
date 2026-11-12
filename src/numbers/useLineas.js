@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { round2 } from "../lib/numbersApi";
 
 export const newLinea = (cc = "", ivaRate = 21) => ({ id: Date.now() + Math.random(), cc, subtotal: "", ivaRate });
 
@@ -21,13 +22,13 @@ export function useLineas(initial, ivaDefault = 21) {
   // (1000 en una → 500 + 500 → 333,33 ×3 → 250 ×4). Cada línea conserva su centro e IVA; la nueva copia el IVA
   // de la última y queda sin centro. El redondeo a centavos va a la última línea para que la suma no se mueva.
   const dividirLinea = () => setLineas(prev => {
-    const r2 = n => Math.round(n * 100) / 100;
-    const total = r2(prev.reduce((a, l) => a + (Number(l.subtotal) || 0), 0));
+
+    const total = round2(prev.reduce((a, l) => a + (Number(l.subtotal) || 0), 0));
     const next = [...prev, newLinea("", prev.length ? prev[prev.length - 1].ivaRate : ivaDefault)];
     const n = next.length;
     const parte = Math.floor(total / n * 100) / 100;
-    const resto = r2(total - parte * n);
-    return next.map((l, i) => ({ ...l, subtotal: r2(i === n - 1 ? parte + resto : parte).toFixed(2) }));   // "918.70", no "918.7"
+    const resto = round2(total - parte * n);
+    return next.map((l, i) => ({ ...l, subtotal: round2(i === n - 1 ? parte + resto : parte).toFixed(2) }));   // "918.70", no "918.7"
   });
 
   return { lineas, setLineas, updLinea, addLinea, delLinea, dividirLinea };

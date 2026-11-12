@@ -30,6 +30,7 @@ export const T = {
   shadow:        "0 1px 4px rgba(0,0,0,.08), 0 2px 12px rgba(0,0,0,.05)",
   shadowMd:      "0 4px 20px rgba(0,0,0,.10)",
   radius:        10,
+  sidebarW:      210,   // ancho del sidebar de Numbers (NumbersApp y los paneles que se abren a su derecha)
   font:          "var(--font)",
   mono:          "var(--mono)",
 };

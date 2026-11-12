@@ -29,7 +29,7 @@ export function matchBusqueda(doc, busqueda, partyKey) {
 // items: [{ label, onClick, color?, disabled?, hint? } | "divider" | falsy]. Los falsy se saltan (acciones
 // condicionales); `disabled` deja la opción en gris con `hint` como tooltip (motivo). `align="right"`
 // pega el menú al borde derecho del botón (última columna de una tabla); `label` cambia el glifo.
-export function RowMenu({ items, align = "left", label = "▾" }) {
+export function RowMenu({ items, align = "left", label = "▾", disabled = false }) {
   const [open, setOpen] = useState(false);
   const [pos,  setPos]  = useState({ top:0 });
   const btnRef  = useRef(null);
@@ -68,7 +68,7 @@ export function RowMenu({ items, align = "left", label = "▾" }) {
 
   return (
     <>
-      <button ref={btnRef} onClick={handleToggle} style={{
+      <button ref={btnRef} onClick={handleToggle} disabled={disabled} style={{
         background: open ? "#e5e7eb" : "#f3f4f6",
         border:`1px solid ${T.cardBorder}`, borderRadius:6,
         padding:"3px 8px", cursor:"pointer", fontSize:12, color:T.muted,

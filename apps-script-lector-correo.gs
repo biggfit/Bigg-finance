@@ -64,11 +64,17 @@ const MAX_PDF_BYTES      = 5 * 1024 * 1024;   // catálogos y dossiers no son fa
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
+// Las propiedades no cambian dentro de una ejecución: se leen todas una vez (cada getProperty es un RPC y
+// cfg_ se consulta varias veces por mail).
+let _props = null;
 function cfg_(k, def) {
-  const v = PropertiesService.getScriptProperties().getProperty(k);
-  if (v === null || v === "") { if (def !== undefined) return def; throw new Error("Falta la propiedad del script " + k); }
+  if (!_props) _props = PropertiesService.getScriptProperties().getProperties() || {};
+  const v = _props[k];
+  if (v === null || v === undefined || v === "") { if (def !== undefined) return def; throw new Error("Falta la propiedad del script " + k); }
   return v;
 }
+// Valor seguro para la nota del borrador (formato k=v;k=v): sin ";" ni "=".
+const notaVal_ = s => String(s || "").replace(/[;=]/g, "_");
 const dominiosInternos_ = () => cfg_("INTERNOS", "bigg.fit").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
 const rePalabrasFactura_ = () => new RegExp(cfg_("PALABRAS_FACTURA", "factura|invoice|fra\\.?\\b|recibo|liquidaci[oó]n|renta\\b|alquiler|arrendamiento"), "i");
 const rePalabrasDescarte_ = () => new RegExp(cfg_("PALABRAS_DESCARTE", "cat[aá]logo|dossier|presupuesto|newsletter|webinar|oferta|black friday|promoci[oó]n|encuesta"), "i");
@@ -84,6 +90,15 @@ function nbGet_(resource, params) {
   const data = JSON.parse(res.getContentText());
   if (data && data.error) throw new Error(data.error);
   return Array.isArray(data) ? data : (data.rows || data.data || []);
+}
+
+// Varias hojas en UNA llamada (?resource=__multi del GAS de Numbers): devuelve { nombre_de_hoja: [filas] }.
+function nbMulti_(spec) {
+  const url = cfg_("NUMBERS_URL") + "?resource=__multi&token=" + encodeURIComponent(cfg_("NUMBERS_TOKEN")) + "&spec=" + encodeURIComponent(JSON.stringify(spec));
+  const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+  const data = JSON.parse(res.getContentText());
+  if (data && data.error) throw new Error(data.error);
+  return data || {};
 }
 
 function nbPost_(payload) {
@@ -156,32 +171,46 @@ function remitenteReal_(from, cuerpo) {
 
 // ── Reglas (nb_banco_reglas) y proveedores ────────────────────────────────────
 
+// Todo lo que la corrida necesita del Sheet, en UNA llamada (cada hoja por separado son 1-3 s por corrida):
+// reglas, proveedores, cuentas, centros y los comprobantes de la sociedad (candados de dedup).
 function cargarContexto_() {
-  const pais = cfg_("PAIS", "ES");
-  const reglas = nbGet_("nb_banco_reglas", {}).filter(r =>
+  const pais = cfg_("PAIS", "ES"), sociedad = cfg_("SOCIEDAD");
+  const hojas = nbMulti_([{ r: "nb_banco_reglas" }, { r: "nb_proveedores" }, { r: "nb_cuentas" }, { r: "nb_centros_costo" }, { r: "nb_comprobantes", s: sociedad }]);
+  const reglas = (hojas.nb_banco_reglas || []).filter(r =>
     String(r.activo) !== "false" && (!r.pais || String(r.pais).toUpperCase() === pais));
   const porTipo = t => reglas.filter(r => String(r.match_tipo) === t && String(r.match_valor || "").trim());
-  const sedes = porTipo("sede").map(r => [up_(r.match_valor), String(r.centro_costo || "")]).filter(x => x[1]);
-  const proveedores = nbGet_("nb_proveedores", {});
+  const sedes = porTipo("sede").map(r => sedeRegla_(up_(r.match_valor), String(r.centro_costo || ""))).filter(s => s.centro);
+  const proveedores = hojas.nb_proveedores || [];
   const cuentas = {};
-  nbGet_("nb_cuentas", {}).forEach(c => { cuentas[String(c.id)] = String(c.nombre || c.id); });
+  (hojas.nb_cuentas || []).forEach(c => { cuentas[String(c.id)] = String(c.nombre || c.id); });
   // Centros de costo de esta sociedad (id → nombre): validan la sede que elige el modelo y arman su diccionario.
-  const sociedad = cfg_("SOCIEDAD");
   const centros = {};
-  nbGet_("nb_centros_costo", {}).forEach(c => {
+  (hojas.nb_centros_costo || []).forEach(c => {
     if (String(c.activo) === "false") return;
     if (lc_(c.empresa) === lc_(sociedad) || (!c.empresa && String(c.pais || "").toUpperCase() === pais)) centros[String(c.id)] = String(c.nombre || c.id);
   });
-  return {
+  const ctx = {
     remitente: porTipo("remitente"), asunto: porTipo("asunto"), sedes,
     proveedores, provPorId: Object.fromEntries(proveedores.map(p => [String(p.id), p])),
-    cuentas, centros,
+    cuentas, centros, comps: hojas.nb_comprobantes || [],
   };
+  ctx.promptBase = promptBase_(ctx);   // la parte fija del prompt de Gemini, una vez por corrida
+  return ctx;
+}
+
+// Regla `sede`: fragmento literal más, si es un nº de contrato / CUPS / nº de cliente ("134-31369"), una regex
+// que lo reconoce aunque el proveedor lo imprima distinto ("134031369", "134/31369", "13431369"): grupos de
+// dígitos en orden, separador y ceros opcionales entre ellos. Se compila una vez por corrida.
+function sedeRegla_(frag, centro) {
+  const grupos = frag.match(/\d+/g) || [];
+  const re = grupos.join("").length >= 6 ? new RegExp("(?:^|\\D)" + grupos.map(g => g.replace(/^0+/, "")).join("\\D{0,3}0*") + "(?!\\d)") : null;
+  return { frag, centro, re };
 }
 
 // Proveedor por CIF/NIF que figura en la factura (nb_proveedores.cuit), cuando ninguna regla ni remitente lo dio.
 const normCif_ = s => up_(s).replace(/[^A-Z0-9]/g, "");
 function proveedorPorCif_(ctx, cif, imp) {
+  if (imp.proveedor_id || !cif) return imp;
   const c = normCif_(cif);
   if (c.length < 8) return imp;
   const prov = ctx.proveedores.find(p => String(p.activo) !== "false" && normCif_(p.cuit) === c);
@@ -232,13 +261,8 @@ function imputar_(ctx, remitente, asunto) {
 function sedesEnTexto_(ctx, texto) {
   const t = up_(texto);
   const hits = {};
-  for (const [frag, centro] of ctx.sedes) {
-    if (!frag) continue;
-    if (t.indexOf(frag) !== -1) { hits[centro] = true; continue; }
-    // Nº de contrato / CUPS / nº de cliente ("134-31369"): el proveedor lo imprime distinto en cada sitio
-    // ("134031369", "134/31369", "13431369") → grupos de dígitos en orden, separador y ceros opcionales entre ellos.
-    const grupos = frag.match(/\d+/g) || [];
-    if (grupos.join("").length >= 6 && new RegExp("(?:^|\\D)" + grupos.map(g => g.replace(/^0+/, "")).join("\\D{0,3}0*") + "(?!\\d)").test(t)) hits[centro] = true;
+  for (const s of ctx.sedes) {
+    if (s.frag && (t.indexOf(s.frag) !== -1 || (s.re && s.re.test(t)))) hits[s.centro] = true;
   }
   return Object.keys(hits);
 }
@@ -250,6 +274,7 @@ function sedesEnTexto_(ctx, texto) {
 
 let ultimoErrorGemini_ = "";
 const geminiActivo_ = () => !!cfg_("GEMINI_KEY", "");
+const geminiModelo_ = () => cfg_("GEMINI_MODEL", "gemini-3.1-flash-lite");
 
 const ESQUEMA_FACTURA = {
   type: "OBJECT",
@@ -281,10 +306,11 @@ const ESQUEMA_FACTURA = {
   required: ["tipo_documento", "emisor_nombre", "moneda", "concepto", "confianza", "referencias"],
 };
 
-function promptFactura_(ctx, pistas) {
+// Parte fija del prompt (instrucciones + diccionario de sedes). Se arma una vez por corrida (cargarContexto_).
+function promptBase_(ctx) {
   // Diccionario de sedes: centro → fragmentos de las reglas `sede` (direcciones, nombres, nº de contrato).
   const porCentro = {};
-  ctx.sedes.forEach(([frag, centro]) => { (porCentro[centro] = porCentro[centro] || []).push(frag); });
+  ctx.sedes.forEach(s => { (porCentro[s.centro] = porCentro[s.centro] || []).push(s.frag); });
   const sedes = Object.keys(porCentro).map(c => c + " = " + (ctx.centros[c] || c) + " (" + porCentro[c].join(", ") + ")");
   return [
     "Sos el asistente contable de BIGG, una cadena de gimnasios. Leé el documento adjunto y devolvé los datos en JSON según el esquema.",
@@ -295,16 +321,18 @@ function promptFactura_(ctx, pistas) {
     "- Si hay período de servicio (consumo del 1 al 31, alquiler de un mes), llená periodo_desde/hasta.",
     "- numero_factura: exactamente como está impreso en el documento (no el nombre del archivo ni el asunto del mail). Si el documento no lo tiene, null.",
     "- No inventes: si un dato no está, null.",
-    "Contexto del mail (solo orientativo): asunto \"" + String(pistas.asunto || "") + "\" · archivo \"" + String(pistas.archivo || "") + "\" · remitente " + String(pistas.remitente || ""),
   ].join("\n");
 }
+// Prompt completo para un PDF: la parte fija más el contexto del mail.
+const promptFactura_ = (ctx, pistas) => ctx.promptBase +
+  "\nContexto del mail (solo orientativo): asunto \"" + String(pistas.asunto || "") + "\" · archivo \"" + String(pistas.archivo || "") + "\" · remitente " + String(pistas.remitente || "");
 
 // Llama a la API. Devuelve la extracción normalizada (ver validarExtraccion_) o null si no hay clave o falló (el
 // motivo queda en ultimoErrorGemini_ y se informa en la corrida; el mail sigue por el camino de patrones).
 function extraerGemini_(ctx, blob, pistas) {
   const key = cfg_("GEMINI_KEY", "");
   if (!key) return null;
-  const model = cfg_("GEMINI_MODEL", "gemini-3.1-flash-lite");
+  const model = geminiModelo_();
   const body = {
     contents: [{ parts: [
       { inlineData: { mimeType: "application/pdf", data: Utilities.base64Encode(blob.getBytes()) } },
@@ -322,7 +350,7 @@ function extraerGemini_(ctx, blob, pistas) {
     const cand = (d.candidates || [])[0];
     const txt = ((cand && cand.content && cand.content.parts) || []).map(p => p.text || "").join("");
     if (!txt) throw new Error("respuesta vacía" + (cand && cand.finishReason ? " (" + cand.finishReason + ")" : ""));
-    return validarExtraccion_(ctx, JSON.parse(txt), pistas);
+    return validarExtraccion_(JSON.parse(txt), pistas);
   } catch (e) {
     ultimoErrorGemini_ = String(e && e.message || e);
     return null;
@@ -333,7 +361,7 @@ function extraerGemini_(ctx, blob, pistas) {
 // nota para que el equipo lo mire (base+IVA ≠ total, sin nº, sin fecha, vto anterior a la emisión, confianza baja).
 const fechaIso_ = s => (/^\d{4}-\d{2}-\d{2}$/.test(String(s || "")) ? String(s) : "");
 const numOrNull_ = v => (v === null || v === undefined || v === "" || isNaN(Number(v)) ? null : round2_(Number(v)));
-function validarExtraccion_(ctx, j, pistas) {
+function validarExtraccion_(j, pistas) {
   const revisar = [];
   const emision = fechaIso_(j.fecha_emision);
   let hasta = fechaIso_(j.periodo_hasta), vto = fechaIso_(j.fecha_vencimiento);
@@ -384,9 +412,12 @@ function lineasPorSede_(ctx, ex, centroFijo) {
 }
 
 // Fallback: extracción por patrones sobre el texto del PDF (Drive → Doc) y el cuerpo del mail. Misma salida que Gemini.
-function extraerPatrones_(src, cuerpo, asunto, totalCuerpoFuerte, totalCuerpo, fechaMail) {
+function extraerPatrones_(src, cuerpo, asunto, nPdfs, fechaMail) {
   if (src.texto === null) src.texto = textoPdf_(src.blob);
   const nro = extraerNro_(src.texto || cuerpo, asunto, src.archivo);
+  // El total del cuerpo del mail solo vale si el mail trae UN PDF (con varios, es el total de otra cosa).
+  const totalCuerpoFuerte = nPdfs <= 1 ? totalFuerte_(cuerpo) : null;
+  const totalCuerpo = nPdfs <= 1 ? (totalCuerpoFuerte !== null ? totalCuerpoFuerte : totalGenerico_(cuerpo)) : null;
   // Total: clave inequívoca en el PDF y/o en el cuerpo del mail (si hay dos, la mayor: la menor suele ser un
   // subtotal) → "Total" genérico del PDF → del cuerpo.
   const totalPdfFuerte = src.texto ? totalFuerte_(src.texto) : null;
@@ -612,14 +643,14 @@ function leerBuzon_(opts) {
   const ctx = cargarContexto_();
   const memo = memo_();
 
-  // Comprobantes existentes de la sociedad: ids (candado 1), borradores ya parkeados (mismo nº o mismo PDF en otro
-  // mail del hilo → no se repite) y EGRESO reales (candados 2 y 3)
-  const comps = nbGet_("nb_comprobantes", { sociedad: sociedad });
+  // Comprobantes existentes de la sociedad (vienen con el contexto): ids (candado 1), borradores ya parkeados (mismo
+  // nº o mismo PDF en otro mail del hilo → no se repite) y EGRESO reales (candados 2 y 3)
+  const comps = ctx.comps;
   const ids = {}; comps.forEach(c => { ids[String(c.id_comp)] = true; });
   const borradores = comps.filter(c => String(c.subtipo || "").toUpperCase() === "EGRESO_BORRADOR")
     .map(c => ({ prov_id: String(c.contraparte_id || ""), nro: String(c.nro_comp || ""), archivo: (String(c.nota || "").match(/(?:^|;)archivo=([^;]+)/) || [])[1] || "" }));
   const yaParkeada = (imp, nro, archivo) => borradores.some(b => b.prov_id && b.prov_id === imp.proveedor_id &&
-    ((nro && b.nro && mismoNro_(nro, b.nro)) || (archivo && b.archivo && b.archivo === archivo.replace(/[;=]/g, "_"))));
+    ((nro && b.nro && mismoNro_(nro, b.nro)) || (archivo && b.archivo && b.archivo === notaVal_(archivo))));
   const egresos = {};
   comps.filter(c => String(c.subtipo || "").toUpperCase() === "EGRESO").forEach(c => {
     const k = String(c.id_comp);
@@ -703,7 +734,7 @@ function leerBuzon_(opts) {
           continue;
         }
         try {
-          const r = procesarMail_(ctx, msg, th, { sociedad, moneda, buzon, ids, yaCargada, yaParkeada, vistos, corte, stats: res.gemini });
+          const r = procesarMail_(ctx, msg, th, { sociedad, moneda, buzon, ids, yaCargada, yaParkeada, vistos, corte, dry, stats: res.gemini });
           if (r.descartado) { memo[mailId] = "descartado"; res.descartados++; if (!dry) etiquetarHilo_(th, "descartado", etiquetados); continue; }
           // Lote (muchos PDF en un mail: históricos, regularizaciones): no se parkea, se avisa para mirarlo a mano.
           if (r.lote) { res.lotes.push({ mail: msg.getSubject(), remitente: r.remitente, pdfs: r.lote, fecha: fmtFecha_(msg.getDate()) }); memo[mailId] = "lote"; if (!dry) etiquetarHilo_(th, "lote", etiquetados); continue; }
@@ -712,12 +743,11 @@ function leerBuzon_(opts) {
             if (f.vieja) { res.viejas.push({ proveedor: f.proveedor, nro: f.nro, total: f.total, fecha: f.vieja, archivo: f.archivo }); continue; }
             if (f.ya_cargada) { res.ya_cargadas.push({ proveedor: f.proveedor, nro: f.nro, total: f.total, egreso: f.ya_cargada }); continue; }
             if (f.duplicado) {            // ya parkeada antes (candado 1); en un simulacro se muestra igual lo extraído, para comparar
-              if (dry) res.ya_parkeadas.push({ proveedor: f.proveedor || f.remitente, nro: f.nro, total: f.total, centro: f.centro, archivo: f.archivo, fuente: f.fuente, revisar: f.revisar && f.revisar.length ? f.revisar.join("|") : "", diag: f.diag });
+              if (dry) res.ya_parkeadas.push(resumenDe_(f));
               continue;
             }
             if (!f.proveedor_id) res.sin_regla++;
-            res.parkeadas.push({ proveedor: f.proveedor || f.remitente, nro: f.nro, total: f.total, centro: f.centro, archivo: f.archivo, sin_regla: !f.proveedor_id,
-              fuente: f.fuente, revisar: f.revisar && f.revisar.length ? f.revisar.join("|") : "", diag: dry ? f.diag : undefined });
+            res.parkeadas.push(Object.assign(resumenDe_(f), { sin_regla: !f.proveedor_id, diag: dry ? f.diag : undefined }));
             if (!dry) f.filas.forEach(x => filas.push(x)); else todoResuelto = false;
           }
           if (r.facturas.length) hilosConFactura[th.getId()] = th;   // tuvo factura (parkeada, ya cargada o vieja)
@@ -749,14 +779,18 @@ function leerBuzon_(opts) {
 }
 
 const maxFecha_ = (a, b) => (a > b ? a : b);
+// Resumen de una factura para el resultado de la corrida (bandeja y simulacro).
+const resumenDe_ = f => ({ proveedor: f.proveedor || f.remitente, nro: f.nro, total: f.total, centro: f.centro, archivo: f.archivo, fuente: f.fuente, revisar: f.revisar.join("|"), diag: f.diag });
+// Adjuntos PDF de un mensaje (por tipo o por extensión).
+const pdfsDe_ = msg => msg.getAttachments({ includeInlineImages: false, includeAttachments: true })
+  .filter(a => /pdf/i.test(a.getContentType()) || /\.pdf$/i.test(a.getName()));
 
 // Un mail → 0..N facturas (una por PDF; sin PDF, una sola con los datos del cuerpo).
 function procesarMail_(ctx, msg, th, env) {
   const asunto = asuntoLimpio_(msg.getSubject());
   const cuerpo = String(msg.getPlainBody() || "").slice(0, 20000);
   const remitente = remitenteReal_(msg.getFrom(), cuerpo);
-  const pdfs = msg.getAttachments({ includeInlineImages: false, includeAttachments: true })
-    .filter(a => /pdf/i.test(a.getContentType()) || /\.pdf$/i.test(a.getName()))
+  const pdfs = pdfsDe_(msg)
     .filter(a => a.getSize() <= MAX_PDF_BYTES)
     .filter(a => !rePdfDescarte_().test(a.getName()));               // certificados, contratos, IPC… no son facturas
   const imp = imputar_(ctx, remitente, asunto);
@@ -773,9 +807,6 @@ function procesarMail_(ctx, msg, th, env) {
   // Muchos PDF en un mail = lote (históricos, regularizaciones): no se parkea, se reporta para revisar a mano.
   const maxPdfs = Number(cfg_("MAX_PDFS_POR_MAIL", "6")) || 6;
   if (pdfs.length > maxPdfs) return { lote: pdfs.map(a => a.getName()), remitente };
-  // El total del cuerpo del mail solo vale si el mail trae UN PDF (con varios, es el total de otra cosa).
-  const totalCuerpoFuerte = pdfs.length <= 1 ? totalFuerte_(cuerpo) : null;
-  const totalCuerpo = pdfs.length <= 1 ? (totalCuerpoFuerte !== null ? totalCuerpoFuerte : totalGenerico_(cuerpo)) : null;
   // Facturas con fecha muy anterior al corte (lotes de históricos reenviados): se apartan, no se parkean.
   const limiteVieja = new Date(new Date(env.corte + "T00:00:00").getTime() - 45 * 864e5);
 
@@ -788,12 +819,18 @@ function procesarMail_(ctx, msg, th, env) {
     if (src.archivo && env.vistos[firma]) return;
     env.vistos[firma] = true;
     const id_comp = "COR-" + msg.getId() + (src.k ? "-" + src.k : "");
+    // Candado 1 antes de leer el PDF: lo ya parkeado no se manda al modelo (tras un reset o al retomar una página
+    // son decenas de llamadas al vicio). En el simulacro sí se extrae, para comparar con lo que hay en la bandeja.
+    if (env.ids[id_comp] && !env.dry) {
+      facturas.push({ archivo: src.archivo, remitente, proveedor_id: imp.proveedor_id, proveedor: imp.proveedor, nro: "", total: null, centro: "", fuente: "", revisar: [], duplicado: true, ya_cargada: "", vieja: "" });
+      return;
+    }
     // 1) Datos de la factura: Gemini lee el PDF entero; sin clave o si falla, patrones (texto del PDF + cuerpo).
     let ex = src.blob ? extraerGemini_(ctx, src.blob, { asunto, archivo: src.archivo, remitente }) : null;
     if (ex) env.stats.gemini++;
-    else { if (src.blob && geminiActivo_()) env.stats.fallback++; ex = extraerPatrones_(src, cuerpo, asunto, totalCuerpoFuerte, totalCuerpo, msg.getDate()); }
+    else { if (src.blob && env.stats.activo) env.stats.fallback++; ex = extraerPatrones_(src, cuerpo, asunto, pdfs.length, msg.getDate()); }
     // 2) Proveedor: regla o remitente (imputar_) → si no, por el CIF que figura en el PDF.
-    const impS = (!imp.proveedor_id && ex.cif) ? proveedorPorCif_(ctx, ex.cif, imp) : imp;
+    const impS = proveedorPorCif_(ctx, ex.cif, imp);
     // Lo que el modelo dice que NO es factura (pedido, albarán, presupuesto, certificado): de un remitente sin regla
     // se descarta; de un proveedor conocido se parkea marcado para revisar (una duda del modelo nunca pierde una factura).
     if (ex.tipo && !/^factura/.test(ex.tipo)) { if (!impS.proveedor_id) { noFactura++; return; } ex.revisar.push("tipo:" + ex.tipo); }
@@ -803,7 +840,7 @@ function procesarMail_(ctx, msg, th, env) {
     const textoSede = [asunto, cuerpo.slice(0, 3000), ex.sedeTexto, ex.refs.join("\n"), ex.lineas.map(l => l.sede_texto).join("\n"), ex.texto].join("\n");
     const sedes = impS.centro ? [impS.centro] : sedesEnTexto_(ctx, textoSede);
     let centro = sedes.length === 1 ? sedes[0] : "";
-    if (!centro && !sedes.length && ex.sedeId && ctx.centros[ex.sedeId]) centro = ex.sedeId;
+    if (!sedes.length && ex.sedeId && ctx.centros[ex.sedeId]) centro = ex.sedeId;
     const lineas = lineasPorSede_(ctx, ex, impS.centro);          // reparto por sede que trae la propia factura
     const f = { archivo: src.archivo, remitente, proveedor_id: impS.proveedor_id, proveedor: impS.proveedor || ex.emisor, nro, total,
       centro: lineas.length ? lineas.map(l => l.centro).join("+") : centro, fuente: ex.fuente, revisar: ex.revisar, duplicado: false, ya_cargada: "", vieja: "" };
@@ -817,9 +854,9 @@ function procesarMail_(ctx, msg, th, env) {
 
     const notas = [
       "mail_ref=" + th.getId(), "fecha_correo=" + fmtFecha_(msg.getDate()), "remitente=" + remitente, "buzon=" + env.buzon,
-      src.archivo ? "archivo=" + src.archivo.replace(/[;=]/g, "_") : "", impS.regla_id ? "regla=" + impS.regla_id : "", impS.por_cif ? "por_cif=1" : "",
+      src.archivo ? "archivo=" + notaVal_(src.archivo) : "", impS.regla_id ? "regla=" + impS.regla_id : "", impS.por_cif ? "por_cif=1" : "",
       !impS.proveedor_id ? "sin_regla=1" : "", sedes.length > 1 && !lineas.length ? "sedes=" + sedes.join("|") : "", total === null ? "sin_total=1" : "",
-      ex.fuente === "gemini" ? "fuente=gemini" : "", ex.revisar.length ? "revisar=" + ex.revisar.join("|").replace(/[;=]/g, "_") : "", ex.pagada ? "pagada=1" : "",
+      ex.fuente === "gemini" ? "fuente=gemini" : "", ex.revisar.length ? "revisar=" + notaVal_(ex.revisar.join("|")) : "", ex.pagada ? "pagada=1" : "",
     ].filter(Boolean).join(";");
     const base = {
       id_comp, sociedad: env.sociedad,
@@ -836,8 +873,9 @@ function procesarMail_(ctx, msg, th, env) {
     const linea = (i, cc, t, sub) => Object.assign({ id: id_comp + "-L" + ("0" + i).slice(-2), centro_costo: cc, subtotal: sub, iva_monto: round2_(t - sub), total: t }, base);
     const subDe = t => (iva > 0 ? round2_(t / (1 + iva / 100)) : t);
     const baseOk = total !== null && ex.base !== null && ex.base > 0 && ex.base <= total && ex.revisar.indexOf("no_cuadra") === -1;
+    const t = total !== null ? total : 0;
     f.filas = lineas.length ? lineas.map((l, i) => linea(i + 1, l.centro, l.total, baseOk ? round2_(l.total * ex.base / total) : subDe(l.total)))
-      : [linea(1, centro, total !== null ? total : 0, baseOk ? ex.base : subDe(total !== null ? total : 0))];
+      : [linea(1, centro, t, baseOk ? ex.base : subDe(t))];
     env.ids[id_comp] = true;
     facturas.push(f);
   });
@@ -872,14 +910,21 @@ function etiquetarHilo_(th, clave, yaEtiquetados) {
 }
 
 // `ref` = id del hilo (mail_ref de la nota del borrador); si es un id de mensaje, se toma su hilo.
-function marcar_(ref, estado) {
-  const nombre = ETIQUETAS[String(estado || "").toLowerCase()];
-  if (!nombre) throw new Error("Estado desconocido: " + estado);
+function hiloDe_(ref) {
   let th = null;
   try { th = GmailApp.getThreadById(ref); } catch (e) { th = null; }
   if (!th) { try { th = GmailApp.getMessageById(ref).getThread(); } catch (e) { th = null; } }
   if (!th) throw new Error("No se encontró el mail " + ref + " en " + cfg_("BUZON", ""));
-  Object.keys(ETIQUETAS).forEach(k => { if (k !== estado && k !== "respondida") { const l = GmailApp.getUserLabelByName(ETIQUETAS[k]); if (l) th.removeLabel(l); } });
+  return th;
+}
+
+function marcar_(ref, estado) {
+  const nombre = ETIQUETAS[String(estado || "").toLowerCase()];
+  if (!nombre) throw new Error("Estado desconocido: " + estado);
+  const th = hiloDe_(ref);
+  // Un solo viaje a Gmail: se sacan las etiquetas de estado que el hilo tenga (Respondida se conserva).
+  const quitar = Object.keys(ETIQUETAS).filter(k => k !== estado && k !== "respondida").map(k => ETIQUETAS[k]);
+  th.getLabels().forEach(l => { if (quitar.indexOf(l.getName()) !== -1) th.removeLabel(l); });
   th.addLabel(etiqueta_(nombre));
   th.markRead();
   return { ok: true, etiqueta: nombre, asunto: th.getFirstMessageSubject() };
@@ -894,10 +939,7 @@ function responder_(ref, para, texto) {
   para = lc_(para).trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(para)) throw new Error("Destinatario inválido: " + para);
   if (!String(texto || "").trim()) throw new Error("El texto de la respuesta está vacío");
-  let th = null;
-  try { th = GmailApp.getThreadById(ref); } catch (e) { th = null; }
-  if (!th) { try { th = GmailApp.getMessageById(ref).getThread(); } catch (e) { th = null; } }
-  if (!th) throw new Error("No se encontró el mail " + ref + " en " + cfg_("BUZON", ""));
+  const th = hiloDe_(ref);
   const asunto = th.getFirstMessageSubject();
   const opciones = { name: cfg_("NOMBRE_REMITENTE", "Administración BIGG España") };
   const suyo = th.getMessages().filter(m => mailDe_(m.getFrom()) === para).pop();
@@ -913,10 +955,9 @@ function pdfDe_(mailId, archivo) {
   let msg = null;
   try { msg = GmailApp.getMessageById(mailId); } catch (e) { msg = null; }
   if (!msg) throw new Error("No se encontró el mail " + mailId + " en " + cfg_("BUZON", ""));
-  const quiero = String(archivo || "").replace(/[;=]/g, "_");
-  const pdfs = msg.getAttachments({ includeInlineImages: false, includeAttachments: true })
-    .filter(a => /pdf/i.test(a.getContentType()) || /\.pdf$/i.test(a.getName()));
-  const a = pdfs.find(x => x.getName().replace(/[;=]/g, "_") === quiero) || (pdfs.length === 1 ? pdfs[0] : null);
+  const quiero = notaVal_(archivo);
+  const pdfs = pdfsDe_(msg);
+  const a = pdfs.find(x => notaVal_(x.getName()) === quiero) || (pdfs.length === 1 ? pdfs[0] : null);
   if (!a) throw new Error("El mail no tiene el PDF " + (archivo || "") + " (adjuntos: " + pdfs.map(x => x.getName()).join(", ") + ")");
   return { ok: true, nombre: a.getName(), mime: "application/pdf", bytes: a.getSize(), base64: Utilities.base64Encode(a.getBytes()) };
 }
@@ -937,7 +978,7 @@ function doGet(e) {
     if (q.accion === "retro") { etiquetarRetroactivo(); return json_({ ok: true }); }
     if (q.accion === "estado") {
       return json_({ ok: true, buzon: cfg_("BUZON", ""), sociedad: cfg_("SOCIEDAD"), moneda: cfg_("MONEDA", "EUR"), corte: cfg_("FECHA_CORTE", ""),
-        gemini: geminiActivo_() ? cfg_("GEMINI_MODEL", "gemini-3.1-flash-lite") : "", version: 6,
+        gemini: geminiActivo_() ? geminiModelo_() : "", version: 6,
         ultima: JSON.parse(PropertiesService.getScriptProperties().getProperty("ULTIMA") || "null"), memo: Object.keys(memo_()).length });
     }
     if (q.accion === "reset") {
@@ -970,7 +1011,7 @@ function instalar() {
   console.log("Reglas del lector en el Sheet: remitente " + ctx.remitente.length + " · asunto " + ctx.asunto.length + " · sede " + ctx.sedes.length);
   console.log("Hilos en la bandeja (7 días): " + GmailApp.search("newer_than:7d", 0, 50).length);
   console.log("Buzón: " + props.getProperty("BUZON") + " → sociedad " + props.getProperty("SOCIEDAD"));
-  console.log("Centros de la sociedad: " + Object.keys(ctx.centros).length + " · Gemini: " + (geminiActivo_() ? cfg_("GEMINI_MODEL", "gemini-3.1-flash-lite") : "SIN CLAVE (se usan patrones)"));
+  console.log("Centros de la sociedad: " + Object.keys(ctx.centros).length + " · Gemini: " + (geminiActivo_() ? geminiModelo_() : "SIN CLAVE (se usan patrones)"));
 }
 
 // Etiqueta en Gmail, de una vez, los mails que el lector YA descartó o apartó como lote en corridas anteriores
@@ -1017,9 +1058,9 @@ function simulacro() {
   if (r.ya_cargadas.length) console.log("YA CARGADAS: " + r.ya_cargadas.map(v => v.proveedor + " " + v.nro + " → " + v.egreso).join(" | "));
   // Con SIMULACRO_FILTRO se re-leen mails ya procesados: lo que ya está en la bandeja se muestra con lo que el modelo
   // extrajo ahora (proveedor · nº · total · centro · fuente · revisar), para comparar contra lo parkeado antes.
-  if (r.ya_parkeadas.length) console.log("YA EN BANDEJA (re-leídas para comparar):\n" + r.ya_parkeadas.map(p =>
-    [p.proveedor, p.nro || "(sin nro)", p.total === null ? "(sin total)" : p.total, p.centro || "(sin centro)", p.fuente, p.revisar || "", p.archivo].join(" · ")).join("\n"));
-  console.log(r.parkeadas.map(p => [p.proveedor, p.nro || "(sin nro)", p.total === null ? "(sin total)" : p.total, p.centro || "(sin centro)", p.archivo].join(" · ")).join("\n"));
+  const lineaDe = (p, extra) => [p.proveedor, p.nro || "(sin nro)", p.total === null ? "(sin total)" : p.total, p.centro || "(sin centro)"].concat(extra || [], [p.archivo]).join(" · ");
+  if (r.ya_parkeadas.length) console.log("YA EN BANDEJA (re-leídas para comparar):\n" + r.ya_parkeadas.map(p => lineaDe(p, [p.fuente, p.revisar || ""])).join("\n"));
+  console.log(r.parkeadas.map(p => lineaDe(p)).join("\n"));
   if (r.errores.length) console.log("ERRORES: " + JSON.stringify(r.errores));
   // Diagnóstico de lo que quedó para revisar (solo los 6 primeros distintos por proveedor): dudas del modelo, o el
   // texto del PDF cuando fue por patrones y faltó el total o la fecha.
