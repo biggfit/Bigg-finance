@@ -10,7 +10,7 @@ styleEl.textContent = `
   --accent:#ADFF19;
   --blue:#6ec6f5;--purple:#b8a9f5;--red:#ff6b7a;--green:#7ed9a0;
   --gold:#DEFB97;--orange:#f5c46e;--cyan:#7ed9d9;
-  --font:'Messina Sans',sans-serif;--mono:'Messina Sans',sans-serif; /* números: Messina con dígitos tabulares (body). JetBrains Mono tenía el 0 con punto y se confundía con el 8; Chivo Mono quedaba achatada */
+  --font:'Messina Sans',sans-serif;--mono:'Numeros','Messina Sans',sans-serif; /* números: Inter más liviana (ver index.css), dígitos tabulares en body. JetBrains Mono tenía el 0 con punto (se confundía con el 8); Chivo Mono quedaba achatada */
 }
 body{background:var(--bg);color:var(--text);font-family:var(--font);font-variant-numeric:tabular-nums}
 input,select,textarea{font-family:var(--font);background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:20px;outline:none;transition:border-color .15s;font-size:13px}
