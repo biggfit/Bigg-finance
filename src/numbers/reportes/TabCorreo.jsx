@@ -323,7 +323,7 @@ export default function TabCorreo({ onPend } = {}) {
 
       {/* Visor de PDF: panel flotante a la derecha, la bandeja sigue visible y editable al lado. */}
       {pdf && (
-        <div style={{ position:"fixed", top:0, right:0, bottom:0, width:"min(720px, 60vw)", zIndex:600, background:T.card,
+        <div style={{ position:"fixed", top:0, right:0, bottom:0, left:210 /* ancho del sidebar de Numbers */, zIndex:600, background:T.card,
           borderLeft:`1px solid ${T.cardBorder}`, boxShadow:"-12px 0 32px rgba(0,0,0,.18)", display:"flex", flexDirection:"column" }}>
           <div style={{ display:"flex", alignItems:"center", gap:10, padding:"12px 16px", borderBottom:`1px solid ${T.cardBorder}` }}>
             <div style={{ flex:1, minWidth:0 }}>
@@ -338,7 +338,8 @@ export default function TabCorreo({ onPend } = {}) {
           </div>
           {pdf.cargando && <div style={{ padding:40, textAlign:"center", color:T.muted, fontSize:13 }}>Trayendo el PDF del mail…</div>}
           {pdf.error && <div role="alert" style={{ margin:16, background:T.redBg, border:`1px solid ${T.red}`, borderRadius:T.radius, padding:"12px 16px", color:"#991b1b", fontSize:13 }}>No se pudo traer el PDF: {pdf.error}</div>}
-          {pdf.url && <iframe title={pdf.nombre} src={pdf.url} style={{ flex:1, border:"none", width:"100%" }} />}
+          {/* #navpanes=0: sin la columna de miniaturas; view=FitH: la hoja ajustada al ancho (parámetros del visor de Chrome) */}
+          {pdf.url && <iframe title={pdf.nombre} src={`${pdf.url}#navpanes=0&view=FitH`} style={{ flex:1, border:"none", width:"100%" }} />}
         </div>
       )}
       <PageHeader
