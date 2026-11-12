@@ -1,8 +1,15 @@
 // ─── STATIC CSS ───────────────────────────────────────────────────────────────
 // Injected once outside the component tree — not re-injected on every render.
+// JetBrains Mono trae el 0 con un punto adentro (se confundía con el 8). Estos archivos tienen
+// solo el "0" de la misma fuente sin el punto; por unicode-range el navegador los usa únicamente
+// para ese carácter y todo lo demás sigue saliendo de Google Fonts.
+import cero400 from "../assets/fonts/JetBrainsMono-cero-400.otf?url";
+import cero600 from "../assets/fonts/JetBrainsMono-cero-600.otf?url";
 const styleEl = document.createElement("style");
 styleEl.textContent = `
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap');
+@font-face{font-family:'JetBrains Mono';src:url('${cero400}') format('opentype');font-weight:400;font-style:normal;unicode-range:U+0030}
+@font-face{font-family:'JetBrains Mono';src:url('${cero600}') format('opentype');font-weight:600;font-style:normal;unicode-range:U+0030}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
   --bg:#1e2022;--bg2:#282b2e;--bg3:#323639;
