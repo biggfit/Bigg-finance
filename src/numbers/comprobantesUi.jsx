@@ -18,8 +18,13 @@ export function CCDisplay({ lineas, resolveCC }) {
 
 // ─── Búsqueda libre de la lista: contraparte, cuenta, centro, nota y N° de comprobante ─────────
 // `partyKey` = "proveedor" | "cliente". Sin texto de búsqueda, todo matchea.
+// Búsqueda cerrada: entre comillas ("laham") trae solo la contraparte con ese nombre exacto.
 export function matchBusqueda(doc, busqueda, partyKey) {
-  const q = String(busqueda ?? "").toLowerCase();
+  const raw = String(busqueda ?? "").trim();
+  const exacta = raw.match(/^["“”](.+)["“”]$/);
+  if (exacta) return String(doc[partyKey] ?? "").trim().toLowerCase() === exacta[1].trim().toLowerCase();
+  // Mientras se tipea la comilla de apertura (sin cerrar todavía), sigue buscando normal.
+  const q = raw.replace(/^["“”]/, "").toLowerCase();
   if (!q) return true;
   const has = v => String(v ?? "").toLowerCase().includes(q);
   return has(doc[partyKey]) || has(doc.cuenta) || has(doc.cc) || has(doc.nota) || has(doc.nroComp);
